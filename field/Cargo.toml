@@ -1,0 +1,9 @@
+[package]
+name = "hyperfield"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rand = "0.8.5"
+rayon = "1.6.1"
+itertools = "0.10.5"
