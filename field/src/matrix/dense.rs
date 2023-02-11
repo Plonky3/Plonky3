@@ -100,7 +100,7 @@ impl<'a, T> DenseMatrixViewMut<'a, T> {
         }
     }
 
-    pub fn split_rows(self, r: usize) -> (Self, Self) {
+    pub fn split_rows(&mut self, r: usize) -> (DenseMatrixViewMut<T>, DenseMatrixViewMut<T>) {
         let (upper_values, lower_values) = self.values.split_at_mut(r * self.width);
         let upper = DenseMatrixViewMut {
             values: upper_values,

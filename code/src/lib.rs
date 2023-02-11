@@ -24,18 +24,19 @@ pub trait SystematicCode<F: Field>: Code<F> {
     fn append_parity(&self, messages: &mut DenseMatrix<F>) {
         assert_eq!(messages.height(), self.systematic_len());
         messages.expand_to_height(self.codeword_len());
-        let (systematic, parity) = messages.as_view_mut().split_rows(self.systematic_len());
-        self.write_parity(systematic.as_view(), parity);
+        let mut messages_view = messages.as_view_mut();
+        let (systematic, mut parity) = messages_view.split_rows(self.systematic_len());
+        self.write_parity(systematic.as_view(), &mut parity);
     }
 
-    fn write_parity(&self, systematic: DenseMatrixView<F>, parity: DenseMatrixViewMut<F>);
+    fn write_parity(&self, systematic: DenseMatrixView<F>, parity: &mut DenseMatrixViewMut<F>);
 }
 
 impl<F: Field, S: SystematicCode<F>> Code<F> for S {
-    fn encode_batch(&self, messages: DenseMatrixView<F>, codewords: DenseMatrixViewMut<F>) {
-        let (systematic, parity) = codewords.split_rows(self.systematic_len());
+    fn encode_batch(&self, messages: DenseMatrixView<F>, mut codewords: DenseMatrixViewMut<F>) {
+        let (systematic, mut parity) = codewords.split_rows(self.systematic_len());
         systematic.values.copy_from_slice(messages.values);
-        self.write_parity(messages, parity);
+        self.write_parity(messages, &mut parity);
     }
 
     fn message_len(&self) -> usize {
@@ -61,7 +62,7 @@ impl<F: Field> SystematicCode<F> for IdentityCode {
         0
     }
 
-    fn write_parity(&self, _systematic: DenseMatrixView<F>, _parity: DenseMatrixViewMut<F>) {
+    fn write_parity(&self, _systematic: DenseMatrixView<F>, _parity: &mut DenseMatrixViewMut<F>) {
         // All done! There are no parity bits.
     }
 }

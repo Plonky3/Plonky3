@@ -39,12 +39,12 @@ impl<F: Field, IC: SystematicCode<F>> SystematicCode<F> for BrakedownCode<F, IC>
         self.y_len() + self.z_parity_len() + self.v_len()
     }
 
-    fn write_parity(&self, x: DenseMatrixView<F>, parity: DenseMatrixViewMut<F>) {
-        let (mut y, rest) = parity.split_rows(self.y_len());
-        let (z, mut v) = rest.split_rows(self.z_parity_len());
+    fn write_parity(&self, x: DenseMatrixView<F>, parity: &mut DenseMatrixViewMut<F>) {
+        let (mut y, mut rest) = parity.split_rows(self.y_len());
+        let (mut z, mut v) = rest.split_rows(self.z_parity_len());
 
         mul_csr_dense(&self.a, x, &mut y);
-        self.inner_code.write_parity(y.as_view(), z);
+        self.inner_code.write_parity(y.as_view(), &mut z);
         mul_csr_dense(&self.b, z.as_view(), &mut v);
     }
 }
