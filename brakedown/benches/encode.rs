@@ -28,11 +28,14 @@ where
     for n_log in [14, 15, 16, 17] {
         let n = 1 << n_log;
 
+        // TODO: Should actually by fixed column weight, though this shouldn't change perf much.
         let a = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, n / 4, n, A_ROW_WEIGHT);
         let b = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, 3 * n / 4, n / 4, B_ROW_WEIGHT);
         let code = BrakedownCode {
             a,
             b,
+            // TODO: Should be another Brakedown or Reed-Solomon code. The performance difference
+            // should be fairly minor though, since the inner code will be much smaller.
             inner_code: Box::new(IdentityCode { len: n / 2 }),
         };
 
