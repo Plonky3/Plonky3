@@ -1,5 +1,7 @@
 use crate::field::Field;
 use core::ops::{Add, AddAssign, BitXorAssign, Mul, MulAssign};
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -68,39 +70,9 @@ impl MulAssign<Self> for Mersenne31 {
     }
 }
 
-// #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-// pub struct Mersenne31Arr<const N: usize> {
-//     values: [Mersenne31; N],
-// }
-//
-// impl<const N: usize> FieldArr<N, Mersenne31> for Mersenne31Arr<N> {}
-//
-// impl<const N: usize> Add<Self> for Mersenne31Arr<N> {
-//     type Output = Self;
-//
-//     fn add(self, rhs: Self) -> Self {
-//         // TODO: Naive for now.
-//         let values = std::array::from_fn(|i| self.values[i] + rhs.values[i]);
-//         Self { values }
-//     }
-// }
-//
-// impl<const N: usize> Mul<Mersenne31> for Mersenne31Arr<N> {
-//     type Output = Self;
-//
-//     fn mul(self, rhs: Mersenne31) -> Self {
-//         // TODO: Naive for now.
-//         let values = self.values.map(|x| x * rhs);
-//         Self { values }
-//     }
-// }
-//
-// impl<const N: usize> Mul<Self> for Mersenne31Arr<N> {
-//     type Output = Self;
-//
-//     fn mul(self, rhs: Self) -> Self {
-//         // TODO: Naive for now.
-//         let values = std::array::from_fn(|i| self.values[i] * rhs.values[i]);
-//         Self { values }
-//     }
-// }
+impl Distribution<Mersenne31> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
+        let value = (rng.next_u64() % Mersenne31::ORDER as u64) as u32;
+        Mersenne31 { value }
+    }
+}

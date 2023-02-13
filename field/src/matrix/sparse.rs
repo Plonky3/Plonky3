@@ -1,6 +1,9 @@
 use crate::matrix::Matrix;
 use alloc::vec::Vec;
+use core::iter;
 use core::ops::Range;
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 /// A sparse matrix stored in the compressed sparse row format.
 pub struct CsrMatrix<T> {
@@ -27,6 +30,26 @@ impl<T> CsrMatrix<T> {
     pub fn row_mut(&mut self, r: usize) -> &mut [(usize, T)] {
         let range = self.row_index_range(r);
         &mut self.nonzero_values[range]
+    }
+
+    pub fn rand_fixed_row_weight<R: Rng>(
+        rng: &mut R,
+        rows: usize,
+        cols: usize,
+        row_weight: usize,
+    ) -> Self
+    where
+        Standard: Distribution<T>,
+    {
+        let nonzero_values = iter::repeat_with(|| (rng.gen_range(0..cols), rng.gen()))
+            .take(rows * row_weight)
+            .collect();
+        let row_indices = (0..rows + 1).map(|r| r * row_weight).collect();
+        Self {
+            width: cols,
+            nonzero_values,
+            row_indices,
+        }
     }
 }
 

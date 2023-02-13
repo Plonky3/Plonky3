@@ -10,7 +10,10 @@ pub fn mul_csr_dense<F: Field>(
     b: DenseMatrixView<F>,
     c: &mut DenseMatrixViewMut<F>,
 ) {
-    debug_assert_eq!(b.width(), c.width());
+    assert_eq!(a.width(), b.height(), "A, B dimensions don't match");
+    assert_eq!(a.height(), c.height(), "A, C dimensions don't match");
+    assert_eq!(b.width(), c.width(), "B, C dimensions don't match");
+
     for a_row_idx in 0..a.height() {
         let c_row = c.row_mut(a_row_idx);
         for &(a_col_idx, a_val) in a.row(a_row_idx) {

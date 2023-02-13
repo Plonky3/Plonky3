@@ -6,3 +6,11 @@ edition = "2021"
 [dependencies]
 hyperfield = { path = "../field" }
 hypercode = { path = "../code" }
+rand = "0.8.5"
+
+[dev-dependencies]
+criterion = "0.4.0"
+
+[[bench]]
+name = "encode"
+harness = false

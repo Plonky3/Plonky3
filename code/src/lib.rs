@@ -22,7 +22,7 @@ pub trait SystematicCode<F: Field>: Code<F> {
     ///
     /// Since this is a systemic code, this method extends the input matrix to avoid copying.
     fn append_parity(&self, messages: &mut DenseMatrix<F>) {
-        assert_eq!(messages.height(), self.systematic_len());
+        assert_eq!(messages.height(), self.systematic_len(), "Wrong message height");
         messages.expand_to_height(self.codeword_len());
         let mut messages_view = messages.as_view_mut();
         let (systematic, mut parity) = messages_view.split_rows(self.systematic_len());
@@ -50,7 +50,7 @@ impl<F: Field, S: SystematicCode<F>> Code<F> for S {
 
 /// The trivial code whose encoder is the identity function.
 pub struct IdentityCode {
-    len: usize,
+    pub len: usize,
 }
 
 impl<F: Field> SystematicCode<F> for IdentityCode {

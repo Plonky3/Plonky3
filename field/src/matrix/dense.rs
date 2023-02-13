@@ -1,5 +1,7 @@
 use crate::matrix::Matrix;
 use alloc::vec::Vec;
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 /// A dense matrix stored in row-major form.
 pub struct DenseMatrix<T> {
@@ -40,6 +42,17 @@ impl<T> DenseMatrix<T> {
     {
         if self.height() < height {
             self.values.resize(self.width * height, T::default());
+        }
+    }
+
+    pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
+    where
+        Standard: Distribution<T>,
+    {
+        let values = rng.sample_iter(Standard).take(rows * cols).collect();
+        Self {
+            values,
+            width: cols,
         }
     }
 }
