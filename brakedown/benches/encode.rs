@@ -10,6 +10,8 @@ use rand::thread_rng;
 use std::any::type_name;
 
 const BATCH_SIZE: usize = 100;
+const A_ROW_WEIGHT: usize = 10;
+const B_ROW_WEIGHT: usize = 20;
 
 fn criterion_benchmark(c: &mut Criterion) {
     encode::<Mersenne31, 20>(c);
@@ -19,15 +21,15 @@ fn encode<F: Field, const ROW_WEIGHT: usize>(c: &mut Criterion)
 where
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!("encode::<{}, {}>", type_name::<F>(), ROW_WEIGHT));
+    let mut group = c.benchmark_group(&format!("encode::<{}>", type_name::<F>()));
     group.sample_size(10);
 
     let mut rng = thread_rng();
     for n_log in [14, 15, 16, 17] {
         let n = 1 << n_log;
 
-        let a = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, n / 2, n, ROW_WEIGHT);
-        let b = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, n / 2, n / 2, ROW_WEIGHT);
+        let a = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, n / 4, n, A_ROW_WEIGHT);
+        let b = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, 3 * n / 4, n / 4, B_ROW_WEIGHT);
         let code = BrakedownCode {
             a,
             b,
