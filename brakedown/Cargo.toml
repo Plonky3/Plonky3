@@ -15,3 +15,7 @@ criterion = "0.4.0"
 [[bench]]
 name = "encode"
 harness = false
+
+[[bench]]
+name = "field_batch"
+harness = false

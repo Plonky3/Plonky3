@@ -9,11 +9,11 @@ use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 use std::any::type_name;
 
-const BATCH_SIZE: usize = 100;
+const BATCH_SIZE: usize = 1 << 12;
 const A_ROW_WEIGHT: usize = 10;
 const B_ROW_WEIGHT: usize = 20;
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn bench_encode(c: &mut Criterion) {
     encode::<Mersenne31, 20>(c);
 }
 
@@ -25,7 +25,7 @@ where
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [14, 15, 16, 17] {
+    for n_log in [12] {
         let n = 1 << n_log;
 
         // TODO: Should actually by fixed column weight, though this shouldn't change perf much.
@@ -50,5 +50,5 @@ where
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, bench_encode);
 criterion_main!(benches);
