@@ -1,46 +1,111 @@
+use crate::packed::PackedField;
 use alloc::vec::Vec;
+use core::fmt::{Debug, Display};
+use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign};
 use itertools::Itertools;
 
+pub trait SmoothSubgroupField: Field {
+    fn smooth_factors(&self) -> Vec<(u32, u32)>;
+}
+
+/// A finite field;
 pub trait Field:
     'static
     + Copy
     + Default
     + Add<Self, Output = Self>
     + AddAssign<Self>
+    + Sum
     + Mul<Self, Output = Self>
     + MulAssign<Self>
+    + Product
+    + Send
+    + Sync
+    + Debug
+    + Display
 {
+    type Packing: PackedField<Scalar = Self>;
+
     const ZERO: Self;
     const ONE: Self;
-    const NEG_ONE: Self;
+    const TWO: Self;
 
-    fn add_arrs<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> [Self; N] {
-        core::array::from_fn(|i| lhs[i] + rhs[i])
-    }
-
-    fn add_slices(lhs: &[Self], rhs: &[Self]) -> Vec<Self> {
-        lhs.iter().zip_eq(rhs).map(|(x, y)| *x + *y).collect()
-    }
+    // fn add_arrs<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> [Self; N] {
+    //     core::array::from_fn(|i| lhs[i] + rhs[i])
+    // }
+    //
+    // fn add_slices(lhs: &[Self], rhs: &[Self]) -> Vec<Self> {
+    //     lhs.iter().zip_eq(rhs).map(|(x, y)| *x + *y).collect()
+    // }
 
     /// `x += y * s`, where `s` is a scalar.
+    // TODO: Use PackedField
     fn add_scaled_slice_in_place(x: &mut [Self], y: &[Self], s: Self) {
         x.iter_mut()
             .zip_eq(y)
             .for_each(|(x_i, y_i)| *x_i += *y_i * s);
     }
 
-    fn mul_arrs<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> [Self; N] {
-        core::array::from_fn(|i| lhs[i] * rhs[i])
+    // fn mul_arrs<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> [Self; N] {
+    //     core::array::from_fn(|i| lhs[i] * rhs[i])
+    // }
+    //
+    // fn mul_slices(lhs: &[Self], rhs: &[Self]) -> Vec<Self> {
+    //     lhs.iter().zip_eq(rhs).map(|(x, y)| *x * *y).collect()
+    // }
+
+    fn square(&self) -> Self {
+        *self * *self
     }
 
-    fn mul_slices(lhs: &[Self], rhs: &[Self]) -> Vec<Self> {
-        lhs.iter().zip_eq(rhs).map(|(x, y)| *x * *y).collect()
+    fn exp_u64(&self, power: u64) -> Self {
+        let mut current = *self;
+        let mut product = Self::ONE;
+
+        for j in 0..bits_u64(power) {
+            if (power >> j & 1) != 0 {
+                product *= current;
+            }
+            current = current.square();
+        }
+        product
     }
 }
 
-// TODO: Instead have batch methods on Field?
-pub trait FieldVec<const N: usize, F: Field>:
-    'static + Copy + Add<Self, Output = Self> + Mul<Self, Output = Self> + Mul<F, Output = Self>
-{
+pub trait FieldExtension<Base: Field>: Field {
+    const D: usize;
+
+    fn from_base(b: Base) -> Self;
+
+    fn add_base(&self, x: Base) -> Self {
+        *self + Self::from_base(x)
+    }
+}
+
+impl<F: Field> FieldExtension<Self> for F {
+    const D: usize = 1;
+
+    fn from_base(b: Self) -> Self {
+        b
+    }
+}
+
+pub trait PrimeField: Field {
+    const NEG_ONE: Self;
+}
+
+/// A `Field` with highly 2-adic multiplicative subgroups.
+pub trait TwoAdicField: Field {
+    const TWO_ADICITY: usize;
+}
+
+/// A `Field` with somewhat smooth multiplicative subgroups.
+pub trait SemiSmoothField: Field {
+    /// A list of "small" factors in the field's multiplicative subgroup, including duplicates.
+    fn semi_smooth_factors() -> Vec<u32>;
+}
+
+fn bits_u64(n: u64) -> usize {
+    (64 - n.leading_zeros()) as usize
 }

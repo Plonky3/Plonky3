@@ -1,4 +1,9 @@
-use crate::field::Field;
+use crate::field::{Field, PrimeField, SemiSmoothField};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::fmt;
+use core::fmt::{Display, Formatter};
+use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Mul, MulAssign};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -17,11 +22,30 @@ impl Mersenne31 {
 }
 
 impl Field for Mersenne31 {
+    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
+    type Packing = Self;
+
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
+    const TWO: Self = Self { value: 2 };
+}
+
+impl PrimeField for Mersenne31 {
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
+}
+
+impl SemiSmoothField for Mersenne31 {
+    fn semi_smooth_factors() -> Vec<u32> {
+        vec![2, 3, 3, 7, 11, 31, 151, 331]
+    }
+}
+
+impl Display for Mersenne31 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.value, f)
+    }
 }
 
 impl Add<Self> for Mersenne31 {
@@ -42,6 +66,12 @@ impl Add<Self> for Mersenne31 {
 impl AddAssign<Self> for Mersenne31 {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
+    }
+}
+
+impl Sum for Mersenne31 {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, |acc, x| acc + x)
     }
 }
 
@@ -74,5 +104,11 @@ impl Distribution<Mersenne31> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
         let value = (rng.next_u64() % Mersenne31::ORDER as u64) as u32;
         Mersenne31 { value }
+    }
+}
+
+impl Product for Mersenne31 {
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ONE, |acc, x| acc * x)
     }
 }
