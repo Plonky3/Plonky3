@@ -73,21 +73,14 @@ pub trait Field:
     }
 }
 
-pub trait FieldExtension<Base: Field>: Field {
+pub trait FieldExtension: Field {
+    type Base: Field;
     const D: usize;
 
-    fn from_base(b: Base) -> Self;
+    fn from_base(b: Self::Base) -> Self;
 
-    fn add_base(&self, x: Base) -> Self {
+    fn add_base(&self, x: Self::Base) -> Self {
         *self + Self::from_base(x)
-    }
-}
-
-impl<F: Field> FieldExtension<Self> for F {
-    const D: usize = 1;
-
-    fn from_base(b: Self) -> Self {
-        b
     }
 }
 

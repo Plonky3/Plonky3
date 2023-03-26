@@ -20,12 +20,12 @@ pub trait PCS<F: Field>: 'static {
 
     fn commit_batches(polynomials: Vec<DenseMatrixView<F>>) -> (Self::Commitment, Self::Hint);
 
-    fn open_batches<FE: FieldExtension<F>>(
+    fn open_batches<FE: FieldExtension<Base = F>>(
         points: &[FE],
         hints: &[Self::Hint],
     ) -> (Vec<FE>, Self::Proof);
 
-    fn verify_batches<FE: FieldExtension<F>>(
+    fn verify_batches<FE: FieldExtension<Base = F>>(
         commit: &Self::Commitment,
         points: &[FE],
         values: &Vec<Vec<Vec<FE>>>,

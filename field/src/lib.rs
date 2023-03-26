@@ -6,3 +6,4 @@ pub mod field;
 pub mod matrix;
 pub mod mersenne31;
 pub mod packed;
+pub mod trivial_extension;

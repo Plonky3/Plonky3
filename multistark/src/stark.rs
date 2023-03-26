@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::constraint_consumer::ConstraintConsumer;
 use crate::variables::StarkEvaluationVars;
 use hyperfield::field::Field;
+use hyperfield::trivial_extension::TrivialExtension;
 
 pub trait Stark<C: Config> {
     fn columns(&self) -> usize;
@@ -15,6 +16,6 @@ pub trait Stark<C: Config> {
     fn eval_ext(
         &self,
         vars: StarkEvaluationVars<C::FE>,
-        constraints: &mut ConstraintConsumer<C::FE, C::FE, C::FE>,
+        constraints: &mut ConstraintConsumer<C::FE, TrivialExtension<C::FE>, C::FE>,
     );
 }
