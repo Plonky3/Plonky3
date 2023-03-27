@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use hyperfield::field::Field;
 
 pub struct UniFromMultiPCS<F: Field, M: MultivariatePCS<F>> {
-    multi: M,
+    _multi: M,
     _phantom_f: PhantomData<F>,
 }
 
