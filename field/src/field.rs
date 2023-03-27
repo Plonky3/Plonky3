@@ -77,10 +77,18 @@ pub trait FieldExtension: Field {
     type Base: Field;
     const D: usize;
 
+    fn to_base_array(&self) -> [Self::Base; Self::D];
+
+    fn from_base_array(arr: [Self::Base; Self::D]) -> Self;
+
     fn from_base(b: Self::Base) -> Self;
 
     fn add_base(&self, x: Self::Base) -> Self {
         *self + Self::from_base(x)
+    }
+
+    fn mul_base(&self, x: Self::Base) -> Self {
+        *self * Self::from_base(x)
     }
 }
 

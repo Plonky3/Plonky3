@@ -69,6 +69,14 @@ impl<F: Field> FieldExtension for TrivialExtension<F> {
     type Base = F;
     const D: usize = 1;
 
+    fn to_base_array(&self) -> [Self::Base; Self::D] {
+        [self.value]
+    }
+
+    fn from_base_array(b: [Self::Base; Self::D]) -> Self {
+        Self { value: b[0] }
+    }
+
     fn from_base(b: F) -> Self {
         Self { value: b }
     }

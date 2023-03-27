@@ -1,5 +1,5 @@
 use hyperfield::field::{FieldExtension, PrimeField};
-use hyperpcs::PCS;
+use hyperpcs::UnivariatePCS;
 
 pub trait Config {
     /// The field over which trace data is encoded.
@@ -7,5 +7,5 @@ pub trait Config {
     /// The field from which the verifier draws random challenges.
     type FE: FieldExtension<Base = Self::F>;
     /// The polynomial commitment scheme used.
-    type PCS: PCS<Self::F>;
+    type PCS: UnivariatePCS<Self::F>;
 }
