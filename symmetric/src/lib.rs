@@ -4,6 +4,6 @@
 
 extern crate alloc;
 
-pub mod hash;
+pub mod hasher;
 pub mod permutation;
 pub mod sponge;

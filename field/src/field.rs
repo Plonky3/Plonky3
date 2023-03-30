@@ -75,6 +75,7 @@ pub trait Field:
 
 pub trait FieldExtension: Field {
     type Base: Field;
+
     const D: usize;
 
     fn to_base_array(&self) -> [Self::Base; Self::D];

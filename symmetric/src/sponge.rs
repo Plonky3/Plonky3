@@ -1,32 +1,29 @@
-use crate::hash::AlgebraicHash;
-use crate::permutation::AlgebraicPermutation;
+use crate::hasher::CryptographicHasher;
+use crate::permutation::CryptographicPermutation;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use hyperfield::field::Field;
 
 /// A padding-free, overwrite-mode sponge function.
-pub struct PaddingFreeAlgebraicSponge<F, P, const RATE: usize, const CAPACITY: usize>
+pub struct PaddingFreeSponge<T, P, const RATE: usize, const CAPACITY: usize>
 where
-    F: Field,
-    P: AlgebraicPermutation<F, { RATE + CAPACITY }>,
+    P: CryptographicPermutation<T, { RATE + CAPACITY }>,
 {
-    _phantom_f: PhantomData<F>,
+    _phantom_f: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
 
-impl<F, P, const RATE: usize, const CAPACITY: usize> AlgebraicHash<F, RATE>
-    for PaddingFreeAlgebraicSponge<F, P, RATE, CAPACITY>
+impl<T: Default + Copy, P, const RATE: usize, const CAPACITY: usize> CryptographicHasher<T, RATE>
+    for PaddingFreeSponge<T, P, RATE, CAPACITY>
 where
-    F: Field,
-    P: AlgebraicPermutation<F, { RATE + CAPACITY }>,
+    P: CryptographicPermutation<T, { RATE + CAPACITY }>,
 {
-    fn hash(input: Vec<F>) -> [F; RATE] {
-        let mut state = [F::ZERO; RATE + CAPACITY];
+    fn hash(input: Vec<T>) -> [T; RATE] {
+        let mut state = [T::default(); RATE + CAPACITY];
         for input_chunk in input.chunks(RATE) {
             state[..input_chunk.len()].copy_from_slice(input_chunk);
             state = P::permute(state);
         }
-        let mut output = [F::ZERO; RATE];
+        let mut output = [T::default(); RATE];
         for i in 0..RATE {
             output[i] = state[i];
         }

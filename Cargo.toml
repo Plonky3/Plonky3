@@ -1,2 +1,2 @@
 [workspace]
-members = ["brakedown", "challenger", "code", "field", "pcs", "multistark", "symmetric", "tensor_pcs"]
+members = ["brakedown", "challenger", "code", "field", "fri", "pcs", "multistark", "symmetric", "tensor_pcs"]

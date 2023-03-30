@@ -3,16 +3,16 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use hyperfield::field::Field;
-use p3_symmetric::hash::AlgebraicHash;
+use p3_symmetric::hasher::CryptographicHasher;
 
-pub struct HashChallenger<F: Field, H: AlgebraicHash<F, OUT_WIDTH>, const OUT_WIDTH: usize> {
+pub struct HashChallenger<F: Field, H: CryptographicHasher<F, OUT_WIDTH>, const OUT_WIDTH: usize> {
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     _phantom_f: PhantomData<F>,
     _phantom_h: PhantomData<H>,
 }
 
-impl<F: Field, H: AlgebraicHash<F, OUT_WIDTH>, const OUT_WIDTH: usize>
+impl<F: Field, H: CryptographicHasher<F, OUT_WIDTH>, const OUT_WIDTH: usize>
     HashChallenger<F, H, OUT_WIDTH>
 {
     pub fn new(initial_state: Vec<F>) -> Self {
@@ -35,7 +35,7 @@ impl<F: Field, H: AlgebraicHash<F, OUT_WIDTH>, const OUT_WIDTH: usize>
     }
 }
 
-impl<F: Field, H: AlgebraicHash<F, OUT_WIDTH>, const OUT_WIDTH: usize> Challenger<F>
+impl<F: Field, H: CryptographicHasher<F, OUT_WIDTH>, const OUT_WIDTH: usize> Challenger<F>
     for HashChallenger<F, H, OUT_WIDTH>
 {
     fn observe_element(&mut self, element: F) {
