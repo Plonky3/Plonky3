@@ -20,6 +20,6 @@ jobs:
       with:
         toolchain: nightly
     - name: Build
-      run: cargo build --verbose
+      run: cargo +nightly build --verbose
     - name: Test
-      run: cargo test --verbose
+      run: cargo +nightly test --verbose
