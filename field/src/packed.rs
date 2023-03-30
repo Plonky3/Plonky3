@@ -9,30 +9,30 @@ use crate::field::Field;
 /// - WIDTH is assumed to be a power of 2.
 /// - If P implements PackedField then P must be castable to/from [P::Scalar; P::WIDTH] without UB.
 pub unsafe trait PackedField:
-'static
-+ Add<Self, Output = Self>
-+ Add<Self::Scalar, Output = Self>
-+ AddAssign<Self>
-+ AddAssign<Self::Scalar>
-+ Copy
-+ Debug
-+ Default
-+ From<Self::Scalar>
-// TODO: Implement packed / packed division
-+ Div<Self::Scalar, Output = Self>
-+ Mul<Self, Output = Self>
-+ Mul<Self::Scalar, Output = Self>
-+ MulAssign<Self>
-+ MulAssign<Self::Scalar>
-+ Neg<Output = Self>
-+ Product
-+ Send
-+ Sub<Self, Output = Self>
-+ Sub<Self::Scalar, Output = Self>
-+ SubAssign<Self>
-+ SubAssign<Self::Scalar>
-+ Sum
-+ Sync
+        'static
+        + Add<Self, Output = Self>
+        + Add<Self::Scalar, Output = Self>
+        + AddAssign<Self>
+        + AddAssign<Self::Scalar>
+        + Copy
+        + Debug
+        + Default
+        + From<Self::Scalar>
+        // TODO: Implement packed / packed division
+        + Div<Self::Scalar, Output = Self>
+        + Mul<Self, Output = Self>
+        + Mul<Self::Scalar, Output = Self>
+        + MulAssign<Self>
+        + MulAssign<Self::Scalar>
+        + Neg<Output = Self>
+        + Product
+        + Send
+        + Sub<Self, Output = Self>
+        + Sub<Self::Scalar, Output = Self>
+        + SubAssign<Self>
+        + SubAssign<Self::Scalar>
+        + Sum
+        + Sync
     where
         Self::Scalar: Add<Self, Output = Self>,
         Self::Scalar: Mul<Self, Output = Self>,
