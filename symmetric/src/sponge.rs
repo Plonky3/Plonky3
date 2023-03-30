@@ -10,8 +10,8 @@ where
     F: Field,
     P: AlgebraicPermutation<F, { RATE + CAPACITY }>,
 {
-    permutation: P,
     _phantom_f: PhantomData<F>,
+    _phantom_p: PhantomData<P>,
 }
 
 impl<F, P, const RATE: usize, const CAPACITY: usize> AlgebraicHash<F, RATE>
@@ -20,11 +20,11 @@ where
     F: Field,
     P: AlgebraicPermutation<F, { RATE + CAPACITY }>,
 {
-    fn hash(&self, input: Vec<F>) -> [F; RATE] {
+    fn hash(input: Vec<F>) -> [F; RATE] {
         let mut state = [F::ZERO; RATE + CAPACITY];
         for input_chunk in input.chunks(RATE) {
             state[..input_chunk.len()].copy_from_slice(input_chunk);
-            state = self.permutation.permute(state);
+            state = P::permute(state);
         }
         let mut output = [F::ZERO; RATE];
         for i in 0..RATE {

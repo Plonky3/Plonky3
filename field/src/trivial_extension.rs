@@ -1,9 +1,9 @@
 use crate::field::{Field, FieldExtension};
 use core::fmt::{Debug, Display, Formatter};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Mul, MulAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-#[derive(Copy, Clone, Default, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Default, Debug)]
 pub struct TrivialExtension<F: Field> {
     value: F,
 }
@@ -11,7 +11,7 @@ pub struct TrivialExtension<F: Field> {
 impl<F: Field> Add<Self> for TrivialExtension<F> {
     type Output = Self;
 
-    fn add(self, rhs: Self) -> Self::Output {
+    fn add(self, rhs: Self) -> Self {
         Self {
             value: self.value + rhs.value,
         }
@@ -30,10 +30,34 @@ impl<F: Field> Sum for TrivialExtension<F> {
     }
 }
 
+impl<F: Field> Sub<Self> for TrivialExtension<F> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            value: self.value - rhs.value,
+        }
+    }
+}
+
+impl<F: Field> SubAssign<Self> for TrivialExtension<F> {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.value -= rhs.value;
+    }
+}
+
+impl<F: Field> Neg for TrivialExtension<F> {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        Self { value: -self.value }
+    }
+}
+
 impl<F: Field> Mul<Self> for TrivialExtension<F> {
     type Output = Self;
 
-    fn mul(self, rhs: Self) -> Self::Output {
+    fn mul(self, rhs: Self) -> Self {
         Self {
             value: self.value * rhs.value,
         }
@@ -52,6 +76,14 @@ impl<F: Field> Product for TrivialExtension<F> {
     }
 }
 
+impl<F: Field> Div<Self> for TrivialExtension<F> {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self {
+        self * rhs.inverse()
+    }
+}
+
 impl<F: Field> Display for TrivialExtension<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         Display::fmt(&self.value, f)
@@ -63,6 +95,10 @@ impl<F: Field> Field for TrivialExtension<F> {
     const ZERO: Self = Self { value: F::ZERO };
     const ONE: Self = Self { value: F::ONE };
     const TWO: Self = Self { value: F::TWO };
+
+    fn try_inverse(&self) -> Option<Self> {
+        self.value.try_inverse().map(|inv| Self { value: inv })
+    }
 }
 
 impl<F: Field> FieldExtension for TrivialExtension<F> {

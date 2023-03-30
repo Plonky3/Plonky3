@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
-use core::ops::{Add, Mul, MulAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use crate::field::Field;
@@ -12,31 +12,31 @@ pub unsafe trait PackedField:
 'static
 + Add<Self, Output = Self>
 + Add<Self::Scalar, Output = Self>
-// + AddAssign<Self>
-// + AddAssign<Self::Scalar>
++ AddAssign<Self>
++ AddAssign<Self::Scalar>
 + Copy
 + Debug
 + Default
 + From<Self::Scalar>
 // TODO: Implement packed / packed division
-// + Div<Self::Scalar, Output = Self>
++ Div<Self::Scalar, Output = Self>
 + Mul<Self, Output = Self>
 + Mul<Self::Scalar, Output = Self>
 + MulAssign<Self>
 + MulAssign<Self::Scalar>
-// + Neg<Output = Self>
++ Neg<Output = Self>
 + Product
 + Send
-// + Sub<Self, Output = Self>
-// + Sub<Self::Scalar, Output = Self>
-// + SubAssign<Self>
-// + SubAssign<Self::Scalar>
++ Sub<Self, Output = Self>
++ Sub<Self::Scalar, Output = Self>
++ SubAssign<Self>
++ SubAssign<Self::Scalar>
 + Sum
 + Sync
     where
         Self::Scalar: Add<Self, Output = Self>,
         Self::Scalar: Mul<Self, Output = Self>,
-        // Self::Scalar: Sub<Self, Output = Self>,
+        Self::Scalar: Sub<Self, Output = Self>,
 {
     type Scalar: Field;
 
@@ -44,8 +44,8 @@ pub unsafe trait PackedField:
     const ZEROS: Self;
     const ONES: Self;
 
-    // fn from_arr(arr: [Self::Scalar; Self::WIDTH]) -> Self;
-    // fn as_arr(&self) -> [Self::Scalar; Self::WIDTH];
+    fn from_arr(arr: [Self::Scalar; Self::WIDTH]) -> Self;
+    fn as_arr(&self) -> [Self::Scalar; Self::WIDTH];
 
     fn from_slice(slice: &[Self::Scalar]) -> &Self;
     fn from_slice_mut(slice: &mut [Self::Scalar]) -> &mut Self;
@@ -106,12 +106,13 @@ unsafe impl<F: Field> PackedField for F {
     const ZEROS: Self = F::ZERO;
     const ONES: Self = F::ONE;
 
-    // fn from_arr(arr: [Self::Scalar; Self::WIDTH]) -> Self {
-    //     arr[0]
-    // }
-    // fn as_arr(&self) -> [Self::Scalar; Self::WIDTH] {
-    //     [*self]
-    // }
+    fn from_arr(arr: [Self::Scalar; Self::WIDTH]) -> Self {
+        arr[0]
+    }
+
+    fn as_arr(&self) -> [Self::Scalar; Self::WIDTH] {
+        [*self]
+    }
 
     fn from_slice(slice: &[Self::Scalar]) -> &Self {
         &slice[0]

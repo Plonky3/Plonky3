@@ -1,15 +1,13 @@
-use crate::field::{Field, PrimeField, SemiSmoothField};
-use alloc::vec;
-use alloc::vec::Vec;
+use crate::field::{Field, PrimeField};
 use core::fmt;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, BitXorAssign, Mul, MulAssign};
+use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     value: u32,
@@ -17,9 +15,28 @@ pub struct Mersenne31 {
 
 impl Mersenne31 {
     pub const ORDER: u32 = (1 << 31) - 1;
+
     /// Two's complement of `ORDER`, i.e. `2^32 - ORDER`.
-    pub const NEG_ORDER: u32 = Self::ORDER.wrapping_neg();
+    const NEG_ORDER: u32 = Self::ORDER.wrapping_neg();
+
+    fn to_canonical_u32(&self) -> u32 {
+        // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
+        // `value` that is not canonical, namely 2^31 - 1 = p = 0.
+        if self.value == Self::ORDER {
+            0
+        } else {
+            self.value
+        }
+    }
 }
+
+impl PartialEq for Mersenne31 {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_canonical_u32() == other.to_canonical_u32()
+    }
+}
+
+impl Eq for Mersenne31 {}
 
 impl Field for Mersenne31 {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
@@ -28,18 +45,20 @@ impl Field for Mersenne31 {
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
+
+    fn is_zero(&self) -> bool {
+        self.value == 0 || self.value == Self::ORDER
+    }
+
+    fn try_inverse(&self) -> Option<Self> {
+        todo!()
+    }
 }
 
 impl PrimeField for Mersenne31 {
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
-}
-
-impl SemiSmoothField for Mersenne31 {
-    fn semi_smooth_factors() -> Vec<u32> {
-        vec![2, 3, 3, 7, 11, 31, 151, 331]
-    }
 }
 
 impl Display for Mersenne31 {
@@ -72,6 +91,35 @@ impl AddAssign<Self> for Mersenne31 {
 impl Sum for Mersenne31 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |acc, x| acc + x)
+    }
+}
+
+impl Sub<Self> for Mersenne31 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        // TODO: Very naive for now.
+        self + (-rhs)
+    }
+}
+
+impl SubAssign<Self> for Mersenne31 {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl Neg for Mersenne31 {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        if self.is_zero() {
+            Self::ZERO
+        } else {
+            Self {
+                value: Self::ORDER - self.to_canonical_u32(),
+            }
+        }
     }
 }
 
@@ -110,5 +158,13 @@ impl Distribution<Mersenne31> for Standard {
 impl Product for Mersenne31 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ONE, |acc, x| acc * x)
+    }
+}
+
+impl Div for Mersenne31 {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self {
+        self * rhs.inverse()
     }
 }
