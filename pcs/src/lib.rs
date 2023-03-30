@@ -22,6 +22,8 @@ pub trait PCS<F: Field>: 'static {
     /// The opening argument.
     type Proof;
 
+    type Error;
+
     fn commit_batches(polynomials: Vec<DenseMatrix<F>>) -> (Self::Commitment, Self::ProverData);
 }
 
@@ -36,9 +38,9 @@ pub trait UnivariatePCS<F: Field>: PCS<F> {
     fn verify_batches<FE: FieldExtension<Base = F>>(
         commit: &Self::Commitment,
         points: &[FE],
-        values: &Vec<Vec<Vec<FE>>>,
+        values: &[Vec<Vec<FE>>],
         proof: &Self::Proof,
-    );
+    ) -> Result<(), Self::Error>;
 }
 
 pub trait MultivariatePCS<F: Field>: PCS<F> {
@@ -52,7 +54,7 @@ pub trait MultivariatePCS<F: Field>: PCS<F> {
     fn verify_batches<FE: FieldExtension<Base = F>>(
         commit: &Self::Commitment,
         points: &[FE],
-        values: &Vec<Vec<Vec<FE>>>,
+        values: &[Vec<Vec<FE>>],
         proof: &Self::Proof,
     );
 }

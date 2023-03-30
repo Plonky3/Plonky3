@@ -79,6 +79,7 @@ impl<F: Field> Product for TrivialExtension<F> {
 impl<F: Field> Div<Self> for TrivialExtension<F> {
     type Output = Self;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }

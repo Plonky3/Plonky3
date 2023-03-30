@@ -23,10 +23,6 @@ where
             state[..input_chunk.len()].copy_from_slice(input_chunk);
             state = P::permute(state);
         }
-        let mut output = [T::default(); RATE];
-        for i in 0..RATE {
-            output[i] = state[i];
-        }
-        output
+        state[..RATE].try_into().unwrap()
     }
 }

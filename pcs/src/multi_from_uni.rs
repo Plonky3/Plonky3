@@ -13,6 +13,7 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
     type Commitment = ();
     type ProverData = U::ProverData;
     type Proof = ();
+    type Error = ();
 
     fn commit_batches(_polynomials: Vec<DenseMatrix<F>>) -> (Self::Commitment, Self::ProverData) {
         todo!()
@@ -30,7 +31,7 @@ impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U>
     fn verify_batches<FE: FieldExtension<Base = F>>(
         _commit: &Self::Commitment,
         _points: &[FE],
-        _values: &Vec<Vec<Vec<FE>>>,
+        _values: &[Vec<Vec<FE>>],
         _proof: &Self::Proof,
     ) {
         todo!()

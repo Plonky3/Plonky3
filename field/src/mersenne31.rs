@@ -19,7 +19,7 @@ impl Mersenne31 {
     /// Two's complement of `ORDER`, i.e. `2^32 - ORDER`.
     const NEG_ORDER: u32 = Self::ORDER.wrapping_neg();
 
-    fn to_canonical_u32(&self) -> u32 {
+    fn as_canonical_u32(&self) -> u32 {
         // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
         // `value` that is not canonical, namely 2^31 - 1 = p = 0.
         if self.value == Self::ORDER {
@@ -32,7 +32,7 @@ impl Mersenne31 {
 
 impl PartialEq for Mersenne31 {
     fn eq(&self, other: &Self) -> bool {
-        self.to_canonical_u32() == other.to_canonical_u32()
+        self.as_canonical_u32() == other.as_canonical_u32()
     }
 }
 
@@ -117,7 +117,7 @@ impl Neg for Mersenne31 {
             Self::ZERO
         } else {
             Self {
-                value: Self::ORDER - self.to_canonical_u32(),
+                value: Self::ORDER - self.as_canonical_u32(),
             }
         }
     }
@@ -164,6 +164,7 @@ impl Product for Mersenne31 {
 impl Div for Mersenne31 {
     type Output = Self;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
