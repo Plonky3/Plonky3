@@ -11,6 +11,7 @@ env:
 
 jobs:
   build_and_test:
+    name: Build and Test
     runs-on: ubuntu-latest
 
     steps:
@@ -20,5 +21,5 @@ jobs:
         toolchain: nightly
     - name: Build
       run: cargo build
-    - name: Run tests
+    - name: Test
       run: cargo test
