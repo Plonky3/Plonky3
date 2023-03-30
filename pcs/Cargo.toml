@@ -1,8 +1,8 @@
 [package]
-name = "hyperpcs"
+name = "p3-pcs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-hyperfield = { path = "../field" }
+p3-field = { path = "../field" }

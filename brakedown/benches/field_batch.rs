@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use hyperfield::field::Field;
-use hyperfield::mersenne31::Mersenne31;
+use p3_field::field::Field;
+use p3_field::mersenne31::Mersenne31;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 use std::any::type_name;

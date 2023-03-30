@@ -1,7 +1,7 @@
 // use alloc::vec::Vec;
-// use hyperfield::field::Field;
-// use hyperfield::matrix::dense::DenseMatrix;
-// use hyperpcs::{PCS, UnivariatePCS};
+// use p3_field::field::Field;
+// use p3_field::matrix::dense::DenseMatrix;
+// use p3_pcs::{PCS, UnivariatePCS};
 // use crate::proof::FriProof;
 //
 // pub struct FriPcs<F: Field, H: H>;

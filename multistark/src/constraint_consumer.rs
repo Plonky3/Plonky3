@@ -1,5 +1,5 @@
-use hyperfield::field::{Field, FieldExtension};
-use hyperfield::packed::PackedField;
+use p3_field::field::{Field, FieldExtension};
+use p3_field::packed::PackedField;
 
 pub struct ConstraintConsumer<F: Field, FE: FieldExtension<Base = F>, P: PackedField<Scalar = F>> {
     /// Random value used to combine multiple constraints into one.

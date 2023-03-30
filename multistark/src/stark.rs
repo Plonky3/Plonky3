@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::constraint_consumer::ConstraintConsumer;
 use crate::variables::StarkEvaluationVars;
-use hyperfield::field::Field;
-use hyperfield::trivial_extension::TrivialExtension;
+use p3_field::field::Field;
+use p3_field::trivial_extension::TrivialExtension;
 
 pub trait Stark<C: Config> {
     fn columns(&self) -> usize;

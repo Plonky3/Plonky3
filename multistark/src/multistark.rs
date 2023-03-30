@@ -13,8 +13,8 @@ pub trait MultiStark<C: Config, const N: usize> {
 //     use crate::stark::Stark;
 //     use crate::variables::StarkEvaluationVars;
 //     use core::marker::PhantomData;
-//     use hyperfield::field::{Field, FieldExtension};
-//     use hyperfield::packed::PackedField;
+//     use p3_field::field::{Field, FieldExtension};
+//     use p3_field::packed::PackedField;
 //
 //     struct FooStark<C: Config> {
 //         _phantom: PhantomData<C>,

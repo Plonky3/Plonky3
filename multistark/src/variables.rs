@@ -1,4 +1,4 @@
-use hyperfield::packed::PackedField;
+use p3_field::packed::PackedField;
 
 #[derive(Debug, Copy, Clone)]
 pub struct StarkEvaluationVars<'a, P: PackedField> {

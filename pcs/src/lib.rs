@@ -5,8 +5,8 @@ extern crate alloc;
 pub mod multi_from_uni;
 pub mod uni_from_multi;
 
-use hyperfield::field::{Field, FieldExtension};
-use hyperfield::matrix::dense::DenseMatrix;
+use p3_field::field::{Field, FieldExtension};
+use p3_field::matrix::dense::DenseMatrix;
 
 use alloc::vec::Vec;
 

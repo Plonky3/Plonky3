@@ -1,8 +1,8 @@
 #![no_std]
 
-use hyperfield::field::Field;
-use hyperfield::matrix::dense::{DenseMatrix, DenseMatrixView, DenseMatrixViewMut};
-use hyperfield::matrix::Matrix;
+use p3_field::field::Field;
+use p3_field::matrix::dense::{DenseMatrix, DenseMatrixView, DenseMatrixViewMut};
+use p3_field::matrix::Matrix;
 
 /// A systematic linear code.
 pub trait Code<F: Field> {

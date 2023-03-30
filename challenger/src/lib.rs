@@ -7,7 +7,7 @@ extern crate alloc;
 pub mod duplex_challenger;
 pub mod hash_challenger;
 
-use hyperfield::field::{Field, FieldExtension};
+use p3_field::field::{Field, FieldExtension};
 
 pub trait Challenger<F: Field> {
     fn observe_element(&mut self, element: F);

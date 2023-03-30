@@ -1,11 +1,11 @@
 [package]
-name = "tensor_pcs"
+name = "p3-tensor-pcs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-hyperfield = { path = "../field" }
-hypercode = { path = "../code" }
-hyperbrakedown = { path = "../brakedown" }
-hyperpcs = { path = "../pcs" }
+p3-field = { path = "../field" }
+p3-code = { path = "../code" }
+p3-brakedown = { path = "../brakedown" }
+p3-pcs = { path = "../pcs" }

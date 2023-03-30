@@ -1,6 +1,6 @@
 use crate::MultivariatePCS;
 use core::marker::PhantomData;
-use hyperfield::field::Field;
+use p3_field::field::Field;
 
 pub struct UniFromMultiPCS<F: Field, M: MultivariatePCS<F>> {
     _multi: M,

@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use hyperbrakedown::BrakedownCode;
-use hypercode::{IdentityCode, SystematicCode};
-use hyperfield::field::Field;
-use hyperfield::matrix::dense::DenseMatrix;
-use hyperfield::matrix::sparse::CsrMatrix;
-use hyperfield::mersenne31::Mersenne31;
+use p3_brakedown::BrakedownCode;
+use p3_code::{IdentityCode, SystematicCode};
+use p3_field::field::Field;
+use p3_field::matrix::dense::DenseMatrix;
+use p3_field::matrix::sparse::CsrMatrix;
+use p3_field::mersenne31::Mersenne31;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 use std::any::type_name;

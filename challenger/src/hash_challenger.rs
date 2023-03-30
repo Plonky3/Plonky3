@@ -2,7 +2,7 @@ use crate::Challenger;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use hyperfield::field::Field;
+use p3_field::field::Field;
 use p3_symmetric::hasher::CryptographicHasher;
 
 pub struct HashChallenger<F: Field, H: CryptographicHasher<F, OUT_WIDTH>, const OUT_WIDTH: usize> {
