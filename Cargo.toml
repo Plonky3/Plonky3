@@ -1,2 +1,13 @@
 [workspace]
-members = ["brakedown", "challenger", "code", "field", "fri", "pcs", "merkle-tree", "multistark", "symmetric", "tensor_pcs"]
+members = [
+    "brakedown",
+    "challenger",
+    "code",
+    "commit",
+    "field",
+    "fri",
+    "merkle-tree",
+    "multistark",
+    "symmetric",
+    "tensor_pcs",
+]

@@ -8,4 +8,4 @@ license = "MIT OR Apache-2.0"
 p3-field = { path = "../field" }
 p3-code = { path = "../code" }
 p3-brakedown = { path = "../brakedown" }
-p3-pcs = { path = "../pcs" }
+p3-commit = { path = "../commit" }

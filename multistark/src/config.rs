@@ -1,5 +1,5 @@
+use p3_commit::UnivariatePCS;
 use p3_field::field::{FieldExtension, PrimeField};
-use p3_pcs::UnivariatePCS;
 
 pub trait Config {
     /// The field over which trace data is encoded.

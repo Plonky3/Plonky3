@@ -4,8 +4,8 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_commit::vector_commit::VectorCommitmentScheme;
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_symmetric::vector_commit::VectorCommitmentScheme;
 
 pub struct MerkleTree<T> {
     pub leaves: Vec<Vec<T>>,

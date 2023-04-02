@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod multi_from_uni;
 pub mod uni_from_multi;
+pub mod vector_commit;
 
 use p3_field::field::{Field, FieldExtension};
 use p3_field::matrix::dense::DenseMatrix;

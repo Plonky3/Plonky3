@@ -7,4 +7,3 @@ extern crate alloc;
 pub mod hasher;
 pub mod permutation;
 pub mod sponge;
-pub mod vector_commit;
