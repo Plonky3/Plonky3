@@ -1,3 +1,5 @@
+// TODO: Move to its own crate? Might want to keep this core crate generic w.r.t. field choice.
+
 use crate::field::{Field, PrimeField};
 use core::fmt;
 use core::fmt::{Display, Formatter};

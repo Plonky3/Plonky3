@@ -1,3 +1,5 @@
+//! Utilities for generating Fiat-Shamir challenges based on an IOP's transcript.
+
 #![no_std]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
@@ -9,6 +11,7 @@ pub mod hash_challenger;
 
 use p3_field::field::{Field, FieldExtension};
 
+/// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.
 pub trait Challenger<F: Field> {
     fn observe_element(&mut self, element: F);
 

@@ -1,15 +1,18 @@
+//! This crate contains an implementation of the Spielman-based code described in the Brakedown paper.
+
 #![no_std]
 
 extern crate alloc;
 
 use alloc::boxed::Box;
-use p3_code::SystematicCode;
+use p3_code::{LinearCode, SystematicCode};
 use p3_field::field::Field;
 use p3_field::matrix::dense::{DenseMatrixView, DenseMatrixViewMut};
 use p3_field::matrix::mul::mul_csr_dense;
 use p3_field::matrix::sparse::CsrMatrix;
 use p3_field::matrix::Matrix;
 
+/// The Spielman-based code described in the Brakedown paper.
 pub struct BrakedownCode<F: Field, IC: SystematicCode<F>> {
     pub a: CsrMatrix<F>,
     pub b: CsrMatrix<F>,
@@ -52,3 +55,5 @@ impl<F: Field, IC: SystematicCode<F>> SystematicCode<F> for BrakedownCode<F, IC>
         mul_csr_dense(&self.b, z.as_view(), &mut v);
     }
 }
+
+impl<F: Field, IC: SystematicCode<F>> LinearCode<F> for BrakedownCode<F, IC> {}

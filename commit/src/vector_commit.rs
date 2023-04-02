@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+/// A vector commitment scheme (VCS).
 pub trait VectorCommitmentScheme {
     type Item;
     type ProverData;

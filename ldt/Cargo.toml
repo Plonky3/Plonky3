@@ -1,9 +1,9 @@
 [package]
-name = "p3-fri"
+name = "p3-ldt"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field = { path = "../field" }
-p3-ldt = { path = "../ldt" }
+p3-commit = { path = "../commit" }

@@ -1,3 +1,5 @@
+//! Traits for polynomial commitment schemes.
+
 use p3_field::field::{Field, FieldExtension};
 use p3_field::matrix::dense::DenseMatrix;
 
@@ -5,6 +7,9 @@ use alloc::vec::Vec;
 
 /// A polynomial commitment scheme, for committing to (batches of) polynomials defined over the
 /// field `F`.
+///
+/// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
+/// and `MultivariatePCS` for more specific subtraits.
 pub trait PCS<F: Field>: 'static {
     /// The commitment that's sent to the verifier.
     type Commitment;

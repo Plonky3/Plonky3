@@ -6,6 +6,7 @@ members = [
     "commit",
     "field",
     "fri",
+    "ldt",
     "merkle-tree",
     "multistark",
     "symmetric",

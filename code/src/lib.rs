@@ -1,10 +1,12 @@
+//! A framework for codes (in the coding theory sense).
+
 #![no_std]
 
 use p3_field::field::Field;
 use p3_field::matrix::dense::{DenseMatrix, DenseMatrixView, DenseMatrixViewMut};
 use p3_field::matrix::Matrix;
 
-/// A systematic linear code.
+/// A code (in the coding theory sense).
 pub trait Code<F: Field> {
     fn encode_batch(&self, messages: DenseMatrixView<F>, codewords: DenseMatrixViewMut<F>);
 
@@ -13,6 +15,10 @@ pub trait Code<F: Field> {
     fn codeword_len(&self) -> usize;
 }
 
+/// A linear code.
+pub trait LinearCode<F: Field>: Code<F> {}
+
+/// A systematic code.
 pub trait SystematicCode<F: Field>: Code<F> {
     fn systematic_len(&self) -> usize;
 
@@ -70,3 +76,5 @@ impl<F: Field> SystematicCode<F> for IdentityCode {
         // All done! There are no parity bits.
     }
 }
+
+impl<F: Field> LinearCode<F> for IdentityCode {}
