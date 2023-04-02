@@ -23,28 +23,27 @@ where
     _phantom_h: PhantomData<H>,
 }
 
-impl<T, H, const OUT_WIDTH: usize> VectorCommitmentScheme for MerkleTreeVCS<T, H, OUT_WIDTH>
+impl<T, H, const OUT_WIDTH: usize> VectorCommitmentScheme<T> for MerkleTreeVCS<T, H, OUT_WIDTH>
 where
     H: CryptographicHasher<T, OUT_WIDTH>,
 {
-    type Item = T;
     type ProverData = MerkleTree<T>;
     type Commitment = [T; OUT_WIDTH];
     type Proof = MerkleProof<T>;
     type Error = ();
 
-    fn commit(_input: Vec<Self::Item>) -> (Self::ProverData, Self::Commitment) {
+    fn commit(_input: Vec<T>) -> (Self::ProverData, Self::Commitment) {
         todo!()
     }
 
-    fn open(_index: usize) -> (Self::Item, Self::Proof) {
+    fn open(_index: usize) -> (T, Self::Proof) {
         todo!()
     }
 
     fn verify(
         _commit: Self::Commitment,
         _index: usize,
-        _item: Self::Item,
+        _item: T,
         _proof: Self::Proof,
     ) -> Result<(), Self::Error> {
         todo!()
