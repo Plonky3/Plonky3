@@ -8,7 +8,9 @@ pub trait VectorCommitmentScheme {
     type Error;
 
     fn commit(input: Vec<Self::Item>) -> (Self::ProverData, Self::Commitment);
+
     fn open(index: usize) -> (Self::Item, Self::Proof);
+
     fn verify(
         commit: Self::Commitment,
         index: usize,

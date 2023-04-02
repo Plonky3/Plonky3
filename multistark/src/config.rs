@@ -1,4 +1,4 @@
-use p3_commit::UnivariatePCS;
+use p3_commit::pcs::UnivariatePCS;
 use p3_field::field::{FieldExtension, PrimeField};
 
 pub trait Config {

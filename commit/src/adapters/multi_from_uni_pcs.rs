@@ -1,8 +1,8 @@
-use crate::{MultivariatePCS, UnivariatePCS, PCS};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_field::field::{Field, FieldExtension};
 use p3_field::matrix::dense::DenseMatrix;
+use crate::pcs::{MultivariatePCS, PCS, UnivariatePCS};
 
 pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {
     _uni: U,
