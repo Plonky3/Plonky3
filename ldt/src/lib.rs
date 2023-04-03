@@ -2,7 +2,7 @@
 
 #![no_std]
 
-use p3_commit::vector_commit::Oracle;
+use p3_commit::oracle::Oracle;
 use p3_field::field::Field;
 
 /// A batch low-degree test (LDT).

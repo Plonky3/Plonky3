@@ -23,3 +23,6 @@ pub trait Oracle<T> {
 pub trait ConcreteOracle<T>: Oracle<T> {
     fn commit(input: Vec<T>) -> (Self::ProverData, Self::Commitment);
 }
+
+// TODO: Streaming oracle? Where `ProverData` can be initialized and then incrementally updated,
+// rather than being created all at once.

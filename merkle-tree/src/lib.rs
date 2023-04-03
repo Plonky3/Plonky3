@@ -4,9 +4,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_commit::vector_commit::{ConcreteOracle, Oracle};
+use p3_commit::oracle::{ConcreteOracle, Oracle};
+use p3_symmetric::compression::CompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
 
+// TODO: Add a variant that supports compression?
+// How would we keep track of previously-seen paths - make the Oracle methods take &mut self?
+
+/// A standard binary Merkle tree.
 pub struct MerkleTree<T> {
     pub leaves: Vec<Vec<T>>,
 }
@@ -15,42 +20,47 @@ pub struct MerkleProof<T> {
     pub siblings: Vec<T>,
 }
 
-pub struct MerkleTreeVCS<T, H, const OUT_WIDTH: usize>
+pub struct MerkleTreeVCS<L, D, H, C>
 where
-    H: CryptographicHasher<T, OUT_WIDTH>,
+    H: CryptographicHasher<L, D>,
+    C: CompressionFunction<D, 2>,
 {
-    _phantom_t: PhantomData<T>,
+    _phantom_l: PhantomData<L>,
+    _phantom_d: PhantomData<D>,
     _phantom_h: PhantomData<H>,
+    _phantom_c: PhantomData<C>,
 }
 
-impl<T, H, const OUT_WIDTH: usize> Oracle<T> for MerkleTreeVCS<T, H, OUT_WIDTH>
+impl<L, D, H, C> Oracle<L> for MerkleTreeVCS<L, D, H, C>
 where
-    H: CryptographicHasher<T, OUT_WIDTH>,
+    H: CryptographicHasher<L, D>,
+    C: CompressionFunction<D, 2>,
 {
-    type ProverData = MerkleTree<T>;
-    type Commitment = [T; OUT_WIDTH];
-    type Proof = MerkleProof<T>;
+    type ProverData = MerkleTree<L>;
+    type Commitment = D;
+    type Proof = MerkleProof<D>;
     type Error = ();
 
-    fn open(_index: usize) -> (T, Self::Proof) {
+    fn open(_index: usize) -> (L, Self::Proof) {
         todo!()
     }
 
     fn verify(
-        _commit: &[T; OUT_WIDTH],
+        _commit: &D,
         _index: usize,
-        _item: T,
-        _proof: &MerkleProof<T>,
+        _item: L,
+        _proof: &MerkleProof<D>,
     ) -> Result<(), Self::Error> {
         todo!()
     }
 }
 
-impl<T, H, const OUT_WIDTH: usize> ConcreteOracle<T> for MerkleTreeVCS<T, H, OUT_WIDTH>
+impl<L, D, H, C> ConcreteOracle<L> for MerkleTreeVCS<L, D, H, C>
 where
-    H: CryptographicHasher<T, OUT_WIDTH>,
+    H: CryptographicHasher<L, D>,
+    C: CompressionFunction<D, 2>,
 {
-    fn commit(_input: Vec<T>) -> (Self::ProverData, Self::Commitment) {
+    fn commit(_input: Vec<L>) -> (Self::ProverData, Self::Commitment) {
         todo!()
     }
 }
