@@ -10,6 +10,8 @@ use p3_commit::oracle::{ConcreteOracle, Oracle};
 use p3_symmetric::compression::CompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
 
+// TODO: Add Jaqui's cache-friendly version, maybe as a separate alternative impl.
+
 // TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the Oracle methods take &mut self?
 
@@ -44,6 +46,13 @@ impl<L, D> MerkleTree<L, D> {
             leaves,
             digest_layers,
         }
+    }
+
+    pub fn root(&self) -> D
+    where
+        D: Copy,
+    {
+        self.digest_layers.last().unwrap()[0]
     }
 }
 
@@ -88,10 +97,13 @@ where
 
 impl<L, D, H, C> ConcreteOracle<L> for MerkleTreeVCS<L, D, H, C>
 where
+    D: Copy,
     H: CryptographicHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {
-    fn commit(_input: Vec<L>) -> (Self::ProverData, Self::Commitment) {
-        todo!()
+    fn commit(input: Vec<L>) -> (Self::ProverData, Self::Commitment) {
+        let tree = MerkleTree::new::<H, C>(input);
+        let root = tree.root();
+        (tree, root)
     }
 }
