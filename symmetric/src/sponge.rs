@@ -17,7 +17,7 @@ impl<T: Default + Copy, P, const RATE: usize, const CAPACITY: usize>
 where
     P: CryptographicPermutation<T, { RATE + CAPACITY }>,
 {
-    fn hash(&self, input: Vec<T>) -> [T; RATE] {
+    fn hash(input: &Vec<T>) -> [T; RATE] {
         let mut state = [T::default(); RATE + CAPACITY];
         for input_chunk in input.chunks(RATE) {
             state[..input_chunk.len()].copy_from_slice(input_chunk);

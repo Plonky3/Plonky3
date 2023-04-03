@@ -8,3 +8,4 @@ license = "MIT OR Apache-2.0"
 p3-field = { path = "../field" }
 p3-symmetric = { path = "../symmetric" }
 p3-commit = { path = "../commit" }
+itertools = "0.10.5"

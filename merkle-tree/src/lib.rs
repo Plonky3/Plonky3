@@ -2,8 +2,10 @@
 
 extern crate alloc;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use itertools::Itertools;
 use p3_commit::oracle::{ConcreteOracle, Oracle};
 use p3_symmetric::compression::CompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
@@ -14,8 +16,35 @@ use p3_symmetric::hasher::CryptographicHasher;
 /// A standard binary Merkle tree.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an `Oracle`, see `MerkleTreeVCS`.
-pub struct MerkleTree<T> {
-    pub leaves: Vec<Vec<T>>,
+pub struct MerkleTree<L, D> {
+    pub leaves: Vec<L>,
+    pub digest_layers: Vec<Vec<D>>,
+}
+
+impl<L, D> MerkleTree<L, D> {
+    pub fn new<H, C>(leaves: Vec<L>) -> Self
+    where
+        H: CryptographicHasher<L, D>,
+        C: CompressionFunction<D, 2>,
+    {
+        // TODO: Assert that leaves.len() is a power of 2.
+        let leaf_digests = leaves.iter().map(|l| H::hash(l)).collect_vec();
+        let mut digest_layers = vec![leaf_digests];
+        while digest_layers.last().unwrap().len() > 1 {
+            let next_digests = digest_layers
+                .last()
+                .unwrap()
+                .iter()
+                .tuples()
+                .map(|(left, right)| C::compress(&[left, right]))
+                .collect_vec();
+            digest_layers.push(next_digests);
+        }
+        Self {
+            leaves,
+            digest_layers,
+        }
+    }
 }
 
 pub struct MerkleProof<T> {
@@ -38,7 +67,7 @@ where
     H: CryptographicHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {
-    type ProverData = MerkleTree<L>;
+    type ProverData = MerkleTree<L, D>;
     type Commitment = D;
     type Proof = MerkleProof<D>;
     type Error = ();
