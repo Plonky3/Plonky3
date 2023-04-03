@@ -1,20 +1,25 @@
 use alloc::vec::Vec;
 
-/// A vector commitment scheme (VCS).
-pub trait VectorCommitmentScheme<T> {
+/// A prover-supplied oracle.
+///
+/// This is essentially a (not necessarily hiding) vector commitment to `T`. However, this API
+/// supports virtual oracles as well as concrete ones (`ConcreteOracle`).
+pub trait Oracle<T> {
     type ProverData;
     type Commitment;
     type Proof;
     type Error;
 
-    fn commit(input: Vec<T>) -> (Self::ProverData, Self::Commitment);
-
     fn open(index: usize) -> (T, Self::Proof);
 
     fn verify(
-        commit: Self::Commitment,
+        commit: &Self::Commitment,
         index: usize,
         item: T,
-        proof: Self::Proof,
+        proof: &Self::Proof,
     ) -> Result<(), Self::Error>;
+}
+
+pub trait ConcreteOracle<T>: Oracle<T> {
+    fn commit(input: Vec<T>) -> (Self::ProverData, Self::Commitment);
 }

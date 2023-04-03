@@ -2,14 +2,17 @@
 
 #![no_std]
 
-use p3_commit::vector_commit::VectorCommitmentScheme;
+use p3_commit::vector_commit::Oracle;
 use p3_field::field::Field;
 
-/// A low-degree test (LDT).
-pub trait LDT<F: Field, VCS: VectorCommitmentScheme<F>> {
+/// A batch low-degree test (LDT).
+pub trait LDT<F: Field, O: Oracle<F>> {
+    type Proof;
     type Error;
 
-    fn test() -> Result<(), Self::Error>;
+    fn prove(codewords: &[O::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
+    fn verify(codeword_commits: &[O::Commitment], proof: &Self::Proof)
+              -> Result<(), Self::Error>;
 }
 
 // TODO: PCS from LDT.

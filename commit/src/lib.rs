@@ -1,4 +1,4 @@
-//! A framework for various types of commitment schemes.
+//! A framework for various (not necessarily hiding) cryptographic commitment schemes.
 
 #![no_std]
 

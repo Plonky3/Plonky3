@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_commit::vector_commit::VectorCommitmentScheme;
+use p3_commit::vector_commit::{ConcreteOracle, Oracle};
 use p3_symmetric::hasher::CryptographicHasher;
 
 pub struct MerkleTree<T> {
@@ -23,7 +23,7 @@ where
     _phantom_h: PhantomData<H>,
 }
 
-impl<T, H, const OUT_WIDTH: usize> VectorCommitmentScheme<T> for MerkleTreeVCS<T, H, OUT_WIDTH>
+impl<T, H, const OUT_WIDTH: usize> Oracle<T> for MerkleTreeVCS<T, H, OUT_WIDTH>
 where
     H: CryptographicHasher<T, OUT_WIDTH>,
 {
@@ -32,20 +32,25 @@ where
     type Proof = MerkleProof<T>;
     type Error = ();
 
-    fn commit(_input: Vec<T>) -> (Self::ProverData, Self::Commitment) {
-        todo!()
-    }
-
     fn open(_index: usize) -> (T, Self::Proof) {
         todo!()
     }
 
     fn verify(
-        _commit: Self::Commitment,
+        _commit: &[T; OUT_WIDTH],
         _index: usize,
         _item: T,
-        _proof: Self::Proof,
+        _proof: &MerkleProof<T>,
     ) -> Result<(), Self::Error> {
+        todo!()
+    }
+}
+
+impl<T, H, const OUT_WIDTH: usize> ConcreteOracle<T> for MerkleTreeVCS<T, H, OUT_WIDTH>
+where
+    H: CryptographicHasher<T, OUT_WIDTH>,
+{
+    fn commit(_input: Vec<T>) -> (Self::ProverData, Self::Commitment) {
         todo!()
     }
 }
