@@ -5,7 +5,10 @@ pub trait CryptographicHasher<I, O> {
     fn hash(&self, input: I) -> O;
 }
 
-pub trait VecToArrHasher<T, const OUT_LEN: usize>: CryptographicHasher<Vec<T>, [T; OUT_LEN]> {}
+pub trait VecToArrHasher<T, const OUT_LEN: usize>:
+    CryptographicHasher<Vec<T>, [T; OUT_LEN]>
+{
+}
 
 /// Converts a hash from [I1] -> O to a hash [I2] -> O.
 pub struct HashAdapter<I1, I2, O, Inner, F>
@@ -22,9 +25,9 @@ where
 }
 
 impl<I1, I2, O, Inner, F> CryptographicHasher<I2, O> for HashAdapter<I1, I2, O, Inner, F>
-    where
-        Inner: CryptographicHasher<I1, O>,
-        F: Fn(I2) -> I1,
+where
+    Inner: CryptographicHasher<I1, O>,
+    F: Fn(I2) -> I1,
 {
     fn hash(&self, input: I2) -> O {
         self.inner.hash((self.map)(input))
