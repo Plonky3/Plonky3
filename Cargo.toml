@@ -8,7 +8,8 @@ members = [
     "fri",
     "ldt",
     "merkle-tree",
+    "maybe-rayon",
     "multistark",
     "symmetric",
-    "tensor_pcs",
+    "tensor-pcs",
 ]

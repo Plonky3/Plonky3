@@ -1,0 +1,13 @@
+[package]
+name = "p3-maybe-rayon"
+description = "Feature-gated wrapper around rayon"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["parallel"]
+parallel = ["rayon"]
+
+[dependencies]
+rayon = { version = "1.7.0", optional = true }

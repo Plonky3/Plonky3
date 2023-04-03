@@ -8,10 +8,12 @@ use p3_commit::oracle::{ConcreteOracle, Oracle};
 use p3_symmetric::compression::CompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
 
-// TODO: Add a variant that supports compression?
+// TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the Oracle methods take &mut self?
 
 /// A standard binary Merkle tree.
+///
+/// This generally shouldn't be used directly. If you're using a Merkle tree as an `Oracle`, see `MerkleTreeVCS`.
 pub struct MerkleTree<T> {
     pub leaves: Vec<Vec<T>>,
 }
