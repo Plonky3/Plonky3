@@ -11,8 +11,7 @@ pub trait LDT<F: Field, O: Oracle<F>> {
     type Error;
 
     fn prove(codewords: &[O::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
-    fn verify(codeword_commits: &[O::Commitment], proof: &Self::Proof)
-              -> Result<(), Self::Error>;
+    fn verify(codeword_commits: &[O::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
 }
 
 // TODO: PCS from LDT.
