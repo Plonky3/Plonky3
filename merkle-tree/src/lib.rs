@@ -15,7 +15,7 @@ use p3_symmetric::hasher::CryptographicHasher;
 // TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the Oracle methods take &mut self?
 
-/// A standard binary Merkle tree.
+/// A standard binary Merkle tree, with leaves of type `L` and digests of type `D`.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an `Oracle`, see `MerkleTreeVCS`.
 pub struct MerkleTree<L, D> {
@@ -50,16 +50,23 @@ impl<L, D> MerkleTree<L, D> {
 
     pub fn root(&self) -> D
     where
-        D: Copy,
+        D: Clone,
     {
-        self.digest_layers.last().unwrap()[0]
+        self.digest_layers.last().unwrap()[0].clone()
     }
 }
 
-pub struct MerkleProof<T> {
-    pub siblings: Vec<T>,
+pub struct MerkleProof<D> {
+    pub sibling_digests: Vec<D>,
 }
 
+/// A vector commitment scheme backed by a Merkle tree.
+///
+/// Generics:
+/// - `L`: a leaf value
+/// - `D`: a digest
+/// - `H`: the leaf hasher
+/// - `C`: the digest compression function
 pub struct MerkleTreeVCS<L, D, H, C>
 where
     H: CryptographicHasher<L, D>,
@@ -73,6 +80,7 @@ where
 
 impl<L, D, H, C> Oracle<L> for MerkleTreeVCS<L, D, H, C>
 where
+    L: Clone,
     H: CryptographicHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {
@@ -81,8 +89,12 @@ where
     type Proof = MerkleProof<D>;
     type Error = ();
 
-    fn open(_index: usize) -> (L, Self::Proof) {
-        todo!()
+    fn open(index: usize, prover_data: &MerkleTree<L, D>) -> (L, MerkleProof<D>) {
+        let leaf = prover_data.leaves[index].clone();
+        let proof = MerkleProof {
+            sibling_digests: vec![], // TODO
+        };
+        (leaf, proof)
     }
 
     fn verify(
@@ -97,7 +109,8 @@ where
 
 impl<L, D, H, C> ConcreteOracle<L> for MerkleTreeVCS<L, D, H, C>
 where
-    D: Copy,
+    L: Clone,
+    D: Clone,
     H: CryptographicHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {

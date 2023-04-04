@@ -10,7 +10,7 @@ pub trait Oracle<T> {
     type Proof;
     type Error;
 
-    fn open(index: usize) -> (T, Self::Proof);
+    fn open(index: usize, prover_data: &Self::ProverData) -> (T, Self::Proof);
 
     fn verify(
         commit: &Self::Commitment,
