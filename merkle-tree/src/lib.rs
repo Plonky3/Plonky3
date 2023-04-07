@@ -46,14 +46,13 @@ impl<L, D> MerkleTree<L, D> {
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
         let max_height = leaves_largest_first.peek().unwrap().height();
+
         let tallest_matrices = leaves_largest_first
             .peeking_take_while(|m| m.height() == max_height)
             .collect_vec();
+
         let first_digest_layer = (0..max_height)
-            .map(|i| {
-                let merged_iter = tallest_matrices.iter().flat_map(|m| m.row(i).iter());
-                H::hash_iter(merged_iter)
-            })
+            .map(|i| H::hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter())))
             .collect_vec();
 
         let mut digest_layers = vec![first_digest_layer];
@@ -66,8 +65,9 @@ impl<L, D> MerkleTree<L, D> {
                 break;
             }
 
+            // The matrices that get inserted at this layer.
             let tallest_matrices = leaves_largest_first
-                .peeking_take_while(|m| m.height() == max_height)
+                .peeking_take_while(|m| m.height() == prev_layer.len())
                 .collect_vec();
 
             let next_len = prev_layer.len() >> 1;
@@ -77,8 +77,8 @@ impl<L, D> MerkleTree<L, D> {
                 let right = &prev_layer[2 * i + 1];
                 let mut digest = C::compress(&[left, right]);
                 if !tallest_matrices.is_empty() {
-                    let merged_iter = tallest_matrices.iter().flat_map(|m| m.row(i).iter());
-                    let tallest_digest = H::hash_iter(merged_iter);
+                    let tallest_digest =
+                        H::hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter()));
                     digest = C::compress(&[&digest, &tallest_digest]);
                 }
                 next_digests.push(digest);
