@@ -24,19 +24,19 @@ where
     _phantom_o: PhantomData<O>,
 }
 
-impl<FE, O> LDT<FE::Base, O> for FriLDT<FE, O>
+impl<FE, M> LDT<FE::Base, M> for FriLDT<FE, M>
 where
     FE: FieldExtension,
-    O: MMCS<FE::Base>,
+    M: MMCS<FE::Base>,
 {
-    type Proof = FriProof<FE, O>;
+    type Proof = FriProof<FE, M>;
     type Error = ();
 
-    fn prove(codewords: &[O::Commitment]) -> Self::Proof {
+    fn prove(codewords: &[M::ProverData]) -> Self::Proof {
         prove(codewords)
     }
 
-    fn verify(_codewords: &[O::Commitment], _proof: &Self::Proof) -> Result<(), Self::Error> {
+    fn verify(_codewords: &[M::Commitment], _proof: &Self::Proof) -> Result<(), Self::Error> {
         todo!()
     }
 }

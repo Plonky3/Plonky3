@@ -12,7 +12,6 @@ members = [
     "merkle-tree",
     "maybe-rayon",
     "mersenne-31",
-    "multistark",
     "symmetric",
     "tensor-pcs",
     "util",
