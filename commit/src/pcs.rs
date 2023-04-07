@@ -1,7 +1,7 @@
 //! Traits for polynomial commitment schemes.
 
 use p3_field::field::{Field, FieldExtension};
-use p3_field::matrix::dense::DenseMatrix;
+use p3_matrix::dense::DenseMatrix;
 
 use alloc::vec::Vec;
 

@@ -2,7 +2,7 @@
 
 // use alloc::vec::Vec;
 // use p3_field::field::Field;
-// use p3_field::matrix::dense::DenseMatrix;
+// use p3_matrix::dense::DenseMatrix;
 // use p3_commit::{PCS, UnivariatePCS};
 // use crate::proof::FriProof;
 //

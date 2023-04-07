@@ -6,3 +6,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field = { path = "../field" }
+p3-matrix = { path = "../matrix" }

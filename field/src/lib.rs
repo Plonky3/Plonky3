@@ -7,6 +7,5 @@
 extern crate alloc;
 
 pub mod field;
-pub mod matrix;
 pub mod packed;
 pub mod trivial_extension;

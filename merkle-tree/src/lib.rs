@@ -8,8 +8,8 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::oracle::{ConcreteOracle, Dimensions, Oracle};
-use p3_field::matrix::dense::DenseMatrix;
-use p3_field::matrix::Matrix;
+use p3_matrix::dense::DenseMatrix;
+use p3_matrix::Matrix;
 use p3_symmetric::compression::CompressionFunction;
 use p3_symmetric::hasher::IterHasher;
 

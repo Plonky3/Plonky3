@@ -7,10 +7,10 @@ extern crate alloc;
 use alloc::boxed::Box;
 use p3_code::{LinearCode, SystematicCode};
 use p3_field::field::Field;
-use p3_field::matrix::dense::{DenseMatrixView, DenseMatrixViewMut};
-use p3_field::matrix::mul::mul_csr_dense;
-use p3_field::matrix::sparse::CsrMatrix;
-use p3_field::matrix::Matrix;
+use p3_matrix::dense::{DenseMatrixView, DenseMatrixViewMut};
+use p3_matrix::mul::mul_csr_dense;
+use p3_matrix::sparse::CsrMatrix;
+use p3_matrix::Matrix;
 
 /// The Spielman-based code described in the Brakedown paper.
 pub struct BrakedownCode<F: Field, IC: SystematicCode<F>> {

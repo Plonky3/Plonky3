@@ -3,8 +3,8 @@
 #![no_std]
 
 use p3_field::field::Field;
-use p3_field::matrix::dense::{DenseMatrix, DenseMatrixView, DenseMatrixViewMut};
-use p3_field::matrix::Matrix;
+use p3_matrix::dense::{DenseMatrix, DenseMatrixView, DenseMatrixViewMut};
+use p3_matrix::Matrix;
 
 /// A code (in the coding theory sense).
 pub trait Code<F: Field> {

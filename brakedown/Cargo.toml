@@ -5,8 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
 p3-code = { path = "../code" }
+p3-field = { path = "../field" }
+p3-matrix = { path = "../matrix" }
 rand = "0.8.5"
 
 [dev-dependencies]

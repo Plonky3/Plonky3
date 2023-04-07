@@ -1,4 +1,4 @@
-use crate::matrix::Matrix;
+use crate::Matrix;
 use alloc::vec::Vec;
 use core::iter;
 use core::ops::Range;

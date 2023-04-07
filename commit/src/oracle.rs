@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use p3_field::matrix::dense::DenseMatrix;
+use p3_matrix::dense::DenseMatrix;
 
 /// An oracle which holds a batch of vectors, potentially of different sizes, and supports querying
 /// all vectors at a particular index.
