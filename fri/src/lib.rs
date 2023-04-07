@@ -7,7 +7,7 @@ extern crate alloc;
 use crate::proof::FriProof;
 use crate::prover::prove;
 use core::marker::PhantomData;
-use p3_commit::oracle::Oracle;
+use p3_commit::mmcs::MMCS;
 use p3_field::field::FieldExtension;
 use p3_ldt::LDT;
 
@@ -18,7 +18,7 @@ mod prover;
 struct FriLDT<FE, O>
 where
     FE: FieldExtension,
-    O: Oracle<FE::Base>,
+    O: MMCS<FE::Base>,
 {
     _phantom_fe: PhantomData<FE>,
     _phantom_o: PhantomData<O>,
@@ -27,7 +27,7 @@ where
 impl<FE, O> LDT<FE::Base, O> for FriLDT<FE, O>
 where
     FE: FieldExtension,
-    O: Oracle<FE::Base>,
+    O: MMCS<FE::Base>,
 {
     type Proof = FriProof<FE, O>;
     type Error = ();

@@ -2,11 +2,11 @@
 
 #![no_std]
 
-use p3_commit::oracle::Oracle;
+use p3_commit::mmcs::MMCS;
 use p3_field::field::Field;
 
 /// A batch low-degree test (LDT).
-pub trait LDT<F: Field, O: Oracle<F>> {
+pub trait LDT<F: Field, O: MMCS<F>> {
     type Proof;
     type Error;
 

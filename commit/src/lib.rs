@@ -5,5 +5,5 @@
 extern crate alloc;
 
 pub mod adapters;
-pub mod oracle;
+pub mod mmcs;
 pub mod pcs;

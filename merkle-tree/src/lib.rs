@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::marker::PhantomData;
 use itertools::Itertools;
-use p3_commit::oracle::{ConcreteOracle, Dimensions, Oracle};
+use p3_commit::mmcs::{ConcreteMMCS, Dimensions, MMCS};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::Matrix;
 use p3_symmetric::compression::CompressionFunction;
@@ -16,12 +16,12 @@ use p3_symmetric::hasher::IterHasher;
 // TODO: Add Jaqui's cache-friendly version, maybe as a separate alternative impl.
 
 // TODO: Add a variant that supports pruning overlapping paths?
-// How would we keep track of previously-seen paths - make the Oracle methods take &mut self?
+// How would we keep track of previously-seen paths - make the MMCS methods take &mut self?
 
 /// A binary Merkle tree, with leaves of type `L` and digests of type `D`.
 ///
-/// This generally shouldn't be used directly. If you're using a Merkle tree as an `Oracle`,
-/// see `MerkleTreeOracle`.
+/// This generally shouldn't be used directly. If you're using a Merkle tree as an `MMCS`,
+/// see `MerkleTreeMMCS`.
 pub struct MerkleTree<L, D> {
     leaves: Vec<DenseMatrix<L>>,
     digest_layers: Vec<Vec<D>>,
@@ -108,7 +108,7 @@ impl<L, D> MerkleTree<L, D> {
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeOracle<L, D, H, C>
+pub struct MerkleTreeMMCS<L, D, H, C>
 where
     for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
@@ -119,7 +119,7 @@ where
     _phantom_c: PhantomData<C>,
 }
 
-impl<L, D, H, C> Oracle<L> for MerkleTreeOracle<L, D, H, C>
+impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: Clone,
     for<'a> H: IterHasher<&'a L, D>,
@@ -151,14 +151,14 @@ where
     }
 }
 
-impl<L, D, H, C> ConcreteOracle<L> for MerkleTreeOracle<L, D, H, C>
+impl<L, D, H, C> ConcreteMMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: Clone,
     D: Clone,
     for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
 {
-    fn commit_batch(inputs: Vec<DenseMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
+    fn commit(inputs: Vec<DenseMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
         let tree = MerkleTree::new::<H, C>(inputs);
         let root = tree.root();
         (tree, root)
