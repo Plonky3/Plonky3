@@ -6,13 +6,14 @@ use p3_commit::mmcs::MMCS;
 use p3_field::field::Field;
 
 /// A batch low-degree test (LDT).
-pub trait LDT<F: Field, O: MMCS<F>> {
+pub trait LDT<F: Field, M: MMCS<F>> {
     type Proof;
     type Error;
 
-    fn prove(codewords: &[O::Commitment]) -> Self::Proof;
+    /// Prove that each column of each matrix in `codewords` is a codeword.
+    fn prove(codewords: &[M::ProverData]) -> Self::Proof;
 
-    fn verify(codeword_commits: &[O::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
+    fn verify(codeword_commits: &[M::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
 }
 
-// TODO: PCS from LDT.
+// TODO: Adapter which builds PCS from LDT.
