@@ -1,10 +1,12 @@
-// TODO: Move to its own crate? Might want to keep this core crate generic w.r.t. field choice.
+//! The prime field `F_p` where `p = 2^31 - 1`.
 
-use crate::field::{Field, PrimeField};
+#![no_std]
+
 use core::fmt;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use p3_field::field::{Field, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
