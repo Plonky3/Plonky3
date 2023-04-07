@@ -6,6 +6,7 @@ members = [
     "commit",
     "field",
     "fri",
+    "keccak",
     "ldt",
     "merkle-tree",
     "maybe-rayon",
