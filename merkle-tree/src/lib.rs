@@ -4,44 +4,89 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::Reverse;
 use core::marker::PhantomData;
 use itertools::Itertools;
-use p3_commit::oracle::{ConcreteOracle, Oracle};
+use p3_commit::oracle::{ConcreteOracle, Dimensions, Oracle};
+use p3_field::matrix::dense::DenseMatrix;
+use p3_field::matrix::Matrix;
 use p3_symmetric::compression::CompressionFunction;
-use p3_symmetric::hasher::CryptographicHasher;
+use p3_symmetric::hasher::IterHasher;
 
 // TODO: Add Jaqui's cache-friendly version, maybe as a separate alternative impl.
 
 // TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the Oracle methods take &mut self?
 
-/// A standard binary Merkle tree, with leaves of type `L` and digests of type `D`.
+/// A binary Merkle tree, with leaves of type `L` and digests of type `D`.
 ///
-/// This generally shouldn't be used directly. If you're using a Merkle tree as an `Oracle`, see `MerkleTreeVCS`.
+/// This generally shouldn't be used directly. If you're using a Merkle tree as an `Oracle`,
+/// see `MerkleTreeOracle`.
 pub struct MerkleTree<L, D> {
-    pub leaves: Vec<L>,
-    pub digest_layers: Vec<Vec<D>>,
+    leaves: Vec<DenseMatrix<L>>,
+    digest_layers: Vec<Vec<D>>,
 }
 
 impl<L, D> MerkleTree<L, D> {
-    pub fn new<H, C>(leaves: Vec<L>) -> Self
+    pub fn new<H, C>(leaves: Vec<DenseMatrix<L>>) -> Self
     where
-        H: CryptographicHasher<L, D>,
+        for<'a> H: IterHasher<&'a L, D>,
         C: CompressionFunction<D, 2>,
     {
-        // TODO: Assert that leaves.len() is a power of 2.
-        let leaf_digests = leaves.iter().map(|l| H::hash(l)).collect_vec();
-        let mut digest_layers = vec![leaf_digests];
-        while digest_layers.last().unwrap().len() > 1 {
-            let next_digests = digest_layers
+        assert!(!leaves.is_empty(), "No matrices given?");
+        for leaf in &leaves {
+            assert!(
+                leaf.height().is_power_of_two(),
+                "Matrix height not a power of two"
+            )
+        }
+
+        let mut leaves_largest_first = leaves
+            .iter()
+            .sorted_by_key(|l| Reverse(l.height()))
+            .peekable();
+        let max_height = leaves_largest_first.peek().unwrap().height();
+        let tallest_matrices = leaves_largest_first
+            .peeking_take_while(|m| m.height() == max_height)
+            .collect_vec();
+        let first_digest_layer = (0..max_height)
+            .map(|i| {
+                let merged_iter = tallest_matrices.iter().flat_map(|m| m.row(i).iter());
+                H::hash_iter(merged_iter)
+            })
+            .collect_vec();
+
+        let mut digest_layers = vec![first_digest_layer];
+        loop {
+            let prev_layer = digest_layers
                 .last()
-                .unwrap()
-                .iter()
-                .tuples()
-                .map(|(left, right)| C::compress(&[left, right]))
+                .map(|v| v.as_slice())
+                .unwrap_or_default();
+            if prev_layer.len() == 1 {
+                break;
+            }
+
+            let tallest_matrices = leaves_largest_first
+                .peeking_take_while(|m| m.height() == max_height)
                 .collect_vec();
+
+            let next_len = prev_layer.len() >> 1;
+            let mut next_digests = Vec::with_capacity(next_len);
+            for i in 0..next_len {
+                let left = &prev_layer[2 * i];
+                let right = &prev_layer[2 * i + 1];
+                let mut digest = C::compress(&[left, right]);
+                if !tallest_matrices.is_empty() {
+                    let merged_iter = tallest_matrices.iter().flat_map(|m| m.row(i).iter());
+                    let tallest_digest = H::hash_iter(merged_iter);
+                    digest = C::compress(&[&digest, &tallest_digest]);
+                }
+                next_digests.push(digest);
+            }
+
             digest_layers.push(next_digests);
         }
+
         Self {
             leaves,
             digest_layers,
@@ -56,10 +101,6 @@ impl<L, D> MerkleTree<L, D> {
     }
 }
 
-pub struct MerkleProof<D> {
-    pub sibling_digests: Vec<D>,
-}
-
 /// A vector commitment scheme backed by a Merkle tree.
 ///
 /// Generics:
@@ -67,9 +108,9 @@ pub struct MerkleProof<D> {
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeVCS<L, D, H, C>
+pub struct MerkleTreeOracle<L, D, H, C>
 where
-    H: CryptographicHasher<L, D>,
+    for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
 {
     _phantom_l: PhantomData<L>,
@@ -78,44 +119,47 @@ where
     _phantom_c: PhantomData<C>,
 }
 
-impl<L, D, H, C> Oracle<L> for MerkleTreeVCS<L, D, H, C>
+impl<L, D, H, C> Oracle<L> for MerkleTreeOracle<L, D, H, C>
 where
     L: Clone,
-    H: CryptographicHasher<L, D>,
+    for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
 {
     type ProverData = MerkleTree<L, D>;
     type Commitment = D;
-    type Proof = MerkleProof<D>;
+    type Proof = Vec<D>;
     type Error = ();
 
-    fn open(index: usize, prover_data: &MerkleTree<L, D>) -> (L, MerkleProof<D>) {
-        let leaf = prover_data.leaves[index].clone();
-        let proof = MerkleProof {
-            sibling_digests: vec![], // TODO
-        };
+    fn open_batch(row: usize, prover_data: &MerkleTree<L, D>) -> (Vec<&[L]>, Vec<D>) {
+        let leaf = prover_data
+            .leaves
+            .iter()
+            .map(|matrix| matrix.row(row))
+            .collect();
+        let proof = vec![]; // TODO
         (leaf, proof)
     }
 
-    fn verify(
+    fn verify_batch(
         _commit: &D,
+        _dimensions: &[Dimensions],
         _index: usize,
-        _item: L,
-        _proof: &MerkleProof<D>,
+        _item: Vec<L>,
+        _proof: &Vec<D>,
     ) -> Result<(), Self::Error> {
         todo!()
     }
 }
 
-impl<L, D, H, C> ConcreteOracle<L> for MerkleTreeVCS<L, D, H, C>
+impl<L, D, H, C> ConcreteOracle<L> for MerkleTreeOracle<L, D, H, C>
 where
     L: Clone,
     D: Clone,
-    H: CryptographicHasher<L, D>,
+    for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
 {
-    fn commit(input: Vec<L>) -> (Self::ProverData, Self::Commitment) {
-        let tree = MerkleTree::new::<H, C>(input);
+    fn commit_batch(inputs: Vec<DenseMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
+        let tree = MerkleTree::new::<H, C>(inputs);
         let root = tree.root();
         (tree, root)
     }

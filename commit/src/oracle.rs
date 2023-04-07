@@ -1,27 +1,41 @@
 use alloc::vec::Vec;
+use p3_field::matrix::dense::DenseMatrix;
 
-/// A prover-supplied oracle.
+/// An oracle which holds a batch of vectors, potentially of different sizes, and supports querying
+/// all vectors at a particular index.
 ///
-/// This is essentially a (not necessarily hiding) vector commitment to `T`. However, this API
-/// supports virtual oracles as well as concrete ones (`ConcreteOracle`).
+/// These oracles may be concrete (`ConcreteOracle`) or virtual.
+// TODO: Rename? MMCS = Mixed Matrix Commitment Scheme?
 pub trait Oracle<T> {
     type ProverData;
     type Commitment;
     type Proof;
     type Error;
 
-    fn open(index: usize, prover_data: &Self::ProverData) -> (T, Self::Proof);
+    fn open_batch(row: usize, prover_data: &Self::ProverData) -> (Vec<&[T]>, Self::Proof);
 
-    fn verify(
+    /// Verify a batch opening.
+    fn verify_batch(
         commit: &Self::Commitment,
+        dimensions: &[Dimensions],
         index: usize,
-        item: T,
+        item: Vec<T>,
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>;
 }
 
+pub struct Dimensions {
+    pub width: usize,
+    pub log2_height: usize,
+}
+
+// pub trait TwoAdicOracle<T>: Oracle<T> {
+//     /// The log2 of the size of the `i`th oracle.
+//     fn log2_size(i: usize) -> usize;
+// }
+
 pub trait ConcreteOracle<T>: Oracle<T> {
-    fn commit(input: Vec<T>) -> (Self::ProverData, Self::Commitment);
+    fn commit_batch(inputs: Vec<DenseMatrix<T>>) -> (Self::ProverData, Self::Commitment);
 }
 
 // TODO: Streaming oracle? Where `ProverData` can be initialized and then incrementally updated,

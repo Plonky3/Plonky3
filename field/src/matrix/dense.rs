@@ -4,6 +4,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 /// A dense matrix stored in row-major form.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DenseMatrix<T> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,

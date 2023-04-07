@@ -10,7 +10,8 @@ pub trait LDT<F: Field, O: Oracle<F>> {
     type Proof;
     type Error;
 
-    fn prove(codewords: &[O::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
+    fn prove(codewords: &[O::Commitment]) -> Self::Proof;
+
     fn verify(codeword_commits: &[O::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
 }
 
