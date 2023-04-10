@@ -15,7 +15,7 @@ use p3_field::field::{Field, FieldExtension};
 pub trait Challenger<F: Field> {
     fn observe_element(&mut self, element: F);
 
-    fn observe_extension_element<FE: FieldExtension<Base = F>>(&mut self, element: FE)
+    fn observe_extension_element<FE: FieldExtension<F>>(&mut self, element: FE)
     where
         [(); FE::D]:,
     {

@@ -8,28 +8,31 @@ use crate::proof::FriProof;
 use crate::prover::prove;
 use core::marker::PhantomData;
 use p3_commit::mmcs::MMCS;
-use p3_field::field::FieldExtension;
+use p3_field::field::{Field, FieldExtension};
 use p3_ldt::LDT;
 
 pub mod fri_pcs;
 pub mod proof;
 mod prover;
 
-struct FriLDT<FE, O>
+struct FriLDT<F, FE, O>
 where
-    FE: FieldExtension,
-    O: MMCS<FE::Base>,
+    F: Field,
+    FE: FieldExtension<F>,
+    O: MMCS<F>,
 {
+    _phantom_f: PhantomData<F>,
     _phantom_fe: PhantomData<FE>,
     _phantom_o: PhantomData<O>,
 }
 
-impl<FE, M> LDT<FE::Base, M> for FriLDT<FE, M>
+impl<F, FE, M> LDT<F, M> for FriLDT<F, FE, M>
 where
-    FE: FieldExtension,
-    M: MMCS<FE::Base>,
+    F: Field,
+    FE: FieldExtension<F>,
+    M: MMCS<F>,
 {
-    type Proof = FriProof<FE, M>;
+    type Proof = FriProof<F, FE, M>;
     type Error = ();
 
     fn prove(codewords: &[M::ProverData]) -> Self::Proof {

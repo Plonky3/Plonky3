@@ -28,12 +28,12 @@ pub trait PCS<F: Field>: 'static {
 pub trait UnivariatePCS<F: Field>: PCS<F> {
     // type UnivariateProverData: UnivariateProverData;
 
-    fn open_batches<FE: FieldExtension<Base = F>>(
+    fn open_batches<FE: FieldExtension<F>>(
         points: &[FE],
         prover_data: &[Self::ProverData],
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof);
 
-    fn verify_batches<FE: FieldExtension<Base = F>>(
+    fn verify_batches<FE: FieldExtension<F>>(
         commit: &Self::Commitment,
         points: &[FE],
         values: &[Vec<Vec<FE>>],
@@ -44,12 +44,12 @@ pub trait UnivariatePCS<F: Field>: PCS<F> {
 pub trait MultivariatePCS<F: Field>: PCS<F> {
     // type MultivariateProverData: MultivariateProverData;
 
-    fn open_batches<FE: FieldExtension<Base = F>>(
+    fn open_batches<FE: FieldExtension<F>>(
         points: &[FE],
         prover_data: &[Self::ProverData],
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof);
 
-    fn verify_batches<FE: FieldExtension<Base = F>>(
+    fn verify_batches<FE: FieldExtension<F>>(
         commit: &Self::Commitment,
         points: &[FE],
         values: &[Vec<Vec<FE>>],

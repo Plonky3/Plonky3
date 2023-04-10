@@ -21,14 +21,14 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
 }
 
 impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
-    fn open_batches<FE: FieldExtension<Base = F>>(
+    fn open_batches<FE: FieldExtension<F>>(
         _points: &[FE],
         _prover_data: &[Self::ProverData],
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof) {
         todo!()
     }
 
-    fn verify_batches<FE: FieldExtension<Base = F>>(
+    fn verify_batches<FE: FieldExtension<F>>(
         _commit: &Self::Commitment,
         _points: &[FE],
         _values: &[Vec<Vec<FE>>],

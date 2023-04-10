@@ -9,7 +9,7 @@ pub trait SmoothSubgroupField: Field {
     fn smooth_factors(&self) -> Vec<(u32, u32)>;
 }
 
-/// A finite field;
+/// A finite field.
 pub trait Field:
     'static
     + Copy
@@ -73,23 +73,37 @@ pub trait Field:
     }
 }
 
-pub trait FieldExtension: Field {
-    type Base: Field;
-
+pub trait FieldExtension<Base: Field>: Field {
     const D: usize;
 
-    fn to_base_array(&self) -> [Self::Base; Self::D];
+    fn to_base_array(&self) -> [Base; Self::D];
 
-    fn from_base_array(arr: [Self::Base; Self::D]) -> Self;
+    fn from_base_array(arr: [Base; Self::D]) -> Self;
 
-    fn from_base(b: Self::Base) -> Self;
+    fn from_base(b: Base) -> Self;
 
-    fn add_base(&self, x: Self::Base) -> Self {
+    fn add_base(&self, x: Base) -> Self {
         *self + Self::from_base(x)
     }
 
-    fn mul_base(&self, x: Self::Base) -> Self {
+    fn mul_base(&self, x: Base) -> Self {
         *self * Self::from_base(x)
+    }
+}
+
+impl<F: Field> FieldExtension<F> for F {
+    const D: usize = 1;
+
+    fn to_base_array(&self) -> [F; Self::D] {
+        [*self]
+    }
+
+    fn from_base_array(arr: [F; Self::D]) -> Self {
+        arr[0]
+    }
+
+    fn from_base(b: F) -> Self {
+        b
     }
 }
 
