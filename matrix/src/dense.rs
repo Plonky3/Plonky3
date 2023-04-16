@@ -12,6 +12,11 @@ pub struct DenseMatrix<T> {
 }
 
 impl<T> DenseMatrix<T> {
+    pub fn new(values: Vec<T>, width: usize) -> Self {
+        debug_assert_eq!(values.len() % width, 0);
+        Self { values, width }
+    }
+
     pub fn row(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -66,6 +71,11 @@ impl<T> Matrix<T> for DenseMatrix<T> {
     fn height(&self) -> usize {
         self.values.len() / self.width
     }
+
+    fn row(&self, r: usize) -> &[T] {
+        debug_assert!(r < self.height());
+        &self.values[r * self.width..(r + 1) * self.width]
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -88,6 +98,11 @@ impl<T> Matrix<T> for DenseMatrixView<'_, T> {
 
     fn height(&self) -> usize {
         self.values.len() / self.width
+    }
+
+    fn row(&self, r: usize) -> &[T] {
+        debug_assert!(r < self.height());
+        &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
@@ -135,5 +150,10 @@ impl<T> Matrix<T> for DenseMatrixViewMut<'_, T> {
 
     fn height(&self) -> usize {
         self.values.len() / self.width
+    }
+
+    fn row(&self, r: usize) -> &[T] {
+        debug_assert!(r < self.height());
+        &self.values[r * self.width..(r + 1) * self.width]
     }
 }

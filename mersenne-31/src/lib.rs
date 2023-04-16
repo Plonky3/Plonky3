@@ -94,7 +94,7 @@ impl AddAssign<Self> for Mersenne31 {
 
 impl Sum for Mersenne31 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::ZERO, |acc, x| acc + x)
+        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
@@ -161,7 +161,7 @@ impl Distribution<Mersenne31> for Standard {
 
 impl Product for Mersenne31 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::ONE, |acc, x| acc * x)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 

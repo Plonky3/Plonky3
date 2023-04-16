@@ -11,4 +11,13 @@ pub mod sparse;
 pub trait Matrix<T> {
     fn width(&self) -> usize;
     fn height(&self) -> usize;
+
+    fn row(&self, r: usize) -> &[T];
+
+    fn get(&self, r: usize, c: usize) -> T
+    where
+        T: Copy,
+    {
+        self.row(r)[c]
+    }
 }

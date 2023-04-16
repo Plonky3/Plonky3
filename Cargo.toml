@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "air",
+    "baby-stark",
     "brakedown",
     "challenger",
     "code",
