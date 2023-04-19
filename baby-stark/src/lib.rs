@@ -50,7 +50,6 @@ where
     let window = BasicAirWindow { main };
     let mut consumer = FoldingConstraintConsumer;
     air.eval(window, &mut consumer);
-    // type MyAirConfig = GenericAirConfig<C::F, FoldingConstraintConsumer, 1, 2>;
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::field::Field;
+use p3_field::packed::PackedField;
 
 pub trait AirTypes {
     type F: Field;
@@ -41,8 +42,8 @@ pub trait AirTypes {
         + MulAssign<Self::F>;
 }
 
-impl<F: Field> AirTypes for F {
-    type F = Self;
-    type Var = Self;
-    type Exp = Self;
+impl<P: PackedField> AirTypes for P {
+    type F = P::Scalar;
+    type Var = P;
+    type Exp = P;
 }
