@@ -2,7 +2,7 @@ use crate::pcs::{MultivariatePCS, UnivariatePCS, PCS};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_field::field::{Field, FieldExtension};
-use p3_matrix::dense::DenseMatrix;
+use p3_matrix::dense::RowMajorMatrix;
 
 pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {
     _uni: U,
@@ -15,7 +15,7 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
     type Proof = ();
     type Error = ();
 
-    fn commit_batches(_polynomials: Vec<DenseMatrix<F>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_batches(_polynomials: Vec<RowMajorMatrix<F>>) -> (Self::Commitment, Self::ProverData) {
         todo!()
     }
 }

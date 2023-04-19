@@ -3,7 +3,7 @@
 #![no_std]
 
 use p3_field::field::Field;
-use p3_matrix::dense::{DenseMatrix, DenseMatrixView, DenseMatrixViewMut};
+use p3_matrix::dense::{RowMajorMatrix, DenseMatrixView, DenseMatrixViewMut};
 use p3_matrix::Matrix;
 
 /// A code (in the coding theory sense).
@@ -27,7 +27,7 @@ pub trait SystematicCode<F: Field>: Code<F> {
     /// Encode a batch of messages, stored in a matrix with a message in each column.
     ///
     /// Since this is a systemic code, this method extends the input matrix to avoid copying.
-    fn append_parity(&self, messages: &mut DenseMatrix<F>) {
+    fn append_parity(&self, messages: &mut RowMajorMatrix<F>) {
         assert_eq!(
             messages.height(),
             self.systematic_len(),

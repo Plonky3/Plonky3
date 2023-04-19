@@ -1,7 +1,7 @@
 //! Traits for polynomial commitment schemes.
 
 use p3_field::field::{Field, FieldExtension};
-use p3_matrix::dense::DenseMatrix;
+use p3_matrix::dense::RowMajorMatrix;
 
 use alloc::vec::Vec;
 
@@ -22,7 +22,7 @@ pub trait PCS<F: Field>: 'static {
 
     type Error;
 
-    fn commit_batches(polynomials: Vec<DenseMatrix<F>>) -> (Self::Commitment, Self::ProverData);
+    fn commit_batches(polynomials: Vec<RowMajorMatrix<F>>) -> (Self::Commitment, Self::ProverData);
 }
 
 pub trait UnivariatePCS<F: Field>: PCS<F> {

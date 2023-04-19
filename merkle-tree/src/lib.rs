@@ -8,7 +8,7 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::mmcs::{ConcreteMMCS, Dimensions, MMCS};
-use p3_matrix::dense::DenseMatrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_symmetric::compression::CompressionFunction;
 use p3_symmetric::hasher::IterHasher;
@@ -23,12 +23,12 @@ use p3_symmetric::hasher::IterHasher;
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an `MMCS`,
 /// see `MerkleTreeMMCS`.
 pub struct MerkleTree<L, D> {
-    leaves: Vec<DenseMatrix<L>>,
+    leaves: Vec<RowMajorMatrix<L>>,
     digest_layers: Vec<Vec<D>>,
 }
 
 impl<L, D> MerkleTree<L, D> {
-    pub fn new<H, C>(leaves: Vec<DenseMatrix<L>>) -> Self
+    pub fn new<H, C>(leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         for<'a> H: IterHasher<&'a L, D>,
         C: CompressionFunction<D, 2>,
@@ -158,7 +158,7 @@ where
     for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
 {
-    fn commit(inputs: Vec<DenseMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
+    fn commit(inputs: Vec<RowMajorMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
         let tree = MerkleTree::new::<H, C>(inputs);
         let root = tree.root();
         (tree, root)

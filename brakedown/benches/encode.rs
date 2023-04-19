@@ -3,7 +3,7 @@ use p3_brakedown::BrakedownCode;
 use p3_code::{IdentityCode, SystematicCode};
 use p3_field::field::Field;
 use p3_field::mersenne31::Mersenne31;
-use p3_matrix::dense::DenseMatrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::sparse::CsrMatrix;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
@@ -39,7 +39,7 @@ where
             inner_code: Box::new(IdentityCode { len: n / 2 }),
         };
 
-        let mut messages = DenseMatrix::rand(&mut rng, n, BATCH_SIZE);
+        let mut messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
 
         group.bench_with_input(BenchmarkId::from_parameter(n), &code, |b, code| {
             b.iter(|| {

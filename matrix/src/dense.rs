@@ -5,13 +5,13 @@ use rand::Rng;
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DenseMatrix<T> {
+pub struct RowMajorMatrix<T> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,
     width: usize,
 }
 
-impl<T> DenseMatrix<T> {
+impl<T> RowMajorMatrix<T> {
     pub fn new(values: Vec<T>, width: usize) -> Self {
         debug_assert_eq!(values.len() % width, 0);
         Self { values, width }
@@ -63,7 +63,7 @@ impl<T> DenseMatrix<T> {
     }
 }
 
-impl<T> Matrix<T> for DenseMatrix<T> {
+impl<T> Matrix<T> for RowMajorMatrix<T> {
     fn width(&self) -> usize {
         self.width
     }
