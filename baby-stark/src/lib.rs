@@ -40,11 +40,7 @@ where
     SC: StarkConfig,
     F: Field,
     A: Air<F, BasicAirWindow<'a, F>, FoldingConstraintConsumer>
-        + Air<
-            Symbolic<F>,
-            BasicAirWindow<'a, SymbolicVar<F>>,
-            ConstraintCollector<Symbolic<F>>,
-        >,
+        + Air<Symbolic<F>, BasicAirWindow<'a, SymbolicVar<F>>, ConstraintCollector<Symbolic<F>>>,
 {
     let main = todo!();
     let window = BasicAirWindow { main };
