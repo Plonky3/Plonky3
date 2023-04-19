@@ -9,21 +9,21 @@ use crate::prover::prove;
 use core::marker::PhantomData;
 use p3_commit::mmcs::MMCS;
 use p3_field::field::{Field, FieldExtension};
-use p3_ldt::LDT;
+use p3_ldt::{LDT, LDTBasedPCS};
 
 pub mod fri_pcs;
 pub mod proof;
 mod prover;
 
-struct FriLDT<F, FE, O>
+pub struct FriLDT<F, FE, M>
 where
     F: Field,
     FE: FieldExtension<F>,
-    O: MMCS<F>,
+    M: MMCS<F>,
 {
     _phantom_f: PhantomData<F>,
     _phantom_fe: PhantomData<FE>,
-    _phantom_o: PhantomData<O>,
+    _phantom_o: PhantomData<M>,
 }
 
 impl<F, FE, M> LDT<F, M> for FriLDT<F, FE, M>
@@ -43,3 +43,5 @@ where
         todo!()
     }
 }
+
+pub type FRIBasedPCS<F, FE, M> = LDTBasedPCS<F, M, FriLDT<F, FE, M>>;

@@ -6,13 +6,14 @@ use p3_air::constraint_consumer::{ConstraintCollector, ConstraintConsumer};
 use p3_air::symbolic::{Symbolic, SymbolicVar};
 use p3_air::window::AirWindow;
 use p3_air::Air;
-// use p3_commit::pcs::PCS;
-use p3_field::field::Field;
+use p3_commit::pcs::PCS;
+use p3_field::field::{Field, FieldExtension};
 use p3_matrix::dense::DenseMatrixView;
 
 pub trait StarkConfig {
     type F: Field;
-    // type PCS: PCS<Self::F>;
+    type Challenge: FieldExtension<Self::F>;
+    type PCS: PCS<Self::F>;
 }
 
 pub struct BasicAirWindow<'a, T> {
@@ -55,15 +56,20 @@ mod tests {
     use p3_air::types::AirTypes;
     use p3_air::window::AirWindow;
     use p3_air::Air;
+    use p3_fri::{FRIBasedPCS, FriLDT};
+    use p3_ldt::LDTBasedPCS;
     use p3_matrix::Matrix;
+    use p3_merkle_tree::MerkleTreeMMCS;
     use p3_mersenne_31::Mersenne31;
 
     struct MyConfig;
 
-    impl StarkConfig for MyConfig {
-        type F = Mersenne31;
-        // type PCS = todo!();
-    }
+    // type MMCS = MerkleTreeMMCS<Mersenne31, Mersenne31, H, C>;
+    // impl StarkConfig for MyConfig {
+    //     type F = Mersenne31;
+    //     type Challenge = TrivialExtension<Self::F>; // TODO: Use a real extension.
+    //     type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS>;
+    // }
 
     struct MulAir;
 
@@ -82,6 +88,6 @@ mod tests {
 
     #[test]
     fn test_prove() {
-        prove::<MyConfig, Mersenne31, MulAir>(&MulAir)
+        // prove::<MyConfig, Mersenne31, MulAir>(&MulAir)
     }
 }

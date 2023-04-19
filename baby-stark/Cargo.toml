@@ -11,4 +11,7 @@ p3-commit = { path = "../commit" }
 p3-matrix = { path = "../matrix" }
 
 [dev-dependencies]
+p3-fri = { path = "../fri" }
+p3-ldt = { path = "../ldt" }
+p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
