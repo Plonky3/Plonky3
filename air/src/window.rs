@@ -12,13 +12,6 @@ pub trait PairWindow<T>: AirWindow<T> {
     fn preprocessed(&self) -> &Self::M;
 }
 
-pub trait AuxWindow<T>: AirWindow<T> {
-    /// A window of the aux table.
-    fn aux(&self) -> &Self::M;
-
-    fn aux_randomness(&self) -> &[T];
-}
-
 pub trait PermutationWindow<T>: AirWindow<T> {
     /// A window of the permutation table.
     fn permutation(&self) -> &Self::M;

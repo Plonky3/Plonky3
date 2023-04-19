@@ -2,7 +2,7 @@
 
 #![no_std]
 
-use p3_air::constraint_consumer::{CollectingConstraintConsumer, ConstraintConsumer};
+use p3_air::constraint_consumer::{ConstraintCollector, ConstraintConsumer};
 use p3_air::symbolic::{Symbolic, SymbolicVar};
 use p3_air::window::AirWindow;
 use p3_air::Air;
@@ -43,7 +43,7 @@ where
         + Air<
             Symbolic<F>,
             BasicAirWindow<'a, SymbolicVar<F>>,
-            CollectingConstraintConsumer<Symbolic<F>>,
+            ConstraintCollector<Symbolic<F>>,
         >,
 {
     let main = todo!();

@@ -5,8 +5,16 @@ use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::field::Field;
 
+/// An implementation of `AirTypes` where arithmetic results in symbolic expressions rather than
+/// concrete values.
 pub struct Symbolic<F: Field> {
     _phantom: PhantomData<F>,
+}
+
+impl<F: Field> AirTypes for Symbolic<F> {
+    type F = F;
+    type Var = SymbolicVar<F>;
+    type Exp = AirRc<SymbolicExp<F>>;
 }
 
 /// A wrapper around `Rc` to get around the orphan rule.
@@ -25,12 +33,6 @@ impl<T> Into<Rc<T>> for AirRc<T> {
     fn into(self) -> Rc<T> {
         self.rc
     }
-}
-
-impl<F: Field> AirTypes for Symbolic<F> {
-    type F = F;
-    type Var = SymbolicVar<F>;
-    type Exp = AirRc<SymbolicExp<F>>;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

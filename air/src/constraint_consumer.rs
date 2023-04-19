@@ -15,11 +15,11 @@ pub trait ConstraintConsumer<T: AirTypes> {
     // fn transition(&mut self, value: T);
 }
 
-pub struct CollectingConstraintConsumer<T: AirTypes> {
+pub struct ConstraintCollector<T: AirTypes> {
     pub constraints: Vec<T::Exp>,
 }
 
-impl<T: AirTypes> ConstraintConsumer<T> for CollectingConstraintConsumer<T> {
+impl<T: AirTypes> ConstraintConsumer<T> for ConstraintCollector<T> {
     fn global(&mut self, value: T::Exp) {
         self.constraints.push(value);
     }
