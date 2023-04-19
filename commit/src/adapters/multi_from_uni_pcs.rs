@@ -15,7 +15,9 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
     type Proof = ();
     type Error = ();
 
-    fn commit_batches(_polynomials: Vec<RowMajorMatrix<F>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_batches(
+        _polynomials: Vec<RowMajorMatrix<F>>,
+    ) -> (Self::Commitment, Self::ProverData) {
         todo!()
     }
 }

@@ -3,7 +3,7 @@
 #![no_std]
 
 use p3_field::field::Field;
-use p3_matrix::dense::{RowMajorMatrix, DenseMatrixView, DenseMatrixViewMut};
+use p3_matrix::dense::{DenseMatrixView, DenseMatrixViewMut, RowMajorMatrix};
 use p3_matrix::Matrix;
 
 /// A code (in the coding theory sense).
