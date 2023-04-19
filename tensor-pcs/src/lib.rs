@@ -6,9 +6,9 @@ use core::marker::PhantomData;
 use p3_code::SystematicCode;
 use p3_field::field::Field;
 
-pub struct TensorPcs<F: Field, C: SystematicCode<F>> {
+pub struct TensorPCS<F: Field, C: SystematicCode<F>> {
     _code: C,
     _phantom: PhantomData<F>,
 }
 
-// impl<F: Field, C: SystematicCode<F>> PCS<F> for TensorPcs<F, C> {}
+// impl<F: Field, C: SystematicCode<F>> PCS<F> for TensorPCS<F, C> {}

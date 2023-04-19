@@ -20,6 +20,15 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
     ) -> (Self::Commitment, Self::ProverData) {
         todo!()
     }
+
+    fn get_committed_value(
+        _prover_data: &Self::ProverData,
+        _batch: usize,
+        _poly: usize,
+        _value: usize,
+    ) -> F {
+        todo!()
+    }
 }
 
 impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
@@ -35,7 +44,7 @@ impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U>
         _points: &[FE],
         _values: &[Vec<Vec<FE>>],
         _proof: &Self::Proof,
-    ) {
+    ) -> Result<(), Self::Error> {
         todo!()
     }
 }

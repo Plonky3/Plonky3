@@ -10,12 +10,12 @@ use alloc::vec::Vec;
 ///
 /// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
 /// and `MultivariatePCS` for more specific subtraits.
-pub trait PCS<F: Field>: 'static {
+pub trait PCS<F: Field> {
     /// The commitment that's sent to the verifier.
     type Commitment;
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
-    type ProverData: ProverData<F>;
+    type ProverData;
 
     /// The opening argument.
     type Proof;
@@ -23,11 +23,16 @@ pub trait PCS<F: Field>: 'static {
     type Error;
 
     fn commit_batches(polynomials: Vec<RowMajorMatrix<F>>) -> (Self::Commitment, Self::ProverData);
+
+    fn get_committed_value(
+        prover_data: &Self::ProverData,
+        batch: usize,
+        poly: usize,
+        value: usize,
+    ) -> F;
 }
 
 pub trait UnivariatePCS<F: Field>: PCS<F> {
-    // type UnivariateProverData: UnivariateProverData;
-
     fn open_batches<FE: FieldExtension<F>>(
         points: &[FE],
         prover_data: &[Self::ProverData],
@@ -42,8 +47,6 @@ pub trait UnivariatePCS<F: Field>: PCS<F> {
 }
 
 pub trait MultivariatePCS<F: Field>: PCS<F> {
-    // type MultivariateProverData: MultivariateProverData;
-
     fn open_batches<FE: FieldExtension<F>>(
         points: &[FE],
         prover_data: &[Self::ProverData],
@@ -54,14 +57,5 @@ pub trait MultivariatePCS<F: Field>: PCS<F> {
         points: &[FE],
         values: &[Vec<Vec<FE>>],
         proof: &Self::Proof,
-    );
+    ) -> Result<(), Self::Error>;
 }
-
-/// Data that the prover stores for committed polynomials, to help the prover with opening.
-pub trait ProverData<F: Field> {
-    fn get_original_value(&self, batch: usize, poly: usize, value: usize) -> F;
-}
-
-// pub trait UnivariateProverData<F: Field>: ProverData<F> {}
-//
-// pub trait MultivariateProverData<F: Field>: ProverData<F> {}
