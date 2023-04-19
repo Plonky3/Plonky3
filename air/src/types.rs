@@ -21,6 +21,7 @@ pub trait AirTypes {
 
     type Exp: Clone
         + From<Self::Var>
+        + From<Self::F>
         + Add<Self::Var, Output = Self::Exp>
         + Add<Self::Exp, Output = Self::Exp>
         + Add<Self::F, Output = Self::Exp>
