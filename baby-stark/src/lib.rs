@@ -30,7 +30,7 @@ impl<'a, T> AirWindow<T> for BasicAirWindow<'a, T> {
 pub struct FoldingConstraintConsumer;
 
 impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
-    fn global(&mut self, value: F) {
+    fn global(&mut self, constraint: F) {
         todo!()
     }
 }
