@@ -1,0 +1,85 @@
+//! Poseidon permutation.
+
+#![no_std]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+use p3_field::field::Field;
+use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+
+pub struct Poseidon<F, MDS, const WIDTH: usize, const ALPHA: u64>
+where
+    F: Field,
+    MDS: MDSPermutation<F, WIDTH>,
+{
+    half_num_full_rounds: usize,
+    num_partial_rounds: usize,
+    constants: Vec<F>,
+    mds: MDS,
+}
+
+impl<F, MDS, const WIDTH: usize, const ALPHA: u64> Poseidon<F, MDS, WIDTH, ALPHA>
+where
+    F: Field,
+    MDS: MDSPermutation<F, WIDTH>,
+{
+    fn half_full_rounds(&self, state: &mut [F; WIDTH], round_ctr: &mut usize) {
+        for _ in 0..self.half_num_full_rounds {
+            self.constant_layer(state, *round_ctr);
+            Self::full_sbox_layer(state);
+            self.mds.permute_mut(state);
+            *round_ctr += 1;
+        }
+    }
+
+    fn partial_rounds(&self, state: &mut [F; WIDTH], round_ctr: &mut usize) {
+        for _ in 0..self.num_partial_rounds {
+            self.constant_layer(state, *round_ctr);
+            Self::partial_sbox_layer(state);
+            self.mds.permute_mut(state);
+            *round_ctr += 1;
+        }
+    }
+
+    fn full_sbox_layer(state: &mut [F; WIDTH]) {
+        for i in 0..WIDTH {
+            state[i] = state[i].exp_const_u64::<ALPHA>();
+        }
+    }
+
+    fn partial_sbox_layer(state: &mut [F; WIDTH]) {
+        state[0] = state[0].exp_const_u64::<ALPHA>();
+    }
+
+    fn constant_layer(&self, state: &mut [F; WIDTH], round: usize) {
+        for i in 0..WIDTH {
+            state[i] += self.constants[round * WIDTH + i];
+        }
+    }
+}
+
+impl<F, MDS, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
+    for Poseidon<F, MDS, WIDTH, ALPHA>
+where
+    F: Field,
+    MDS: MDSPermutation<F, WIDTH>,
+{
+    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
+        let mut round_ctr = 0;
+        self.half_full_rounds(&mut state, &mut round_ctr);
+        self.partial_rounds(&mut state, &mut round_ctr);
+        self.half_full_rounds(&mut state, &mut round_ctr);
+        state
+    }
+}
+
+impl<F: Field, MDS, const WIDTH: usize, const ALPHA: u64> ArrayPermutation<F, WIDTH>
+    for Poseidon<F, MDS, WIDTH, ALPHA>
+where
+    F: Field,
+    MDS: MDSPermutation<F, WIDTH>,
+{
+}

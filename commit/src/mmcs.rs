@@ -35,7 +35,7 @@ pub struct Dimensions {
 }
 
 pub trait ConcreteMMCS<T>: MMCS<T> {
-    fn commit(inputs: Vec<RowMajorMatrix<T>>) -> (Self::ProverData, Self::Commitment);
+    fn commit(&self, inputs: Vec<RowMajorMatrix<T>>) -> (Self::ProverData, Self::Commitment);
 }
 
 // TODO: Streaming MMCS? Where `ProverData` can be initialized and then incrementally updated,

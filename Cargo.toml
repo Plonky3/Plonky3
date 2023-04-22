@@ -15,6 +15,7 @@ members = [
     "merkle-tree",
     "maybe-rayon",
     "mersenne-31",
+    "poseidon",
     "symmetric",
     "tensor-pcs",
     "util",

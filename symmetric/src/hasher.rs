@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 pub trait CryptographicHasher<In, Out> {
-    fn hash(input: &In) -> Out;
+    fn hash(&self, input: &In) -> Out;
 }
 
 #[deprecated] // Just use IterHasher?
@@ -11,7 +11,7 @@ pub trait VecToArrHasher<T, const OUT_LEN: usize>:
 }
 
 pub trait IterHasher<Item, Out> {
-    fn hash_iter<I>(input: I) -> Out
+    fn hash_iter<I>(&self, input: I) -> Out
     where
         I: IntoIterator<Item = Item>;
 

@@ -13,7 +13,7 @@ use tiny_keccak::{keccakf, Hasher, Keccak};
 pub struct KeccakF;
 
 impl CryptographicPermutation<[u64; 25]> for KeccakF {
-    fn permute(mut input: [u64; 25]) -> [u64; 25] {
+    fn permute(&self, mut input: [u64; 25]) -> [u64; 25] {
         keccakf(&mut input);
         input
     }
@@ -26,7 +26,7 @@ impl ArrayPermutation<u64, 25> for KeccakF {}
 pub struct Keccak256Hash;
 
 impl IterHasher<u8, [u8; 32]> for Keccak256Hash {
-    fn hash_iter<I>(input: I) -> [u8; 32]
+    fn hash_iter<I>(&self, input: I) -> [u8; 32]
     where
         I: IntoIterator<Item = u8>,
     {

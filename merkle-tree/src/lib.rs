@@ -28,7 +28,7 @@ pub struct MerkleTree<L, D> {
 }
 
 impl<L, D> MerkleTree<L, D> {
-    pub fn new<H, C>(leaves: Vec<RowMajorMatrix<L>>) -> Self
+    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         for<'a> H: IterHasher<&'a L, D>,
         C: CompressionFunction<D, 2>,
@@ -52,7 +52,7 @@ impl<L, D> MerkleTree<L, D> {
             .collect_vec();
 
         let first_digest_layer = (0..max_height)
-            .map(|i| H::hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter())))
+            .map(|i| h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter())))
             .collect_vec();
 
         let mut digest_layers = vec![first_digest_layer];
@@ -75,11 +75,11 @@ impl<L, D> MerkleTree<L, D> {
             for i in 0..next_len {
                 let left = &prev_layer[2 * i];
                 let right = &prev_layer[2 * i + 1];
-                let mut digest = C::compress(&[left, right]);
+                let mut digest = c.compress(&[left, right]);
                 if !tallest_matrices.is_empty() {
                     let tallest_digest =
-                        H::hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter()));
-                    digest = C::compress(&[&digest, &tallest_digest]);
+                        h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter()));
+                    digest = c.compress(&[&digest, &tallest_digest]);
                 }
                 next_digests.push(digest);
             }
@@ -115,8 +115,8 @@ where
 {
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
-    _phantom_h: PhantomData<H>,
-    _phantom_c: PhantomData<C>,
+    h: H,
+    c: C,
 }
 
 impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
@@ -158,8 +158,8 @@ where
     for<'a> H: IterHasher<&'a L, D>,
     C: CompressionFunction<D, 2>,
 {
-    fn commit(inputs: Vec<RowMajorMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
-        let tree = MerkleTree::new::<H, C>(inputs);
+    fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
+        let tree = MerkleTree::new(&self.h, &self.c, inputs);
         let root = tree.root();
         (tree, root)
     }

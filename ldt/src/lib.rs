@@ -47,6 +47,7 @@ where
     fn commit_batches(
         _polynomials: Vec<RowMajorMatrix<F>>,
     ) -> (Self::Commitment, Self::ProverData) {
+        // (Streaming?) LDE + Merklize
         todo!()
     }
 

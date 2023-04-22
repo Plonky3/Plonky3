@@ -59,6 +59,10 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        self.exp_u64(POWER)
+    }
+
     fn exp_u64(&self, power: u64) -> Self {
         let mut current = *self;
         let mut product = Self::ONE;
