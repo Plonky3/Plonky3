@@ -39,8 +39,8 @@ where
     M: MMCS<F>,
     L: LDT<F, M>,
 {
-    type Commitment = Vec<M::Commitment>;
-    type ProverData = Vec<M::ProverData>;
+    type Commitment = M::Commitment;
+    type ProverData = M::ProverData;
     type Proof = L::Proof;
     type Error = L::Error;
 
@@ -50,13 +50,7 @@ where
         todo!()
     }
 
-    fn get_committed_value(
-        _prover_data: &Self::ProverData,
-        _batch: usize,
-        _poly: usize,
-        _value: usize,
-    ) -> F {
-        // prover_data[batch].get(...)
+    fn get_committed_value(_prover_data: &Self::ProverData, _poly: usize, _value: usize) -> F {
         todo!()
     }
 }
