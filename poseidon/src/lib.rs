@@ -1,4 +1,4 @@
-//! Poseidon permutation.
+//! The Poseidon permutation.
 
 #![no_std]
 #![allow(incomplete_features)]
@@ -9,7 +9,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 use p3_field::field::Field;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
+use rand::Rng;
 
+/// The Poseidon permutation.
 pub struct Poseidon<F, MDS, const WIDTH: usize, const ALPHA: u64>
 where
     F: Field,
@@ -26,6 +30,45 @@ where
     F: Field,
     MDS: MDSPermutation<F, WIDTH>,
 {
+    pub fn new(
+        half_num_full_rounds: usize,
+        num_partial_rounds: usize,
+        constants: Vec<F>,
+        mds: MDS,
+    ) -> Self {
+        let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
+        assert_eq!(constants.len(), WIDTH * num_rounds);
+        Self {
+            half_num_full_rounds,
+            num_partial_rounds,
+            constants,
+            mds,
+        }
+    }
+
+    pub fn new_from_rng<R: Rng>(
+        half_num_full_rounds: usize,
+        num_partial_rounds: usize,
+        mds: MDS,
+        rng: &mut R,
+    ) -> Self
+    where
+        Standard: Distribution<F>,
+    {
+        let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
+        let num_constants = WIDTH * num_rounds;
+        let constants = rng
+            .sample_iter(Standard)
+            .take(num_constants)
+            .collect::<Vec<_>>();
+        Self {
+            half_num_full_rounds,
+            num_partial_rounds,
+            constants,
+            mds,
+        }
+    }
+
     fn half_full_rounds(&self, state: &mut [F; WIDTH], round_ctr: &mut usize) {
         for _ in 0..self.half_num_full_rounds {
             self.constant_layer(state, *round_ctr);
@@ -45,8 +88,8 @@ where
     }
 
     fn full_sbox_layer(state: &mut [F; WIDTH]) {
-        for i in 0..WIDTH {
-            state[i] = state[i].exp_const_u64::<ALPHA>();
+        for x in state.iter_mut() {
+            *x = x.exp_const_u64::<ALPHA>();
         }
     }
 
@@ -55,8 +98,8 @@ where
     }
 
     fn constant_layer(&self, state: &mut [F; WIDTH], round: usize) {
-        for i in 0..WIDTH {
-            state[i] += self.constants[round * WIDTH + i];
+        for (i, x) in state.iter_mut().enumerate() {
+            *x += self.constants[round * WIDTH + i];
         }
     }
 }

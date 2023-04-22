@@ -29,9 +29,9 @@ impl<T> AirRc<T> {
     }
 }
 
-impl<T> Into<Rc<T>> for AirRc<T> {
-    fn into(self) -> Rc<T> {
-        self.rc
+impl<T> From<AirRc<T>> for Rc<T> {
+    fn from(value: AirRc<T>) -> Self {
+        value.rc
     }
 }
 

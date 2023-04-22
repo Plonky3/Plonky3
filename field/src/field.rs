@@ -1,13 +1,8 @@
 use crate::packed::PackedField;
-use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use itertools::Itertools;
-
-pub trait SmoothSubgroupField: Field {
-    fn smooth_factors(&self) -> Vec<(u32, u32)>;
-}
 
 /// A finite field.
 pub trait Field:
