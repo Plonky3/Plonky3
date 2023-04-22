@@ -9,7 +9,7 @@ use crate::prover::prove;
 use core::marker::PhantomData;
 use p3_commit::mmcs::MMCS;
 use p3_field::field::{Field, FieldExtension};
-use p3_ldt::{LDT, LDTBasedPCS};
+use p3_ldt::{LDTBasedPCS, LDT};
 
 pub mod fri_pcs;
 pub mod proof;

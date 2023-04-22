@@ -3,7 +3,8 @@
 #![no_std]
 
 use core::fmt;
-use core::fmt::{Display, Formatter};
+use core::fmt::{Debug, Display, Formatter};
+use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::field::{Field, PrimeField};
@@ -11,7 +12,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Default)]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     value: u32,
@@ -42,6 +43,36 @@ impl PartialEq for Mersenne31 {
 
 impl Eq for Mersenne31 {}
 
+impl Hash for Mersenne31 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u32(self.as_canonical_u32())
+    }
+}
+
+impl Display for Mersenne31 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.value, f)
+    }
+}
+
+impl Debug for Mersenne31 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self.value, f)
+    }
+}
+
+impl Distribution<Mersenne31> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
+        loop {
+            let next_u31 = rng.next_u32() >> 1;
+            let is_canonical = next_u31 != Mersenne31::ORDER;
+            if is_canonical {
+                return Mersenne31 { value: next_u31 };
+            }
+        }
+    }
+}
+
 impl Field for Mersenne31 {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
@@ -63,12 +94,6 @@ impl PrimeField for Mersenne31 {
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
-}
-
-impl Display for Mersenne31 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.value, f)
-    }
 }
 
 impl Add<Self> for Mersenne31 {
@@ -117,12 +142,8 @@ impl Neg for Mersenne31 {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        if self.is_zero() {
-            Self::ZERO
-        } else {
-            Self {
-                value: Self::ORDER - self.as_canonical_u32(),
-            }
+        Self {
+            value: Self::ORDER - self.as_canonical_u32(),
         }
     }
 }
@@ -149,13 +170,6 @@ impl Mul<Self> for Mersenne31 {
 impl MulAssign<Self> for Mersenne31 {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
-    }
-}
-
-impl Distribution<Mersenne31> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
-        let value = (rng.next_u64() % Mersenne31::ORDER as u64) as u32;
-        Mersenne31 { value }
     }
 }
 
