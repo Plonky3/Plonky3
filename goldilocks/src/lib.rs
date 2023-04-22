@@ -1,4 +1,4 @@
-//! The prime field `F_p` where `p = 2^64 - 2^32 + 1`.
+//! The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 
 #![no_std]
 
@@ -12,7 +12,7 @@ use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-/// The prime field `F_p` where `p = 2^64 - 2^32 + 1`.
+/// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 #[derive(Copy, Clone, Default)]
 pub struct Goldilocks {
     /// Not necessarily canonical.
