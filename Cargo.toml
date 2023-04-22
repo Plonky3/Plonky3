@@ -8,6 +8,7 @@ members = [
     "commit",
     "field",
     "fri",
+    "goldilocks",
     "keccak",
     "ldt",
     "matrix",
