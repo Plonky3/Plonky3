@@ -9,6 +9,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use p3_field::field::Field;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+use p3_symmetric::sponge::PaddingFreeSponge;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -126,3 +127,11 @@ where
     MDS: MDSPermutation<F, WIDTH>,
 {
 }
+
+pub type PaddingFreePoseidonSponge<
+    F,
+    MDS,
+    const RATE: usize,
+    const CAPACITY: usize,
+    const ALPHA: u64,
+> = PaddingFreeSponge<F, Poseidon<F, MDS, { RATE + CAPACITY }, ALPHA>, RATE, CAPACITY>;

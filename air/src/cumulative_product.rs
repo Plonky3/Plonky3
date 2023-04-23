@@ -28,9 +28,11 @@ where
 {
     fn eval(&self, window: &W, constraints: &mut CC) {
         self.inner.eval(window, constraints);
-        let main_local = window.main().row(0);
-        let perm_local = window.permutation().row(0);
-        let perm_next = window.permutation().row(1);
+        let main = window.main();
+        let main_local = main.row(0);
+        let permutation = window.permutation();
+        let perm_local = permutation.row(0);
+        let perm_next = permutation.row(1);
 
         for update in &self.updates {
             let one = T::F::ONE;

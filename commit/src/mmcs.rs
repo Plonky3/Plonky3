@@ -34,7 +34,8 @@ pub struct Dimensions {
     pub log2_height: usize,
 }
 
-pub trait ConcreteMMCS<T>: MMCS<T> {
+/// An MMCS over explicit inputs which are supplied upfront.
+pub trait DirectMMCS<T>: MMCS<T> {
     fn commit(&self, inputs: Vec<RowMajorMatrix<T>>) -> (Self::ProverData, Self::Commitment);
 }
 

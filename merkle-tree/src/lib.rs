@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::marker::PhantomData;
 use itertools::Itertools;
-use p3_commit::mmcs::{ConcreteMMCS, Dimensions, MMCS};
+use p3_commit::mmcs::{Dimensions, DirectMMCS, MMCS};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_symmetric::compression::CompressionFunction;
@@ -30,7 +30,9 @@ pub struct MerkleTree<L, D> {
 impl<L, D> MerkleTree<L, D> {
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
-        for<'a> H: IterHasher<&'a L, D>,
+        L: Copy,
+        D: Copy,
+        H: IterHasher<L, D>,
         C: CompressionFunction<D, 2>,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
@@ -52,7 +54,14 @@ impl<L, D> MerkleTree<L, D> {
             .collect_vec();
 
         let first_digest_layer = (0..max_height)
-            .map(|i| h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter())))
+            .map(|i| {
+                h.hash_iter(
+                    tallest_matrices
+                        .iter()
+                        .flat_map(|m| m.row(i).iter())
+                        .copied(),
+                )
+            })
             .collect_vec();
 
         let mut digest_layers = vec![first_digest_layer];
@@ -73,13 +82,17 @@ impl<L, D> MerkleTree<L, D> {
             let next_len = prev_layer.len() >> 1;
             let mut next_digests = Vec::with_capacity(next_len);
             for i in 0..next_len {
-                let left = &prev_layer[2 * i];
-                let right = &prev_layer[2 * i + 1];
-                let mut digest = c.compress(&[left, right]);
+                let left = prev_layer[2 * i];
+                let right = prev_layer[2 * i + 1];
+                let mut digest = c.compress([left, right]);
                 if !tallest_matrices.is_empty() {
-                    let tallest_digest =
-                        h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).iter()));
-                    digest = c.compress(&[&digest, &tallest_digest]);
+                    let tallest_digest = h.hash_iter(
+                        tallest_matrices
+                            .iter()
+                            .flat_map(|m| m.row(i).iter())
+                            .copied(),
+                    );
+                    digest = c.compress([digest, tallest_digest]);
                 }
                 next_digests.push(digest);
             }
@@ -110,19 +123,19 @@ impl<L, D> MerkleTree<L, D> {
 /// - `C`: the digest compression function
 pub struct MerkleTreeMMCS<L, D, H, C>
 where
-    for<'a> H: IterHasher<&'a L, D>,
+    H: IterHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
-    h: H,
-    c: C,
+    hash: H,
+    compress: C,
 }
 
 impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: Clone,
-    for<'a> H: IterHasher<&'a L, D>,
+    H: IterHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {
     type ProverData = MerkleTree<L, D>;
@@ -151,15 +164,15 @@ where
     }
 }
 
-impl<L, D, H, C> ConcreteMMCS<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
-    L: Clone,
-    D: Clone,
-    for<'a> H: IterHasher<&'a L, D>,
+    L: Copy,
+    D: Copy,
+    H: IterHasher<L, D>,
     C: CompressionFunction<D, 2>,
 {
     fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
-        let tree = MerkleTree::new(&self.h, &self.c, inputs);
+        let tree = MerkleTree::new(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (tree, root)
     }

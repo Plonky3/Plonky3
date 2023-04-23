@@ -43,8 +43,11 @@ mod tests {
         CC: ConstraintConsumer<T>,
     {
         fn eval(&self, window: &W, constraints: &mut CC) {
-            let preprocessed_local = window.preprocessed().row(0);
-            let main_local = window.main().row(0);
+            let preprocessed = window.preprocessed();
+            let main = window.main();
+            let preprocessed_local = preprocessed.row(0);
+            let main_local = main.row(0);
+
             let selector = preprocessed_local[0];
             let diff = main_local[0] * main_local[1] - main_local[2];
             constraints.global(selector * diff);
