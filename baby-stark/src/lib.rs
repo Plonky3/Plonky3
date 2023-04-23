@@ -24,6 +24,7 @@ impl<'a, T> AirWindow<T> for BasicAirWindow<'a, T> {
     type M = DenseMatrixView<'a, T>;
 
     fn main(&self) -> &'a Self::M {
+        // &self.main
         todo!()
     }
 }
@@ -46,7 +47,7 @@ where
     let main = todo!();
     let window = BasicAirWindow { main };
     let mut consumer = FoldingConstraintConsumer;
-    air.eval(window, &mut consumer);
+    air.eval(&window, &mut consumer);
 }
 
 #[cfg(test)]
@@ -79,7 +80,7 @@ mod tests {
         W: AirWindow<T::Var>,
         CC: ConstraintConsumer<T>,
     {
-        fn eval(&self, window: W, constraints: &mut CC) {
+        fn eval(&self, window: &W, constraints: &mut CC) {
             let main_local = window.main().row(0);
             let diff = main_local[0] * main_local[1] - main_local[2];
             constraints.global(diff);

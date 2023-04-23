@@ -7,8 +7,10 @@
 extern crate alloc;
 
 pub mod constraint_consumer;
+pub mod cumulative_product;
 pub mod symbolic;
 pub mod types;
+pub mod virtual_column;
 pub mod window;
 
 use crate::constraint_consumer::ConstraintConsumer;
@@ -22,7 +24,7 @@ where
     W: AirWindow<T::Var>,
     CC: ConstraintConsumer<T>,
 {
-    fn eval(&self, window: W, constraints: &mut CC);
+    fn eval(&self, window: &W, constraints: &mut CC);
 }
 
 #[cfg(test)]
@@ -34,13 +36,13 @@ mod tests {
 
     struct MulAir;
 
-    impl<'a, T, W, CC> Air<T, W, CC> for MulAir
+    impl<T, W, CC> Air<T, W, CC> for MulAir
     where
         T: AirTypes<F = Mersenne31>,
         W: PairWindow<T::Var>,
         CC: ConstraintConsumer<T>,
     {
-        fn eval(&self, window: W, constraints: &mut CC) {
+        fn eval(&self, window: &W, constraints: &mut CC) {
             let preprocessed_local = window.preprocessed().row(0);
             let main_local = window.main().row(0);
             let selector = preprocessed_local[0];
