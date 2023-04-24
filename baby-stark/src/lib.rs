@@ -22,7 +22,7 @@ pub trait StarkConfig {
 pub struct FoldingConstraintConsumer;
 
 impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
-    fn enforce(&mut self, _constraint: F) {
+    fn assert_zero(&mut self, _constraint: F) {
         todo!()
     }
 }
@@ -97,7 +97,7 @@ mod tests {
             let main = window.main();
             let main_local = main.row(0);
             let diff = main_local[0] * main_local[1] - main_local[2];
-            constraints.enforce(diff);
+            constraints.assert_zero(diff);
         }
     }
 

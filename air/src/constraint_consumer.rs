@@ -9,7 +9,7 @@ pub trait ConstraintConsumer<T: AirTypes> {
         }
     }
 
-    fn enforce(&mut self, constraint: T::Exp);
+    fn assert_zero(&mut self, constraint: T::Exp);
     // fn first_row(&mut self, value: T);
     // fn last_row(&mut self, value: T);
     // fn transition(&mut self, value: T);
@@ -20,7 +20,7 @@ pub struct ConstraintCollector<T: AirTypes> {
 }
 
 impl<T: AirTypes> ConstraintConsumer<T> for ConstraintCollector<T> {
-    fn enforce(&mut self, constraint: T::Exp) {
+    fn assert_zero(&mut self, constraint: T::Exp) {
         self.constraints.push(constraint);
     }
 }
@@ -39,7 +39,7 @@ where
     T: AirTypes,
     CC: ConstraintConsumer<T> + ?Sized,
 {
-    fn enforce(&mut self, constraint: T::Exp) {
-        self.inner.enforce(self.filter.clone() * constraint);
+    fn assert_zero(&mut self, constraint: T::Exp) {
+        self.inner.assert_zero(self.filter.clone() * constraint);
     }
 }

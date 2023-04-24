@@ -50,7 +50,7 @@ mod tests {
 
             let selector = preprocessed_local[0];
             let diff = main_local[0] * main_local[1] - main_local[2];
-            constraints.enforce(selector * diff);
+            constraints.assert_zero(selector * diff);
         }
     }
 }
