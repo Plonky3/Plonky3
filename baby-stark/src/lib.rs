@@ -22,7 +22,7 @@ pub trait StarkConfig {
 pub struct FoldingConstraintConsumer;
 
 impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
-    fn assert_zero(&mut self, _constraint: F) {
+    fn assert_zero<I: Into<F>>(&mut self, _constraint: I) {
         todo!()
     }
 }
