@@ -88,11 +88,21 @@ impl Field for Mersenne31 {
     }
 
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        todo!()
+        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
+        let exp = (exp % 31) as u8;
+        let left = (self.value << exp) & ((1 << 31) - 1);
+        let right = self.value >> (31 - exp);
+        let rotated = left | right;
+        Self { value: rotated }
     }
 
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        todo!()
+        // In a Mersenne field, division by 2^k is just a right rotation by k bits.
+        let exp = (exp % 31) as u8;
+        let left = self.value >> exp;
+        let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
+        let rotated = left | right;
+        Self { value: rotated }
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -184,5 +194,33 @@ impl Div for Mersenne31 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Mersenne31;
+    use p3_field::field::Field;
+
+    type F = Mersenne31;
+
+    #[test]
+    fn mul_2exp_u64() {
+        // 1 * 2^0 = 1.
+        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
+        // 2 * 2^30 = 2^31 = 1.
+        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
+        // 5 * 2^2 = 20.
+        assert_eq!(F { value: 5 }.mul_2exp_u64(2), F { value: 20 });
+    }
+
+    #[test]
+    fn div_2exp_u64() {
+        // 1 / 2^0 = 1.
+        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
+        // 2 / 2^0 = 2.
+        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
+        // 32 / 2^5 = 1.
+        assert_eq!(F { value: 32 }.div_2exp_u64(5), F { value: 1 });
     }
 }
