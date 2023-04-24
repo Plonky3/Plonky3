@@ -56,29 +56,29 @@ mod tests {
     use p3_matrix::Matrix;
     use p3_merkle_tree::MerkleTreeMMCS;
     use p3_mersenne_31::Mersenne31;
-    use p3_poseidon::PaddingFreePoseidonSponge;
-    use p3_symmetric::compression::CompressionFunctionFromIterHasher;
-    use p3_symmetric::hasher::TruncatingIterHasher;
+    use p3_poseidon::Poseidon;
+    use p3_symmetric::compression::TruncatedPermutation;
     use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+    use p3_symmetric::sponge::PaddingFreeSponge;
     use rand::thread_rng;
 
     struct MyConfig;
 
     type F = Mersenne31;
     struct MyMds;
-    impl CryptographicPermutation<[F; 12]> for MyMds {
-        fn permute(&self, input: [F; 12]) -> [F; 12] {
+    impl CryptographicPermutation<[F; 8]> for MyMds {
+        fn permute(&self, input: [F; 8]) -> [F; 8] {
             input // TODO
         }
     }
-    impl ArrayPermutation<F, 12> for MyMds {}
-    impl MDSPermutation<F, 12> for MyMds {}
+    impl ArrayPermutation<F, 8> for MyMds {}
+    impl MDSPermutation<F, 8> for MyMds {}
 
     type MDS = MyMds;
-    type H8 = PaddingFreePoseidonSponge<F, MDS, 8, 4, 5>;
-    type H = TruncatingIterHasher<H8, F, F, 8, 4>;
-    type C = CompressionFunctionFromIterHasher<F, H, 2, 4>;
-    type MMCS = MerkleTreeMMCS<F, [F; 4], H, C>;
+    type Perm = Poseidon<F, MDS, 8, 7>;
+    type H4 = PaddingFreeSponge<F, Perm, 4, 4>;
+    type C = TruncatedPermutation<F, Perm, 2, 4>;
+    type MMCS = MerkleTreeMMCS<F, [F; 4], H4, C>;
     impl StarkConfig for MyConfig {
         type F = F;
         type Challenge = Self::F; // TODO: Use an extension.
