@@ -1,7 +1,9 @@
 use crate::hasher::IterHasher;
 use core::marker::PhantomData;
 
-/// An `n`-to-1 compression function, like `CompressionFunction`, except that TODO.
+/// An `n`-to-1 compression function, like `CompressionFunction`, except that it need only be
+/// collision-resistant in a hash tree setting, where the preimage of a non-leaf node must consist
+/// of compression outputs.
 pub trait PseudoCompressionFunction<T, const N: usize> {
     fn compress(&self, input: [T; N]) -> T;
 }
