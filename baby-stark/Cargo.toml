@@ -9,6 +9,7 @@ p3-air = { path = "../air" }
 p3-field = { path = "../field" }
 p3-commit = { path = "../commit" }
 p3-matrix = { path = "../matrix" }
+rand = "0.8.5"
 
 [dev-dependencies]
 p3-fri = { path = "../fri" }

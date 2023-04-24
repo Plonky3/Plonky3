@@ -2,30 +2,21 @@
 
 #![no_std]
 
+mod window;
+
+use crate::window::BasicAirWindow;
 use p3_air::constraint_consumer::{ConstraintCollector, ConstraintConsumer};
 use p3_air::symbolic::{Symbolic, SymbolicVar};
-use p3_air::window::AirWindow;
 use p3_air::Air;
 use p3_commit::pcs::PCS;
 use p3_field::field::{Field, FieldExtension};
-use p3_matrix::dense::DenseMatrixView;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 
 pub trait StarkConfig {
     type F: Field;
     type Challenge: FieldExtension<Self::F>;
     type PCS: PCS<Self::F>;
-}
-
-pub struct BasicAirWindow<'a, T> {
-    main: DenseMatrixView<'a, T>,
-}
-
-impl<'a, T: Copy> AirWindow<T> for BasicAirWindow<'a, T> {
-    type M = DenseMatrixView<'a, T>;
-
-    fn main(&self) -> Self::M {
-        self.main
-    }
 }
 
 pub struct FoldingConstraintConsumer;
@@ -36,17 +27,21 @@ impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
     }
 }
 
-pub fn prove<'a, SC, F, A>(air: &A)
+pub fn prove<SC, F, A>(air: &A, trace: RowMajorMatrix<F>)
 where
     SC: StarkConfig,
     F: Field,
-    A: Air<F, BasicAirWindow<'a, F>, FoldingConstraintConsumer>
+    for<'a> A: Air<F, BasicAirWindow<'a, F>, FoldingConstraintConsumer>
         + Air<Symbolic<F>, BasicAirWindow<'a, SymbolicVar<F>>, ConstraintCollector<Symbolic<F>>>,
 {
-    let main = todo!();
-    let window = BasicAirWindow { main };
-    let mut consumer = FoldingConstraintConsumer;
-    air.eval(&window, &mut consumer);
+    for i_local in 0..trace.height() {
+        let i_next = (i_local + 1) % trace.height();
+        let main_local = trace.row(i_local);
+        let main_next = trace.row(i_next);
+        let window = BasicAirWindow::new(main_local, main_next);
+        let mut consumer = FoldingConstraintConsumer;
+        air.eval(&window, &mut consumer);
+    }
 }
 
 #[cfg(test)]
@@ -57,6 +52,7 @@ mod tests {
     use p3_air::window::AirWindow;
     use p3_air::Air;
     use p3_fri::FRIBasedPCS;
+    use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Matrix;
     use p3_merkle_tree::MerkleTreeMMCS;
     use p3_mersenne_31::Mersenne31;
@@ -64,6 +60,7 @@ mod tests {
     use p3_symmetric::compression::CompressionFunctionFromIterHasher;
     use p3_symmetric::hasher::TruncatingIterHasher;
     use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+    use rand::thread_rng;
 
     struct MyConfig;
 
@@ -106,6 +103,8 @@ mod tests {
 
     #[test]
     fn test_prove() {
-        prove::<MyConfig, Mersenne31, MulAir>(&MulAir)
+        let mut rng = thread_rng();
+        let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
+        prove::<MyConfig, Mersenne31, MulAir>(&MulAir, trace);
     }
 }
