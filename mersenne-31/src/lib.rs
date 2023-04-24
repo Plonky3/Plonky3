@@ -205,6 +205,23 @@ mod tests {
     type F = Mersenne31;
 
     #[test]
+    fn add() {
+        assert_eq!(F::ONE + F::ONE, F::TWO);
+        assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
+        assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
+        assert_eq!(F::NEG_ONE + F::NEG_ONE, F { value: F::ORDER - 2 });
+    }
+
+    #[test]
+    fn sub() {
+        assert_eq!(F::ONE - F::ONE, F::ZERO);
+        assert_eq!(F::TWO - F::TWO, F::ZERO);
+        assert_eq!(F::NEG_ONE - F::NEG_ONE, F::ZERO);
+        assert_eq!(F::TWO - F::ONE, F::ONE);
+        assert_eq!(F::NEG_ONE - F::ZERO, F::NEG_ONE);
+    }
+
+    #[test]
     fn mul_2exp_u64() {
         // 1 * 2^0 = 1.
         assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
