@@ -6,31 +6,31 @@ use core::marker::PhantomData;
 use p3_field::field::Field;
 use p3_matrix::Matrix;
 
-pub struct CumulativeProductAir<T, W, CC, Inner>
+pub struct CumulativeProductAir<T, W, Inner>
 where
     T: AirTypes,
-    W: AirWindow<T::Var>,
-    CC: ConstraintConsumer<T>,
-    Inner: Air<T, W, CC>,
+    W: AirWindow<T>,
+    Inner: Air<T, W>,
 {
     inner: Inner,
     updates: Vec<CumulativeProductUpdate<T::F>>,
     _phantom_w: PhantomData<W>,
-    _phantom_cc: PhantomData<CC>,
 }
 
-impl<T, W, CC, Inner> Air<T, W, CC> for CumulativeProductAir<T, W, CC, Inner>
+impl<T, W, Inner> Air<T, W> for CumulativeProductAir<T, W, Inner>
 where
     T: AirTypes,
-    W: PermutationWindow<T::Var>,
-    CC: ConstraintConsumer<T>,
-    Inner: Air<T, W, CC>,
+    W: PermutationWindow<T>,
+    Inner: Air<T, W>,
 {
-    fn eval(&self, window: &W, constraints: &mut CC) {
-        self.inner.eval(window, constraints);
-        let main = window.main();
+    fn eval<CC>(&self, constraints: &mut CC)
+    where
+        CC: ConstraintConsumer<T, W>,
+    {
+        self.inner.eval(constraints);
+        let main = constraints.window().main();
         let main_local = main.row(0);
-        let permutation = window.permutation();
+        let permutation = constraints.window().permutation();
         let perm_local = permutation.row(0);
         let perm_next = permutation.row(1);
 

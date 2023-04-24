@@ -18,13 +18,14 @@ use crate::types::AirTypes;
 use crate::window::AirWindow;
 
 /// An AIR.
-pub trait Air<T, W, CC>
+pub trait Air<T, W>
 where
     T: AirTypes,
-    W: AirWindow<T::Var>,
-    CC: ConstraintConsumer<T>,
+    W: AirWindow<T>,
 {
-    fn eval(&self, window: &W, constraints: &mut CC);
+    fn eval<CC>(&self, constraints: &mut CC)
+    where
+        CC: ConstraintConsumer<T, W>;
 }
 
 #[cfg(test)]
@@ -37,24 +38,24 @@ mod tests {
 
     struct FibonacciAir;
 
-    impl<T, W, CC> Air<T, W, CC> for FibonacciAir
+    impl<T, W> Air<T, W> for FibonacciAir
     where
         T: AirTypes<F = Mersenne31>,
-        W: AirWindow<T::Var>,
-        CC: ConstraintConsumer<T>,
+        W: AirWindow<T>,
     {
-        fn eval(&self, window: &W, constraints: &mut CC) {
-            let main = window.main();
+        fn eval<CC>(&self, constraints: &mut CC)
+        where
+            CC: ConstraintConsumer<T, W>,
+        {
+            let main = constraints.window().main();
             let x_0 = main.row(0)[0];
             let x_1 = main.row(1)[0];
             let x_2 = main.row(2)[0];
 
-            let first_row = T::F::ZERO; // TODO
             let second_row = T::F::ZERO; // TODO
-            let transition = T::F::ZERO; // TODO
-            constraints.when(first_row).assert_zero(x_0);
+            constraints.when_first_row().assert_zero(x_0);
             constraints.when(second_row).assert_one(x_1);
-            constraints.when(transition).assert_eq(x_0 + x_1, x_2);
+            constraints.when_transition().assert_eq(x_0 + x_1, x_2);
         }
     }
 }

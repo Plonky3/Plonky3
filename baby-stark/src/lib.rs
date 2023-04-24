@@ -2,9 +2,9 @@
 
 #![no_std]
 
-use p3_air::constraint_consumer::{ConstraintCollector, ConstraintConsumer};
-use p3_air::symbolic::{Symbolic, SymbolicVar};
-use p3_air::window::BasicAirWindow;
+use p3_air::constraint_consumer::ConstraintConsumer;
+use p3_air::symbolic::Symbolic;
+use p3_air::window::{BasicAirWindow, TwoRowMatrixView};
 use p3_air::Air;
 use p3_commit::pcs::PCS;
 use p3_field::field::{Field, FieldExtension};
@@ -17,9 +17,17 @@ pub trait StarkConfig {
     type PCS: PCS<Self::F>;
 }
 
-pub struct FoldingConstraintConsumer;
+pub struct FoldingConstraintConsumer<'a, F: Field> {
+    window: BasicAirWindow<'a, F>,
+}
 
-impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
+impl<'a, F: Field> ConstraintConsumer<F, BasicAirWindow<'a, F>>
+    for FoldingConstraintConsumer<'a, F>
+{
+    fn window(&self) -> &BasicAirWindow<'a, F> {
+        &self.window
+    }
+
     fn assert_zero<I: Into<F>>(&mut self, _constraint: I) {
         todo!()
     }
@@ -28,20 +36,22 @@ impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
 pub fn prove<SC, A>(air: &A, trace: RowMajorMatrix<SC::F>)
 where
     SC: StarkConfig,
-    for<'a> A: Air<SC::F, BasicAirWindow<'a, SC::F>, FoldingConstraintConsumer>
-        + Air<
-            Symbolic<SC::F>,
-            BasicAirWindow<'a, SymbolicVar<SC::F>>,
-            ConstraintCollector<Symbolic<SC::F>>,
-        >,
+    for<'a> A: Air<SC::F, BasicAirWindow<'a, SC::F>>
+        + Air<Symbolic<SC::F>, BasicAirWindow<'a, Symbolic<SC::F>>>,
 {
     for i_local in 0..trace.height() {
         let i_next = (i_local + 1) % trace.height();
         let main_local = trace.row(i_local);
         let main_next = trace.row(i_next);
-        let window = BasicAirWindow::new(main_local, main_next);
-        let mut consumer = FoldingConstraintConsumer;
-        air.eval(&window, &mut consumer);
+        let main = TwoRowMatrixView::new(main_local, main_next);
+        let window = BasicAirWindow::<SC::F> {
+            main,
+            is_first_row: SC::F::ZERO,  // TODO
+            is_last_row: SC::F::ZERO,   // TODO
+            is_transition: SC::F::ZERO, // TODO
+        };
+        let mut consumer = FoldingConstraintConsumer { window };
+        air.eval(&mut consumer);
     }
 }
 
@@ -88,14 +98,16 @@ mod tests {
 
     struct MulAir;
 
-    impl<T, W, CC> Air<T, W, CC> for MulAir
+    impl<T, W> Air<T, W> for MulAir
     where
-        T: AirTypes<F = Mersenne31>,
-        W: AirWindow<T::Var>,
-        CC: ConstraintConsumer<T>,
+        T: AirTypes,
+        W: AirWindow<T>,
     {
-        fn eval(&self, window: &W, constraints: &mut CC) {
-            let main = window.main();
+        fn eval<CC>(&self, constraints: &mut CC)
+        where
+            CC: ConstraintConsumer<T, W>,
+        {
+            let main = constraints.window().main();
             let main_local = main.row(0);
             let diff = main_local[0] * main_local[1] - main_local[2];
             constraints.assert_zero(diff);
