@@ -80,6 +80,11 @@ impl Field for Goldilocks {
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
+    const NEG_ONE: Self = Self {
+        value: Self::ORDER - 1,
+    };
+
+    const TWO_ADICITY: usize = 32;
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER
@@ -90,11 +95,7 @@ impl Field for Goldilocks {
     }
 }
 
-impl PrimeField for Goldilocks {
-    const NEG_ONE: Self = Self {
-        value: Self::ORDER - 1,
-    };
-}
+impl PrimeField for Goldilocks {}
 
 impl Add<Self> for Goldilocks {
     type Output = Self;

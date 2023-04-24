@@ -21,9 +21,6 @@ pub struct Mersenne31 {
 impl Mersenne31 {
     pub const ORDER: u32 = (1 << 31) - 1;
 
-    /// Two's complement of `ORDER`, i.e. `2^32 - ORDER`.
-    const NEG_ORDER: u32 = Self::ORDER.wrapping_neg();
-
     fn as_canonical_u32(&self) -> u32 {
         // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
         // `value` that is not canonical, namely 2^31 - 1 = p = 0.
@@ -80,9 +77,22 @@ impl Field for Mersenne31 {
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
+    const NEG_ONE: Self = Self {
+        value: Self::ORDER - 1,
+    };
+
+    const TWO_ADICITY: usize = 1;
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER
+    }
+
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        todo!()
+    }
+
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        todo!()
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -90,11 +100,7 @@ impl Field for Mersenne31 {
     }
 }
 
-impl PrimeField for Mersenne31 {
-    const NEG_ONE: Self = Self {
-        value: Self::ORDER - 1,
-    };
-}
+impl PrimeField for Mersenne31 {}
 
 impl Add<Self> for Mersenne31 {
     type Output = Self;
@@ -106,7 +112,7 @@ impl Add<Self> for Mersenne31 {
         // 2 * (2^31 - 1) = 2^32 - 2.
         let msb = sum & (1 << 31);
         sum.bitxor_assign(msb);
-        sum.bitxor_assign((msb != 0) as u32);
+        sum += (msb != 0) as u32;
         Self { value: sum }
     }
 }
@@ -143,7 +149,8 @@ impl Neg for Mersenne31 {
 
     fn neg(self) -> Self::Output {
         Self {
-            value: Self::ORDER - self.as_canonical_u32(),
+            // Can't underflow, since self.value is 31-bits and thus can't exceed ORDER.
+            value: Self::ORDER - self.value,
         }
     }
 }
@@ -153,17 +160,9 @@ impl Mul<Self> for Mersenne31 {
 
     fn mul(self, rhs: Self) -> Self {
         let prod = (self.value as u64) * (rhs.value as u64);
-        let prod_lo = prod as u32;
-        let prod_hi = (prod >> 32) as u32;
-
-        // Because each value was 31 bits, prod_hi is at most 30 bits.
-        // So we can apply its weight of 2 (since 2^32 = 2 mod p) without overflow.
-        let prod_hi_weighted = prod_hi << 1;
-
-        let (sum, over) = prod_lo.overflowing_add(prod_hi_weighted);
-        let (sum, _) = sum.overflowing_add((over as u32) * Self::NEG_ORDER);
-        // TODO: Clear most significant bit.
-        Self { value: sum }
+        let prod_lo = (prod as u32) & ((1 << 31) - 1);
+        let prod_hi = (prod >> 31) as u32;
+        Self { value: prod_lo } + Self { value: prod_hi }
     }
 }
 

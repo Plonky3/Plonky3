@@ -30,6 +30,10 @@ pub trait Field:
     const ZERO: Self;
     const ONE: Self;
     const TWO: Self;
+    const NEG_ONE: Self;
+
+    /// The number of factors of two in this field's multiplicative group.
+    const TWO_ADICITY: usize;
 
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
@@ -47,6 +51,16 @@ pub trait Field:
         *self * *self
     }
 
+    /// self * 2^exp
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        *self * Self::ONE.exp_u64(exp)
+    }
+
+    /// self / 2^exp
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        *self / Self::ONE.exp_u64(exp)
+    }
+
     /// The multiplicative inverse of this field element, if it exists.
     fn try_inverse(&self) -> Option<Self>;
 
@@ -55,7 +69,26 @@ pub trait Field:
     }
 
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        self.exp_u64(POWER)
+        // Check for some common small powers before falling back to the general `exp_u64`.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.square() * *self,
+            4 => self.square().square(),
+            5 => self.square().square() * *self,
+            6 => {
+                let x2 = self.square();
+                let x4 = x2.square();
+                x4 * x2
+            }
+            7 => {
+                let x2 = self.square();
+                let x4 = x2.square();
+                x4 * x2 * *self
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 
     fn exp_u64(&self, power: u64) -> Self {
@@ -72,7 +105,9 @@ pub trait Field:
     }
 }
 
-pub trait FieldExtension<Base: Field>: Field {
+pub trait FieldExtension<Base: Field>:
+    Field + Add<Base, Output = Self> + Mul<Base, Output = Self>
+{
     const D: usize;
 
     fn to_base_array(&self) -> [Base; Self::D];
@@ -80,14 +115,6 @@ pub trait FieldExtension<Base: Field>: Field {
     fn from_base_array(arr: [Base; Self::D]) -> Self;
 
     fn from_base(b: Base) -> Self;
-
-    fn add_base(&self, x: Base) -> Self {
-        *self + Self::from_base(x)
-    }
-
-    fn mul_base(&self, x: Base) -> Self {
-        *self * Self::from_base(x)
-    }
 }
 
 impl<F: Field> FieldExtension<F> for F {
@@ -106,14 +133,7 @@ impl<F: Field> FieldExtension<F> for F {
     }
 }
 
-pub trait PrimeField: Field {
-    const NEG_ONE: Self;
-}
-
-/// A `Field` with highly 2-adic multiplicative subgroups.
-pub trait TwoAdicField: Field {
-    const TWO_ADICITY: usize;
-}
+pub trait PrimeField: Field {}
 
 fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize
