@@ -53,12 +53,12 @@ pub trait Field:
 
     /// self * 2^exp
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::ONE.exp_u64(exp)
+        *self * Self::TWO.exp_u64(exp)
     }
 
     /// self / 2^exp
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::ONE.exp_u64(exp)
+        *self / Self::TWO.exp_u64(exp)
     }
 
     /// The multiplicative inverse of this field element, if it exists.
