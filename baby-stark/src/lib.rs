@@ -27,12 +27,15 @@ impl<F: Field> ConstraintConsumer<F> for FoldingConstraintConsumer {
     }
 }
 
-pub fn prove<SC, F, A>(air: &A, trace: RowMajorMatrix<F>)
+pub fn prove<SC, A>(air: &A, trace: RowMajorMatrix<SC::F>)
 where
     SC: StarkConfig,
-    F: Field,
-    for<'a> A: Air<F, BasicAirWindow<'a, F>, FoldingConstraintConsumer>
-        + Air<Symbolic<F>, BasicAirWindow<'a, SymbolicVar<F>>, ConstraintCollector<Symbolic<F>>>,
+    for<'a> A: Air<SC::F, BasicAirWindow<'a, SC::F>, FoldingConstraintConsumer>
+        + Air<
+            Symbolic<SC::F>,
+            BasicAirWindow<'a, SymbolicVar<SC::F>>,
+            ConstraintCollector<Symbolic<SC::F>>,
+        >,
 {
     for i_local in 0..trace.height() {
         let i_next = (i_local + 1) % trace.height();
@@ -105,6 +108,6 @@ mod tests {
     fn test_prove() {
         let mut rng = thread_rng();
         let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
-        prove::<MyConfig, Mersenne31, MulAir>(&MulAir, trace);
+        prove::<MyConfig, MulAir>(&MulAir, trace);
     }
 }
