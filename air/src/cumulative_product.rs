@@ -54,7 +54,7 @@ where
                 + gamma;
 
             let multiply = filter * (reduced_term - one) + one;
-            constraints.global(z_next - z_local * multiply);
+            constraints.assert_zero(z_next - z_local * multiply);
         }
     }
 }

@@ -10,7 +10,7 @@ use itertools::Itertools;
 use p3_commit::mmcs::{Dimensions, DirectMMCS, MMCS};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_symmetric::compression::CompressionFunction;
+use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::IterHasher;
 
 // TODO: Add Jaqui's cache-friendly version, maybe as a separate alternative impl.
@@ -33,7 +33,7 @@ impl<L, D> MerkleTree<L, D> {
         L: Copy,
         D: Copy,
         H: IterHasher<L, D>,
-        C: CompressionFunction<D, 2>,
+        C: PseudoCompressionFunction<D, 2>,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
         for leaf in &leaves {
@@ -124,7 +124,7 @@ impl<L, D> MerkleTree<L, D> {
 pub struct MerkleTreeMMCS<L, D, H, C>
 where
     H: IterHasher<L, D>,
-    C: CompressionFunction<D, 2>,
+    C: PseudoCompressionFunction<D, 2>,
 {
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
@@ -136,7 +136,7 @@ impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: Clone,
     H: IterHasher<L, D>,
-    C: CompressionFunction<D, 2>,
+    C: PseudoCompressionFunction<D, 2>,
 {
     type ProverData = MerkleTree<L, D>;
     type Commitment = D;
@@ -169,7 +169,7 @@ where
     L: Copy,
     D: Copy,
     H: IterHasher<L, D>,
-    C: CompressionFunction<D, 2>,
+    C: PseudoCompressionFunction<D, 2>,
 {
     fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);

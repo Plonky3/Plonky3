@@ -29,28 +29,32 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::window::PairWindow;
+    use crate::window::AirWindow;
     use crate::{Air, AirTypes, ConstraintConsumer};
+    use p3_field::field::Field;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
 
-    struct MulAir;
+    struct FibonacciAir;
 
-    impl<T, W, CC> Air<T, W, CC> for MulAir
+    impl<T, W, CC> Air<T, W, CC> for FibonacciAir
     where
         T: AirTypes<F = Mersenne31>,
-        W: PairWindow<T::Var>,
+        W: AirWindow<T::Var>,
         CC: ConstraintConsumer<T>,
     {
         fn eval(&self, window: &W, constraints: &mut CC) {
-            let preprocessed = window.preprocessed();
             let main = window.main();
-            let preprocessed_local = preprocessed.row(0);
-            let main_local = main.row(0);
+            let x_0 = main.row(0)[0];
+            let x_1 = main.row(1)[0];
+            let x_2 = main.row(2)[0];
 
-            let selector = preprocessed_local[0];
-            let diff = main_local[0] * main_local[1] - main_local[2];
-            constraints.global(selector * diff);
+            let first_row = T::F::ZERO; // TODO
+            let second_row = T::F::ZERO; // TODO
+            let transition = T::F::ZERO; // TODO
+            constraints.when(first_row).assert_zero(x_0);
+            constraints.when(second_row).assert_one(x_1);
+            constraints.when(transition).assert_eq(x_0 + x_1, x_2);
         }
     }
 }

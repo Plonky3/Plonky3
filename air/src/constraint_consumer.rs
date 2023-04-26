@@ -1,18 +1,25 @@
 use crate::AirTypes;
 use alloc::vec::Vec;
+use p3_field::field::Field;
 
 pub trait ConstraintConsumer<T: AirTypes> {
-    fn when(&mut self, filter: T::Exp) -> FilteredConstraintConsumer<T, Self> {
+    fn when<I: Into<T::Exp>>(&mut self, filter: I) -> FilteredConstraintConsumer<T, Self> {
         FilteredConstraintConsumer {
             inner: self,
-            filter,
+            filter: filter.into(),
         }
     }
 
-    fn global(&mut self, constraint: T::Exp);
-    // fn first_row(&mut self, value: T);
-    // fn last_row(&mut self, value: T);
-    // fn transition(&mut self, value: T);
+    fn assert_zero<I: Into<T::Exp>>(&mut self, constraint: I);
+
+    fn assert_one<I: Into<T::Exp>>(&mut self, constraint: I) {
+        let constraint: T::Exp = constraint.into();
+        self.assert_zero::<T::Exp>(constraint - T::F::ONE);
+    }
+
+    fn assert_eq<I1: Into<T::Exp>, I2: Into<T::Exp>>(&mut self, a: I1, b: I2) {
+        self.assert_zero(a.into() - b.into());
+    }
 }
 
 pub struct ConstraintCollector<T: AirTypes> {
@@ -20,8 +27,8 @@ pub struct ConstraintCollector<T: AirTypes> {
 }
 
 impl<T: AirTypes> ConstraintConsumer<T> for ConstraintCollector<T> {
-    fn global(&mut self, constraint: T::Exp) {
-        self.constraints.push(constraint);
+    fn assert_zero<I: Into<T::Exp>>(&mut self, constraint: I) {
+        self.constraints.push(constraint.into());
     }
 }
 
@@ -39,7 +46,8 @@ where
     T: AirTypes,
     CC: ConstraintConsumer<T> + ?Sized,
 {
-    fn global(&mut self, constraint: T::Exp) {
-        self.inner.global(self.filter.clone() * constraint);
+    fn assert_zero<I: Into<T::Exp>>(&mut self, constraint: I) {
+        self.inner
+            .assert_zero(self.filter.clone() * constraint.into());
     }
 }
