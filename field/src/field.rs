@@ -68,29 +68,6 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        // Check for some common small powers before falling back to the general `exp_u64`.
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.square() * *self,
-            4 => self.square().square(),
-            5 => self.square().square() * *self,
-            6 => {
-                let x2 = self.square();
-                let x4 = x2.square();
-                x4 * x2
-            }
-            7 => {
-                let x2 = self.square();
-                let x4 = x2.square();
-                x4 * x2 * *self
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-
     fn exp_u64(&self, power: u64) -> Self {
         let mut current = *self;
         let mut product = Self::ONE;

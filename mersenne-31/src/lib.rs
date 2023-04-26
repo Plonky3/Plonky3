@@ -209,7 +209,12 @@ mod tests {
         assert_eq!(F::ONE + F::ONE, F::TWO);
         assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
         assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
-        assert_eq!(F::NEG_ONE + F::NEG_ONE, F { value: F::ORDER - 2 });
+        assert_eq!(
+            F::NEG_ONE + F::NEG_ONE,
+            F {
+                value: F::ORDER - 2
+            }
+        );
     }
 
     #[test]
