@@ -2,9 +2,7 @@
 
 #![no_std]
 
-mod window;
-
-use crate::window::BasicAirWindow;
+use p3_air::window::BasicAirWindow;
 use p3_air::constraint_consumer::{ConstraintCollector, ConstraintConsumer};
 use p3_air::symbolic::{Symbolic, SymbolicVar};
 use p3_air::Air;
