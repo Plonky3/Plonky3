@@ -21,6 +21,12 @@ pub struct Mersenne31 {
 impl Mersenne31 {
     pub const ORDER: u32 = (1 << 31) - 1;
 
+    fn new(value: u32) -> Self {
+        Self {
+            value: value % Self::ORDER,
+        }
+    }
+
     fn as_canonical_u32(&self) -> u32 {
         // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
         // `value` that is not canonical, namely 2^31 - 1 = p = 0.
@@ -38,7 +44,25 @@ impl PartialEq for Mersenne31 {
     }
 }
 
+impl Ord for Mersenne31 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.as_canonical_u32().cmp(&other.as_canonical_u32())
+    }
+}
+
+impl PartialOrd for Mersenne31 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.as_canonical_u32().cmp(&other.as_canonical_u32()))
+    }
+}
+
 impl Eq for Mersenne31 {}
+
+impl From<u32> for Mersenne31 {
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
