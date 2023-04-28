@@ -10,12 +10,18 @@ where
 {
     fn window(&self) -> &W;
 
+    /// Returns a constraint consumer whose constraints are enforced iff `filter` is nonzero.
     fn when<I: Into<T::Exp>>(&mut self, filter: I) -> FilteredConstraintConsumer<T, W, Self> {
         FilteredConstraintConsumer {
             inner: self,
             filter: filter.into(),
             _phantom_w: Default::default(),
         }
+    }
+
+    /// Returns a constraint consumer whose constraints are enforced iff `x != y`.
+    fn when_ne<I: Into<T::Exp>>(&mut self, x: I, y: I) -> FilteredConstraintConsumer<T, W, Self> {
+        self.when(x.into() - y.into())
     }
 
     /// Returns a constraint consumer whose constraints are enforced only on the first row.
