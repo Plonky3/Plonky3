@@ -47,8 +47,14 @@ where
         self.assert_zero::<T::Exp>(constraint - T::F::ONE);
     }
 
-    fn assert_eq<I1: Into<T::Exp>, I2: Into<T::Exp>>(&mut self, a: I1, b: I2) {
-        self.assert_zero(a.into() - b.into());
+    fn assert_eq<I1: Into<T::Exp>, I2: Into<T::Exp>>(&mut self, x: I1, y: I2) {
+        self.assert_zero(x.into() - y.into());
+    }
+
+    /// Assert that `x` is a boolean value, i.e. 0 or 1.
+    fn assert_bool<I: Into<T::Exp>>(&mut self, x: I) {
+        let constraint: T::Exp = constraint.into();
+        self.assert_zero::<T::Exp>(constraint.clone() * (constraint - T::F::ONE));
     }
 }
 
