@@ -58,7 +58,7 @@ impl<'a, T> Matrix<T> for TwoRowMatrixView<'a, T> {
         match r {
             0 => self.local,
             1 => self.next,
-            _ => panic!("baby-stark only supports two-rows windows"),
+            _ => panic!("BasicAirWindow only supports two-rows windows"),
         }
     }
 }
