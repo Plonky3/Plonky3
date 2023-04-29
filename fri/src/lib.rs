@@ -11,9 +11,8 @@ use p3_commit::mmcs::MMCS;
 use p3_field::field::{Field, FieldExtension};
 use p3_ldt::{LDTBasedPCS, LDT};
 
-pub mod fri_pcs;
 pub mod proof;
-mod prover;
+pub mod prover;
 
 pub struct FriLDT<F, FE, M>
 where

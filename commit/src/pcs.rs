@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 ///
 /// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
 /// and `MultivariatePCS` for more specific subtraits.
+// TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
 pub trait PCS<F: Field> {
     /// The commitment that's sent to the verifier.
     type Commitment;
