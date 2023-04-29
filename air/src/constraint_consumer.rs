@@ -53,8 +53,8 @@ where
 
     /// Assert that `x` is a boolean value, i.e. 0 or 1.
     fn assert_bool<I: Into<T::Exp>>(&mut self, x: I) {
-        let constraint: T::Exp = constraint.into();
-        self.assert_zero::<T::Exp>(constraint.clone() * (constraint - T::F::ONE));
+        let x: T::Exp = x.into();
+        self.assert_zero::<T::Exp>(x.clone() * (x - T::F::ONE));
     }
 }
 
