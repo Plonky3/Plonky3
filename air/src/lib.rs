@@ -32,7 +32,6 @@ where
 mod tests {
     use crate::window::AirWindow;
     use crate::{Air, AirTypes, ConstraintConsumer};
-    use p3_field::field::Field;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
 
