@@ -8,3 +8,4 @@ extern crate alloc;
 
 pub mod field;
 pub mod packed;
+pub mod symbolic;

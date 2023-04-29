@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use crate::field::Field;
+use crate::field::{Field, FieldLike};
 
 /// # Safety
 /// - `WIDTH` is assumed to be a power of 2.
@@ -11,7 +11,8 @@ use crate::field::Field;
 ///   without UB.
 pub unsafe trait PackedField:
     'static
-    + Add<Self, Output = Self>
+    + FieldLike<Self::Scalar>
+    + Add<Self, Output = Self> // TODO: Already from FieldLike
     + Add<Self::Scalar, Output = Self>
     + AddAssign<Self>
     + AddAssign<Self::Scalar>

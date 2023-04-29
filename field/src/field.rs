@@ -4,36 +4,42 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use itertools::Itertools;
 
-/// A finite field.
-pub trait Field:
-    'static
-    + Copy
-    + Default
+/// A generalization of `Field` which permits things like
+/// - an actual field element
+/// - a symbolic expression which would evaluate to a field element
+/// - a vector of field elements
+pub trait FieldLike<F: Field>:
+    Sized
+    + From<F>
+    + Clone
     + Add<Self, Output = Self>
+    + Add<F, Output = Self>
     + AddAssign<Self>
+    + AddAssign<F>
     + Sum
     + Sub<Self, Output = Self>
+    + Sub<F, Output = Self>
     + SubAssign<Self>
+    + SubAssign<F>
     + Neg<Output = Self>
     + Mul<Self, Output = Self>
+    + Mul<F, Output = Self>
     + MulAssign<Self>
+    + MulAssign<F>
     + Product
-    + Div<Self, Output = Self>
-    + Eq
-    + Send
-    + Sync
     + Debug
-    + Display
 {
-    type Packing: PackedField<Scalar = Self>;
-
     const ZERO: Self;
     const ONE: Self;
     const TWO: Self;
     const NEG_ONE: Self;
+}
 
-    /// The number of factors of two in this field's multiplicative group.
-    const TWO_ADICITY: usize;
+/// An element of a finite field.
+pub trait Field:
+    FieldLike<Self> + 'static + Copy + Default + Div<Self, Output = Self> + Eq + Send + Sync + Display
+{
+    type Packing: PackedField<Scalar = Self>;
 
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
@@ -41,6 +47,7 @@ pub trait Field:
 
     /// `x += y * s`, where `s` is a scalar.
     // TODO: Use PackedField
+    // TODO: Move out of Field?
     fn add_scaled_slice_in_place(x: &mut [Self], y: &[Self], s: Self) {
         x.iter_mut()
             .zip_eq(y)
@@ -111,6 +118,23 @@ impl<F: Field> FieldExtension<F> for F {
 }
 
 pub trait PrimeField: Field {}
+
+/// A field which supplies information like the two-adicity of its multiplicative group, and methods
+/// for obtaining two-adic roots of unity.
+pub trait TwoAdicField: Field {
+    /// The number of factors of two in this field's multiplicative group.
+    const TWO_ADICITY: usize;
+
+    /// Generator of a multiplicative subgroup of order `2^TWO_ADICITY`.
+    const POWER_OF_TWO_GENERATOR: Self;
+
+    /// Returns a primitive root of order `2^bits`.
+    fn primitive_root_of_unity(bits: usize) -> Self {
+        assert!(bits <= Self::TWO_ADICITY);
+        let base = Self::POWER_OF_TWO_GENERATOR;
+        base.mul_2exp_u64((Self::TWO_ADICITY - bits) as u64)
+    }
+}
 
 fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize

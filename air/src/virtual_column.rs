@@ -1,7 +1,6 @@
-use crate::AirTypes;
 use alloc::vec;
 use alloc::vec::Vec;
-use p3_field::field::Field;
+use p3_field::field::{Field, FieldLike};
 
 /// An affine function over columns.
 pub struct VirtualColumn<F: Field> {
@@ -17,10 +16,13 @@ impl<F: Field> VirtualColumn<F> {
         }
     }
 
-    pub fn apply<T: AirTypes<F = F>>(&self, row: &[T::Var]) -> T::Exp {
-        let mut result = T::Exp::from(self.constant);
+    pub fn apply<FL: FieldLike<F>, V>(&self, row: &[V]) -> FL
+    where
+        V: Into<FL> + Copy,
+    {
+        let mut result = FL::from(self.constant);
         for (column, weight) in self.column_weights.iter() {
-            result += row[*column] * *weight;
+            result += row[*column].into() * *weight;
         }
         result
     }

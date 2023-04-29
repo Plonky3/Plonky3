@@ -7,7 +7,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{Field, PrimeField};
+use p3_field::field::{Field, FieldLike, PrimeField, TwoAdicField};
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -73,18 +73,18 @@ impl Distribution<Goldilocks> for Standard {
     }
 }
 
-impl Field for Goldilocks {
-    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
-    type Packing = Self;
-
+impl FieldLike<Self> for Goldilocks {
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
+}
 
-    const TWO_ADICITY: usize = 32;
+impl Field for Goldilocks {
+    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
+    type Packing = Self;
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER
@@ -96,6 +96,13 @@ impl Field for Goldilocks {
 }
 
 impl PrimeField for Goldilocks {}
+
+impl TwoAdicField for Goldilocks {
+    const TWO_ADICITY: usize = 32;
+    const POWER_OF_TWO_GENERATOR: Self = Self {
+        value: 1753635133440165772,
+    };
+}
 
 impl Add<Self> for Goldilocks {
     type Output = Self;
