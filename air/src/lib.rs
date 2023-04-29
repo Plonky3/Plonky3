@@ -52,9 +52,8 @@ mod tests {
             let x_1 = main.row(1)[0];
             let x_2 = main.row(2)[0];
 
-            let second_row = T::F::ZERO; // TODO
             constraints.when_first_row().assert_zero(x_0);
-            constraints.when(second_row).assert_one(x_1);
+            constraints.when_first_row().assert_one(x_1);
             constraints.when_transition().assert_eq(x_0 + x_1, x_2);
         }
     }
