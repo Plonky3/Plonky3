@@ -87,23 +87,11 @@ pub trait FieldExtension<Base: Field>:
 {
     const D: usize;
 
-    fn to_base_array(&self) -> [Base; Self::D];
-
-    fn from_base_array(arr: [Base; Self::D]) -> Self;
-
     fn from_base(b: Base) -> Self;
 }
 
 impl<F: Field> FieldExtension<F> for F {
     const D: usize = 1;
-
-    fn to_base_array(&self) -> [F; Self::D] {
-        [*self]
-    }
-
-    fn from_base_array(arr: [F; Self::D]) -> Self {
-        arr[0]
-    }
 
     fn from_base(b: F) -> Self {
         b
