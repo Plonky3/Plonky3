@@ -1,11 +1,9 @@
-use p3_field::field::{Field, FieldExtension};
+use p3_field::field::Field;
 
-pub struct FriProof<F, FE, O>
+pub struct FriProof<F, O>
 where
     F: Field,
-    FE: FieldExtension<F>,
 {
     _todo_f: F,
-    _todo_fe: FE,
     _todo_o: O,
 }

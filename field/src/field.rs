@@ -5,6 +5,10 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use itertools::Itertools;
 
 /// A finite field.
+///
+/// This `Field` trait represents both a field with a specified
+/// extension `Field`/`DistinguishedSubfield` of degree `EXT_DEGREE`,
+/// *and* elements of the extension field.
 pub trait Field:
     'static
     + Copy
@@ -25,6 +29,39 @@ pub trait Field:
     + Debug
     + Display
 {
+    // This name is a bit long; could probably just call it `Subfield`.
+    type DistinguishedSubfield: Field;
+    const EXT_DEGREE: usize;
+
+    // Lift a subfield element to this Field; could also be called
+    // `from_subfield()`.
+    fn lift(x: Self::DistinguishedSubfield) -> Self;
+
+    // Return self as an element of the DistinguishedSubfield if it is
+    // indeed an element of the subfield, otherwise None.
+    fn try_lower(&self) -> Option<Self::DistinguishedSubfield>;
+
+    // Considering Field as a dimension EXT_DEGREE vector space over
+    // DistinguishedSubfield, an element of Field has a
+    // *NON-CANONICAL* representation as a tuple of EXT_DEGREE
+    // elements of DistinguishedSubfield.
+    //
+    // The two functions below could provide facility to `map` or
+    // `fold` over the elements of such a vector; they should be
+    // *avoided* where possible and used with caution if necessary. The
+    // intention is that they would replace existing cases where
+    // `to_base_array()` is called.
+    //
+    // map should return an iterator I guess, since can't return a slice
+    /*
+    fn map_components<Fn>(&self, f: Fn) -> &[Self::DistinguishedSubfield];
+    fn fold_components<Fn>(
+        &self,
+        f: Fn,
+        init: Self::DistinguishedSubfield,
+    ) -> Self::DistinguishedSubfield;
+    */
+
     type Packing: PackedField<Scalar = Self>;
 
     const ZERO: Self;
@@ -82,36 +119,19 @@ pub trait Field:
     }
 }
 
-pub trait FieldExtension<Base: Field>:
-    Field + Add<Base, Output = Self> + Mul<Base, Output = Self>
-{
-    const D: usize;
+// TODO: Would be good to be able to share these specialisations
+// between Goldilocks, Mersenne31, etc.
+/*
+pub trait PrimeField: Field {
+    type DistinguishedSubfield = Self;
+    const EXT_DEGREE: usize = 1;
 
-    fn to_base_array(&self) -> [Base; Self::D];
-
-    fn from_base_array(arr: [Base; Self::D]) -> Self;
-
-    fn from_base(b: Base) -> Self;
+    fn lift(x: Self::DistinguishedSubfield) -> Self { x }
+    fn try_lower(&self) -> Option<Self::DistinguishedSubfield> { Some(*self) }
 }
+*/
 
-impl<F: Field> FieldExtension<F> for F {
-    const D: usize = 1;
-
-    fn to_base_array(&self) -> [F; Self::D] {
-        [*self]
-    }
-
-    fn from_base_array(arr: [F; Self::D]) -> Self {
-        arr[0]
-    }
-
-    fn from_base(b: F) -> Self {
-        b
-    }
-}
-
-pub trait PrimeField: Field {}
-
+// This obviously belongs in a utils module.
 fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize
 }

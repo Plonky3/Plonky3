@@ -7,13 +7,13 @@ use p3_air::symbolic::Symbolic;
 use p3_air::window::{BasicAirWindow, TwoRowMatrixView};
 use p3_air::Air;
 use p3_commit::pcs::PCS;
-use p3_field::field::{Field, FieldExtension};
+use p3_field::field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
 pub trait StarkConfig {
     type F: Field;
-    type Challenge: FieldExtension<Self::F>;
+    type Challenge: Field<DistinguishedSubfield = Self::F>;
     type PCS: PCS<Self::F>;
 }
 
@@ -93,7 +93,7 @@ mod tests {
     impl StarkConfig for MyConfig {
         type F = F;
         type Challenge = Self::F; // TODO: Use an extension.
-        type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS>;
+        type PCS = FRIBasedPCS<Self::Challenge, MMCS>;
     }
 
     struct MulAir;

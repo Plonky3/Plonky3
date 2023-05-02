@@ -7,7 +7,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{Field, PrimeField};
+use p3_field::field::Field;
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -77,6 +77,17 @@ impl Field for Goldilocks {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
 
+    type DistinguishedSubfield = Self;
+    const EXT_DEGREE: usize = 1;
+
+    fn lift(x: Self::DistinguishedSubfield) -> Self {
+        x
+    }
+
+    fn try_lower(&self) -> Option<Self::DistinguishedSubfield> {
+        Some(*self)
+    }
+
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
@@ -94,8 +105,6 @@ impl Field for Goldilocks {
         todo!()
     }
 }
-
-impl PrimeField for Goldilocks {}
 
 impl Add<Self> for Goldilocks {
     type Output = Self;

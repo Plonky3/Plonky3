@@ -1,7 +1,7 @@
 use crate::pcs::{MultivariatePCS, UnivariatePCS, PCS};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_field::field::{Field, FieldExtension};
+use p3_field::field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 
 pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {
@@ -27,14 +27,14 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
 }
 
 impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
-    fn open_multi_batches<FE: FieldExtension<F>>(
+    fn open_multi_batches<FE: Field<DistinguishedSubfield = F>>(
         _points: &[FE],
         _prover_data: &[Self::ProverData],
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof) {
         todo!()
     }
 
-    fn verify_multi_batches<FE: FieldExtension<F>>(
+    fn verify_multi_batches<FE: Field<DistinguishedSubfield = F>>(
         _commits: &[Self::Commitment],
         _points: &[FE],
         _values: &[Vec<Vec<FE>>],

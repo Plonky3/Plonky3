@@ -1,7 +1,7 @@
 //! Traits for polynomial commitment schemes.
 
 use alloc::vec;
-use p3_field::field::{Field, FieldExtension};
+use p3_field::field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 
 use alloc::vec::Vec;
@@ -34,12 +34,12 @@ pub trait PCS<F: Field> {
 }
 
 pub trait UnivariatePCS<F: Field>: PCS<F> {
-    fn open_multi_batches<FE: FieldExtension<F>>(
+    fn open_multi_batches<FE: Field<DistinguishedSubfield = F>>(
         prover_data: &[Self::ProverData],
         points: &[FE],
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof);
 
-    fn verify_multi_batches<FE: FieldExtension<F>>(
+    fn verify_multi_batches<FE: Field<DistinguishedSubfield = F>>(
         commits: &[Self::Commitment],
         points: &[FE],
         values: &[Vec<Vec<FE>>],
@@ -48,12 +48,12 @@ pub trait UnivariatePCS<F: Field>: PCS<F> {
 }
 
 pub trait MultivariatePCS<F: Field>: PCS<F> {
-    fn open_multi_batches<FE: FieldExtension<F>>(
+    fn open_multi_batches<FE: Field<DistinguishedSubfield = F>>(
         points: &[FE],
         prover_data: &[Self::ProverData],
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof);
 
-    fn verify_multi_batches<FE: FieldExtension<F>>(
+    fn verify_multi_batches<FE: Field<DistinguishedSubfield = F>>(
         commits: &[Self::Commitment],
         points: &[FE],
         values: &[Vec<Vec<FE>>],
