@@ -7,7 +7,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{Field, FieldLike, PrimeField};
+use p3_field::field::{Field, Field32, FieldLike, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -24,16 +24,6 @@ impl Mersenne31 {
     fn new(value: u32) -> Self {
         Self {
             value: value % Self::ORDER,
-        }
-    }
-
-    fn as_canonical_u32(&self) -> u32 {
-        // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
-        // `value` that is not canonical, namely 2^31 - 1 = p = 0.
-        if self.value == Self::ORDER {
-            0
-        } else {
-            self.value
         }
     }
 }
@@ -135,6 +125,18 @@ impl Field for Mersenne31 {
 }
 
 impl PrimeField for Mersenne31 {}
+
+impl Field32 for Mersenne31 {
+    fn as_canonical_u32(&self) -> u32 {
+        // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
+        // `value` that is not canonical, namely 2^31 - 1 = p = 0.
+        if self.value == Self::ORDER {
+            0
+        } else {
+            self.value
+        }
+    }
+}
 
 impl Add<Self> for Mersenne31 {
     type Output = Self;

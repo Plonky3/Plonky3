@@ -126,6 +126,10 @@ impl<F: Field> FieldExtension<F> for F {
 
 pub trait PrimeField: Field {}
 
+pub trait Field32: Field {
+    fn as_canonical_u32(&self) -> u32;
+}
+
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods
 /// for obtaining two-adic roots of unity.
 pub trait TwoAdicField: Field {
