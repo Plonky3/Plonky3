@@ -73,6 +73,12 @@ pub trait AirBuilder: Sized {
     fn assert_eq<I1: Into<Self::FL>, I2: Into<Self::FL>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
     }
+
+    /// Assert that `x` is a boolean, i.e. either 0 or 1.
+    fn assert_bool<I: Into<Self::FL>>(&mut self, x: I) {
+        let x = x.into();
+        self.assert_zero(x.clone() * (x - Self::FL::ONE));
+    }
 }
 
 pub trait PairBuilder: AirBuilder {
