@@ -42,7 +42,7 @@ where
 impl<'a, F, FL, V> AirBuilder for BasicFoldingAirBuilder<'a, F, FL, V>
 where
     F: Field,
-    FL: FieldLike<F>,
+    FL: FieldLike<F> + Add<V, Output = FL> + Sub<V, Output = FL> + Mul<V, Output = FL>,
     V: Into<FL>
         + Copy
         + Add<V, Output = FL>

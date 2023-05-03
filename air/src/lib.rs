@@ -18,7 +18,12 @@ pub trait Air<AB: AirBuilder>: Sync {
     fn eval(&self, builder: &mut AB);
 }
 
-pub trait AirBuilder: Sized {
+pub trait AirBuilder: Sized
+where
+    Self::FL: Add<Self::Var, Output = Self::FL>
+        + Sub<Self::Var, Output = Self::FL>
+        + Mul<Self::Var, Output = Self::FL>,
+{
     type F: Field;
     type FL: FieldLike<Self::F>;
 
