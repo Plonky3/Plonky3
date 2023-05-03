@@ -90,7 +90,14 @@ pub trait Field:
 }
 
 pub trait FieldExtension<Base: Field>:
-    Field + Add<Base, Output = Self> + Mul<Base, Output = Self>
+    FieldLike<Base>
+    + Field
+    + Add<Base, Output = Self>
+    + AddAssign<Base>
+    + Sub<Base, Output = Self>
+    + SubAssign<Base>
+    + Mul<Base, Output = Self>
+    + MulAssign<Base>
 {
     const D: usize;
 
