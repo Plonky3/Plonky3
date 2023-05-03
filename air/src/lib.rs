@@ -25,8 +25,14 @@ pub trait AirBuilder: Sized {
     type Var: Into<Self::FL>
         + Copy
         + Add<Self::Var, Output = Self::FL>
+        + Add<Self::F, Output = Self::FL>
+        + Add<Self::FL, Output = Self::FL>
         + Sub<Self::Var, Output = Self::FL>
-        + Mul<Self::Var, Output = Self::FL>;
+        + Sub<Self::F, Output = Self::FL>
+        + Sub<Self::FL, Output = Self::FL>
+        + Mul<Self::Var, Output = Self::FL>
+        + Mul<Self::F, Output = Self::FL>
+        + Mul<Self::FL, Output = Self::FL>;
 
     type M: Matrix<Self::Var>;
 

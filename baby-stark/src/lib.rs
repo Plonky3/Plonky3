@@ -43,7 +43,17 @@ impl<'a, F, FL, V> AirBuilder for BasicFoldingAirBuilder<'a, F, FL, V>
 where
     F: Field,
     FL: FieldLike<F>,
-    V: Into<FL> + Copy + Add<V, Output = FL> + Sub<V, Output = FL> + Mul<V, Output = FL>,
+    V: Into<FL>
+        + Copy
+        + Add<V, Output = FL>
+        + Add<F, Output = FL>
+        + Add<FL, Output = FL>
+        + Sub<V, Output = FL>
+        + Sub<F, Output = FL>
+        + Sub<FL, Output = FL>
+        + Mul<V, Output = FL>
+        + Mul<F, Output = FL>
+        + Mul<FL, Output = FL>,
 {
     type F = F;
     type FL = FL;
@@ -80,7 +90,7 @@ pub struct BasicSymVar {
     pub column: usize,
 }
 
-pub fn prove2<SC, A>(air: &A, trace: RowMajorMatrix<SC::F>)
+pub fn prove<SC, A>(air: &A, trace: RowMajorMatrix<SC::F>)
 where
     SC: StarkConfig,
     A: for<'a> Air<
