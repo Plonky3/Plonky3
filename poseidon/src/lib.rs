@@ -1,8 +1,6 @@
 //! The Poseidon permutation.
 
 #![no_std]
-#![allow(incomplete_features)]
-#![feature(generic_const_exprs)]
 
 extern crate alloc;
 
@@ -128,10 +126,5 @@ where
 {
 }
 
-pub type PaddingFreePoseidonSponge<
-    F,
-    MDS,
-    const RATE: usize,
-    const CAPACITY: usize,
-    const ALPHA: u64,
-> = PaddingFreeSponge<F, Poseidon<F, MDS, { RATE + CAPACITY }, ALPHA>, RATE, CAPACITY>;
+pub type PaddingFreePoseidonSponge<F, MDS, const WIDTH: usize, const ALPHA: u64> =
+    PaddingFreeSponge<F, Poseidon<F, MDS, WIDTH, ALPHA>, WIDTH>;

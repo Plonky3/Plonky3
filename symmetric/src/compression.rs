@@ -13,19 +13,19 @@ pub trait PseudoCompressionFunction<T, const N: usize> {
 /// An `n`-to-1 compression function.
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
-pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize>
+pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
 where
-    InnerP: CryptographicPermutation<[T; CHUNK * N]>,
+    InnerP: CryptographicPermutation<[T; PROD]>,
 {
     _phantom_t: PhantomData<T>,
     inner_permutation: InnerP,
 }
 
-impl<T, InnerP, const N: usize, const CHUNK: usize> PseudoCompressionFunction<[T; CHUNK], N>
-    for TruncatedPermutation<T, InnerP, N, CHUNK>
+impl<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
+    PseudoCompressionFunction<[T; CHUNK], N> for TruncatedPermutation<T, InnerP, N, CHUNK, PROD>
 where
     T: Copy,
-    InnerP: CryptographicPermutation<[T; CHUNK * N]>,
+    InnerP: CryptographicPermutation<[T; PROD]>,
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
         let flat_input = input

@@ -174,8 +174,8 @@ mod tests {
 
     type MDS = MyMds;
     type Perm = Poseidon<F, MDS, 8, 7>;
-    type H4 = PaddingFreeSponge<F, Perm, 4, 4>;
-    type C = TruncatedPermutation<F, Perm, 2, 4>;
+    type H4 = PaddingFreeSponge<F, Perm, { 4 + 4 }>;
+    type C = TruncatedPermutation<F, Perm, 2, 4, { 2 * 4 }>;
     type MMCS = MerkleTreeMMCS<F, [F; 4], H4, C>;
     impl StarkConfig for MyConfig {
         type F = F;

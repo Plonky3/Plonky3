@@ -46,9 +46,6 @@ pub unsafe trait PackedField:
     const ZEROS: Self;
     const ONES: Self;
 
-    fn from_arr(arr: [Self::Scalar; Self::WIDTH]) -> Self;
-    fn as_arr(&self) -> [Self::Scalar; Self::WIDTH];
-
     fn from_slice(slice: &[Self::Scalar]) -> &Self;
     fn from_slice_mut(slice: &mut [Self::Scalar]) -> &mut Self;
     fn as_slice(&self) -> &[Self::Scalar];
@@ -107,14 +104,6 @@ unsafe impl<F: Field> PackedField for F {
     const WIDTH: usize = 1;
     const ZEROS: Self = F::ZERO;
     const ONES: Self = F::ONE;
-
-    fn from_arr(arr: [Self::Scalar; Self::WIDTH]) -> Self {
-        arr[0]
-    }
-
-    fn as_arr(&self) -> [Self::Scalar; Self::WIDTH] {
-        [*self]
-    }
 
     fn from_slice(slice: &[Self::Scalar]) -> &Self {
         &slice[0]
