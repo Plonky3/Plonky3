@@ -225,7 +225,7 @@ mod tests {
     impl StarkConfig for MyConfig {
         type F = F;
         type Challenge = Self::F; // TODO: Use an extension.
-        type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS>;
+        type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS, MMCS>;
     }
 
     struct MulAir;

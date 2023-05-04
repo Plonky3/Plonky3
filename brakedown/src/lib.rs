@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use p3_code::{LinearCode, SystematicCode};
 use p3_field::field::Field;
-use p3_matrix::dense::{DenseMatrixView, DenseMatrixViewMut};
+use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::mul::mul_csr_dense;
 use p3_matrix::sparse::CsrMatrix;
 use p3_matrix::Matrix;
@@ -46,7 +46,7 @@ impl<F: Field, IC: SystematicCode<F>> SystematicCode<F> for BrakedownCode<F, IC>
         self.y_len() + self.z_parity_len() + self.v_len()
     }
 
-    fn write_parity(&self, x: DenseMatrixView<F>, parity: &mut DenseMatrixViewMut<F>) {
+    fn write_parity(&self, x: RowMajorMatrixView<F>, parity: &mut RowMajorMatrixViewMut<F>) {
         let (mut z, mut v) = parity.split_rows(self.z_len());
         let (mut y, mut z_parity) = z.split_rows(self.y_len());
 

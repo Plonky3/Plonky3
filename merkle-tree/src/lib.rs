@@ -142,6 +142,7 @@ where
     type Commitment = D;
     type Proof = Vec<D>;
     type Error = ();
+    type Mat = RowMajorMatrix<L>;
 
     fn open_batch(row: usize, prover_data: &MerkleTree<L, D>) -> (Vec<&[L]>, Vec<D>) {
         let leaf = prover_data
@@ -151,6 +152,10 @@ where
             .collect();
         let proof = vec![]; // TODO
         (leaf, proof)
+    }
+
+    fn get_matrices(prover_data: &Self::ProverData) -> &[RowMajorMatrix<L>] {
+        &prover_data.leaves
     }
 
     fn verify_batch(

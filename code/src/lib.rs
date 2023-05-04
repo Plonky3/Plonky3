@@ -3,12 +3,12 @@
 #![no_std]
 
 use p3_field::field::Field;
-use p3_matrix::dense::{DenseMatrixView, DenseMatrixViewMut, RowMajorMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 
 /// A code (in the coding theory sense).
 pub trait Code<F: Field> {
-    fn encode_batch(&self, messages: DenseMatrixView<F>, codewords: DenseMatrixViewMut<F>);
+    fn encode_batch(&self, messages: RowMajorMatrixView<F>, codewords: RowMajorMatrixViewMut<F>);
 
     fn message_len(&self) -> usize;
 
@@ -39,11 +39,19 @@ pub trait SystematicCode<F: Field>: Code<F> {
         self.write_parity(systematic.as_view(), &mut parity);
     }
 
-    fn write_parity(&self, systematic: DenseMatrixView<F>, parity: &mut DenseMatrixViewMut<F>);
+    fn write_parity(
+        &self,
+        systematic: RowMajorMatrixView<F>,
+        parity: &mut RowMajorMatrixViewMut<F>,
+    );
 }
 
 impl<F: Field, S: SystematicCode<F>> Code<F> for S {
-    fn encode_batch(&self, messages: DenseMatrixView<F>, mut codewords: DenseMatrixViewMut<F>) {
+    fn encode_batch(
+        &self,
+        messages: RowMajorMatrixView<F>,
+        mut codewords: RowMajorMatrixViewMut<F>,
+    ) {
         let (systematic, mut parity) = codewords.split_rows(self.systematic_len());
         systematic.values.copy_from_slice(messages.values);
         self.write_parity(messages, &mut parity);
@@ -72,7 +80,11 @@ impl<F: Field> SystematicCode<F> for IdentityCode {
         0
     }
 
-    fn write_parity(&self, _systematic: DenseMatrixView<F>, _parity: &mut DenseMatrixViewMut<F>) {
+    fn write_parity(
+        &self,
+        _systematic: RowMajorMatrixView<F>,
+        _parity: &mut RowMajorMatrixViewMut<F>,
+    ) {
         // All done! There are no parity bits.
     }
 }

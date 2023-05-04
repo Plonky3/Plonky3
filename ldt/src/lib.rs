@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_challenger::Challenger;
 use p3_commit::mmcs::MMCS;
 use p3_commit::pcs::PCS;
 use p3_field::field::Field;
@@ -17,9 +18,17 @@ pub trait LDT<F: Field, M: MMCS<F>> {
     type Error;
 
     /// Prove that each column of each matrix in `codewords` is a codeword.
-    fn prove(codewords: &[M::ProverData]) -> Self::Proof;
+    fn prove<Chal>(codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
+    where
+        Chal: Challenger<F>;
 
-    fn verify(codeword_commits: &[M::Commitment], proof: &Self::Proof) -> Result<(), Self::Error>;
+    fn verify<Chal>(
+        codeword_commits: &[M::Commitment],
+        proof: &Self::Proof,
+        challenger: &mut Chal,
+    ) -> Result<(), Self::Error>
+    where
+        Chal: Challenger<F>;
 }
 
 pub struct LDTBasedPCS<F, M, L>

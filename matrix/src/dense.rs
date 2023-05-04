@@ -27,15 +27,15 @@ impl<T> RowMajorMatrix<T> {
         &mut self.values[r * self.width..(r + 1) * self.width]
     }
 
-    pub fn as_view(&self) -> DenseMatrixView<T> {
-        DenseMatrixView {
+    pub fn as_view(&self) -> RowMajorMatrixView<T> {
+        RowMajorMatrixView {
             values: &self.values,
             width: self.width,
         }
     }
 
-    pub fn as_view_mut(&mut self) -> DenseMatrixViewMut<T> {
-        DenseMatrixViewMut {
+    pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<T> {
+        RowMajorMatrixViewMut {
             values: &mut self.values,
             width: self.width,
         }
@@ -79,19 +79,19 @@ impl<T> Matrix<T> for RowMajorMatrix<T> {
 }
 
 #[derive(Copy, Clone)]
-pub struct DenseMatrixView<'a, T> {
+pub struct RowMajorMatrixView<'a, T> {
     pub values: &'a [T],
     width: usize,
 }
 
-impl<'a, T> DenseMatrixView<'a, T> {
+impl<'a, T> RowMajorMatrixView<'a, T> {
     pub fn row(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
-impl<T> Matrix<T> for DenseMatrixView<'_, T> {
+impl<T> Matrix<T> for RowMajorMatrixView<'_, T> {
     fn width(&self) -> usize {
         self.width
     }
@@ -106,12 +106,12 @@ impl<T> Matrix<T> for DenseMatrixView<'_, T> {
     }
 }
 
-pub struct DenseMatrixViewMut<'a, T> {
+pub struct RowMajorMatrixViewMut<'a, T> {
     pub values: &'a mut [T],
     width: usize,
 }
 
-impl<'a, T> DenseMatrixViewMut<'a, T> {
+impl<'a, T> RowMajorMatrixViewMut<'a, T> {
     pub fn row(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -122,20 +122,20 @@ impl<'a, T> DenseMatrixViewMut<'a, T> {
         &mut self.values[r * self.width..(r + 1) * self.width]
     }
 
-    pub fn as_view(&self) -> DenseMatrixView<T> {
-        DenseMatrixView {
+    pub fn as_view(&self) -> RowMajorMatrixView<T> {
+        RowMajorMatrixView {
             values: self.values,
             width: self.width,
         }
     }
 
-    pub fn split_rows(&mut self, r: usize) -> (DenseMatrixViewMut<T>, DenseMatrixViewMut<T>) {
+    pub fn split_rows(&mut self, r: usize) -> (RowMajorMatrixViewMut<T>, RowMajorMatrixViewMut<T>) {
         let (upper_values, lower_values) = self.values.split_at_mut(r * self.width);
-        let upper = DenseMatrixViewMut {
+        let upper = RowMajorMatrixViewMut {
             values: upper_values,
             width: self.width,
         };
-        let lower = DenseMatrixViewMut {
+        let lower = RowMajorMatrixViewMut {
             values: lower_values,
             width: self.width,
         };
@@ -143,7 +143,7 @@ impl<'a, T> DenseMatrixViewMut<'a, T> {
     }
 }
 
-impl<T> Matrix<T> for DenseMatrixViewMut<'_, T> {
+impl<T> Matrix<T> for RowMajorMatrixViewMut<'_, T> {
     fn width(&self) -> usize {
         self.width
     }

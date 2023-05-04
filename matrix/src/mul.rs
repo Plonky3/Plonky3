@@ -1,4 +1,4 @@
-use crate::dense::{DenseMatrixView, DenseMatrixViewMut};
+use crate::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use crate::sparse::CsrMatrix;
 use crate::Matrix;
 use p3_field::field::Field;
@@ -7,8 +7,8 @@ use p3_field::field::Field;
 /// This assumes that `C` is initially filled with zeros.
 pub fn mul_csr_dense<F: Field>(
     a: &CsrMatrix<F>,
-    b: DenseMatrixView<F>,
-    c: &mut DenseMatrixViewMut<F>,
+    b: RowMajorMatrixView<F>,
+    c: &mut RowMajorMatrixViewMut<F>,
 ) {
     assert_eq!(a.width(), b.height(), "A, B dimensions don't match");
     assert_eq!(a.height(), c.height(), "A, C dimensions don't match");

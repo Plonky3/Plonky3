@@ -5,6 +5,7 @@ use p3_field::field::{Field, FieldExtension};
 use p3_matrix::dense::RowMajorMatrix;
 
 use alloc::vec::Vec;
+use p3_challenger::Challenger;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
 /// polynomials defined over the field `F`.
@@ -34,29 +35,43 @@ pub trait PCS<F: Field> {
 }
 
 pub trait UnivariatePCS<F: Field>: PCS<F> {
-    fn open_multi_batches<FE: FieldExtension<F>>(
+    fn open_multi_batches<FE, Chal>(
         prover_data: &[Self::ProverData],
         points: &[FE],
-    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof);
+        challenger: &mut Chal,
+    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
+    where
+        FE: FieldExtension<F>,
+        Chal: Challenger<F>;
 
-    fn verify_multi_batches<FE: FieldExtension<F>>(
+    fn verify_multi_batches<FE, Chal>(
         commits: &[Self::Commitment],
         points: &[FE],
         values: &[Vec<Vec<FE>>],
         proof: &Self::Proof,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Self::Error>
+    where
+        FE: FieldExtension<F>,
+        Chal: Challenger<F>;
 }
 
 pub trait MultivariatePCS<F: Field>: PCS<F> {
-    fn open_multi_batches<FE: FieldExtension<F>>(
-        points: &[FE],
+    fn open_multi_batches<FE, Chal>(
         prover_data: &[Self::ProverData],
-    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof);
+        points: &[FE],
+        challenger: &mut Chal,
+    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
+    where
+        FE: FieldExtension<F>,
+        Chal: Challenger<F>;
 
-    fn verify_multi_batches<FE: FieldExtension<F>>(
+    fn verify_multi_batches<FE, Chal>(
         commits: &[Self::Commitment],
         points: &[FE],
         values: &[Vec<Vec<FE>>],
         proof: &Self::Proof,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Self::Error>
+    where
+        FE: FieldExtension<F>,
+        Chal: Challenger<F>;
 }
