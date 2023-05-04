@@ -117,7 +117,8 @@ where
     let next_step = 1 << quotient_degree_bits;
 
     let coset_shift = SC::F::MULTIPLICATIVE_GROUP_GENERATOR;
-    let coset = cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size);
+    let coset: Vec<_> =
+        cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
     // Evaluations of x^n on our coset s H. Note that
     //     (s g^i)^n = s^n (g^n)^i,
@@ -131,10 +132,19 @@ where
     // Evaluations of Z_H(x) = (x^n - 1) on our coset s H.
     let zerofier_evals = x_pow_n_evals.map(|y| y - SC::F::ONE);
 
-    let lagrange_first_evals = todo!(); // zerofier_evals.map(|y| y / (x - 1));
-    let lagrange_last_evals = todo!();
+    // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
+    let lagrange_first_evals: Vec<_> = g_subgroup
+        .powers()
+        .zip(zerofier_evals.clone())
+        .map(|(x, z)| z / (x - SC::F::ONE))
+        .collect();
 
-    let points = coset.take(quotient_size).collect::<Vec<_>>();
+    // Evaluations of L_last(x) = Z_H(x) / (x - g^-1) on our coset s H.
+    let lagrange_last_evals: Vec<_> = g_subgroup
+        .powers()
+        .zip(zerofier_evals)
+        .map(|(x, z)| z / (x - subgroup_last))
+        .collect();
 
     let quotient_values = (0..quotient_size)
         .into_par_iter()
@@ -143,10 +153,11 @@ where
             let i_next_start = (i_local_start + next_step) % quotient_size;
             let i_range = i_local_start..i_local_start + <SC::F as Field>::Packing::WIDTH;
 
-            let x: <SC::F as Field>::Packing = todo!(); // *<SC::F as Field>::Packing::from_slice(&coset[i_range.clone()]);
+            let x = *<SC::F as Field>::Packing::from_slice(&coset[i_range.clone()]);
             let is_transition = x - subgroup_last;
-            let is_first_row = todo!(); // *P::from_slice(&lagrange_first.values[i_range.clone()]);
-            let is_last_row = todo!(); // *P::from_slice(&lagrange_last.values[i_range]);
+            let is_first_row =
+                *<SC::F as Field>::Packing::from_slice(&lagrange_first_evals[i_range.clone()]);
+            let is_last_row = *<SC::F as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
 
             let mut builder = BasicFoldingAirBuilder {
                 main: TwoRowMatrixView {

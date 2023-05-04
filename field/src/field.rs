@@ -172,7 +172,7 @@ impl<F: Field> Iterator for Powers<F> {
 pub fn cyclic_subgroup_known_order<F: Field>(
     generator: F,
     order: usize,
-) -> impl Iterator<Item = F> {
+) -> impl Iterator<Item = F> + Clone {
     generator.powers().take(order)
 }
 
@@ -181,7 +181,7 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     generator: F,
     shift: F,
     order: usize,
-) -> impl Iterator<Item = F> {
+) -> impl Iterator<Item = F> + Clone {
     cyclic_subgroup_known_order(generator, order).map(move |x| x * shift)
 }
 

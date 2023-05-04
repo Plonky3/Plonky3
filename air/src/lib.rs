@@ -18,6 +18,7 @@ pub trait Air<AB: AirBuilder>: Sync {
 
 pub trait AirBuilder: Sized {
     type F: Field;
+
     type FL: FieldLike<Self::F>
         + Add<Self::Var, Output = Self::FL>
         + Sub<Self::Var, Output = Self::FL>
