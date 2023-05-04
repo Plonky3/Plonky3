@@ -87,6 +87,13 @@ pub trait Field:
         }
         product
     }
+
+    fn powers(&self) -> Powers<Self> {
+        Powers {
+            base: *self,
+            current: Self::ONE,
+        }
+    }
 }
 
 pub trait FieldExtension<Base: Field>:
@@ -145,6 +152,40 @@ pub trait TwoAdicField: Field {
         let base = Self::POWER_OF_TWO_GENERATOR;
         base.mul_2exp_u64((Self::TWO_ADICITY - bits) as u64)
     }
+}
+
+/// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
+#[derive(Clone)]
+pub struct Powers<F: Field> {
+    base: F,
+    current: F,
+}
+
+impl<F: Field> Iterator for Powers<F> {
+    type Item = F;
+
+    fn next(&mut self) -> Option<F> {
+        let result = self.current;
+        self.current *= self.base;
+        Some(result)
+    }
+}
+
+/// Computes a multiplicative subgroup whose order is known in advance.
+pub fn cyclic_subgroup_known_order<F: Field>(
+    generator: F,
+    order: usize,
+) -> impl Iterator<Item = F> {
+    generator.powers().take(order)
+}
+
+/// Computes a coset of a multiplicative subgroup whose order is known in advance.
+pub fn cyclic_subgroup_coset_known_order<F: Field>(
+    generator: F,
+    shift: F,
+    order: usize,
+) -> impl Iterator<Item = F> {
+    cyclic_subgroup_known_order(generator, order).map(move |x| x * shift)
 }
 
 fn bits_u64(n: u64) -> usize {
