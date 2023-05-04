@@ -33,6 +33,7 @@ pub trait FieldLike<F: Field>:
     const ONE: Self;
     const TWO: Self;
     const NEG_ONE: Self;
+    const MULTIPLICATIVE_GROUP_GENERATOR: Self;
 }
 
 /// An element of a finite field.
@@ -86,6 +87,14 @@ pub trait Field:
             current = current.square();
         }
         product
+    }
+
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        let mut res = *self;
+        for _ in 0..power_log {
+            res = res.square();
+        }
+        res
     }
 
     fn powers(&self) -> Powers<Self> {

@@ -25,6 +25,7 @@ impl<F: Field, V: Clone + Debug> FieldLike<F> for SymbolicField<F, V> {
     const ONE: Self = Self::Constant(F::ONE);
     const TWO: Self = Self::Constant(F::TWO);
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
+    const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self::Constant(F::MULTIPLICATIVE_GROUP_GENERATOR);
 }
 
 impl<F: Field, V: Clone + Debug> Add for SymbolicField<F, V> {

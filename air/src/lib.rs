@@ -16,14 +16,12 @@ pub trait Air<AB: AirBuilder>: Sync {
     fn eval(&self, builder: &mut AB);
 }
 
-pub trait AirBuilder: Sized
-where
-    Self::FL: Add<Self::Var, Output = Self::FL>
-        + Sub<Self::Var, Output = Self::FL>
-        + Mul<Self::Var, Output = Self::FL>,
-{
+pub trait AirBuilder: Sized {
     type F: Field;
-    type FL: FieldLike<Self::F>;
+    type FL: FieldLike<Self::F>
+        + Add<Self::Var, Output = Self::FL>
+        + Sub<Self::Var, Output = Self::FL>
+        + Mul<Self::Var, Output = Self::FL>;
 
     type Var: Into<Self::FL>
         + Copy
@@ -128,19 +126,15 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Air, AirBuilder, PairBuilder};
+    use crate::{Air, AirBuilder};
     use p3_matrix::Matrix;
-    use p3_mersenne_31::Mersenne31;
 
     struct FibonacciAir;
 
-    impl<AB: AirBuilder> Air<AB> for FibonacciAir
-    where
-        AB: PairBuilder<F = Mersenne31>,
-    {
+    impl<AB: AirBuilder> Air<AB> for FibonacciAir {
         fn eval(&self, builder: &mut AB) {
-            builder.preprocessed();
             let main = builder.main();
+
             let x_0 = main.row(0)[0];
             let x_1 = main.row(1)[0];
             let x_2 = main.row(2)[0];

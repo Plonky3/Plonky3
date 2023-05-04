@@ -80,6 +80,8 @@ impl FieldLike<Self> for Goldilocks {
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
+    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
+    const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self { value: 7 };
 }
 
 impl Field for Goldilocks {
