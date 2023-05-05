@@ -14,7 +14,7 @@ use p3_air::two_row_matrix::TwoRowMatrixView;
 use p3_air::{Air, AirBuilder};
 use p3_commit::pcs::PCS;
 use p3_field::field::{
-    cyclic_subgroup_coset_known_order, Field, FieldExtension, FieldLike, TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractField, Field, FieldExtension, TwoAdicField,
 };
 use p3_field::packed::PackedField;
 use p3_field::symbolic::SymbolicField;
@@ -31,53 +31,55 @@ pub trait StarkConfig {
     type PCS: PCS<Self::F>;
 }
 
-pub struct BasicFoldingAirBuilder<'a, F, FL, V>
+pub struct BasicFoldingAirBuilder<'a, F, Exp, Var>
 where
     F: Field,
-    FL: FieldLike<F>,
-    V: Into<FL> + Copy, //+ Add<V, Output = FL> + Sub<V, Output = FL> + Mul<V, Output = FL>,
+    Exp: AbstractField<F>,
+    Var:
+        Into<Exp> + Copy + Add<Var, Output = Exp> + Sub<Var, Output = Exp> + Mul<Var, Output = Exp>,
 {
-    main: TwoRowMatrixView<'a, V>,
-    is_first_row: FL,
-    is_last_row: FL,
-    is_transition: FL,
+    main: TwoRowMatrixView<'a, Var>,
+    is_first_row: Exp,
+    is_last_row: Exp,
+    is_transition: Exp,
     _phantom_f: PhantomData<F>,
 }
 
-impl<'a, F, FL, V> AirBuilder for BasicFoldingAirBuilder<'a, F, FL, V>
+impl<'a, F, Exp, Var> AirBuilder for BasicFoldingAirBuilder<'a, F, Exp, Var>
 where
     F: Field,
-    FL: FieldLike<F> + Add<V, Output = FL> + Sub<V, Output = FL> + Mul<V, Output = FL>,
-    V: Into<FL>
+    Exp:
+        AbstractField<F> + Add<Var, Output = Exp> + Sub<Var, Output = Exp> + Mul<Var, Output = Exp>,
+    Var: Into<Exp>
         + Copy
-        + Add<V, Output = FL>
-        + Add<F, Output = FL>
-        + Add<FL, Output = FL>
-        + Sub<V, Output = FL>
-        + Sub<F, Output = FL>
-        + Sub<FL, Output = FL>
-        + Mul<V, Output = FL>
-        + Mul<F, Output = FL>
-        + Mul<FL, Output = FL>,
+        + Add<Var, Output = Exp>
+        + Add<F, Output = Exp>
+        + Add<Exp, Output = Exp>
+        + Sub<Var, Output = Exp>
+        + Sub<F, Output = Exp>
+        + Sub<Exp, Output = Exp>
+        + Mul<Var, Output = Exp>
+        + Mul<F, Output = Exp>
+        + Mul<Exp, Output = Exp>,
 {
     type F = F;
-    type FL = FL;
-    type Var = V;
-    type M = TwoRowMatrixView<'a, V>;
+    type Exp = Exp;
+    type Var = Var;
+    type M = TwoRowMatrixView<'a, Var>;
 
     fn main(&self) -> Self::M {
         self.main
     }
 
-    fn is_first_row(&self) -> Self::FL {
+    fn is_first_row(&self) -> Self::Exp {
         self.is_first_row.clone()
     }
 
-    fn is_last_row(&self) -> Self::FL {
+    fn is_last_row(&self) -> Self::Exp {
         self.is_last_row.clone()
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::FL {
+    fn is_transition_window(&self, size: usize) -> Self::Exp {
         if size == 2 {
             self.is_transition.clone()
         } else {
@@ -85,7 +87,7 @@ where
         }
     }
 
-    fn assert_zero<I: Into<Self::FL>>(&mut self, x: I) {
+    fn assert_zero<I: Into<Self::Exp>>(&mut self, x: I) {
         todo!()
     }
 }

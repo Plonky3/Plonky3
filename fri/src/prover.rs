@@ -5,7 +5,7 @@ use core::cmp::Reverse;
 use itertools::Itertools;
 use p3_challenger::Challenger;
 use p3_commit::mmcs::{DirectMMCS, MMCS};
-use p3_field::field::{Field, FieldExtension, FieldLike};
+use p3_field::field::{AbstractField, Field, FieldExtension};
 use p3_matrix::Matrix;
 
 pub(crate) fn prove<F, FE, M, MC, Chal>(
@@ -35,7 +35,7 @@ where
     MC: DirectMMCS<F>,
     Chal: Challenger<F>,
 {
-    let alpha: FE = <FE as FieldLike<F>>::ZERO; // TODO challenger.random_ext_element();
+    let alpha: FE = <FE as AbstractField<F>>::ZERO; // TODO challenger.random_ext_element();
     let matrices_by_desc_height = codewords
         .iter()
         .flat_map(|data| M::get_matrices(data))
@@ -45,13 +45,13 @@ where
 
     let (max_height, largest_matrices_iter) = matrices_by_desc_height.next().expect("No matrices?");
     let largest_matrices = largest_matrices_iter.collect_vec();
-    let zero_vec = vec![<FE as FieldLike<F>>::ZERO; max_height];
+    let zero_vec = vec![<FE as AbstractField<F>>::ZERO; max_height];
     let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
     let mut committed = vec![current.clone()];
 
     for (height, matrices) in matrices_by_desc_height {
         while current.len() < height {
-            let beta = <FE as FieldLike<F>>::ZERO; // TODO
+            let beta = <FE as AbstractField<F>>::ZERO; // TODO
             current = fold_even_odd(&current, beta);
         }
         committed.push(current.clone());

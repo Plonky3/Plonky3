@@ -1,6 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use p3_field::field::{Field, FieldLike};
+use p3_field::field::{AbstractField, Field};
 
 /// An affine function over columns.
 pub struct VirtualColumn<F: Field> {
@@ -16,11 +16,11 @@ impl<F: Field> VirtualColumn<F> {
         }
     }
 
-    pub fn apply<FL: FieldLike<F>, V>(&self, row: &[V]) -> FL
+    pub fn apply<Exp: AbstractField<F>, Var>(&self, row: &[Var]) -> Exp
     where
-        V: Into<FL> + Copy,
+        Var: Into<Exp> + Copy,
     {
-        let mut result = FL::from(self.constant);
+        let mut result = Exp::from(self.constant);
         for (column, weight) in self.column_weights.iter() {
             result += row[*column].into() * *weight;
         }

@@ -8,7 +8,7 @@ use itertools::Itertools;
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
 /// - a vector of field elements
-pub trait FieldLike<F: Field>:
+pub trait AbstractField<F: Field>:
     Sized
     + From<F>
     + Clone
@@ -38,7 +38,15 @@ pub trait FieldLike<F: Field>:
 
 /// An element of a finite field.
 pub trait Field:
-    FieldLike<Self> + 'static + Copy + Default + Div<Self, Output = Self> + Eq + Send + Sync + Display
+    AbstractField<Self>
+    + 'static
+    + Copy
+    + Default
+    + Div<Self, Output = Self>
+    + Eq
+    + Send
+    + Sync
+    + Display
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -106,7 +114,7 @@ pub trait Field:
 }
 
 pub trait FieldExtension<Base: Field>:
-    FieldLike<Base>
+    AbstractField<Base>
     + Field
     + Add<Base, Output = Self>
     + AddAssign<Base>

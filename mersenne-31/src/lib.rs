@@ -7,7 +7,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{Field, Field32, FieldLike, PrimeField};
+use p3_field::field::{AbstractField, Field, Field32, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -84,7 +84,7 @@ impl Distribution<Mersenne31> for Standard {
     }
 }
 
-impl FieldLike<Self> for Mersenne31 {
+impl AbstractField<Self> for Mersenne31 {
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
@@ -228,7 +228,7 @@ impl Div for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use crate::Mersenne31;
-    use p3_field::field::{Field, FieldLike};
+    use p3_field::field::{AbstractField, Field};
 
     type F = Mersenne31;
 

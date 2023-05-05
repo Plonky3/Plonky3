@@ -9,7 +9,7 @@ pub mod two_row_matrix;
 pub mod virtual_column;
 
 use core::ops::{Add, Mul, Sub};
-use p3_field::field::{Field, FieldLike};
+use p3_field::field::{AbstractField, Field};
 use p3_matrix::Matrix;
 
 pub trait Air<AB: AirBuilder>: Sync {
@@ -19,35 +19,35 @@ pub trait Air<AB: AirBuilder>: Sync {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type FL: FieldLike<Self::F>
-        + Add<Self::Var, Output = Self::FL>
-        + Sub<Self::Var, Output = Self::FL>
-        + Mul<Self::Var, Output = Self::FL>;
+    type Exp: AbstractField<Self::F>
+        + Add<Self::Var, Output = Self::Exp>
+        + Sub<Self::Var, Output = Self::Exp>
+        + Mul<Self::Var, Output = Self::Exp>;
 
-    type Var: Into<Self::FL>
+    type Var: Into<Self::Exp>
         + Copy
-        + Add<Self::Var, Output = Self::FL>
-        + Add<Self::F, Output = Self::FL>
-        + Add<Self::FL, Output = Self::FL>
-        + Sub<Self::Var, Output = Self::FL>
-        + Sub<Self::F, Output = Self::FL>
-        + Sub<Self::FL, Output = Self::FL>
-        + Mul<Self::Var, Output = Self::FL>
-        + Mul<Self::F, Output = Self::FL>
-        + Mul<Self::FL, Output = Self::FL>;
+        + Add<Self::Var, Output = Self::Exp>
+        + Add<Self::F, Output = Self::Exp>
+        + Add<Self::Exp, Output = Self::Exp>
+        + Sub<Self::Var, Output = Self::Exp>
+        + Sub<Self::F, Output = Self::Exp>
+        + Sub<Self::Exp, Output = Self::Exp>
+        + Mul<Self::Var, Output = Self::Exp>
+        + Mul<Self::F, Output = Self::Exp>
+        + Mul<Self::Exp, Output = Self::Exp>;
 
     type M: Matrix<Self::Var>;
 
     fn main(&self) -> Self::M;
 
-    fn is_first_row(&self) -> Self::FL;
-    fn is_last_row(&self) -> Self::FL;
-    fn is_transition(&self) -> Self::FL {
+    fn is_first_row(&self) -> Self::Exp;
+    fn is_last_row(&self) -> Self::Exp;
+    fn is_transition(&self) -> Self::Exp {
         self.is_transition_window(2)
     }
-    fn is_transition_window(&self, size: usize) -> Self::FL;
+    fn is_transition_window(&self, size: usize) -> Self::Exp;
 
-    fn when<I: Into<Self::FL>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
+    fn when<I: Into<Self::Exp>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
         FilteredAirBuilder {
             inner: self,
             condition: condition.into(),
@@ -66,20 +66,20 @@ pub trait AirBuilder: Sized {
         self.when(self.is_transition())
     }
 
-    fn assert_zero<I: Into<Self::FL>>(&mut self, x: I);
+    fn assert_zero<I: Into<Self::Exp>>(&mut self, x: I);
 
-    fn assert_one<I: Into<Self::FL>>(&mut self, x: I) {
-        self.assert_zero(x.into() - Self::FL::ONE);
+    fn assert_one<I: Into<Self::Exp>>(&mut self, x: I) {
+        self.assert_zero(x.into() - Self::Exp::ONE);
     }
 
-    fn assert_eq<I1: Into<Self::FL>, I2: Into<Self::FL>>(&mut self, x: I1, y: I2) {
+    fn assert_eq<I1: Into<Self::Exp>, I2: Into<Self::Exp>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
     }
 
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
-    fn assert_bool<I: Into<Self::FL>>(&mut self, x: I) {
+    fn assert_bool<I: Into<Self::Exp>>(&mut self, x: I) {
         let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::FL::ONE));
+        self.assert_zero(x.clone() * (x - Self::Exp::ONE));
     }
 }
 
@@ -90,17 +90,17 @@ pub trait PairBuilder: AirBuilder {
 pub trait PermutationAirBuilder: AirBuilder {
     fn permutation(&self) -> Self::M;
 
-    fn permutation_randomness(&self) -> Self::FL;
+    fn permutation_randomness(&self) -> Self::Exp;
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     inner: &'a mut AB,
-    condition: AB::FL,
+    condition: AB::Exp,
 }
 
 impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     type F = AB::F;
-    type FL = AB::FL;
+    type Exp = AB::Exp;
     type Var = AB::Var;
     type M = AB::M;
 
@@ -108,19 +108,19 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
         self.inner.main()
     }
 
-    fn is_first_row(&self) -> Self::FL {
+    fn is_first_row(&self) -> Self::Exp {
         self.inner.is_first_row()
     }
 
-    fn is_last_row(&self) -> Self::FL {
+    fn is_last_row(&self) -> Self::Exp {
         self.inner.is_last_row()
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::FL {
+    fn is_transition_window(&self, size: usize) -> Self::Exp {
         self.inner.is_transition_window(size)
     }
 
-    fn assert_zero<I: Into<Self::FL>>(&mut self, x: I) {
+    fn assert_zero<I: Into<Self::Exp>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition.clone() * x.into())
     }
 }
