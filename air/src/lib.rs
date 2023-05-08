@@ -47,6 +47,7 @@ pub trait AirBuilder: Sized {
     }
     fn is_transition_window(&self, size: usize) -> Self::Exp;
 
+    /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
     fn when<I: Into<Self::Exp>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
         FilteredAirBuilder {
             inner: self,
@@ -54,14 +55,17 @@ pub trait AirBuilder: Sized {
         }
     }
 
+    /// Returns a sub-builder whose constraints are enforced only on the first row.
     fn when_first_row(&mut self) -> FilteredAirBuilder<Self> {
         self.when(self.is_first_row())
     }
 
+    /// Returns a sub-builder whose constraints are enforced only on the last row.
     fn when_last_row(&mut self) -> FilteredAirBuilder<Self> {
         self.when(self.is_last_row())
     }
 
+    /// Returns a sub-builder whose constraints are enforced on all rows except the last.
     fn when_transition(&mut self) -> FilteredAirBuilder<Self> {
         self.when(self.is_transition())
     }
