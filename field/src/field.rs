@@ -2,6 +2,7 @@ use crate::packed::PackedField;
 use core::fmt::{Debug, Display};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::slice;
 use itertools::Itertools;
 
 /// A generalization of `Field` which permits things like
@@ -126,6 +127,10 @@ pub trait FieldExtension<Base: Field>:
     const D: usize;
 
     fn from_base(b: Base) -> Self;
+
+    fn from_base_slice(bs: &[Base]) -> Self;
+
+    fn as_base_slice(&self) -> &[Base];
 }
 
 impl<F: Field> FieldExtension<F> for F {
@@ -133,6 +138,15 @@ impl<F: Field> FieldExtension<F> for F {
 
     fn from_base(b: F) -> Self {
         b
+    }
+
+    fn from_base_slice(bs: &[F]) -> Self {
+        assert_eq!(bs.len(), 1);
+        bs[0]
+    }
+
+    fn as_base_slice(&self) -> &[F] {
+        slice::from_ref(self)
     }
 }
 
