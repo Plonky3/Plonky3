@@ -55,6 +55,14 @@ pub trait AirBuilder: Sized {
         }
     }
 
+    fn when_true(&mut self, condition: KnownBool<Self::Exp>) -> FilteredAirBuilder<Self> {
+        self.when(condition.0)
+    }
+
+    fn when_false(&mut self, condition: KnownBool<Self::Exp>) -> FilteredAirBuilder<Self> {
+        self.when_ne(condition.0, Self::Exp::ONE)
+    }
+
     /// Returns a sub-builder whose constraints are enforced only when `x != y`.
     fn when_ne<I1: Into<Self::Exp>, I2: Into<Self::Exp>>(
         &mut self,
@@ -90,9 +98,10 @@ pub trait AirBuilder: Sized {
     }
 
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
-    fn assert_bool<I: Into<Self::Exp>>(&mut self, x: I) {
+    fn assert_bool<I: Into<Self::Exp>>(&mut self, x: I) -> KnownBool<Self::Exp> {
         let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::Exp::ONE));
+        self.assert_zero(x.clone() * (x.clone() - Self::Exp::ONE));
+        KnownBool(x)
     }
 }
 
@@ -135,6 +144,20 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
     fn assert_zero<I: Into<Self::Exp>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition.clone() * x.into())
+    }
+}
+
+/// A wrapper around a value that must be 0 or 1.
+pub struct KnownBool<T>(T);
+
+impl<T> KnownBool<T> {
+    /// Safe only if `b` is known to be 0 or 1, e.g. if it was constrained with `assert_bool`.
+    pub unsafe fn new(b: T) -> Self {
+        Self(b)
+    }
+
+    pub fn get(&self) -> &T {
+        &self.0
     }
 }
 
