@@ -13,9 +13,7 @@ use core::ops::{Add, Mul, Sub};
 use p3_air::two_row_matrix::TwoRowMatrixView;
 use p3_air::{Air, AirBuilder};
 use p3_commit::pcs::PCS;
-use p3_field::field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, FieldExtension, TwoAdicField,
-};
+use p3_field::field::{cyclic_subgroup_coset_known_order, AbstractField, Field, FieldExtension, TwoAdicField, PrimeField};
 use p3_field::packed::PackedField;
 use p3_field::symbolic::SymbolicField;
 use p3_matrix::dense::RowMajorMatrix;
@@ -26,7 +24,7 @@ use p3_maybe_rayon::ParallelIterator;
 use p3_util::log2_strict_usize;
 
 pub trait StarkConfig {
-    type F: TwoAdicField;
+    type F: PrimeField + TwoAdicField;
     type Challenge: FieldExtension<Self::F>;
     type PCS: PCS<Self::F>;
 }
