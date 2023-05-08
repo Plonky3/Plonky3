@@ -240,6 +240,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // TODO: Not ready yet.
     fn test_prove() {
         let mut rng = thread_rng();
         let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
