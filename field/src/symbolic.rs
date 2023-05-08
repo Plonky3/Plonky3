@@ -58,7 +58,7 @@ impl<F: Field, Var: Clone + Debug> AddAssign<F> for SymbolicField<F, Var> {
 
 impl<F: Field, Var: Clone + Debug> Sum for SymbolicField<F, Var> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::Constant(F::ZERO))
+        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
@@ -128,6 +128,6 @@ impl<F: Field, Var: Clone + Debug> MulAssign<F> for SymbolicField<F, Var> {
 
 impl<F: Field, Var: Clone + Debug> Product for SymbolicField<F, Var> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::Constant(F::ONE))
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
