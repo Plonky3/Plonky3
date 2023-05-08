@@ -1,6 +1,4 @@
-use core::fmt::Debug;
-use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
 use crate::field::{AbstractField, Field};
@@ -10,30 +8,20 @@ use crate::field::{AbstractField, Field};
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Scalar; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedField:
-    'static
-    + AbstractField<Self::Scalar>
-    + Add<Self, Output = Self> // TODO: Already from FieldLike
-    + Add<Self::Scalar, Output = Self>
-    + AddAssign<Self>
-    + AddAssign<Self::Scalar>
+ AbstractField
+    + 'static
     + Copy
-    + Debug
     + Default
+    + Add<Self::Scalar, Output = Self>
+    + AddAssign<Self::Scalar>
+    + Sub<Self::Scalar, Output = Self>
+    + SubAssign<Self::Scalar>
     + From<Self::Scalar>
+    + Mul<Self::Scalar, Output = Self>
+    + MulAssign<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
-    + Mul<Self, Output = Self>
-    + Mul<Self::Scalar, Output = Self>
-    + MulAssign<Self>
-    + MulAssign<Self::Scalar>
-    + Neg<Output = Self>
-    + Product
     + Send
-    + Sub<Self, Output = Self>
-    + Sub<Self::Scalar, Output = Self>
-    + SubAssign<Self>
-    + SubAssign<Self::Scalar>
-    + Sum
     + Sync
     where
         Self::Scalar: Add<Self, Output = Self>,

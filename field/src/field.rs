@@ -9,24 +9,17 @@ use itertools::Itertools;
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
 /// - a vector of field elements
-pub trait AbstractField<F: Field>:
+pub trait AbstractField:
     Sized
-    + From<F>
     + Clone
-    + Add<Self, Output = Self>
-    + Add<F, Output = Self>
-    + AddAssign<Self>
-    + AddAssign<F>
-    + Sum
-    + Sub<Self, Output = Self>
-    + Sub<F, Output = Self>
-    + SubAssign<Self>
-    + SubAssign<F>
+    + Add<Output = Self>
+    + AddAssign
+    + Sub<Output = Self>
+    + SubAssign
     + Neg<Output = Self>
-    + Mul<Self, Output = Self>
-    + Mul<F, Output = Self>
-    + MulAssign<Self>
-    + MulAssign<F>
+    + Mul<Output = Self>
+    + MulAssign
+    + Sum
     + Product
     + Debug
 {
@@ -37,17 +30,22 @@ pub trait AbstractField<F: Field>:
     const MULTIPLICATIVE_GROUP_GENERATOR: Self;
 }
 
+pub trait ArithWith<F>:
+    From<F>
+    + Add<F, Output = Self>
+    + AddAssign<F>
+    + Sub<F, Output = Self>
+    + SubAssign<F>
+    + Mul<F, Output = Self>
+    + MulAssign<F>
+    + Sum<F>
+    + Product<F>
+{
+}
+
 /// An element of a finite field.
 pub trait Field:
-    AbstractField<Self>
-    + 'static
-    + Copy
-    + Default
-    + Div<Self, Output = Self>
-    + Eq
-    + Send
-    + Sync
-    + Display
+    AbstractField + 'static + Copy + Default + Div<Self, Output = Self> + Eq + Send + Sync + Display
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -115,8 +113,7 @@ pub trait Field:
 }
 
 pub trait FieldExtension<Base: Field>:
-    AbstractField<Base>
-    + Field
+    Field
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>
