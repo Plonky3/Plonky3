@@ -55,6 +55,15 @@ pub trait AirBuilder: Sized {
         }
     }
 
+    /// Returns a sub-builder whose constraints are enforced only when `x != y`.
+    fn when_ne<I1: Into<Self::Exp>, I2: Into<Self::Exp>>(
+        &mut self,
+        x: I1,
+        y: I2,
+    ) -> FilteredAirBuilder<Self> {
+        self.when(x.into() - y.into())
+    }
+
     /// Returns a sub-builder whose constraints are enforced only on the first row.
     fn when_first_row(&mut self) -> FilteredAirBuilder<Self> {
         self.when(self.is_first_row())
