@@ -43,7 +43,7 @@ Algorithms
 Hashes
 - [ ] Rescue
 - [x] Poseidon
-- [x] Poseidon2
+- [ ] Poseidon2
 - [x] Keccak-256
 - [ ] BLAKE3-modified
 
