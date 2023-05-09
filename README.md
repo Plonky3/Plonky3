@@ -5,6 +5,49 @@ Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and
 This is the "core" repo, but the plan is to move each crate into its own repo once APIs stabilize.
 
 
+## Status
+
+Fields:
+- [x] Mersenne31
+  - [ ] common extension fields
+  - [ ] AVX2
+  - [ ] AVX-512
+  - [ ] NEON
+- [x] Goldilocks
+  - [ ] common extension fields
+  - [ ] AVX2
+  - [ ] AVX-512
+  - [ ] NEON
+
+Vector-ish commitment schemes
+- [x] generalized Merkle tree
+
+Polynomial commitment schemes
+- [ ] FRI-based PCS
+- [ ] tensor PCS
+- [ ] univariate-to-multivariate adapter
+- [ ] multivariate-to-univariate adapter
+
+PIOPs
+- [ ] STARK
+- [ ] PLONK
+
+Codes
+- [x] Brakedown
+- [ ] Reed-Solomon
+
+Algorithms
+- [ ] basic FFT
+- [ ] Mersenne FFT
+
+Hashes
+- [ ] Rescue
+- [x] Poseidon
+- [x] Poseidon2
+- [x] Keccak-256
+- [ ] BLAKE3-modified
+
+
 ## License
 
 Licensed under either of
