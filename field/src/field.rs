@@ -11,6 +11,7 @@ use itertools::Itertools;
 /// - a vector of field elements
 pub trait AbstractField:
     Sized
+    + Default
     + Clone
     + Add<Output = Self>
     + AddAssign
@@ -48,7 +49,7 @@ impl<F: Field> AbstractionOf<F> for F {}
 
 /// An element of a finite field.
 pub trait Field:
-    AbstractField + 'static + Copy + Default + Div<Self, Output = Self> + Eq + Send + Sync + Display
+    AbstractField + 'static + Copy + Div<Self, Output = Self> + Eq + Send + Sync + Display
 {
     type Packing: PackedField<Scalar = Self>;
 

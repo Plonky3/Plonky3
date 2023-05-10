@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 #[derive(Clone, Debug)]
-pub enum SymbolicField<F: Field, Var: Clone + Debug> {
+pub enum SymbolicField<F: Field, Var> {
     Variable(Var),
     Constant(F),
     Add(Rc<Self>, Rc<Self>),
@@ -14,7 +14,13 @@ pub enum SymbolicField<F: Field, Var: Clone + Debug> {
     Mul(Rc<Self>, Rc<Self>),
 }
 
-impl<F: Field, Var: Clone + Debug> From<F> for SymbolicField<F, Var> {
+impl<F: Field, Var> Default for SymbolicField<F, Var> {
+    fn default() -> Self {
+        Self::Constant(F::ZERO)
+    }
+}
+
+impl<F: Field, Var> From<F> for SymbolicField<F, Var> {
     fn from(value: F) -> Self {
         Self::Constant(value)
     }
