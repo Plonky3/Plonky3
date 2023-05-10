@@ -13,7 +13,10 @@ use core::ops::{Add, Mul, Sub};
 use p3_air::two_row_matrix::TwoRowMatrixView;
 use p3_air::{Air, AirBuilder};
 use p3_commit::pcs::PCS;
-use p3_field::field::{cyclic_subgroup_coset_known_order, AbstractField, Field, FieldExtension, TwoAdicField, PrimeField};
+use p3_field::field::{
+    cyclic_subgroup_coset_known_order, AbstractField, Field, FieldExtension, PrimeField,
+    TwoAdicField,
+};
 use p3_field::packed::PackedField;
 use p3_field::symbolic::SymbolicField;
 use p3_matrix::dense::RowMajorMatrix;
@@ -29,13 +32,7 @@ pub trait StarkConfig {
     type PCS: PCS<Self::F>;
 }
 
-pub struct BasicFoldingAirBuilder<'a, F, Exp, Var>
-where
-    F: Field,
-    Exp: AbstractField<F>,
-    Var:
-        Into<Exp> + Copy + Add<Var, Output = Exp> + Sub<Var, Output = Exp> + Mul<Var, Output = Exp>,
-{
+pub struct BasicFoldingAirBuilder<'a, F, Exp, Var> {
     main: TwoRowMatrixView<'a, Var>,
     is_first_row: Exp,
     is_last_row: Exp,
@@ -45,19 +42,24 @@ where
 
 impl<'a, F, Exp, Var> AirBuilder for BasicFoldingAirBuilder<'a, F, Exp, Var>
 where
-    F: Field,
-    Exp:
-        AbstractField<F> + Add<Var, Output = Exp> + Sub<Var, Output = Exp> + Mul<Var, Output = Exp>,
+    F: Field + Into<Exp>,
+    Exp: AbstractField
+        + Add<F, Output = Exp>
+        + Add<Var, Output = Exp>
+        + Sub<F, Output = Exp>
+        + Sub<Var, Output = Exp>
+        + Mul<F, Output = Exp>
+        + Mul<Var, Output = Exp>,
     Var: Into<Exp>
         + Copy
-        + Add<Var, Output = Exp>
         + Add<F, Output = Exp>
+        + Add<Var, Output = Exp>
         + Add<Exp, Output = Exp>
-        + Sub<Var, Output = Exp>
         + Sub<F, Output = Exp>
+        + Sub<Var, Output = Exp>
         + Sub<Exp, Output = Exp>
-        + Mul<Var, Output = Exp>
         + Mul<F, Output = Exp>
+        + Mul<Var, Output = Exp>
         + Mul<Exp, Output = Exp>,
 {
     type F = F;

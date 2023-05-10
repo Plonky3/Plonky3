@@ -2,12 +2,14 @@
 
 #![no_std]
 
+pub mod complex;
+
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{AbstractField, Field, Field32, PrimeField};
+use p3_field::field::{AbstractField, ArithWith, Field, Field32, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -21,7 +23,7 @@ pub struct Mersenne31 {
 impl Mersenne31 {
     pub const ORDER: u32 = (1 << 31) - 1;
 
-    fn new(value: u32) -> Self {
+    const fn new(value: u32) -> Self {
         Self {
             value: value % Self::ORDER,
         }
@@ -84,7 +86,7 @@ impl Distribution<Mersenne31> for Standard {
     }
 }
 
-impl AbstractField<Self> for Mersenne31 {
+impl AbstractField for Mersenne31 {
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
@@ -94,6 +96,8 @@ impl AbstractField<Self> for Mersenne31 {
     // Sage: GF(2^31 - 1).multiplicative_generator()
     const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self { value: 7 };
 }
+
+impl ArithWith<Self> for Mersenne31 {}
 
 impl Field for Mersenne31 {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.

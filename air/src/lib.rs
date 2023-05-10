@@ -17,23 +17,26 @@ pub trait Air<AB: AirBuilder>: Sync {
 }
 
 pub trait AirBuilder: Sized {
-    type F: Field;
+    type F: Field + Into<Self::Exp>;
 
-    type Exp: AbstractField<Self::F>
+    type Exp: AbstractField
+        + Add<Self::F, Output = Self::Exp>
         + Add<Self::Var, Output = Self::Exp>
+        + Sub<Self::F, Output = Self::Exp>
         + Sub<Self::Var, Output = Self::Exp>
+        + Mul<Self::F, Output = Self::Exp>
         + Mul<Self::Var, Output = Self::Exp>;
 
     type Var: Into<Self::Exp>
         + Copy
-        + Add<Self::Var, Output = Self::Exp>
         + Add<Self::F, Output = Self::Exp>
+        + Add<Self::Var, Output = Self::Exp>
         + Add<Self::Exp, Output = Self::Exp>
-        + Sub<Self::Var, Output = Self::Exp>
         + Sub<Self::F, Output = Self::Exp>
+        + Sub<Self::Var, Output = Self::Exp>
         + Sub<Self::Exp, Output = Self::Exp>
-        + Mul<Self::Var, Output = Self::Exp>
         + Mul<Self::F, Output = Self::Exp>
+        + Mul<Self::Var, Output = Self::Exp>
         + Mul<Self::Exp, Output = Self::Exp>;
 
     type M: Matrix<Self::Var>;
