@@ -30,8 +30,9 @@ pub trait AbstractField:
     const MULTIPLICATIVE_GROUP_GENERATOR: Self;
 }
 
-pub trait ArithWith<F>:
-    From<F>
+pub trait AbstractionOf<F: Field>:
+    AbstractField
+    + From<F>
     + Add<F, Output = Self>
     + AddAssign<F>
     + Sub<F, Output = Self>
@@ -42,6 +43,8 @@ pub trait ArithWith<F>:
     + Product<F>
 {
 }
+
+impl<F: Field> AbstractionOf<F> for F {}
 
 /// An element of a finite field.
 pub trait Field:

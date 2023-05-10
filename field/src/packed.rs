@@ -1,23 +1,23 @@
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
-use crate::field::{AbstractField, Field};
+use crate::field::{AbstractField, AbstractionOf, Field};
 
 /// # Safety
 /// - `WIDTH` is assumed to be a power of 2.
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Scalar; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedField:
- AbstractField
+ AbstractionOf<Self::Scalar>
     + 'static
     + Copy
     + Default
-    + Add<Self::Scalar, Output = Self>
+    // + Add<Self::Scalar, Output = Self>
     + AddAssign<Self::Scalar>
-    + Sub<Self::Scalar, Output = Self>
+    // + Sub<Self::Scalar, Output = Self>
     + SubAssign<Self::Scalar>
-    + From<Self::Scalar>
-    + Mul<Self::Scalar, Output = Self>
+    // + From<Self::Scalar>
+    // + Mul<Self::Scalar, Output = Self>
     + MulAssign<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>

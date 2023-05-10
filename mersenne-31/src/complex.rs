@@ -2,15 +2,15 @@ use crate::Mersenne31;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{AbstractField, ArithWith, Field};
+use p3_field::field::{AbstractField, AbstractionOf, Field};
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Default)]
-pub struct ComplexExtension<AF: AbstractField + ArithWith<Mersenne31>> {
+pub struct ComplexExtension<AF: AbstractField + AbstractionOf<Mersenne31>> {
     real: AF,
     imag: AF,
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> ComplexExtension<AF> {
     pub const fn new(real: AF, imag: AF) -> Self {
         Self { real, imag }
     }
@@ -24,7 +24,7 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> ComplexExtension<AF> {
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Add<Self> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Add<Self> for ComplexExtension<AF> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -32,7 +32,7 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Add<Self> for ComplexExtension<A
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Add<Mersenne31> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Add<Mersenne31> for ComplexExtension<AF> {
     type Output = Self;
 
     fn add(self, rhs: Mersenne31) -> Self {
@@ -40,26 +40,26 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Add<Mersenne31> for ComplexExten
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> AddAssign<Self> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> AddAssign<Self> for ComplexExtension<AF> {
     fn add_assign(&mut self, rhs: Self) {
         self.real += rhs.real;
         self.imag += rhs.imag;
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> AddAssign<Mersenne31> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> AddAssign<Mersenne31> for ComplexExtension<AF> {
     fn add_assign(&mut self, rhs: Mersenne31) {
         self.real += AF::from(rhs);
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Sum for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Sum for ComplexExtension<AF> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Sub<Self> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Sub<Self> for ComplexExtension<AF> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -67,7 +67,7 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Sub<Self> for ComplexExtension<A
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Sub<Mersenne31> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Sub<Mersenne31> for ComplexExtension<AF> {
     type Output = Self;
 
     fn sub(self, rhs: Mersenne31) -> Self {
@@ -75,20 +75,20 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Sub<Mersenne31> for ComplexExten
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> SubAssign<Self> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> SubAssign<Self> for ComplexExtension<AF> {
     fn sub_assign(&mut self, rhs: Self) {
         self.real -= rhs.real;
         self.imag -= rhs.imag;
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> SubAssign<Mersenne31> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> SubAssign<Mersenne31> for ComplexExtension<AF> {
     fn sub_assign(&mut self, rhs: Mersenne31) {
         self.real -= rhs;
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Neg for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Neg for ComplexExtension<AF> {
     type Output = Self;
 
     fn neg(self) -> Self {
@@ -96,7 +96,7 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Neg for ComplexExtension<AF> {
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Mul<Self> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Mul<Self> for ComplexExtension<AF> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -113,7 +113,7 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Mul<Self> for ComplexExtension<A
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Mul<Mersenne31> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Mul<Mersenne31> for ComplexExtension<AF> {
     type Output = Self;
 
     fn mul(self, rhs: Mersenne31) -> Self {
@@ -121,26 +121,26 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> Mul<Mersenne31> for ComplexExten
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> MulAssign<Self> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> MulAssign<Self> for ComplexExtension<AF> {
     fn mul_assign(&mut self, rhs: Self) {
         *self = self.clone() * rhs;
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> MulAssign<Mersenne31> for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> MulAssign<Mersenne31> for ComplexExtension<AF> {
     fn mul_assign(&mut self, rhs: Mersenne31) {
         self.real *= rhs;
         self.imag *= rhs;
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> Product for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> Product for ComplexExtension<AF> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
-impl<AF: AbstractField + ArithWith<Mersenne31>> AbstractField for ComplexExtension<AF> {
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> AbstractField for ComplexExtension<AF> {
     const ZERO: Self = Self::real(AF::ZERO);
     const ONE: Self = Self::real(AF::ONE);
     const TWO: Self = Self::real(AF::TWO);
@@ -153,8 +153,6 @@ impl<AF: AbstractField + ArithWith<Mersenne31>> AbstractField for ComplexExtensi
     // u + 12
     const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self::ZERO; // TODO Self::new(AF::ONE, AF::from(Mersenne31::new(12)));
 }
-
-impl<AF: AbstractField + ArithWith<Mersenne31>> ArithWith<Self> for ComplexExtension<AF> {}
 
 impl Div<Self> for ComplexExtension<Mersenne31> {
     type Output = Self;

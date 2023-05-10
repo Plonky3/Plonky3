@@ -1,4 +1,4 @@
-use crate::field::{AbstractField, ArithWith, Field};
+use crate::field::{AbstractField, AbstractionOf, Field};
 use alloc::rc::Rc;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
@@ -28,7 +28,7 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
     const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self::Constant(F::MULTIPLICATIVE_GROUP_GENERATOR);
 }
 
-impl<F: Field, Var: Clone + Debug> ArithWith<Self> for SymbolicField<F, Var> {}
+impl<F: Field, Var: Clone + Debug> AbstractionOf<F> for SymbolicField<F, Var> {}
 
 impl<F: Field, Var: Clone + Debug> Add for SymbolicField<F, Var> {
     type Output = Self;

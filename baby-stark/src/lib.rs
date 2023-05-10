@@ -14,8 +14,8 @@ use p3_air::two_row_matrix::TwoRowMatrixView;
 use p3_air::{Air, AirBuilder};
 use p3_commit::pcs::PCS;
 use p3_field::field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, FieldExtension, PrimeField,
-    TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractField, AbstractionOf, Field, FieldExtension,
+    PrimeField, TwoAdicField,
 };
 use p3_field::packed::PackedField;
 use p3_field::symbolic::SymbolicField;
@@ -42,14 +42,9 @@ pub struct BasicFoldingAirBuilder<'a, F, Exp, Var> {
 
 impl<'a, F, Exp, Var> AirBuilder for BasicFoldingAirBuilder<'a, F, Exp, Var>
 where
-    F: Field + Into<Exp>,
-    Exp: AbstractField
-        + Add<F, Output = Exp>
-        + Add<Var, Output = Exp>
-        + Sub<F, Output = Exp>
-        + Sub<Var, Output = Exp>
-        + Mul<F, Output = Exp>
-        + Mul<Var, Output = Exp>,
+    F: Field,
+    Exp:
+        AbstractionOf<F> + Add<Var, Output = Exp> + Sub<Var, Output = Exp> + Mul<Var, Output = Exp>,
     Var: Into<Exp>
         + Copy
         + Add<F, Output = Exp>

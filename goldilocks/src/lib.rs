@@ -7,7 +7,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{AbstractField, ArithWith, Field, PrimeField, TwoAdicField};
+use p3_field::field::{AbstractField, Field, PrimeField, TwoAdicField};
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -83,8 +83,6 @@ impl AbstractField for Goldilocks {
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self { value: 7 };
 }
-
-impl ArithWith<Self> for Goldilocks {}
 
 impl Field for Goldilocks {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.

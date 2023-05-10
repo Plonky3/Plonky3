@@ -9,7 +9,7 @@ pub mod two_row_matrix;
 pub mod virtual_column;
 
 use core::ops::{Add, Mul, Sub};
-use p3_field::field::{AbstractField, Field};
+use p3_field::field::{AbstractField, AbstractionOf, Field};
 use p3_matrix::Matrix;
 
 pub trait Air<AB: AirBuilder>: Sync {
@@ -17,14 +17,11 @@ pub trait Air<AB: AirBuilder>: Sync {
 }
 
 pub trait AirBuilder: Sized {
-    type F: Field + Into<Self::Exp>;
+    type F: Field;
 
-    type Exp: AbstractField
-        + Add<Self::F, Output = Self::Exp>
+    type Exp: AbstractionOf<Self::F>
         + Add<Self::Var, Output = Self::Exp>
-        + Sub<Self::F, Output = Self::Exp>
         + Sub<Self::Var, Output = Self::Exp>
-        + Mul<Self::F, Output = Self::Exp>
         + Mul<Self::Var, Output = Self::Exp>;
 
     type Var: Into<Self::Exp>
