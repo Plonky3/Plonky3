@@ -103,7 +103,7 @@ pub trait PairBuilder: AirBuilder {
 pub trait PermutationAirBuilder: AirBuilder {
     fn permutation(&self) -> Self::M;
 
-    fn permutation_randomness(&self) -> Self::Exp;
+    fn permutation_randomness(&self) -> &[Self::Exp];
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
