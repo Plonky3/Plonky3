@@ -7,17 +7,12 @@ use crate::field::{AbstractField, AbstractionOf, Field};
 /// - `WIDTH` is assumed to be a power of 2.
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Scalar; P::WIDTH]`
 ///   without UB.
-pub unsafe trait PackedField:
- AbstractionOf<Self::Scalar>
+pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
     + 'static
     + Copy
     + Default
-    // + Add<Self::Scalar, Output = Self>
     + AddAssign<Self::Scalar>
-    // + Sub<Self::Scalar, Output = Self>
     + SubAssign<Self::Scalar>
-    // + From<Self::Scalar>
-    // + Mul<Self::Scalar, Output = Self>
     + MulAssign<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
