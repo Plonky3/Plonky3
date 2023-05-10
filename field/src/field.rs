@@ -31,6 +31,7 @@ pub trait AbstractField:
     const MULTIPLICATIVE_GROUP_GENERATOR: Self;
 }
 
+/// An `AbstractField` which abstracts the given field `F`.
 pub trait AbstractionOf<F: Field>:
     AbstractField
     + From<F>
