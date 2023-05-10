@@ -23,6 +23,7 @@ pub trait MMCS<T> {
 
     fn open_batch(row: usize, prover_data: &Self::ProverData) -> (Vec<&[T]>, Self::Proof);
 
+    /// Get the matrices that were committed to.
     fn get_matrices(prover_data: &Self::ProverData) -> &[Self::Mat];
 
     /// Verify a batch opening.
@@ -42,7 +43,7 @@ pub struct Dimensions {
 
 /// An MMCS over explicit inputs which are supplied upfront.
 pub trait DirectMMCS<T>: MMCS<T> {
-    fn commit(&self, inputs: Vec<RowMajorMatrix<T>>) -> (Self::ProverData, Self::Commitment);
+    fn commit(&self, inputs: Vec<Self::Mat>) -> (Self::ProverData, Self::Commitment);
 }
 
 // TODO: Streaming MMCS? Where `ProverData` can be initialized and then incrementally updated,
