@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a bit like a vector commitment scheme, but it

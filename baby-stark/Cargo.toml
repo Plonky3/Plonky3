@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 p3-air = { path = "../air" }
 p3-field = { path = "../field" }
 p3-commit = { path = "../commit" }
+p3-lde = { path = "../lde" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
@@ -15,7 +16,6 @@ rand = "0.8.5"
 
 [dev-dependencies]
 p3-fri = { path = "../fri" }
-p3-goldilocks = { path = "../goldilocks" }
 p3-ldt = { path = "../ldt" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
