@@ -1,7 +1,7 @@
 use crate::FriProof;
 use p3_challenger::Challenger;
 use p3_commit::mmcs::{DirectMMCS, MMCS};
-use p3_field::field::{Field, FieldExtension};
+use p3_field::field::{AbstractFieldExtension, Field};
 
 pub(crate) fn verify<F, FE, M, MC, Chal>(
     _proof: &FriProof<F, FE, M, MC>,
@@ -9,7 +9,7 @@ pub(crate) fn verify<F, FE, M, MC, Chal>(
 ) -> Result<(), ()>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    FE: AbstractFieldExtension<F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
     Chal: Challenger<F>,

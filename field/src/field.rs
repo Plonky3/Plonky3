@@ -117,8 +117,8 @@ pub trait Field:
     }
 }
 
-pub trait FieldExtension<Base: Field>:
-    Field
+pub trait AbstractFieldExtension<Base: AbstractField>:
+    AbstractField
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>
@@ -135,7 +135,11 @@ pub trait FieldExtension<Base: Field>:
     fn as_base_slice(&self) -> &[Base];
 }
 
-impl<F: Field> FieldExtension<F> for F {
+pub trait FieldExtension<Base: Field>: Field + AbstractFieldExtension<Base> {}
+
+impl<Base: Field, Ext: Field + AbstractFieldExtension<Base>> FieldExtension<Base> for Ext {}
+
+impl<F: Field> AbstractFieldExtension<F> for F {
     const D: usize = 1;
 
     fn from_base(b: F) -> Self {

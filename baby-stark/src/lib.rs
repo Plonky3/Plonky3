@@ -14,11 +14,12 @@ use p3_air::two_row_matrix::TwoRowMatrixView;
 use p3_air::{Air, AirBuilder};
 use p3_commit::pcs::PCS;
 use p3_field::field::{
-    cyclic_subgroup_coset_known_order, AbstractField, AbstractionOf, Field, FieldExtension,
+    cyclic_subgroup_coset_known_order, AbstractField, AbstractFieldExtension, AbstractionOf, Field,
     PrimeField, TwoAdicField,
 };
 use p3_field::packed::PackedField;
 use p3_field::symbolic::SymbolicField;
+use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::IndexedParallelIterator;
@@ -27,9 +28,11 @@ use p3_maybe_rayon::ParallelIterator;
 use p3_util::log2_strict_usize;
 
 pub trait StarkConfig {
-    type F: PrimeField + TwoAdicField;
-    type Challenge: FieldExtension<Self::F>;
+    type F: PrimeField;
+    type Domain: AbstractFieldExtension<Self::F> + TwoAdicField;
+    type Challenge: AbstractFieldExtension<Self::F>;
     type PCS: PCS<Self::F>;
+    type LDE: TwoAdicLDE<Self::F, Self::Domain>;
 }
 
 pub struct BasicFoldingAirBuilder<'a, F, Exp, Var> {
@@ -91,14 +94,19 @@ pub fn prove<SC, A>(air: &A, trace: RowMajorMatrix<SC::F>)
 where
     SC: StarkConfig,
     A: for<'a> Air<
-        BasicFoldingAirBuilder<'a, SC::F, <SC::F as Field>::Packing, <SC::F as Field>::Packing>,
+        BasicFoldingAirBuilder<
+            'a,
+            SC::Domain,
+            <SC::Domain as Field>::Packing,
+            <SC::Domain as Field>::Packing,
+        >,
     >,
     A: for<'a> Air<
         BasicFoldingAirBuilder<
             'a,
-            SC::F,
-            SymbolicField<SC::F, BasicSymVar<SC::F>>,
-            BasicSymVar<SC::F>,
+            SC::Domain,
+            SymbolicField<SC::Domain, BasicSymVar<SC::Domain>>,
+            BasicSymVar<SC::Domain>,
         >,
     >,
 {
@@ -108,12 +116,12 @@ where
     let quotient_size_bits = degree_bits + quotient_degree_bits;
     let quotient_size = 1 << quotient_size_bits;
 
-    let g_subgroup = SC::F::primitive_root_of_unity(degree_bits);
-    let g_extended = SC::F::primitive_root_of_unity(quotient_size_bits);
+    let g_subgroup = SC::Domain::primitive_root_of_unity(degree_bits);
+    let g_extended = SC::Domain::primitive_root_of_unity(quotient_size_bits);
     let subgroup_last = g_subgroup.inverse();
     let next_step = 1 << quotient_degree_bits;
 
-    let coset_shift = SC::F::MULTIPLICATIVE_GROUP_GENERATOR;
+    let coset_shift = SC::Domain::MULTIPLICATIVE_GROUP_GENERATOR;
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
@@ -150,11 +158,12 @@ where
             let i_next_start = (i_local_start + next_step) % quotient_size;
             let i_range = i_local_start..i_local_start + <SC::F as Field>::Packing::WIDTH;
 
-            let x = *<SC::F as Field>::Packing::from_slice(&coset[i_range.clone()]);
+            let x = *<SC::Domain as Field>::Packing::from_slice(&coset[i_range.clone()]);
             let is_transition = x - subgroup_last;
             let is_first_row =
-                *<SC::F as Field>::Packing::from_slice(&lagrange_first_evals[i_range.clone()]);
-            let is_last_row = *<SC::F as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
+                *<SC::Domain as Field>::Packing::from_slice(&lagrange_first_evals[i_range.clone()]);
+            let is_last_row =
+                *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
 
             let mut builder = BasicFoldingAirBuilder {
                 main: TwoRowMatrixView {
@@ -192,10 +201,12 @@ mod tests {
     use crate::{prove, StarkConfig};
     use p3_air::{Air, AirBuilder};
     use p3_fri::FRIBasedPCS;
-    use p3_goldilocks::Goldilocks;
+    use p3_lde::naive::NaiveLDE;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Matrix;
     use p3_merkle_tree::MerkleTreeMMCS;
+    use p3_mersenne_31::complex::Mersenne31Complex;
+    use p3_mersenne_31::Mersenne31;
     use p3_poseidon::Poseidon;
     use p3_symmetric::compression::TruncatedPermutation;
     use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
@@ -204,7 +215,7 @@ mod tests {
 
     struct MyConfig;
 
-    type F = Goldilocks;
+    type F = Mersenne31;
     struct MyMds;
     impl CryptographicPermutation<[F; 8]> for MyMds {
         fn permute(&self, input: [F; 8]) -> [F; 8] {
@@ -221,8 +232,10 @@ mod tests {
     type MMCS = MerkleTreeMMCS<F, [F; 4], H4, C>;
     impl StarkConfig for MyConfig {
         type F = F;
+        type Domain = Mersenne31Complex<F>;
         type Challenge = Self::F; // TODO: Use an extension.
         type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS, MMCS>;
+        type LDE = NaiveLDE;
     }
 
     struct MulAir;
