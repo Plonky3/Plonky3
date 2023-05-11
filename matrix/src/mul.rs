@@ -1,7 +1,7 @@
 use crate::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use crate::sparse::CsrMatrix;
 use crate::Matrix;
-use p3_field::field::Field;
+use p3_field::Field;
 
 /// Compute `C = A * B`, where `A` in a CSR matrix and `B` is a dense matrix.
 /// This assumes that `C` is initially filled with zeros.

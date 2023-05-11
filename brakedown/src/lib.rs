@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use p3_code::{LinearCode, SystematicCode};
-use p3_field::field::Field;
+use p3_field::Field;
 use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::mul::mul_csr_dense;
 use p3_matrix::sparse::CsrMatrix;

@@ -9,7 +9,7 @@ use core::marker::PhantomData;
 use p3_challenger::Challenger;
 use p3_commit::mmcs::MMCS;
 use p3_commit::pcs::PCS;
-use p3_field::field::Field;
+use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// A batch low-degree test (LDT).

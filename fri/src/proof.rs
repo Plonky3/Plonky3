@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use p3_commit::mmcs::{DirectMMCS, MMCS};
-use p3_field::field::{AbstractFieldExtension, Field};
+use p3_field::{AbstractFieldExtension, Field};
 
 pub struct FriProof<F, FE, M, MC>
 where

@@ -2,7 +2,7 @@ use crate::pcs::{MultivariatePCS, UnivariatePCS, PCS};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_field::field::{AbstractFieldExtension, Field};
+use p3_field::{AbstractFieldExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {

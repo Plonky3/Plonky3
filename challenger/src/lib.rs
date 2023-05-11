@@ -8,7 +8,7 @@ pub mod duplex_challenger;
 pub mod hash_challenger;
 
 use alloc::vec::Vec;
-use p3_field::field::{AbstractFieldExtension, Field};
+use p3_field::{AbstractFieldExtension, Field};
 
 /// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.
 pub trait Challenger<F: Field> {

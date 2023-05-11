@@ -2,7 +2,7 @@
 
 #![no_std]
 
-use p3_field::field::Field;
+use p3_field::Field;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 

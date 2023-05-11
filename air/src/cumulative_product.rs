@@ -3,7 +3,7 @@
 // use crate::{Air, AirTypes, AirWindow, ConstraintConsumer};
 // use alloc::vec::Vec;
 // use core::marker::PhantomData;
-// use p3_field::field::{Field, FieldLike};
+// use p3_field::{Field, FieldLike};
 // use p3_matrix::Matrix;
 //
 // pub struct CumulativeProductAir<T, W, Inner>

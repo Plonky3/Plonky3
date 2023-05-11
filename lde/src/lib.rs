@@ -6,7 +6,7 @@ pub mod naive;
 
 extern crate alloc;
 
-use p3_field::field::{Field, FieldExtension, TwoAdicField};
+use p3_field::{Field, FieldExtension, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 /// Computes low-degree extensions of polynomials over `F`, which are given in the Lagrange basis

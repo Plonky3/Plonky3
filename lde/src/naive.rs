@@ -1,7 +1,7 @@
 use crate::TwoAdicLDE;
 use alloc::vec::Vec;
-use p3_field::field::{Field, FieldExtension, TwoAdicField};
 use p3_field::{batch_multiplicative_inverse, cyclic_subgroup_known_order};
+use p3_field::{Field, FieldExtension, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;

@@ -9,7 +9,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{AbstractField, Field, Field32, PrimeField};
+use p3_field::{AbstractField, Field, Field32, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -233,7 +233,7 @@ impl Div for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use crate::Mersenne31;
-    use p3_field::field::{AbstractField, Field};
+    use p3_field::{AbstractField, Field};
 
     type F = Mersenne31;
 

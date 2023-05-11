@@ -2,7 +2,7 @@
 // use alloc::vec;
 // use alloc::vec::Vec;
 // use core::marker::PhantomData;
-// use p3_field::field::Field;
+// use p3_field::Field;
 // use p3_symmetric::hasher::{CryptographicHasher, VecToArrHasher};
 //
 // pub struct HashChallenger<F: Field, H: VecToArrHasher<F, OUT_LEN>, const OUT_LEN: usize> {

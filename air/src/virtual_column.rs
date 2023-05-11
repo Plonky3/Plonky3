@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
-use p3_field::field::{AbstractField, Field};
+use p3_field::{AbstractField, Field};
 
 /// An affine function over columns.
 pub struct VirtualColumn<F: Field> {

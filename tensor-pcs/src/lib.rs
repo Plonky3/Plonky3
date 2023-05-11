@@ -4,7 +4,7 @@
 
 use core::marker::PhantomData;
 use p3_code::SystematicCode;
-use p3_field::field::Field;
+use p3_field::Field;
 
 pub struct TensorPCS<F: Field, C: SystematicCode<F>> {
     _code: C,

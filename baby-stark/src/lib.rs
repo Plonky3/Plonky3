@@ -14,11 +14,11 @@ use p3_air::two_row_matrix::TwoRowMatrixView;
 use p3_air::{Air, AirBuilder};
 use p3_commit::pcs::PCS;
 use p3_field::cyclic_subgroup_coset_known_order;
-use p3_field::field::{
+use p3_field::PackedField;
+use p3_field::SymbolicField;
+use p3_field::{
     AbstractField, AbstractFieldExtension, AbstractionOf, Field, PrimeField, TwoAdicField,
 };
-use p3_field::packed::PackedField;
-use p3_field::symbolic::SymbolicField;
 use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;

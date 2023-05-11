@@ -9,7 +9,7 @@ pub mod two_row_matrix;
 pub mod virtual_column;
 
 use core::ops::{Add, Mul, Sub};
-use p3_field::field::{AbstractField, AbstractionOf, Field};
+use p3_field::{AbstractField, AbstractionOf, Field};
 use p3_matrix::Matrix;
 
 pub trait Air<AB: AirBuilder>: Sync {

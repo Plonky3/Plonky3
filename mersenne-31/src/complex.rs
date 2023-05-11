@@ -2,7 +2,7 @@ use crate::Mersenne31;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::field::{AbstractField, AbstractFieldExtension, AbstractionOf, Field, TwoAdicField};
+use p3_field::{AbstractField, AbstractFieldExtension, AbstractionOf, Field, TwoAdicField};
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractionOf<Mersenne31>> {
