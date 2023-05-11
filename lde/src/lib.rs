@@ -11,9 +11,7 @@ extern crate alloc;
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
-/// Computes low-degree extensions of polynomials over `F`, which are given in the Lagrange basis
-/// over two-adic multiplicative subgroups of `FE`.
-pub trait TwoAdicLDE<F, FE>
+pub trait TwoAdicSubgroupLDE<F, FE>
 where
     F: Field,
     FE: Field<Base = F> + TwoAdicField,
@@ -30,6 +28,18 @@ where
         polys: RowMajorMatrix<F>,
         added_bits: usize,
     ) -> RowMajorMatrix<Self::Res>;
+}
+
+pub trait TwoAdicCosetLDE<F, FE>
+where
+    F: Field,
+    FE: Field<Base = F> + TwoAdicField,
+{
+    /// The result type. Typically this will be `FE`, but it may also be a compressed encoding of
+    /// the subspace of `FE` that may be produced by LDEs.
+    type Res: Into<FE>;
+
+    fn shift(&self, lde_bits: usize) -> FE;
 
     /// Given a batch of polynomials, each defined by `2^k` evaluations over the subgroup generated
     /// by `FE::primitive_root_of_unity(k)`, compute their evaluations over the coset `shift H`,
@@ -38,6 +48,5 @@ where
         &self,
         polys: RowMajorMatrix<F>,
         added_bits: usize,
-        shift: FE,
     ) -> RowMajorMatrix<Self::Res>;
 }

@@ -1,4 +1,4 @@
-use crate::TwoAdicLDE;
+use crate::TwoAdicSubgroupLDE;
 use alloc::vec::Vec;
 use p3_field::{batch_multiplicative_inverse, cyclic_subgroup_known_order};
 use p3_field::{Field, TwoAdicField};
@@ -9,7 +9,7 @@ use p3_util::log2_strict_usize;
 /// A naive quadratic-time implementation of `TwoAdicLDE`, intended for testing.
 pub struct NaiveLDE;
 
-impl<F, FE> TwoAdicLDE<F, FE> for NaiveLDE
+impl<F, FE> TwoAdicSubgroupLDE<F, FE> for NaiveLDE
 where
     F: Field,
     FE: Field<Base = F> + TwoAdicField,
@@ -35,15 +35,6 @@ where
             .flatten()
             .collect();
         RowMajorMatrix::new(values, polys.width())
-    }
-
-    fn coset_lde_batch(
-        &self,
-        _polys: RowMajorMatrix<F>,
-        _added_bits: usize,
-        _shift: FE,
-    ) -> RowMajorMatrix<Self::Res> {
-        todo!()
     }
 }
 
