@@ -51,6 +51,16 @@ impl<T> RowMajorMatrix<T> {
         }
     }
 
+    pub fn map<U, F: Fn(T) -> U>(&self, f: F) -> RowMajorMatrix<U>
+    where
+        T: Clone,
+    {
+        RowMajorMatrix {
+            values: self.values.iter().map(|v| f(v.clone())).collect(),
+            width: self.width,
+        }
+    }
+
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         Standard: Distribution<T>,
