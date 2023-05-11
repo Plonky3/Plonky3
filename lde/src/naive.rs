@@ -92,7 +92,8 @@ fn add_vecs<F: Field>(v: Vec<F>, w: Vec<F>) -> Vec<F> {
 }
 
 fn sum_vecs<F: Field, I: Iterator<Item = Vec<F>>>(iter: I) -> Vec<F> {
-    iter.reduce(|v, w| add_vecs(v, w)).expect("sum_vecs: empty iterator")
+    iter.reduce(|v, w| add_vecs(v, w))
+        .expect("sum_vecs: empty iterator")
 }
 
 fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
