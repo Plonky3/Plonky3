@@ -10,7 +10,7 @@ use crate::verifier::verify;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{Field, FieldExtension};
+use p3_field::Field;
 use p3_ldt::{LDTBasedPCS, LDT};
 
 mod proof;
@@ -22,7 +22,7 @@ pub use proof::*;
 pub struct FriLDT<F, FE, M, MC>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    FE: Field<Base = F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
@@ -35,7 +35,7 @@ where
 impl<F, FE, M, MC> LDT<F, M> for FriLDT<F, FE, M, MC>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    FE: Field<Base = F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {

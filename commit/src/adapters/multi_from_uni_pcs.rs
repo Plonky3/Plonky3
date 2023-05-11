@@ -2,7 +2,7 @@ use crate::pcs::{MultivariatePCS, UnivariatePCS, PCS};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_field::{AbstractFieldExtension, Field};
+use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 
 pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {
@@ -34,7 +34,7 @@ impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U>
         _challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
     where
-        FE: AbstractFieldExtension<F>,
+        FE: Field<Base = F>,
         Chal: Challenger<F>,
     {
         todo!()
@@ -47,7 +47,7 @@ impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U>
         _proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        FE: AbstractFieldExtension<F>,
+        FE: Field<Base = F>,
         Chal: Challenger<F>,
     {
         todo!()

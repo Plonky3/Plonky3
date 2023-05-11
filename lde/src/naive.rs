@@ -1,7 +1,7 @@
 use crate::TwoAdicLDE;
 use alloc::vec::Vec;
 use p3_field::{batch_multiplicative_inverse, cyclic_subgroup_known_order};
-use p3_field::{Field, FieldExtension, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
@@ -12,7 +12,7 @@ pub struct NaiveLDE;
 impl<F, FE> TwoAdicLDE<F, FE> for NaiveLDE
 where
     F: Field,
-    FE: FieldExtension<F> + TwoAdicField,
+    FE: Field<Base = F> + TwoAdicField,
 {
     type Res = FE;
 

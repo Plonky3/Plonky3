@@ -5,7 +5,7 @@ use core::cmp::Reverse;
 use itertools::Itertools;
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{AbstractField, Field, FieldExtension};
+use p3_field::{AbstractField, Field};
 use p3_matrix::Matrix;
 
 pub(crate) fn prove<F, FE, M, MC, Chal>(
@@ -14,7 +14,7 @@ pub(crate) fn prove<F, FE, M, MC, Chal>(
 ) -> FriProof<F, FE, M, MC>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    FE: Field<Base = F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
     Chal: Challenger<F>,
@@ -30,7 +30,7 @@ pub(crate) fn commit_phase<F, FE, M, MC, Chal>(
 ) -> Vec<MC::ProverData>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    FE: Field<Base = F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
     Chal: Challenger<F>,
@@ -74,7 +74,7 @@ fn reduce_matrices<F, FE, Mat>(
 ) -> Vec<FE>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    FE: Field<Base = F>,
     Mat: Matrix<F>,
 {
     (0..height)

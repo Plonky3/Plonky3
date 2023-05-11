@@ -8,7 +8,7 @@ pub use naive::*;
 
 extern crate alloc;
 
-use p3_field::{Field, FieldExtension, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 /// Computes low-degree extensions of polynomials over `F`, which are given in the Lagrange basis
@@ -16,7 +16,7 @@ use p3_matrix::dense::RowMajorMatrix;
 pub trait TwoAdicLDE<F, FE>
 where
     F: Field,
-    FE: FieldExtension<F> + TwoAdicField,
+    FE: Field<Base = F> + TwoAdicField,
 {
     /// The result type. Typically this will be `FE`, but it may also be a compressed encoding of
     /// the subspace of `FE` that may be produced by LDEs.

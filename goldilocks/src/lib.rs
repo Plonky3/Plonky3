@@ -88,8 +88,25 @@ impl AbstractField for Goldilocks {
 }
 
 impl Field for Goldilocks {
+    type Base = Self;
+
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
+
+    const EXT_DEGREE: usize = 1;
+
+    fn from_base(b: Self::Base) -> Self {
+        b
+    }
+
+    fn from_base_slice(bs: &[Self::Base]) -> Self {
+        assert_eq!(bs.len(), 1);
+        bs[0]
+    }
+
+    fn as_base_slice(&self) -> &[Self::Base] {
+        core::slice::from_ref(self)
+    }
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER
