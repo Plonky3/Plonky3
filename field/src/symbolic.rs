@@ -31,7 +31,10 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
     const ONE: Self = Self::Constant(F::ONE);
     const TWO: Self = Self::Constant(F::TWO);
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
-    const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self::Constant(F::MULTIPLICATIVE_GROUP_GENERATOR);
+
+    fn multiplicative_group_generator() -> Self {
+        Self::Constant(F::multiplicative_group_generator())
+    }
 }
 
 impl<F: Field, Var: Clone + Debug> AbstractionOf<F> for SymbolicField<F, Var> {}

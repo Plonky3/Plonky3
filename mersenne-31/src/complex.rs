@@ -161,7 +161,9 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     // sage: F2.<u> = F.extension(x^2 + 1)
     // sage: F2.multiplicative_generator()
     // u + 12
-    const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self::ZERO; // TODO Self::new(AF::ONE, AF::from(Mersenne31::new(12)));
+    fn multiplicative_group_generator() -> Self {
+        Self::new(AF::ONE, AF::from(Mersenne31::new(12)))
+    }
 }
 
 impl Div<Self> for Mersenne31Complex<Mersenne31> {
@@ -196,7 +198,9 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
     // 1117296306*u + 1166849849
     // sage: assert(g.multiplicative_order() == 2^32)
-    const POWER_OF_TWO_GENERATOR: Self = Self::ZERO; // TODO 1117296306*u + 1166849849
+    fn power_of_two_generator() -> Self {
+        Self::new(Mersenne31::new(1117296306), Mersenne31::new(1166849849))
+    }
 }
 
 impl<AF: AbstractField + AbstractionOf<Mersenne31>> AbstractFieldExtension<AF>
@@ -205,7 +209,7 @@ impl<AF: AbstractField + AbstractionOf<Mersenne31>> AbstractFieldExtension<AF>
     const D: usize = 2;
 
     fn from_base(b: AF) -> Self {
-        Self::new(b, AF::ZERO)
+        Self::new_real(b)
     }
 
     fn from_base_slice(bs: &[AF]) -> Self {

@@ -93,8 +93,11 @@ impl AbstractField for Mersenne31 {
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
+
     // Sage: GF(2^31 - 1).multiplicative_generator()
-    const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self { value: 7 };
+    fn multiplicative_group_generator() -> Self {
+        Self { value: 7 }
+    }
 }
 
 impl Field for Mersenne31 {

@@ -28,7 +28,8 @@ pub trait AbstractField:
     const ONE: Self;
     const TWO: Self;
     const NEG_ONE: Self;
-    const MULTIPLICATIVE_GROUP_GENERATOR: Self;
+
+    fn multiplicative_group_generator() -> Self;
 }
 
 /// An `AbstractField` which abstracts the given field `F`.
@@ -169,12 +170,12 @@ pub trait TwoAdicField: Field {
     const TWO_ADICITY: usize;
 
     /// Generator of a multiplicative subgroup of order `2^TWO_ADICITY`.
-    const POWER_OF_TWO_GENERATOR: Self;
+    fn power_of_two_generator() -> Self;
 
     /// Returns a primitive root of order `2^bits`.
     fn primitive_root_of_unity(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::POWER_OF_TWO_GENERATOR;
+        let base = Self::power_of_two_generator();
         base.mul_2exp_u64((Self::TWO_ADICITY - bits) as u64)
     }
 }

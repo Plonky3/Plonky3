@@ -80,8 +80,11 @@ impl AbstractField for Goldilocks {
     const NEG_ONE: Self = Self {
         value: Self::ORDER - 1,
     };
+
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
-    const MULTIPLICATIVE_GROUP_GENERATOR: Self = Self { value: 7 };
+    fn multiplicative_group_generator() -> Self {
+        Self { value: 7 }
+    }
 }
 
 impl Field for Goldilocks {
@@ -101,9 +104,12 @@ impl PrimeField for Goldilocks {}
 
 impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
-    const POWER_OF_TWO_GENERATOR: Self = Self {
-        value: 1753635133440165772,
-    };
+
+    fn power_of_two_generator() -> Self {
+        Self {
+            value: 1753635133440165772,
+        }
+    }
 }
 
 impl Add<Self> for Goldilocks {

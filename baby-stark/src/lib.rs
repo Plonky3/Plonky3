@@ -121,7 +121,7 @@ where
     let subgroup_last = g_subgroup.inverse();
     let next_step = 1 << quotient_degree_bits;
 
-    let coset_shift = SC::Domain::MULTIPLICATIVE_GROUP_GENERATOR;
+    let coset_shift = SC::Domain::multiplicative_group_generator();
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
