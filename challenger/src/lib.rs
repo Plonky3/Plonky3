@@ -4,8 +4,11 @@
 
 extern crate alloc;
 
-pub mod duplex_challenger;
-pub mod hash_challenger;
+mod duplex_challenger;
+mod hash_challenger;
+
+pub use duplex_challenger::*;
+pub use hash_challenger::*;
 
 use alloc::vec::Vec;
 use p3_field::{AbstractFieldExtension, Field};

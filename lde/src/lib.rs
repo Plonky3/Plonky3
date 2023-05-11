@@ -2,7 +2,9 @@
 
 #![no_std]
 
-pub mod naive;
+mod naive;
+
+pub use naive::*;
 
 extern crate alloc;
 

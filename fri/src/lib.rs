@@ -9,13 +9,15 @@ use crate::prover::prove;
 use crate::verifier::verify;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_commit::mmcs::{DirectMMCS, MMCS};
+use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{Field, FieldExtension};
 use p3_ldt::{LDTBasedPCS, LDT};
 
-pub mod proof;
-pub mod prover;
-pub mod verifier;
+mod proof;
+mod prover;
+mod verifier;
+
+pub use proof::*;
 
 pub struct FriLDT<F, FE, M, MC>
 where

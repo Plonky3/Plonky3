@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::marker::PhantomData;
 use itertools::Itertools;
-use p3_commit::mmcs::{Dimensions, DirectMMCS, MMCS};
+use p3_commit::{Dimensions, DirectMMCS, MMCS};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_symmetric::compression::PseudoCompressionFunction;

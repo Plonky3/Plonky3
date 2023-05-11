@@ -2,7 +2,9 @@
 
 #![no_std]
 
-pub mod complex;
+mod complex;
+
+pub use complex::*;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};

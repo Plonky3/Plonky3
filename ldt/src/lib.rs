@@ -7,8 +7,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_commit::mmcs::MMCS;
-use p3_commit::pcs::PCS;
+use p3_commit::MMCS;
+use p3_commit::PCS;
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 
