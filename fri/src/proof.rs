@@ -2,36 +2,33 @@ use alloc::vec::Vec;
 use p3_commit::{DirectMMCS, MMCS};
 use p3_field::Field;
 
-pub struct FriProof<F, FE, M, MC>
+pub struct FriProof<F, M, MC>
 where
     F: Field,
-    FE: Field<Base = F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    M: MMCS<F::Base>,
+    MC: DirectMMCS<F::Base>,
 {
-    queries: Vec<QueryProof<F, FE, M, MC>>,
+    queries: Vec<QueryProof<F, M, MC>>,
 }
 
-pub struct QueryProof<F, FE, M, MC>
+pub struct QueryProof<F, M, MC>
 where
     F: Field,
-    FE: Field<Base = F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    M: MMCS<F::Base>,
+    MC: DirectMMCS<F::Base>,
 {
     /// An opened row of each matrix that was part of this batch-FRI proof.
-    leaves: Vec<Vec<F>>,
+    leaves: Vec<Vec<F::Base>>,
     leaf_opening_proofs: Vec<M::Proof>,
-    steps: Vec<QueryStepProof<F, FE, MC>>,
+    steps: Vec<QueryStepProof<F, MC>>,
 }
 
-pub struct QueryStepProof<F, FE, MC>
+pub struct QueryStepProof<F, MC>
 where
     F: Field,
-    FE: Field<Base = F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<F::Base>,
 {
     /// An opened row of each matrix that was part of this batch-FRI proof.
-    leaves: FE,
+    leaves: F,
     leaf_opening_proofs: MC::Proof,
 }
