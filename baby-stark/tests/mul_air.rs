@@ -33,7 +33,7 @@ impl StarkConfig for MyConfig {
     type F = F;
     type Domain = Mersenne31Complex<F>;
     type Challenge = Self::F; // TODO: Use an extension.
-    type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS, MMCS>;
+    type PCS = FRIBasedPCS<Self::Challenge, MMCS, MMCS>;
     type LDE = NaiveLDE;
 }
 
