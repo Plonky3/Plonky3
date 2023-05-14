@@ -141,8 +141,10 @@ pub trait Field:
 
 pub trait PrimeField: Field {}
 
-pub trait Field32: Field {
-    fn as_canonical_u32(&self) -> u32;
+pub trait AsInt: Field {
+    type UnsignedInteger;
+
+    fn as_canonical_uint(&self) -> Self::UnsignedInteger;
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods

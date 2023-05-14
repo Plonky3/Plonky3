@@ -11,7 +11,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::{AbstractField, Field, Field32, PrimeField};
+use p3_field::{AbstractField, AsInt, Field, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -34,19 +34,19 @@ impl Mersenne31 {
 
 impl PartialEq for Mersenne31 {
     fn eq(&self, other: &Self) -> bool {
-        self.as_canonical_u32() == other.as_canonical_u32()
+        self.as_canonical_uint() == other.as_canonical_uint()
     }
 }
 
 impl Ord for Mersenne31 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.as_canonical_u32().cmp(&other.as_canonical_u32())
+        self.as_canonical_uint().cmp(&other.as_canonical_uint())
     }
 }
 
 impl PartialOrd for Mersenne31 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.as_canonical_u32().cmp(&other.as_canonical_u32()))
+        Some(self.as_canonical_uint().cmp(&other.as_canonical_uint()))
     }
 }
 
@@ -60,7 +60,7 @@ impl From<u32> for Mersenne31 {
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.as_canonical_u32())
+        state.write_u32(self.as_canonical_uint())
     }
 }
 
@@ -152,8 +152,10 @@ impl Field for Mersenne31 {
 
 impl PrimeField for Mersenne31 {}
 
-impl Field32 for Mersenne31 {
-    fn as_canonical_u32(&self) -> u32 {
+impl AsInt for Mersenne31 {
+    type UnsignedInteger = u32;
+
+    fn as_canonical_uint(&self) -> Self::UnsignedInteger {
         // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
         // `value` that is not canonical, namely 2^31 - 1 = p = 0.
         if self.value == Self::ORDER {
