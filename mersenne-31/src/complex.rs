@@ -33,6 +33,12 @@ impl<AF: AbstractionOf<Mersenne31>> Mersenne31Complex<AF> {
     }
 }
 
+impl<AF: AbstractionOf<Mersenne31>> From<u32> for Mersenne31Complex<AF> {
+    fn from(value: u32) -> Self {
+        Self::new_real(AF::from(Mersenne31::from(value)))
+    }
+}
+
 impl<AF: AbstractionOf<Mersenne31>> Add<Self> for Mersenne31Complex<AF> {
     type Output = Self;
 
@@ -181,11 +187,19 @@ impl Display for Mersenne31Complex<Mersenne31> {
 }
 
 impl Field for Mersenne31Complex<Mersenne31> {
+    type IntegerRepr = u32;
+
     type Base = Mersenne31;
 
     type Packing = Self;
 
+    const ORDER: Self::IntegerRepr = (1 << 31) - 1;
+
     const EXT_DEGREE: usize = 2;
+
+    fn as_canonical_uint(&self) -> Self::IntegerRepr {
+        unimplemented!()
+    }
 
     fn from_base(b: Self::Base) -> Self {
         Self::new_real(b)

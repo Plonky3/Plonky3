@@ -20,24 +20,13 @@ pub struct Goldilocks {
 }
 
 impl Goldilocks {
-    pub const ORDER: u64 = 0xFFFFFFFF00000001;
-
     /// Two's complement of `ORDER`, i.e. `2^64 - ORDER = 2^32 - 1`.
     const NEG_ORDER: u64 = Self::ORDER.wrapping_neg();
-
-    fn as_canonical_u64(&self) -> u64 {
-        let mut c = self.value;
-        // We only need one condition subtraction, since 2 * ORDER would not fit in a u64.
-        if c >= Self::ORDER {
-            c -= Self::ORDER;
-        }
-        c
-    }
 }
 
 impl PartialEq for Goldilocks {
     fn eq(&self, other: &Self) -> bool {
-        self.as_canonical_u64() == other.as_canonical_u64()
+        self.as_canonical_uint() == other.as_canonical_uint()
     }
 }
 
@@ -45,7 +34,7 @@ impl Eq for Goldilocks {}
 
 impl Hash for Goldilocks {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(self.as_canonical_u64())
+        state.write_u64(self.as_canonical_uint())
     }
 }
 
@@ -88,12 +77,25 @@ impl AbstractField for Goldilocks {
 }
 
 impl Field for Goldilocks {
+    type IntegerRepr = u64;
+
     type Base = Self;
 
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
 
+    const ORDER: u64 = 0xFFFFFFFF00000001;
+
     const EXT_DEGREE: usize = 1;
+
+    fn as_canonical_uint(&self) -> u64 {
+        let mut c = self.value;
+        // We only need one condition subtraction, since 2 * ORDER would not fit in a u64.
+        if c >= Self::ORDER {
+            c -= Self::ORDER;
+        }
+        c
+    }
 
     fn from_base(b: Self::Base) -> Self {
         b
@@ -126,6 +128,12 @@ impl TwoAdicField for Goldilocks {
         Self {
             value: 1753635133440165772,
         }
+    }
+}
+
+impl From<u32> for Goldilocks {
+    fn from(n: u32) -> Self {
+        Self { value: n as u64 }
     }
 }
 
@@ -196,7 +204,7 @@ impl Neg for Goldilocks {
 
     fn neg(self) -> Self::Output {
         Self {
-            value: Self::ORDER - self.as_canonical_u64(),
+            value: Self::ORDER - self.as_canonical_uint(),
         }
     }
 }

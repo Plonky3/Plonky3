@@ -53,6 +53,7 @@ pub trait Field:
     AbstractField
     + 'static
     + Copy
+    + From<u32>
     + Add<Self::Base, Output = Self>
     + AddAssign<Self::Base>
     + Sub<Self::Base, Output = Self>
@@ -65,10 +66,15 @@ pub trait Field:
     + Sync
     + Display
 {
+    type IntegerRepr;
     type Base: Field;
     type Packing: PackedField<Scalar = Self>;
 
+    const ORDER: Self::IntegerRepr;
+
     const EXT_DEGREE: usize;
+
+    fn as_canonical_uint(&self) -> Self::IntegerRepr;
 
     fn from_base(b: Self::Base) -> Self;
 
@@ -140,12 +146,6 @@ pub trait Field:
 }
 
 pub trait PrimeField: Field {}
-
-pub trait AsInt: Field {
-    type UnsignedInteger;
-
-    fn as_canonical_uint(&self) -> Self::UnsignedInteger;
-}
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods
 /// for obtaining two-adic roots of unity.

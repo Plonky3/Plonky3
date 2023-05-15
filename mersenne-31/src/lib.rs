@@ -11,7 +11,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::{AbstractField, AsInt, Field, PrimeField};
+use p3_field::{AbstractField, Field, PrimeField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -23,8 +23,6 @@ pub struct Mersenne31 {
 }
 
 impl Mersenne31 {
-    pub const ORDER: u32 = (1 << 31) - 1;
-
     const fn new(value: u32) -> Self {
         Self {
             value: value % Self::ORDER,
@@ -103,12 +101,26 @@ impl AbstractField for Mersenne31 {
 }
 
 impl Field for Mersenne31 {
+    type IntegerRepr = u32;
+
     type Base = Self;
 
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
 
+    const ORDER: u32 = (1 << 31) - 1;
+
     const EXT_DEGREE: usize = 1;
+
+    fn as_canonical_uint(&self) -> u32 {
+        // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
+        // `value` that is not canonical, namely 2^31 - 1 = p = 0.
+        if self.value == Self::ORDER {
+            0
+        } else {
+            self.value
+        }
+    }
 
     fn from_base(b: Self::Base) -> Self {
         b
@@ -151,20 +163,6 @@ impl Field for Mersenne31 {
 }
 
 impl PrimeField for Mersenne31 {}
-
-impl AsInt for Mersenne31 {
-    type UnsignedInteger = u32;
-
-    fn as_canonical_uint(&self) -> Self::UnsignedInteger {
-        // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
-        // `value` that is not canonical, namely 2^31 - 1 = p = 0.
-        if self.value == Self::ORDER {
-            0
-        } else {
-            self.value
-        }
-    }
-}
 
 impl Add<Self> for Mersenne31 {
     type Output = Self;
