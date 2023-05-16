@@ -155,7 +155,7 @@ impl TwoAdicField for Goldilocks {
     }
 }
 
-impl Add<Self> for Goldilocks {
+impl Add for Goldilocks {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -177,7 +177,7 @@ impl Add<Self> for Goldilocks {
     }
 }
 
-impl AddAssign<Self> for Goldilocks {
+impl AddAssign for Goldilocks {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
@@ -189,7 +189,7 @@ impl Sum for Goldilocks {
     }
 }
 
-impl Sub<Self> for Goldilocks {
+impl Sub for Goldilocks {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -211,7 +211,7 @@ impl Sub<Self> for Goldilocks {
     }
 }
 
-impl SubAssign<Self> for Goldilocks {
+impl SubAssign for Goldilocks {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -225,7 +225,7 @@ impl Neg for Goldilocks {
     }
 }
 
-impl Mul<Self> for Goldilocks {
+impl Mul for Goldilocks {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -233,7 +233,7 @@ impl Mul<Self> for Goldilocks {
     }
 }
 
-impl MulAssign<Self> for Goldilocks {
+impl MulAssign for Goldilocks {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }

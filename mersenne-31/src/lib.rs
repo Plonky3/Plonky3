@@ -177,7 +177,7 @@ impl PrimeField32 for Mersenne31 {
     }
 }
 
-impl Add<Self> for Mersenne31 {
+impl Add for Mersenne31 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -192,7 +192,7 @@ impl Add<Self> for Mersenne31 {
     }
 }
 
-impl AddAssign<Self> for Mersenne31 {
+impl AddAssign for Mersenne31 {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
@@ -204,7 +204,7 @@ impl Sum for Mersenne31 {
     }
 }
 
-impl Sub<Self> for Mersenne31 {
+impl Sub for Mersenne31 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -213,7 +213,7 @@ impl Sub<Self> for Mersenne31 {
     }
 }
 
-impl SubAssign<Self> for Mersenne31 {
+impl SubAssign for Mersenne31 {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -228,7 +228,7 @@ impl Neg for Mersenne31 {
     }
 }
 
-impl Mul<Self> for Mersenne31 {
+impl Mul for Mersenne31 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -239,7 +239,7 @@ impl Mul<Self> for Mersenne31 {
     }
 }
 
-impl MulAssign<Self> for Mersenne31 {
+impl MulAssign for Mersenne31 {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }

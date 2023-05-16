@@ -33,7 +33,7 @@ impl<AF: AbstractionOf<Mersenne31>> Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Add<Self> for Mersenne31Complex<AF> {
+impl<AF: AbstractionOf<Mersenne31>> Add for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -49,7 +49,7 @@ impl<AF: AbstractionOf<Mersenne31>> Add<AF> for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> AddAssign<Self> for Mersenne31Complex<AF> {
+impl<AF: AbstractionOf<Mersenne31>> AddAssign for Mersenne31Complex<AF> {
     fn add_assign(&mut self, rhs: Self) {
         self.parts[0] += rhs.real();
         self.parts[1] += rhs.imag();
@@ -68,7 +68,7 @@ impl<AF: AbstractionOf<Mersenne31>> Sum for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Sub<Self> for Mersenne31Complex<AF> {
+impl<AF: AbstractionOf<Mersenne31>> Sub for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -84,7 +84,7 @@ impl<AF: AbstractionOf<Mersenne31>> Sub<AF> for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> SubAssign<Self> for Mersenne31Complex<AF> {
+impl<AF: AbstractionOf<Mersenne31>> SubAssign for Mersenne31Complex<AF> {
     fn sub_assign(&mut self, rhs: Self) {
         self.parts[0] -= rhs.real();
         self.parts[1] -= rhs.imag();
@@ -105,7 +105,7 @@ impl<AF: AbstractionOf<Mersenne31>> Neg for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Mul<Self> for Mersenne31Complex<AF> {
+impl<AF: AbstractionOf<Mersenne31>> Mul for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -130,7 +130,7 @@ impl<AF: AbstractionOf<Mersenne31>> Mul<AF> for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> MulAssign<Self> for Mersenne31Complex<AF> {
+impl<AF: AbstractionOf<Mersenne31>> MulAssign for Mersenne31Complex<AF> {
     fn mul_assign(&mut self, rhs: Self) {
         *self = self.clone() * rhs;
     }
