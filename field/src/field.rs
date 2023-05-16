@@ -141,8 +141,26 @@ pub trait Field:
 
 pub trait PrimeField: Field {}
 
-pub trait Field32: Field {
+/// A prime field of order less than `2^32`.
+pub trait PrimeField32: PrimeField {
+    const ORDER_U32: u32;
+
     fn as_canonical_u32(&self) -> u32;
+}
+
+/// A prime field of order less than `2^64`.
+pub trait PrimeField64: PrimeField {
+    const ORDER_U64: u64;
+
+    fn as_canonical_u64(&self) -> u64;
+}
+
+impl<F: PrimeField32> PrimeField64 for F {
+    const ORDER_U64: u64 = <F as PrimeField32>::ORDER_U32 as u64;
+
+    fn as_canonical_u64(&self) -> u64 {
+        self.as_canonical_u32() as u64
+    }
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods

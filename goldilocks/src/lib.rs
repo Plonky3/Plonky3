@@ -7,7 +7,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::{AbstractField, Field, PrimeField, TwoAdicField};
+use p3_field::{AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -20,19 +20,8 @@ pub struct Goldilocks {
 }
 
 impl Goldilocks {
-    pub const ORDER: u64 = 0xFFFFFFFF00000001;
-
     /// Two's complement of `ORDER`, i.e. `2^64 - ORDER = 2^32 - 1`.
-    const NEG_ORDER: u64 = Self::ORDER.wrapping_neg();
-
-    fn as_canonical_u64(&self) -> u64 {
-        let mut c = self.value;
-        // We only need one condition subtraction, since 2 * ORDER would not fit in a u64.
-        if c >= Self::ORDER {
-            c -= Self::ORDER;
-        }
-        c
-    }
+    const NEG_ORDER: u64 = Self::ORDER_U64.wrapping_neg();
 }
 
 impl PartialEq for Goldilocks {
@@ -65,7 +54,7 @@ impl Distribution<Goldilocks> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Goldilocks {
         loop {
             let next_u64 = rng.next_u64();
-            let is_canonical = next_u64 < Goldilocks::ORDER;
+            let is_canonical = next_u64 < Goldilocks::ORDER_U64;
             if is_canonical {
                 return Goldilocks { value: next_u64 };
             }
@@ -78,7 +67,7 @@ impl AbstractField for Goldilocks {
     const ONE: Self = Self { value: 1 };
     const TWO: Self = Self { value: 2 };
     const NEG_ONE: Self = Self {
-        value: Self::ORDER - 1,
+        value: Self::ORDER_U64 - 1,
     };
 
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
@@ -109,7 +98,7 @@ impl Field for Goldilocks {
     }
 
     fn is_zero(&self) -> bool {
-        self.value == 0 || self.value == Self::ORDER
+        self.value == 0 || self.value == Self::ORDER_U64
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -118,6 +107,19 @@ impl Field for Goldilocks {
 }
 
 impl PrimeField for Goldilocks {}
+
+impl PrimeField64 for Goldilocks {
+    const ORDER_U64: u64 = 0xFFFFFFFF00000001;
+
+    fn as_canonical_u64(&self) -> u64 {
+        let mut c = self.value;
+        // We only need one condition subtraction, since 2 * ORDER would not fit in a u64.
+        if c >= Self::ORDER_U64 {
+            c -= Self::ORDER_U64;
+        }
+        c
+    }
+}
 
 impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
@@ -143,7 +145,7 @@ impl Add<Self> for Goldilocks {
             //     this check.
             //  2. Hints to the compiler how rare this double-overflow is (thus handled better with
             //     a branch).
-            assume(self.value > Self::ORDER && rhs.value > Self::ORDER);
+            assume(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
             branch_hint();
             sum += Self::NEG_ORDER; // Cannot overflow.
         }
@@ -177,7 +179,7 @@ impl Sub<Self> for Goldilocks {
             //     then it can skip this check.
             //  2. Hints to the compiler how rare this double-underflow is (thus handled better
             //     with a branch).
-            assume(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER);
+            assume(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
             branch_hint();
             diff -= Self::NEG_ORDER; // Cannot underflow.
         }
@@ -196,7 +198,7 @@ impl Neg for Goldilocks {
 
     fn neg(self) -> Self::Output {
         Self {
-            value: Self::ORDER - self.as_canonical_u64(),
+            value: Self::ORDER_U64 - self.as_canonical_u64(),
         }
     }
 }
