@@ -129,7 +129,7 @@ impl PrimeField for Goldilocks {
         Self::new(n)
     }
 
-    fn from_canonical_usize(n: u64) -> Self {
+    fn from_canonical_usize(n: usize) -> Self {
         Self::new(n as u64)
     }
 
