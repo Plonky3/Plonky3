@@ -152,18 +152,18 @@ pub trait PrimeField: Field + Ord {
     // fn try_as_canonical_u32(&self) -> Option<u32>;
 }
 
-/// A prime field of order less than `2^32`.
-pub trait PrimeField32: PrimeField {
-    const ORDER_U32: u32;
-
-    fn as_canonical_u32(&self) -> u32;
-}
-
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
     fn as_canonical_u64(&self) -> u64;
+}
+
+/// A prime field of order less than `2^32`.
+pub trait PrimeField32: PrimeField64 {
+    const ORDER_U32: u32;
+
+    fn as_canonical_u32(&self) -> u32;
 }
 
 impl<F: PrimeField32> PrimeField64 for F {
