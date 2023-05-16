@@ -4,7 +4,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::{AbstractField, AbstractionOf, Field, TwoAdicField};
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug, Default)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractionOf<Mersenne31>> {
     parts: [AF; 2],
 }

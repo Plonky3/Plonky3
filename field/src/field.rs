@@ -1,5 +1,6 @@
 use crate::packed::PackedField;
 use core::fmt::{Debug, Display};
+use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use itertools::Itertools;
@@ -61,6 +62,7 @@ pub trait Field:
     + MulAssign<Self::Base>
     + Div<Self, Output = Self>
     + Eq
+    + Hash
     + Send
     + Sync
     + Display
@@ -149,8 +151,6 @@ pub trait PrimeField: Field {
 
     // fn try_as_canonical_u32(&self) -> Option<u32>;
 }
-
-// TODO: Blanket impl Display for PrimeField64?
 
 /// A prime field of order less than `2^32`.
 pub trait PrimeField32: PrimeField {
