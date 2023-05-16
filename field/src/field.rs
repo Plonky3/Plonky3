@@ -142,6 +142,8 @@ pub trait Field:
 }
 
 pub trait PrimeField: Field + Ord {
+    fn from_canonical_u8(n: u8) -> Self;
+    fn from_canonical_u16(n: u8) -> Self;
     fn from_canonical_u32(n: u32) -> Self;
     fn from_canonical_u64(n: u64) -> Self;
     fn from_canonical_usize(n: usize) -> Self;

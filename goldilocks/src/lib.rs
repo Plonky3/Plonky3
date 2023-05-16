@@ -121,6 +121,14 @@ impl Field for Goldilocks {
 }
 
 impl PrimeField for Goldilocks {
+    fn from_canonical_u8(n: u8) -> Self {
+        Self::new(n as u64)
+    }
+
+    fn from_canonical_u16(n: u8) -> Self {
+        Self::new(n as u64)
+    }
+
     fn from_canonical_u32(n: u32) -> Self {
         Self::new(n as u64)
     }

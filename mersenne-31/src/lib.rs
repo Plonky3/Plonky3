@@ -139,6 +139,14 @@ impl Field for Mersenne31 {
 }
 
 impl PrimeField for Mersenne31 {
+    fn from_canonical_u8(n: u8) -> Self {
+        Self::new(n as u32)
+    }
+
+    fn from_canonical_u16(n: u8) -> Self {
+        Self::new(n as u32)
+    }
+
     fn from_canonical_u32(n: u32) -> Self {
         Self::new(n)
     }
