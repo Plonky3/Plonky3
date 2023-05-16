@@ -48,12 +48,6 @@ impl PartialOrd for Mersenne31 {
 
 impl Eq for Mersenne31 {}
 
-impl From<u32> for Mersenne31 {
-    fn from(value: u32) -> Self {
-        Self::new(value)
-    }
-}
-
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u32(self.as_canonical_u32())
@@ -155,6 +149,17 @@ impl PrimeField for Mersenne31 {
 
     fn from_canonical_usize(n: u64) -> Self {
         Self::new(n as u32)
+    }
+
+    fn from_wrapped_u32(n: u32) -> Self {
+        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
+        let msb = n & (1 << 31);
+        let msb_reduced = msb >> 31;
+        Self::new(n ^ msb) + Self::new(msb_reduced)
+    }
+
+    fn from_wrapped_u64(_n: u64) -> Self {
+        todo!()
     }
 }
 

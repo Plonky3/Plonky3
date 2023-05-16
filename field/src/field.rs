@@ -143,7 +143,14 @@ pub trait PrimeField: Field {
     fn from_canonical_u32(n: u32) -> Self;
     fn from_canonical_u64(n: u64) -> Self;
     fn from_canonical_usize(n: u64) -> Self;
+
+    fn from_wrapped_u32(n: u32) -> Self;
+    fn from_wrapped_u64(n: u64) -> Self;
+
+    // fn try_as_canonical_u32(&self) -> Option<u32>;
 }
+
+// TODO: Blanket impl Display for PrimeField64?
 
 /// A prime field of order less than `2^32`.
 pub trait PrimeField32: PrimeField {
