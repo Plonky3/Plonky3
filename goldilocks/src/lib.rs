@@ -20,6 +20,10 @@ pub struct Goldilocks {
 }
 
 impl Goldilocks {
+    const fn new(value: u64) -> Self {
+        Self { value }
+    }
+
     /// Two's complement of `ORDER`, i.e. `2^64 - ORDER = 2^32 - 1`.
     const NEG_ORDER: u64 = Self::ORDER_U64.wrapping_neg();
 }
@@ -56,23 +60,21 @@ impl Distribution<Goldilocks> for Standard {
             let next_u64 = rng.next_u64();
             let is_canonical = next_u64 < Goldilocks::ORDER_U64;
             if is_canonical {
-                return Goldilocks { value: next_u64 };
+                return Goldilocks::new(next_u64);
             }
         }
     }
 }
 
 impl AbstractField for Goldilocks {
-    const ZERO: Self = Self { value: 0 };
-    const ONE: Self = Self { value: 1 };
-    const TWO: Self = Self { value: 2 };
-    const NEG_ONE: Self = Self {
-        value: Self::ORDER_U64 - 1,
-    };
+    const ZERO: Self = Self::new(0);
+    const ONE: Self = Self::new(1);
+    const TWO: Self = Self::new(2);
+    const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     fn multiplicative_group_generator() -> Self {
-        Self { value: 7 }
+        Self::new(7)
     }
 }
 
@@ -106,7 +108,19 @@ impl Field for Goldilocks {
     }
 }
 
-impl PrimeField for Goldilocks {}
+impl PrimeField for Goldilocks {
+    fn from_canonical_u32(n: u32) -> Self {
+        Self::new(n as u64)
+    }
+
+    fn from_canonical_u64(n: u64) -> Self {
+        Self::new(n)
+    }
+
+    fn from_canonical_usize(n: u64) -> Self {
+        Self::new(n as u64)
+    }
+}
 
 impl PrimeField64 for Goldilocks {
     const ORDER_U64: u64 = 0xFFFFFFFF00000001;
@@ -125,9 +139,7 @@ impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
 
     fn power_of_two_generator() -> Self {
-        Self {
-            value: 1753635133440165772,
-        }
+        Self::new(1753635133440165772)
     }
 }
 
@@ -149,7 +161,7 @@ impl Add<Self> for Goldilocks {
             branch_hint();
             sum += Self::NEG_ORDER; // Cannot overflow.
         }
-        Self { value: sum }
+        Self::new(sum)
     }
 }
 
@@ -183,7 +195,7 @@ impl Sub<Self> for Goldilocks {
             branch_hint();
             diff -= Self::NEG_ORDER; // Cannot underflow.
         }
-        Self { value: diff }
+        Self::new(diff)
     }
 }
 
@@ -197,9 +209,7 @@ impl Neg for Goldilocks {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        Self {
-            value: Self::ORDER_U64 - self.as_canonical_u64(),
-        }
+        Self::new(Self::ORDER_U64 - self.as_canonical_u64())
     }
 }
 
@@ -247,7 +257,7 @@ fn reduce128(x: u128) -> Goldilocks {
     }
     let t1 = x_hi_lo * Goldilocks::NEG_ORDER;
     let t2 = unsafe { add_no_canonicalize_trashing_input(t0, t1) };
-    Goldilocks { value: t2 }
+    Goldilocks::new(t2)
 }
 
 #[inline]

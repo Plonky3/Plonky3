@@ -139,7 +139,11 @@ pub trait Field:
     }
 }
 
-pub trait PrimeField: Field {}
+pub trait PrimeField: Field {
+    fn from_canonical_u32(n: u32) -> Self;
+    fn from_canonical_u64(n: u64) -> Self;
+    fn from_canonical_usize(n: u64) -> Self;
+}
 
 /// A prime field of order less than `2^32`.
 pub trait PrimeField32: PrimeField {

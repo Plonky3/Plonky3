@@ -24,9 +24,7 @@ pub struct Mersenne31 {
 
 impl Mersenne31 {
     const fn new(value: u32) -> Self {
-        Self {
-            value: value % Self::ORDER_U32,
-        }
+        Self { value }
     }
 }
 
@@ -80,23 +78,21 @@ impl Distribution<Mersenne31> for Standard {
             let next_u31 = rng.next_u32() >> 1;
             let is_canonical = next_u31 != Mersenne31::ORDER_U32;
             if is_canonical {
-                return Mersenne31 { value: next_u31 };
+                return Mersenne31::new(next_u31);
             }
         }
     }
 }
 
 impl AbstractField for Mersenne31 {
-    const ZERO: Self = Self { value: 0 };
-    const ONE: Self = Self { value: 1 };
-    const TWO: Self = Self { value: 2 };
-    const NEG_ONE: Self = Self {
-        value: Self::ORDER_U32 - 1,
-    };
+    const ZERO: Self = Self::new(0);
+    const ONE: Self = Self::new(1);
+    const TWO: Self = Self::new(2);
+    const NEG_ONE: Self = Self::new(Self::ORDER_U32 - 1);
 
     // Sage: GF(2^31 - 1).multiplicative_generator()
     fn multiplicative_group_generator() -> Self {
-        Self { value: 7 }
+        Self::new(7)
     }
 }
 
@@ -131,7 +127,7 @@ impl Field for Mersenne31 {
         let left = (self.value << exp) & ((1 << 31) - 1);
         let right = self.value >> (31 - exp);
         let rotated = left | right;
-        Self { value: rotated }
+        Self::new(rotated)
     }
 
     fn div_2exp_u64(&self, exp: u64) -> Self {
@@ -140,7 +136,7 @@ impl Field for Mersenne31 {
         let left = self.value >> exp;
         let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
         let rotated = left | right;
-        Self { value: rotated }
+        Self::new(rotated)
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -148,7 +144,19 @@ impl Field for Mersenne31 {
     }
 }
 
-impl PrimeField for Mersenne31 {}
+impl PrimeField for Mersenne31 {
+    fn from_canonical_u32(n: u32) -> Self {
+        Self::new(n)
+    }
+
+    fn from_canonical_u64(n: u64) -> Self {
+        Self::new(n as u32)
+    }
+
+    fn from_canonical_usize(n: u64) -> Self {
+        Self::new(n as u32)
+    }
+}
 
 impl PrimeField32 for Mersenne31 {
     const ORDER_U32: u32 = (1 << 31) - 1;
@@ -175,7 +183,7 @@ impl Add<Self> for Mersenne31 {
         let msb = sum & (1 << 31);
         sum.bitxor_assign(msb);
         sum += (msb != 0) as u32;
-        Self { value: sum }
+        Self::new(sum)
     }
 }
 
@@ -210,10 +218,8 @@ impl Neg for Mersenne31 {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        Self {
-            // Can't underflow, since self.value is 31-bits and thus can't exceed ORDER.
-            value: Self::ORDER_U32 - self.value,
-        }
+        // Can't underflow, since self.value is 31-bits and thus can't exceed ORDER.
+        Self::new(Self::ORDER_U32 - self.value)
     }
 }
 
@@ -224,7 +230,7 @@ impl Mul<Self> for Mersenne31 {
         let prod = (self.value as u64) * (rhs.value as u64);
         let prod_lo = (prod as u32) & ((1 << 31) - 1);
         let prod_hi = (prod >> 31) as u32;
-        Self { value: prod_lo } + Self { value: prod_hi }
+        Self::new(prod_lo) + Self::new(prod_hi)
     }
 }
 
