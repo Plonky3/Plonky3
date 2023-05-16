@@ -34,6 +34,14 @@ impl PartialEq for Mersenne31 {
     }
 }
 
+impl Eq for Mersenne31 {}
+
+impl Hash for Mersenne31 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u32(self.as_canonical_u32())
+    }
+}
+
 impl Ord for Mersenne31 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_canonical_u32().cmp(&other.as_canonical_u32())
@@ -42,15 +50,7 @@ impl Ord for Mersenne31 {
 
 impl PartialOrd for Mersenne31 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.as_canonical_u32().cmp(&other.as_canonical_u32()))
-    }
-}
-
-impl Eq for Mersenne31 {}
-
-impl Hash for Mersenne31 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.as_canonical_u32())
+        Some(self.cmp(other))
     }
 }
 

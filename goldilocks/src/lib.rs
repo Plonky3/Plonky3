@@ -42,6 +42,18 @@ impl Hash for Goldilocks {
     }
 }
 
+impl Ord for Goldilocks {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.as_canonical_u64().cmp(&other.as_canonical_u64())
+    }
+}
+
+impl PartialOrd for Goldilocks {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Display for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.value, f)
