@@ -8,34 +8,32 @@ use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{AbstractField, Field};
 use p3_matrix::Matrix;
 
-pub(crate) fn prove<F, FE, M, MC, Chal>(
+pub(crate) fn prove<F, M, MC, Chal>(
     codewords: &[M::ProverData],
     challenger: &mut Chal,
-) -> FriProof<F, FE, M, MC>
+) -> FriProof<F, M, MC>
 where
     F: Field,
-    FE: Field<Base = F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
-    Chal: Challenger<F>,
+    M: MMCS<F::Base>,
+    MC: DirectMMCS<F::Base>,
+    Chal: Challenger<F::Base>,
 {
-    let commit_phase_commits = commit_phase::<F, FE, M, MC, Chal>(codewords, challenger);
+    let commit_phase_commits = commit_phase::<F, M, MC, Chal>(codewords, challenger);
     let queries = todo!();
     todo!()
 }
 
-pub(crate) fn commit_phase<F, FE, M, MC, Chal>(
+pub(crate) fn commit_phase<F, M, MC, Chal>(
     codewords: &[M::ProverData],
     challenger: &mut Chal,
 ) -> Vec<MC::ProverData>
 where
     F: Field,
-    FE: Field<Base = F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
-    Chal: Challenger<F>,
+    M: MMCS<F::Base>,
+    MC: DirectMMCS<F::Base>,
+    Chal: Challenger<F::Base>,
 {
-    let alpha: FE = <FE as AbstractField>::ZERO; // TODO challenger.random_ext_element();
+    let alpha: F = <F as AbstractField>::ZERO; // TODO challenger.random_ext_element();
     let matrices_by_desc_height = codewords
         .iter()
         .flat_map(|data| M::get_matrices(data))
@@ -45,18 +43,17 @@ where
 
     let (max_height, largest_matrices_iter) = matrices_by_desc_height.next().expect("No matrices?");
     let largest_matrices = largest_matrices_iter.collect_vec();
-    let zero_vec = vec![<FE as AbstractField>::ZERO; max_height];
+    let zero_vec = vec![<F as AbstractField>::ZERO; max_height];
     let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
     let mut committed = vec![current.clone()];
 
     for (height, matrices) in matrices_by_desc_height {
         while current.len() < height {
-            let beta = <FE as AbstractField>::ZERO; // TODO
+            let beta = <F as AbstractField>::ZERO; // TODO
             current = fold_even_odd(&current, beta);
         }
         committed.push(current.clone());
-        current =
-            reduce_matrices::<F, FE, M::Mat>(height, current.clone(), matrices.collect(), alpha);
+        current = reduce_matrices::<F, M::Mat>(height, current.clone(), matrices.collect(), alpha);
     }
     todo!()
 }
@@ -66,16 +63,10 @@ fn fold_even_odd<F: Field>(poly: &[F], beta: F) -> Vec<F> {
     todo!()
 }
 
-fn reduce_matrices<F, FE, Mat>(
-    height: usize,
-    init: Vec<FE>,
-    matrices: Vec<&Mat>,
-    alpha: FE,
-) -> Vec<FE>
+fn reduce_matrices<F, Mat>(height: usize, init: Vec<F>, matrices: Vec<&Mat>, alpha: F) -> Vec<F>
 where
     F: Field,
-    FE: Field<Base = F>,
-    Mat: Matrix<F>,
+    Mat: Matrix<F::Base>,
 {
     (0..height)
         .map(|r| {

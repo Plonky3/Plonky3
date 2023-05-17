@@ -19,34 +19,31 @@ mod verifier;
 
 pub use proof::*;
 
-pub struct FriLDT<F, FE, M, MC>
+pub struct FriLDT<F, M, MC>
 where
     F: Field,
-    FE: Field<Base = F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    M: MMCS<F::Base>,
+    MC: DirectMMCS<F::Base>,
 {
     _phantom_f: PhantomData<F>,
-    _phantom_fe: PhantomData<FE>,
     _phantom_m: PhantomData<M>,
     _phantom_mc: PhantomData<MC>,
 }
 
-impl<F, FE, M, MC> LDT<F, M> for FriLDT<F, FE, M, MC>
+impl<F, M, MC> LDT<F::Base, M> for FriLDT<F, M, MC>
 where
     F: Field,
-    FE: Field<Base = F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    M: MMCS<F::Base>,
+    MC: DirectMMCS<F::Base>,
 {
-    type Proof = FriProof<F, FE, M, MC>;
+    type Proof = FriProof<F, M, MC>;
     type Error = ();
 
     fn prove<Chal>(codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
     where
-        Chal: Challenger<F>,
+        Chal: Challenger<F::Base>,
     {
-        prove::<F, FE, M, MC, Chal>(codewords, challenger)
+        prove::<F, M, MC, Chal>(codewords, challenger)
     }
 
     fn verify<Chal>(
@@ -55,10 +52,10 @@ where
         challenger: &mut Chal,
     ) -> Result<(), Self::Error>
     where
-        Chal: Challenger<F>,
+        Chal: Challenger<F::Base>,
     {
-        verify::<F, FE, M, MC, Chal>(proof, challenger)
+        verify::<F, M, MC, Chal>(proof, challenger)
     }
 }
 
-pub type FRIBasedPCS<F, FE, M, MC> = LDTBasedPCS<F, M, FriLDT<F, FE, M, MC>>;
+pub type FRIBasedPCS<F, M, MC> = LDTBasedPCS<<F as Field>::Base, M, FriLDT<F, M, MC>>;
