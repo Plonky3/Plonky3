@@ -1,6 +1,6 @@
-use core::marker::PhantomData;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 use p3_field::Field;
 use p3_symmetric::permutation::ArrayPermutation;
 
@@ -41,7 +41,9 @@ impl<F: Field, P: ArrayPermutation<F, WIDTH>, const WIDTH: usize> DuplexChalleng
     }
 }
 
-impl<F: Field, P: ArrayPermutation<F, WIDTH>, const WIDTH: usize> Challenger<F> for DuplexChallenger<F, P, WIDTH> {
+impl<F: Field, P: ArrayPermutation<F, WIDTH>, const WIDTH: usize> Challenger<F>
+    for DuplexChallenger<F, P, WIDTH>
+{
     fn observe_element(&mut self, element: F) {
         // Any buffered output is now invalid.
         self.output_buffer.clear();
@@ -54,6 +56,8 @@ impl<F: Field, P: ArrayPermutation<F, WIDTH>, const WIDTH: usize> Challenger<F> 
             self.duplexing();
         }
 
-        self.output_buffer.pop().expect("Output buffer should be non-empty")
+        self.output_buffer
+            .pop()
+            .expect("Output buffer should be non-empty")
     }
 }

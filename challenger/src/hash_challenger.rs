@@ -1,9 +1,9 @@
 use crate::Challenger;
 use alloc::vec;
 use alloc::vec::Vec;
-use p3_symmetric::hasher::IterHasher;
 use core::marker::PhantomData;
 use p3_field::Field;
+use p3_symmetric::hasher::IterHasher;
 
 pub struct HashChallenger<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> {
     input_buffer: Vec<F>,
@@ -13,9 +13,7 @@ pub struct HashChallenger<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LE
     _phantom_h: PhantomData<H>,
 }
 
-impl<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize>
-    HashChallenger<F, H, OUT_LEN>
-{
+impl<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> HashChallenger<F, H, OUT_LEN> {
     pub fn new(initial_state: Vec<F>, hasher: H) -> Self {
         Self {
             input_buffer: initial_state,
