@@ -16,17 +16,17 @@ where
     A: for<'a> Air<
         BasicFoldingAirBuilder<
             'a,
-            SC::Domain,
-            <SC::Domain as Field>::Packing,
-            <SC::Domain as Field>::Packing,
+            SC::Domain::Extension,
+            <SC::Domain::Extension as Field>::Packing,
+            <SC::Domain::Extension as Field>::Packing,
         >,
     >,
     A: for<'a> Air<
         BasicFoldingAirBuilder<
             'a,
-            SC::Domain,
-            SymbolicField<SC::Domain, BasicSymVar<SC::Domain>>,
-            BasicSymVar<SC::Domain>,
+            SC::Domain::Extension,
+            SymbolicField<SC::Domain::Extension, BasicSymVar<SC::Domain::Extension>>,
+            BasicSymVar<SC::Domain::Extension>,
         >,
     >,
 {

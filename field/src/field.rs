@@ -50,31 +50,9 @@ impl<F: Field> AbstractionOf<F> for F {}
 
 /// An element of a finite field.
 pub trait Field:
-    AbstractField
-    + 'static
-    + Copy
-    + Add<Self::Base, Output = Self>
-    + AddAssign<Self::Base>
-    + Sub<Self::Base, Output = Self>
-    + SubAssign<Self::Base>
-    + Mul<Self::Base, Output = Self>
-    + MulAssign<Self::Base>
-    + Div<Self, Output = Self>
-    + Eq
-    + Send
-    + Sync
-    + Display
+    AbstractField + 'static + Copy + Div<Self, Output = Self> + Eq + Send + Sync + Display
 {
-    type Base: Field;
     type Packing: PackedField<Scalar = Self>;
-
-    const EXT_DEGREE: usize;
-
-    fn from_base(b: Self::Base) -> Self;
-
-    fn from_base_slice(bs: &[Self::Base]) -> Self;
-
-    fn as_base_slice(&self) -> &[Self::Base];
 
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
@@ -143,6 +121,67 @@ pub trait PrimeField: Field {}
 
 pub trait Field32: Field {
     fn as_canonical_u32(&self) -> u32;
+}
+
+pub trait FieldExtension {
+    // The field "downstairs"
+    type Base: Field + Add<Self::Extension, Output = Self::Extension>;
+    // The field "upstairs"
+    type Extension: Field + Add<Self::Base, Output = Self::Extension>;
+
+    const DEGREE: usize;
+
+    // Map between the base field and extension field. NB: Always use
+    // the dedicated operators where available rather than these
+    // methods (i.e. prefer `x + y` to `FE::lift(x) + y`), as the
+    // latter could be more expensive.
+    fn lift(x: Self::Base) -> Self::Extension;
+    fn try_lower(y: Self::Extension) -> Option<Self::Base>;
+
+    // Relative Frobenius of Extension over Base
+    fn frobenius(y: Self::Extension) -> Self::Extension;
+
+    // Relative norm of Extension over Base (I don't think we use this)
+    fn norm(y: Self::Extension) -> Self::Base;
+
+    fn as_base_slice<'a>(y: &'a Self::Extension) -> &'a [Self::Base];
+    fn from_base_slice(v: &[Self::Base]) -> Self::Extension;
+}
+
+/// Every field is a trivial extension of itself
+impl<F: Field> FieldExtension for F {
+    type Base = F;
+    type Extension = F;
+
+    const DEGREE: usize = 1;
+
+    fn lift(x: Self::Base) -> Self::Extension {
+        x
+    }
+
+    fn try_lower(y: Self::Extension) -> Option<Self::Base> {
+        Some(y)
+    }
+
+    fn frobenius(y: Self::Extension) -> Self::Extension {
+        y
+    }
+
+    fn norm(y: Self::Extension) -> Self::Base {
+        y
+    }
+
+    fn as_base_slice<'a>(y: &'a Self::Extension) -> &'a [Self::Base] {
+        core::slice::from_ref(y)
+    }
+
+    fn from_base_slice(v: &[Self::Base]) -> Self::Extension {
+        if v.len() == 1 {
+            v[0]
+        } else {
+            panic!("incorrect number of base elements");
+        }
+    }
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods

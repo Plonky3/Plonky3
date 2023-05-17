@@ -1,6 +1,7 @@
 //! A minimal STARK framework.
 
 #![no_std]
+#![feature(associated_type_bounds)]
 
 extern crate alloc;
 

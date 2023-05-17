@@ -2,7 +2,7 @@ use crate::Mersenne31;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::{AbstractField, AbstractionOf, Field, TwoAdicField};
+use p3_field::{AbstractField, AbstractionOf, Field, FieldExtension, TwoAdicField};
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractionOf<Mersenne31>> {
@@ -181,27 +181,64 @@ impl Display for Mersenne31Complex<Mersenne31> {
 }
 
 impl Field for Mersenne31Complex<Mersenne31> {
-    type Base = Mersenne31;
-
     type Packing = Self;
-
-    const EXT_DEGREE: usize = 2;
-
-    fn from_base(b: Self::Base) -> Self {
-        Self::new_real(b)
-    }
-
-    fn from_base_slice(bs: &[Self::Base]) -> Self {
-        assert_eq!(bs.len(), 2);
-        Self::new(bs[0], bs[1])
-    }
-
-    fn as_base_slice(&self) -> &[Self::Base] {
-        &self.parts
-    }
 
     fn try_inverse(&self) -> Option<Self> {
         todo!()
+    }
+}
+
+pub struct Mersenne31Quadratic;
+
+// FIXME: The code in this file has nothing to do with Mersenne31,
+// it's just a field extension by sqrt(-1).
+
+impl Add<Mersenne31Complex<Mersenne31>> for Mersenne31 {
+    type Output = Mersenne31Complex<Mersenne31>;
+
+    fn add(self, y: Mersenne31Complex<Mersenne31>) -> Self::Output {
+        Self::Output {
+            parts: [self + y.parts[0], y.parts[1]],
+        }
+    }
+}
+
+impl FieldExtension for Mersenne31Quadratic {
+    type Base = Mersenne31;
+    type Extension = Mersenne31Complex<Mersenne31>;
+
+    const DEGREE: usize = 2;
+
+    fn lift(x: Self::Base) -> Self::Extension {
+        Self::Extension::new_real(x)
+    }
+
+    fn try_lower(y: Self::Extension) -> Option<Self::Base> {
+        if y.imag().is_zero() {
+            Some(y.real())
+        } else {
+            None
+        }
+    }
+
+    fn frobenius(y: Self::Extension) -> Self::Extension {
+        Self::Extension {
+            parts: [y.parts[0], -y.parts[1]],
+        }
+    }
+
+    fn norm(y: Self::Extension) -> Self::Base {
+        y.real().square() + y.imag().square()
+    }
+
+    fn as_base_slice<'a>(y: &'a Self::Extension) -> &'a [Self::Base] {
+        &y.parts
+    }
+
+    fn from_base_slice(v: &[Self::Base]) -> Self::Extension {
+        Self::Extension {
+            parts: v.try_into().unwrap(),
+        }
     }
 }
 

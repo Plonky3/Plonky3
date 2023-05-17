@@ -2,7 +2,7 @@ use crate::pcs::{MultivariatePCS, UnivariatePCS, PCS};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_field::Field;
+use p3_field::{Field, FieldExtension};
 use p3_matrix::dense::RowMajorMatrix;
 
 pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {
@@ -30,25 +30,25 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
 impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
     fn open_multi_batches<FE, Chal>(
         _prover_data: &[Self::ProverData],
-        _points: &[FE],
+        _points: &[FE::Extension],
         _challenger: &mut Chal,
-    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
+    ) -> (Vec<Vec<Vec<FE::Extension>>>, Self::Proof)
     where
-        FE: Field<Base = F>,
-        Chal: Challenger<F>,
+        FE: FieldExtension,
+        Chal: Challenger<FE::Base>,
     {
         todo!()
     }
 
     fn verify_multi_batches<FE, Chal>(
         _commits: &[Self::Commitment],
-        _points: &[FE],
-        _values: &[Vec<Vec<FE>>],
+        _points: &[FE::Extension],
+        _values: &[Vec<Vec<FE::Extension>>],
         _proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        FE: Field<Base = F>,
-        Chal: Challenger<F>,
+        FE: FieldExtension,
+        Chal: Challenger<FE::Base>,
     {
         todo!()
     }
