@@ -23,15 +23,15 @@ pub trait Challenger<F: Field> {
         }
     }
 
-    fn observe_ext_element<FE: AbstractFieldExtension<F>>(&mut self, ext: FE) {
+    fn observe_ext_element<EF: AbstractFieldExtension<F>>(&mut self, ext: EF) {
         self.observe_elements(ext.as_base_slice());
     }
 
     fn random_element(&mut self) -> F;
 
-    fn random_ext_element<FE: AbstractFieldExtension<F>>(&mut self) {
-        let vec = self.random_vec(FE::D);
-        FE::from_base_slice(&vec);
+    fn random_ext_element<EF: AbstractFieldExtension<F>>(&mut self) {
+        let vec = self.random_vec(EF::D);
+        EF::from_base_slice(&vec);
     }
 
     fn random_array<const N: usize>(&mut self) -> [F; N] {

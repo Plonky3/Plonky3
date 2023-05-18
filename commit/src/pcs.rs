@@ -35,43 +35,43 @@ pub trait PCS<F: Field> {
 }
 
 pub trait UnivariatePCS<F: Field>: PCS<F> {
-    fn open_multi_batches<FE, Chal>(
+    fn open_multi_batches<EF, Chal>(
         prover_data: &[Self::ProverData],
-        points: &[FE],
+        points: &[EF],
         challenger: &mut Chal,
-    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
+    ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        FE: AbstractFieldExtension<F>,
+        EF: AbstractFieldExtension<F>,
         Chal: Challenger<F>;
 
-    fn verify_multi_batches<FE, Chal>(
+    fn verify_multi_batches<EF, Chal>(
         commits: &[Self::Commitment],
-        points: &[FE],
-        values: &[Vec<Vec<FE>>],
+        points: &[EF],
+        values: &[Vec<Vec<EF>>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        FE: AbstractFieldExtension<F>,
+        EF: AbstractFieldExtension<F>,
         Chal: Challenger<F>;
 }
 
 pub trait MultivariatePCS<F: Field>: PCS<F> {
-    fn open_multi_batches<FE, Chal>(
+    fn open_multi_batches<EF, Chal>(
         prover_data: &[Self::ProverData],
-        points: &[FE],
+        points: &[EF],
         challenger: &mut Chal,
-    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
+    ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        FE: AbstractFieldExtension<F>,
+        EF: AbstractFieldExtension<F>,
         Chal: Challenger<F>;
 
-    fn verify_multi_batches<FE, Chal>(
+    fn verify_multi_batches<EF, Chal>(
         commits: &[Self::Commitment],
-        points: &[FE],
-        values: &[Vec<Vec<FE>>],
+        points: &[EF],
+        values: &[Vec<Vec<EF>>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        FE: AbstractFieldExtension<F>,
+        EF: AbstractFieldExtension<F>,
         Chal: Challenger<F>;
 }

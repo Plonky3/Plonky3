@@ -28,26 +28,26 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
 }
 
 impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
-    fn open_multi_batches<FE, Chal>(
+    fn open_multi_batches<EF, Chal>(
         _prover_data: &[Self::ProverData],
-        _points: &[FE],
+        _points: &[EF],
         _challenger: &mut Chal,
-    ) -> (Vec<Vec<Vec<FE>>>, Self::Proof)
+    ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        FE: AbstractFieldExtension<F>,
+        EF: AbstractFieldExtension<F>,
         Chal: Challenger<F>,
     {
         todo!()
     }
 
-    fn verify_multi_batches<FE, Chal>(
+    fn verify_multi_batches<EF, Chal>(
         _commits: &[Self::Commitment],
-        _points: &[FE],
-        _values: &[Vec<Vec<FE>>],
+        _points: &[EF],
+        _values: &[Vec<Vec<EF>>],
         _proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        FE: AbstractFieldExtension<F>,
+        EF: AbstractFieldExtension<F>,
         Chal: Challenger<F>,
     {
         todo!()

@@ -10,7 +10,7 @@ use crate::verifier::verify;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{Field, FieldExtension};
+use p3_field::{ExtensionField, Field};
 use p3_ldt::{LDTBasedPCS, LDT};
 
 mod proof;
@@ -19,34 +19,34 @@ mod verifier;
 
 pub use proof::*;
 
-pub struct FriLDT<F, FE, M, MC>
+pub struct FriLDT<F, EF, M, MC>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    EF: ExtensionField<F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
     _phantom_f: PhantomData<F>,
-    _phantom_fe: PhantomData<FE>,
+    _phantom_fe: PhantomData<EF>,
     _phantom_m: PhantomData<M>,
     _phantom_mc: PhantomData<MC>,
 }
 
-impl<F, FE, M, MC> LDT<F, M> for FriLDT<F, FE, M, MC>
+impl<F, EF, M, MC> LDT<F, M> for FriLDT<F, EF, M, MC>
 where
     F: Field,
-    FE: FieldExtension<F>,
+    EF: ExtensionField<F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
-    type Proof = FriProof<F, FE, M, MC>;
+    type Proof = FriProof<F, EF, M, MC>;
     type Error = ();
 
     fn prove<Chal>(codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
     where
         Chal: Challenger<F>,
     {
-        prove::<F, FE, M, MC, Chal>(codewords, challenger)
+        prove::<F, EF, M, MC, Chal>(codewords, challenger)
     }
 
     fn verify<Chal>(
@@ -57,8 +57,8 @@ where
     where
         Chal: Challenger<F>,
     {
-        verify::<F, FE, M, MC, Chal>(proof, challenger)
+        verify::<F, EF, M, MC, Chal>(proof, challenger)
     }
 }
 
-pub type FRIBasedPCS<F, FE, M, MC> = LDTBasedPCS<F, M, FriLDT<F, FE, M, MC>>;
+pub type FRIBasedPCS<F, EF, M, MC> = LDTBasedPCS<F, M, FriLDT<F, EF, M, MC>>;
