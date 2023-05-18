@@ -49,10 +49,16 @@ impl<F: Field, P: ArrayPermutation<F, WIDTH>, const WIDTH: usize> Challenger<F>
         self.output_buffer.clear();
 
         self.input_buffer.push(element);
+
+        if self.input_buffer.len() == WIDTH {
+            self.duplexing();
+        }
     }
 
     fn random_element(&mut self) -> F {
-        if self.output_buffer.is_empty() {
+        // If we have buffered inputs, we must perform a duplexing so that the challenge will
+        // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
+        if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
             self.duplexing();
         }
 
