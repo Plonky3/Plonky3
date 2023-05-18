@@ -2,7 +2,7 @@ use crate::Mersenne31;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::{AbstractField, AbstractionOf, Field, TwoAdicField};
+use p3_field::{AbstractField, AbstractFieldExtension, AbstractionOf, Field, TwoAdicField};
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractionOf<Mersenne31>> {
@@ -181,24 +181,7 @@ impl Display for Mersenne31Complex<Mersenne31> {
 }
 
 impl Field for Mersenne31Complex<Mersenne31> {
-    type Base = Mersenne31;
-
     type Packing = Self;
-
-    const EXT_DEGREE: usize = 2;
-
-    fn from_base(b: Self::Base) -> Self {
-        Self::new_real(b)
-    }
-
-    fn from_base_slice(bs: &[Self::Base]) -> Self {
-        assert_eq!(bs.len(), 2);
-        Self::new(bs[0], bs[1])
-    }
-
-    fn as_base_slice(&self) -> &[Self::Base] {
-        &self.parts
-    }
 
     fn try_inverse(&self) -> Option<Self> {
         todo!()
@@ -217,5 +200,24 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     // sage: assert(g.multiplicative_order() == 2^32)
     fn power_of_two_generator() -> Self {
         Self::new(Mersenne31::new(1117296306), Mersenne31::new(1166849849))
+    }
+}
+
+impl<AF: AbstractField + AbstractionOf<Mersenne31>> AbstractFieldExtension<AF>
+    for Mersenne31Complex<AF>
+{
+    const D: usize = 2;
+
+    fn from_base(b: AF) -> Self {
+        Self::new_real(b)
+    }
+
+    fn from_base_slice(bs: &[AF]) -> Self {
+        assert_eq!(bs.len(), 2);
+        Self::new(bs[0].clone(), bs[1].clone())
+    }
+
+    fn as_base_slice(&self) -> &[AF] {
+        &self.parts
     }
 }

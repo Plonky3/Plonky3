@@ -3,6 +3,7 @@ use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::slice;
 use itertools::Itertools;
 
 /// A generalization of `Field` which permits things like
@@ -51,32 +52,9 @@ impl<F: Field> AbstractionOf<F> for F {}
 
 /// An element of a finite field.
 pub trait Field:
-    AbstractField
-    + 'static
-    + Copy
-    + Add<Self::Base, Output = Self>
-    + AddAssign<Self::Base>
-    + Sub<Self::Base, Output = Self>
-    + SubAssign<Self::Base>
-    + Mul<Self::Base, Output = Self>
-    + MulAssign<Self::Base>
-    + Div<Self, Output = Self>
-    + Eq
-    + Hash
-    + Send
-    + Sync
-    + Display
+    AbstractField + 'static + Copy + Div<Self, Output = Self> + Eq + Hash + Send + Sync + Display
 {
-    type Base: Field;
     type Packing: PackedField<Scalar = Self>;
-
-    const EXT_DEGREE: usize;
-
-    fn from_base(b: Self::Base) -> Self;
-
-    fn from_base_slice(bs: &[Self::Base]) -> Self;
-
-    fn as_base_slice(&self) -> &[Self::Base];
 
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
@@ -150,8 +128,6 @@ pub trait PrimeField: Field + Ord {
 
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
-
-    // fn try_as_canonical_u32(&self) -> Option<u32>;
 }
 
 /// A prime field of order less than `2^64`.
@@ -173,6 +149,45 @@ impl<F: PrimeField32> PrimeField64 for F {
 
     fn as_canonical_u64(&self) -> u64 {
         self.as_canonical_u32() as u64
+    }
+}
+
+pub trait AbstractFieldExtension<Base: AbstractField>:
+    AbstractField
+    + Add<Base, Output = Self>
+    + AddAssign<Base>
+    + Sub<Base, Output = Self>
+    + SubAssign<Base>
+    + Mul<Base, Output = Self>
+    + MulAssign<Base>
+{
+    const D: usize;
+
+    fn from_base(b: Base) -> Self;
+
+    fn from_base_slice(bs: &[Base]) -> Self;
+
+    fn as_base_slice(&self) -> &[Base];
+}
+
+pub trait FieldExtension<Base: Field>: Field + AbstractFieldExtension<Base> {}
+
+impl<Base: Field, Ext: Field + AbstractFieldExtension<Base>> FieldExtension<Base> for Ext {}
+
+impl<F: Field> AbstractFieldExtension<F> for F {
+    const D: usize = 1;
+
+    fn from_base(b: F) -> Self {
+        b
+    }
+
+    fn from_base_slice(bs: &[F]) -> Self {
+        assert_eq!(bs.len(), 1);
+        bs[0]
+    }
+
+    fn as_base_slice(&self) -> &[F] {
+        slice::from_ref(self)
     }
 }
 

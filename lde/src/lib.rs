@@ -8,13 +8,13 @@ pub use naive::*;
 
 extern crate alloc;
 
-use p3_field::{Field, TwoAdicField};
+use p3_field::{Field, FieldExtension, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 pub trait TwoAdicSubgroupLDE<F, FE>
 where
     F: Field,
-    FE: Field<Base = F> + TwoAdicField,
+    FE: FieldExtension<F> + TwoAdicField,
 {
     /// The result type. Typically this will be `FE`, but it may also be a compressed encoding of
     /// the subspace of `FE` that may be produced by LDEs.
@@ -33,7 +33,7 @@ where
 pub trait TwoAdicCosetLDE<F, FE>
 where
     F: Field,
-    FE: Field<Base = F> + TwoAdicField,
+    FE: FieldExtension<F> + TwoAdicField,
 {
     /// The result type. Typically this will be `FE`, but it may also be a compressed encoding of
     /// the subspace of `FE` that may be produced by LDEs.
