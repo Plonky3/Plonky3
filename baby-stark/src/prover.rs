@@ -1,6 +1,7 @@
 use crate::{BasicFoldingAirBuilder, BasicSymVar, StarkConfig};
 use alloc::vec::Vec;
 use p3_air::{Air, TwoRowMatrixView};
+use p3_commit::PCS;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, SymbolicField,
     TwoAdicField,
@@ -71,6 +72,8 @@ where
         .map(|(x, z)| z / (x - subgroup_last))
         .collect();
 
+    let (trace_commit, trace_data) = SC::PCS::commit_batch(trace);
+
     let quotient_values = (0..quotient_size)
         .into_par_iter()
         .step_by(<SC::F as Field>::Packing::WIDTH)
@@ -85,11 +88,10 @@ where
             let is_last_row =
                 *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
 
+            let local = todo!(); // &get_trace_values_packed(i_local_start),
+            let next = todo!(); // &get_trace_values_packed(i_next_start),
             let mut builder = BasicFoldingAirBuilder {
-                main: TwoRowMatrixView {
-                    local: todo!(), // &get_trace_values_packed(i_local_start),
-                    next: todo!(),  // &get_trace_values_packed(i_next_start),
-                },
+                main: TwoRowMatrixView { local, next },
                 is_first_row,
                 is_last_row,
                 is_transition,
