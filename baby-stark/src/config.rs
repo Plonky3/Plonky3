@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 use p3_commit::PCS;
-use p3_field::{AbstractExtensionField, Field, PrimeField, TwoAdicField};
+use p3_field::{AbstractExtensionField, Field, TwoAdicField};
 use p3_lde::TwoAdicCosetLDE;
 
 pub trait StarkConfig {
