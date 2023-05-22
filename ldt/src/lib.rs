@@ -33,11 +33,23 @@ pub trait LDT<F: Field, M: MMCS<F>> {
 }
 
 pub struct LDTBasedPCS<Val, Dom, LDE, M, L> {
+    lde: LDE,
     _phantom_val: PhantomData<Val>,
     _phantom_dom: PhantomData<Dom>,
-    _phantom_lde: PhantomData<LDE>,
     _phantom_m: PhantomData<M>,
     _phantom_l: PhantomData<L>,
+}
+
+impl<Val, Dom, LDE, M, L> LDTBasedPCS<Val, Dom, LDE, M, L> {
+    pub fn new(lde: LDE) -> Self {
+        Self {
+            lde,
+            _phantom_val: PhantomData,
+            _phantom_dom: PhantomData,
+            _phantom_m: PhantomData,
+            _phantom_l: PhantomData,
+        }
+    }
 }
 
 impl<Val, Dom, LDE, M, L> PCS<Val> for LDTBasedPCS<Val, Dom, LDE, M, L>
@@ -54,13 +66,19 @@ where
     type Error = L::Error;
 
     fn commit_batches(
+        &self,
         _polynomials: Vec<RowMajorMatrix<Val>>,
     ) -> (Self::Commitment, Self::ProverData) {
         // (Streaming?) LDE + Merklize
         todo!()
     }
 
-    fn get_committed_value(_prover_data: &Self::ProverData, _poly: usize, _value: usize) -> Val {
+    fn get_committed_value(
+        &self,
+        _prover_data: &Self::ProverData,
+        _poly: usize,
+        _value: usize,
+    ) -> Val {
         todo!()
     }
 }

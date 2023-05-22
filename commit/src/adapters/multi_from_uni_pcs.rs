@@ -17,18 +17,25 @@ impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
     type Error = ();
 
     fn commit_batches(
+        &self,
         _polynomials: Vec<RowMajorMatrix<F>>,
     ) -> (Self::Commitment, Self::ProverData) {
         todo!()
     }
 
-    fn get_committed_value(_prover_data: &Self::ProverData, _poly: usize, _value: usize) -> F {
+    fn get_committed_value(
+        &self,
+        _prover_data: &Self::ProverData,
+        _poly: usize,
+        _value: usize,
+    ) -> F {
         todo!()
     }
 }
 
 impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
     fn open_multi_batches<EF, Chal>(
+        &self,
         _prover_data: &[Self::ProverData],
         _points: &[EF],
         _challenger: &mut Chal,
@@ -41,6 +48,7 @@ impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U>
     }
 
     fn verify_multi_batches<EF, Chal>(
+        &self,
         _commits: &[Self::Commitment],
         _points: &[EF],
         _values: &[Vec<Vec<EF>>],

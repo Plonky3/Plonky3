@@ -11,7 +11,7 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-pub fn prove<SC, A>(air: &A, trace: RowMajorMatrix<SC::F>)
+pub fn prove<SC, A>(air: &A, config: SC, trace: RowMajorMatrix<SC::Val>)
 where
     SC: StarkConfig,
     A: for<'a> Air<
@@ -56,13 +56,13 @@ where
     );
 
     // Evaluations of Z_H(x) = (x^n - 1) on our coset s H.
-    let zerofier_evals = x_pow_n_evals.map(|y| y - SC::F::ONE);
+    let zerofier_evals = x_pow_n_evals.map(|y| y - SC::Val::ONE);
 
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
     let lagrange_first_evals: Vec<_> = g_subgroup
         .powers()
         .zip(zerofier_evals.clone())
-        .map(|(x, z)| z / (x - SC::F::ONE))
+        .map(|(x, z)| z / (x - SC::Val::ONE))
         .collect();
 
     // Evaluations of L_last(x) = Z_H(x) / (x - g^-1) on our coset s H.
@@ -72,14 +72,14 @@ where
         .map(|(x, z)| z / (x - subgroup_last))
         .collect();
 
-    let (trace_commit, trace_data) = SC::PCS::commit_batch(trace);
+    let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
 
     let quotient_values = (0..quotient_size)
         .into_par_iter()
-        .step_by(<SC::F as Field>::Packing::WIDTH)
+        .step_by(<SC::Val as Field>::Packing::WIDTH)
         .flat_map_iter(|i_local_start| {
             let i_next_start = (i_local_start + next_step) % quotient_size;
-            let i_range = i_local_start..i_local_start + <SC::F as Field>::Packing::WIDTH;
+            let i_range = i_local_start..i_local_start + <SC::Val as Field>::Packing::WIDTH;
 
             let x = *<SC::Domain as Field>::Packing::from_slice(&coset[i_range.clone()]);
             let is_transition = x - subgroup_last;
@@ -107,13 +107,13 @@ where
             //     *eval *= denominator_inv;
             // }
 
-            (0..<SC::F as Field>::Packing::WIDTH).map(move |i| {
-                let x: SC::F = todo!();
+            (0..<SC::Val as Field>::Packing::WIDTH).map(move |i| {
+                let x: SC::Val = todo!();
                 x
                 // (0..num_challenges)
                 //     .map(|j| constraints_evals[j].as_slice()[i])
                 //     .collect()
             })
         })
-        .collect::<Vec<SC::F>>();
+        .collect::<Vec<SC::Val>>();
 }

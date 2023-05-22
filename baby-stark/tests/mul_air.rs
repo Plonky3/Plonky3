@@ -1,5 +1,5 @@
 use p3_air::{Air, AirBuilder};
-use p3_baby_stark::{prove, StarkConfig};
+use p3_baby_stark::{prove, StarkConfig, StarkConfigImpl};
 use p3_fri::FRIBasedPCS;
 use p3_goldilocks::Goldilocks;
 use p3_lde::NaiveCosetLDE;
@@ -12,30 +12,26 @@ use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSP
 use p3_symmetric::sponge::PaddingFreeSponge;
 use rand::thread_rng;
 
-struct MyConfig;
-
-type F = Goldilocks;
+type Val = Goldilocks;
+type Domain = Goldilocks;
+type Challenge = Goldilocks; // TODO
 struct MyMds;
-impl CryptographicPermutation<[F; 8]> for MyMds {
-    fn permute(&self, input: [F; 8]) -> [F; 8] {
+impl CryptographicPermutation<[Val; 8]> for MyMds {
+    fn permute(&self, input: [Val; 8]) -> [Val; 8] {
         input // TODO
     }
 }
-impl ArrayPermutation<F, 8> for MyMds {}
-impl MDSPermutation<F, 8> for MyMds {}
+impl ArrayPermutation<Val, 8> for MyMds {}
+impl MDSPermutation<Val, 8> for MyMds {}
 
 type MDS = MyMds;
-type Perm = Poseidon<F, MDS, 8, 7>;
-type H4 = PaddingFreeSponge<F, Perm, { 4 + 4 }>;
-type C = TruncatedPermutation<F, Perm, 2, 4, { 2 * 4 }>;
-type MMCS = MerkleTreeMMCS<F, [F; 4], H4, C>;
-impl StarkConfig for MyConfig {
-    type F = F;
-    type Domain = F;
-    type Challenge = F; // TODO: Use an extension.
-    type PCS = FRIBasedPCS<Self::F, Self::Domain, Self::Challenge, Self::LDE, MMCS, MMCS>;
-    type LDE = NaiveCosetLDE;
-}
+type Perm = Poseidon<Val, MDS, 8, 7>;
+type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;
+type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
+type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
+type LDE = NaiveCosetLDE;
+type PCS = FRIBasedPCS<Val, Domain, Challenge, LDE, MMCS, MMCS>;
+type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PCS, LDE>;
 
 struct MulAir;
 
@@ -53,5 +49,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 fn test_prove() {
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
-    prove::<MyConfig, MulAir>(&MulAir, trace);
+    let pcs = PCS::new(NaiveCosetLDE);
+    let config = StarkConfigImpl::new(pcs, NaiveCosetLDE);
+    prove::<MyConfig, MulAir>(&MulAir, config, trace);
 }
