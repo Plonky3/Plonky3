@@ -8,4 +8,5 @@ license = "MIT OR Apache-2.0"
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-field = { path = "../field" }
+p3-lde = { path = "../lde" }
 p3-matrix = { path = "../matrix" }

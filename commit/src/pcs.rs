@@ -1,7 +1,7 @@
 //! Traits for polynomial commitment schemes.
 
 use alloc::vec;
-use p3_field::{AbstractFieldExtension, Field};
+use p3_field::{AbstractExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 use alloc::vec::Vec;
@@ -41,7 +41,7 @@ pub trait UnivariatePCS<F: Field>: PCS<F> {
         challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        EF: AbstractFieldExtension<F>,
+        EF: AbstractExtensionField<F>,
         Chal: Challenger<F>;
 
     fn verify_multi_batches<EF, Chal>(
@@ -51,7 +51,7 @@ pub trait UnivariatePCS<F: Field>: PCS<F> {
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        EF: AbstractFieldExtension<F>,
+        EF: AbstractExtensionField<F>,
         Chal: Challenger<F>;
 }
 
@@ -62,7 +62,7 @@ pub trait MultivariatePCS<F: Field>: PCS<F> {
         challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        EF: AbstractFieldExtension<F>,
+        EF: AbstractExtensionField<F>,
         Chal: Challenger<F>;
 
     fn verify_multi_batches<EF, Chal>(
@@ -72,6 +72,6 @@ pub trait MultivariatePCS<F: Field>: PCS<F> {
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        EF: AbstractFieldExtension<F>,
+        EF: AbstractExtensionField<F>,
         Chal: Challenger<F>;
 }

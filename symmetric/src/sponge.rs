@@ -12,7 +12,6 @@ where
     P: ArrayPermutation<T, WIDTH>,
 {
     _phantom_f: PhantomData<T>,
-    // _phantom_p: PhantomData<P>,
     permutation: P,
 }
 

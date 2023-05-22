@@ -152,7 +152,7 @@ impl<F: PrimeField32> PrimeField64 for F {
     }
 }
 
-pub trait AbstractFieldExtension<Base: AbstractField>:
+pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
     + Add<Base, Output = Self>
     + AddAssign<Base>
@@ -170,11 +170,11 @@ pub trait AbstractFieldExtension<Base: AbstractField>:
     fn as_base_slice(&self) -> &[Base];
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractFieldExtension<Base> {}
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {}
 
-impl<Base: Field, Ext: Field + AbstractFieldExtension<Base>> ExtensionField<Base> for Ext {}
+impl<Base: Field, Ext: Field + AbstractExtensionField<Base>> ExtensionField<Base> for Ext {}
 
-impl<F: Field> AbstractFieldExtension<F> for F {
+impl<F: Field> AbstractExtensionField<F> for F {
     const D: usize = 1;
 
     fn from_base(b: F) -> Self {

@@ -9,7 +9,8 @@ use core::marker::PhantomData;
 use p3_challenger::Challenger;
 use p3_commit::MMCS;
 use p3_commit::PCS;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// A batch low-degree test (LDT).
@@ -31,22 +32,21 @@ pub trait LDT<F: Field, M: MMCS<F>> {
         Chal: Challenger<F>;
 }
 
-pub struct LDTBasedPCS<F, M, L>
-where
-    F: Field,
-    M: MMCS<F>,
-    L: LDT<F, M>,
-{
-    _phantom_f: PhantomData<F>,
+pub struct LDTBasedPCS<Val, Dom, LDE, M, L> {
+    _phantom_val: PhantomData<Val>,
+    _phantom_dom: PhantomData<Dom>,
+    _phantom_lde: PhantomData<LDE>,
     _phantom_m: PhantomData<M>,
     _phantom_l: PhantomData<L>,
 }
 
-impl<F, M, L> PCS<F> for LDTBasedPCS<F, M, L>
+impl<Val, Dom, LDE, M, L> PCS<Val> for LDTBasedPCS<Val, Dom, LDE, M, L>
 where
-    F: Field,
-    M: MMCS<F>,
-    L: LDT<F, M>,
+    Val: Field,
+    Dom: ExtensionField<Val> + TwoAdicField,
+    LDE: TwoAdicLDE<Val, Dom>,
+    M: MMCS<Dom>,
+    L: LDT<Dom, M>,
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
@@ -54,13 +54,13 @@ where
     type Error = L::Error;
 
     fn commit_batches(
-        _polynomials: Vec<RowMajorMatrix<F>>,
+        _polynomials: Vec<RowMajorMatrix<Val>>,
     ) -> (Self::Commitment, Self::ProverData) {
         // (Streaming?) LDE + Merklize
         todo!()
     }
 
-    fn get_committed_value(_prover_data: &Self::ProverData, _poly: usize, _value: usize) -> F {
+    fn get_committed_value(_prover_data: &Self::ProverData, _poly: usize, _value: usize) -> Val {
         todo!()
     }
 }

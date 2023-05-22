@@ -1,11 +1,11 @@
 use p3_air::{Air, AirBuilder};
 use p3_baby_stark::{prove, StarkConfig};
 use p3_fri::FRIBasedPCS;
-use p3_lde::NaiveLDE;
+use p3_goldilocks::Goldilocks;
+use p3_lde::NaiveCosetLDE;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMMCS;
-use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
@@ -14,7 +14,7 @@ use rand::thread_rng;
 
 struct MyConfig;
 
-type F = Mersenne31;
+type F = Goldilocks;
 struct MyMds;
 impl CryptographicPermutation<[F; 8]> for MyMds {
     fn permute(&self, input: [F; 8]) -> [F; 8] {
@@ -31,10 +31,10 @@ type C = TruncatedPermutation<F, Perm, 2, 4, { 2 * 4 }>;
 type MMCS = MerkleTreeMMCS<F, [F; 4], H4, C>;
 impl StarkConfig for MyConfig {
     type F = F;
-    type Domain = Mersenne31Complex<F>;
-    type Challenge = Self::F; // TODO: Use an extension.
-    type PCS = FRIBasedPCS<Self::F, Self::Challenge, MMCS, MMCS>;
-    type LDE = NaiveLDE;
+    type Domain = F;
+    type Challenge = F; // TODO: Use an extension.
+    type PCS = FRIBasedPCS<Self::F, Self::Domain, Self::Challenge, Self::LDE, MMCS, MMCS>;
+    type LDE = NaiveCosetLDE;
 }
 
 struct MulAir;

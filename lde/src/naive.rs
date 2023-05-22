@@ -1,40 +1,92 @@
-use crate::TwoAdicSubgroupLDE;
+use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE};
 use alloc::vec::Vec;
-use p3_field::{batch_multiplicative_inverse, cyclic_subgroup_known_order};
+use p3_field::{
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
+};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-/// A naive quadratic-time implementation of `TwoAdicLDE`, intended for testing.
-pub struct NaiveLDE;
+/// A naive quadratic-time implementation of `TwoAdicSubgroupLDE`, intended for testing.
+pub struct NaiveSubgroupLDE;
 
-impl<F, EF> TwoAdicSubgroupLDE<F, EF> for NaiveLDE
+/// A naive quadratic-time implementation of `TwoAdicCosetLDE`, intended for testing.
+pub struct NaiveCosetLDE;
+
+impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveSubgroupLDE
 where
-    F: Field,
-    EF: ExtensionField<F> + TwoAdicField,
+    Val: Field,
+    Dom: ExtensionField<Val> + TwoAdicField,
 {
-    type Res = EF;
+    type Res = Dom;
 
-    fn subgroup_lde_batch(
+    fn lde_batch(
         &self,
-        polys: RowMajorMatrix<F>,
+        polys: RowMajorMatrix<Val>,
         added_bits: usize,
     ) -> RowMajorMatrix<Self::Res> {
         let bits = log2_strict_usize(polys.height());
-        let g = EF::primitive_root_of_unity(bits);
-        let subgroup = cyclic_subgroup_known_order::<EF>(g, 1 << bits).collect::<Vec<_>>();
+        let g = Dom::primitive_root_of_unity(bits);
+        let subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
-        let lde_subgroup = cyclic_subgroup_known_order::<EF>(g, 1 << lde_bits);
+        let lde_subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << lde_bits);
 
-        let polys_fe = polys.map(|x| EF::from_base(x));
+        let polys_fe = polys.map(|x| Dom::from_base(x));
         let values = lde_subgroup
             .map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
             .flatten()
             .collect();
         RowMajorMatrix::new(values, polys.width())
+    }
+}
+
+impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveCosetLDE
+where
+    Val: Field,
+    Dom: ExtensionField<Val> + TwoAdicField,
+{
+    type Res = Dom;
+
+    fn lde_batch(
+        &self,
+        polys: RowMajorMatrix<Val>,
+        added_bits: usize,
+    ) -> RowMajorMatrix<Self::Res> {
+        let bits = log2_strict_usize(polys.height());
+        let g = Dom::primitive_root_of_unity(bits);
+        let subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << bits).collect::<Vec<_>>();
+        let weights = barycentric_weights(&subgroup);
+
+        let lde_bits = bits + added_bits;
+        let lde_subgroup =
+            cyclic_subgroup_coset_known_order(g, self.shift(lde_bits), 1 << lde_bits);
+
+        let polys_fe = polys.map(|x| Dom::from_base(x));
+        let values = lde_subgroup
+            .map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
+            .flatten()
+            .collect();
+        RowMajorMatrix::new(values, polys.width())
+    }
+}
+
+impl<Val, Dom> TwoAdicSubgroupLDE<Val, Dom> for NaiveSubgroupLDE
+where
+    Val: Field,
+    Dom: ExtensionField<Val> + TwoAdicField,
+{
+}
+
+impl<Val, Dom> TwoAdicCosetLDE<Val, Dom> for NaiveCosetLDE
+where
+    Val: Field,
+    Dom: ExtensionField<Val> + TwoAdicField,
+{
+    fn shift(&self, _lde_bits: usize) -> Dom {
+        Dom::multiplicative_group_generator()
     }
 }
 

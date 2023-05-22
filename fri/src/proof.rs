@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{AbstractFieldExtension, Field};
+use p3_field::{AbstractExtensionField, Field};
 
 pub struct FriProof<F, EF, M, MC>
 where
     F: Field,
-    EF: AbstractFieldExtension<F>,
+    EF: AbstractExtensionField<F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
@@ -15,7 +15,7 @@ where
 pub struct QueryProof<F, EF, M, MC>
 where
     F: Field,
-    EF: AbstractFieldExtension<F>,
+    EF: AbstractExtensionField<F>,
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
@@ -28,7 +28,7 @@ where
 pub struct QueryStepProof<F, EF, MC>
 where
     F: Field,
-    EF: AbstractFieldExtension<F>,
+    EF: AbstractExtensionField<F>,
     MC: DirectMMCS<F>,
 {
     /// An opened row of each matrix that was part of this batch-FRI proof.

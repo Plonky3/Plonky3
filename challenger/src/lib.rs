@@ -11,7 +11,7 @@ pub use duplex_challenger::*;
 pub use hash_challenger::*;
 
 use alloc::vec::Vec;
-use p3_field::{AbstractFieldExtension, Field};
+use p3_field::{AbstractExtensionField, Field};
 
 /// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.
 pub trait Challenger<F: Field> {
@@ -23,13 +23,13 @@ pub trait Challenger<F: Field> {
         }
     }
 
-    fn observe_ext_element<EF: AbstractFieldExtension<F>>(&mut self, ext: EF) {
+    fn observe_ext_element<EF: AbstractExtensionField<F>>(&mut self, ext: EF) {
         self.observe_elements(ext.as_base_slice());
     }
 
     fn random_element(&mut self) -> F;
 
-    fn random_ext_element<EF: AbstractFieldExtension<F>>(&mut self) {
+    fn random_ext_element<EF: AbstractExtensionField<F>>(&mut self) {
         let vec = self.random_vec(EF::D);
         EF::from_base_slice(&vec);
     }
