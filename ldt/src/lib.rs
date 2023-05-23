@@ -7,9 +7,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_commit::PCS;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_commit::{UnivariatePCS, PCS};
+use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -76,8 +76,7 @@ where
             .into_iter()
             .map(|poly| self.lde.lde_batch(poly, self.added_bits))
             .collect();
-        let (ldes_data, ldes_commit) = self.mmcs.commit(ldes);
-        todo!()
+        self.mmcs.commit(ldes)
     }
 
     fn get_committed_value(
@@ -86,6 +85,42 @@ where
         _poly: usize,
         _value: usize,
     ) -> Val {
+        todo!()
+    }
+}
+
+impl<Val, Dom, LDE, M, L> UnivariatePCS<Val> for LDTBasedPCS<Val, Dom, LDE, M, L>
+where
+    Val: Field,
+    Dom: ExtensionField<Val> + TwoAdicField,
+    LDE: TwoAdicLDE<Val, Dom>,
+    M: DirectMMCS<Dom, Mat = RowMajorMatrix<LDE::Res>>,
+    L: LDT<Dom, M>,
+{
+    fn open_multi_batches<EF, Chal>(
+        &self,
+        prover_data: &[Self::ProverData],
+        points: &[EF],
+        challenger: &mut Chal,
+    ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
+    where
+        EF: AbstractExtensionField<Val>,
+        Chal: Challenger<Val>,
+    {
+        todo!()
+    }
+
+    fn verify_multi_batches<EF, Chal>(
+        &self,
+        commits: &[Self::Commitment],
+        points: &[EF],
+        values: &[Vec<Vec<EF>>],
+        proof: &Self::Proof,
+    ) -> Result<(), Self::Error>
+    where
+        EF: AbstractExtensionField<Val>,
+        Chal: Challenger<Val>,
+    {
         todo!()
     }
 }

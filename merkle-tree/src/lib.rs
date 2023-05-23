@@ -183,9 +183,9 @@ where
     H: IterHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
-    fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::ProverData, Self::Commitment) {
+    fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::Commitment, Self::ProverData) {
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);
         let root = tree.root();
-        (tree, root)
+        (root, tree)
     }
 }

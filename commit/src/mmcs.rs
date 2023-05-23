@@ -42,7 +42,7 @@ pub struct Dimensions {
 
 /// An MMCS over explicit inputs which are supplied upfront.
 pub trait DirectMMCS<T>: MMCS<T> {
-    fn commit(&self, inputs: Vec<Self::Mat>) -> (Self::ProverData, Self::Commitment);
+    fn commit(&self, inputs: Vec<Self::Mat>) -> (Self::Commitment, Self::ProverData);
 }
 
 // TODO: Streaming MMCS? Where `ProverData` can be initialized and then incrementally updated,
