@@ -13,12 +13,20 @@ pub trait PseudoCompressionFunction<T, const N: usize> {
 /// An `n`-to-1 compression function.
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
-pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
-where
-    InnerP: CryptographicPermutation<[T; PROD]>,
-{
-    _phantom_t: PhantomData<T>,
+pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize> {
     inner_permutation: InnerP,
+    _phantom_t: PhantomData<T>,
+}
+
+impl<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
+    TruncatedPermutation<T, InnerP, N, CHUNK, PROD>
+{
+    pub fn new(inner_permutation: InnerP) -> Self {
+        Self {
+            inner_permutation,
+            _phantom_t: PhantomData,
+        }
+    }
 }
 
 impl<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>

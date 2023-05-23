@@ -29,6 +29,8 @@ fn test_prove_goldilocks() {
     type Val = Goldilocks;
     type Domain = Goldilocks;
     type Challenge = Goldilocks; // TODO
+
+    #[derive(Clone)]
     struct MyMds;
     impl CryptographicPermutation<[Val; 8]> for MyMds {
         fn permute(&self, input: [Val; 8]) -> [Val; 8] {
@@ -39,9 +41,17 @@ fn test_prove_goldilocks() {
     impl MDSPermutation<Val, 8> for MyMds {}
 
     type MDS = MyMds;
+    let mds = MyMds;
+
     type Perm = Poseidon<Val, MDS, 8, 7>;
+    let perm = Perm::new(5, 5, vec![], mds);
+
     type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;
+    let h4 = H4::new(perm.clone());
+
     type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
+    let c = C::new(perm);
+
     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
     type LDE = NaiveCosetLDE;
     type PCS = FRIBasedPCS<Val, Domain, Challenge, LDE, MMCS, MMCS>;
@@ -49,7 +59,7 @@ fn test_prove_goldilocks() {
 
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
-    let pcs = PCS::new(NaiveCosetLDE);
+    let pcs = PCS::new(NaiveCosetLDE, 1, MMCS::new(h4, c));
     let config = StarkConfigImpl::new(pcs, NaiveCosetLDE);
     prove::<MyConfig, MulAir>(&MulAir, config, trace);
 }

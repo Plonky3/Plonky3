@@ -13,6 +13,7 @@ use rand::prelude::Distribution;
 use rand::Rng;
 
 /// The Poseidon permutation.
+#[derive(Clone)]
 pub struct Poseidon<F, MDS, const WIDTH: usize, const ALPHA: u64>
 where
     F: Field,

@@ -7,17 +7,24 @@ use itertools::Itertools;
 /// A padding-free, overwrite-mode sponge function.
 ///
 /// WIDTH is the sponge's rate + sponge's capacity
-pub struct PaddingFreeSponge<T, P, const WIDTH: usize>
-where
-    P: ArrayPermutation<T, WIDTH>,
-{
-    _phantom_f: PhantomData<T>,
+pub struct PaddingFreeSponge<T, P, const WIDTH: usize> {
     permutation: P,
+    _phantom_f: PhantomData<T>,
 }
 
-impl<T: Default + Copy, P, const RATE: usize, const WIDTH: usize>
-    CryptographicHasher<Vec<T>, [T; RATE]> for PaddingFreeSponge<T, P, WIDTH>
+impl<T, P, const WIDTH: usize> PaddingFreeSponge<T, P, WIDTH> {
+    pub fn new(permutation: P) -> Self {
+        Self {
+            permutation,
+            _phantom_f: PhantomData,
+        }
+    }
+}
+
+impl<T, P, const RATE: usize, const WIDTH: usize> CryptographicHasher<Vec<T>, [T; RATE]>
+    for PaddingFreeSponge<T, P, WIDTH>
 where
+    T: Default + Copy,
     P: ArrayPermutation<T, WIDTH>,
 {
     fn hash(&self, input: &Vec<T>) -> [T; RATE] {
@@ -31,9 +38,10 @@ where
     }
 }
 
-impl<T: Default + Copy, P, const RATE: usize, const WIDTH: usize> IterHasher<T, [T; RATE]>
+impl<T, P, const RATE: usize, const WIDTH: usize> IterHasher<T, [T; RATE]>
     for PaddingFreeSponge<T, P, WIDTH>
 where
+    T: Default + Copy,
     P: ArrayPermutation<T, WIDTH>,
 {
     fn hash_iter<I>(&self, input: I) -> [T; RATE]

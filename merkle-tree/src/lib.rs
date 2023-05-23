@@ -121,15 +121,22 @@ impl<L, D> MerkleTree<L, D> {
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeMMCS<L, D, H, C>
-where
-    H: IterHasher<L, D>,
-    C: PseudoCompressionFunction<D, 2>,
-{
-    _phantom_l: PhantomData<L>,
-    _phantom_d: PhantomData<D>,
+pub struct MerkleTreeMMCS<L, D, H, C> {
     hash: H,
     compress: C,
+    _phantom_l: PhantomData<L>,
+    _phantom_d: PhantomData<D>,
+}
+
+impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
+    pub fn new(hash: H, compress: C) -> Self {
+        Self {
+            hash,
+            compress,
+            _phantom_l: Default::default(),
+            _phantom_d: Default::default(),
+        }
+    }
 }
 
 impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>

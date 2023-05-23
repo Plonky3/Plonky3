@@ -7,8 +7,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_commit::MMCS;
 use p3_commit::PCS;
+use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
@@ -34,19 +34,21 @@ pub trait LDT<F: Field, M: MMCS<F>> {
 
 pub struct LDTBasedPCS<Val, Dom, LDE, M, L> {
     lde: LDE,
+    added_bits: usize,
+    mmcs: M,
     _phantom_val: PhantomData<Val>,
     _phantom_dom: PhantomData<Dom>,
-    _phantom_m: PhantomData<M>,
     _phantom_l: PhantomData<L>,
 }
 
 impl<Val, Dom, LDE, M, L> LDTBasedPCS<Val, Dom, LDE, M, L> {
-    pub fn new(lde: LDE) -> Self {
+    pub fn new(lde: LDE, added_bits: usize, mmcs: M) -> Self {
         Self {
             lde,
+            added_bits,
+            mmcs,
             _phantom_val: PhantomData,
             _phantom_dom: PhantomData,
-            _phantom_m: PhantomData,
             _phantom_l: PhantomData,
         }
     }
@@ -57,7 +59,7 @@ where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     LDE: TwoAdicLDE<Val, Dom>,
-    M: MMCS<Dom>,
+    M: DirectMMCS<Dom, Mat = RowMajorMatrix<LDE::Res>>,
     L: LDT<Dom, M>,
 {
     type Commitment = M::Commitment;
@@ -67,9 +69,14 @@ where
 
     fn commit_batches(
         &self,
-        _polynomials: Vec<RowMajorMatrix<Val>>,
+        polynomials: Vec<RowMajorMatrix<Val>>,
     ) -> (Self::Commitment, Self::ProverData) {
-        // (Streaming?) LDE + Merklize
+        // TODO: Streaming?
+        let ldes = polynomials
+            .into_iter()
+            .map(|poly| self.lde.lde_batch(poly, self.added_bits))
+            .collect();
+        let (ldes_data, ldes_commit) = self.mmcs.commit(ldes);
         todo!()
     }
 
