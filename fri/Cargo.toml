@@ -10,4 +10,5 @@ p3-commit = { path = "../commit" }
 p3-field = { path = "../field" }
 p3-ldt = { path = "../ldt" }
 p3-matrix = { path = "../matrix" }
+p3-maybe-rayon = { path = "../maybe-rayon" }
 itertools = "0.10.5"

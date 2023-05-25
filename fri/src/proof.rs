@@ -10,7 +10,7 @@ where
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
-    queries: Vec<QueryProof<F, EF, M, MC>>,
+    query_proofs: Vec<QueryProof<F, EF, M, MC>>,
 }
 
 #[allow(dead_code)] // TODO: fields should be used soon

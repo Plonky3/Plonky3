@@ -104,7 +104,7 @@ pub fn prove<SC, A, Chal>(
                 .collect();
 
             let accumulator = SC::PackedChallenge::ZEROS;
-            let mut builder = ConstraintFolder::<SC::Domain, SC::Challenge, SC::PackedChallenge> {
+            let mut builder = ConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
@@ -118,13 +118,7 @@ pub fn prove<SC, A, Chal>(
             };
             air.eval(&mut builder);
 
-            // let mut constraints_evals = consumer.accumulators();
-            // // We divide the constraints evaluations by `Z_H(x)`.
-            // let denominator_inv: P = z_h_on_coset.eval_inverse_packed(i_start);
-            //
-            // for eval in &mut constraints_evals {
-            //     *eval *= denominator_inv;
-            // }
+            // TODO: divide the constraints evaluations by `Z_H(x)`.
 
             builder.accumulator.as_slice().to_vec()
         })

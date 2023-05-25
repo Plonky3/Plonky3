@@ -13,10 +13,12 @@ use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{ExtensionField, Field};
 use p3_ldt::{LDTBasedPCS, LDT};
 
+mod config;
 mod proof;
 mod prover;
 mod verifier;
 
+pub use config::*;
 pub use proof::*;
 
 pub struct FriLDT<F, Challenge, M, MC>
@@ -26,6 +28,7 @@ where
     M: MMCS<F>,
     MC: DirectMMCS<F>,
 {
+    config: FriConfig,
     _phantom_f: PhantomData<F>,
     _phantom_fe: PhantomData<Challenge>,
     _phantom_m: PhantomData<M>,
@@ -42,14 +45,15 @@ where
     type Proof = FriProof<F, Challenge, M, MC>;
     type Error = ();
 
-    fn prove<Chal>(codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
+    fn prove<Chal>(&self, codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
     where
         Chal: Challenger<F>,
     {
-        prove::<F, Challenge, M, MC, Chal>(codewords, challenger)
+        prove::<F, Challenge, M, MC, Chal>(codewords, &self.config, challenger)
     }
 
     fn verify<Chal>(
+        &self,
         _codeword_commits: &[M::Commitment],
         proof: &Self::Proof,
         challenger: &mut Chal,
