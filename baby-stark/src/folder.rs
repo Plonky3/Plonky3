@@ -1,9 +1,8 @@
 use core::marker::PhantomData;
-use core::ops::{Add, Mul, Sub};
 use p3_air::{AirBuilder, TwoRowMatrixView};
-use p3_field::{AbstractExtensionField, AbstractionOf, ExtensionField, Field};
+use p3_field::{ExtensionField, Field};
 
-pub struct BasicFoldingAirBuilder<'a, F, Challenge>
+pub struct ConstraintFolder<'a, F, Challenge>
 where
     F: Field,
 {
@@ -16,7 +15,7 @@ where
     pub(crate) _phantom_f: PhantomData<F>,
 }
 
-impl<'a, F, Challenge> AirBuilder for BasicFoldingAirBuilder<'a, F, Challenge>
+impl<'a, F, Challenge> AirBuilder for ConstraintFolder<'a, F, Challenge>
 where
     F: Field,
     Challenge: ExtensionField<F>,

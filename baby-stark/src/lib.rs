@@ -4,12 +4,12 @@
 
 extern crate alloc;
 
-mod builder;
 mod config;
+mod folder;
 mod prover;
 mod sym_var;
 
-pub use builder::*;
+pub use folder::*;
 pub use config::*;
 pub use prover::*;
 pub use sym_var::*;

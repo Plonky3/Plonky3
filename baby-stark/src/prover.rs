@@ -1,4 +1,4 @@
-use crate::{BasicFoldingAirBuilder, BasicSymVar, StarkConfig};
+use crate::{ConstraintFolder, BasicSymVar, StarkConfig};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_air::{Air, TwoRowMatrixView};
@@ -21,7 +21,7 @@ pub fn prove<SC, A, Chal>(
     trace: RowMajorMatrix<SC::Val>,
 ) where
     SC: StarkConfig,
-    A: for<'a> Air<BasicFoldingAirBuilder<'a, SC::Domain, SC::Challenge>>,
+    A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge>>,
     Chal: Challenger<SC::Domain>,
 {
     let degree = trace.height();
@@ -105,7 +105,7 @@ pub fn prove<SC, A, Chal>(
                 .collect();
 
             let accumulator: SC::Challenge = SC::Challenge::ZERO;
-            let mut builder = BasicFoldingAirBuilder::<SC::Domain, SC::Challenge> {
+            let mut builder = ConstraintFolder::<SC::Domain, SC::Challenge> {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
