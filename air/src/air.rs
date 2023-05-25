@@ -14,36 +14,36 @@ pub trait Pair<AB: AirBuilder>: Air<AB> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type Exp: AbstractionOf<Self::F>
-        + Add<Self::Var, Output = Self::Exp>
-        + Sub<Self::Var, Output = Self::Exp>
-        + Mul<Self::Var, Output = Self::Exp>;
+    type Expr: AbstractionOf<Self::F>
+        + Add<Self::Var, Output = Self::Expr>
+        + Sub<Self::Var, Output = Self::Expr>
+        + Mul<Self::Var, Output = Self::Expr>;
 
-    type Var: Into<Self::Exp>
+    type Var: Into<Self::Expr>
         + Copy
-        + Add<Self::F, Output = Self::Exp>
-        + Add<Self::Var, Output = Self::Exp>
-        + Add<Self::Exp, Output = Self::Exp>
-        + Sub<Self::F, Output = Self::Exp>
-        + Sub<Self::Var, Output = Self::Exp>
-        + Sub<Self::Exp, Output = Self::Exp>
-        + Mul<Self::F, Output = Self::Exp>
-        + Mul<Self::Var, Output = Self::Exp>
-        + Mul<Self::Exp, Output = Self::Exp>;
+        + Add<Self::F, Output = Self::Expr>
+        + Add<Self::Var, Output = Self::Expr>
+        + Add<Self::Expr, Output = Self::Expr>
+        + Sub<Self::F, Output = Self::Expr>
+        + Sub<Self::Var, Output = Self::Expr>
+        + Sub<Self::Expr, Output = Self::Expr>
+        + Mul<Self::F, Output = Self::Expr>
+        + Mul<Self::Var, Output = Self::Expr>
+        + Mul<Self::Expr, Output = Self::Expr>;
 
     type M: Matrix<Self::Var>;
 
     fn main(&self) -> Self::M;
 
-    fn is_first_row(&self) -> Self::Exp;
-    fn is_last_row(&self) -> Self::Exp;
-    fn is_transition(&self) -> Self::Exp {
+    fn is_first_row(&self) -> Self::Expr;
+    fn is_last_row(&self) -> Self::Expr;
+    fn is_transition(&self) -> Self::Expr {
         self.is_transition_window(2)
     }
-    fn is_transition_window(&self, size: usize) -> Self::Exp;
+    fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
-    fn when<I: Into<Self::Exp>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
+    fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
         FilteredAirBuilder {
             inner: self,
             condition: condition.into(),
@@ -51,7 +51,7 @@ pub trait AirBuilder: Sized {
     }
 
     /// Returns a sub-builder whose constraints are enforced only when `x != y`.
-    fn when_ne<I1: Into<Self::Exp>, I2: Into<Self::Exp>>(
+    fn when_ne<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(
         &mut self,
         x: I1,
         y: I2,
@@ -79,20 +79,20 @@ pub trait AirBuilder: Sized {
         self.when(self.is_transition_window(size))
     }
 
-    fn assert_zero<I: Into<Self::Exp>>(&mut self, x: I);
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
-    fn assert_one<I: Into<Self::Exp>>(&mut self, x: I) {
-        self.assert_zero(x.into() - Self::Exp::ONE);
+    fn assert_one<I: Into<Self::Expr>>(&mut self, x: I) {
+        self.assert_zero(x.into() - Self::Expr::ONE);
     }
 
-    fn assert_eq<I1: Into<Self::Exp>, I2: Into<Self::Exp>>(&mut self, x: I1, y: I2) {
+    fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
     }
 
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
-    fn assert_bool<I: Into<Self::Exp>>(&mut self, x: I) {
+    fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::Exp::ONE));
+        self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
 }
 
@@ -103,17 +103,17 @@ pub trait PairBuilder: AirBuilder {
 pub trait PermutationAirBuilder: AirBuilder {
     fn permutation(&self) -> Self::M;
 
-    fn permutation_randomness(&self) -> &[Self::Exp];
+    fn permutation_randomness(&self) -> &[Self::Expr];
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     inner: &'a mut AB,
-    condition: AB::Exp,
+    condition: AB::Expr,
 }
 
 impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     type F = AB::F;
-    type Exp = AB::Exp;
+    type Expr = AB::Expr;
     type Var = AB::Var;
     type M = AB::M;
 
@@ -121,19 +121,19 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
         self.inner.main()
     }
 
-    fn is_first_row(&self) -> Self::Exp {
+    fn is_first_row(&self) -> Self::Expr {
         self.inner.is_first_row()
     }
 
-    fn is_last_row(&self) -> Self::Exp {
+    fn is_last_row(&self) -> Self::Expr {
         self.inner.is_last_row()
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Exp {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
         self.inner.is_transition_window(size)
     }
 
-    fn assert_zero<I: Into<Self::Exp>>(&mut self, x: I) {
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition.clone() * x.into())
     }
 }

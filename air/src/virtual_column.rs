@@ -40,11 +40,11 @@ impl<F: Field> VirtualPairCol<F> {
         Self::single(PairCol::Main(column))
     }
 
-    pub fn apply<Exp, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Exp
+    pub fn apply<Expr, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Expr
     where
-        F: Into<Exp>,
-        Exp: AbstractField + Mul<F, Output = Exp>,
-        Var: Into<Exp> + Copy,
+        F: Into<Expr>,
+        Expr: AbstractField + Mul<F, Output = Expr>,
+        Var: Into<Expr> + Copy,
     {
         let mut result = self.constant.into();
         for (column, weight) in self.column_weights.iter() {
