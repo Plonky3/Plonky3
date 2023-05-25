@@ -29,9 +29,9 @@ pub trait Challenger<F: Field> {
 
     fn random_element(&mut self) -> F;
 
-    fn random_ext_element<EF: AbstractExtensionField<F>>(&mut self) {
+    fn random_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
         let vec = self.random_vec(EF::D);
-        EF::from_base_slice(&vec);
+        EF::from_base_slice(&vec)
     }
 
     fn random_array<const N: usize>(&mut self) -> [F; N] {

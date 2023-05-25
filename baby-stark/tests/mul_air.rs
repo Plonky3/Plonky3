@@ -1,5 +1,6 @@
 use p3_air::{Air, AirBuilder};
 use p3_baby_stark::{prove, StarkConfigImpl};
+use p3_challenger::DuplexChallenger;
 use p3_fri::FRIBasedPCS;
 use p3_goldilocks::Goldilocks;
 use p3_lde::NaiveCosetLDE;
@@ -50,7 +51,7 @@ fn test_prove_goldilocks() {
     let h4 = H4::new(perm.clone());
 
     type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
-    let c = C::new(perm);
+    let c = C::new(perm.clone());
 
     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
     type LDE = NaiveCosetLDE;
@@ -61,7 +62,8 @@ fn test_prove_goldilocks() {
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
     let pcs = PCS::new(NaiveCosetLDE, 1, MMCS::new(h4, c));
     let config = StarkConfigImpl::new(pcs, NaiveCosetLDE);
-    prove::<MyConfig, MulAir>(&MulAir, config, trace);
+    let mut challenger = DuplexChallenger::new(perm);
+    prove::<MyConfig, _, _>(&MulAir, config, &mut challenger, trace);
 }
 
 #[test]

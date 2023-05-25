@@ -1,12 +1,12 @@
 use core::marker::PhantomData;
 use p3_commit::PCS;
-use p3_field::{AbstractExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_lde::TwoAdicCosetLDE;
 
 pub trait StarkConfig {
     type Val: Field;
-    type Domain: AbstractExtensionField<Self::Val> + TwoAdicField;
-    type Challenge: AbstractExtensionField<Self::Val>;
+    type Domain: ExtensionField<Self::Val> + TwoAdicField;
+    type Challenge: ExtensionField<Self::Domain>;
     type PCS: PCS<Self::Val>;
     type LDE: TwoAdicCosetLDE<Self::Val, Self::Domain>;
 
@@ -38,8 +38,8 @@ impl<Val, Domain, Challenge, PCS, LDE> StarkConfig
     for StarkConfigImpl<Val, Domain, Challenge, PCS, LDE>
 where
     Val: Field,
-    Domain: AbstractExtensionField<Val> + TwoAdicField,
-    Challenge: AbstractExtensionField<Val>,
+    Domain: ExtensionField<Val> + TwoAdicField,
+    Challenge: ExtensionField<Domain>,
     PCS: p3_commit::PCS<Val>,
     LDE: TwoAdicCosetLDE<Val, Domain>,
 {

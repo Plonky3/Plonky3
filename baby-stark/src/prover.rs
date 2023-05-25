@@ -1,6 +1,8 @@
 use crate::{BasicFoldingAirBuilder, BasicSymVar, StarkConfig};
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 use p3_air::{Air, TwoRowMatrixView};
+use p3_challenger::Challenger;
 use p3_commit::PCS;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, SymbolicField,
@@ -12,25 +14,15 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-pub fn prove<SC, A>(air: &A, config: SC, trace: RowMajorMatrix<SC::Val>)
-where
+pub fn prove<SC, A, Chal>(
+    air: &A,
+    config: SC,
+    challenger: &mut Chal,
+    trace: RowMajorMatrix<SC::Val>,
+) where
     SC: StarkConfig,
-    A: for<'a> Air<
-        BasicFoldingAirBuilder<
-            'a,
-            SC::Domain,
-            <SC::Domain as Field>::Packing,
-            <SC::Domain as Field>::Packing,
-        >,
-    >,
-    A: for<'a> Air<
-        BasicFoldingAirBuilder<
-            'a,
-            SC::Domain,
-            SymbolicField<SC::Domain, BasicSymVar<SC::Domain>>,
-            BasicSymVar<SC::Domain>,
-        >,
-    >,
+    A: for<'a> Air<BasicFoldingAirBuilder<'a, SC::Domain, SC::Challenge>>,
+    Chal: Challenger<SC::Domain>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
@@ -77,6 +69,9 @@ where
 
     let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
 
+    // challenger.observe_ext_element(trace_commit); // TODO
+    let alpha = challenger.random_ext_element::<SC::Challenge>();
+
     let quotient_values = (0..quotient_size)
         .into_par_iter()
         .step_by(<SC::Val as Field>::Packing::WIDTH)
@@ -109,7 +104,8 @@ where
                 })
                 .collect();
 
-            let mut builder = BasicFoldingAirBuilder {
+            let accumulator: SC::Challenge = SC::Challenge::ZERO;
+            let mut builder = BasicFoldingAirBuilder::<SC::Domain, SC::Challenge> {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
@@ -117,7 +113,9 @@ where
                 is_first_row,
                 is_last_row,
                 is_transition,
-                _phantom_f: Default::default(),
+                alpha,
+                accumulator,
+                _phantom_f: PhantomData,
             };
             air.eval(&mut builder);
 
@@ -129,13 +127,13 @@ where
             //     *eval *= denominator_inv;
             // }
 
-            (0..<SC::Val as Field>::Packing::WIDTH).map(move |i| {
-                let x: SC::Val = todo!();
+            (0..<SC::Domain as Field>::Packing::WIDTH).map(move |i| {
+                let x: SC::Domain = todo!();
                 x
                 // (0..num_challenges)
                 //     .map(|j| constraints_evals[j].as_slice()[i])
                 //     .collect()
             })
         })
-        .collect::<Vec<SC::Val>>();
+        .collect::<Vec<SC::Domain>>();
 }
