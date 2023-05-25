@@ -133,7 +133,7 @@ impl PrimeField for Goldilocks {
     fn from_wrapped_u64(n: u64) -> Self {
         // There's no need to reduce `n` to canonical form, as our internal encoding is
         // non-canonical, so there's no need for a reduction.
-        Self::new(n as u64)
+        Self::new(n)
     }
 }
 

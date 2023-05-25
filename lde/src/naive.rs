@@ -36,8 +36,7 @@ where
 
         let polys_fe = polys.map(|x| Dom::from_base(x));
         let values = lde_subgroup
-            .map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
-            .flatten()
+            .flat_map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
             .collect();
         RowMajorMatrix::new(values, polys.width())
     }
@@ -66,8 +65,7 @@ where
 
         let polys_fe = polys.map(|x| Dom::from_base(x));
         let values = lde_subgroup
-            .map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
-            .flatten()
+            .flat_map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
             .collect();
         RowMajorMatrix::new(values, polys.width())
     }
