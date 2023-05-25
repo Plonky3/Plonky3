@@ -19,14 +19,13 @@ where
     MC: DirectMMCS<F>,
     Chal: Challenger<F>,
 {
-    let commit_phase_commits = commit_phase::<F, EF, M, MC, Chal>(codewords, challenger);
-    let queries = todo!();
-    todo!()
+    let _commit_phase_commits = commit_phase::<F, EF, M, MC, Chal>(codewords, challenger);
+    let _queries = todo!();
 }
 
 pub(crate) fn commit_phase<F, EF, M, MC, Chal>(
     codewords: &[M::ProverData],
-    challenger: &mut Chal,
+    _challenger: &mut Chal,
 ) -> Vec<MC::ProverData>
 where
     F: Field,
@@ -62,7 +61,7 @@ where
 }
 
 /// Fold a polynomial `p(x) = p_even(x^2) + x p_odd(x^2)` into `p_even(x) + beta * p_odd(x)`.
-fn fold_even_odd<F: Field>(poly: &[F], beta: F) -> Vec<F> {
+fn fold_even_odd<F: Field>(_poly: &[F], _beta: F) -> Vec<F> {
     todo!()
 }
 

@@ -1,8 +1,8 @@
 use core::marker::PhantomData;
 use p3_air::{AirBuilder, TwoRowMatrixView};
-use p3_field::{ExtensionField, Field};
+use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField};
 
-pub struct ConstraintFolder<'a, F, Challenge>
+pub struct ConstraintFolder<'a, F, Challenge, PackedChallenge>
 where
     F: Field,
 {
@@ -11,14 +11,16 @@ where
     pub(crate) is_last_row: F::Packing,
     pub(crate) is_transition: F::Packing,
     pub(crate) alpha: Challenge,
-    pub(crate) accumulator: Challenge,
+    pub(crate) accumulator: PackedChallenge,
     pub(crate) _phantom_f: PhantomData<F>,
 }
 
-impl<'a, F, Challenge> AirBuilder for ConstraintFolder<'a, F, Challenge>
+impl<'a, F, Challenge, PackedChallenge> AirBuilder
+    for ConstraintFolder<'a, F, Challenge, PackedChallenge>
 where
     F: Field,
     Challenge: ExtensionField<F>,
+    PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<F::Packing>,
 {
     type F = F;
     type Expr = F::Packing;
@@ -46,6 +48,8 @@ where
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        todo!()
+        let x: F::Packing = x.into();
+        self.accumulator *= self.alpha;
+        self.accumulator += x;
     }
 }

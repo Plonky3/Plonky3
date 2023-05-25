@@ -56,7 +56,7 @@ fn test_prove_goldilocks() {
     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
     type LDE = NaiveCosetLDE;
     type PCS = FRIBasedPCS<Val, Domain, Challenge, LDE, MMCS, MMCS>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PCS, LDE>;
+    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Challenge, PCS, LDE>;
 
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);

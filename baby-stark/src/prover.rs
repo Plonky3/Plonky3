@@ -1,12 +1,11 @@
-use crate::{ConstraintFolder, BasicSymVar, StarkConfig};
+use crate::{ConstraintFolder, StarkConfig};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::Challenger;
 use p3_commit::PCS;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, SymbolicField,
-    TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
 };
 use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
@@ -21,7 +20,7 @@ pub fn prove<SC, A, Chal>(
     trace: RowMajorMatrix<SC::Val>,
 ) where
     SC: StarkConfig,
-    A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge>>,
+    A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
     Chal: Challenger<SC::Domain>,
 {
     let degree = trace.height();
@@ -67,12 +66,12 @@ pub fn prove<SC, A, Chal>(
 
     let trace_lde = config.lde().lde_batch(trace.clone(), quotient_degree_bits);
 
-    let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
+    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace);
 
     // challenger.observe_ext_element(trace_commit); // TODO
     let alpha = challenger.random_ext_element::<SC::Challenge>();
 
-    let quotient_values = (0..quotient_size)
+    let _quotient_values = (0..quotient_size)
         .into_par_iter()
         .step_by(<SC::Val as Field>::Packing::WIDTH)
         .flat_map_iter(|i_local_start| {
@@ -104,8 +103,8 @@ pub fn prove<SC, A, Chal>(
                 })
                 .collect();
 
-            let accumulator: SC::Challenge = SC::Challenge::ZERO;
-            let mut builder = ConstraintFolder::<SC::Domain, SC::Challenge> {
+            let accumulator = SC::PackedChallenge::ZEROS;
+            let mut builder = ConstraintFolder::<SC::Domain, SC::Challenge, SC::PackedChallenge> {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
@@ -127,13 +126,7 @@ pub fn prove<SC, A, Chal>(
             //     *eval *= denominator_inv;
             // }
 
-            (0..<SC::Domain as Field>::Packing::WIDTH).map(move |i| {
-                let x: SC::Domain = todo!();
-                x
-                // (0..num_challenges)
-                //     .map(|j| constraints_evals[j].as_slice()[i])
-                //     .collect()
-            })
+            builder.accumulator.as_slice().to_vec()
         })
-        .collect::<Vec<SC::Domain>>();
+        .collect::<Vec<SC::Challenge>>();
 }

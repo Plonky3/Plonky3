@@ -99,9 +99,9 @@ where
 {
     fn open_multi_batches<EF, Chal>(
         &self,
-        prover_data: &[Self::ProverData],
-        points: &[EF],
-        challenger: &mut Chal,
+        _prover_data: &[Self::ProverData],
+        _points: &[EF],
+        _challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: AbstractExtensionField<Val>,
@@ -112,10 +112,10 @@ where
 
     fn verify_multi_batches<EF, Chal>(
         &self,
-        commits: &[Self::Commitment],
-        points: &[EF],
-        values: &[Vec<Vec<EF>>],
-        proof: &Self::Proof,
+        _commits: &[Self::Commitment],
+        _points: &[EF],
+        _values: &[Vec<Vec<EF>>],
+        _proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
         EF: AbstractExtensionField<Val>,
