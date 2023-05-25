@@ -31,6 +31,10 @@ pub trait AbstractField:
     const NEG_ONE: Self;
 
     fn multiplicative_group_generator() -> Self;
+
+    fn square(&self) -> Self {
+        self.clone() * self.clone()
+    }
 }
 
 /// An `AbstractField` which abstracts the given field `F`.
@@ -67,10 +71,6 @@ pub trait Field:
         x.iter_mut()
             .zip_eq(y)
             .for_each(|(x_i, y_i)| *x_i += *y_i * s);
-    }
-
-    fn square(&self) -> Self {
-        *self * *self
     }
 
     /// self * 2^exp

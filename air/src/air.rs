@@ -1,9 +1,14 @@
 use core::ops::{Add, Mul, Sub};
 use p3_field::{AbstractField, AbstractionOf, Field};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
 pub trait Air<AB: AirBuilder>: Sync {
     fn eval(&self, builder: &mut AB);
+}
+
+pub trait Pair<AB: AirBuilder>: Air<AB> {
+    fn preprocessed_trace(&self) -> RowMajorMatrix<AB::F>;
 }
 
 pub trait AirBuilder: Sized {

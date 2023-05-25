@@ -4,6 +4,7 @@
 
 mod naive;
 
+use core::fmt::Debug;
 pub use naive::*;
 
 extern crate alloc;
@@ -20,7 +21,7 @@ where
 {
     /// The result type. Typically this will be `EF`, but it may also be a compressed encoding of
     /// the subspace of `EF` that may be produced by LDEs.
-    type Res: Into<Dom>;
+    type Res: Into<Dom> + Copy + Send + Sync + Debug;
 
     /// Given a batch of polynomials, each defined by `2^k` evaluations over the subgroup generated
     /// by `EF::primitive_root_of_unity(k)`, compute their evaluations over the (possibly trivial)

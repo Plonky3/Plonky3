@@ -31,6 +31,10 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
 
     fn from_slice(slice: &[Self::Scalar]) -> &Self;
     fn from_slice_mut(slice: &mut [Self::Scalar]) -> &mut Self;
+
+    /// Similar to `core:array::from_fn`.
+    fn from_fn<F>(f: F) -> Self where F: FnMut(usize) -> Self::Scalar;
+
     fn as_slice(&self) -> &[Self::Scalar];
     fn as_slice_mut(&mut self) -> &mut [Self::Scalar];
 
@@ -64,6 +68,7 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
         let n = buf.len() / Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
+
     fn pack_slice_mut(buf: &mut [Self::Scalar]) -> &mut [Self] {
         assert!(
             buf.len() % Self::WIDTH == 0,
@@ -91,12 +96,22 @@ unsafe impl<F: Field> PackedField for F {
     fn from_slice(slice: &[Self::Scalar]) -> &Self {
         &slice[0]
     }
+
     fn from_slice_mut(slice: &mut [Self::Scalar]) -> &mut Self {
         &mut slice[0]
     }
+
+    fn from_fn<Fn>(mut f: Fn) -> Self
+    where
+        Fn: FnMut(usize) -> Self::Scalar,
+    {
+        f(0)
+    }
+
     fn as_slice(&self) -> &[Self::Scalar] {
         slice::from_ref(self)
     }
+
     fn as_slice_mut(&mut self) -> &mut [Self::Scalar] {
         slice::from_mut(self)
     }

@@ -6,6 +6,7 @@ use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, SymbolicField,
     TwoAdicField,
 };
+use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
@@ -33,7 +34,7 @@ where
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
-    let quotient_degree_bits = 2; // TODO
+    let quotient_degree_bits = 1; // TODO
     let quotient_size_bits = degree_bits + quotient_degree_bits;
     let quotient_size = 1 << quotient_size_bits;
 
@@ -72,13 +73,16 @@ where
         .map(|(x, z)| z / (x - subgroup_last))
         .collect();
 
+    let trace_lde = config.lde().lde_batch(trace.clone(), quotient_degree_bits);
+
     let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
 
     let quotient_values = (0..quotient_size)
         .into_par_iter()
         .step_by(<SC::Val as Field>::Packing::WIDTH)
         .flat_map_iter(|i_local_start| {
-            let i_next_start = (i_local_start + next_step) % quotient_size;
+            let wrap = |i| i % quotient_size;
+            let i_next_start = wrap(i_local_start + next_step);
             let i_range = i_local_start..i_local_start + <SC::Val as Field>::Packing::WIDTH;
 
             let x = *<SC::Domain as Field>::Packing::from_slice(&coset[i_range.clone()]);
@@ -88,10 +92,28 @@ where
             let is_last_row =
                 *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
 
-            let local = todo!(); // &get_trace_values_packed(i_local_start),
-            let next = todo!(); // &get_trace_values_packed(i_next_start),
+            let local: Vec<_> = (0..trace_lde.width())
+                .map(|col| {
+                    <SC::Domain as Field>::Packing::from_fn(|offset| {
+                        let row = wrap(i_local_start + offset);
+                        trace_lde.get(row, col).into()
+                    })
+                })
+                .collect();
+            let next: Vec<_> = (0..trace_lde.width())
+                .map(|col| {
+                    <SC::Domain as Field>::Packing::from_fn(|offset| {
+                        let row = wrap(i_next_start + offset);
+                        trace_lde.get(row, col).into()
+                    })
+                })
+                .collect();
+
             let mut builder = BasicFoldingAirBuilder {
-                main: TwoRowMatrixView { local, next },
+                main: TwoRowMatrixView {
+                    local: &local,
+                    next: &next,
+                },
                 is_first_row,
                 is_last_row,
                 is_transition,
