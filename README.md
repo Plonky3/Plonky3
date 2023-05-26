@@ -30,6 +30,8 @@ Polynomial commitment schemes
 
 PIOPs
 - [ ] STARK
+  - [ ] univariate
+  - [ ] multivariate
 - [ ] PLONK
 
 Codes
@@ -37,6 +39,7 @@ Codes
 - [ ] Reed-Solomon
 
 Algorithms
+- [ ] Barycentric interpolation
 - [ ] basic FFT
 - [ ] Mersenne FFT
 

@@ -7,7 +7,7 @@ use p3_commit::PCS;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
 };
-use p3_lde::TwoAdicLDE;
+use p3_lde::{TwoAdicCosetLDE, TwoAdicLDE};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
@@ -34,7 +34,7 @@ pub fn prove<SC, A, Chal>(
     let subgroup_last = g_subgroup.inverse();
     let next_step = 1 << quotient_degree_bits;
 
-    let coset_shift = SC::Domain::multiplicative_group_generator();
+    let coset_shift = config.lde().shift(quotient_size_bits);
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 

@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "air",
-    "baby-stark",
     "brakedown",
     "challenger",
     "code",
@@ -16,8 +15,10 @@ members = [
     "merkle-tree",
     "maybe-rayon",
     "mersenne-31",
+    "multi-stark",
     "poseidon",
     "symmetric",
     "tensor-pcs",
     "util",
+    "uni-stark",
 ]

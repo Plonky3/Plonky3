@@ -1,5 +1,6 @@
 use crate::Matrix;
 use alloc::vec::Vec;
+use p3_field::Field;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -70,6 +71,22 @@ impl<T> RowMajorMatrix<T> {
         Standard: Distribution<T>,
     {
         let values = rng.sample_iter(Standard).take(rows * cols).collect();
+        Self {
+            values,
+            width: cols,
+        }
+    }
+
+    pub fn rand_nonzero<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
+    where
+        T: Field,
+        Standard: Distribution<T>,
+    {
+        let values = rng
+            .sample_iter(Standard)
+            .filter(|x| !x.is_zero())
+            .take(rows * cols)
+            .collect();
         Self {
             values,
             width: cols,

@@ -1,5 +1,4 @@
 use p3_air::{Air, AirBuilder};
-use p3_baby_stark::{prove, StarkConfigImpl};
 use p3_challenger::DuplexChallenger;
 use p3_fri::FRIBasedPCS;
 use p3_goldilocks::Goldilocks;
@@ -11,6 +10,7 @@ use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
 use p3_symmetric::sponge::PaddingFreeSponge;
+use p3_uni_stark::{prove, StarkConfigImpl};
 use rand::thread_rng;
 
 struct MulAir;
