@@ -6,11 +6,13 @@ pub trait StarkConfig {
     /// A value of the trace.
     type Val: Field;
 
+    /// The field from which most random challenges are drawn.
     type Challenge: ExtensionField<Self::Val>;
 
     type PackedChallenge: PackedField<Scalar = Self::Challenge>
         + AbstractExtensionField<<Self::Val as Field>::Packing>;
 
+    /// The PCS used to commit to trace polynomials.
     type PCS: MultivariatePCS<Self::Val>;
 
     fn pcs(&self) -> &Self::PCS;
@@ -40,7 +42,7 @@ where
     Val: Field,
     Challenge: ExtensionField<Val>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Val::Packing>,
-    PCS: p3_commit::MultivariatePCS<Val>,
+    PCS: MultivariatePCS<Val>,
 {
     type Val = Val;
     type Challenge = Challenge;

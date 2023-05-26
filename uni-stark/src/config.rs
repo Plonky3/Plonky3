@@ -7,13 +7,16 @@ pub trait StarkConfig {
     /// A value of the trace.
     type Val: Field;
 
+    /// The domain over which trace polynomials are defined.
     type Domain: ExtensionField<Self::Val> + TwoAdicField;
 
+    /// The field from which most random challenges are drawn.
     type Challenge: ExtensionField<Self::Domain>;
 
     type PackedChallenge: PackedField<Scalar = Self::Challenge>
         + AbstractExtensionField<<Self::Domain as Field>::Packing>;
 
+    /// The PCS used to commit to trace polynomials.
     type PCS: UnivariatePCS<Self::Val>;
 
     type LDE: TwoAdicCosetLDE<Self::Val, Self::Domain>;
@@ -54,7 +57,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Domain>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Domain::Packing>,
-    PCS: p3_commit::UnivariatePCS<Val>,
+    PCS: UnivariatePCS<Val>,
     LDE: TwoAdicCosetLDE<Val, Domain>,
 {
     type Val = Val;
