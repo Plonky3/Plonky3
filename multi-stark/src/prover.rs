@@ -6,7 +6,7 @@ use p3_matrix::dense::RowMajorMatrix;
 
 pub fn prove<SC, A, Chal>(
     _air: &A,
-    config: SC,
+    config: &SC,
     _challenger: &mut Chal,
     trace: RowMajorMatrix<SC::Val>,
 ) where

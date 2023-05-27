@@ -38,7 +38,7 @@ impl Eq for Mersenne31 {}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.as_canonical_u32())
+        state.write_u32(self.as_canonical_u32());
     }
 }
 
@@ -134,10 +134,12 @@ impl PrimeField for Mersenne31 {
         Self::new(n)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn from_canonical_u64(n: u64) -> Self {
         Self::new(n as u32)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn from_canonical_usize(n: usize) -> Self {
         Self::new(n as u32)
     }
@@ -222,6 +224,7 @@ impl Neg for Mersenne31 {
 impl Mul for Mersenne31 {
     type Output = Self;
 
+    #[allow(clippy::cast_possible_truncation)]
     fn mul(self, rhs: Self) -> Self {
         let prod = (self.value as u64) * (rhs.value as u64);
         let prod_lo = (prod as u32) & ((1 << 31) - 1);

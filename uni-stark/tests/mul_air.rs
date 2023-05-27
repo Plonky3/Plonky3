@@ -26,6 +26,8 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
 #[test]
 #[ignore] // TODO: Not ready yet.
+#[allow(clippy::items_after_statements)]
+#[allow(clippy::upper_case_acronyms)]
 fn test_prove_goldilocks() {
     type Val = Goldilocks;
     type Domain = Goldilocks;
@@ -63,7 +65,7 @@ fn test_prove_goldilocks() {
     let pcs = PCS::new(NaiveCosetLDE, 1, MMCS::new(h4, c));
     let config = StarkConfigImpl::new(pcs, NaiveCosetLDE);
     let mut challenger = DuplexChallenger::new(perm);
-    prove::<MyConfig, _, _>(&MulAir, config, &mut challenger, trace);
+    prove::<MyConfig, _, _>(&MulAir, &config, &mut challenger, trace);
 }
 
 #[test]

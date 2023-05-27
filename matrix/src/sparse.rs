@@ -44,7 +44,7 @@ impl<T> CsrMatrix<T> {
         let nonzero_values = iter::repeat_with(|| (rng.gen_range(0..cols), rng.gen()))
             .take(rows * row_weight)
             .collect();
-        let row_indices = (0..rows + 1).map(|r| r * row_weight).collect();
+        let row_indices = (0..=rows).map(|r| r * row_weight).collect();
         Self {
             width: cols,
             nonzero_values,

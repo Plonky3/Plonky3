@@ -30,6 +30,10 @@ where
     F: Field,
     MDS: MDSPermutation<F, WIDTH>,
 {
+    /// Create a new Poseidon
+    ///
+    /// # Panics
+    /// Number of constants must match WIDTH times `num_rounds`; panics otherwise.
     pub fn new(
         half_num_full_rounds: usize,
         num_partial_rounds: usize,

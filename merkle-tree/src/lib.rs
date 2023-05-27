@@ -40,7 +40,7 @@ impl<L, D> MerkleTree<L, D> {
             assert!(
                 leaf.height().is_power_of_two(),
                 "Matrix height not a power of two"
-            )
+            );
         }
 
         let mut leaves_largest_first = leaves
@@ -133,8 +133,8 @@ impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
         Self {
             hash,
             compress,
-            _phantom_l: Default::default(),
-            _phantom_d: Default::default(),
+            _phantom_l: PhantomData::default(),
+            _phantom_d: PhantomData::default(),
         }
     }
 }
