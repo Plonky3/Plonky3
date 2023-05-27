@@ -105,15 +105,15 @@ impl Field for Goldilocks {
 
 impl PrimeField for Goldilocks {
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n as u64)
+        Self::new(u64::from(n))
     }
 
     fn from_canonical_u16(n: u8) -> Self {
-        Self::new(n as u64)
+        Self::new(u64::from(n))
     }
 
     fn from_canonical_u32(n: u32) -> Self {
-        Self::new(n as u64)
+        Self::new(u64::from(n))
     }
 
     fn from_canonical_u64(n: u64) -> Self {
@@ -127,7 +127,7 @@ impl PrimeField for Goldilocks {
     fn from_wrapped_u32(n: u32) -> Self {
         // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
         // need for a reduction.
-        Self::new(n as u64)
+        Self::new(u64::from(n))
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
@@ -138,7 +138,7 @@ impl PrimeField for Goldilocks {
 }
 
 impl PrimeField64 for Goldilocks {
-    const ORDER_U64: u64 = 0xFFFFFFFF00000001;
+    const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
 
     fn as_canonical_u64(&self) -> u64 {
         let mut c = self.value;
@@ -154,7 +154,7 @@ impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
 
     fn power_of_two_generator() -> Self {
-        Self::new(1753635133440165772)
+        Self::new(1_753_635_133_440_165_772)
     }
 }
 
@@ -163,7 +163,7 @@ impl Add for Goldilocks {
 
     fn add(self, rhs: Self) -> Self {
         let (sum, over) = self.value.overflowing_add(rhs.value);
-        let (mut sum, over) = sum.overflowing_add((over as u64) * Self::NEG_ORDER);
+        let (mut sum, over) = sum.overflowing_add(u64::from(over) * Self::NEG_ORDER);
         if over {
             // NB: self.value > Self::ORDER && rhs.value > Self::ORDER is necessary but not
             // sufficient for double-overflow.
@@ -197,7 +197,7 @@ impl Sub for Goldilocks {
 
     fn sub(self, rhs: Self) -> Self {
         let (diff, under) = self.value.overflowing_sub(rhs.value);
-        let (mut diff, under) = diff.overflowing_sub((under as u64) * Self::NEG_ORDER);
+        let (mut diff, under) = diff.overflowing_sub(u64::from(under) * Self::NEG_ORDER);
         if under {
             // NB: self.value < NEG_ORDER - 1 && rhs.value > ORDER is necessary but not
             // sufficient for double-underflow.
@@ -232,7 +232,7 @@ impl Mul for Goldilocks {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        reduce128((self.value as u128) * (rhs.value as u128))
+        reduce128(u128::from(self.value) * u128::from(rhs.value))
     }
 }
 

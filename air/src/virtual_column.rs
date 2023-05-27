@@ -25,6 +25,7 @@ impl PairCol {
 }
 
 impl<F: Field> VirtualPairCol<F> {
+    #[must_use]
     pub fn single(column: PairCol) -> Self {
         Self {
             column_weights: vec![(column, F::ONE)],
@@ -32,10 +33,12 @@ impl<F: Field> VirtualPairCol<F> {
         }
     }
 
+    #[must_use]
     pub fn single_preprocessed(column: usize) -> Self {
         Self::single(PairCol::Preprocessed(column))
     }
 
+    #[must_use]
     pub fn single_main(column: usize) -> Self {
         Self::single(PairCol::Main(column))
     }
@@ -47,7 +50,7 @@ impl<F: Field> VirtualPairCol<F> {
         Var: Into<Expr> + Copy,
     {
         let mut result = self.constant.into();
-        for (column, weight) in self.column_weights.iter() {
+        for (column, weight) in &self.column_weights {
             result += column.get(preprocessed, main).into() * *weight;
         }
         result

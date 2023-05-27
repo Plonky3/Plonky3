@@ -148,7 +148,7 @@ impl<F: PrimeField32> PrimeField64 for F {
     const ORDER_U64: u64 = <F as PrimeField32>::ORDER_U32 as u64;
 
     fn as_canonical_u64(&self) -> u64 {
-        self.as_canonical_u32() as u64
+        u64::from(self.as_canonical_u32())
     }
 }
 
@@ -201,6 +201,7 @@ pub trait TwoAdicField: Field {
     fn power_of_two_generator() -> Self;
 
     /// Returns a primitive root of order `2^bits`.
+    #[must_use]
     fn primitive_root_of_unity(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
         let base = Self::power_of_two_generator();
