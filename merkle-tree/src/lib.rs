@@ -68,7 +68,7 @@ impl<L, D> MerkleTree<L, D> {
         loop {
             let prev_layer = digest_layers
                 .last()
-                .map(alloc::vec::Vec::as_slice)
+                .map(Vec::as_slice)
                 .unwrap_or_default();
             if prev_layer.len() == 1 {
                 break;

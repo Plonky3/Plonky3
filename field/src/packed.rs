@@ -40,21 +40,31 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
 
     /// Take interpret two vectors as chunks of `block_len` elements. Unpack and interleave those
     /// chunks. This is best seen with an example. If we have:
-    ///     A = [x0, y0, x1, y1],
-    ///     B = [x2, y2, x3, y3],
+    ///
+    ///     A = [x0, y0, x1, y1]
+    ///     B = [x2, y2, x3, y3]
+    ///
     /// then
-    ///     interleave(A, B, 1) = ([x0, x2, x1, x3], [y0, y2, y1, y3]).
+    ///
+    ///     interleave(A, B, 1) = ([x0, x2, x1, x3], [y0, y2, y1, y3])
+    ///
     /// Pairs that were adjacent in the input are at corresponding positions in the output.
-    ///   r lets us set the size of chunks we're interleaving. If we set `block_len` = 2, then for
-    ///     A = [x0, x1, y0, y1],
-    ///     B = [x2, x3, y2, y3],
+    ///
+    /// `r` lets us set the size of chunks we're interleaving. If we set `block_len = 2`, then for
+    ///
+    ///     A = [x0, x1, y0, y1]
+    ///     B = [x2, x3, y2, y3]
+    ///
     /// we obtain
-    ///     interleave(A, B, `block_len`) = ([x0, x1, x2, x3], [y0, y1, y2, y3]).
-    ///   We can also think about this as stacking the vectors, dividing them into 2x2 matrices, and
+    ///
+    ///     interleave(A, B, block_len) = ([x0, x1, x2, x3], [y0, y1, y2, y3])
+    ///
+    /// We can also think about this as stacking the vectors, dividing them into 2x2 matrices, and
     /// transposing those matrices.
-    ///   When `block_len` = WIDTH, this operation is a no-op. `block_len` must divide WIDTH. Since
-    /// WIDTH is specified to be a power of 2, `block_len` must also be a power of 2. It cannot be 0
-    /// and it cannot be > WIDTH.
+    ///
+    /// When `block_len = WIDTH`, this operation is a no-op. `block_len` must divide `WIDTH`. Since
+    /// `WIDTH` is specified to be a power of 2, `block_len` must also be a power of 2. It cannot be
+    /// 0 and it cannot exceed `WIDTH`.
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 
     fn pack_slice(buf: &[Self::Scalar]) -> &[Self] {
