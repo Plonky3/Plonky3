@@ -68,7 +68,7 @@ impl<L, D> MerkleTree<L, D> {
         loop {
             let prev_layer = digest_layers
                 .last()
-                .map(|v| v.as_slice())
+                .map(alloc::vec::Vec::as_slice)
                 .unwrap_or_default();
             if prev_layer.len() == 1 {
                 break;
@@ -106,6 +106,7 @@ impl<L, D> MerkleTree<L, D> {
         }
     }
 
+    #[must_use]
     pub fn root(&self) -> D
     where
         D: Clone,

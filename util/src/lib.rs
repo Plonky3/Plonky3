@@ -5,6 +5,7 @@
 use core::hint::unreachable_unchecked;
 
 /// Computes `ceil(a / b)`. Assumes `a + b` does not overflow.
+#[must_use]
 pub const fn ceil_div_usize(a: usize, b: usize) -> usize {
     (a + b - 1) / b
 }
@@ -16,6 +17,7 @@ pub fn log2_ceil_usize(n: usize) -> usize {
 }
 
 /// Computes `log_2(n)`, panicking if `n` is not a power of two.
+#[must_use]
 pub fn log2_strict_usize(n: usize) -> usize {
     let res = n.trailing_zeros();
     assert_eq!(n.wrapping_shr(res), 1, "Not a power of two: {n}");

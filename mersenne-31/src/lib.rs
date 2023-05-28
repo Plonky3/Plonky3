@@ -123,11 +123,11 @@ impl Field for Mersenne31 {
 
 impl PrimeField for Mersenne31 {
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n as u32)
+        Self::new(u32::from(n))
     }
 
     fn from_canonical_u16(n: u8) -> Self {
-        Self::new(n as u32)
+        Self::new(u32::from(n))
     }
 
     fn from_canonical_u32(n: u32) -> Self {
@@ -178,7 +178,7 @@ impl Add for Mersenne31 {
         // 2 * (2^31 - 1) = 2^32 - 2.
         let msb = sum & (1 << 31);
         sum.bitxor_assign(msb);
-        sum += (msb != 0) as u32;
+        sum += u32::from(msb != 0);
         Self::new(sum)
     }
 }
@@ -223,7 +223,7 @@ impl Mul for Mersenne31 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        let prod = (self.value as u64) * (rhs.value as u64);
+        let prod = u64::from(self.value) * u64::from(rhs.value);
         let prod_lo = (prod as u32) & ((1 << 31) - 1);
         let prod_hi = (prod >> 31) as u32;
         Self::new(prod_lo) + Self::new(prod_hi)

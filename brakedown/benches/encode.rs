@@ -25,7 +25,8 @@ where
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [12] {
+    {
+        let n_log = 12;
         let n = 1 << n_log;
 
         // TODO: Should actually by fixed column weight, though this shouldn't change perf much.
