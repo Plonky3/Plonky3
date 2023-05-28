@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 p3-code = { path = "../code" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
+p3-mersenne-31 = { path = "../mersenne-31" }
 rand = "0.8.5"
 
 [dev-dependencies]
