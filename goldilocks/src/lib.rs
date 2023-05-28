@@ -317,5 +317,5 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     let (res_wrapped, carry) = x.overflowing_add(y);
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
-    res_wrapped + Goldilocks::NEG_ORDER * (carry as u64)
+    res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
 }
