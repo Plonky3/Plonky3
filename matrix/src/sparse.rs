@@ -23,6 +23,7 @@ impl<T> CsrMatrix<T> {
         self.row_indices[r]..self.row_indices[r + 1]
     }
 
+    #[must_use]
     pub fn row(&self, r: usize) -> &[(usize, T)] {
         &self.nonzero_values[self.row_index_range(r)]
     }

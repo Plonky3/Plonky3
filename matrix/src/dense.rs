@@ -13,11 +13,13 @@ pub struct RowMajorMatrix<T> {
 }
 
 impl<T> RowMajorMatrix<T> {
+    #[must_use]
     pub fn new(values: Vec<T>, width: usize) -> Self {
         debug_assert_eq!(values.len() % width, 0);
         Self { values, width }
     }
 
+    #[must_use]
     pub fn row(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -32,6 +34,7 @@ impl<T> RowMajorMatrix<T> {
         self.values.chunks_exact(self.width)
     }
 
+    #[must_use]
     pub fn as_view(&self) -> RowMajorMatrixView<T> {
         RowMajorMatrixView {
             values: &self.values,
@@ -116,6 +119,7 @@ pub struct RowMajorMatrixView<'a, T> {
 }
 
 impl<'a, T> RowMajorMatrixView<'a, T> {
+    #[must_use]
     pub fn row(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -147,6 +151,7 @@ pub struct RowMajorMatrixViewMut<'a, T> {
 }
 
 impl<'a, T> RowMajorMatrixViewMut<'a, T> {
+    #[must_use]
     pub fn row(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -161,6 +166,7 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         self.values.chunks_exact(self.width)
     }
 
+    #[must_use]
     pub fn as_view(&self) -> RowMajorMatrixView<T> {
         RowMajorMatrixView {
             values: self.values,

@@ -200,7 +200,10 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     // 1117296306*u + 1166849849
     // sage: assert(g.multiplicative_order() == 2^32)
     fn power_of_two_generator() -> Self {
-        Self::new(Mersenne31::new(1117296306), Mersenne31::new(1166849849))
+        Self::new(
+            Mersenne31::new(1_117_296_306),
+            Mersenne31::new(1_166_849_849),
+        )
     }
 }
 
