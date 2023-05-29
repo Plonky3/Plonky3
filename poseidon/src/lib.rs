@@ -30,7 +30,7 @@ where
     F: Field,
     MDS: MDSPermutation<F, WIDTH>,
 {
-    /// Create a new Poseidon
+    /// Create a new Poseidon configuration.
     ///
     /// # Panics
     /// Number of constants must match WIDTH times `num_rounds`; panics otherwise.

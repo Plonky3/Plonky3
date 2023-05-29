@@ -24,6 +24,7 @@ pub struct Mersenne31 {
 
 impl Mersenne31 {
     const fn new(value: u32) -> Self {
+        debug_assert!(value < Self::ORDER_U32);
         Self { value }
     }
 }
@@ -134,17 +135,20 @@ impl PrimeField for Mersenne31 {
         Self::new(n)
     }
 
-    /// Convert from u64
-    ///
-    /// # Panics
-    /// Panics if the number is too large to fit into a u32.
+    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
     fn from_canonical_u64(n: u64) -> Self {
-        Self::new(n.try_into().expect("Too large to fit into Mersenne31 field"))
+        Self::new(
+            n.try_into()
+                .expect("Too large to be a canonical Mersenne31 encoding"),
+        )
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
     fn from_canonical_usize(n: usize) -> Self {
-        Self::new(n as u32)
+        Self::new(
+            n.try_into()
+                .expect("Too large to be a canonical Mersenne31 encoding"),
+        )
     }
 
     fn from_wrapped_u32(n: u32) -> Self {
