@@ -26,6 +26,19 @@ impl PairCol {
 
 impl<F: Field> VirtualPairCol<F> {
     #[must_use]
+    pub fn one() -> Self {
+        Self::constant(F::ONE)
+    }
+
+    #[must_use]
+    pub fn constant(x: F) -> Self {
+        Self {
+            column_weights: vec![],
+            constant: x,
+        }
+    }
+
+    #[must_use]
     pub fn single(column: PairCol) -> Self {
         Self {
             column_weights: vec![(column, F::ONE)],
