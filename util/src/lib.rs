@@ -16,7 +16,10 @@ pub fn log2_ceil_usize(n: usize) -> usize {
     (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
 }
 
-/// Computes `log_2(n)`, panicking if `n` is not a power of two.
+/// Computes `log_2(n)`
+///
+/// # Panics
+/// Panics if `n` is not a power of two.
 #[must_use]
 pub fn log2_strict_usize(n: usize) -> usize {
     let res = n.trailing_zeros();
@@ -35,14 +38,14 @@ pub fn assume(p: bool) {
 }
 
 /// Try to force Rust to emit a branch. Example:
-///
+/// ```text
 ///     if x > 2 {
 ///         y = foo();
 ///         branch_hint();
 ///     } else {
 ///         y = bar();
 ///     }
-///
+/// ```
 /// This function has no semantics. It is a hint only.
 #[inline(always)]
 pub fn branch_hint() {

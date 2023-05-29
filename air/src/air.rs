@@ -134,7 +134,7 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.inner.assert_zero(self.condition.clone() * x.into())
+        self.inner.assert_zero(self.condition.clone() * x.into());
     }
 }
 

@@ -76,6 +76,7 @@ fn fold_even_odd<F: Field>(_poly: &[F], _beta: F) -> Vec<F> {
     todo!()
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
     init: Vec<Challenge>,

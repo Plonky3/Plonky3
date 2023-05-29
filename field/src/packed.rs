@@ -91,6 +91,7 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    #[must_use]
     fn doubles(&self) -> Self {
         *self * Self::Scalar::TWO
     }

@@ -1,4 +1,4 @@
-//! A PCS using degree 2 tensor codes, based on BCG20 (https://eprint.iacr.org/2020/1426).
+//! A PCS using degree 2 tensor codes, based on BCG20 <https://eprint.iacr.org/2020/1426>.
 
 #![no_std]
 

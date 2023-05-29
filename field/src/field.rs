@@ -32,6 +32,7 @@ pub trait AbstractField:
 
     fn multiplicative_group_generator() -> Self;
 
+    #[must_use]
     fn square(&self) -> Self {
         self.clone() * self.clone()
     }
@@ -74,22 +75,27 @@ pub trait Field:
     }
 
     /// self * 2^exp
+    #[must_use]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         *self * Self::TWO.exp_u64(exp)
     }
 
     /// self / 2^exp
+    #[must_use]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         *self / Self::TWO.exp_u64(exp)
     }
 
     /// The multiplicative inverse of this field element, if it exists.
+    #[must_use]
     fn try_inverse(&self) -> Option<Self>;
 
+    #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    #[must_use]
     fn exp_u64(&self, power: u64) -> Self {
         let mut current = *self;
         let mut product = Self::ONE;
@@ -103,6 +109,7 @@ pub trait Field:
         product
     }
 
+    #[must_use]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
         let mut res = *self;
         for _ in 0..power_log {
@@ -111,6 +118,7 @@ pub trait Field:
         res
     }
 
+    #[must_use]
     fn powers(&self) -> Powers<Self> {
         Powers {
             base: *self,

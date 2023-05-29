@@ -38,7 +38,7 @@ impl Eq for Goldilocks {}
 
 impl Hash for Goldilocks {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(self.as_canonical_u64())
+        state.write_u64(self.as_canonical_u64());
     }
 }
 
@@ -276,6 +276,7 @@ fn reduce128(x: u128) -> Goldilocks {
 }
 
 #[inline]
+#[allow(clippy::cast_possible_truncation)]
 fn split(x: u128) -> (u64, u64) {
     (x as u64, (x >> 64) as u64)
 }

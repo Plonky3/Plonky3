@@ -15,7 +15,7 @@ use p3_util::log2_strict_usize;
 
 pub fn prove<SC, A, Chal>(
     air: &A,
-    config: SC,
+    config: &SC,
     challenger: &mut Chal,
     trace: RowMajorMatrix<SC::Val>,
 ) where

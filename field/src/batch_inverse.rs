@@ -2,14 +2,17 @@ use crate::field::Field;
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// Batch multiplicative inverses with Montgomery's trick
+/// This is Montgomery's trick. At a high level, we invert the product of the given field
+/// elements, then derive the individual inverses from that via multiplication.
+///
+/// The usual Montgomery trick involves calculating an array of cumulative products,
+/// resulting in a long dependency chain. To increase instruction-level parallelism, we
+/// compute WIDTH separate cumulative product arrays that only meet at the end.
+///
+/// # Panics
+/// Might panic if asserts or unwraps uncover a bug.
 pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
-    // This is Montgomery's trick. At a high level, we invert the product of the given field
-    // elements, then derive the individual inverses from that via multiplication.
-
-    // The usual Montgomery trick involves calculating an array of cumulative products,
-    // resulting in a long dependency chain. To increase instruction-level parallelism, we
-    // compute WIDTH separate cumulative product arrays that only meet at the end.
-
     // Higher WIDTH increases instruction-level parallelism, but too high a value will cause us
     // to run out of registers.
     const WIDTH: usize = 4;

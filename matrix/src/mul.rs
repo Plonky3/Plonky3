@@ -5,6 +5,9 @@ use p3_field::Field;
 
 /// Compute `C = A * B`, where `A` in a CSR matrix and `B` is a dense matrix.
 /// This assumes that `C` is initially filled with zeros.
+///
+/// # Panics
+/// Panics if dimensions of input matrices don't match.
 pub fn mul_csr_dense<F: Field>(
     a: &CsrMatrix<F>,
     b: RowMajorMatrixView<F>,

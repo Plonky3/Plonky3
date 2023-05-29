@@ -44,7 +44,7 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &code, |b, code| {
             b.iter(|| {
                 messages.values.truncate(n * BATCH_SIZE);
-                code.append_parity(&mut messages)
+                code.append_parity(&mut messages);
             });
         });
     }
