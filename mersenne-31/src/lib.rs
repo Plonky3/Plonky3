@@ -134,9 +134,12 @@ impl PrimeField for Mersenne31 {
         Self::new(n)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    /// Convert from u64
+    ///
+    /// # Panics
+    /// Panics if the number is too large to fit into a u32.
     fn from_canonical_u64(n: u64) -> Self {
-        Self::new(n as u32)
+        Self::new(n.try_into().expect("Too large to fit into Mersenne31 field"))
     }
 
     #[allow(clippy::cast_possible_truncation)]
