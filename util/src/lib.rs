@@ -39,13 +39,14 @@ pub fn assume(p: bool) {
 
 /// Try to force Rust to emit a branch. Example:
 ///
-/// ```ignore
-///     if x > 2 {
-///         y = foo();
-///         branch_hint();
-///     } else {
-///         y = bar();
-///     }
+/// ```
+/// let x = 100;
+/// if x > 20 {
+///     println!("x is big!");
+///     p3_util::branch_hint();
+/// } else {
+///     println!("x is small!");
+/// }
 /// ```
 ///
 /// This function has no semantics. It is a hint only.
