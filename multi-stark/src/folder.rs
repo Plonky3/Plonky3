@@ -43,7 +43,7 @@ where
         if size == 2 {
             self.is_transition
         } else {
-            panic!("uni-stark only supports a window size of 2")
+            panic!("multi-stark only supports a window size of 2")
         }
     }
 

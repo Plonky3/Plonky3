@@ -24,7 +24,7 @@ pub struct Mersenne31 {
 
 impl Mersenne31 {
     const fn new(value: u32) -> Self {
-        debug_assert!(value < Self::ORDER_U32);
+        debug_assert!((value >> 31) == 0);
         Self { value }
     }
 }
