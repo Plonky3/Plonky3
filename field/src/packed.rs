@@ -40,24 +40,31 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
 
     /// Take interpret two vectors as chunks of `block_len` elements. Unpack and interleave those
     /// chunks. This is best seen with an example. If we have:
-    ///
+    /// ```text
     ///     A = [x0, y0, x1, y1]
     ///     B = [x2, y2, x3, y3]
+    /// ```
     ///
     /// then
     ///
+    /// ```text
     ///     interleave(A, B, 1) = ([x0, x2, x1, x3], [y0, y2, y1, y3])
+    /// ```
     ///
     /// Pairs that were adjacent in the input are at corresponding positions in the output.
     ///
     /// `r` lets us set the size of chunks we're interleaving. If we set `block_len = 2`, then for
     ///
+    /// ```text
     ///     A = [x0, x1, y0, y1]
     ///     B = [x2, x3, y2, y3]
+    /// ```
     ///
     /// we obtain
     ///
+    /// ```text
     ///     interleave(A, B, block_len) = ([x0, x1, x2, x3], [y0, y1, y2, y3])
+    /// ```
     ///
     /// We can also think about this as stacking the vectors, dividing them into 2x2 matrices, and
     /// transposing those matrices.
