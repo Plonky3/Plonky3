@@ -1,0 +1,54 @@
+use crate::{Code, LinearCode};
+use p3_field::Field;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::Matrix;
+
+/// A systematic code.
+pub trait SystematicCode<F: Field>: Code<F> {
+    fn systematic_len(&self) -> usize;
+
+    fn parity_len(&self) -> usize;
+
+    /// Encode a batch of messages, stored in a matrix with a message in each column.
+    ///
+    /// Since this is a systemic code, this method extends the input matrix to avoid copying.
+    fn append_parity(&self, messages: &mut RowMajorMatrix<F>) {
+        assert_eq!(
+            messages.height(),
+            self.systematic_len(),
+            "Wrong message height"
+        );
+        messages.expand_to_height(self.codeword_len());
+        let mut messages_view = messages.as_view_mut();
+        let (systematic, mut parity) = messages_view.split_rows(self.systematic_len());
+        self.write_parity(systematic.as_view(), &mut parity);
+    }
+
+    fn write_parity(
+        &self,
+        systematic: RowMajorMatrixView<F>,
+        parity: &mut RowMajorMatrixViewMut<F>,
+    );
+}
+
+impl<F: Field, S: SystematicCode<F>> Code<F> for S {
+    fn encode_batch(
+        &self,
+        messages: RowMajorMatrixView<F>,
+        mut codewords: RowMajorMatrixViewMut<F>,
+    ) {
+        let (systematic, mut parity) = codewords.split_rows(self.systematic_len());
+        systematic.values.copy_from_slice(messages.values);
+        self.write_parity(messages, &mut parity);
+    }
+
+    fn message_len(&self) -> usize {
+        self.systematic_len()
+    }
+
+    fn codeword_len(&self) -> usize {
+        self.systematic_len() + self.parity_len()
+    }
+}
+
+pub trait SystematicLinearCode<F: Field>: SystematicCode<F> + LinearCode<F> {}

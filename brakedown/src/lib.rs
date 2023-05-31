@@ -5,7 +5,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use p3_code::{LinearCode, SystematicCode};
+use p3_code::{LinearCode, SystematicCode, SystematicLinearCode};
 use p3_field::Field;
 use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::mul::mul_csr_dense;
@@ -57,3 +57,5 @@ impl<F: Field, IC: SystematicCode<F>> SystematicCode<F> for BrakedownCode<F, IC>
 }
 
 impl<F: Field, IC: SystematicCode<F>> LinearCode<F> for BrakedownCode<F, IC> {}
+
+impl<F: Field, IC: SystematicCode<F>> SystematicLinearCode<F> for BrakedownCode<F, IC> {}
