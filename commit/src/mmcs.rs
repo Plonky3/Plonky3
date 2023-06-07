@@ -44,6 +44,3 @@ pub struct Dimensions {
 pub trait DirectMMCS<T>: MMCS<T> {
     fn commit(&self, inputs: Vec<Self::Mat>) -> (Self::Commitment, Self::ProverData);
 }
-
-// TODO: Streaming MMCS? Where `ProverData` can be initialized and then incrementally updated,
-// rather than being created all at once.

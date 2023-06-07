@@ -15,7 +15,7 @@ use p3_matrix::dense::RowMajorMatrix;
 pub struct TensorPCS<F, C, M>
 where
     F: Field,
-    C: LinearCodeFamily<F>,
+    C: LinearCodeFamily<F, RowMajorMatrix<F>>,
     M: DirectMMCS<F>,
 {
     _codes: C,
@@ -27,7 +27,7 @@ where
 impl<F, C, M> PCS<F> for TensorPCS<F, C, M>
 where
     F: Field,
-    C: LinearCodeFamily<F>,
+    C: LinearCodeFamily<F, RowMajorMatrix<F>>,
     M: DirectMMCS<F, Mat = RowMajorMatrix<F>>,
 {
     type Commitment = M::Commitment;
@@ -59,7 +59,7 @@ where
 impl<F, C, M> MultivariatePCS<F> for TensorPCS<F, C, M>
 where
     F: Field,
-    C: LinearCodeFamily<F>,
+    C: LinearCodeFamily<F, RowMajorMatrix<F>>,
     M: DirectMMCS<F, Mat = RowMajorMatrix<F>>,
 {
     fn open_multi_batches<EF, Chal>(

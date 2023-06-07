@@ -1,23 +1,28 @@
-use crate::{CodeFamily, SystematicCodeFamily, SystematicCodeOrFamily, SystematicLinearCode};
+use crate::{
+    CodeFamily, CodeOrFamily, LinearCodeFamily, SystematicCodeFamily, SystematicCodeOrFamily,
+    SystematicLinearCode,
+};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use p3_field::Field;
-use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 
 /// A registry of systematic, linear codes for various message sizes.
-pub struct SLCodeRegistry<F: Field> {
+pub struct SLCodeRegistry<F: Field, In: Matrix<F>, Out: Matrix<F>> {
     /// Ordered by message length, ascending.
-    codes: Vec<Box<dyn SystematicLinearCode<F>>>,
+    codes: Vec<Box<dyn SystematicLinearCode<F, In, Out = Out>>>,
 }
 
-impl<F: Field> SLCodeRegistry<F> {
-    pub fn new(mut codes: Vec<Box<dyn SystematicLinearCode<F>>>) -> Self {
+impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SLCodeRegistry<F, In, Out> {
+    pub fn new(mut codes: Vec<Box<dyn SystematicLinearCode<F, In, Out = Out>>>) -> Self {
         codes.sort_by_key(|c| c.message_len());
         Self { codes }
     }
 
-    pub fn for_message_len(&self, message_len: usize) -> &dyn SystematicLinearCode<F> {
+    pub fn for_message_len(
+        &self,
+        message_len: usize,
+    ) -> &dyn SystematicLinearCode<F, In, Out = Out> {
         for c in &self.codes {
             if c.message_len() == message_len {
                 return &**c;
@@ -27,18 +32,16 @@ impl<F: Field> SLCodeRegistry<F> {
     }
 }
 
-impl<F: Field> SystematicCodeOrFamily<F> for SLCodeRegistry<F> {
-    fn write_parity(
-        &self,
-        systematic: RowMajorMatrixView<F>,
-        parity: &mut RowMajorMatrixViewMut<F>,
-    ) {
-        self.for_message_len(systematic.height())
-            .write_parity(systematic, parity);
+impl<F: Field, In: Matrix<F>, Out: Matrix<F>> CodeOrFamily<F, In> for SLCodeRegistry<F, In, Out> {
+    type Out = Out;
+
+    fn encode_batch(&self, messages: In) -> Self::Out {
+        self.for_message_len(messages.height())
+            .encode_batch(messages)
     }
 }
 
-impl<F: Field> CodeFamily<F> for SLCodeRegistry<F> {
+impl<F: Field, In: Matrix<F>, Out: Matrix<F>> CodeFamily<F, In> for SLCodeRegistry<F, In, Out> {
     /// The next supported message length that is at least `min`.
     fn next_message_len(&self, min: usize) -> Option<usize> {
         for c in &self.codes {
@@ -59,4 +62,17 @@ impl<F: Field> CodeFamily<F> for SLCodeRegistry<F> {
     }
 }
 
-impl<F: Field> SystematicCodeFamily<F> for SLCodeRegistry<F> {}
+impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SystematicCodeOrFamily<F, In>
+    for SLCodeRegistry<F, In, Out>
+{
+}
+
+impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SystematicCodeFamily<F, In>
+    for SLCodeRegistry<F, In, Out>
+{
+}
+
+impl<F: Field, In: Matrix<F>, Out: Matrix<F>> LinearCodeFamily<F, In>
+    for SLCodeRegistry<F, In, Out>
+{
+}

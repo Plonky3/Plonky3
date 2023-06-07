@@ -1,23 +1,23 @@
-use crate::{Code, LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode};
+use crate::{
+    Code, CodeOrFamily, LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode,
+};
 use p3_field::Field;
-use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::Matrix;
 
 /// The trivial code whose encoder is the identity function.
 pub struct IdentityCode {
     pub len: usize,
 }
 
-impl<F: Field> SystematicCodeOrFamily<F> for IdentityCode {
-    fn write_parity(
-        &self,
-        _systematic: RowMajorMatrixView<F>,
-        _parity: &mut RowMajorMatrixViewMut<F>,
-    ) {
-        // All done! There are no parity bits.
+impl<F: Field, In: Matrix<F>> CodeOrFamily<F, In> for IdentityCode {
+    type Out = In;
+
+    fn encode_batch(&self, messages: In) -> Self::Out {
+        messages
     }
 }
 
-impl<F: Field> Code<F> for IdentityCode {
+impl<F: Field, In: Matrix<F>> Code<F, In> for IdentityCode {
     fn message_len(&self) -> usize {
         self.len
     }
@@ -27,8 +27,10 @@ impl<F: Field> Code<F> for IdentityCode {
     }
 }
 
-impl<F: Field> SystematicCode<F> for IdentityCode {}
+impl<F: Field, In: Matrix<F>> SystematicCodeOrFamily<F, In> for IdentityCode {}
 
-impl<F: Field> LinearCode<F> for IdentityCode {}
+impl<F: Field, In: Matrix<F>> SystematicCode<F, In> for IdentityCode {}
 
-impl<F: Field> SystematicLinearCode<F> for IdentityCode {}
+impl<F: Field, In: Matrix<F>> LinearCode<F, In> for IdentityCode {}
+
+impl<F: Field, In: Matrix<F>> SystematicLinearCode<F, In> for IdentityCode {}
