@@ -9,6 +9,7 @@ pub trait CodeOrFamily<F: Field> {
 
 /// A code (in the coding theory sense).
 pub trait Code<F: Field>: CodeOrFamily<F> {
+    /// The input length of this code's encoder. In other words, the dimension of the code.
     fn message_len(&self) -> usize;
 
     fn codeword_len(&self) -> usize;
@@ -16,7 +17,9 @@ pub trait Code<F: Field>: CodeOrFamily<F> {
 
 /// A family of codes (in the coding theory sense).
 pub trait CodeFamily<F: Field>: CodeOrFamily<F> {
-    // TODO: Some method about supported message lengths, maybe next_message_len(usize) -> Option<usize>?
+    fn next_message_len(&self, len: usize) -> Option<usize>;
+
+    fn codeword_len(&self, len: usize) -> Option<usize>;
 }
 
 /// A linear code.

@@ -5,7 +5,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use p3_code::{LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode};
+use p3_code::{Code, LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode};
 use p3_field::Field;
 use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::mul::mul_csr_dense;
@@ -48,11 +48,17 @@ impl<F: Field, IC: SystematicCode<F>> SystematicCodeOrFamily<F> for BrakedownCod
     }
 }
 
-impl<F: Field, IC: SystematicCode<F>> SystematicCode<F> for BrakedownCode<F, IC> {
-    fn systematic_len(&self) -> usize {
+impl<F: Field, IC: SystematicCode<F>> Code<F> for BrakedownCode<F, IC> {
+    fn message_len(&self) -> usize {
         self.a.width()
     }
 
+    fn codeword_len(&self) -> usize {
+        self.message_len() + self.parity_len()
+    }
+}
+
+impl<F: Field, IC: SystematicCode<F>> SystematicCode<F> for BrakedownCode<F, IC> {
     fn parity_len(&self) -> usize {
         self.y_len() + self.z_parity_len() + self.v_len()
     }

@@ -1,4 +1,4 @@
-use crate::{LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode};
+use crate::{Code, LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode};
 use p3_field::Field;
 use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 
@@ -17,15 +17,17 @@ impl<F: Field> SystematicCodeOrFamily<F> for IdentityCode {
     }
 }
 
-impl<F: Field> SystematicCode<F> for IdentityCode {
-    fn systematic_len(&self) -> usize {
+impl<F: Field> Code<F> for IdentityCode {
+    fn message_len(&self) -> usize {
         self.len
     }
 
-    fn parity_len(&self) -> usize {
-        0
+    fn codeword_len(&self) -> usize {
+        self.len
     }
 }
+
+impl<F: Field> SystematicCode<F> for IdentityCode {}
 
 impl<F: Field> LinearCode<F> for IdentityCode {}
 
