@@ -7,20 +7,27 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
-use p3_code::SLCodeRegistry;
+use p3_code::LinearCodeFamily;
 use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
-pub struct TensorPCS<F: Field, M: DirectMMCS<F>> {
-    _codes: SLCodeRegistry<F>,
-    mmcs: M,
-    _phantom: PhantomData<M>,
-}
-
-impl<F, M> PCS<F> for TensorPCS<F, M>
+pub struct TensorPCS<F, C, M>
 where
     F: Field,
+    C: LinearCodeFamily<F>,
+    M: DirectMMCS<F>,
+{
+    _codes: C,
+    mmcs: M,
+    _phantom_f: PhantomData<F>,
+    _phantom_m: PhantomData<M>,
+}
+
+impl<F, C, M> PCS<F> for TensorPCS<F, C, M>
+where
+    F: Field,
+    C: LinearCodeFamily<F>,
     M: DirectMMCS<F, Mat = RowMajorMatrix<F>>,
 {
     type Commitment = M::Commitment;
@@ -49,9 +56,10 @@ where
     }
 }
 
-impl<F, M> MultivariatePCS<F> for TensorPCS<F, M>
+impl<F, C, M> MultivariatePCS<F> for TensorPCS<F, C, M>
 where
     F: Field,
+    C: LinearCodeFamily<F>,
     M: DirectMMCS<F, Mat = RowMajorMatrix<F>>,
 {
     fn open_multi_batches<EF, Chal>(

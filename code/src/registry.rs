@@ -1,4 +1,4 @@
-use crate::SystematicLinearCode;
+use crate::{CodeFamily, SystematicCodeFamily, SystematicCodeOrFamily, SystematicLinearCode};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use p3_field::Field;
@@ -23,8 +23,10 @@ impl<F: Field> SLCodeRegistry<F> {
         }
         panic!("No code found for message length {}", message_len);
     }
+}
 
-    pub fn write_parity(
+impl<F: Field> SystematicCodeOrFamily<F> for SLCodeRegistry<F> {
+    fn write_parity(
         &self,
         systematic: RowMajorMatrixView<F>,
         parity: &mut RowMajorMatrixViewMut<F>,
@@ -33,3 +35,7 @@ impl<F: Field> SLCodeRegistry<F> {
             .write_parity(systematic, parity);
     }
 }
+
+impl<F: Field> CodeFamily<F> for SLCodeRegistry<F> {}
+
+impl<F: Field> SystematicCodeFamily<F> for SLCodeRegistry<F> {}

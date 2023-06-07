@@ -4,7 +4,7 @@ use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 
 /// A systematic code, or a family thereof.
-pub trait SystematicCodeOrFamily<F: Field>: Code<F> {
+pub trait SystematicCodeOrFamily<F: Field>: CodeOrFamily<F> {
     /// Encode a batch of messages, stored in a matrix with a message in each column.
     fn write_parity(
         &self,

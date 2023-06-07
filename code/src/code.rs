@@ -16,8 +16,7 @@ pub trait Code<F: Field>: CodeOrFamily<F> {
 
 /// A family of codes (in the coding theory sense).
 pub trait CodeFamily<F: Field>: CodeOrFamily<F> {
-    // TODO: Return codewords instead of mutating? Could return a "chained" matrix.
-    fn encode_batch(&self, messages: RowMajorMatrixView<F>, codewords: RowMajorMatrixViewMut<F>);
+    // TODO: Some method about supported message lengths, maybe next_message_len(usize) -> Option<usize>?
 }
 
 /// A linear code.
