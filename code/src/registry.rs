@@ -2,7 +2,7 @@ use crate::SystematicLinearCode;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use p3_field::Field;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 
 /// A registry of systematic, linear codes for various message sizes.
@@ -24,8 +24,12 @@ impl<F: Field> SLCodeRegistry<F> {
         panic!("No code found for message length {}", message_len);
     }
 
-    pub fn append_parity(&self, messages: &mut RowMajorMatrix<F>) {
-        self.for_message_len(messages.height())
-            .append_parity(messages);
+    pub fn write_parity(
+        &self,
+        systematic: RowMajorMatrixView<F>,
+        parity: &mut RowMajorMatrixViewMut<F>,
+    ) {
+        self.for_message_len(systematic.height())
+            .write_parity(systematic, parity);
     }
 }

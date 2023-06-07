@@ -1,29 +1,11 @@
-use crate::{Code, LinearCode};
+use crate::{Code, CodeFamily, CodeOrFamily, LinearCode};
 use p3_field::Field;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::dense::{RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 
-/// A systematic code.
-pub trait SystematicCode<F: Field>: Code<F> {
-    fn systematic_len(&self) -> usize;
-
-    fn parity_len(&self) -> usize;
-
+/// A systematic code, or a family thereof.
+pub trait SystematicCodeOrFamily<F: Field>: Code<F> {
     /// Encode a batch of messages, stored in a matrix with a message in each column.
-    ///
-    /// Since this is a systemic code, this method extends the input matrix to avoid copying.
-    fn append_parity(&self, messages: &mut RowMajorMatrix<F>) {
-        assert_eq!(
-            messages.height(),
-            self.systematic_len(),
-            "Wrong message height"
-        );
-        messages.expand_to_height(self.codeword_len());
-        let mut messages_view = messages.as_view_mut();
-        let (systematic, mut parity) = messages_view.split_rows(self.systematic_len());
-        self.write_parity(systematic.as_view(), &mut parity);
-    }
-
     fn write_parity(
         &self,
         systematic: RowMajorMatrixView<F>,
@@ -31,17 +13,31 @@ pub trait SystematicCode<F: Field>: Code<F> {
     );
 }
 
-impl<F: Field, S: SystematicCode<F>> Code<F> for S {
+/// A systematic code.
+pub trait SystematicCode<F: Field>: SystematicCodeOrFamily<F> + Code<F> {
+    fn systematic_len(&self) -> usize;
+
+    fn parity_len(&self) -> usize;
+}
+
+pub trait SystematicLinearCode<F: Field>: SystematicCode<F> + LinearCode<F> {}
+
+/// A family of systematic codes.
+pub trait SystematicCodeFamily<F: Field>: SystematicCodeOrFamily<F> + CodeFamily<F> {}
+
+impl<F: Field, S: SystematicCodeOrFamily<F>> CodeOrFamily<F> for S {
     fn encode_batch(
         &self,
         messages: RowMajorMatrixView<F>,
         mut codewords: RowMajorMatrixViewMut<F>,
     ) {
-        let (systematic, mut parity) = codewords.split_rows(self.systematic_len());
+        let (systematic, mut parity) = codewords.split_rows(messages.height());
         systematic.values.copy_from_slice(messages.values);
         self.write_parity(messages, &mut parity);
     }
+}
 
+impl<F: Field, S: SystematicCode<F>> Code<F> for S {
     fn message_len(&self) -> usize {
         self.systematic_len()
     }
@@ -50,5 +46,3 @@ impl<F: Field, S: SystematicCode<F>> Code<F> for S {
         self.systematic_len() + self.parity_len()
     }
 }
-
-pub trait SystematicLinearCode<F: Field>: SystematicCode<F> + LinearCode<F> {}

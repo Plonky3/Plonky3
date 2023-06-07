@@ -13,7 +13,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 pub struct TensorPCS<F: Field, M: DirectMMCS<F>> {
-    codes: SLCodeRegistry<F>,
+    _codes: SLCodeRegistry<F>,
     mmcs: M,
     _phantom: PhantomData<M>,
 }
@@ -32,8 +32,9 @@ where
         &self,
         mut polynomials: Vec<RowMajorMatrix<F>>,
     ) -> (Self::Commitment, Self::ProverData) {
-        for m in polynomials.iter_mut() {
-            self.codes.append_parity(m);
+        for _m in polynomials.iter_mut() {
+            // TODO
+            // self.codes.write_parity(m);
         }
         self.mmcs.commit(polynomials)
     }
