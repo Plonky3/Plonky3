@@ -12,7 +12,7 @@ use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::mul::mul_csr_dense_v2;
 use p3_matrix::sparse::CsrMatrix;
-use p3_matrix::stack::VertStack2;
+use p3_matrix::stack::VerticalPair;
 use p3_matrix::Matrix;
 
 /// The Spielman-based code described in the Brakedown paper.
@@ -35,9 +35,9 @@ where
         self.a.height()
     }
 
-    fn z_len(&self) -> usize {
-        self.y_len() + self.z_parity_len()
-    }
+    // fn z_len(&self) -> usize {
+    //     self.y_len() + self.z_parity_len()
+    // }
 
     fn z_parity_len(&self) -> usize {
         self.inner_code.parity_len()
@@ -53,15 +53,15 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
 {
-    type Out = VertStack2<F, RowMajorMatrix<F>, VertStack2<F, IC::Out, RowMajorMatrix<F>>>;
+    type Out = VerticalPair<F, RowMajorMatrix<F>, VerticalPair<F, IC::Out, RowMajorMatrix<F>>>;
 
     fn encode_batch(&self, x: RowMajorMatrix<F>) -> Self::Out {
         let y = mul_csr_dense_v2(&self.a, &x);
         let z = self.inner_code.encode_batch(y);
         let v = mul_csr_dense_v2(&self.b, &z);
 
-        let parity = VertStack2::new(z, v);
-        VertStack2::new(x, parity)
+        let parity = VerticalPair::new(z, v);
+        VerticalPair::new(x, parity)
     }
 }
 

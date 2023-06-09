@@ -1,4 +1,4 @@
-use crate::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use crate::dense::RowMajorMatrix;
 use crate::sparse::CsrMatrix;
 use crate::Matrix;
 use alloc::vec;
