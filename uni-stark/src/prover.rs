@@ -90,7 +90,7 @@ pub fn prove<SC, A, Chal>(
                 .map(|col| {
                     <SC::Domain as Field>::Packing::from_fn(|offset| {
                         let row = wrap(i_local_start + offset);
-                        trace_lde.get(row, col).into()
+                        trace_lde.get(row, col)
                     })
                 })
                 .collect();
@@ -98,7 +98,7 @@ pub fn prove<SC, A, Chal>(
                 .map(|col| {
                     <SC::Domain as Field>::Packing::from_fn(|offset| {
                         let row = wrap(i_next_start + offset);
-                        trace_lde.get(row, col).into()
+                        trace_lde.get(row, col)
                     })
                 })
                 .collect();

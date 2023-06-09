@@ -19,13 +19,7 @@ where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
 {
-    type Res = Dom;
-
-    fn lde_batch(
-        &self,
-        polys: RowMajorMatrix<Val>,
-        added_bits: usize,
-    ) -> RowMajorMatrix<Self::Res> {
+    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Dom> {
         let bits = log2_strict_usize(polys.height());
         let g = Dom::primitive_root_of_unity(bits);
         let subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << bits).collect::<Vec<_>>();
@@ -47,13 +41,7 @@ where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
 {
-    type Res = Dom;
-
-    fn lde_batch(
-        &self,
-        polys: RowMajorMatrix<Val>,
-        added_bits: usize,
-    ) -> RowMajorMatrix<Self::Res> {
+    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Dom> {
         let bits = log2_strict_usize(polys.height());
         let g = Dom::primitive_root_of_unity(bits);
         let subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << bits).collect::<Vec<_>>();

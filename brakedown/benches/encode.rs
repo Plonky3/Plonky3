@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_brakedown::BrakedownCode;
-use p3_code::{IdentityCode, SystematicCode};
+use p3_code::{CodeOrFamily, IdentityCode};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::sparse::CsrMatrix;
@@ -44,7 +44,7 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &code, |b, code| {
             b.iter(|| {
                 messages.values.truncate(n * BATCH_SIZE);
-                code.append_parity(&mut messages);
+                code.encode_batch(messages.clone());
             });
         });
     }

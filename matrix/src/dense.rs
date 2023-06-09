@@ -19,12 +19,6 @@ impl<T> RowMajorMatrix<T> {
         Self { values, width }
     }
 
-    #[must_use]
-    pub fn row(&self, r: usize) -> &[T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
-    }
-
     pub fn row_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]

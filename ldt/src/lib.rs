@@ -60,7 +60,7 @@ where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     LDE: TwoAdicLDE<Val, Dom>,
-    M: DirectMMCS<Dom, Mat = RowMajorMatrix<LDE::Res>>,
+    M: DirectMMCS<Dom, Mat = RowMajorMatrix<Dom>>,
     L: LDT<Dom, M>,
 {
     type Commitment = M::Commitment;
@@ -95,7 +95,7 @@ where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     LDE: TwoAdicLDE<Val, Dom>,
-    M: DirectMMCS<Dom, Mat = RowMajorMatrix<LDE::Res>>,
+    M: DirectMMCS<Dom, Mat = RowMajorMatrix<Dom>>,
     L: LDT<Dom, M>,
 {
     fn open_multi_batches<EF, Chal>(
