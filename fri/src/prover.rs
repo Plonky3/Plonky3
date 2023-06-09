@@ -6,7 +6,7 @@ use itertools::Itertools;
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{AbstractField, ExtensionField, Field};
-use p3_matrix::Matrix;
+use p3_matrix::{Matrix, MatrixRows};
 use p3_maybe_rayon::MaybeIntoParIter;
 use p3_maybe_rayon::ParallelIterator;
 
@@ -86,7 +86,7 @@ fn reduce_matrices<F, Challenge, Mat>(
 where
     F: Field,
     Challenge: ExtensionField<F>,
-    Mat: Matrix<F>,
+    Mat: for<'a> MatrixRows<'a, F>,
 {
     (0..height)
         .map(|r| {

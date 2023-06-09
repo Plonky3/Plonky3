@@ -5,7 +5,7 @@ use p3_field::{
 };
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
 /// A naive quadratic-time implementation of `TwoAdicSubgroupLDE`, intended for testing.

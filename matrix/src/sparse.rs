@@ -62,8 +62,4 @@ impl<T> Matrix<T> for CsrMatrix<T> {
     fn height(&self) -> usize {
         self.row_indices.len() - 1
     }
-
-    fn row(&self, _r: usize) -> &[T] {
-        todo!()
-    }
 }

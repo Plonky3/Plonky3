@@ -1,4 +1,4 @@
-use crate::Matrix;
+use crate::{Matrix, MatrixGet, MatrixRows};
 use alloc::vec::Vec;
 use p3_field::Field;
 use rand::distributions::{Distribution, Standard};
@@ -99,8 +99,18 @@ impl<T> Matrix<T> for RowMajorMatrix<T> {
     fn height(&self) -> usize {
         self.values.len() / self.width
     }
+}
 
-    fn row(&self, r: usize) -> &[T] {
+impl<T: Clone> MatrixGet<T> for RowMajorMatrix<T> {
+    fn get(&self, r: usize, c: usize) -> T {
+        self.values[r * self.width + c].clone()
+    }
+}
+
+impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrix<T> {
+    type Row = &'a [T];
+
+    fn row(&'a self, r: usize) -> &'a [T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
@@ -113,12 +123,6 @@ pub struct RowMajorMatrixView<'a, T> {
 }
 
 impl<'a, T> RowMajorMatrixView<'a, T> {
-    #[must_use]
-    pub fn row(&self, r: usize) -> &[T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
-    }
-
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
         self.values.chunks_exact(self.width)
     }
@@ -132,8 +136,12 @@ impl<T> Matrix<T> for RowMajorMatrixView<'_, T> {
     fn height(&self) -> usize {
         self.values.len() / self.width
     }
+}
 
-    fn row(&self, r: usize) -> &[T] {
+impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixView<'_, T> {
+    type Row = &'a [T];
+
+    fn row(&'a self, r: usize) -> &'a [T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
@@ -145,12 +153,6 @@ pub struct RowMajorMatrixViewMut<'a, T> {
 }
 
 impl<'a, T> RowMajorMatrixViewMut<'a, T> {
-    #[must_use]
-    pub fn row(&self, r: usize) -> &[T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
-    }
-
     pub fn row_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
@@ -190,8 +192,12 @@ impl<T> Matrix<T> for RowMajorMatrixViewMut<'_, T> {
     fn height(&self) -> usize {
         self.values.len() / self.width
     }
+}
 
-    fn row(&self, r: usize) -> &[T] {
+impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixViewMut<'_, T> {
+    type Row = &'a [T];
+
+    fn row(&'a self, r: usize) -> &'a [T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }

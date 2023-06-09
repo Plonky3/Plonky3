@@ -4,7 +4,6 @@ use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
-use itertools::Itertools;
 
 /// A generalization of `Field` which permits things like
 /// - an actual field element
@@ -63,15 +62,6 @@ pub trait Field:
 
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
-    }
-
-    /// `x += y * s`, where `s` is a scalar.
-    // TODO: Use PackedField
-    // TODO: Move out of Field?
-    fn add_scaled_slice_in_place(x: &mut [Self], y: &[Self], s: Self) {
-        x.iter_mut()
-            .zip_eq(y)
-            .for_each(|(x_i, y_i)| *x_i += *y_i * s);
     }
 
     /// self * 2^exp
