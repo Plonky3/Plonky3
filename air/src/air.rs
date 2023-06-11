@@ -1,5 +1,5 @@
 use core::ops::{Add, Mul, Sub};
-use p3_field::{AbstractField, AbstractionOf, ExtensionField, Field};
+use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -95,23 +95,23 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
 
-    fn assert_eq_ext<EF: ExtensionField<Self::F>>(&mut self, x: EF, y: EF) {
+    fn assert_eq_ext<EF: AbstractExtensionField<Self::Expr>>(&mut self, x: EF, y: EF) {
         let xb = x.as_base_slice();
         let yb = y.as_base_slice();
         for i in 0..EF::D {
-            self.assert_eq(xb[i], yb[i]);
+            self.assert_eq(xb[i].clone(), yb[i].clone());
         }
     }
 
-    fn assert_zero_ext<EF: ExtensionField<Self::F>>(&mut self, x: EF) {
-        for xb in x.as_base_slice() {
-            self.assert_zero(*xb);
+    fn assert_zero_ext<EF: AbstractExtensionField<Self::Expr>>(&mut self, x: EF) {
+        for xb in x.as_base_slice().iter().cloned() {
+            self.assert_zero(xb);
         }
     }
 
-    fn assert_one_ext<EF: ExtensionField<Self::F>>(&mut self, x: EF) {
-        for xb in x.as_base_slice() {
-            self.assert_one(*xb);
+    fn assert_one_ext<EF: AbstractExtensionField<Self::Expr>>(&mut self, x: EF) {
+        for xb in x.as_base_slice().iter().cloned() {
+            self.assert_one(xb);
         }
     }
 }
@@ -121,7 +121,7 @@ pub trait PairBuilder: AirBuilder {
 }
 
 pub trait PermutationAirBuilder: AirBuilder {
-    type EF: ExtensionField<Self::F>;
+    type EF: AbstractExtensionField<Self::F>;
     type MP: Matrix<Self::EF>;
 
     fn permutation(&self) -> Self::MP;
