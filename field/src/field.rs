@@ -160,7 +160,7 @@ impl<F: PrimeField32> PrimeField64 for F {
     }
 }
 
-pub trait AbstractExtensionField<Base: AbstractField>:
+pub trait AbstractExtensionField<Base>:
     AbstractField
     + Add<Base, Output = Self>
     + AddAssign<Base>
@@ -219,17 +219,17 @@ pub trait TwoAdicField: Field {
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
 #[derive(Clone)]
-pub struct Powers<F: Field> {
-    base: F,
-    current: F,
+pub struct Powers<F> {
+    pub base: F,
+    pub current: F,
 }
 
-impl<F: Field> Iterator for Powers<F> {
+impl<F: MulAssign + Clone> Iterator for Powers<F> {
     type Item = F;
 
     fn next(&mut self) -> Option<F> {
-        let result = self.current;
-        self.current *= self.base;
+        let result = self.current.clone();
+        self.current *= self.base.clone();
         Some(result)
     }
 }
