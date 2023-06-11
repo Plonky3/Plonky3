@@ -1,5 +1,5 @@
 use core::ops::{Add, Mul, Sub};
-use p3_field::{AbstractField, AbstractionOf, Field};
+use p3_field::{AbstractField, AbstractionOf, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -94,6 +94,26 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
+
+    fn assert_eq_ext<EF: ExtensionField<Self::F>>(&mut self, x: EF, y: EF) {
+        let xb = x.as_base_slice();
+        let yb = y.as_base_slice();
+        for i in 0..EF::D {
+            self.assert_eq(xb[i], yb[i]);
+        }
+    }
+
+    fn assert_zero_ext<EF: ExtensionField<Self::F>>(&mut self, x: EF) {
+        for xb in x.as_base_slice() {
+            self.assert_zero(*xb);
+        }
+    }
+
+    fn assert_one_ext<EF: ExtensionField<Self::F>>(&mut self, x: EF) {
+        for xb in x.as_base_slice() {
+            self.assert_one(*xb);
+        }
+    }
 }
 
 pub trait PairBuilder: AirBuilder {
@@ -101,9 +121,12 @@ pub trait PairBuilder: AirBuilder {
 }
 
 pub trait PermutationAirBuilder: AirBuilder {
-    fn permutation(&self) -> Self::M;
+    type EF: ExtensionField<Self::F>;
+    type MP: Matrix<Self::EF>;
 
-    fn permutation_randomness(&self) -> &[Self::Expr];
+    fn permutation(&self) -> Self::MP;
+
+    fn permutation_randomness(&self) -> &[Self::EF];
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
