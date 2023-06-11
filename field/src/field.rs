@@ -160,7 +160,7 @@ impl<F: PrimeField32> PrimeField64 for F {
     }
 }
 
-pub trait AbstractExtensionField<Base: AbstractField>:
+pub trait AbstractExtensionField<Base>:
     AbstractField
     + Add<Base, Output = Self>
     + AddAssign<Base>
