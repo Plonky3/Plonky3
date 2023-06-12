@@ -3,9 +3,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_field::Field;
-use p3_symmetric::hasher::IterHasher;
+use p3_symmetric::hasher::CryptographicHasher;
 
-pub struct HashChallenger<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> {
+pub struct HashChallenger<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> {
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     hasher: H,
@@ -13,7 +13,9 @@ pub struct HashChallenger<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LE
     _phantom_h: PhantomData<H>,
 }
 
-impl<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> HashChallenger<F, H, OUT_LEN> {
+impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize>
+    HashChallenger<F, H, OUT_LEN>
+{
     pub fn new(initial_state: Vec<F>, hasher: H) -> Self {
         Self {
             input_buffer: initial_state,
@@ -35,7 +37,7 @@ impl<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> HashChallen
     }
 }
 
-impl<F: Field, H: IterHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> Challenger<F>
+impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> Challenger<F>
     for HashChallenger<F, H, OUT_LEN>
 {
     fn observe_element(&mut self, element: F) {

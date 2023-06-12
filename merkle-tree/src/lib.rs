@@ -11,7 +11,7 @@ use p3_commit::{Dimensions, DirectMMCS, MMCS};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_symmetric::compression::PseudoCompressionFunction;
-use p3_symmetric::hasher::IterHasher;
+use p3_symmetric::hasher::CryptographicHasher;
 
 // TODO: Add Jaqui's cache-friendly version, maybe as a separate alternative impl.
 
@@ -32,7 +32,7 @@ impl<L, D> MerkleTree<L, D> {
     where
         L: Copy,
         D: Copy,
-        H: IterHasher<L, D>,
+        H: CryptographicHasher<L, D>,
         C: PseudoCompressionFunction<D, 2>,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
@@ -54,14 +54,7 @@ impl<L, D> MerkleTree<L, D> {
             .collect_vec();
 
         let first_digest_layer = (0..max_height)
-            .map(|i| {
-                h.hash_iter(
-                    tallest_matrices
-                        .iter()
-                        .flat_map(|m| m.row(i).iter())
-                        .copied(),
-                )
-            })
+            .map(|i| h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i))))
             .collect_vec();
 
         let mut digest_layers = vec![first_digest_layer];
@@ -83,12 +76,8 @@ impl<L, D> MerkleTree<L, D> {
                 let right = prev_layer[2 * i + 1];
                 let mut digest = c.compress([left, right]);
                 if !tallest_matrices.is_empty() {
-                    let tallest_digest = h.hash_iter(
-                        tallest_matrices
-                            .iter()
-                            .flat_map(|m| m.row(i).iter())
-                            .copied(),
-                    );
+                    let tallest_digest =
+                        h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i)));
                     digest = c.compress([digest, tallest_digest]);
                 }
                 next_digests.push(digest);
@@ -140,7 +129,7 @@ impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
 impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: Clone,
-    H: IterHasher<L, D>,
+    H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
     type ProverData = MerkleTree<L, D>;
@@ -178,7 +167,7 @@ impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: Copy,
     D: Copy,
-    H: IterHasher<L, D>,
+    H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
     fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::Commitment, Self::ProverData) {

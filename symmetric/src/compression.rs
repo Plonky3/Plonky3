@@ -1,4 +1,4 @@
-use crate::hasher::IterHasher;
+use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
 use core::marker::PhantomData;
 use itertools::Itertools;
@@ -49,7 +49,8 @@ where
 
 pub struct CompressionFunctionFromIterHasher<T, H, const N: usize, const CHUNK: usize>
 where
-    H: IterHasher<T, [T; CHUNK]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; CHUNK]>,
 {
     _phantom_t: PhantomData<T>,
     hasher: H,
@@ -58,7 +59,8 @@ where
 impl<T, H, const N: usize, const CHUNK: usize> PseudoCompressionFunction<[T; CHUNK], N>
     for CompressionFunctionFromIterHasher<T, H, N, CHUNK>
 where
-    H: IterHasher<T, [T; CHUNK]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; CHUNK]>,
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
         self.hasher.hash_iter(input.into_iter().flatten())
@@ -68,6 +70,7 @@ where
 impl<T, H, const N: usize, const CHUNK: usize> CompressionFunction<[T; CHUNK], N>
     for CompressionFunctionFromIterHasher<T, H, N, CHUNK>
 where
-    H: IterHasher<T, [T; CHUNK]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; CHUNK]>,
 {
 }
