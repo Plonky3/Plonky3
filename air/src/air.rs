@@ -5,10 +5,10 @@ use p3_matrix::Matrix;
 
 pub trait Air<AB: AirBuilder>: Sync {
     fn eval(&self, builder: &mut AB);
-}
 
-pub trait Pair<AB: AirBuilder>: Air<AB> {
-    fn preprocessed_trace(&self) -> RowMajorMatrix<AB::F>;
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<AB::F>> {
+        None
+    }
 }
 
 pub trait AirBuilder: Sized {
