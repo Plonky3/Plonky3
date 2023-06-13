@@ -19,6 +19,7 @@ where
     num_rounds: usize,
     mds: MDS,
     rate: usize,
+    round_constants: Vec<F>,
 
     _phantom_f: PhantomData<F>,
     _phantom_isl: PhantomData<ISL>,
@@ -31,13 +32,12 @@ where
     MDS: MDSPermutation<F, WIDTH>,
     ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
-
-
-    pub fn new_from_num_rounds(num_rounds: usize, mds: MDS) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: MDS) -> Self {
         Self {
             num_rounds,
             mds,
             rate: WIDTH - CAPACITY,
+            round_constants,
             _phantom_f: PhantomData,
             _phantom_isl: PhantomData,
         }
@@ -56,17 +56,47 @@ where
         (1..25).find(is_sufficient).unwrap()
     }
 
-    fn rescue_XLIX_permutation(state: &mut [F; WIDTH]) {}
-
-    fn get_round_constants() -> Vec<F> {
-        let bytes_per_int = ceil_div_usize(F::BITS, 8) + 1;
-        let num_bytes = bytes_per_int * 2 * WIDTH * self.num_rounds;
-        let seed_string = format!("Rescue-XLIX({},{},{},{}", F::order(), WIDTH, CAPACITY, SEC_LEVEL);
-
-        let mut hasher = Shake256::new();
-        hasher.update(seed_string.as_bytes());
-        let byte_string = hasher.finalize()[..];
+    fn sbox_layer(state: &mut [F; WIDTH]) {
+        for x in state.iter_mut() {
+            *x = x.exp_u64(ALPHA);
+        }
     }
+
+    fn rescue_XLIX_permutation(&self, state: &mut [F; WIDTH]) {
+        for round in 0..self.num_rounds {
+            // S-box
+            Self::sbox_layer(state);
+
+            // MDS
+            self.mds.permute_mut(state);
+
+            // Constants
+            for j in 0..WIDTH {
+                state[j] += self.round_constants[round * WIDTH * 2 + j];
+            }
+
+            // Inverse S-box
+            ISL::inverse_sbox_layer(state);
+
+            // MDS
+            self.mds.permute_mut(state);
+
+            // Constants
+            for j in 0..WIDTH {
+                state[j] += self.round_constants[round * WIDTH * 2 + WIDTH + j];
+            }
+        }
+    }
+
+    // fn get_round_constants() -> Vec<F> {
+    //     let bytes_per_int = ceil_div_usize(F::BITS, 8) + 1;
+    //     let num_bytes = bytes_per_int * 2 * WIDTH * self.num_rounds;
+    //     let seed_string = format!("Rescue-XLIX({},{},{},{}", F::order(), WIDTH, CAPACITY, SEC_LEVEL);
+
+    //     let mut hasher = Shake256::new();
+    //     hasher.update(seed_string.as_bytes());
+    //     let byte_string = hasher.finalize()[..];
+    // }
 }
 
 
