@@ -2,12 +2,12 @@ use crate::inverse_sbox::InverseSboxLayer;
 use crate::util::binomial;
 
 use ethereum_types::U256;
-use sha3::Shake256;
+// use sha3::Shake256;
 use std::marker::PhantomData;
 
 use p3_field::PrimeField;
-use p3_symmetric::permutation::MDSPermutation;
-use p3_util::ceil_div_usize;
+use p3_symmetric::permutation::{CryptographicPermutation, MDSPermutation};
+// use p3_util::ceil_div_usize;
 
 #[derive(Clone)]
 pub struct Rescue<F, MDS, ISL, const WIDTH: usize, const CAPACITY: usize, const ALPHA: u64, const SEC_LEVEL: usize>
@@ -62,7 +62,27 @@ where
         }
     }
 
-    fn rescue_XLIX_permutation(&self, state: &mut [F; WIDTH]) {
+    // fn get_round_constants() -> Vec<F> {
+    //     let bytes_per_int = ceil_div_usize(F::BITS, 8) + 1;
+    //     let num_bytes = bytes_per_int * 2 * WIDTH * self.num_rounds;
+    //     let seed_string = format!("Rescue-XLIX({},{},{},{}", F::order(), WIDTH, CAPACITY, SEC_LEVEL);
+
+    //     let mut hasher = Shake256::new();
+    //     hasher.update(seed_string.as_bytes());
+    //     let byte_string = hasher.finalize()[..];
+    // }
+}
+
+impl<F, MDS, ISL, const WIDTH: usize, const CAPACITY: usize, const ALPHA: u64, const SEC_LEVEL: usize>
+    CryptographicPermutation<[F; WIDTH]> for Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+where
+    F: PrimeField,
+    MDS: MDSPermutation<F, WIDTH>,
+    ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
+{
+    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
+        // Rescue-XLIX permutation
+
         for round in 0..self.num_rounds {
             // S-box
             Self::sbox_layer(state);
@@ -87,19 +107,9 @@ where
             }
         }
     }
-
-    // fn get_round_constants() -> Vec<F> {
-    //     let bytes_per_int = ceil_div_usize(F::BITS, 8) + 1;
-    //     let num_bytes = bytes_per_int * 2 * WIDTH * self.num_rounds;
-    //     let seed_string = format!("Rescue-XLIX({},{},{},{}", F::order(), WIDTH, CAPACITY, SEC_LEVEL);
-
-    //     let mut hasher = Shake256::new();
-    //     hasher.update(seed_string.as_bytes());
-    //     let byte_string = hasher.finalize()[..];
-    // }
 }
 
-
+// fn get_alphas() -> (u64, u64) {
 
 
 // type RescuePrimeOptimizedM31 = Rescue<Mersenne31, ... >
