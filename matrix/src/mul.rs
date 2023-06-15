@@ -9,7 +9,7 @@ use p3_field::Field;
 ///
 /// # Panics
 /// Panics if dimensions of input matrices don't match.
-pub fn mul_csr_dense_v2<'a, F, B>(a: &CsrMatrix<F>, b: &'a B) -> RowMajorMatrix<F>
+pub fn mul_csr_dense<'a, F, B>(a: &CsrMatrix<F>, b: &'a B) -> RowMajorMatrix<F>
 where
     F: Field,
     B: MatrixRows<'a, F>,

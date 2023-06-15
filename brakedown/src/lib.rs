@@ -10,7 +10,7 @@ use p3_code::{
 };
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::mul::mul_csr_dense_v2;
+use p3_matrix::mul::mul_csr_dense;
 use p3_matrix::sparse::CsrMatrix;
 use p3_matrix::stack::VerticalPair;
 use p3_matrix::Matrix;
@@ -35,10 +35,6 @@ where
         self.a.height()
     }
 
-    // fn z_len(&self) -> usize {
-    //     self.y_len() + self.z_parity_len()
-    // }
-
     fn z_parity_len(&self) -> usize {
         self.inner_code.parity_len()
     }
@@ -56,9 +52,9 @@ where
     type Out = VerticalPair<F, RowMajorMatrix<F>, VerticalPair<F, IC::Out, RowMajorMatrix<F>>>;
 
     fn encode_batch(&self, x: RowMajorMatrix<F>) -> Self::Out {
-        let y = mul_csr_dense_v2(&self.a, &x);
+        let y = mul_csr_dense(&self.a, &x);
         let z = self.inner_code.encode_batch(y);
-        let v = mul_csr_dense_v2(&self.b, &z);
+        let v = mul_csr_dense(&self.b, &z);
 
         let parity = VerticalPair::new(z, v);
         VerticalPair::new(x, parity)
