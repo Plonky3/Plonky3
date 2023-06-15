@@ -4,7 +4,7 @@ use p3_fri::FRIBasedPCS;
 use p3_goldilocks::Goldilocks;
 use p3_lde::NaiveCosetLDE;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::MatrixRows;
 use p3_merkle_tree::MerkleTreeMMCS;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;

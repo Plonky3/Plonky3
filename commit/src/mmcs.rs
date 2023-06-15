@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use p3_matrix::Matrix;
+use p3_matrix::MatrixRows;
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a bit like a vector commitment scheme, but it
 /// supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
@@ -18,7 +18,7 @@ pub trait MMCS<T> {
     type Commitment;
     type Proof;
     type Error;
-    type Mat: Matrix<T>;
+    type Mat: for<'a> MatrixRows<'a, T>;
 
     fn open_batch(row: usize, prover_data: &Self::ProverData) -> (Vec<&[T]>, Self::Proof);
 

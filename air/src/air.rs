@@ -1,7 +1,7 @@
 use core::ops::{Add, Mul, Sub};
 use p3_field::{AbstractField, AbstractionOf, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::MatrixRows;
 
 pub trait Air<AB: AirBuilder>: Sync {
     fn eval(&self, builder: &mut AB);
@@ -31,7 +31,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
-    type M: Matrix<Self::Var>;
+    type M: for<'a> MatrixRows<'a, Self::Var, Row = &'a [Self::Var]>;
 
     fn main(&self) -> Self::M;
 
@@ -141,7 +141,7 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 #[cfg(test)]
 mod tests {
     use crate::{Air, AirBuilder};
-    use p3_matrix::Matrix;
+    use p3_matrix::MatrixRows;
 
     struct FibonacciAir;
 

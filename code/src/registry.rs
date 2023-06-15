@@ -5,7 +5,7 @@ use crate::{
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use p3_field::Field;
-use p3_matrix::Matrix;
+use p3_matrix::{Matrix, MatrixRows};
 
 /// A registry of systematic, linear codes for various message sizes.
 pub struct SLCodeRegistry<F: Field, In: Matrix<F>, Out: Matrix<F>> {
@@ -13,7 +13,12 @@ pub struct SLCodeRegistry<F: Field, In: Matrix<F>, Out: Matrix<F>> {
     codes: Vec<Box<dyn SystematicLinearCode<F, In, Out = Out>>>,
 }
 
-impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SLCodeRegistry<F, In, Out> {
+impl<F, In, Out> SLCodeRegistry<F, In, Out>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Out: for<'a> MatrixRows<'a, F>,
+{
     pub fn new(mut codes: Vec<Box<dyn SystematicLinearCode<F, In, Out = Out>>>) -> Self {
         codes.sort_by_key(|c| c.message_len());
         Self { codes }
@@ -32,7 +37,12 @@ impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SLCodeRegistry<F, In, Out> {
     }
 }
 
-impl<F: Field, In: Matrix<F>, Out: Matrix<F>> CodeOrFamily<F, In> for SLCodeRegistry<F, In, Out> {
+impl<F, In, Out> CodeOrFamily<F, In> for SLCodeRegistry<F, In, Out>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Out: for<'a> MatrixRows<'a, F>,
+{
     type Out = Out;
 
     fn encode_batch(&self, messages: In) -> Self::Out {
@@ -41,7 +51,12 @@ impl<F: Field, In: Matrix<F>, Out: Matrix<F>> CodeOrFamily<F, In> for SLCodeRegi
     }
 }
 
-impl<F: Field, In: Matrix<F>, Out: Matrix<F>> CodeFamily<F, In> for SLCodeRegistry<F, In, Out> {
+impl<F, In, Out> CodeFamily<F, In> for SLCodeRegistry<F, In, Out>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Out: for<'a> MatrixRows<'a, F>,
+{
     /// The next supported message length that is at least `min`.
     fn next_message_len(&self, min: usize) -> Option<usize> {
         for c in &self.codes {
@@ -62,17 +77,26 @@ impl<F: Field, In: Matrix<F>, Out: Matrix<F>> CodeFamily<F, In> for SLCodeRegist
     }
 }
 
-impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SystematicCodeOrFamily<F, In>
-    for SLCodeRegistry<F, In, Out>
+impl<F, In, Out> SystematicCodeOrFamily<F, In> for SLCodeRegistry<F, In, Out>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Out: for<'a> MatrixRows<'a, F>,
 {
 }
 
-impl<F: Field, In: Matrix<F>, Out: Matrix<F>> SystematicCodeFamily<F, In>
-    for SLCodeRegistry<F, In, Out>
+impl<F, In, Out> SystematicCodeFamily<F, In> for SLCodeRegistry<F, In, Out>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Out: for<'a> MatrixRows<'a, F>,
 {
 }
 
-impl<F: Field, In: Matrix<F>, Out: Matrix<F>> LinearCodeFamily<F, In>
-    for SLCodeRegistry<F, In, Out>
+impl<F, In, Out> LinearCodeFamily<F, In> for SLCodeRegistry<F, In, Out>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Out: for<'a> MatrixRows<'a, F>,
 {
 }
