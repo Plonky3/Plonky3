@@ -13,7 +13,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::mul::mul_csr_dense;
 use p3_matrix::sparse::CsrMatrix;
 use p3_matrix::stack::VerticalPair;
-use p3_matrix::Matrix;
+use p3_matrix::{Matrix, MatrixRows};
 
 /// The Spielman-based code described in the Brakedown paper.
 pub struct BrakedownCode<F, IC>
@@ -44,14 +44,15 @@ where
     }
 }
 
-impl<F, IC> CodeOrFamily<F, RowMajorMatrix<F>> for BrakedownCode<F, IC>
+impl<F, IC, In> CodeOrFamily<F, In> for BrakedownCode<F, IC>
 where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
+    In: for<'a> MatrixRows<'a, F>,
 {
-    type Out = VerticalPair<F, RowMajorMatrix<F>, VerticalPair<F, IC::Out, RowMajorMatrix<F>>>;
+    type Out = VerticalPair<F, In, VerticalPair<F, IC::Out, RowMajorMatrix<F>>>;
 
-    fn encode_batch(&self, x: RowMajorMatrix<F>) -> Self::Out {
+    fn encode_batch(&self, x: In) -> Self::Out {
         let y = mul_csr_dense(&self.a, &x);
         let z = self.inner_code.encode_batch(y);
         let v = mul_csr_dense(&self.b, &z);
@@ -61,47 +62,53 @@ where
     }
 }
 
-impl<F, IC> Code<F, RowMajorMatrix<F>> for BrakedownCode<F, IC>
+impl<F, IC, In> Code<F, In> for BrakedownCode<F, IC>
 where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
+    In: for<'a> MatrixRows<'a, F>,
 {
     fn message_len(&self) -> usize {
         self.a.width()
     }
 
     fn codeword_len(&self) -> usize {
-        self.message_len() + self.parity_len()
+        <BrakedownCode<F, IC> as Code<F, In>>::message_len(self)
+            + <BrakedownCode<F, IC> as SystematicCode<F, In>>::parity_len(self)
     }
 }
 
-impl<F, IC> SystematicCodeOrFamily<F, RowMajorMatrix<F>> for BrakedownCode<F, IC>
+impl<F, IC, In> SystematicCodeOrFamily<F, In> for BrakedownCode<F, IC>
 where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
+    In: for<'a> MatrixRows<'a, F>,
 {
 }
 
-impl<F, IC> SystematicCode<F, RowMajorMatrix<F>> for BrakedownCode<F, IC>
+impl<F, IC, In> SystematicCode<F, In> for BrakedownCode<F, IC>
 where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
+    In: for<'a> MatrixRows<'a, F>,
 {
     fn parity_len(&self) -> usize {
         self.y_len() + self.z_parity_len() + self.v_len()
     }
 }
 
-impl<F, IC> LinearCode<F, RowMajorMatrix<F>> for BrakedownCode<F, IC>
+impl<F, IC, In> LinearCode<F, In> for BrakedownCode<F, IC>
 where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
+    In: for<'a> MatrixRows<'a, F>,
 {
 }
 
-impl<F, IC> SystematicLinearCode<F, RowMajorMatrix<F>> for BrakedownCode<F, IC>
+impl<F, IC, In> SystematicLinearCode<F, In> for BrakedownCode<F, IC>
 where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
+    In: for<'a> MatrixRows<'a, F>,
 {
 }
