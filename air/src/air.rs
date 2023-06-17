@@ -1,5 +1,7 @@
 use core::ops::{Add, Mul, Sub};
-use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
+use p3_field::{
+    AbstractExtensionField, AbstractField, AbstractionOf, AbstractionOfEF, ExtensionField, Field,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -13,6 +15,29 @@ pub trait Pair<AB: AirBuilder>: Air<AB> {
 
 pub trait AirBuilder: Sized {
     type F: Field;
+
+    type EF: ExtensionField<Self::F>;
+
+    type ExprEF: AbstractionOfEF<Self::F, Self::EF>
+        + From<Self::Expr>
+        + Add<Self::Expr, Output = Self::ExprEF>
+        + Sub<Self::Expr, Output = Self::ExprEF>
+        + Mul<Self::Expr, Output = Self::ExprEF>
+        + Add<Self::VarEF, Output = Self::ExprEF>
+        + Sub<Self::VarEF, Output = Self::ExprEF>
+        + Mul<Self::VarEF, Output = Self::ExprEF>;
+
+    type VarEF: Into<Self::ExprEF>
+        + Copy
+        + Add<Self::EF, Output = Self::ExprEF>
+        + Add<Self::VarEF, Output = Self::ExprEF>
+        + Add<Self::ExprEF, Output = Self::ExprEF>
+        + Sub<Self::EF, Output = Self::ExprEF>
+        + Sub<Self::VarEF, Output = Self::ExprEF>
+        + Sub<Self::ExprEF, Output = Self::ExprEF>
+        + Mul<Self::EF, Output = Self::ExprEF>
+        + Mul<Self::VarEF, Output = Self::ExprEF>
+        + Mul<Self::ExprEF, Output = Self::ExprEF>;
 
     type Expr: AbstractionOf<Self::F>
         + Add<Self::Var, Output = Self::Expr>
@@ -95,23 +120,19 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
 
-    fn assert_eq_ext<EF: AbstractExtensionField<Self::Expr>>(&mut self, x: EF, y: EF) {
-        let xb = x.as_base_slice();
-        let yb = y.as_base_slice();
-        for i in 0..EF::D {
+    fn assert_eq_ext<I1: Into<Self::ExprEF>, I2: Into<Self::ExprEF>>(&mut self, x: I1, y: I2) {
+        let xe = x.into();
+        let ye = y.into();
+        let xb = xe.as_base_slice();
+        let yb = ye.as_base_slice();
+        for i in 0..Self::EF::D {
             self.assert_eq(xb[i].clone(), yb[i].clone());
         }
     }
 
-    fn assert_zero_ext<EF: AbstractExtensionField<Self::Expr>>(&mut self, x: EF) {
-        for xb in x.as_base_slice().iter().cloned() {
+    fn assert_zero_ext<EF: Into<Self::ExprEF>>(&mut self, x: EF) {
+        for xb in x.into().as_base_slice().iter().cloned() {
             self.assert_zero(xb);
-        }
-    }
-
-    fn assert_one_ext<EF: AbstractExtensionField<Self::Expr>>(&mut self, x: EF) {
-        for xb in x.as_base_slice().iter().cloned() {
-            self.assert_one(xb);
         }
     }
 }
@@ -121,8 +142,7 @@ pub trait PairBuilder: AirBuilder {
 }
 
 pub trait PermutationAirBuilder: AirBuilder {
-    type EF: AbstractExtensionField<Self::F>;
-    type MP: Matrix<Self::EF>;
+    type MP: Matrix<Self::VarEF>;
 
     fn permutation(&self) -> Self::MP;
 
@@ -136,6 +156,9 @@ pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
 
 impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     type F = AB::F;
+    type EF = AB::EF;
+    type VarEF = AB::VarEF;
+    type ExprEF = AB::ExprEF;
     type Expr = AB::Expr;
     type Var = AB::Var;
     type M = AB::M;

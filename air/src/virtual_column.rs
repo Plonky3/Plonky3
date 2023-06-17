@@ -4,7 +4,7 @@ use core::ops::Mul;
 use p3_field::{AbstractField, Field};
 
 /// An affine function over columns in a PAIR.
-pub struct VirtualPairCol<F: AbstractField> {
+pub struct VirtualPairCol<F: Field> {
     column_weights: Vec<(PairCol, F)>,
     constant: F,
 }
@@ -24,7 +24,7 @@ impl PairCol {
     }
 }
 
-impl<F: AbstractField> VirtualPairCol<F> {
+impl<F: Field> VirtualPairCol<F> {
     #[must_use]
     pub fn one() -> Self {
         Self::constant(F::ONE)
@@ -62,9 +62,9 @@ impl<F: AbstractField> VirtualPairCol<F> {
         Expr: AbstractField + Mul<F, Output = Expr>,
         Var: Into<Expr> + Copy,
     {
-        let mut result = self.constant.clone().into();
+        let mut result = self.constant.into();
         for (column, weight) in &self.column_weights {
-            result += column.get(preprocessed, main).into() * weight.clone();
+            result += column.get(preprocessed, main).into() * *weight;
         }
         result
     }
