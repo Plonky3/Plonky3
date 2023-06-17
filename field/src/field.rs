@@ -31,6 +31,15 @@ pub trait AbstractField:
     const TWO: Self;
     const NEG_ONE: Self;
 
+    fn from_canonical_u8(n: u8) -> Self;
+    fn from_canonical_u16(n: u8) -> Self;
+    fn from_canonical_u32(n: u32) -> Self;
+    fn from_canonical_u64(n: u64) -> Self;
+    fn from_canonical_usize(n: usize) -> Self;
+
+    fn from_wrapped_u32(n: u32) -> Self;
+    fn from_wrapped_u64(n: u64) -> Self;
+
     fn multiplicative_group_generator() -> Self;
 
     #[must_use]
@@ -119,16 +128,7 @@ pub trait Field:
     }
 }
 
-pub trait PrimeField: Field + Ord {
-    fn from_canonical_u8(n: u8) -> Self;
-    fn from_canonical_u16(n: u8) -> Self;
-    fn from_canonical_u32(n: u32) -> Self;
-    fn from_canonical_u64(n: u64) -> Self;
-    fn from_canonical_usize(n: usize) -> Self;
-
-    fn from_wrapped_u32(n: u32) -> Self;
-    fn from_wrapped_u64(n: u64) -> Self;
-}
+pub trait PrimeField: Field + Ord {}
 
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {

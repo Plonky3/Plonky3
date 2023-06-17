@@ -155,6 +155,34 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     const TWO: Self = Self::new_real(AF::TWO);
     const NEG_ONE: Self = Self::new_real(AF::NEG_ONE);
 
+    fn from_canonical_u8(n: u8) -> Self {
+        Self::new_real(AF::from_canonical_u8(n))
+    }
+
+    fn from_canonical_u16(n: u8) -> Self {
+        Self::new_real(AF::from_canonical_u16(n))
+    }
+
+    fn from_canonical_u32(n: u32) -> Self {
+        Self::new_real(AF::from_canonical_u32(n))
+    }
+
+    fn from_canonical_u64(n: u64) -> Self {
+        Self::new_real(AF::from_canonical_u64(n))
+    }
+
+    fn from_canonical_usize(n: usize) -> Self {
+        Self::new_real(AF::from_canonical_usize(n))
+    }
+
+    fn from_wrapped_u32(n: u32) -> Self {
+        Self::new_real(AF::from_wrapped_u32(n))
+    }
+
+    fn from_wrapped_u64(n: u64) -> Self {
+        Self::new_real(AF::from_wrapped_u64(n))
+    }
+
     // sage: p = 2^31 - 1
     // sage: F = GF(p)
     // sage: R.<x> = F[]

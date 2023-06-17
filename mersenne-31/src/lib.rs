@@ -85,6 +85,45 @@ impl AbstractField for Mersenne31 {
     const TWO: Self = Self::new(2);
     const NEG_ONE: Self = Self::new(Self::ORDER_U32 - 1);
 
+    fn from_canonical_u8(n: u8) -> Self {
+        Self::new(u32::from(n))
+    }
+
+    fn from_canonical_u16(n: u8) -> Self {
+        Self::new(u32::from(n))
+    }
+
+    fn from_canonical_u32(n: u32) -> Self {
+        Self::new(n)
+    }
+
+    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
+    fn from_canonical_u64(n: u64) -> Self {
+        Self::new(
+            n.try_into()
+                .expect("Too large to be a canonical Mersenne31 encoding"),
+        )
+    }
+
+    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
+    fn from_canonical_usize(n: usize) -> Self {
+        Self::new(
+            n.try_into()
+                .expect("Too large to be a canonical Mersenne31 encoding"),
+        )
+    }
+
+    fn from_wrapped_u32(n: u32) -> Self {
+        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
+        let msb = n & (1 << 31);
+        let msb_reduced = msb >> 31;
+        Self::new(n ^ msb) + Self::new(msb_reduced)
+    }
+
+    fn from_wrapped_u64(_n: u64) -> Self {
+        todo!()
+    }
+
     // Sage: GF(2^31 - 1).multiplicative_generator()
     fn multiplicative_group_generator() -> Self {
         Self::new(7)
@@ -147,46 +186,7 @@ impl Field for Mersenne31 {
     }
 }
 
-impl PrimeField for Mersenne31 {
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(u32::from(n))
-    }
-
-    fn from_canonical_u16(n: u8) -> Self {
-        Self::new(u32::from(n))
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(n)
-    }
-
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
-        let msb = n & (1 << 31);
-        let msb_reduced = msb >> 31;
-        Self::new(n ^ msb) + Self::new(msb_reduced)
-    }
-
-    fn from_wrapped_u64(_n: u64) -> Self {
-        todo!()
-    }
-}
+impl PrimeField for Mersenne31 {}
 
 impl PrimeField32 for Mersenne31 {
     const ORDER_U32: u32 = (1 << 31) - 1;

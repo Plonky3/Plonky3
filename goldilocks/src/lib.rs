@@ -84,26 +84,6 @@ impl AbstractField for Goldilocks {
     const TWO: Self = Self::new(2);
     const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
-    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
-    fn multiplicative_group_generator() -> Self {
-        Self::new(7)
-    }
-}
-
-impl Field for Goldilocks {
-    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
-    type Packing = Self;
-
-    fn is_zero(&self) -> bool {
-        self.value == 0 || self.value == Self::ORDER_U64
-    }
-
-    fn try_inverse(&self) -> Option<Self> {
-        todo!()
-    }
-}
-
-impl PrimeField for Goldilocks {
     fn from_canonical_u8(n: u8) -> Self {
         Self::new(u64::from(n))
     }
@@ -135,7 +115,27 @@ impl PrimeField for Goldilocks {
         // non-canonical, so there's no need for a reduction.
         Self::new(n)
     }
+
+    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
+    fn multiplicative_group_generator() -> Self {
+        Self::new(7)
+    }
 }
+
+impl Field for Goldilocks {
+    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
+    type Packing = Self;
+
+    fn is_zero(&self) -> bool {
+        self.value == 0 || self.value == Self::ORDER_U64
+    }
+
+    fn try_inverse(&self) -> Option<Self> {
+        todo!()
+    }
+}
+
+impl PrimeField for Goldilocks {}
 
 impl PrimeField64 for Goldilocks {
     const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
