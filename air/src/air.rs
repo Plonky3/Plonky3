@@ -16,29 +16,6 @@ pub trait Pair<AB: AirBuilder>: Air<AB> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type EF: ExtensionField<Self::F>;
-
-    type ExprEF: AbstractionOfEF<Self::F, Self::EF>
-        + From<Self::Expr>
-        + Add<Self::Expr, Output = Self::ExprEF>
-        + Sub<Self::Expr, Output = Self::ExprEF>
-        + Mul<Self::Expr, Output = Self::ExprEF>
-        + Add<Self::VarEF, Output = Self::ExprEF>
-        + Sub<Self::VarEF, Output = Self::ExprEF>
-        + Mul<Self::VarEF, Output = Self::ExprEF>;
-
-    type VarEF: Into<Self::ExprEF>
-        + Copy
-        + Add<Self::EF, Output = Self::ExprEF>
-        + Add<Self::VarEF, Output = Self::ExprEF>
-        + Add<Self::ExprEF, Output = Self::ExprEF>
-        + Sub<Self::EF, Output = Self::ExprEF>
-        + Sub<Self::VarEF, Output = Self::ExprEF>
-        + Sub<Self::ExprEF, Output = Self::ExprEF>
-        + Mul<Self::EF, Output = Self::ExprEF>
-        + Mul<Self::VarEF, Output = Self::ExprEF>
-        + Mul<Self::ExprEF, Output = Self::ExprEF>;
-
     type Expr: AbstractionOf<Self::F>
         + Add<Self::Var, Output = Self::Expr>
         + Sub<Self::Var, Output = Self::Expr>
@@ -119,6 +96,41 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
+}
+
+pub trait PairBuilder: AirBuilder {
+    fn preprocessed(&self) -> Self::M;
+}
+
+pub trait PermutationAirBuilder: AirBuilder {
+    type EF: ExtensionField<Self::F>;
+
+    type ExprEF: AbstractionOfEF<Self::F, Self::EF>
+        + From<Self::Expr>
+        + Add<Self::Expr, Output = Self::ExprEF>
+        + Sub<Self::Expr, Output = Self::ExprEF>
+        + Mul<Self::Expr, Output = Self::ExprEF>
+        + Add<Self::VarEF, Output = Self::ExprEF>
+        + Sub<Self::VarEF, Output = Self::ExprEF>
+        + Mul<Self::VarEF, Output = Self::ExprEF>;
+
+    type VarEF: Into<Self::ExprEF>
+        + Copy
+        + Add<Self::EF, Output = Self::ExprEF>
+        + Add<Self::VarEF, Output = Self::ExprEF>
+        + Add<Self::ExprEF, Output = Self::ExprEF>
+        + Sub<Self::EF, Output = Self::ExprEF>
+        + Sub<Self::VarEF, Output = Self::ExprEF>
+        + Sub<Self::ExprEF, Output = Self::ExprEF>
+        + Mul<Self::EF, Output = Self::ExprEF>
+        + Mul<Self::VarEF, Output = Self::ExprEF>
+        + Mul<Self::ExprEF, Output = Self::ExprEF>;
+
+    type MP: Matrix<Self::VarEF>;
+
+    fn permutation(&self) -> Self::MP;
+
+    fn permutation_randomness(&self) -> &[Self::EF];
 
     fn assert_eq_ext<I1: Into<Self::ExprEF>, I2: Into<Self::ExprEF>>(&mut self, x: I1, y: I2) {
         let xe = x.into();
@@ -137,28 +149,28 @@ pub trait AirBuilder: Sized {
     }
 }
 
-pub trait PairBuilder: AirBuilder {
-    fn preprocessed(&self) -> Self::M;
-}
-
-pub trait PermutationAirBuilder: AirBuilder {
-    type MP: Matrix<Self::VarEF>;
-
-    fn permutation(&self) -> Self::MP;
-
-    fn permutation_randomness(&self) -> &[Self::EF];
-}
-
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     inner: &'a mut AB,
     condition: AB::Expr,
 }
 
-impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
-    type F = AB::F;
+impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
     type EF = AB::EF;
     type VarEF = AB::VarEF;
     type ExprEF = AB::ExprEF;
+    type MP = AB::MP;
+
+    fn permutation(&self) -> Self::MP {
+        self.inner.permutation()
+    }
+
+    fn permutation_randomness(&self) -> &[Self::EF] {
+        self.inner.permutation_randomness()
+    }
+}
+
+impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
+    type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
     type M = AB::M;
