@@ -4,6 +4,6 @@
 // use p3_symmetric::permutation::{MDSPermutation, CryptographicPermutation, ArrayPermutation};
 
 mod inverse_sbox;
-mod mds_matrix;
+mod mds_matrix_naive;
 mod rescue;
 mod util;

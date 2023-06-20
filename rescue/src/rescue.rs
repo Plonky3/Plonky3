@@ -1,11 +1,17 @@
-use crate::inverse_sbox::InverseSboxLayer;
-use crate::util::binomial;
+use crate::inverse_sbox::{BasicInverseSboxLayer, InverseSboxLayer};
+use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
+use crate::util::{binomial, shake256_hash};
 
 use ethereum_types::U256;
-use std::marker::PhantomData;
-
-use p3_field::PrimeField;
+use itertools::Itertools;
+use p3_field::{PrimeField, PrimeField64};
+use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{CryptographicPermutation, MDSPermutation};
+use p3_util::ceil_div_usize;
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
+use rand::Rng;
+use std::marker::PhantomData;
 
 #[derive(Clone)]
 pub struct Rescue<
@@ -24,7 +30,6 @@ pub struct Rescue<
     num_rounds: usize,
     mds: MDS,
     isl: ISL,
-    rate: usize,
     round_constants: Vec<F>,
 
     _phantom_f: PhantomData<F>,
@@ -49,7 +54,6 @@ where
             num_rounds,
             mds,
             isl,
-            rate: WIDTH - CAPACITY,
             round_constants,
             _phantom_f: PhantomData,
         }
@@ -74,6 +78,59 @@ where
         for x in state.iter_mut() {
             *x = x.exp_u64(ALPHA);
         }
+    }
+
+    // For a general field, we provide a generic constructor for the round constants.
+    pub(crate) fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
+    where
+        Standard: Distribution<F>,
+    {
+        let num_constants = 2 * WIDTH * num_rounds;
+        rng.sample_iter(Standard).take(num_constants).collect()
+    }
+}
+
+impl<
+        F,
+        MDS,
+        ISL,
+        const WIDTH: usize,
+        const CAPACITY: usize,
+        const ALPHA: u64,
+        const SEC_LEVEL: usize,
+    > Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+where
+    F: PrimeField64,
+    MDS: MDSPermutation<F, WIDTH>,
+    ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
+{
+    fn get_round_constants_rescue_prime(num_rounds: usize) -> Vec<F> {
+        let num_constants = 2 * WIDTH * num_rounds;
+        let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
+        let num_bytes = bytes_per_constant * num_constants;
+
+        let seed_string = format!(
+            "Rescue-XLIX({},{},{},{}",
+            F::ORDER_U64,
+            WIDTH,
+            CAPACITY,
+            SEC_LEVEL,
+        );
+        let byte_string = shake256_hash(seed_string.as_bytes(), num_bytes);
+
+        byte_string
+            .iter()
+            .chunks(bytes_per_constant)
+            .into_iter()
+            .map(|chunk| {
+                let integer = chunk
+                    .collect_vec()
+                    .iter()
+                    .rev()
+                    .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
+                F::from_canonical_u64(integer)
+            })
+            .collect()
     }
 }
 
@@ -125,11 +182,57 @@ where
     }
 }
 
-// type RescuePrimeOptimizedM31 = Rescue<Mersenne31, ... >
-// fn new_rescue_prime_optimized_m31() -> RescuePrimeOptimizedM31 {
+#[cfg(test)]
+mod tests {
+    use itertools::Itertools;
+    use p3_field::PrimeField;
+    use p3_mersenne_31::Mersenne31;
 
-#[test]
-fn test_rescue() {
-    // let mds =
-    // let rescue_prime_optimized_m31 =
+    use crate::inverse_sbox::BasicInverseSboxLayer;
+    use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
+    use crate::rescue::Rescue;
+
+    type RescuePrimeM31Default =
+        Rescue<Mersenne31, MDSMatrixNaive<Mersenne31, 12>, BasicInverseSboxLayer, 12, 6, 5, 128>;
+
+    fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
+        let num_rounds = RescuePrimeM31Default::num_rounds();
+        let round_constants = RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds);
+        let mds = rescue_prime_m31_width_12_mds_matrix();
+        let isl = BasicInverseSboxLayer {};
+
+        RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl)
+    }
+
+    #[test]
+    fn test_rescue_prime_m31_default() {
+        let rescue_prime = new_rescue_prime_m31_default();
+        let state: [Mersenne31; 12] = (0..12)
+            .map(|i| Mersenne31::from_canonical_u8(i))
+            .collect_vec()
+            .try_into()
+            .unwrap();
+        let expected = [
+            11084501481526603421,
+            6291559951628160880,
+            13626645864671311919,
+            18397438323058963117,
+            7443014167353970324,
+            17930833023906771425,
+            4275355080008025761,
+            7676681476902901785,
+            3460534574143792217,
+            11912731278641497187,
+            8104899243369883110,
+            674509706691634438,
+        ]
+        .iter()
+        .map(|x| Mersenne31::from_canonical_u64(*x))
+        .collect_vec()
+        .try_into()
+        .unwrap();
+
+        let actual = rescue_prime.permute(state);
+        assert_eq!(actual, expected);
+    }
 }

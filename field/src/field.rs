@@ -5,6 +5,8 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
+use p3_util::log2_ceil_u64;
+
 /// A generalization of `Field` which permits things like
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
@@ -131,6 +133,10 @@ pub trait PrimeField: Field + Ord {
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
+
+    fn bits() -> usize {
+        log2_ceil_u64(Self::ORDER_U64) as usize
+    }
 
     fn as_canonical_u64(&self) -> u64;
 }
