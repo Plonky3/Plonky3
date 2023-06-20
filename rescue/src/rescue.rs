@@ -187,6 +187,7 @@ mod tests {
     use itertools::Itertools;
     use p3_field::PrimeField;
     use p3_mersenne_31::Mersenne31;
+    use p3_symmetric::permutation::CryptographicPermutation;
 
     use crate::inverse_sbox::BasicInverseSboxLayer;
     use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
