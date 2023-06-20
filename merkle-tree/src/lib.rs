@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
+use core::iter;
 use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::{Dimensions, DirectMMCS, MMCS};
@@ -12,8 +13,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
-
-// TODO: Add Jaqui's cache-friendly version, maybe as a separate alternative impl.
+use p3_util::log2_ceil_usize;
 
 // TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the MMCS methods take &mut self?
@@ -28,26 +28,25 @@ pub struct MerkleTree<L, D> {
 }
 
 impl<L, D> MerkleTree<L, D> {
+    /// Matrix heights need not be powers of two. However, if the heights of two given matrices
+    /// round up to the same power of two, they must be equal.
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         L: Copy,
-        D: Copy,
+        D: Copy + Default,
         H: CryptographicHasher<L, D>,
         C: PseudoCompressionFunction<D, 2>,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
-        for leaf in &leaves {
-            assert!(
-                leaf.height().is_power_of_two(),
-                "Matrix height not a power of two"
-            );
-        }
+
+        // TODO: Check the matching height condition.
 
         let mut leaves_largest_first = leaves
             .iter()
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
         let max_height = leaves_largest_first.peek().unwrap().height();
+        let max_height_padded = log2_ceil_usize(max_height);
 
         let tallest_matrices = leaves_largest_first
             .peeking_take_while(|m| m.height() == max_height)
@@ -55,6 +54,8 @@ impl<L, D> MerkleTree<L, D> {
 
         let first_digest_layer = (0..max_height)
             .map(|i| h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i))))
+            .chain(iter::repeat(D::default()))
+            .take(max_height_padded)
             .collect_vec();
 
         let mut digest_layers = vec![first_digest_layer];
@@ -66,23 +67,10 @@ impl<L, D> MerkleTree<L, D> {
 
             // The matrices that get inserted at this layer.
             let tallest_matrices = leaves_largest_first
-                .peeking_take_while(|m| m.height() == prev_layer.len())
+                .peeking_take_while(|m| log2_ceil_usize(m.height()) == prev_layer.len())
                 .collect_vec();
 
-            let next_len = prev_layer.len() >> 1;
-            let mut next_digests = Vec::with_capacity(next_len);
-            for i in 0..next_len {
-                let left = prev_layer[2 * i];
-                let right = prev_layer[2 * i + 1];
-                let mut digest = c.compress([left, right]);
-                if !tallest_matrices.is_empty() {
-                    let tallest_digest =
-                        h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i)));
-                    digest = c.compress([digest, tallest_digest]);
-                }
-                next_digests.push(digest);
-            }
-
+            let next_digests = compression_layer(prev_layer, tallest_matrices, h, c);
             digest_layers.push(next_digests);
         }
 
@@ -99,6 +87,53 @@ impl<L, D> MerkleTree<L, D> {
     {
         self.digest_layers.last().unwrap()[0].clone()
     }
+}
+
+/// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
+/// some leaf data, if there are input matrices with (padded) height `n/2`.
+fn compression_layer<L, D, H, C>(
+    prev_layer: &[D],
+    tallest_matrices: Vec<&RowMajorMatrix<L>>,
+    h: &H,
+    c: &C,
+) -> Vec<D>
+where
+    L: Copy,
+    D: Copy + Default,
+    H: CryptographicHasher<L, D>,
+    C: PseudoCompressionFunction<D, 2>,
+{
+    let next_len_padded = prev_layer.len() >> 1;
+    let mut next_digests = Vec::with_capacity(next_len_padded);
+
+    if tallest_matrices.is_empty() {
+        for i in 0..next_len_padded {
+            let left = prev_layer[2 * i];
+            let right = prev_layer[2 * i + 1];
+            let digest = c.compress([left, right]);
+            next_digests.push(digest);
+        }
+        return next_digests;
+    }
+
+    let next_len = tallest_matrices[0].height();
+    for i in 0..next_len {
+        let left = prev_layer[2 * i];
+        let right = prev_layer[2 * i + 1];
+        let mut digest = c.compress([left, right]);
+        let tallest_digest = h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i)));
+        digest = c.compress([digest, tallest_digest]);
+        next_digests.push(digest);
+    }
+    for i in next_len..next_len_padded {
+        let left = prev_layer[2 * i];
+        let right = prev_layer[2 * i + 1];
+        let mut digest = c.compress([left, right]);
+        let tallest_digest = D::default();
+        digest = c.compress([digest, tallest_digest]);
+        next_digests.push(digest);
+    }
+    next_digests
 }
 
 /// A vector commitment scheme backed by a Merkle tree.
@@ -166,7 +201,7 @@ where
 impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: 'static + Copy,
-    D: Copy,
+    D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
@@ -174,5 +209,37 @@ where
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::MerkleTreeMMCS;
+    use alloc::vec;
+    use p3_commit::DirectMMCS;
+    use p3_keccak::Keccak256Hash;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_symmetric::compression::TruncatedPermutation;
+    use rand::thread_rng;
+
+    #[test]
+    fn commit() {
+        use p3_keccak::KeccakF;
+
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type MMCS = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = MMCS::new(Keccak256Hash, compress);
+
+        let mut rng = thread_rng();
+
+        // First try a power-of-two height.
+        let mat = RowMajorMatrix::rand(&mut rng, 256, 13);
+        mmcs.commit(vec![mat]);
+
+        // Then a non-power-of-two height.
+        let mat = RowMajorMatrix::rand(&mut rng, 200, 13);
+        mmcs.commit(vec![mat]);
     }
 }

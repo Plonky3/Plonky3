@@ -1,7 +1,6 @@
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
 use core::marker::PhantomData;
-use itertools::Itertools;
 
 /// An `n`-to-1 compression function, like `CompressionFunction`, except that it need only be
 /// collision-resistant in a hash tree setting, where the preimage of a non-leaf node must consist
@@ -13,13 +12,13 @@ pub trait PseudoCompressionFunction<T, const N: usize> {
 /// An `n`-to-1 compression function.
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
-pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize> {
+pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize> {
     inner_permutation: InnerP,
     _phantom_t: PhantomData<T>,
 }
 
-impl<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
-    TruncatedPermutation<T, InnerP, N, CHUNK, PROD>
+impl<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
+    TruncatedPermutation<T, InnerP, N, CHUNK, WIDTH>
 {
     pub fn new(inner_permutation: InnerP) -> Self {
         Self {
@@ -29,21 +28,20 @@ impl<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
     }
 }
 
-impl<T, InnerP, const N: usize, const CHUNK: usize, const PROD: usize>
-    PseudoCompressionFunction<[T; CHUNK], N> for TruncatedPermutation<T, InnerP, N, CHUNK, PROD>
+impl<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
+    PseudoCompressionFunction<[T; CHUNK], N> for TruncatedPermutation<T, InnerP, N, CHUNK, WIDTH>
 where
-    T: Copy,
-    InnerP: CryptographicPermutation<[T; PROD]>,
+    T: Copy + Default,
+    InnerP: CryptographicPermutation<[T; WIDTH]>,
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
-        let flat_input = input
-            .into_iter()
-            .flatten()
-            .collect_vec()
-            .try_into()
-            .unwrap_or_else(|_| panic!("Impossible!"));
-        let perm_out = self.inner_permutation.permute(flat_input);
-        perm_out[..CHUNK].try_into().unwrap()
+        debug_assert!(CHUNK * N <= WIDTH);
+        let mut pre = [T::default(); WIDTH];
+        for i in 0..N {
+            pre[i * CHUNK..(i + 1) * CHUNK].copy_from_slice(&input[i]);
+        }
+        let post = self.inner_permutation.permute(pre);
+        post[..CHUNK].try_into().unwrap()
     }
 }
 

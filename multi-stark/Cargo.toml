@@ -13,7 +13,6 @@ p3-lde = { path = "../lde" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
-rand = "0.8.5"
 
 [dev-dependencies]
 p3-fri = { path = "../fri" }
@@ -23,3 +22,4 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-poseidon = { path = "../poseidon" }
 p3-symmetric = { path = "../symmetric" }
 p3-tensor-pcs = { path = "../tensor-pcs" }
+rand = "0.8.5"

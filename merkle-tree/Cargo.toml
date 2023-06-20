@@ -11,3 +11,7 @@ p3-symmetric = { path = "../symmetric" }
 p3-commit = { path = "../commit" }
 p3-util = { path = "../util" }
 itertools = "0.10.5"
+
+[dev-dependencies]
+p3-keccak = { path = "../keccak" }
+rand = "0.8.5"

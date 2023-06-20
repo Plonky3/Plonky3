@@ -21,6 +21,21 @@ impl CryptographicPermutation<[u64; 25]> for KeccakF {
 
 impl ArrayPermutation<u64, 25> for KeccakF {}
 
+impl CryptographicPermutation<[u8; 200]> for KeccakF {
+    fn permute(&self, input_u8s: [u8; 200]) -> [u8; 200] {
+        let mut state_u64s: [u64; 25] = core::array::from_fn(|i| {
+            u64::from_le_bytes(input_u8s[i * 8..][..8].try_into().unwrap())
+        });
+
+        keccakf(&mut state_u64s);
+
+        core::array::from_fn(|i| {
+            let u64_limb = state_u64s[i / 8];
+            u64_limb.to_le_bytes()[i % 8]
+        })
+    }
+}
+
 /// The `Keccak` hash functions defined in
 /// [Keccak SHA3 submission](https://keccak.team/files/Keccak-submission-3.pdf).
 pub struct Keccak256Hash;

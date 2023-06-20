@@ -27,7 +27,7 @@ where
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
-    type Proof = ();
+    type Proof = Vec<M::Proof>;
     type Error = ();
 
     fn commit_batches(
