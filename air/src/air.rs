@@ -94,6 +94,38 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
+
+    fn assert_zero_ext<ExprExt, I>(&mut self, x: I)
+    where
+        ExprExt: AbstractExtensionField<Self::Expr>,
+        I: Into<ExprExt>,
+    {
+        for xb in x.into().as_base_slice().iter().cloned() {
+            self.assert_zero(xb);
+        }
+    }
+
+    fn assert_eq_ext<ExprExt, I1, I2>(&mut self, x: I1, y: I2)
+    where
+        ExprExt: AbstractExtensionField<Self::Expr>,
+        I1: Into<ExprExt>,
+        I2: Into<ExprExt>,
+    {
+        self.assert_zero_ext::<ExprExt, ExprExt>(x.into() - y.into());
+    }
+
+    fn assert_one_ext<ExprExt, I>(&mut self, x: ExprExt)
+    where
+        ExprExt: AbstractExtensionField<Self::Expr>,
+        I: Into<ExprExt>,
+    {
+        let xe: ExprExt = x.into();
+        let parts = xe.as_base_slice();
+        self.assert_one(parts[0].clone());
+        for part in &parts[1..] {
+            self.assert_zero(part.clone());
+        }
+    }
 }
 
 pub trait PairBuilder: AirBuilder {
@@ -130,32 +162,6 @@ pub trait PermutationAirBuilder: AirBuilder {
     fn permutation(&self) -> Self::MP;
 
     fn permutation_randomness(&self) -> &[Self::EF];
-
-    fn assert_eq_ext<I1: Into<Self::ExprEF>, I2: Into<Self::ExprEF>>(&mut self, x: I1, y: I2) {
-        let xe = x.into();
-        let ye = y.into();
-        let xb = xe.as_base_slice();
-        let yb = ye.as_base_slice();
-        for i in 0..Self::EF::D {
-            self.assert_eq(xb[i], yb[i]);
-        }
-    }
-
-    fn assert_zero_ext<EF: Into<Self::ExprEF>>(&mut self, x: EF) {
-        for xb in x.into().as_base_slice().iter().cloned() {
-            self.assert_zero(xb);
-        }
-    }
-
-    fn assert_one_ext<EF: Into<Self::ExprEF>>(&mut self, x: EF) {
-        for (n, xb) in x.into().as_base_slice().iter().cloned().enumerate() {
-            if n == Self::EF::D - 1 {
-                self.assert_one(xb);
-            } else {
-                self.assert_zero(xb);
-            }
-        }
-    }
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {

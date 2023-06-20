@@ -165,6 +165,8 @@ pub trait AbstractExtensionField<Base>:
 
     fn from_base_slice(bs: &[Base]) -> Self;
 
+    /// Return the coefficients in little-endian order, i.e. starting with the coefficient of the
+    /// degree 0 monomial, and ending with the coefficient of the degree `D-1` monomial.
     fn as_base_slice(&self) -> &[Base];
 }
 
