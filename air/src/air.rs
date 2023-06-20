@@ -137,7 +137,7 @@ pub trait PermutationAirBuilder: AirBuilder {
         let xb = xe.as_base_slice();
         let yb = ye.as_base_slice();
         for i in 0..Self::EF::D {
-            self.assert_eq(xb[i].clone(), yb[i].clone());
+            self.assert_eq(xb[i], yb[i]);
         }
     }
 

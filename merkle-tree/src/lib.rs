@@ -229,8 +229,8 @@ mod tests {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
-        type MMCS = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
-        let mmcs = MMCS::new(Keccak256Hash, compress);
+        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         let mut rng = thread_rng();
 
