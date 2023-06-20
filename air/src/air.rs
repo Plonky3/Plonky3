@@ -125,7 +125,7 @@ pub trait PermutationAirBuilder: AirBuilder {
         + Mul<Self::VarEF, Output = Self::ExprEF>
         + Mul<Self::ExprEF, Output = Self::ExprEF>;
 
-    type MP: Matrix<Self::VarEF>;
+    type MP: for<'a> MatrixRows<'a, Self::Var, Row = &'a [Self::VarEF]>;
 
     fn permutation(&self) -> Self::MP;
 
