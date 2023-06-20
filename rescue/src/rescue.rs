@@ -18,11 +18,11 @@ where
 {
     num_rounds: usize,
     mds: MDS,
+    isl: ISL,
     rate: usize,
     round_constants: Vec<F>,
 
     _phantom_f: PhantomData<F>,
-    _phantom_isl: PhantomData<ISL>,
 }
 
 impl<F, MDS, ISL, const WIDTH: usize, const CAPACITY: usize, const ALPHA: u64, const SEC_LEVEL: usize>
@@ -32,14 +32,14 @@ where
     MDS: MDSPermutation<F, WIDTH>,
     ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: MDS) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: MDS, isl: ISL) -> Self {
         Self {
             num_rounds,
             mds,
+            isl,
             rate: WIDTH - CAPACITY,
             round_constants,
             _phantom_f: PhantomData,
-            _phantom_isl: PhantomData,
         }
     }
 
@@ -80,15 +80,17 @@ where
     MDS: MDSPermutation<F, WIDTH>,
     ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
-    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
+    fn permute(&self, state: [F; WIDTH]) -> [F; WIDTH] {
         // Rescue-XLIX permutation
+
+        let mut state = state;
 
         for round in 0..self.num_rounds {
             // S-box
-            Self::sbox_layer(state);
+            Self::sbox_layer(&mut state);
 
             // MDS
-            self.mds.permute_mut(state);
+            self.mds.permute_mut(&mut state);
 
             // Constants
             for j in 0..WIDTH {
@@ -96,16 +98,18 @@ where
             }
 
             // Inverse S-box
-            ISL::inverse_sbox_layer(state);
+            self.isl.inverse_sbox_layer(&mut state);
 
             // MDS
-            self.mds.permute_mut(state);
+            self.mds.permute_mut(&mut state);
 
             // Constants
             for j in 0..WIDTH {
                 state[j] += self.round_constants[round * WIDTH * 2 + WIDTH + j];
             }
         }
+
+        state
     }
 }
 
