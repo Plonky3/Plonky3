@@ -158,6 +158,10 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         &mut self.values[r * self.width..(r + 1) * self.width]
     }
 
+    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
+        self.values.chunks_exact_mut(self.width)
+    }
+
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
         self.values.chunks_exact(self.width)
     }

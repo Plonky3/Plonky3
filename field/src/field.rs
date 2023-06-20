@@ -35,6 +35,14 @@ pub trait AbstractField:
     fn square(&self) -> Self {
         self.clone() * self.clone()
     }
+
+    #[must_use]
+    fn powers(&self) -> Powers<Self> {
+        Powers {
+            base: self.clone(),
+            current: Self::ONE,
+        }
+    }
 }
 
 /// An `AbstractField` which abstracts the given field `F`.
@@ -106,14 +114,6 @@ pub trait Field:
             res = res.square();
         }
         res
-    }
-
-    #[must_use]
-    fn powers(&self) -> Powers<Self> {
-        Powers {
-            base: *self,
-            current: Self::ONE,
-        }
     }
 }
 
@@ -209,17 +209,17 @@ pub trait TwoAdicField: Field {
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
 #[derive(Clone)]
-pub struct Powers<F: Field> {
-    base: F,
-    current: F,
+pub struct Powers<F> {
+    pub base: F,
+    pub current: F,
 }
 
-impl<F: Field> Iterator for Powers<F> {
+impl<F: MulAssign + Clone> Iterator for Powers<F> {
     type Item = F;
 
     fn next(&mut self) -> Option<F> {
-        let result = self.current;
-        self.current *= self.base;
+        let result = self.current.clone();
+        self.current *= self.base.clone();
         Some(result)
     }
 }
