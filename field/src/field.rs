@@ -61,24 +61,7 @@ pub trait AbstractionOf<F: Field>:
 {
 }
 
-/// An `AbstractExtensionField` which abstracts the given field extension `EF`.
-pub trait AbstractionOfEF<F: Field, EF: ExtensionField<F>>:
-    AbstractExtensionField<F>
-    + From<EF>
-    + Add<EF, Output = Self>
-    + AddAssign<F>
-    + Sub<EF, Output = Self>
-    + SubAssign<F>
-    + Mul<EF, Output = Self>
-    + MulAssign<EF>
-    + Sum<EF>
-    + Product<EF>
-{
-}
-
 impl<F: Field> AbstractionOf<F> for F {}
-
-impl<F: Field, EF: ExtensionField<F>> AbstractionOfEF<F, EF> for EF {}
 
 /// An element of a finite field.
 pub trait Field:

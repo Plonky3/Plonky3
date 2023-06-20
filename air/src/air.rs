@@ -1,7 +1,5 @@
 use core::ops::{Add, Mul, Sub};
-use p3_field::{
-    AbstractExtensionField, AbstractField, AbstractionOf, AbstractionOfEF, ExtensionField, Field,
-};
+use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -105,7 +103,8 @@ pub trait PairBuilder: AirBuilder {
 pub trait PermutationAirBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
-    type ExprEF: AbstractionOfEF<Self::F, Self::EF>
+    type ExprEF: AbstractionOf<Self::EF>
+        + AbstractExtensionField<Self::F>
         + From<Self::Expr>
         + Add<Self::Expr, Output = Self::ExprEF>
         + Sub<Self::Expr, Output = Self::ExprEF>
@@ -145,6 +144,16 @@ pub trait PermutationAirBuilder: AirBuilder {
     fn assert_zero_ext<EF: Into<Self::ExprEF>>(&mut self, x: EF) {
         for xb in x.into().as_base_slice().iter().cloned() {
             self.assert_zero(xb);
+        }
+    }
+
+    fn assert_one_ext<EF: Into<Self::ExprEF>>(&mut self, x: EF) {
+        for (n, xb) in x.into().as_base_slice().iter().cloned().enumerate() {
+            if n == Self::EF::D - 1 {
+                self.assert_one(xb);
+            } else {
+                self.assert_zero(xb);
+            }
         }
     }
 }
