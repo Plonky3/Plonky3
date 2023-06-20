@@ -208,12 +208,14 @@ mod tests {
     #[test]
     fn test_rescue_prime_m31_default() {
         let rescue_prime = new_rescue_prime_m31_default();
+        
         let state: [Mersenne31; 12] = (0..12)
             .map(|i| Mersenne31::from_canonical_u8(i))
             .collect_vec()
             .try_into()
             .unwrap();
-        let expected = [
+
+        let expected: [Mersenne31; 12] = [
             11084501481526603421,
             6291559951628160880,
             13626645864671311919,
