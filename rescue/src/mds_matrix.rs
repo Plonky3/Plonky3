@@ -1,12 +1,13 @@
-use p3_field::{PrimeField, AbstractField};
+use p3_field::{AbstractField, PrimeField};
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::{ArrayPermutation, MDSPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
 
 struct MDSMatrix<F: PrimeField, const WIDTH: usize> {
     matrix: [[F; WIDTH]; WIDTH],
 }
 
-impl<F: PrimeField, const WIDTH: usize> CryptographicPermutation<[F; WIDTH]> for MDSMatrix<F, WIDTH>
+impl<F: PrimeField, const WIDTH: usize> CryptographicPermutation<[F; WIDTH]>
+    for MDSMatrix<F, WIDTH>
 {
     fn permute(&self, input: [F; WIDTH]) -> [F; WIDTH] {
         let mut output = [F::ZERO; WIDTH];
