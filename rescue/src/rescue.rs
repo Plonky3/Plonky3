@@ -193,7 +193,7 @@ mod tests {
     use crate::rescue::Rescue;
 
     const WIDTH: usize = 12;
-    const CAPACITY: usize = 12;
+    const CAPACITY: usize = 6;
     const ALPHA: u64 = 5;
     const SEC_LEVEL: usize = 128;
     type RescuePrimeM31Default = Rescue<
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rescue_prime_m31_default() {
+    fn test_rescue_xlix_permutation() {
         let rescue_prime = new_rescue_prime_m31_default();
         let state: [Mersenne31; 12] = (0..12)
             .map(|i| Mersenne31::from_canonical_u8(i))
@@ -238,4 +238,9 @@ mod tests {
         let actual = rescue_prime.permute(state);
         assert_eq!(actual, expected);
     }
+
+    // #[test]
+    // fn test_rescue_sponge() {
+
+    // }
 }
