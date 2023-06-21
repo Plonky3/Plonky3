@@ -21,7 +21,7 @@ pub(crate) fn binomial(n: usize, k: usize) -> U256 {
 /// Generate alpha, the smallest integer relatively prime to p − 1.
 pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {
     let p = F::ORDER_U64;
-    
+
     (3..p).find(|&a| a.gcd(p - 1) == 1).unwrap()
 }
 
