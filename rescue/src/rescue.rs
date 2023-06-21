@@ -215,28 +215,57 @@ mod tests {
         RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl)
     }
 
+    const NUM_TESTS: usize = 3;
+    const INPUTS: [[u64; WIDTH]; NUM_TESTS] = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        [
+            144096679, 1638468327, 1550998769, 1713522258, 730676443, 955614588, 1970746889,
+            1473251100, 1575313887, 1867935938, 364960233, 91318724,
+        ],
+        [
+            1946786350, 648783024, 470775457, 573110744, 2049365630, 710763043, 1694076126,
+            1852085316, 1518834534, 249604062, 45487116, 1543494419,
+        ],
+    ];
+
+    // Generated using https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
+    const OUTPUTS: [[u64; WIDTH]; NUM_TESTS] = [
+        [
+            1174355075, 506638036, 1293741855, 669671042, 881673047, 1403310363, 1489659750,
+            106483224, 1578796769, 289825640, 498340024, 564347160,
+        ],
+        [
+            1341954293, 1462092714, 1382783160, 288894489, 1768710137, 1938423223, 288009985,
+            684142220, 1708749517, 773110691, 916511285, 553593472,
+        ],
+        [
+            868623386, 984305610, 478195671, 1835744746, 2122442506, 495239130, 1519185684,
+            1631691838, 1813476755, 1147911813, 2000740064, 986040905,
+        ],
+    ];
+
     #[test]
     fn test_rescue_xlix_permutation() {
         let rescue_prime = new_rescue_prime_m31_default();
-        let state: [Mersenne31; 12] = (0..12)
-            .map(|i| Mersenne31::from_canonical_u8(i))
-            .collect_vec()
-            .try_into()
-            .unwrap();
 
-        // Generated using https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
-        let expected: [Mersenne31; 12] = [
-            1174355075, 506638036, 1293741855, 669671042, 881673047, 1403310363, 1489659750,
-            106483224, 1578796769, 289825640, 498340024, 564347160,
-        ]
-        .iter()
-        .map(|x| Mersenne31::from_canonical_u64(*x))
-        .collect_vec()
-        .try_into()
-        .unwrap();
+        for test_run in 0..NUM_TESTS {
+            let state: [Mersenne31; WIDTH] = INPUTS[test_run]
+                .iter()
+                .map(|x| Mersenne31::from_canonical_u64(*x))
+                .collect_vec()
+                .try_into()
+                .unwrap();
 
-        let actual = rescue_prime.permute(state);
-        assert_eq!(actual, expected);
+            let expected: [Mersenne31; WIDTH] = OUTPUTS[test_run]
+                .iter()
+                .map(|x| Mersenne31::from_canonical_u64(*x))
+                .collect_vec()
+                .try_into()
+                .unwrap();
+
+            let actual = rescue_prime.permute(state);
+            assert_eq!(actual, expected);
+        }
     }
 
     // #[test]
