@@ -1,6 +1,5 @@
 use ethereum_types::U256;
 use gcd::Gcd;
-use itertools::Itertools;
 use modinverse::egcd;
 use p3_field::PrimeField64;
 use sha3::{
