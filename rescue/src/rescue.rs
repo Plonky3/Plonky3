@@ -4,7 +4,7 @@ use crate::util::{binomial, shake256_hash};
 use ethereum_types::U256;
 use itertools::Itertools;
 use p3_field::{PrimeField, PrimeField64};
-use p3_symmetric::permutation::{CryptographicPermutation, MDSPermutation};
+use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -181,12 +181,30 @@ where
     }
 }
 
+impl<
+        F,
+        MDS,
+        ISL,
+        const WIDTH: usize,
+        const CAPACITY: usize,
+        const ALPHA: u64,
+        const SEC_LEVEL: usize,
+    > ArrayPermutation<F, WIDTH> for Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+where
+    F: PrimeField,
+    MDS: MDSPermutation<F, WIDTH>,
+    ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
+{
+}
+
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
     use p3_field::PrimeField;
     use p3_mersenne_31::Mersenne31;
+    use p3_symmetric::hasher::CryptographicHasher;
     use p3_symmetric::permutation::CryptographicPermutation;
+    use p3_symmetric::sponge::PaddingFreeSponge;
 
     use crate::inverse_sbox::BasicInverseSboxLayer;
     use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
@@ -216,7 +234,8 @@ mod tests {
     }
 
     const NUM_TESTS: usize = 3;
-    const INPUTS: [[u64; WIDTH]; NUM_TESTS] = [
+
+    const PERMUTATION_INPUTS: [[u64; WIDTH]; NUM_TESTS] = [
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
         [
             144096679, 1638468327, 1550998769, 1713522258, 730676443, 955614588, 1970746889,
@@ -228,8 +247,9 @@ mod tests {
         ],
     ];
 
-    // Generated using https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
-    const OUTPUTS: [[u64; WIDTH]; NUM_TESTS] = [
+    // Generated using the rescue_XLIX_permutation function of
+    // https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
+    const PERMUTATION_OUTPUTS: [[u64; WIDTH]; NUM_TESTS] = [
         [
             1174355075, 506638036, 1293741855, 669671042, 881673047, 1403310363, 1489659750,
             106483224, 1578796769, 289825640, 498340024, 564347160,
@@ -249,14 +269,14 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
 
         for test_run in 0..NUM_TESTS {
-            let state: [Mersenne31; WIDTH] = INPUTS[test_run]
+            let state: [Mersenne31; WIDTH] = PERMUTATION_INPUTS[test_run]
                 .iter()
                 .map(|x| Mersenne31::from_canonical_u64(*x))
                 .collect_vec()
                 .try_into()
                 .unwrap();
 
-            let expected: [Mersenne31; WIDTH] = OUTPUTS[test_run]
+            let expected: [Mersenne31; WIDTH] = PERMUTATION_OUTPUTS[test_run]
                 .iter()
                 .map(|x| Mersenne31::from_canonical_u64(*x))
                 .collect_vec()
@@ -268,8 +288,28 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_rescue_sponge() {
+    #[test]
+    fn test_rescue_sponge() {
+        let rescue_prime = new_rescue_prime_m31_default();
+        let rescue_sponge = PaddingFreeSponge::new(rescue_prime);
 
-    // }
+        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6]
+            .iter()
+            .map(|x| Mersenne31::from_canonical_u64(*x))
+            .collect_vec()
+            .try_into()
+            .unwrap();
+
+        let expected: [Mersenne31; 6] = [
+            599387515, 345626813, 50230127, 538251572, 279746862, 2080222279,
+        ]
+        .iter()
+        .map(|x| Mersenne31::from_canonical_u64(*x))
+        .collect_vec()
+        .try_into()
+        .unwrap();
+
+        let actual: [Mersenne31; 6] = rescue_sponge.hash_iter(input).try_into().unwrap();
+        assert_eq!(actual, expected);
+    }
 }

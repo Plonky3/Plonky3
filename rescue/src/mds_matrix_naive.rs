@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use p3_field::{AbstractField, PrimeField};
+use p3_field::PrimeField;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
 
