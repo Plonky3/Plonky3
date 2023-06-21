@@ -13,6 +13,7 @@ impl<F: PrimeField64, const WIDTH: usize, const ALPHA: u64> InverseSboxLayer<F, 
 {
     fn inverse_sbox_layer(&self, state: &mut [F; WIDTH]) {
         let alpha_inv = get_inverse::<F>(ALPHA);
+        dbg!(alpha_inv);
         for x in state {
             *x = x.exp_u64(alpha_inv);
         }

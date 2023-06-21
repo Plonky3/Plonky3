@@ -71,7 +71,8 @@ where
             let bin = binomial(v(*l1) + dcon(*l1), v(*l1));
             bin * bin > target
         };
-        (1..25).find(is_sufficient).unwrap()
+        let l1 = (1..25).find(is_sufficient).unwrap();
+        (l1.max(5) as f32 * 1.5).ceil() as usize
     }
 
     fn sbox_layer(state: &mut [F; WIDTH]) {
@@ -110,7 +111,7 @@ where
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
-            "Rescue-XLIX({},{},{},{}",
+            "Rescue-XLIX({},{},{},{})",
             F::ORDER_U64,
             WIDTH,
             CAPACITY,
@@ -155,49 +156,27 @@ where
         let mut state = state;
 
         for round in 0..self.num_rounds {
-            println!("round {}", round);
-
-            dbg!(state.clone());
-
             // S-box
             Self::sbox_layer(&mut state);
 
-            println!("AFTER S-BOX");
-            dbg!(state.clone());
-
             // MDS
             self.mds.permute_mut(&mut state);
-
-            println!("AFTER MDS");
-            dbg!(state.clone());
 
             // Constants
             for j in 0..WIDTH {
                 state[j] += self.round_constants[round * WIDTH * 2 + j];
             }
 
-            println!("AFTER CONSTANTS");
-            dbg!(state.clone());
-
             // Inverse S-box
             self.isl.inverse_sbox_layer(&mut state);
 
-            println!("AFTER INVERSE S-BOX");
-            dbg!(state.clone());
-
             // MDS
             self.mds.permute_mut(&mut state);
-
-            println!("AFTER MDS");
-            dbg!(state.clone());
 
             // Constants
             for j in 0..WIDTH {
                 state[j] += self.round_constants[round * WIDTH * 2 + WIDTH + j];
             }
-
-            println!("AFTER CONSTANTS");
-            dbg!(state.clone());
         }
 
         state
@@ -230,7 +209,6 @@ mod tests {
     #[test]
     fn test_rescue_prime_m31_default() {
         let rescue_prime = new_rescue_prime_m31_default();
-
         let state: [Mersenne31; 12] = (0..12)
             .map(|i| Mersenne31::from_canonical_u8(i))
             .collect_vec()
