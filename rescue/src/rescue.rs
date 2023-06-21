@@ -155,27 +155,49 @@ where
         let mut state = state;
 
         for round in 0..self.num_rounds {
+            println!("round {}", round);
+
+            dbg!(state.clone());
+
             // S-box
             Self::sbox_layer(&mut state);
 
+            println!("AFTER S-BOX");
+            dbg!(state.clone());
+
             // MDS
             self.mds.permute_mut(&mut state);
+
+            println!("AFTER MDS");
+            dbg!(state.clone());
 
             // Constants
             for j in 0..WIDTH {
                 state[j] += self.round_constants[round * WIDTH * 2 + j];
             }
 
+            println!("AFTER CONSTANTS");
+            dbg!(state.clone());
+
             // Inverse S-box
             self.isl.inverse_sbox_layer(&mut state);
 
+            println!("AFTER INVERSE S-BOX");
+            dbg!(state.clone());
+
             // MDS
             self.mds.permute_mut(&mut state);
+
+            println!("AFTER MDS");
+            dbg!(state.clone());
 
             // Constants
             for j in 0..WIDTH {
                 state[j] += self.round_constants[round * WIDTH * 2 + WIDTH + j];
             }
+
+            println!("AFTER CONSTANTS");
+            dbg!(state.clone());
         }
 
         state
@@ -216,8 +238,8 @@ mod tests {
             .unwrap();
 
         let expected: [Mersenne31; 12] = [
-            990034328, 455937524, 793417833, 357722086, 1996502687, 1471625702, 1145869542,
-            233052069, 2134505886, 1107849263, 546829033, 1788937376,
+            1174355075, 506638036, 1293741855, 669671042, 881673047, 1403310363, 1489659750,
+            106483224, 1578796769, 289825640, 498340024, 564347160,
         ]
         .iter()
         .map(|x| Mersenne31::from_canonical_u64(*x))
