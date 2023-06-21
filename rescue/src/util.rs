@@ -26,9 +26,9 @@ pub(crate) fn get_alphas<F: PrimeField64>() -> (u64, u64) {
 }
 
 pub(crate) fn get_inverse<F: PrimeField64>(alpha: u64) -> u64 {
-    let p = F::ORDER_U64;
-    let (_, alphainv, _) = egcd(alpha, p - 1);
-    alphainv
+    let p = F::ORDER_U64 as i64;
+    let (_, alphainv, _) = egcd(alpha as i64, p - 1);
+    alphainv.rem_euclid(p) as u64
 }
 
 pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {

@@ -128,7 +128,7 @@ where
                     .iter()
                     .rev()
                     .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
-                F::from_canonical_u64(integer)
+                F::from_canonical_u64(integer % F::ORDER_U64)
             })
             .collect()
     }
