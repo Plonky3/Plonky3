@@ -215,6 +215,7 @@ mod tests {
             .try_into()
             .unwrap();
 
+        // Generated using https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
         let expected: [Mersenne31; 12] = [
             1174355075, 506638036, 1293741855, 669671042, 881673047, 1403310363, 1489659750,
             106483224, 1578796769, 289825640, 498340024, 564347160,
