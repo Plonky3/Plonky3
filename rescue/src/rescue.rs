@@ -1,11 +1,9 @@
-use crate::inverse_sbox::{BasicInverseSboxLayer, InverseSboxLayer};
-use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
+use crate::inverse_sbox::InverseSboxLayer;
 use crate::util::{binomial, shake256_hash};
 
 use ethereum_types::U256;
 use itertools::Itertools;
 use p3_field::{PrimeField, PrimeField64};
-use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{CryptographicPermutation, MDSPermutation};
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
@@ -82,7 +80,7 @@ where
     }
 
     // For a general field, we provide a generic constructor for the round constants.
-    pub(crate) fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
+    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
     where
         Standard: Distribution<F>,
     {
@@ -194,8 +192,19 @@ mod tests {
     use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
     use crate::rescue::Rescue;
 
-    type RescuePrimeM31Default =
-        Rescue<Mersenne31, MDSMatrixNaive<Mersenne31, 12>, BasicInverseSboxLayer, 12, 6, 5, 128>;
+    const WIDTH: usize = 12;
+    const CAPACITY: usize = 12;
+    const ALPHA: u64 = 5;
+    const SEC_LEVEL: usize = 128;
+    type RescuePrimeM31Default = Rescue<
+        Mersenne31,
+        MDSMatrixNaive<Mersenne31, WIDTH>,
+        BasicInverseSboxLayer,
+        WIDTH,
+        CAPACITY,
+        ALPHA,
+        SEC_LEVEL,
+    >;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
         let num_rounds = RescuePrimeM31Default::num_rounds();
