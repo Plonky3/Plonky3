@@ -1,8 +1,8 @@
 use crate::inverse_sbox::InverseSboxLayer;
 use crate::util::{binomial, shake256_hash};
 
-use ethereum_types::U256;
 use itertools::Itertools;
+use num::{BigUint, One};
 use p3_field::{PrimeField, PrimeField64};
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
 use p3_util::ceil_div_usize;
@@ -63,11 +63,11 @@ where
             (0.5 * ((ALPHA - 1) * WIDTH as u64 * (n as u64 - 1)) as f64 + 2.0).floor() as usize
         };
         let v = |n: usize| WIDTH * (n - 1) + rate;
-        let target = U256::one() << SEC_LEVEL;
+        let target = BigUint::one() << SEC_LEVEL;
 
         let is_sufficient = |l1: &usize| {
             let bin = binomial(v(*l1) + dcon(*l1), v(*l1));
-            bin * bin > target
+            &bin * &bin > target
         };
         let l1 = (1..25).find(is_sufficient).unwrap();
         (l1.max(5) as f32 * 1.5).ceil() as usize

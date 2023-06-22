@@ -1,6 +1,6 @@
-use ethereum_types::U256;
 use gcd::Gcd;
 use modinverse::egcd;
+use num::{BigUint, One};
 use p3_field::PrimeField64;
 use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
@@ -8,8 +8,8 @@ use sha3::{
 };
 
 /// The binomial function from combinatorics, used to compute the number of rounds needed for soundness.
-pub(crate) fn binomial(n: usize, k: usize) -> U256 {
-    let mut result = U256::one();
+pub(crate) fn binomial(n: usize, k: usize) -> BigUint {
+    let mut result = BigUint::one();
     for i in 0..k {
         result *= n - i;
         result /= i + 1;
