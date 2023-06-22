@@ -1,8 +1,9 @@
 use crate::inverse_sbox::InverseSboxLayer;
-use crate::util::{binomial, shake256_hash};
+use crate::util::shake256_hash;
 
 use itertools::Itertools;
 use num::{BigUint, One};
+use num_integer::binomial;
 use p3_field::{PrimeField, PrimeField64};
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
 use p3_util::ceil_div_usize;
@@ -51,7 +52,9 @@ where
         let target = BigUint::one() << sec_level;
 
         let is_sufficient = |l1: &usize| {
-            let bin = binomial(v(*l1) + dcon(*l1), v(*l1));
+            let n = BigUint::from(v(*l1) + dcon(*l1));
+            let k = BigUint::from(v(*l1));
+            let bin = binomial(n, k);
             &bin * &bin > target
         };
         let l1 = (1..25).find(is_sufficient).unwrap();

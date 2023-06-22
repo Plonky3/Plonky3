@@ -7,17 +7,6 @@ use sha3::{
     Shake256,
 };
 
-/// The binomial function from combinatorics, used to compute the number of rounds needed for soundness.
-pub(crate) fn binomial(n: usize, k: usize) -> BigUint {
-    let mut result = BigUint::one();
-    for i in 0..k {
-        result *= n - i;
-        result /= i + 1;
-    }
-
-    result
-}
-
 /// Generate alpha, the smallest integer relatively prime to p − 1.
 pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {
     let p = F::ORDER_U64;
