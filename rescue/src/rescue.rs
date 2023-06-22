@@ -17,9 +17,7 @@ pub struct Rescue<
     MDS,
     ISL,
     const WIDTH: usize,
-    const CAPACITY: usize,
     const ALPHA: u64,
-    const SEC_LEVEL: usize,
 > where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
@@ -38,10 +36,8 @@ impl<
         MDS,
         ISL,
         const WIDTH: usize,
-        const CAPACITY: usize,
         const ALPHA: u64,
-        const SEC_LEVEL: usize,
-    > Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+    > Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
@@ -57,13 +53,13 @@ where
         }
     }
 
-    fn num_rounds() -> usize {
-        let rate = WIDTH - CAPACITY;
+    fn num_rounds(capacity: usize, sec_level: usize) -> usize {
+        let rate = WIDTH - capacity;
         let dcon = |n: usize| {
             (0.5 * ((ALPHA - 1) * WIDTH as u64 * (n as u64 - 1)) as f64 + 2.0).floor() as usize
         };
         let v = |n: usize| WIDTH * (n - 1) + rate;
-        let target = BigUint::one() << SEC_LEVEL;
+        let target = BigUint::one() << sec_level;
 
         let is_sufficient = |l1: &usize| {
             let bin = binomial(v(*l1) + dcon(*l1), v(*l1));
@@ -94,16 +90,14 @@ impl<
         MDS,
         ISL,
         const WIDTH: usize,
-        const CAPACITY: usize,
         const ALPHA: u64,
-        const SEC_LEVEL: usize,
-    > Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+    > Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField64,
     MDS: MDSPermutation<F, WIDTH>,
     ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
-    fn get_round_constants_rescue_prime(num_rounds: usize) -> Vec<F> {
+    fn get_round_constants_rescue_prime(num_rounds: usize, capacity: usize, sec_level: usize) -> Vec<F> {
         let num_constants = 2 * WIDTH * num_rounds;
         let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
@@ -112,8 +106,8 @@ where
             "Rescue-XLIX({},{},{},{})",
             F::ORDER_U64,
             WIDTH,
-            CAPACITY,
-            SEC_LEVEL,
+            capacity,
+            sec_level,
         );
         let byte_string = shake256_hash(seed_string.as_bytes(), num_bytes);
 
@@ -138,11 +132,9 @@ impl<
         MDS,
         ISL,
         const WIDTH: usize,
-        const CAPACITY: usize,
         const ALPHA: u64,
-        const SEC_LEVEL: usize,
     > CryptographicPermutation<[F; WIDTH]>
-    for Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+    for Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
@@ -186,10 +178,8 @@ impl<
         MDS,
         ISL,
         const WIDTH: usize,
-        const CAPACITY: usize,
         const ALPHA: u64,
-        const SEC_LEVEL: usize,
-    > ArrayPermutation<F, WIDTH> for Rescue<F, MDS, ISL, WIDTH, CAPACITY, ALPHA, SEC_LEVEL>
+    > ArrayPermutation<F, WIDTH> for Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
@@ -211,26 +201,22 @@ mod tests {
     use crate::rescue::Rescue;
 
     const WIDTH: usize = 12;
-    const CAPACITY: usize = 6;
     const ALPHA: u64 = 5;
-    const SEC_LEVEL: usize = 128;
     type RescuePrimeM31Default = Rescue<
         Mersenne31,
         MDSMatrixNaive<Mersenne31, WIDTH>,
         BasicInverseSboxLayer,
         WIDTH,
-        CAPACITY,
         ALPHA,
-        SEC_LEVEL,
     >;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
-        let num_rounds = RescuePrimeM31Default::num_rounds();
-        let round_constants = RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds);
+        let num_rounds = RescuePrimeM31Default::num_rounds(6, 128);
+        let round_constants = RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
         let mds = rescue_prime_m31_width_12_mds_matrix();
         let isl = BasicInverseSboxLayer {};
 
-        RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl)
+        RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl, )
     }
 
     const NUM_TESTS: usize = 3;
