@@ -309,7 +309,7 @@ mod tests {
         .try_into()
         .unwrap();
 
-        let actual: [Mersenne31; 6] = rescue_sponge.hash_iter(input).try_into().unwrap();
+        let actual = rescue_sponge.hash_iter(input);
         assert_eq!(actual, expected);
     }
 }
