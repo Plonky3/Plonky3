@@ -28,7 +28,9 @@ pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {
 /// Given alpha, find its multiplicative inverse in Z/⟨p − 1⟩.
 pub(crate) fn get_inverse<F: PrimeField64>(alpha: u64) -> u64 {
     let p = F::ORDER_U64 as i64;
-    modinverse(alpha as i64, p - 1).expect("x^alpha not a permutation").abs() as u64
+    modinverse(alpha as i64, p - 1)
+        .expect("x^alpha not a permutation")
+        .unsigned_abs()
 }
 
 /// Compute the SHAKE256 variant of SHA-3.
