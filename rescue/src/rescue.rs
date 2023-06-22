@@ -12,13 +12,8 @@ use rand::Rng;
 use std::marker::PhantomData;
 
 #[derive(Clone)]
-pub struct Rescue<
-    F,
-    MDS,
-    ISL,
-    const WIDTH: usize,
-    const ALPHA: u64,
-> where
+pub struct Rescue<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64>
+where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
     ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
@@ -31,13 +26,7 @@ pub struct Rescue<
     _phantom_f: PhantomData<F>,
 }
 
-impl<
-        F,
-        MDS,
-        ISL,
-        const WIDTH: usize,
-        const ALPHA: u64,
-    > Rescue<F, MDS, ISL, WIDTH, ALPHA>
+impl<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64> Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
@@ -85,19 +74,17 @@ where
     }
 }
 
-impl<
-        F,
-        MDS,
-        ISL,
-        const WIDTH: usize,
-        const ALPHA: u64,
-    > Rescue<F, MDS, ISL, WIDTH, ALPHA>
+impl<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64> Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField64,
     MDS: MDSPermutation<F, WIDTH>,
     ISL: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
-    fn get_round_constants_rescue_prime(num_rounds: usize, capacity: usize, sec_level: usize) -> Vec<F> {
+    fn get_round_constants_rescue_prime(
+        num_rounds: usize,
+        capacity: usize,
+        sec_level: usize,
+    ) -> Vec<F> {
         let num_constants = 2 * WIDTH * num_rounds;
         let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
@@ -127,13 +114,7 @@ where
     }
 }
 
-impl<
-        F,
-        MDS,
-        ISL,
-        const WIDTH: usize,
-        const ALPHA: u64,
-    > CryptographicPermutation<[F; WIDTH]>
+impl<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
     for Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField,
@@ -173,13 +154,8 @@ where
     }
 }
 
-impl<
-        F,
-        MDS,
-        ISL,
-        const WIDTH: usize,
-        const ALPHA: u64,
-    > ArrayPermutation<F, WIDTH> for Rescue<F, MDS, ISL, WIDTH, ALPHA>
+impl<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64> ArrayPermutation<F, WIDTH>
+    for Rescue<F, MDS, ISL, WIDTH, ALPHA>
 where
     F: PrimeField,
     MDS: MDSPermutation<F, WIDTH>,
@@ -202,21 +178,17 @@ mod tests {
 
     const WIDTH: usize = 12;
     const ALPHA: u64 = 5;
-    type RescuePrimeM31Default = Rescue<
-        Mersenne31,
-        MDSMatrixNaive<Mersenne31, WIDTH>,
-        BasicInverseSboxLayer,
-        WIDTH,
-        ALPHA,
-    >;
+    type RescuePrimeM31Default =
+        Rescue<Mersenne31, MDSMatrixNaive<Mersenne31, WIDTH>, BasicInverseSboxLayer, WIDTH, ALPHA>;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
         let num_rounds = RescuePrimeM31Default::num_rounds(6, 128);
-        let round_constants = RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
+        let round_constants =
+            RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
         let mds = rescue_prime_m31_width_12_mds_matrix();
         let isl = BasicInverseSboxLayer {};
 
-        RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl, )
+        RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl)
     }
 
     const NUM_TESTS: usize = 3;
