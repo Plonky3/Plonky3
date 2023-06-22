@@ -1,5 +1,5 @@
 use gcd::Gcd;
-use modinverse::egcd;
+use modinverse::modinverse;
 use num::{BigUint, One};
 use p3_field::PrimeField64;
 use sha3::{
@@ -28,8 +28,7 @@ pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {
 /// Given alpha, find its multiplicative inverse in Z/⟨p − 1⟩.
 pub(crate) fn get_inverse<F: PrimeField64>(alpha: u64) -> u64 {
     let p = F::ORDER_U64 as i64;
-    let (_, alphainv, _) = egcd(alpha as i64, p - 1);
-    alphainv.rem_euclid(p - 1) as u64
+    modinverse(alpha as i64, p - 1).expect("x^alpha not a permutation").abs() as u64
 }
 
 /// Compute the SHAKE256 variant of SHA-3.
