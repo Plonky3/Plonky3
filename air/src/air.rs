@@ -136,11 +136,8 @@ pub trait PermutationAirBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
     type ExprEF: AbstractionOf<Self::EF>
-        + AbstractExtensionField<Self::F>
+        + AbstractExtensionField<Self::Expr>
         + From<Self::Expr>
-        + Add<Self::Expr, Output = Self::ExprEF>
-        + Sub<Self::Expr, Output = Self::ExprEF>
-        + Mul<Self::Expr, Output = Self::ExprEF>
         + Add<Self::VarEF, Output = Self::ExprEF>
         + Sub<Self::VarEF, Output = Self::ExprEF>
         + Mul<Self::VarEF, Output = Self::ExprEF>;
