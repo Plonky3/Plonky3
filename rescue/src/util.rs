@@ -1,6 +1,6 @@
 use gcd::Gcd;
 use modinverse::modinverse;
-use num::{BigUint, One};
+
 use p3_field::PrimeField64;
 use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
