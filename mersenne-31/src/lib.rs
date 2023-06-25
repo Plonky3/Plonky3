@@ -120,6 +120,11 @@ impl Field for Mersenne31 {
     fn try_inverse(&self) -> Option<Self> {
         // Uses algorithm 9.4.5 in Crandall and Pomerance book
         // "Prime Numbers: A Computational Perspective" to compute the inverse.
+
+        if self.is_zero() {
+            return None;
+        }
+
         let mut a = Self::ONE;
         let mut b = Self::ZERO;
         let mut u = self.value;
