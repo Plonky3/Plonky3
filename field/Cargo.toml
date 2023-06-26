@@ -8,3 +8,4 @@ license = "MIT OR Apache-2.0"
 p3-maybe-rayon = { path = "../maybe-rayon" }
 rand = "0.8.5"
 itertools = "0.10.5"
+p3-util = { path = "../util" }
