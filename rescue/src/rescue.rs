@@ -10,7 +10,6 @@ use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
-use std::marker::PhantomData;
 
 #[derive(Clone)]
 pub struct Rescue<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64>
@@ -23,8 +22,6 @@ where
     mds: MDS,
     isl: ISL,
     round_constants: Vec<F>,
-
-    _phantom_f: PhantomData<F>,
 }
 
 impl<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64> Rescue<F, MDS, ISL, WIDTH, ALPHA>
@@ -39,7 +36,6 @@ where
             mds,
             isl,
             round_constants,
-            _phantom_f: PhantomData,
         }
     }
 
