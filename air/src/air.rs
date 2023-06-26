@@ -114,12 +114,12 @@ pub trait AirBuilder: Sized {
         self.assert_zero_ext::<ExprExt, ExprExt>(x.into() - y.into());
     }
 
-    fn assert_one_ext<ExprExt, I>(&mut self, x: ExprExt)
+    fn assert_one_ext<ExprExt, I>(&mut self, x: I)
     where
         ExprExt: AbstractExtensionField<Self::Expr>,
         I: Into<ExprExt>,
     {
-        let xe: ExprExt = x;
+        let xe: ExprExt = x.into();
         let parts = xe.as_base_slice();
         self.assert_one(parts[0].clone());
         for part in &parts[1..] {
