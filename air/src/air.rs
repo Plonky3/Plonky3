@@ -137,7 +137,6 @@ pub trait PermutationAirBuilder: AirBuilder {
 
     type ExprEF: AbstractionOf<Self::EF>
         + AbstractExtensionField<Self::Expr>
-        + From<Self::Expr>
         + Add<Self::VarEF, Output = Self::ExprEF>
         + Sub<Self::VarEF, Output = Self::ExprEF>
         + Mul<Self::VarEF, Output = Self::ExprEF>;
@@ -154,7 +153,7 @@ pub trait PermutationAirBuilder: AirBuilder {
         + Mul<Self::VarEF, Output = Self::ExprEF>
         + Mul<Self::ExprEF, Output = Self::ExprEF>;
 
-    type MP: for<'a> MatrixRows<'a, Self::Var, Row = &'a [Self::VarEF]>;
+    type MP: for<'a> MatrixRows<'a, Self::VarEF, Row = &'a [Self::VarEF]>;
 
     fn permutation(&self) -> Self::MP;
 
