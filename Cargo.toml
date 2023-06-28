@@ -17,6 +17,7 @@ members = [
     "mersenne-31",
     "multi-stark",
     "poseidon",
+    "reed-solomon",
     "rescue",
     "symmetric",
     "tensor-pcs",

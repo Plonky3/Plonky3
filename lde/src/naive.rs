@@ -1,18 +1,45 @@
-use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE};
+use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE, UndefinedLDE};
 use alloc::vec::Vec;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
 };
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::stack::VerticalPair;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
+
+/// A naive quadratic-time implementation of `LDE`, intended for testing.
+pub struct NaiveUndefinedLDE;
 
 /// A naive quadratic-time implementation of `TwoAdicSubgroupLDE`, intended for testing.
 pub struct NaiveSubgroupLDE;
 
 /// A naive quadratic-time implementation of `TwoAdicCosetLDE`, intended for testing.
 pub struct NaiveCosetLDE;
+
+impl<F, In> UndefinedLDE<F, F, In> for NaiveUndefinedLDE
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+{
+    type Out = VerticalPair<F, In, RowMajorMatrix<F>>;
+
+    fn lde_batch(&self, polys: In, extended_height: usize) -> Self::Out {
+        let original_height = polys.height();
+        let original_domain: Vec<F> = (0..original_height)
+            .map(|x| F::from_canonical_usize(x))
+            .collect();
+        let weights = barycentric_weights(&original_domain);
+
+        let added_values = (original_height..extended_height)
+            .map(|x| F::from_canonical_usize(x))
+            .flat_map(|x| interpolate(&original_domain, &polys, x, &weights))
+            .collect();
+        let extension = RowMajorMatrix::new(added_values, polys.width());
+        VerticalPair::new(polys, extension)
+    }
+}
 
 impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveSubgroupLDE
 where
@@ -90,16 +117,16 @@ fn barycentric_weights<F: Field>(points: &[F]) -> Vec<F> {
     )
 }
 
-fn interpolate<F: Field>(
+fn interpolate<F: Field, Mat: for<'a> MatrixRows<'a, F>>(
     points: &[F],
-    values: &RowMajorMatrix<F>,
+    values: &Mat,
     x: F,
     barycentric_weights: &[F],
 ) -> Vec<F> {
     // If x is in the list of points, the Lagrange formula would divide by zero.
     for (i, &x_i) in points.iter().enumerate() {
         if x_i == x {
-            return values.row(i).to_vec();
+            return values.row(i).into_iter().copied().collect();
         }
     }
 
@@ -107,7 +134,7 @@ fn interpolate<F: Field>(
 
     let sum = sum_vecs((0..points.len()).map(|i| {
         let x_i = points[i];
-        let y_i = values.row(i).to_vec();
+        let y_i = values.row(i).into_iter().copied().collect();
         let w_i = barycentric_weights[i];
         scale_vec(w_i / (x - x_i), y_i)
     }));

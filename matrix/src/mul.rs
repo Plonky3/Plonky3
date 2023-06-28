@@ -2,8 +2,8 @@ use crate::dense::RowMajorMatrix;
 use crate::sparse::CsrMatrix;
 use crate::{Matrix, MatrixRows};
 use alloc::vec;
-use alloc::vec::Vec;
 use p3_field::Field;
+use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 
 /// Compute `C = A * B`, where `A` in a CSR matrix and `B` is a dense matrix.
 ///
@@ -12,20 +12,21 @@ use p3_field::Field;
 pub fn mul_csr_dense<'a, F, B>(a: &CsrMatrix<F>, b: &'a B) -> RowMajorMatrix<F>
 where
     F: Field,
-    B: MatrixRows<'a, F>,
+    B: MatrixRows<'a, F> + Sync,
 {
     assert_eq!(a.width(), b.height(), "A, B dimensions don't match");
     let c_width = b.width();
-    let c_height = a.height();
-    let mut c_values = Vec::with_capacity(c_width * c_height);
 
-    for a_row_idx in 0..a.height() {
-        let mut c_row = vec![F::ZERO; c_width];
-        for &(a_col_idx, a_val) in a.row(a_row_idx) {
-            add_scaled_slice_in_place(&mut c_row, b.row(a_col_idx).into_iter(), a_val);
-        }
-        c_values.extend(c_row);
-    }
+    let c_values = (0..a.height())
+        .into_par_iter()
+        .flat_map(|a_row_idx| {
+            let mut c_row = vec![F::ZERO; c_width];
+            for &(a_col_idx, a_val) in a.row(a_row_idx) {
+                add_scaled_slice_in_place(&mut c_row, b.row(a_col_idx).into_iter(), a_val);
+            }
+            c_row
+        })
+        .collect();
 
     RowMajorMatrix::new(c_values, c_width)
 }

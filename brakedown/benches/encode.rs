@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_brakedown::BrakedownCode;
+use p3_brakedown::{fast_height_14, BrakedownCode};
 use p3_code::{CodeOrFamily, IdentityCode};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
@@ -25,19 +25,10 @@ where
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [10, 11, 12] {
+    for n_log in [14] {
         let n = 1 << n_log;
 
-        // TODO: Should actually by fixed column weight, though this shouldn't change perf much.
-        let a = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, n / 4, n, A_ROW_WEIGHT);
-        let b = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, 3 * n / 4, n / 4, B_ROW_WEIGHT);
-        let code = BrakedownCode {
-            a,
-            b,
-            // TODO: Should be another Brakedown or Reed-Solomon code. The performance difference
-            // should be fairly minor though, since the inner code will be much smaller.
-            inner_code: Box::new(IdentityCode { len: n / 2 }),
-        };
+        let code = fast_height_14();
 
         let mut messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
 

@@ -32,6 +32,34 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
     const TWO: Self = Self::Constant(F::TWO);
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
+    fn from_canonical_u8(n: u8) -> Self {
+        Self::Constant(F::from_canonical_u8(n))
+    }
+
+    fn from_canonical_u16(n: u8) -> Self {
+        Self::Constant(F::from_canonical_u16(n))
+    }
+
+    fn from_canonical_u32(n: u32) -> Self {
+        Self::Constant(F::from_canonical_u32(n))
+    }
+
+    fn from_canonical_u64(n: u64) -> Self {
+        Self::Constant(F::from_canonical_u64(n))
+    }
+
+    fn from_canonical_usize(n: usize) -> Self {
+        Self::Constant(F::from_canonical_usize(n))
+    }
+
+    fn from_wrapped_u32(n: u32) -> Self {
+        Self::Constant(F::from_wrapped_u32(n))
+    }
+
+    fn from_wrapped_u64(n: u64) -> Self {
+        Self::Constant(F::from_wrapped_u64(n))
+    }
+
     fn multiplicative_group_generator() -> Self {
         Self::Constant(F::multiplicative_group_generator())
     }
