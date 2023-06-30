@@ -165,7 +165,7 @@ where
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use p3_field::{AbstractField, PrimeField};
+    use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::hasher::CryptographicHasher;
     use p3_symmetric::permutation::CryptographicPermutation;

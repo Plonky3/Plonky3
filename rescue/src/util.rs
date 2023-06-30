@@ -7,14 +7,14 @@ use sha3::{
     Shake256,
 };
 
-/// Generate alpha, the smallest integer relatively prime to p − 1.
+/// Generate alpha, the smallest integer relatively prime to `p − 1`.
 pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {
     let p = F::ORDER_U64;
 
     (3..p).find(|&a| a.gcd(p - 1) == 1).unwrap()
 }
 
-/// Given alpha, find its multiplicative inverse in Z/⟨p − 1⟩.
+/// Given alpha, find its multiplicative inverse in `Z/⟨p − 1⟩`.
 pub(crate) fn get_inverse<F: PrimeField64>(alpha: u64) -> u64 {
     let p = F::ORDER_U64 as i64;
     modinverse(alpha as i64, p - 1)

@@ -3,6 +3,7 @@ use p3_field::Field;
 use p3_matrix::MatrixRows;
 
 /// A systematic code, or a family thereof.
+// TODO: Remove? Not really used.
 pub trait SystematicCodeOrFamily<F: Field, In: for<'a> MatrixRows<'a, F>>:
     CodeOrFamily<F, In>
 {

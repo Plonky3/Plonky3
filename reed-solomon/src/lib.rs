@@ -50,7 +50,7 @@ where
     type Out = L::Out;
 
     fn encode_batch(&self, messages: In) -> Self::Out {
-        self.lde.lde_batch(messages, self.n - self.k)
+        self.lde.lde_batch(messages, self.n)
     }
 }
 

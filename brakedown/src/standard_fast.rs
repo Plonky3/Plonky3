@@ -1,6 +1,8 @@
+use crate::macros::{brakedown, brakedown_to_rs};
 use crate::BrakedownCode;
 use alloc::boxed::Box;
-use p3_code::SystematicLinearCode;
+use alloc::vec;
+use p3_code::{LinearCodeFamily, SLCodeRegistry};
 use p3_field::Field;
 use p3_matrix::sparse::CsrMatrix;
 use p3_matrix::MatrixRows;
@@ -8,48 +10,23 @@ use rand::distributions::{Distribution, Standard};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
-macro_rules! brakedown {
-    ($a_width:literal, $a_height:literal, $a_density:literal,
-     $b_width:literal, $b_height:literal, $b_density:literal,
-     $inner_code:expr) => {{
-        let mut rng = ChaCha20Rng::seed_from_u64(0);
-        // TODO: Should actually by fixed column weight.
-        let a = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, $a_height, $a_width, $a_density);
-        let b = CsrMatrix::<F>::rand_fixed_row_weight(&mut rng, $b_height, $b_width, $b_density);
-        let inner_code = Box::new($inner_code);
-        BrakedownCode { a, b, inner_code }
-    }};
-}
-
-macro_rules! brakedown_to_rs {
-    ($a_width:literal, $a_height:literal, $a_density:literal,
-     $b_width:literal, $b_height:literal, $b_density:literal) => {
-        brakedown!(
-            $a_width,
-            $a_height,
-            $a_density,
-            $b_width,
-            $b_height,
-            $b_density,
-            p3_reed_solomon::UndefinedReedSolomonCode::new(
-                p3_lde::NaiveUndefinedLDE,
-                $b_width,
-                $a_height
-            )
-        )
-    };
-}
-
-#[rustfmt::skip]
-pub fn fast_height_14<F, In>() -> impl SystematicLinearCode<F, In>
+pub fn fast_registry<F, In>() -> impl LinearCodeFamily<F, In>
 where
     F: Field,
     Standard: Distribution<F>,
     In: for<'a> MatrixRows<'a, F> + Sync,
 {
-    // TODO: These numbers aren't 100% correct...
-    brakedown!(16384, 1967, 8, 2812, 4213, 20,
-        brakedown!(1967, 237, 9, 339, 506, 23,
-            brakedown!(237, 29, 11, 41, 61, 15,
-                brakedown_to_rs!(29, 4, 1, 4, 8, 1))))
+    #[rustfmt::skip]
+    let height_14 = brakedown!(16384, 1967, 8, 2810, 4211, 20,
+        brakedown!(1967, 237, 9, 338, 505, 23,
+            brakedown!(237, 29, 11, 41, 60, 15,
+                brakedown_to_rs!(29, 4, 0, 5, 7, 0))));
+
+    #[rustfmt::skip]
+    let height_16 = brakedown!(65536, 7865, 8, 11235, 16851, 19,
+        brakedown!(7865, 944, 8, 1348, 2022, 21,
+            brakedown!(944, 114, 9, 162, 242, 23,
+                brakedown_to_rs!(114, 14, 7, 20, 28, 11))));
+
+    SLCodeRegistry::new(vec![Box::new(height_14), Box::new(height_16)])
 }

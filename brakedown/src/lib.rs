@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod brakedown_code;
+mod macros;
 mod standard_fast;
 
 pub use brakedown_code::*;
