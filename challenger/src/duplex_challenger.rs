@@ -73,33 +73,25 @@ mod tests {
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::permutation::CryptographicPermutation;
-    use rand::seq::{index::sample, SliceRandom};
 
     use super::*;
 
-    type ByteArray = [F; 32];
+    const WIDTH: usize = 32;
+
+    type TestArray = [F; WIDTH];
     type F = Goldilocks;
 
-    const WIDTH: usize = 32;
     struct TestPermutation {}
 
-    impl CryptographicPermutation<ByteArray> for TestPermutation {
-        fn permute(&self, input: ByteArray) -> ByteArray {
-            let mut output = [F::ZERO; 32];
-            let mut rng = rand::thread_rng();
-            let mut shuffled_indexes: [usize; 32] =
-                (0..32).collect::<Vec<usize>>().try_into().unwrap();
-            shuffled_indexes.shuffle(&mut rng);
-            (0..32).for_each(|i| output[shuffled_indexes[i]] = input[i]);
-            output
+    impl CryptographicPermutation<TestArray> for TestPermutation {
+        fn permute(&self, input: TestArray) -> TestArray {
+            let mut output = input.clone();
+            output.reverse();
+            output.try_into().unwrap()
         }
 
-        fn permute_mut(&self, input: &mut ByteArray) {
-            let mut rng = rand::thread_rng();
-            let mut shuffled_indexes: [usize; 32] =
-                (0..32).collect::<Vec<usize>>().try_into().unwrap();
-            shuffled_indexes.shuffle(&mut rng);
-            (0..32).for_each(|i| input[i] = input[shuffled_indexes[i]]);
+        fn permute_mut(&self, input: &mut TestArray) {
+            input.reverse()
         }
     }
 
@@ -107,35 +99,94 @@ mod tests {
 
     #[test]
     fn it_works_duplexing() {
-        let mut rng = rand::thread_rng();
         let permutation = TestPermutation {};
         let mut duplex_challenger = DuplexChallenger::new(permutation);
-        let sample_range = sample(&mut rng, u32::MAX as usize, 31);
-        let mut sample_iter = sample_range.iter();
 
-        (0..31).for_each(|_| {
-            let element = sample_iter.next().unwrap();
-            duplex_challenger.observe_element(Goldilocks::from_canonical_usize(element))
+        // observe elements before reaching WIDTH
+        (0..WIDTH - 1).for_each(|element| {
+            duplex_challenger.observe_element(F::from_canonical_u8(element as u8));
+            assert_eq!(duplex_challenger.input_buffer.len(), element + 1);
+            assert_eq!(
+                duplex_challenger.input_buffer,
+                (0..element + 1)
+                    .map(|i| F::from_canonical_u8(i as u8))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(duplex_challenger.output_buffer, vec![]);
+            assert_eq!(duplex_challenger.sponge_state, [F::ZERO; WIDTH]);
         });
 
-        let input_buffer = duplex_challenger.input_buffer.clone();
+        // Test functionality when we observe WIDTH elements
+        duplex_challenger.observe_element(F::from_canonical_u8(31));
+        assert_eq!(duplex_challenger.input_buffer, vec![]);
 
-        assert_eq!(duplex_challenger.input_buffer.len(), 31);
+        let should_be_output_buffer: [F; WIDTH] = (0..WIDTH as u8)
+            .rev()
+            .map(|i| F::from_canonical_u8(i))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        assert_eq!(duplex_challenger.output_buffer, should_be_output_buffer);
+        assert_eq!(duplex_challenger.sponge_state, should_be_output_buffer);
+
+        // Test functionality when observe, over more than WIDTH elements
+        duplex_challenger.observe_element(F::from_canonical_u8(255));
+        assert_eq!(duplex_challenger.input_buffer, [F::from_canonical_u8(255)]);
+        assert_eq!(duplex_challenger.output_buffer, vec![]);
+        assert_eq!(duplex_challenger.sponge_state, should_be_output_buffer);
+
+        // Test functionality after duplexing again
         duplex_challenger.duplexing();
+        let mut should_be_output_buffer =
+            (0..31).map(|i| F::from_canonical_u8(i)).collect::<Vec<_>>();
+        should_be_output_buffer.push(F::from_canonical_u8(255));
+        assert_eq!(duplex_challenger.input_buffer, vec![]);
+        assert_eq!(duplex_challenger.output_buffer, should_be_output_buffer);
+        let should_be_sponge_state: [F; WIDTH] = should_be_output_buffer.try_into().unwrap();
+        assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state);
+    }
 
-        assert_eq!(duplex_challenger.input_buffer.len(), 0);
-        assert_eq!(duplex_challenger.output_buffer.len(), 32);
-        for i in 0..31 {
-            assert!(
-                input_buffer.contains(&duplex_challenger.output_buffer[i])
-                    || duplex_challenger.output_buffer[i] == F::ZERO
+    #[test]
+    fn it_works_random_element() {
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = DuplexChallenger::new(permutation);
+
+        // observe elements before reaching WIDTH
+        (0..WIDTH / 2).for_each(|element| {
+            duplex_challenger.observe_element(F::from_canonical_u8(element as u8))
+        });
+
+        let should_be_sponge_state: [F; 32] = [
+            vec![F::ZERO; 16],
+            (0..16)
+                .rev()
+                .map(|i| F::from_canonical_u8(i))
+                .collect::<Vec<_>>(),
+        ]
+        .concat()
+        .try_into()
+        .unwrap();
+
+        (0..WIDTH / 2).for_each(|element| {
+            assert_eq!(
+                duplex_challenger.random_element(),
+                F::from_canonical_u8(element as u8)
             );
-        }
+            assert_eq!(
+                duplex_challenger.output_buffer,
+                should_be_sponge_state[..WIDTH - element - 1]
+            );
+            assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state);
+        });
 
-        assert_eq!(duplex_challenger.sponge_state.len(), 32);
-        assert_eq!(
-            duplex_challenger.sponge_state[..],
-            duplex_challenger.output_buffer[..]
-        );
+        (0..WIDTH / 2).for_each(|i| {
+            assert_eq!(duplex_challenger.random_element(), F::from_canonical_u8(0));
+            assert_eq!(duplex_challenger.input_buffer, vec![]);
+            assert_eq!(
+                duplex_challenger.output_buffer,
+                vec![F::ZERO; WIDTH / 2 - i - 1]
+            );
+            assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state)
+        })
     }
 }
