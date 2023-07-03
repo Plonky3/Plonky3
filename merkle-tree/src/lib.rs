@@ -29,7 +29,7 @@ pub struct MerkleTree<L, D, Mat: Matrix<L>> {
 
 impl<L, D, Mat> MerkleTree<L, D, Mat>
 where
-    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
+    Mat: for<'a> MatrixRows<'a, L>,
 {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
@@ -56,7 +56,14 @@ where
             .collect_vec();
 
         let first_digest_layer = (0..max_height)
-            .map(|i| h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i))))
+            .map(|i| {
+                h.hash_iter(
+                    tallest_matrices
+                        .iter()
+                        .map(|m| m.row(i).into_iter().copied())
+                        .flatten(),
+                )
+            })
             .chain(iter::repeat(D::default()))
             .take(max_height_padded)
             .collect_vec();
@@ -106,7 +113,7 @@ where
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
+    Mat: for<'a> MatrixRows<'a, L>,
 {
     let next_len_padded = prev_layer.len() >> 1;
     let mut next_digests = Vec::with_capacity(next_len_padded);
@@ -126,7 +133,12 @@ where
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let mut digest = c.compress([left, right]);
-        let tallest_digest = h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row(i)));
+        let tallest_digest = h.hash_iter(
+            tallest_matrices
+                .iter()
+                .map(|m| m.row(i).into_iter().copied())
+                .flatten(),
+        );
         digest = c.compress([digest, tallest_digest]);
         next_digests.push(digest);
     }
@@ -173,7 +185,7 @@ where
     L: 'static + Clone,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
+    Mat: for<'a> MatrixRows<'a, L>,
 {
     type ProverData = MerkleTree<L, D, Mat>;
     type Commitment = D;
@@ -181,11 +193,11 @@ where
     type Error = ();
     type Mat = Mat;
 
-    fn open_batch(row: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<&[L]>, Vec<D>) {
+    fn open_batch(row: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<Vec<L>>, Vec<D>) {
         let leaf = prover_data
             .leaves
             .iter()
-            .map(|matrix| matrix.row(row))
+            .map(|matrix| matrix.row(row).into_iter().cloned().collect())
             .collect();
         let proof = vec![]; // TODO
         (leaf, proof)
@@ -212,7 +224,7 @@ where
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
+    Mat: for<'a> MatrixRows<'a, L>,
 {
     fn commit(&self, inputs: Vec<Mat>) -> (Self::Commitment, Self::ProverData) {
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);

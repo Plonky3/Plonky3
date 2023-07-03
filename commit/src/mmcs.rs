@@ -20,7 +20,7 @@ pub trait MMCS<T> {
     type Error;
     type Mat: for<'a> MatrixRows<'a, T>;
 
-    fn open_batch(row: usize, prover_data: &Self::ProverData) -> (Vec<&[T]>, Self::Proof);
+    fn open_batch(row: usize, prover_data: &Self::ProverData) -> (Vec<Vec<T>>, Self::Proof);
 
     /// Get the matrices that were committed to.
     fn get_matrices(prover_data: &Self::ProverData) -> &[Self::Mat];
