@@ -56,7 +56,7 @@ fn test_prove_goldilocks() {
     type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
     let c = C::new(perm.clone());
 
-    type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
+    type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C, RowMajorMatrix<Val>>;
     type LDE = NaiveCosetLDE;
     type PCS = FRIBasedPCS<Val, Domain, Challenge, LDE, MMCS, MMCS>;
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Challenge, PCS, LDE>;

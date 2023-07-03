@@ -9,7 +9,6 @@ use core::iter;
 use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::{Dimensions, DirectMMCS, MMCS};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
@@ -22,15 +21,19 @@ use p3_util::log2_ceil_usize;
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an `MMCS`,
 /// see `MerkleTreeMMCS`.
-pub struct MerkleTree<L, D> {
-    leaves: Vec<RowMajorMatrix<L>>,
+pub struct MerkleTree<L, D, Mat: Matrix<L>> {
+    leaves: Vec<Mat>,
     digest_layers: Vec<Vec<D>>,
+    _phantom_l: PhantomData<L>,
 }
 
-impl<L, D> MerkleTree<L, D> {
+impl<L, D, Mat> MerkleTree<L, D, Mat>
+where
+    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
+{
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
-    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
+    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<Mat>) -> Self
     where
         L: Copy,
         D: Copy + Default,
@@ -77,6 +80,7 @@ impl<L, D> MerkleTree<L, D> {
         Self {
             leaves,
             digest_layers,
+            _phantom_l: PhantomData,
         }
     }
 
@@ -91,9 +95,9 @@ impl<L, D> MerkleTree<L, D> {
 
 /// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
-fn compression_layer<L, D, H, C>(
+fn compression_layer<L, D, H, C, Mat>(
     prev_layer: &[D],
-    tallest_matrices: Vec<&RowMajorMatrix<L>>,
+    tallest_matrices: Vec<&Mat>,
     h: &H,
     c: &C,
 ) -> Vec<D>
@@ -102,6 +106,7 @@ where
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
+    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
 {
     let next_len_padded = prev_layer.len() >> 1;
     let mut next_digests = Vec::with_capacity(next_len_padded);
@@ -143,37 +148,40 @@ where
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeMMCS<L, D, H, C> {
+pub struct MerkleTreeMMCS<L, D, H, C, Mat> {
     hash: H,
     compress: C,
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
+    _phantom_mat: PhantomData<Mat>,
 }
 
-impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
+impl<L, D, H, C, Mat> MerkleTreeMMCS<L, D, H, C, Mat> {
     pub fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
             compress,
-            _phantom_l: PhantomData::default(),
-            _phantom_d: PhantomData::default(),
+            _phantom_l: PhantomData,
+            _phantom_d: PhantomData,
+            _phantom_mat: PhantomData,
         }
     }
 }
 
-impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C, Mat> MMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
 where
     L: 'static + Clone,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
+    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
 {
-    type ProverData = MerkleTree<L, D>;
+    type ProverData = MerkleTree<L, D, Mat>;
     type Commitment = D;
     type Proof = Vec<D>;
     type Error = ();
-    type Mat = RowMajorMatrix<L>;
+    type Mat = Mat;
 
-    fn open_batch(row: usize, prover_data: &MerkleTree<L, D>) -> (Vec<&[L]>, Vec<D>) {
+    fn open_batch(row: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<&[L]>, Vec<D>) {
         let leaf = prover_data
             .leaves
             .iter()
@@ -183,7 +191,7 @@ where
         (leaf, proof)
     }
 
-    fn get_matrices(prover_data: &Self::ProverData) -> &[RowMajorMatrix<L>] {
+    fn get_matrices(prover_data: &Self::ProverData) -> &[Mat] {
         &prover_data.leaves
     }
 
@@ -198,14 +206,15 @@ where
     }
 }
 
-impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C, Mat> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
 where
     L: 'static + Copy,
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
+    Mat: for<'a> MatrixRows<'a, L, Row = &'a [L]>,
 {
-    fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit(&self, inputs: Vec<Mat>) -> (Self::Commitment, Self::ProverData) {
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
@@ -229,7 +238,7 @@ mod tests {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
-        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C, RowMajorMatrix<u8>>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         let mut rng = thread_rng();
