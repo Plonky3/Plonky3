@@ -169,7 +169,7 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::hasher::CryptographicHasher;
-    use p3_symmetric::mds::MDSMatrixNaive;
+    use p3_symmetric::mds::NaiveMDSMatrix;
     use p3_symmetric::permutation::CryptographicPermutation;
     use p3_symmetric::sponge::PaddingFreeSponge;
 
@@ -180,7 +180,7 @@ mod tests {
     const WIDTH: usize = 12;
     const ALPHA: u64 = 5;
     type RescuePrimeM31Default =
-        Rescue<Mersenne31, MDSMatrixNaive<Mersenne31, WIDTH>, BasicInverseSboxLayer, WIDTH, ALPHA>;
+        Rescue<Mersenne31, NaiveMDSMatrix<Mersenne31, WIDTH>, BasicInverseSboxLayer, WIDTH, ALPHA>;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
         let num_rounds = RescuePrimeM31Default::num_rounds(6, 128);

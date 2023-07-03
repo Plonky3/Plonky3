@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use p3_field::AbstractField;
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::mds::MDSMatrixNaive;
+use p3_symmetric::mds::NaiveMDSMatrix;
 
 // Generated with SageMath, using the get_mds_matrix function from the Rescue-Prime paper.
 const RESCUE_PRIME_M31_WIDTH_8_MDS_MATRIX: [[u32; 8]; 8] = [
@@ -100,14 +100,14 @@ fn u32_matrix_to_m31_matrix<const SIZE: usize>(
         .unwrap()
 }
 
-pub fn rescue_prime_m31_width_8_mds_matrix() -> MDSMatrixNaive<Mersenne31, 8> {
-    MDSMatrixNaive::new(u32_matrix_to_m31_matrix(
+pub fn rescue_prime_m31_width_8_mds_matrix() -> NaiveMDSMatrix<Mersenne31, 8> {
+    NaiveMDSMatrix::new(u32_matrix_to_m31_matrix(
         RESCUE_PRIME_M31_WIDTH_8_MDS_MATRIX,
     ))
 }
 
-pub fn rescue_prime_m31_width_12_mds_matrix() -> MDSMatrixNaive<Mersenne31, 12> {
-    MDSMatrixNaive::new(u32_matrix_to_m31_matrix(
+pub fn rescue_prime_m31_width_12_mds_matrix() -> NaiveMDSMatrix<Mersenne31, 12> {
+    NaiveMDSMatrix::new(u32_matrix_to_m31_matrix(
         RESCUE_PRIME_M31_WIDTH_12_MDS_MATRIX,
     ))
 }
