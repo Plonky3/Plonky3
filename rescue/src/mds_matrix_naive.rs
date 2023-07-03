@@ -1,29 +1,7 @@
 use itertools::Itertools;
-use p3_field::{AbstractField, PrimeField};
+use p3_field::AbstractField;
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
-
-pub struct MDSMatrixNaive<F: PrimeField, const WIDTH: usize> {
-    matrix: [[F; WIDTH]; WIDTH],
-}
-
-impl<F: PrimeField, const WIDTH: usize> CryptographicPermutation<[F; WIDTH]>
-    for MDSMatrixNaive<F, WIDTH>
-{
-    fn permute(&self, input: [F; WIDTH]) -> [F; WIDTH] {
-        let mut output = [F::ZERO; WIDTH];
-        for (i, row) in self.matrix.iter().enumerate() {
-            for (j, &x) in row.iter().enumerate() {
-                output[i] += input[j] * x;
-            }
-        }
-        output
-    }
-}
-
-impl<F: PrimeField, const WIDTH: usize> ArrayPermutation<F, WIDTH> for MDSMatrixNaive<F, WIDTH> {}
-
-impl<F: PrimeField, const WIDTH: usize> MDSPermutation<F, WIDTH> for MDSMatrixNaive<F, WIDTH> {}
+use p3_symmetric::mds::MDSMatrixNaive;
 
 // Generated with SageMath, using the get_mds_matrix function from the Rescue-Prime paper.
 const RESCUE_PRIME_M31_WIDTH_8_MDS_MATRIX: [[u32; 8]; 8] = [
@@ -123,13 +101,13 @@ fn u32_matrix_to_m31_matrix<const SIZE: usize>(
 }
 
 pub fn rescue_prime_m31_width_8_mds_matrix() -> MDSMatrixNaive<Mersenne31, 8> {
-    MDSMatrixNaive {
-        matrix: u32_matrix_to_m31_matrix(RESCUE_PRIME_M31_WIDTH_8_MDS_MATRIX),
-    }
+    MDSMatrixNaive::new(u32_matrix_to_m31_matrix(
+        RESCUE_PRIME_M31_WIDTH_8_MDS_MATRIX,
+    ))
 }
 
 pub fn rescue_prime_m31_width_12_mds_matrix() -> MDSMatrixNaive<Mersenne31, 12> {
-    MDSMatrixNaive {
-        matrix: u32_matrix_to_m31_matrix(RESCUE_PRIME_M31_WIDTH_12_MDS_MATRIX),
-    }
+    MDSMatrixNaive::new(u32_matrix_to_m31_matrix(
+        RESCUE_PRIME_M31_WIDTH_12_MDS_MATRIX,
+    ))
 }

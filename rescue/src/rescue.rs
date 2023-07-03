@@ -5,7 +5,8 @@ use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
 use p3_field::{PrimeField, PrimeField64};
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+use p3_symmetric::mds::MDSPermutation;
+use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -168,11 +169,12 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::hasher::CryptographicHasher;
+    use p3_symmetric::mds::MDSMatrixNaive;
     use p3_symmetric::permutation::CryptographicPermutation;
     use p3_symmetric::sponge::PaddingFreeSponge;
 
     use crate::inverse_sbox::BasicInverseSboxLayer;
-    use crate::mds_matrix_naive::{rescue_prime_m31_width_12_mds_matrix, MDSMatrixNaive};
+    use crate::mds_matrix_naive::rescue_prime_m31_width_12_mds_matrix;
     use crate::rescue::Rescue;
 
     const WIDTH: usize = 12;

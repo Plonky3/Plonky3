@@ -19,6 +19,22 @@ where
     _phantom_m: PhantomData<M>,
 }
 
+impl<F, C, M> TensorPCS<F, C, M>
+where
+    F: Field,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
+    M: DirectMMCS<F, Mat = C::Out>,
+{
+    pub fn new(codes: C, mmcs: M) -> Self {
+        Self {
+            codes,
+            mmcs,
+            _phantom_f: PhantomData,
+            _phantom_m: PhantomData,
+        }
+    }
+}
+
 impl<F, C, M> PCS<F> for TensorPCS<F, C, M>
 where
     F: Field,

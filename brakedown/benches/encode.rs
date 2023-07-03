@@ -22,7 +22,7 @@ where
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [14] {
+    for n_log in [14, 16] {
         let n = 1 << n_log;
 
         let code = fast_registry();

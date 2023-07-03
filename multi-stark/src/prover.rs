@@ -5,8 +5,8 @@ use p3_commit::PCS;
 use p3_matrix::dense::RowMajorMatrix;
 
 pub fn prove<SC, A, Chal>(
-    _air: &A,
     config: &SC,
+    _air: &A,
     _challenger: &mut Chal,
     trace: RowMajorMatrix<SC::Val>,
 ) where

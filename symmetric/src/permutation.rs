@@ -10,5 +10,3 @@ pub trait CryptographicPermutation<T> {
 }
 
 pub trait ArrayPermutation<T, const WIDTH: usize>: CryptographicPermutation<[T; WIDTH]> {}
-
-pub trait MDSPermutation<T, const WIDTH: usize>: ArrayPermutation<T, WIDTH> {}
