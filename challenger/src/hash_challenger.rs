@@ -5,6 +5,7 @@ use core::marker::PhantomData;
 use p3_field::Field;
 use p3_symmetric::hasher::CryptographicHasher;
 
+#[derive(Clone)]
 pub struct HashChallenger<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> {
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,

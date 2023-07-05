@@ -6,6 +6,7 @@ use p3_symmetric::permutation::ArrayPermutation;
 
 use crate::Challenger;
 
+#[derive(Clone)]
 pub struct DuplexChallenger<F: Field, P: ArrayPermutation<F, WIDTH>, const WIDTH: usize> {
     sponge_state: [F; WIDTH],
     input_buffer: Vec<F>,
