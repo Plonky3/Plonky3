@@ -11,3 +11,4 @@ p3-code = { path = "../code" }
 p3-commit = { path = "../commit" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
+p3-util = { path = "../util" }

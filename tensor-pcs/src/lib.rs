@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod reshape;
 mod tensor_pcs;
 mod wrapped_matrix;
 

@@ -1,3 +1,4 @@
+use crate::reshape::optimal_wraps;
 use crate::wrapped_matrix::WrappedMatrix;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -6,6 +7,7 @@ use p3_code::LinearCodeFamily;
 use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 
 pub struct TensorPCS<F, C, M>
 where
@@ -53,7 +55,7 @@ where
         let encoded_polynomials = polynomials
             .into_iter()
             .map(|mat| {
-                let wraps = 16; // TODO
+                let wraps = optimal_wraps(mat.width(), mat.height());
                 let wrapped = WrappedMatrix::new(mat, wraps);
                 self.codes.encode_batch(wrapped)
             })
