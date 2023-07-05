@@ -34,7 +34,9 @@ pub trait PCS<F: Field> {
         self.commit_batches(vec![polynomials])
     }
 
-    fn get_committed_value(&self, prover_data: &Self::ProverData, poly: usize, value: usize) -> F;
+    fn get_committed_height(&self, prover_data: &Self::ProverData, matrix: usize) -> usize;
+
+    fn get_committed_row(&self, prover_data: &Self::ProverData, matrix: usize, row: usize) -> &[F];
 }
 
 pub trait UnivariatePCS<F: Field>: PCS<F> {

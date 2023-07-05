@@ -63,12 +63,16 @@ where
         self.mmcs.commit(encoded_polynomials)
     }
 
-    fn get_committed_value(
+    fn get_committed_height(&self, _prover_data: &Self::ProverData, _matrix: usize) -> usize {
+        todo!()
+    }
+
+    fn get_committed_row(
         &self,
         _prover_data: &Self::ProverData,
-        _poly: usize,
-        _value: usize,
-    ) -> F {
+        _matrix: usize,
+        _row: usize,
+    ) -> &[F] {
         todo!()
     }
 }

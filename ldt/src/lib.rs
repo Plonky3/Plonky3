@@ -80,12 +80,16 @@ where
         self.mmcs.commit(ldes)
     }
 
-    fn get_committed_value(
+    fn get_committed_height(&self, _prover_data: &Self::ProverData, _matrix: usize) -> usize {
+        todo!()
+    }
+
+    fn get_committed_row(
         &self,
         _prover_data: &Self::ProverData,
-        _poly: usize,
-        _value: usize,
-    ) -> Val {
+        _matrix: usize,
+        _row: usize,
+    ) -> &[Val] {
         todo!()
     }
 }
