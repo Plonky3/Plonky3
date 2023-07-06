@@ -1,46 +1,47 @@
-use crate::pcs::{MultivariatePCS, UnivariatePCS, PCS};
+use crate::pcs::{UnivariatePCS, PCS};
+use crate::MultivariatePCS;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_challenger::Challenger;
 use p3_field::{ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::MatrixRows;
 
-pub struct MultiFromUniPCS<F: Field, U: UnivariatePCS<F>> {
+pub struct MultiFromUniPCS<F, In, U>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    U: UnivariatePCS<F, In>,
+{
     _uni: U,
     _phantom_f: PhantomData<F>,
+    _phantom_in: PhantomData<In>,
 }
 
-impl<F: Field, U: UnivariatePCS<F>> PCS<F> for MultiFromUniPCS<F, U> {
+impl<F, In, U> PCS<F, In> for MultiFromUniPCS<F, In, U>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    U: UnivariatePCS<F, In>,
+{
     type Commitment = ();
     type ProverData = U::ProverData;
     type Proof = ();
     type Error = ();
 
-    fn commit_batches(
-        &self,
-        _polynomials: Vec<RowMajorMatrix<F>>,
-    ) -> (Self::Commitment, Self::ProverData) {
-        todo!()
-    }
-
-    fn get_committed_height(&self, _prover_data: &Self::ProverData, _matrix: usize) -> usize {
-        todo!()
-    }
-
-    fn get_committed_row(
-        &self,
-        _prover_data: &Self::ProverData,
-        _matrix: usize,
-        _row: usize,
-    ) -> &[F] {
+    fn commit_batches(&self, _polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
         todo!()
     }
 }
 
-impl<F: Field, U: UnivariatePCS<F>> MultivariatePCS<F> for MultiFromUniPCS<F, U> {
+impl<F, In, U> MultivariatePCS<F, In> for MultiFromUniPCS<F, In, U>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    U: UnivariatePCS<F, In>,
+{
     fn open_multi_batches<EF, Chal>(
         &self,
-        _prover_data: &[Self::ProverData],
+        _prover_data: &[&Self::ProverData],
         _points: &[Vec<EF>],
         _challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)

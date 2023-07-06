@@ -12,6 +12,7 @@ use p3_commit::{UnivariatePCS, PCS};
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::MatrixRows;
 
 /// A batch low-degree test (LDT).
 pub trait LDT<F: Field, M: MMCS<F>> {
@@ -55,10 +56,11 @@ impl<Val, Dom, LDE, M, L> LDTBasedPCS<Val, Dom, LDE, M, L> {
     }
 }
 
-impl<Val, Dom, LDE, M, L> PCS<Val> for LDTBasedPCS<Val, Dom, LDE, M, L>
+impl<Val, Dom, In, LDE, M, L> PCS<Val, In> for LDTBasedPCS<Val, Dom, LDE, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
+    In: for<'a> MatrixRows<'a, Val>,
     LDE: TwoAdicLDE<Val, Dom>,
     M: DirectMMCS<Dom, Mat = RowMajorMatrix<Dom>>,
     L: LDT<Dom, M>,
@@ -68,43 +70,31 @@ where
     type Proof = L::Proof;
     type Error = L::Error;
 
-    fn commit_batches(
-        &self,
-        polynomials: Vec<RowMajorMatrix<Val>>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
         // TODO: Streaming?
         let ldes = polynomials
             .into_iter()
-            .map(|poly| self.lde.lde_batch(poly, self.added_bits))
+            .map(|poly| {
+                self.lde
+                    .lde_batch(poly.to_row_major_matrix(), self.added_bits)
+            })
             .collect();
         self.mmcs.commit(ldes)
     }
-
-    fn get_committed_height(&self, _prover_data: &Self::ProverData, _matrix: usize) -> usize {
-        todo!()
-    }
-
-    fn get_committed_row(
-        &self,
-        _prover_data: &Self::ProverData,
-        _matrix: usize,
-        _row: usize,
-    ) -> &[Val] {
-        todo!()
-    }
 }
 
-impl<Val, Dom, LDE, M, L> UnivariatePCS<Val> for LDTBasedPCS<Val, Dom, LDE, M, L>
+impl<Val, Dom, In, LDE, M, L> UnivariatePCS<Val, In> for LDTBasedPCS<Val, Dom, LDE, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
+    In: for<'a> MatrixRows<'a, Val>,
     LDE: TwoAdicLDE<Val, Dom>,
     M: DirectMMCS<Dom, Mat = RowMajorMatrix<Dom>>,
     L: LDT<Dom, M>,
 {
     fn open_multi_batches<EF, Chal>(
         &self,
-        _prover_data: &[Self::ProverData],
+        _prover_data: &[&Self::ProverData],
         _points: &[EF],
         _challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)

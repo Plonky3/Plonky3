@@ -182,7 +182,7 @@ impl<L, D, H, C, Mat> MerkleTreeMMCS<L, D, H, C, Mat> {
 
 impl<L, D, H, C, Mat> MMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
 where
-    L: 'static + Clone,
+    L: Clone,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
     Mat: for<'a> MatrixRows<'a, L>,
@@ -220,7 +220,7 @@ where
 
 impl<L, D, H, C, Mat> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
 where
-    L: 'static + Copy,
+    L: Copy,
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,

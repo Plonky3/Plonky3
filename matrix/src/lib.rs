@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+use crate::dense::RowMajorMatrix;
 use alloc::boxed::Box;
 
 pub mod dense;
@@ -27,6 +28,14 @@ pub trait MatrixRows<'a, T: 'a>: Matrix<T> {
     type Row: IntoIterator<Item = &'a T>;
 
     fn row(&'a self, r: usize) -> Self::Row;
+
+    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
+    where
+        Self: Sized,
+        T: Clone,
+    {
+        todo!()
+    }
 }
 
 impl<T> Matrix<T> for Box<dyn Matrix<T>> {

@@ -114,6 +114,13 @@ impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrix<T> {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
+
+    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -144,6 +151,14 @@ impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixView<'_, T> {
     fn row(&'a self, r: usize) -> &'a [T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
+    }
+
+    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
+    where
+        Self: Sized,
+        T: Clone,
+    {
+        RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
 }
 
@@ -204,5 +219,13 @@ impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixViewMut<'_, T> {
     fn row(&'a self, r: usize) -> &'a [T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
+    }
+
+    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
+    where
+        Self: Sized,
+        T: Clone,
+    {
+        RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
 }

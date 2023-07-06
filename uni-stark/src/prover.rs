@@ -66,7 +66,7 @@ pub fn prove<SC, A, Chal>(
 
     let trace_lde = config.lde().lde_batch(trace.clone(), quotient_degree_bits);
 
-    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace);
+    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
 
     // challenger.observe_ext_element(trace_commit); // TODO
     let alpha = challenger.random_ext_element::<SC::Challenge>();
