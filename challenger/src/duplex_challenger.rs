@@ -98,7 +98,7 @@ mod tests {
     impl ArrayPermutation<F, WIDTH> for TestPermutation {}
 
     #[test]
-    fn it_works_duplexing() {
+    fn test_duplex_challenger() {
         let permutation = TestPermutation {};
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(duplex_challenger.output_buffer, vec![]);
         assert_eq!(duplex_challenger.sponge_state, should_be_output_buffer);
 
-        // Test functionality after duplexing again
+        // Test functionality when observing additional elements
         duplex_challenger.duplexing();
         let mut should_be_output_buffer =
             (0..31).map(|i| F::from_canonical_u8(i)).collect::<Vec<_>>();
@@ -147,20 +147,20 @@ mod tests {
     }
 
     #[test]
-    fn it_works_random_element() {
+    fn test_duplex_challenger_randomized() {
         let permutation = TestPermutation {};
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
-        // observe elements before reaching WIDTH
+        // Observe WIDTH / 2 elements.
         (0..WIDTH / 2).for_each(|element| {
             duplex_challenger.observe_element(F::from_canonical_u8(element as u8))
         });
 
-        let should_be_sponge_state: [F; 32] = [
-            vec![F::ZERO; 16],
-            (0..16)
+        let should_be_sponge_state: [F; WIDTH] = [
+            vec![F::ZERO; WIDTH / 2],
+            (0..WIDTH / 2)
                 .rev()
-                .map(|i| F::from_canonical_u8(i))
+                .map(|i| F::from_canonical_usize(i))
                 .collect::<Vec<_>>(),
         ]
         .concat()
