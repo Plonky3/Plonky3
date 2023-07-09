@@ -72,7 +72,8 @@ mod tests {
     struct TestHasher {}
 
     impl CryptographicHasher<F, [F; OUT_LEN]> for TestHasher {
-        /// A very simple hash iterator, which takes the sum of elements.
+        /// A very simple hash iterator. From an input of type `IntoIterator<Item = Goldilocks>`,
+        /// it outputs the sum of its elements and its length (as a field element).
         fn hash_iter<I>(&self, input: I) -> [F; OUT_LEN]
         where
             I: IntoIterator<Item = F>,
@@ -85,7 +86,8 @@ mod tests {
             [sum, F::from_canonical_usize(len)]
         }
 
-        /// A very simple hash iterator, in slices, which takes the sum of elements.
+        /// A very simple slice hash iterator. From an input of type `IntoIterator<Item = &'a [Goldilocks]>`,
+        /// it outputs the sum of its elements and its length (as a field element).
         fn hash_iter_slices<'a, I>(&self, input: I) -> [F; OUT_LEN]
         where
             I: IntoIterator<Item = &'a [F]>,
