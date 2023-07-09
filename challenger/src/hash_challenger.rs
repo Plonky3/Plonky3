@@ -59,3 +59,84 @@ impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> Ch
             .expect("Output buffer should be non-empty")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use p3_field::AbstractField;
+    use p3_goldilocks::Goldilocks;
+
+    const OUT_LEN: usize = 2;
+    type F = Goldilocks;
+
+    struct TestHasher {}
+
+    impl CryptographicHasher<F, [F; OUT_LEN]> for TestHasher {
+        /// A very simple hash iterator, which takes the sum of elements.
+        fn hash_iter<I>(&self, input: I) -> [F; OUT_LEN]
+        where
+            I: IntoIterator<Item = F>,
+        {
+            let (sum, len) = input
+                .into_iter()
+                .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), f| {
+                    (acc_sum + f, acc_len + 1)
+                });
+            [sum, F::from_canonical_usize(len)]
+        }
+
+        /// A very simple hash iterator, in slices, which takes the sum of elements.
+        fn hash_iter_slices<'a, I>(&self, input: I) -> [F; OUT_LEN]
+        where
+            I: IntoIterator<Item = &'a [F]>,
+            F: 'a,
+        {
+            let (sum, len) = input
+                .into_iter()
+                .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), n| {
+                    (
+                        acc_sum + n.iter().fold(F::ZERO, |acc, f| acc + *f),
+                        acc_len + n.len(),
+                    )
+                });
+            [sum, F::from_canonical_usize(len)]
+        }
+    }
+
+    #[test]
+    fn test_hash_challenger() {
+        let initial_state = (1..11_u8)
+            .map(|i| F::from_canonical_u8(i))
+            .collect::<Vec<_>>();
+        let test_hasher = TestHasher {};
+        let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
+
+        assert_eq!(hash_challenger.input_buffer, initial_state);
+        assert_eq!(hash_challenger.output_buffer, vec![]);
+
+        hash_challenger.flush();
+
+        let expected_sum = F::from_canonical_u8(55);
+        let expected_len = F::from_canonical_u8(10);
+        assert_eq!(
+            hash_challenger.input_buffer,
+            vec![expected_sum, expected_len]
+        );
+        assert_eq!(
+            hash_challenger.output_buffer,
+            vec![expected_sum, expected_len]
+        );
+
+        let new_element = F::from_canonical_u8(11);
+        hash_challenger.observe_element(new_element);
+        assert_eq!(
+            hash_challenger.input_buffer,
+            vec![expected_sum, expected_len, new_element]
+        );
+        assert_eq!(hash_challenger.output_buffer, vec![]);
+
+        let new_element = hash_challenger.random_element();
+        assert_eq!(new_element, F::from_canonical_u8(3));
+        assert_eq!(hash_challenger.output_buffer, [F::from_canonical_u8(76)])
+    }
+}
