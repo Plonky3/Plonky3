@@ -7,3 +7,6 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-field = { path = "../field" }
 p3-symmetric = { path = "../symmetric" }
+
+[dev-dependencies]
+p3-goldilocks = { path = "../goldilocks" }
