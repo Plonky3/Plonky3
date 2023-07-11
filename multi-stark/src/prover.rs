@@ -14,7 +14,7 @@ pub fn prove<SC, A, Chal>(
     A: for<'a> Air<ConstraintFolder<'a, SC::Val, SC::Challenge, SC::PackedChallenge>>,
     Chal: Challenger<SC::Val>,
 {
-    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace);
+    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
 
     // challenger.observe_ext_element(trace_commit); // TODO
 }

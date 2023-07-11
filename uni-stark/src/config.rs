@@ -2,6 +2,7 @@ use core::marker::PhantomData;
 use p3_commit::UnivariatePCS;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
 use p3_lde::TwoAdicCosetLDE;
+use p3_matrix::dense::RowMajorMatrixView;
 
 pub trait StarkConfig {
     /// A value of the trace.
@@ -17,7 +18,7 @@ pub trait StarkConfig {
         + AbstractExtensionField<<Self::Domain as Field>::Packing>;
 
     /// The PCS used to commit to trace polynomials.
-    type PCS: UnivariatePCS<Self::Val>;
+    type PCS: for<'a> UnivariatePCS<Self::Val, RowMajorMatrixView<'a, Self::Val>>;
 
     type LDE: TwoAdicCosetLDE<Self::Val, Self::Domain>;
 
@@ -57,7 +58,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Domain>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Domain::Packing>,
-    PCS: UnivariatePCS<Val>,
+    PCS: for<'a> UnivariatePCS<Val, RowMajorMatrixView<'a, Val>>,
     LDE: TwoAdicCosetLDE<Val, Domain>,
 {
     type Val = Val;
