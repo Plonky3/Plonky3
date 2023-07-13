@@ -1,7 +1,7 @@
 #[cfg(not(feature = "parallel"))]
 use core::{
     iter::{FlatMap, IntoIterator, Iterator},
-    slice::{Chunks, ChunksExact, ChunksExactMut, ChunksMut},
+    slice::{Chunks, ChunksExact, ChunksExactMut, ChunksMut, Windows},
 };
 
 #[cfg(feature = "parallel")]
@@ -17,7 +17,7 @@ use rayon::{
     prelude::*,
     slice::{
         Chunks as ParChunks, ChunksExact as ParChunksExact, ChunksExactMut as ParChunksExactMut,
-        ChunksMut as ParChunksMut, ParallelSlice, ParallelSliceMut,
+        ChunksMut as ParChunksMut, ParallelSlice, ParallelSliceMut, Windows as ParWindows,
     },
 };
 
@@ -223,6 +223,25 @@ impl<T: Send> MaybeParChunksMut<T> for [T] {
     }
     fn par_chunks_exact_mut(&mut self, chunk_size: usize) -> ChunksExactMut<'_, T> {
         self.chunks_exact_mut(chunk_size)
+    }
+}
+
+#[cfg(feature = "parallel")]
+pub trait MaybeParWindows<T: Sync> {
+    fn par_windows(&self, window_size: usize) -> ParWindows<'_, T>;
+}
+
+#[cfg(feature = "parallel")]
+impl<T: ParallelSlice<U> + ?Sized, U: Sync> MaybeParWindows<U> for T {
+    fn par_windows(&self, window_size: usize) -> ParWindows<'_, U> {
+        self.par_windows(window_size)
+    }
+}
+
+#[cfg(not(feature = "parallel"))]
+impl<T> MaybeParWindows<T> for [T] {
+    fn par_windows(&self, window_size: usize) -> Windows<'_, T> {
+        self.windows(window_size)
     }
 }
 
