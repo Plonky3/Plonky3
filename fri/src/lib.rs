@@ -11,7 +11,7 @@ use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{ExtensionField, Field};
 use p3_ldt::{LDTBasedPCS, LDT};
 
-use crate::proof::FriProof;
+pub use crate::proof::FriProof;
 use crate::prover::prove;
 use crate::verifier::verify;
 

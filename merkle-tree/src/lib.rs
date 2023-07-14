@@ -61,8 +61,7 @@ where
                 h.hash_iter(
                     tallest_matrices
                         .iter()
-                        .map(|m| m.row(i).into_iter().copied())
-                        .flatten(),
+                        .flat_map(|m| m.row(i).into_iter().copied()),
                 )
             })
             .chain(iter::repeat(D::default()))
@@ -137,8 +136,7 @@ where
         let tallest_digest = h.hash_iter(
             tallest_matrices
                 .iter()
-                .map(|m| m.row(i).into_iter().copied())
-                .flatten(),
+                .flat_map(|m| m.row(i).into_iter().copied()),
         );
         digest = c.compress([digest, tallest_digest]);
         next_digests.push(digest);

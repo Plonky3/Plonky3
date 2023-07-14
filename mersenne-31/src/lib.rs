@@ -172,7 +172,7 @@ impl Field for Mersenne31 {
         loop {
             // Shift off trailing zeros
             let e = u.trailing_zeros() as u64;
-            u = u >> e;
+            u >>= e;
 
             // Circular shift
             a = a.mul_2exp_u64(31 - e);

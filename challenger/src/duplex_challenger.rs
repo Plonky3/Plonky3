@@ -86,10 +86,9 @@ mod tests {
     struct TestPermutation {}
 
     impl CryptographicPermutation<TestArray> for TestPermutation {
-        fn permute(&self, input: TestArray) -> TestArray {
-            let mut output = input.clone();
-            output.reverse();
-            output.try_into().unwrap()
+        fn permute(&self, mut input: TestArray) -> TestArray {
+            self.permute_mut(&mut input);
+            input
         }
 
         fn permute_mut(&self, input: &mut TestArray) {
@@ -124,7 +123,7 @@ mod tests {
 
         let should_be_output_buffer: [F; WIDTH] = (0..WIDTH as u8)
             .rev()
-            .map(|i| F::from_canonical_u8(i))
+            .map(F::from_canonical_u8)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -139,8 +138,7 @@ mod tests {
 
         // Test functionality when observing additional elements
         duplex_challenger.duplexing();
-        let mut should_be_output_buffer =
-            (0..31).map(|i| F::from_canonical_u8(i)).collect::<Vec<_>>();
+        let mut should_be_output_buffer = (0..31).map(F::from_canonical_u8).collect::<Vec<_>>();
         should_be_output_buffer.push(F::from_canonical_u8(255));
         assert_eq!(duplex_challenger.input_buffer, vec![]);
         assert_eq!(duplex_challenger.output_buffer, should_be_output_buffer);
@@ -162,7 +160,7 @@ mod tests {
             vec![F::ZERO; WIDTH / 2],
             (0..WIDTH / 2)
                 .rev()
-                .map(|i| F::from_canonical_usize(i))
+                .map(F::from_canonical_usize)
                 .collect::<Vec<_>>(),
         ]
         .concat()
