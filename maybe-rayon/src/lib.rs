@@ -231,6 +231,11 @@ pub trait MaybeParWindows<T: Sync> {
     fn par_windows(&self, window_size: usize) -> ParWindows<'_, T>;
 }
 
+#[cfg(not(feature = "parallel"))]
+pub trait MaybeParWindows<T> {
+    fn par_windows(&self, window_size: usize) -> Windows<'_, T>;
+}
+
 #[cfg(feature = "parallel")]
 impl<T: ParallelSlice<U> + ?Sized, U: Sync> MaybeParWindows<U> for T {
     fn par_windows(&self, window_size: usize) -> ParWindows<'_, U> {
