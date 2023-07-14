@@ -1,9 +1,11 @@
-use crate::Challenger;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_field::Field;
 use p3_symmetric::hasher::CryptographicHasher;
+
+use crate::Challenger;
 
 #[derive(Clone)]
 pub struct HashChallenger<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> {

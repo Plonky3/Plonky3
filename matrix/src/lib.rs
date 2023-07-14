@@ -4,8 +4,9 @@
 
 extern crate alloc;
 
-use crate::dense::RowMajorMatrix;
 use alloc::boxed::Box;
+
+use crate::dense::RowMajorMatrix;
 
 pub mod dense;
 pub mod mul;

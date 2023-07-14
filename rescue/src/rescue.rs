@@ -1,6 +1,3 @@
-use crate::inverse_sbox::InverseSboxLayer;
-use crate::util::shake256_hash;
-
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
@@ -11,6 +8,9 @@ use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
+
+use crate::inverse_sbox::InverseSboxLayer;
+use crate::util::shake256_hash;
 
 #[derive(Clone)]
 pub struct Rescue<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64>
@@ -134,8 +134,11 @@ where
             self.mds.permute_mut(&mut state);
 
             // Constants
-            for j in 0..WIDTH {
-                state[j] += self.round_constants[round * WIDTH * 2 + j];
+            for (state_item, &round_constant) in itertools::izip!(
+                state.iter_mut(),
+                self.round_constants[round * WIDTH * 2..].iter()
+            ) {
+                *state_item += round_constant;
             }
 
             // Inverse S-box
@@ -145,8 +148,11 @@ where
             self.mds.permute_mut(&mut state);
 
             // Constants
-            for j in 0..WIDTH {
-                state[j] += self.round_constants[round * WIDTH * 2 + WIDTH + j];
+            for (state_item, &round_constant) in itertools::izip!(
+                state.iter_mut(),
+                self.round_constants[round * WIDTH * 2 + WIDTH..].iter()
+            ) {
+                *state_item += round_constant;
             }
         }
 

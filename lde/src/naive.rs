@@ -1,13 +1,15 @@
-use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE, UndefinedLDE};
 use alloc::vec::Vec;
+
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
+    ExtensionField, Field, TwoAdicField,
 };
-use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::VerticalPair;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
+
+use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE, UndefinedLDE};
 
 /// A naive quadratic-time implementation of `LDE`, intended for testing.
 pub struct NaiveUndefinedLDE;

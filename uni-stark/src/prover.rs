@@ -1,6 +1,6 @@
-use crate::{ConstraintFolder, StarkConfig};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::Challenger;
 use p3_commit::PCS;
@@ -12,6 +12,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
+
+use crate::{ConstraintFolder, StarkConfig};
 
 pub fn prove<SC, A, Chal>(
     air: &A,

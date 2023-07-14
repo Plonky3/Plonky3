@@ -1,9 +1,11 @@
+use alloc::vec;
+
+use p3_field::Field;
+use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
+
 use crate::dense::RowMajorMatrix;
 use crate::sparse::CsrMatrix;
 use crate::{Matrix, MatrixRows};
-use alloc::vec;
-use p3_field::Field;
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 
 /// Compute `C = A * B`, where `A` in a CSR matrix and `B` is a dense matrix.
 ///

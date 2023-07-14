@@ -1,6 +1,7 @@
-use crate::{Code, CodeFamily, CodeOrFamily, LinearCode};
 use p3_field::Field;
 use p3_matrix::MatrixRows;
+
+use crate::{Code, CodeFamily, CodeOrFamily, LinearCode};
 
 /// A systematic code, or a family thereof.
 // TODO: Remove? Not really used.

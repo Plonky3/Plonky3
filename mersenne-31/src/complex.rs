@@ -1,8 +1,10 @@
-use crate::Mersenne31;
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+
 use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, Field, TwoAdicField};
+
+use crate::Mersenne31;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractionOf<Mersenne31>> {

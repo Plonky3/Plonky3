@@ -1,4 +1,5 @@
 use core::ops::{Add, Mul, Sub};
+
 use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
@@ -209,8 +210,9 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Air, AirBuilder};
     use p3_matrix::MatrixRows;
+
+    use crate::{Air, AirBuilder};
 
     struct FibonacciAir;
 

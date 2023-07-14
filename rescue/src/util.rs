@@ -1,11 +1,8 @@
 use gcd::Gcd;
 use modinverse::modinverse;
-
 use p3_field::PrimeField64;
-use sha3::{
-    digest::{ExtendableOutput, Update, XofReader},
-    Shake256,
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::Shake256;
 
 /// Generate alpha, the smallest integer relatively prime to `p − 1`.
 pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {

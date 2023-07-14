@@ -1,7 +1,9 @@
-use crate::pcs::MultivariatePCS;
 use core::marker::PhantomData;
+
 use p3_field::Field;
 use p3_matrix::MatrixRows;
+
+use crate::pcs::MultivariatePCS;
 
 pub struct UniFromMultiPCS<F, In, M>
 where

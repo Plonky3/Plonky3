@@ -4,13 +4,13 @@
 
 mod complex;
 
-pub use complex::*;
-
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+
+pub use complex::*;
 use p3_field::{AbstractField, Field, PrimeField, PrimeField32};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -172,7 +172,7 @@ impl Field for Mersenne31 {
         loop {
             // Shift off trailing zeros
             let e = u.trailing_zeros() as u64;
-            u = u >> e;
+            u >>= e;
 
             // Circular shift
             a = a.mul_2exp_u64(31 - e);
@@ -288,8 +288,9 @@ impl Div for Mersenne31 {
 
 #[cfg(test)]
 mod tests {
-    use crate::Mersenne31;
     use p3_field::{AbstractField, Field, PrimeField32};
+
+    use crate::Mersenne31;
 
     type F = Mersenne31;
 

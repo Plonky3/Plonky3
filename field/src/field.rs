@@ -1,4 +1,3 @@
-use crate::packed::PackedField;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
@@ -6,6 +5,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use p3_util::log2_ceil_u64;
+
+use crate::packed::PackedField;
 
 /// A generalization of `Field` which permits things like
 /// - an actual field element

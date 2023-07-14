@@ -1,8 +1,9 @@
-use crate::field::{AbstractField, AbstractionOf, Field};
 use alloc::rc::Rc;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
+use crate::field::{AbstractField, AbstractionOf, Field};
 
 #[derive(Clone, Debug)]
 pub enum SymbolicField<F: Field, Var> {

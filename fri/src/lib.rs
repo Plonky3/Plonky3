@@ -4,14 +4,16 @@
 
 extern crate alloc;
 
-use crate::proof::FriProof;
-use crate::prover::prove;
-use crate::verifier::verify;
 use core::marker::PhantomData;
+
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{ExtensionField, Field};
 use p3_ldt::{LDTBasedPCS, LDT};
+
+pub use crate::proof::FriProof;
+use crate::prover::prove;
+use crate::verifier::verify;
 
 mod config;
 mod proof;

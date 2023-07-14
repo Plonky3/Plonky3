@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 use core::ops::{Add, Mul, Sub};
-use p3_field::Field;
-use p3_field::SymbolicField;
+
+use p3_field::{Field, SymbolicField};
 
 #[derive(Copy, Clone, Debug)]
 pub struct BasicSymVar<F: Field> {

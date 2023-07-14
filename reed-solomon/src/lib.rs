@@ -1,12 +1,13 @@
 //! Reed-Solomon codes.
 
+use std::marker::PhantomData;
+
 use p3_code::{
     Code, CodeOrFamily, LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode,
 };
 use p3_field::Field;
 use p3_lde::UndefinedLDE;
 use p3_matrix::MatrixRows;
-use std::marker::PhantomData;
 
 /// A Reed-Solomon code based on an `UndefinedLDE`.
 pub struct UndefinedReedSolomonCode<F, L, In>

@@ -1,6 +1,6 @@
-use crate::util::get_inverse;
-
 use p3_field::{PrimeField, PrimeField64};
+
+use crate::util::get_inverse;
 
 pub trait InverseSboxLayer<F: PrimeField, const WIDTH: usize, const ALPHA: u64> {
     fn inverse_sbox_layer(&self, state: &mut [F; WIDTH]);

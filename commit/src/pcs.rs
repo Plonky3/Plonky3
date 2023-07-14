@@ -1,10 +1,10 @@
 //! Traits for polynomial commitment schemes.
 
 use alloc::vec;
-use p3_field::{ExtensionField, Field};
-
 use alloc::vec::Vec;
+
 use p3_challenger::Challenger;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)

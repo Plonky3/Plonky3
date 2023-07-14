@@ -5,6 +5,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+
 use p3_field::Field;
 use p3_symmetric::mds::MDSPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};

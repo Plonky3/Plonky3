@@ -6,9 +6,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_challenger::Challenger;
-use p3_commit::{DirectMMCS, MMCS};
-use p3_commit::{UnivariatePCS, PCS};
+use p3_commit::{DirectMMCS, UnivariatePCS, MMCS, PCS};
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_lde::TwoAdicLDE;
 use p3_matrix::dense::RowMajorMatrix;

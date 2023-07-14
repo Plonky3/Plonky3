@@ -1,14 +1,15 @@
-use crate::{FriConfig, FriProof};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
+
 use itertools::Itertools;
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
-use p3_maybe_rayon::MaybeIntoParIter;
-use p3_maybe_rayon::ParallelIterator;
+use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
+
+use crate::{FriConfig, FriProof};
 
 pub(crate) fn prove<F, Challenge, M, MC, Chal>(
     codewords: &[M::ProverData],

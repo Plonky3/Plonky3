@@ -1,9 +1,11 @@
-use crate::Matrix;
 use alloc::vec::Vec;
 use core::iter;
 use core::ops::Range;
+
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+
+use crate::Matrix;
 
 /// A sparse matrix stored in the compressed sparse row format.
 pub struct CsrMatrix<T> {

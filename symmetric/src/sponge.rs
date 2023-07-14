@@ -1,7 +1,9 @@
+use core::marker::PhantomData;
+
+use itertools::Itertools;
+
 use crate::hasher::CryptographicHasher;
 use crate::permutation::ArrayPermutation;
-use core::marker::PhantomData;
-use itertools::Itertools;
 
 /// A padding-free, overwrite-mode sponge function.
 ///

@@ -1,4 +1,5 @@
 use core::marker::PhantomData;
+
 use p3_matrix::{Matrix, MatrixRows};
 
 pub struct WrappedMatrix<T, M> {
