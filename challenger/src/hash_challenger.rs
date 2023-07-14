@@ -91,7 +91,6 @@ mod tests {
         fn hash_iter_slices<'a, I>(&self, input: I) -> [F; OUT_LEN]
         where
             I: IntoIterator<Item = &'a [F]>,
-
             F: 'a,
         {
             let (sum, len) = input
