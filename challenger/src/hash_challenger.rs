@@ -137,8 +137,14 @@ mod tests {
         );
         assert_eq!(hash_challenger.output_buffer, vec![]);
 
+        let new_expected_len = 3;
+        let new_expected_sum = 76;
+
         let new_element = hash_challenger.random_element();
-        assert_eq!(new_element, F::from_canonical_u8(3));
-        assert_eq!(hash_challenger.output_buffer, [F::from_canonical_u8(76)])
+        assert_eq!(new_element, F::from_canonical_u8(new_expected_len));
+        assert_eq!(
+            hash_challenger.output_buffer,
+            [F::from_canonical_u8(new_expected_sum)]
+        )
     }
 }
