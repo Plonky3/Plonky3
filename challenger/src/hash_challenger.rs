@@ -62,9 +62,10 @@ impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> Ch
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
+
+    use super::*;
 
     const OUT_LEN: usize = 2;
     type F = Goldilocks;
