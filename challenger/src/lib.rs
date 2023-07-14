@@ -7,10 +7,10 @@ extern crate alloc;
 mod duplex_challenger;
 mod hash_challenger;
 
+use alloc::vec::Vec;
+
 pub use duplex_challenger::*;
 pub use hash_challenger::*;
-
-use alloc::vec::Vec;
 use p3_field::{AbstractExtensionField, Field};
 
 /// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.

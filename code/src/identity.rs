@@ -1,8 +1,9 @@
+use p3_field::Field;
+use p3_matrix::MatrixRows;
+
 use crate::{
     Code, CodeOrFamily, LinearCode, SystematicCode, SystematicCodeOrFamily, SystematicLinearCode,
 };
-use p3_field::Field;
-use p3_matrix::MatrixRows;
 
 /// The trivial code whose encoder is the identity function.
 pub struct IdentityCode {

@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_field::Field;
 use p3_symmetric::permutation::ArrayPermutation;
 

@@ -30,5 +30,4 @@ macro_rules! brakedown_to_rs {
     };
 }
 
-pub(crate) use brakedown;
-pub(crate) use brakedown_to_rs;
+pub(crate) use {brakedown, brakedown_to_rs};

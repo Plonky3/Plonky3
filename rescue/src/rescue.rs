@@ -1,6 +1,3 @@
-use crate::inverse_sbox::InverseSboxLayer;
-use crate::util::shake256_hash;
-
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
@@ -11,6 +8,9 @@ use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
+
+use crate::inverse_sbox::InverseSboxLayer;
+use crate::util::shake256_hash;
 
 #[derive(Clone)]
 pub struct Rescue<F, MDS, ISL, const WIDTH: usize, const ALPHA: u64>

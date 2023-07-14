@@ -1,8 +1,9 @@
-use crate::{ConstraintFolder, StarkConfig};
 use p3_air::Air;
 use p3_challenger::Challenger;
 use p3_commit::PCS;
 use p3_matrix::dense::RowMajorMatrix;
+
+use crate::{ConstraintFolder, StarkConfig};
 
 pub fn prove<SC, A, Chal>(
     config: &SC,

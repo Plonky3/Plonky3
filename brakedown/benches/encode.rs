@@ -1,3 +1,5 @@
+use std::any::type_name;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_brakedown::fast_registry;
 use p3_code::CodeOrFamily;
@@ -6,7 +8,6 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
-use std::any::type_name;
 
 const BATCH_SIZE: usize = 1 << 12;
 

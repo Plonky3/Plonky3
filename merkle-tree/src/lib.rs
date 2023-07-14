@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::iter;
 use core::marker::PhantomData;
+
 use itertools::Itertools;
 use p3_commit::{Dimensions, DirectMMCS, MMCS};
 use p3_matrix::{Matrix, MatrixRows};
@@ -235,13 +236,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::MerkleTreeMMCS;
     use alloc::vec;
+
     use p3_commit::DirectMMCS;
     use p3_keccak::Keccak256Hash;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
+
+    use crate::MerkleTreeMMCS;
 
     #[test]
     fn commit() {

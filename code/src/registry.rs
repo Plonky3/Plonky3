@@ -1,11 +1,13 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use p3_field::Field;
+use p3_matrix::{Matrix, MatrixRows};
+
 use crate::{
     CodeFamily, CodeOrFamily, LinearCodeFamily, SystematicCodeFamily, SystematicCodeOrFamily,
     SystematicLinearCode,
 };
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use p3_field::Field;
-use p3_matrix::{Matrix, MatrixRows};
 
 /// A registry of systematic, linear codes for various message sizes.
 pub struct SLCodeRegistry<F: Field, In: Matrix<F>, Out: Matrix<F>> {

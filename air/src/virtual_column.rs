@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
+
 use p3_field::{AbstractField, Field};
 
 /// An affine function over columns in a PAIR.

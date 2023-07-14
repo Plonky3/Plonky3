@@ -1,13 +1,15 @@
-use crate::reshape::optimal_wraps;
-use crate::wrapped_matrix::WrappedMatrix;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_challenger::Challenger;
 use p3_code::LinearCodeFamily;
 use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
+
+use crate::reshape::optimal_wraps;
+use crate::wrapped_matrix::WrappedMatrix;
 
 pub struct TensorPCS<F, C, M>
 where

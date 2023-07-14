@@ -1,10 +1,12 @@
-use crate::pcs::{UnivariatePCS, PCS};
-use crate::MultivariatePCS;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_challenger::Challenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
+
+use crate::pcs::{UnivariatePCS, PCS};
+use crate::MultivariatePCS;
 
 pub struct MultiFromUniPCS<F, In, U>
 where

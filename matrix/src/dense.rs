@@ -1,8 +1,10 @@
-use crate::{Matrix, MatrixGet, MatrixRows};
 use alloc::vec::Vec;
+
 use p3_field::Field;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+
+use crate::{Matrix, MatrixGet, MatrixRows};
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]

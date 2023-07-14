@@ -1,6 +1,7 @@
-use crate::field::Field;
 use alloc::vec;
 use alloc::vec::Vec;
+
+use crate::field::Field;
 
 /// Batch multiplicative inverses with Montgomery's trick
 /// This is Montgomery's trick. At a high level, we invert the product of the given field

@@ -1,7 +1,6 @@
-use crate::macros::{brakedown, brakedown_to_rs};
-use crate::BrakedownCode;
 use alloc::boxed::Box;
 use alloc::vec;
+
 use p3_code::{LinearCodeFamily, SLCodeRegistry};
 use p3_field::Field;
 use p3_matrix::sparse::CsrMatrix;
@@ -9,6 +8,9 @@ use p3_matrix::MatrixRows;
 use rand::distributions::{Distribution, Standard};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+
+use crate::macros::{brakedown, brakedown_to_rs};
+use crate::BrakedownCode;
 
 pub fn fast_registry<F, In>() -> impl LinearCodeFamily<F, In>
 where

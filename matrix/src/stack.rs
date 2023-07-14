@@ -1,5 +1,6 @@
-use crate::{Matrix, MatrixRows};
 use core::marker::PhantomData;
+
+use crate::{Matrix, MatrixRows};
 
 /// A combination of two matrices, stacked together vertically.
 pub struct VerticalPair<T, First: Matrix<T>, Second: Matrix<T>> {
