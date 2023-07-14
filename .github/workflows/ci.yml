@@ -27,3 +27,47 @@ jobs:
         # It's necessary to run doc tests separately, until
         # <https://github.com/rust-lang/cargo/issues/6669> is fixed.
         cargo +nightly test --verbose --doc
+
+  lints:
+    name: Formatting and Clippy
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install nightly toolchain
+        id: rustc-toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly-2023-06-30
+          override: true
+          components: rustfmt, clippy
+
+      - name: rust-cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rustc-lints-${{ steps.rustc-toolchain.outputs.rustc_hash }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+        env:
+          CARGO_INCREMENTAL: 1
+
+      - name: Run cargo clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --all-features --all-targets -- -D warnings -A incomplete-features
+        env:
+          CARGO_INCREMENTAL: 1
