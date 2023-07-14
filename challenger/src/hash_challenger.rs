@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn test_hash_challenger() {
         let initial_state = (1..11_u8)
-            .map(|i| F::from_canonical_u8(i))
+            .map(F::from_canonical_u8)
             .collect::<Vec<_>>();
         let test_hasher = TestHasher {};
         let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
