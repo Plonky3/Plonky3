@@ -321,3 +321,33 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type F = Goldilocks;
+
+    #[test]
+    fn test_goldilocks() {
+        let f = F::new(100);
+        assert_eq!(f.as_canonical_u64(), 100);
+
+        let f = F::new(u64::MAX);
+        assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
+
+        let f = F::from_canonical_u64(u64::MAX);
+        assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
+
+        let f = F::from_canonical_u64(0);
+        assert!(f.is_zero());
+
+        let f = F::from_canonical_u64(F::ORDER_U64);
+        assert!(f.is_zero());
+
+        assert_eq!(
+            F::multiplicative_group_generator().as_canonical_u64(),
+            7_u64
+        );
+    }
+}
