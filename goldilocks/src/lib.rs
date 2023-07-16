@@ -349,5 +349,58 @@ mod tests {
             F::multiplicative_group_generator().as_canonical_u64(),
             7_u64
         );
+
+        let f_1 = F::new(1);
+        let f_2 = F::new(1);
+
+        let expected_result = F::ZERO;
+        assert_eq!(f_1 - f_2, expected_result);
+
+        let expected_result = F::new(2);
+        assert_eq!(f_1 + f_2, expected_result);
+
+        let f_3 = F::new(2);
+        let expected_result = F::new(3);
+        assert_eq!(f_1 + f_2 * f_3, expected_result);
+
+        let expected_result = F::new(5);
+        assert_eq!(f_1 + f_3 * f_3, expected_result);
+
+        let f_4 = F::from_canonical_u64(F::ORDER_U64 - 1);
+        let expected_result = F::ZERO;
+        assert_eq!(f_1 + f_4, expected_result);
+
+        let f_5 = F::from_canonical_u64(F::ORDER_U64 - 2);
+        let expected_result = F::from_canonical_u64(F::ORDER_U64 - 3);
+        assert_eq!(f_4 + f_5, expected_result);
+
+        let expected_result = F::new(1);
+        assert_eq!(f_4 - f_5, expected_result);
+
+        let expected_result = f_4;
+        assert_eq!(f_5 - f_4, expected_result);
+
+        let expected_result = f_5;
+        assert_eq!(f_4 - f_1, expected_result);
+
+        let expected_result = F::new(3);
+        assert_eq!(f_3 * f_3 - f_1, expected_result);
+
+        // Generator check
+        assert_eq!(F::multiplicative_group_generator(), F::new(7));
+
+        // Check on `reduce_u128`
+        let x = u128::MAX;
+        let y = reduce128(x);
+        // The following equalitiy sequence holds, modulo p = 2^64 - 2^32 + 1
+        // 2^128 - 1 = (2^64 - 1) * (2^64 + 1)
+        //           = (2^32 - 1 - 1) * (2^32 - 1 + 1)
+        //           = (2^32 - 2) * (2^32)
+        //           = 2^64 - 2 * 2^32
+        //           = 2^64 - 2^33
+        //           = 2^32 - 1 - 2^33
+        //           = - 2^32 - 1
+        let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
+        assert_eq!(y, expected_result);
     }
 }
