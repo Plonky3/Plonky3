@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 gcd = "2.3.0"
-itertools = "0.10.5"
+itertools = "0.11.0"
 modinverse = "0.1.1"
 num = "0.4.0"
 num-integer = "0.1.45"
