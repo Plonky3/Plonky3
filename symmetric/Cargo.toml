@@ -6,4 +6,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field = { path = "../field" }
-itertools = "0.10.5"
+itertools = "0.11.0"
