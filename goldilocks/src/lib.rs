@@ -321,3 +321,94 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type F = Goldilocks;
+
+    #[test]
+    fn test_goldilocks() {
+        let f = F::new(100);
+        assert_eq!(f.as_canonical_u64(), 100);
+
+        // Over the Goldilocks field, the following set of equations hold
+        // p               = 0
+        // 2^64 - 2^32 + 1 = 0
+        // 2^64            = 2^32 - 1
+        let f = F::new(u64::MAX);
+        assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
+
+        let f = F::from_canonical_u64(u64::MAX);
+        assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
+
+        let f = F::from_canonical_u64(0);
+        assert!(f.is_zero());
+
+        let f = F::from_canonical_u64(F::ORDER_U64);
+        assert!(f.is_zero());
+
+        assert_eq!(
+            F::multiplicative_group_generator().as_canonical_u64(),
+            7_u64
+        );
+
+        let f_1 = F::new(1);
+        let f_1_copy = F::new(1);
+
+        let expected_result = F::ZERO;
+        assert_eq!(f_1 - f_1_copy, expected_result);
+
+        let expected_result = F::new(2);
+        assert_eq!(f_1 + f_1_copy, expected_result);
+
+        let f_2 = F::new(2);
+        let expected_result = F::new(3);
+        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
+
+        let expected_result = F::new(5);
+        assert_eq!(f_1 + f_2 * f_2, expected_result);
+
+        let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
+        let expected_result = F::ZERO;
+        assert_eq!(f_1 + f_p_minus_1, expected_result);
+
+        let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);
+        let expected_result = F::from_canonical_u64(F::ORDER_U64 - 3);
+        assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
+
+        let expected_result = F::new(1);
+        assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
+
+        let expected_result = f_p_minus_1;
+        assert_eq!(f_p_minus_2 - f_p_minus_1, expected_result);
+
+        let expected_result = f_p_minus_2;
+        assert_eq!(f_p_minus_1 - f_1, expected_result);
+
+        let expected_result = F::new(3);
+        assert_eq!(f_2 * f_2 - f_1, expected_result);
+
+        // Generator check
+        let expected_multiplicative_group_generator = F::new(7);
+        assert_eq!(
+            F::multiplicative_group_generator(),
+            expected_multiplicative_group_generator
+        );
+
+        // Check on `reduce_u128`
+        let x = u128::MAX;
+        let y = reduce128(x);
+        // The following equalitiy sequence holds, modulo p = 2^64 - 2^32 + 1
+        // 2^128 - 1 = (2^64 - 1) * (2^64 + 1)
+        //           = (2^32 - 1 - 1) * (2^32 - 1 + 1)
+        //           = (2^32 - 2) * (2^32)
+        //           = 2^64 - 2 * 2^32
+        //           = 2^64 - 2^33
+        //           = 2^32 - 1 - 2^33
+        //           = - 2^32 - 1
+        let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
+        assert_eq!(y, expected_result);
+    }
+}
