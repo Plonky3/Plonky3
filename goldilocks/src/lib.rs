@@ -333,6 +333,10 @@ mod tests {
         let f = F::new(100);
         assert_eq!(f.as_canonical_u64(), 100);
 
+        // Over the Goldilocks field, the following set of equations hold
+        // p               = 0
+        // 2^64 - 2^32 + 1 = 0
+        // 2^64            = 2^32 - 1
         let f = F::new(u64::MAX);
         assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
 
@@ -351,43 +355,47 @@ mod tests {
         );
 
         let f_1 = F::new(1);
-        let f_2 = F::new(1);
+        let f_1_copy = F::new(1);
 
         let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_2, expected_result);
+        assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::new(2);
-        assert_eq!(f_1 + f_2, expected_result);
+        assert_eq!(f_1 + f_1_copy, expected_result);
 
-        let f_3 = F::new(2);
+        let f_2 = F::new(2);
         let expected_result = F::new(3);
-        assert_eq!(f_1 + f_2 * f_3, expected_result);
+        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
 
         let expected_result = F::new(5);
-        assert_eq!(f_1 + f_3 * f_3, expected_result);
+        assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_4 = F::from_canonical_u64(F::ORDER_U64 - 1);
+        let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
         let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_4, expected_result);
+        assert_eq!(f_1 + f_p_minus_1, expected_result);
 
-        let f_5 = F::from_canonical_u64(F::ORDER_U64 - 2);
+        let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);
         let expected_result = F::from_canonical_u64(F::ORDER_U64 - 3);
-        assert_eq!(f_4 + f_5, expected_result);
+        assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
 
         let expected_result = F::new(1);
-        assert_eq!(f_4 - f_5, expected_result);
+        assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
 
-        let expected_result = f_4;
-        assert_eq!(f_5 - f_4, expected_result);
+        let expected_result = f_p_minus_1;
+        assert_eq!(f_p_minus_2 - f_p_minus_1, expected_result);
 
-        let expected_result = f_5;
-        assert_eq!(f_4 - f_1, expected_result);
+        let expected_result = f_p_minus_2;
+        assert_eq!(f_p_minus_1 - f_1, expected_result);
 
         let expected_result = F::new(3);
-        assert_eq!(f_3 * f_3 - f_1, expected_result);
+        assert_eq!(f_2 * f_2 - f_1, expected_result);
 
         // Generator check
-        assert_eq!(F::multiplicative_group_generator(), F::new(7));
+        let expected_multiplicative_group_generator = F::new(7);
+        assert_eq!(
+            F::multiplicative_group_generator(),
+            expected_multiplicative_group_generator
+        );
 
         // Check on `reduce_u128`
         let x = u128::MAX;
