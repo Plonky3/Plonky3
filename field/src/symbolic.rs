@@ -33,11 +33,15 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
     const TWO: Self = Self::Constant(F::TWO);
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
+    fn from_bool(b: bool) -> Self {
+        Self::Constant(F::from_bool(b))
+    }
+
     fn from_canonical_u8(n: u8) -> Self {
         Self::Constant(F::from_canonical_u8(n))
     }
 
-    fn from_canonical_u16(n: u8) -> Self {
+    fn from_canonical_u16(n: u16) -> Self {
         Self::Constant(F::from_canonical_u16(n))
     }
 

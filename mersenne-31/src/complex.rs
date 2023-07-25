@@ -157,11 +157,15 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     const TWO: Self = Self::new_real(AF::TWO);
     const NEG_ONE: Self = Self::new_real(AF::NEG_ONE);
 
+    fn from_bool(b: bool) -> Self {
+        Self::new_real(AF::from_bool(b))
+    }
+
     fn from_canonical_u8(n: u8) -> Self {
         Self::new_real(AF::from_canonical_u8(n))
     }
 
-    fn from_canonical_u16(n: u8) -> Self {
+    fn from_canonical_u16(n: u16) -> Self {
         Self::new_real(AF::from_canonical_u16(n))
     }
 

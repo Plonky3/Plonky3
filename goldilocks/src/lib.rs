@@ -85,11 +85,15 @@ impl AbstractField for Goldilocks {
     const TWO: Self = Self::new(2);
     const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
+    fn from_bool(b: bool) -> Self {
+        Self::new(u64::from(b))
+    }
+
     fn from_canonical_u8(n: u8) -> Self {
         Self::new(u64::from(n))
     }
 
-    fn from_canonical_u16(n: u8) -> Self {
+    fn from_canonical_u16(n: u16) -> Self {
         Self::new(u64::from(n))
     }
 
