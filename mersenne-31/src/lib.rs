@@ -85,11 +85,15 @@ impl AbstractField for Mersenne31 {
     const TWO: Self = Self::new(2);
     const NEG_ONE: Self = Self::new(Self::ORDER_U32 - 1);
 
+    fn from_bool(b: bool) -> Self {
+        Self::new(b as u32)
+    }
+
     fn from_canonical_u8(n: u8) -> Self {
         Self::new(u32::from(n))
     }
 
-    fn from_canonical_u16(n: u8) -> Self {
+    fn from_canonical_u16(n: u16) -> Self {
         Self::new(u32::from(n))
     }
 
