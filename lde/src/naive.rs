@@ -25,7 +25,7 @@ where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,
 {
-    type Out = VerticalPair<F, In, RowMajorMatrix<F>>;
+    type Out = RowMajorMatrix<F>;
 
     fn lde_batch(&self, polys: In, extended_height: usize) -> Self::Out {
         let original_height = polys.height();
@@ -39,7 +39,7 @@ where
             .flat_map(|x| interpolate(&original_domain, &polys, x, &weights))
             .collect();
         let extension = RowMajorMatrix::new(added_values, polys.width());
-        VerticalPair::new(polys, extension)
+        VerticalPair::new(polys, extension).to_row_major_matrix()
     }
 }
 

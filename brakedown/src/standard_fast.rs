@@ -3,8 +3,8 @@ use alloc::vec;
 
 use p3_code::{LinearCodeFamily, SLCodeRegistry};
 use p3_field::Field;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::sparse::CsrMatrix;
-use p3_matrix::MatrixRows;
 use rand::distributions::{Distribution, Standard};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -12,11 +12,10 @@ use rand_chacha::ChaCha20Rng;
 use crate::macros::{brakedown, brakedown_to_rs};
 use crate::BrakedownCode;
 
-pub fn fast_registry<F, In>() -> impl LinearCodeFamily<F, In>
+pub fn fast_registry<F>() -> impl LinearCodeFamily<F, RowMajorMatrix<F>>
 where
     F: Field,
     Standard: Distribution<F>,
-    In: for<'a> MatrixRows<'a, F> + Sync,
 {
     let height_4 = brakedown_to_rs!(16, 2, 0, 2, 4, 0);
 
