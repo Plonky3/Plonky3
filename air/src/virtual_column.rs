@@ -84,6 +84,18 @@ impl<F: Field> VirtualPairCol<F> {
         Self::single(PairCol::Main(column))
     }
 
+    #[must_use]
+    pub fn sum_main(columns: Vec<usize>) -> Self {
+        let column_weights = columns.into_iter().map(|col| (col, F::ONE)).collect();
+        Self::new_main(column_weights, F::ZERO)
+    }
+
+    #[must_use]
+    pub fn sum_preprocessed(columns: Vec<usize>) -> Self {
+        let column_weights = columns.into_iter().map(|col| (col, F::ONE)).collect();
+        Self::new_preprocessed(column_weights, F::ZERO)
+    }
+
     /// `a - b`, where `a` and `b` are columns in the preprocessed trace.
     #[must_use]
     pub fn diff_preprocessed(a_col: usize, b_col: usize) -> Self {
