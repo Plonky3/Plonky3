@@ -49,6 +49,7 @@ Hashes
 - [ ] Poseidon2
 - [x] Keccak-256
 - [ ] BLAKE3-modified
+- [x] tip5
 
 
 ## License

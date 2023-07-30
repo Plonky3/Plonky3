@@ -241,11 +241,12 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
+    use p3_tip5::{Tip5Hasher, Tip5Permutation};
 
     use crate::MerkleTreeMMCS;
 
     #[test]
-    fn commit() {
+    fn comit() {
         use p3_keccak::KeccakF;
 
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
@@ -264,4 +265,26 @@ mod tests {
         let mat = RowMajorMatrix::rand(&mut rng, 200, 13);
         mmcs.commit(vec![mat]);
     }
+
+    #[test]
+    fn commit_tip5() {
+        type T = u8;
+        type P = Tip5Permutation<200>;
+        type C = TruncatedPermutation<T, P, 2, 32, 200>;
+        let compress = C::new(P::default());
+
+        type Mmcs = MerkleTreeMMCS<T, [T; 32], Keccak256Hash, C, RowMajorMatrix<T>>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        let mut rng = thread_rng();
+
+        // First try a power-of-two height.
+        let mat = RowMajorMatrix::rand(&mut rng, 256, 13);
+        mmcs.commit(vec![mat]);
+
+        // Then a non-power-of-two height.
+        let mat = RowMajorMatrix::rand(&mut rng, 200, 13);
+        mmcs.commit(vec![mat]);
+    }
+
 }

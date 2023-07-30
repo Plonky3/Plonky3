@@ -23,6 +23,7 @@ members = [
     "rescue",
     "symmetric",
     "tensor-pcs",
+    "tip5",
     "util",
     "uni-stark",
 ]
