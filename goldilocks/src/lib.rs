@@ -148,6 +148,9 @@ impl Field for Goldilocks {
     /// The inverse happens in constant time.
     ///
     /// Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
+    ///
+    /// TODO: It's good to benchmark this against the inplementaiton in the link below.
+    /// https://github.com/mir-protocol/plonky2/blob/7a81c5/field/src/inversion.rs
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -176,12 +179,13 @@ impl Field for Goldilocks {
         let t24 = exp_acc::<12>(t12, t12);
 
         // compute base^1111111111111111111111111111111 (31 ones)
-        // repeatedly square t24 7 times and multiply by t6
+        // repeatedly square t24 6 times and multiply by t6 first. then square t30 and
+        // multiply by base
         let t30 = exp_acc::<6>(t24, t6);
         let t31 = t30.square() * *self;
 
         // compute base^111111111111111111111111111111101111111111111111111111111111111
-        // repeatedly square t31 31 times and multiply by t31
+        // repeatedly square t31 32 times and multiply by t31
         let t63 = exp_acc::<32>(t31, t31);
 
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
@@ -317,11 +321,7 @@ impl Div for Goldilocks {
 /// Squares the base N number of times and multiplies the result by the tail value.
 #[inline(always)]
 fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
-    let mut result = base;
-    for _ in 0..N {
-        result = result.square();
-    }
-    result * tail
+    base.exp_power_of_2(N) * tail
 }
 
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
@@ -476,5 +476,15 @@ mod tests {
         //           = - 2^32 - 1
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
+
+        // Check inverse
+        // --------- test inverse of identity elements ---------------------------------------------
+
+        assert_eq!(F::ONE, F::ONE.try_inverse().unwrap());
+
+        // --------- test inverse of field elements ------------------------------------------------
+
+        let r: Goldilocks = F::new(5);
+        assert_eq!(F::new(14757395255531667457), r.try_inverse().unwrap());
     }
 }
