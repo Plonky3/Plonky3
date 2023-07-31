@@ -17,6 +17,7 @@ members = [
     "merkle-tree",
     "maybe-rayon",
     "mersenne-31",
+    "monolith",
     "multi-stark",
     "poseidon",
     "reed-solomon",
