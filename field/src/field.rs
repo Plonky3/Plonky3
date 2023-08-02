@@ -152,6 +152,22 @@ pub trait PrimeField64: PrimeField {
     fn as_canonical_u64(&self) -> u64;
 }
 
+default impl<F: PrimeField64> Field for F {
+    default type Packing = F;
+    default fn try_inverse(&self) -> Option<Self> {
+        crate::inverse(self.as_canonical_u64() as i128, Self::ORDER_U64 as i128)
+            .map(|x| Self::from_canonical_u64(x as u64))
+    }
+}
+
+default impl<F: PrimeField32> Field for F {
+    default type Packing = F;
+    default fn try_inverse(&self) -> Option<Self> {
+        crate::inverse(self.as_canonical_u32() as i64, Self::ORDER_U64 as i64)
+            .map(|x| Self::from_canonical_u32(x as u32))
+    }
+}
+
 /// A prime field of order less than `2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
