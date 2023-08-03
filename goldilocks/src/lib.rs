@@ -148,9 +148,6 @@ impl Field for Goldilocks {
     /// The inverse happens in constant time.
     ///
     /// Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
-    ///
-    /// TODO: It's good to benchmark this against the inplementaiton in the link below.
-    /// https://github.com/mir-protocol/plonky2/blob/7a81c5/field/src/inversion.rs
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
