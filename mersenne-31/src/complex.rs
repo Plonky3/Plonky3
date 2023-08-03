@@ -277,3 +277,121 @@ impl Distribution<Mersenne31Complex<Mersenne31>> for Standard {
         Mersenne31Complex::<Mersenne31>::new(rng.gen(), rng.gen())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_field::PrimeField32;
+
+    use super::*;
+
+    // The Euler criteria:
+    // https://en.wikipedia.org/wiki/Euler%27s_criterion,
+    // implies that every prime field whose order is not divisible by 4,
+    // does not admit a square root of -1.
+    // Over the Mersenne31 prime field (of order 2^31 - 1), we know
+    // that p = (2^31 - 1) - 1 = 2^31 - 2 = 2 * (2^30 - 1), is not divisible
+    // by 4. Therefore, it makes sense to consider a complex field extension,
+    // F_p[X] / (X^2 + 1) = F_[i] / F_p, of the Mersennes31 field.
+    type Fi = Mersenne31Complex<Mersenne31>;
+    type F = Mersenne31;
+
+    #[test]
+    fn add() {
+        // real part
+        assert_eq!(Fi::ONE + Fi::ONE, Fi::TWO);
+        assert_eq!(Fi::NEG_ONE + Fi::ONE, Fi::ZERO);
+        assert_eq!(Fi::NEG_ONE + Fi::TWO, Fi::ONE);
+        assert_eq!((Fi::NEG_ONE + Fi::NEG_ONE).real(), F::new(F::ORDER_U32 - 2));
+
+        // complex part
+        assert_eq!(
+            Fi::new_imag(F::ONE) + Fi::new_imag(F::ONE),
+            Fi::new_imag(F::TWO)
+        );
+        assert_eq!(
+            Fi::new_imag(F::NEG_ONE) + Fi::new_imag(F::ONE),
+            Fi::new_imag(F::ZERO)
+        );
+        assert_eq!(
+            Fi::new_imag(F::NEG_ONE) + Fi::new_imag(F::TWO),
+            Fi::new_imag(F::ONE)
+        );
+        assert_eq!(
+            (Fi::new_imag(F::NEG_ONE) + Fi::new_imag(F::NEG_ONE)).imag(),
+            F::new(F::ORDER_U32 - 2)
+        );
+
+        // further tests
+        assert_eq!(
+            Fi::new(F::ONE, F::TWO) + Fi::new(F::ONE, F::ONE),
+            Fi::new(F::TWO, F::new(3))
+        );
+        assert_eq!(
+            Fi::new(F::NEG_ONE, F::NEG_ONE) + Fi::new(F::ONE, F::ONE),
+            Fi::ZERO
+        );
+        assert_eq!(
+            Fi::new(F::NEG_ONE, F::ONE) + Fi::new(F::TWO, F::new(F::ORDER_U32 - 2)),
+            Fi::new(F::ONE, F::NEG_ONE)
+        );
+    }
+
+    #[test]
+    fn sub() {
+        // real part
+        assert_eq!(Fi::ONE - Fi::ONE, Fi::ZERO);
+        assert_eq!(Fi::TWO - Fi::TWO, Fi::ZERO);
+        assert_eq!(Fi::NEG_ONE - Fi::NEG_ONE, Fi::ZERO);
+        assert_eq!(Fi::TWO - Fi::ONE, Fi::ONE);
+        assert_eq!(Fi::NEG_ONE - Fi::ZERO, Fi::NEG_ONE);
+
+        // complex part
+        assert_eq!(Fi::new_imag(F::ONE) - Fi::new_imag(F::ONE), Fi::ZERO);
+        assert_eq!(Fi::new_imag(F::TWO) - Fi::new_imag(F::TWO), Fi::ZERO);
+        assert_eq!(
+            Fi::new_imag(F::NEG_ONE) - Fi::new_imag(F::NEG_ONE),
+            Fi::ZERO
+        );
+        assert_eq!(
+            Fi::new_imag(F::TWO) - Fi::new_imag(F::ONE),
+            Fi::new_imag(F::ONE)
+        );
+        assert_eq!(
+            Fi::new_imag(F::NEG_ONE) - Fi::ZERO,
+            Fi::new_imag(F::NEG_ONE)
+        );
+    }
+
+    #[test]
+    fn mul() {
+        assert_eq!(
+            Fi::new(F::TWO, F::TWO) * Fi::new(F::new(4), F::new(5)),
+            Fi::new(-F::TWO, F::new(18))
+        );
+    }
+
+    #[test]
+    fn mul_2exp_u64() {
+        // real part
+        // 1 * 2^0 = 1.
+        assert_eq!(Fi::ONE.mul_2exp_u64(0), Fi::ONE);
+        // 2 * 2^30 = 2^31 = 1.
+        assert_eq!(Fi::TWO.mul_2exp_u64(30), Fi::ONE);
+        // 5 * 2^2 = 20.
+        assert_eq!(
+            Fi::new_real(F::new(5)).mul_2exp_u64(2),
+            Fi::new_real(F::new(20))
+        );
+
+        // complex part
+        // i * 2^0 = i.
+        assert_eq!(Fi::new_imag(F::ONE).mul_2exp_u64(0), Fi::new_imag(F::ONE));
+        // (2i) * 2^30 = (2^31) * i = i.
+        assert_eq!(Fi::new_imag(F::TWO).mul_2exp_u64(30), Fi::new_imag(F::ONE));
+        // 5i * 2^2 = 20i.
+        assert_eq!(
+            Fi::new_imag(F::new(5)).mul_2exp_u64(2),
+            Fi::new_imag(F::new(20))
+        );
+    }
+}
