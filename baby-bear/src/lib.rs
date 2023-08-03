@@ -4,7 +4,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
+use p3_field::{AbstractField, Field, PrimeField, PrimeField32, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -13,6 +13,7 @@ const MONTY_BITS: u32 = 31;
 const MONTY_MASK: u32 = (1 << MONTY_BITS) - 1;
 const MONTY_MU: u32 = 0x8000001;
 
+/// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
 pub struct BabyBear {
     value: u32,
@@ -20,7 +21,7 @@ pub struct BabyBear {
 
 impl Ord for BabyBear {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.as_canonical_u64().cmp(&other.as_canonical_u64())
+        self.as_canonical_u32().cmp(&other.as_canonical_u32())
     }
 }
 
@@ -32,13 +33,13 @@ impl PartialOrd for BabyBear {
 
 impl Display for BabyBear {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.as_canonical_u64(), f)
+        Display::fmt(&self.as_canonical_u32(), f)
     }
 }
 
 impl Debug for BabyBear {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.as_canonical_u64(), f)
+        Debug::fmt(&self.as_canonical_u32(), f)
     }
 }
 
@@ -73,14 +74,17 @@ impl AbstractField for BabyBear {
     }
 
     fn from_canonical_u32(n: u32) -> Self {
+        debug_assert!(n < P);
         Self::from_wrapped_u32(n)
     }
 
     fn from_canonical_u64(n: u64) -> Self {
+        debug_assert!(n < P as u64);
         Self::from_canonical_u32(n as u32)
     }
 
     fn from_canonical_usize(n: usize) -> Self {
+        debug_assert!(n < P as usize);
         Self::from_canonical_u32(n as u32)
     }
 
@@ -102,10 +106,6 @@ impl AbstractField for BabyBear {
 impl Field for BabyBear {
     type Packing = Self;
 
-    fn is_zero(&self) -> bool {
-        *self == Self::ZERO
-    }
-
     fn try_inverse(&self) -> Option<Self> {
         todo!()
     }
@@ -113,11 +113,11 @@ impl Field for BabyBear {
 
 impl PrimeField for BabyBear {}
 
-impl PrimeField64 for BabyBear {
-    const ORDER_U64: u64 = P as u64;
+impl PrimeField32 for BabyBear {
+    const ORDER_U32: u32 = P;
 
-    fn as_canonical_u64(&self) -> u64 {
-        from_monty(self.value) as u64
+    fn as_canonical_u32(&self) -> u32 {
+        from_monty(self.value)
     }
 }
 
@@ -274,6 +274,8 @@ fn monty_reduce(x: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::PrimeField64;
+
     use super::*;
 
     type F = BabyBear;
@@ -286,7 +288,7 @@ mod tests {
         let f = F::from_canonical_u32(0);
         assert!(f.is_zero());
 
-        let f = F::from_canonical_u32(F::ORDER_U64 as u32);
+        let f = F::from_wrapped_u32(F::ORDER_U32);
         assert!(f.is_zero());
 
         let f_1 = F::ONE;
@@ -305,12 +307,12 @@ mod tests {
         let expected_result = F::from_canonical_u32(5);
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U64 as u32 - 1);
+        let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
         let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
-        let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U64 as u32 - 2);
-        let expected_result = F::from_canonical_u32(F::ORDER_U64 as u32 - 3);
+        let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);
+        let expected_result = F::from_canonical_u32(F::ORDER_U32 - 3);
         assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
 
         let expected_result = F::from_canonical_u32(1);

@@ -98,12 +98,13 @@ impl AbstractField for Mersenne31 {
     }
 
     fn from_canonical_u32(n: u32) -> Self {
+        debug_assert!(n < Self::ORDER_U32);
         Self::new(n)
     }
 
     /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
     fn from_canonical_u64(n: u64) -> Self {
-        Self::new(
+        Self::from_canonical_u32(
             n.try_into()
                 .expect("Too large to be a canonical Mersenne31 encoding"),
         )
@@ -111,7 +112,7 @@ impl AbstractField for Mersenne31 {
 
     /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
     fn from_canonical_usize(n: usize) -> Self {
-        Self::new(
+        Self::from_canonical_u32(
             n.try_into()
                 .expect("Too large to be a canonical Mersenne31 encoding"),
         )
