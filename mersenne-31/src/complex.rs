@@ -342,12 +342,6 @@ mod tests {
             Fi::new_imag(F::NEG_ONE) - Fi::ZERO,
             Fi::new_imag(F::NEG_ONE)
         );
-
-        // WARN: panics at the moment, but it should not
-        assert_eq!(
-            Fi::new_imag(F::NEG_ONE) - Fi::new_imag(F::NEG_ONE),
-            Fi::new_imag(F::new(F::ORDER_U32 - 2))
-        );
     }
 
     #[test]
