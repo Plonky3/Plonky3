@@ -30,6 +30,14 @@ pub trait MatrixRows<'a, T: 'a>: Matrix<T> {
 
     fn row(&'a self, r: usize) -> Self::Row;
 
+    fn first_row(&'a self) -> Self::Row {
+        self.row(0)
+    }
+
+    fn last_row(&'a self) -> Self::Row {
+        self.row(self.height() - 1)
+    }
+
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,

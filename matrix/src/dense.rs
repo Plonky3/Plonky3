@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_field::Field;
+use p3_maybe_rayon::{MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -177,6 +178,13 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
 
     pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
         self.values.chunks_exact_mut(self.width)
+    }
+
+    pub fn par_rows_mut(&mut self) -> impl ParallelIterator<Item = &mut [T]>
+    where
+        T: Send,
+    {
+        self.values.par_chunks_exact_mut(self.width)
     }
 
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {

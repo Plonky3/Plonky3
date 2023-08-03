@@ -32,8 +32,9 @@ pub trait AbstractField:
     const TWO: Self;
     const NEG_ONE: Self;
 
+    fn from_bool(b: bool) -> Self;
     fn from_canonical_u8(n: u8) -> Self;
-    fn from_canonical_u16(n: u8) -> Self;
+    fn from_canonical_u16(n: u16) -> Self;
     fn from_canonical_u32(n: u32) -> Self;
     fn from_canonical_u64(n: u64) -> Self;
     fn from_canonical_usize(n: usize) -> Self;
@@ -42,6 +43,11 @@ pub trait AbstractField:
     fn from_wrapped_u64(n: u64) -> Self;
 
     fn multiplicative_group_generator() -> Self;
+
+    #[must_use]
+    fn double(&self) -> Self {
+        self.clone() + self.clone()
+    }
 
     #[must_use]
     fn square(&self) -> Self {
@@ -82,6 +88,10 @@ pub trait Field:
 
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
+    }
+
+    fn is_one(&self) -> bool {
+        *self == Self::ONE
     }
 
     /// self * 2^exp

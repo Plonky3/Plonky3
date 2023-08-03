@@ -1,0 +1,11 @@
+[package]
+name = "p3-keccak-air"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-air = { path = "../air" }
+p3-field = { path = "../field" }
+p3-matrix = { path = "../matrix" }
+p3-util = { path = "../util" }
