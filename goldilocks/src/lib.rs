@@ -135,8 +135,58 @@ impl Field for Goldilocks {
         self.value == 0 || self.value == Self::ORDER_U64
     }
 
+    /// Returns the inverse of the Field element. According to the Fermat's little theorem, the
+    /// inverse of `a` is `a^(p-2)`, where `p` is the prime order of the field.
+    ///
+    /// NOTE: The inverse of `0` is undefined and will return `None`.
+    ///
+    /// Mathematically, this is equivalent to:
+    ///                $a^(p-1)     = 1 (mod p)$
+    ///                $a^(p-2) * a = 1 (mod p)$
+    /// Therefore      $a^(p-2)     = a^-1 (mod p)$
+    ///
+    /// The inverse happens in constant time.
+    ///
+    /// Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
     fn try_inverse(&self) -> Option<Self> {
-        todo!()
+        if self.is_zero() {
+            return None;
+        }
+
+        // compute base^(M - 2) using 72 multiplications
+        // The exponent M - 2 is represented in binary as:
+        // 0b1111111111111111111111111111111011111111111111111111111111111111
+
+        // compute base^11
+        let t2 = self.square() * *self;
+
+        // compute base^111
+        let t3 = t2.square() * *self;
+
+        // compute base^111111 (6 ones)
+        // repeatedly square t3 3 times and multiply by t3
+        let t6 = exp_acc::<3>(t3, t3);
+
+        // compute base^111111111111 (12 ones)
+        // repeatedly square t6 6 times and multiply by t6
+        let t12 = exp_acc::<6>(t6, t6);
+
+        // compute base^111111111111111111111111 (24 ones)
+        // repeatedly square t12 12 times and multiply by t12
+        let t24 = exp_acc::<12>(t12, t12);
+
+        // compute base^1111111111111111111111111111111 (31 ones)
+        // repeatedly square t24 6 times and multiply by t6 first. then square t30 and
+        // multiply by base
+        let t30 = exp_acc::<6>(t24, t6);
+        let t31 = t30.square() * *self;
+
+        // compute base^111111111111111111111111111111101111111111111111111111111111111
+        // repeatedly square t31 32 times and multiply by t31
+        let t63 = exp_acc::<32>(t31, t31);
+
+        // compute base^1111111111111111111111111111111011111111111111111111111111111111
+        Some(t63.square() * *self)
     }
 }
 
@@ -260,6 +310,15 @@ impl Div for Goldilocks {
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
+}
+
+// HELPER FUNCTIONS
+// ================================================================================================
+
+/// Squares the base N number of times and multiplies the result by the tail value.
+#[inline(always)]
+fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
+    base.exp_power_of_2(N) * tail
 }
 
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
@@ -414,5 +473,15 @@ mod tests {
         //           = - 2^32 - 1
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
+
+        // Check inverse
+        // --------- test inverse of identity elements ---------------------------------------------
+
+        assert_eq!(F::ONE, F::ONE.try_inverse().unwrap());
+
+        // --------- test inverse of field elements ------------------------------------------------
+
+        let r: Goldilocks = F::new(5);
+        assert_eq!(F::new(14757395255531667457), r.try_inverse().unwrap());
     }
 }
