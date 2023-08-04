@@ -175,7 +175,7 @@ mod tests {
         for _ in 0..1000 {
             let a: i64 = rng.gen::<i32>().abs() as i64;
             let b: i64 = rng.gen::<i32>().abs() as i64;
-            let (g, x, y) = gcd::<i64>(a as i64, b as i64);
+            let (g, x, y) = gcd::<i64>(a, b);
             assert_eq!(g, a * x + b * y);
         }
     }
@@ -200,7 +200,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..1000 {
             let a: i32 = rng.gen();
-            let m: i32 = 1 << 31 - 1;
+            let m: i32 = (((1 << 31) as u32) - 1) as i32;
             if a < m && a > 0 {
                 let inv = inverse(a, m);
                 if let Some(inv) = inv {

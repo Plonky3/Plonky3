@@ -1,3 +1,4 @@
+#![feature(specialization)]
 #![no_std]
 
 use core::fmt::{self, Debug, Display, Formatter};

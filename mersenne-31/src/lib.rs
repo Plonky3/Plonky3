@@ -1,5 +1,5 @@
 //! The prime field `F_p` where `p = 2^31 - 1`.
-
+#![feature(specialization)]
 #![no_std]
 
 mod complex;
