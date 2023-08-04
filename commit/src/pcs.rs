@@ -11,7 +11,7 @@ use p3_matrix::MatrixRows;
 /// polynomials defined over the field `F`.
 ///
 /// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
-/// and `MultivariatePCS` for more specific subtraits.
+/// and `MultilinearPCS` for more specific subtraits.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
 pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>> {
     /// The commitment that's sent to the verifier.
@@ -55,7 +55,7 @@ pub trait UnivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
         Chal: Challenger<F>;
 }
 
-pub trait MultivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
+pub trait MultilinearPCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
     fn open_multi_batches<EF, Chal>(
         &self,
         prover_data: &[&Self::ProverData],

@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
 use crate::pcs::{UnivariatePCS, PCS};
-use crate::MultivariatePCS;
+use crate::MultilinearPCS;
 
 pub struct MultiFromUniPCS<F, In, U>
 where
@@ -35,7 +35,7 @@ where
     }
 }
 
-impl<F, In, U> MultivariatePCS<F, In> for MultiFromUniPCS<F, In, U>
+impl<F, In, U> MultilinearPCS<F, In> for MultiFromUniPCS<F, In, U>
 where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,

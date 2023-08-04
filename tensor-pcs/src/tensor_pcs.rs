@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::Challenger;
 use p3_code::LinearCodeFamily;
-use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
+use p3_commit::{DirectMMCS, MultilinearPCS, PCS};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
@@ -64,7 +64,7 @@ where
     }
 }
 
-impl<F, In, C, M> MultivariatePCS<F, In> for TensorPCS<F, C, M>
+impl<F, In, C, M> MultilinearPCS<F, In> for TensorPCS<F, C, M>
 where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,
