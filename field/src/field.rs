@@ -155,7 +155,7 @@ pub trait PrimeField64: PrimeField {
 default impl<F: PrimeField64> Field for F {
     default type Packing = F;
     default fn try_inverse(&self) -> Option<Self> {
-        crate::inverse(self.as_canonical_u64() as i128, Self::ORDER_U64 as i128)
+        crate::inverse_u::<u64, i64>(self.as_canonical_u64(), Self::ORDER_U64)
             .map(|x| Self::from_canonical_u64(x as u64))
     }
 }
@@ -163,7 +163,7 @@ default impl<F: PrimeField64> Field for F {
 default impl<F: PrimeField32> Field for F {
     default type Packing = F;
     default fn try_inverse(&self) -> Option<Self> {
-        crate::inverse(self.as_canonical_u32() as i64, Self::ORDER_U64 as i64)
+        crate::inverse_u::<u32, i32>(self.as_canonical_u32(), Self::ORDER_U32)
             .map(|x| Self::from_canonical_u32(x as u32))
     }
 }
