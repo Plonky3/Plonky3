@@ -12,7 +12,7 @@ use crate::{Matrix, MatrixGet, MatrixRows};
 pub struct RowMajorMatrix<T> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,
-    width: usize,
+    pub width: usize,
 }
 
 impl<T> RowMajorMatrix<T> {

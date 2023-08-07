@@ -222,7 +222,7 @@ pub trait TwoAdicField: Field {
     fn primitive_root_of_unity(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
         let base = Self::power_of_two_generator();
-        base.mul_2exp_u64((Self::TWO_ADICITY - bits) as u64)
+        base.exp_power_of_2(Self::TWO_ADICITY - bits)
     }
 }
 
@@ -233,7 +233,7 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<F: MulAssign + Clone> Iterator for Powers<F> {
+impl<F: AbstractField> Iterator for Powers<F> {
     type Item = F;
 
     fn next(&mut self) -> Option<F> {
