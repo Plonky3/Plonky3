@@ -14,6 +14,8 @@ fn bench_fft(c: &mut Criterion) {
     fft::<BabyBear, Radix2BowersFft, 10>(c);
     fft::<Goldilocks, Radix2DitFft, 10>(c);
     fft::<Goldilocks, Radix2BowersFft, 10>(c);
+
+    ifft::<Goldilocks, Radix2DitFft, 10>(c);
 }
 
 fn fft<F, DFT, const BATCH_SIZE: usize>(c: &mut Criterion)
@@ -40,6 +42,35 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
                 dft.dft_batch(messages.clone());
+            });
+        });
+    }
+}
+
+fn ifft<F, DFT, const BATCH_SIZE: usize>(c: &mut Criterion)
+where
+    F: TwoAdicField,
+    DFT: TwoAdicSubgroupDFT<F, F> + Default,
+    Standard: Distribution<F>,
+{
+    let mut group = c.benchmark_group(&format!(
+        "ifft::<{}, {}, {}>",
+        type_name::<F>(),
+        type_name::<DFT>(),
+        BATCH_SIZE
+    ));
+    group.sample_size(10);
+
+    let mut rng = thread_rng();
+    for n_log in [14, 16, 18, 20] {
+        let n = 1 << n_log;
+
+        let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
+
+        let dft = DFT::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
+            b.iter(|| {
+                dft.idft_batch(messages.clone());
             });
         });
     }
