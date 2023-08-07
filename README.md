@@ -9,12 +9,18 @@ This is the "core" repo, but the plan is to move each crate into its own repo on
 
 Fields:
 - [x] Mersenne31
-  - [ ] common extension fields
+  - [x] "complex" extension field
+  - [ ] ~128 bit extension field
+  - [ ] AVX2
+  - [ ] AVX-512
+  - [ ] NEON
+- [x] BabyBear
+  - [ ] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
   - [ ] NEON
 - [x] Goldilocks
-  - [ ] common extension fields
+  - [ ] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
   - [ ] NEON
@@ -36,18 +42,21 @@ PIOPs
 
 Codes
 - [x] Brakedown
-- [ ] Reed-Solomon
+- [x] Reed-Solomon
 
 Algorithms
-- [ ] Barycentric interpolation
-- [ ] basic FFT
-- [ ] Mersenne FFT
+- [x] Barycentric interpolation
+- [x] radix-2 DIT FFT
+- [x] radix-2 Bowers FFT
+- [ ] four-step FFT
+- [ ] Mersenne circle group FFT
 
 Hashes
-- [ ] Rescue
+- [x] Rescue
 - [x] Poseidon
 - [ ] Poseidon2
 - [x] Keccak-256
+- [ ] Monolith
 - [ ] BLAKE3-modified
 
 
