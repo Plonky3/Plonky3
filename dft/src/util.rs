@@ -13,7 +13,7 @@ pub(crate) fn reverse_matrix_index_bits<F>(vals: &mut RowMajorMatrix<F>) {
 }
 
 /// Assumes `i < j`.
-fn swap_rows<F>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
+pub(crate) fn swap_rows<F>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
     let w = mat.width();
     let (upper, lower) = mat.values.split_at_mut(j * w);
     let row_i = &mut upper[i * w..(i + 1) * w];

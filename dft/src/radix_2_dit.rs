@@ -66,18 +66,29 @@ fn dit_butterfly<F: Field>(mat: &mut RowMajorMatrix<F>, row_1: usize, row_2: usi
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
+    use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
     use crate::{NaiveDFT, Radix2DitFft, TwoAdicSubgroupDFT};
 
     #[test]
-    fn consistency() {
+    fn matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
         let dft_naive = NaiveDFT.dft_batch(mat.clone());
         let dft_radix_2_dit = Radix2DitFft.dft_batch(mat);
         assert_eq!(dft_naive, dft_radix_2_dit);
+    }
+
+    #[test]
+    fn dft_idft_consistency() {
+        type F = Goldilocks;
+        let mut rng = thread_rng();
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
+        let dft = Radix2DitFft.dft_batch(original.clone());
+        let idft = Radix2DitFft.idft_batch(dft);
+        assert_eq!(original, idft);
     }
 }

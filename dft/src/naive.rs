@@ -38,7 +38,9 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
+    use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
+    use rand::thread_rng;
 
     use crate::{NaiveDFT, TwoAdicSubgroupDFT};
 
@@ -81,5 +83,15 @@ mod tests {
                 width: 3,
             }
         )
+    }
+
+    #[test]
+    fn dft_idft_consistency() {
+        type F = Goldilocks;
+        let mut rng = thread_rng();
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let dft = NaiveDFT.dft_batch(original.clone());
+        let idft = NaiveDFT.idft_batch(dft);
+        assert_eq!(original, idft);
     }
 }
