@@ -4,7 +4,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField32, TwoAdicField};
+use p3_field::{make_div_assign, AbstractField, Field, PrimeField, PrimeField32, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -211,6 +211,8 @@ impl Div for BabyBear {
         self * rhs.inverse()
     }
 }
+
+make_div_assign! {BabyBear}
 
 #[must_use]
 fn canonical_sub(x: u32, y: u32) -> u32 {

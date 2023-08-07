@@ -11,7 +11,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
-use p3_field::{AbstractField, Field, PrimeField, PrimeField32};
+use p3_field::{make_div_assign, AbstractField, Field, PrimeField, PrimeField32};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -290,6 +290,8 @@ impl Div for Mersenne31 {
         self * rhs.inverse()
     }
 }
+
+make_div_assign! {Mersenne31}
 
 #[cfg(test)]
 mod tests {

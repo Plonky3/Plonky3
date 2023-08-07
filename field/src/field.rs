@@ -1,7 +1,7 @@
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use p3_util::log2_ceil_u64;
@@ -82,7 +82,7 @@ impl<F: Field> AbstractionOf<F> for F {}
 
 /// An element of a finite field.
 pub trait Field:
-    AbstractField + 'static + Copy + Div<Self, Output = Self> + Eq + Hash + Send + Sync + Display
+    AbstractField + 'static + Copy + Div<Output = Self> + DivAssign + Eq + Hash + Send + Sync + Display
 {
     type Packing: PackedField<Scalar = Self>;
 

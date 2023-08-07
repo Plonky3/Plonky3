@@ -8,7 +8,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
+use p3_field::{make_div_assign, AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -311,6 +311,8 @@ impl Div for Goldilocks {
         self * rhs.inverse()
     }
 }
+
+make_div_assign! {Goldilocks}
 
 // HELPER FUNCTIONS
 // ================================================================================================
