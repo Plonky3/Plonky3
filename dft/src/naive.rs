@@ -5,11 +5,11 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::TwoAdicSubgroupDFT;
+use crate::TwoAdicSubgroupDft;
 
 pub struct NaiveDFT;
 
-impl<Val, Dom> TwoAdicSubgroupDFT<Val, Dom> for NaiveDFT
+impl<Val, Dom> TwoAdicSubgroupDft<Val, Dom> for NaiveDFT
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -42,7 +42,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDFT, TwoAdicSubgroupDFT};
+    use crate::{NaiveDFT, TwoAdicSubgroupDft};
 
     #[test]
     fn basic() {

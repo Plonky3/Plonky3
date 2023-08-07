@@ -6,14 +6,14 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::util::{reverse_bits, reverse_matrix_index_bits};
-use crate::TwoAdicSubgroupDFT;
+use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G^T FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
 #[derive(Default)]
 pub struct Radix2BowersFft;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDFT<F, F> for Radix2BowersFft {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F, F> for Radix2BowersFft {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -68,7 +68,7 @@ mod tests {
     use rand::thread_rng;
 
     use crate::radix_2_bowers::Radix2BowersFft;
-    use crate::{NaiveDFT, TwoAdicSubgroupDFT};
+    use crate::{NaiveDFT, TwoAdicSubgroupDft};
 
     #[test]
     fn matches_naive() {

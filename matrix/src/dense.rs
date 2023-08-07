@@ -31,6 +31,10 @@ impl<T> RowMajorMatrix<T> {
         self.values.chunks_exact(self.width)
     }
 
+    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
+        self.values.chunks_exact_mut(self.width)
+    }
+
     #[must_use]
     pub fn as_view(&self) -> RowMajorMatrixView<T> {
         RowMajorMatrixView {

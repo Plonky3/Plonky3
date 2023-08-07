@@ -6,13 +6,13 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::util::reverse_matrix_index_bits;
-use crate::TwoAdicSubgroupDFT;
+use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
 #[derive(Default)]
 pub struct Radix2DitFft;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDFT<F, F> for Radix2DitFft {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F, F> for Radix2DitFft {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -70,7 +70,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDFT, Radix2DitFft, TwoAdicSubgroupDFT};
+    use crate::{NaiveDFT, Radix2DitFft, TwoAdicSubgroupDft};
 
     #[test]
     fn matches_naive() {

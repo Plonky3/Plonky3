@@ -2,7 +2,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
-use p3_fft::{Radix2BowersFft, Radix2DitFft, TwoAdicSubgroupDFT};
+use p3_fft::{Radix2BowersFft, Radix2DitFft, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
@@ -21,7 +21,7 @@ fn bench_fft(c: &mut Criterion) {
 fn fft<F, DFT, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
     F: TwoAdicField,
-    DFT: TwoAdicSubgroupDFT<F, F> + Default,
+    DFT: TwoAdicSubgroupDft<F, F> + Default,
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
@@ -50,7 +50,7 @@ where
 fn ifft<F, DFT, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
     F: TwoAdicField,
-    DFT: TwoAdicSubgroupDFT<F, F> + Default,
+    DFT: TwoAdicSubgroupDft<F, F> + Default,
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
