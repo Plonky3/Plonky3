@@ -8,7 +8,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeField64};
 use p3_ldt::{LDTBasedPCS, LDT};
 
 pub use crate::proof::FriProof;
@@ -28,7 +28,7 @@ where
     F: Field,
     Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<Challenge>,
 {
     config: FriConfig,
     _phantom_f: PhantomData<F>,
@@ -39,10 +39,10 @@ where
 
 impl<F, Challenge, M, MC> LDT<F, M> for FriLDT<F, Challenge, M, MC>
 where
-    F: Field,
+    F: PrimeField64,
     Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<Challenge>,
 {
     type Proof = FriProof<F, Challenge, M, MC>;
     type Error = ();

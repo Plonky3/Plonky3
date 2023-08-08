@@ -5,33 +5,67 @@ use core::cmp::Reverse;
 use itertools::Itertools;
 use p3_challenger::Challenger;
 use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{AbstractField, ExtensionField, Field};
+use p3_field::{AbstractField, ExtensionField, Field, PrimeField64};
 use p3_matrix::{Matrix, MatrixRows};
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 
-use crate::{FriConfig, FriProof};
+use crate::{FriConfig, FriProof, QueryProof};
 
 pub(crate) fn prove<F, Challenge, M, MC, Chal>(
-    codewords: &[M::ProverData],
+    input_commits: &[M::ProverData],
     config: &FriConfig,
     challenger: &mut Chal,
 ) -> FriProof<F, Challenge, M, MC>
 where
+    F: PrimeField64,
+    Challenge: ExtensionField<F>,
+    M: MMCS<F>,
+    MC: DirectMMCS<Challenge>,
+    Chal: Challenger<F>,
+{
+    let n = input_commits
+        .iter()
+        .map(|cw| M::get_max_height(cw))
+        .max()
+        .unwrap_or_else(|| panic!("No matrices?"));
+
+    let commit_phase_commits = commit_phase::<F, Challenge, M, MC, Chal>(input_commits, challenger);
+    let query_indices: Vec<usize> = (0..config.num_queries)
+        .map(|_| challenger.random_usize(n))
+        .collect();
+    // TODO: into_par_iter?
+    let query_proofs = query_indices
+        .into_iter()
+        .map(|index| answer_query(input_commits, &commit_phase_commits, index))
+        .collect();
+    FriProof { query_proofs }
+}
+
+fn answer_query<F, Challenge, M, MC>(
+    input_commits: &[M::ProverData],
+    commit_phase_commits: &[MC::ProverData],
+    index: usize,
+) -> QueryProof<F, Challenge, M, MC>
+where
     F: Field,
     Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
-    Chal: Challenger<F>,
+    MC: DirectMMCS<Challenge>,
 {
-    let _commit_phase_commits = commit_phase::<F, Challenge, M, MC, Chal>(codewords, challenger);
-    let query_indices: Vec<Challenge> = (0..config.num_queries)
-        .map(|_| challenger.random_ext_element())
+    let input_openings = input_commits
+        .iter()
+        .map(|commit| M::open_batch(index, commit))
         .collect();
-    let _query_proofs = query_indices.into_par_iter().map(|_query_index| todo!());
-    todo!()
+    let commit_phase_openings = commit_phase_commits
+        .iter()
+        .map(|commit| MC::open_batch(index, commit))
+        .collect();
+    QueryProof {
+        input_openings,
+        commit_phase_openings,
+    }
 }
 
-pub(crate) fn commit_phase<F, Challenge, M, MC, Chal>(
+fn commit_phase<F, Challenge, M, MC, Chal>(
     codewords: &[M::ProverData],
     challenger: &mut Chal,
 ) -> Vec<MC::ProverData>
@@ -39,7 +73,7 @@ where
     F: Field,
     Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<Challenge>,
     Chal: Challenger<F>,
 {
     let alpha: Challenge = challenger.random_ext_element();

@@ -4,15 +4,15 @@ use p3_field::{ExtensionField, Field};
 
 use crate::FriProof;
 
-pub(crate) fn verify<F, EF, M, MC, Chal>(
-    _proof: &FriProof<F, EF, M, MC>,
+pub(crate) fn verify<F, Challenge, M, MC, Chal>(
+    _proof: &FriProof<F, Challenge, M, MC>,
     _challenger: &mut Chal,
 ) -> Result<(), ()>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<Challenge>,
     Chal: Challenger<F>,
 {
     todo!()

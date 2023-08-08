@@ -4,38 +4,26 @@ use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{ExtensionField, Field};
 
 #[allow(dead_code)] // TODO: fields should be used soon
-pub struct FriProof<F, EF, M, MC>
+pub struct FriProof<F, Challenge, M, MC>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<Challenge>,
 {
-    query_proofs: Vec<QueryProof<F, EF, M, MC>>,
+    pub(crate) query_proofs: Vec<QueryProof<F, Challenge, M, MC>>,
 }
 
 #[allow(dead_code)] // TODO: fields should be used soon
-pub struct QueryProof<F, EF, M, MC>
+pub struct QueryProof<F, Challenge, M, MC>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    Challenge: ExtensionField<F>,
     M: MMCS<F>,
-    MC: DirectMMCS<F>,
+    MC: DirectMMCS<Challenge>,
 {
-    /// An opened row of each matrix that was part of this batch-FRI proof.
-    leaves: Vec<Vec<F>>,
-    leaf_opening_proofs: Vec<M::Proof>,
-    steps: Vec<QueryStepProof<F, EF, MC>>,
-}
-
-#[allow(dead_code)] // TODO: fields should be used soon
-pub struct QueryStepProof<F, EF, MC>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    MC: DirectMMCS<F>,
-{
-    /// An opened row of each matrix that was part of this batch-FRI proof.
-    leaves: EF,
-    leaf_opening_proofs: MC::Proof,
+    /// For each MMCS commitment, this contains openings of each matrix at the queried location,
+    /// along with an opening proof.
+    pub(crate) input_openings: Vec<(Vec<Vec<F>>, M::Proof)>,
+    pub(crate) commit_phase_openings: Vec<(Vec<Vec<Challenge>>, MC::Proof)>,
 }

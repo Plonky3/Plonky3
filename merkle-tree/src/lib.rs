@@ -192,11 +192,12 @@ where
     type Error = ();
     type Mat = Mat;
 
-    fn open_batch(row: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<Vec<L>>, Vec<D>) {
+    fn open_batch(index: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<Vec<L>>, Vec<D>) {
         let leaf = prover_data
             .leaves
             .iter()
-            .map(|matrix| matrix.row(row).into_iter().cloned().collect())
+            // TODO: index should be shifted >> if this matrix is smaller?
+            .map(|matrix| matrix.row(index).into_iter().cloned().collect())
             .collect();
         let proof = vec![]; // TODO
         (leaf, proof)
@@ -210,7 +211,7 @@ where
         _commit: &D,
         _dimensions: &[Dimensions],
         _index: usize,
-        _item: Vec<L>,
+        _rows: Vec<Vec<L>>,
         _proof: &Vec<D>,
     ) -> Result<(), Self::Error> {
         todo!()

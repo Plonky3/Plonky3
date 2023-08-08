@@ -8,10 +8,11 @@ mod duplex_challenger;
 mod hash_challenger;
 
 use alloc::vec::Vec;
+use core::mem::size_of;
 
 pub use duplex_challenger::*;
 pub use hash_challenger::*;
-use p3_field::{AbstractExtensionField, Field};
+use p3_field::{AbstractExtensionField, Field, PrimeField64};
 
 /// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.
 pub trait Challenger<F: Field> {
@@ -28,6 +29,16 @@ pub trait Challenger<F: Field> {
     }
 
     fn random_element(&mut self) -> F;
+
+    fn random_usize(&mut self, bits: usize) -> usize
+    where
+        F: PrimeField64,
+    {
+        debug_assert!(bits < size_of::<usize>());
+        let rand_f = self.random_element();
+        let rand_usize = rand_f.as_canonical_u64() as usize;
+        rand_usize & ((1 << bits) - 1)
+    }
 
     fn random_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
         let vec = self.random_vec(EF::D);
