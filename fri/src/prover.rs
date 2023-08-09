@@ -66,7 +66,7 @@ where
 }
 
 fn commit_phase<F, Challenge, M, MC, Chal>(
-    codewords: &[M::ProverData],
+    input_commits: &[M::ProverData],
     challenger: &mut Chal,
 ) -> Vec<MC::ProverData>
 where
@@ -77,20 +77,20 @@ where
     Chal: Challenger<F>,
 {
     let alpha: Challenge = challenger.random_ext_element();
-    let matrices_by_desc_height = codewords
+    let inputs_by_desc_height = input_commits
         .iter()
         .flat_map(|data| M::get_matrices(data))
         .sorted_by_key(|mat| Reverse(mat.height()))
         .group_by(|mat| mat.height());
-    let mut matrices_by_desc_height = matrices_by_desc_height.into_iter();
+    let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();
 
-    let (max_height, largest_matrices_iter) = matrices_by_desc_height.next().expect("No matrices?");
+    let (max_height, largest_matrices_iter) = inputs_by_desc_height.next().expect("No matrices?");
     let largest_matrices = largest_matrices_iter.collect_vec();
-    let zero_vec = vec![<Challenge as AbstractField>::ZERO; max_height];
+    let zero_vec = vec![Challenge::ZERO; max_height];
     let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
     let mut committed = vec![current.clone()];
 
-    for (height, matrices) in matrices_by_desc_height {
+    for (height, matrices) in inputs_by_desc_height {
         while current.len() < height {
             let beta = <Challenge as AbstractField>::ZERO; // TODO
             current = fold_even_odd(&current, beta);
