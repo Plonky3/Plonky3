@@ -67,12 +67,12 @@ Do you feel keen and able to help with Plonky3? That's great! We
 encourage external contributions!
 
 We want to make it easy for you to contribute, but at the same time we
-must manage the burden of reviewing external contributions.  We are a
+must manage the burden of reviewing external contributions. We are a
 small team, and the time we spend reviewing external contributions is
 time we are not developing ourselves.
 
 We also want to help you to avoid inadvertently duplicating work that
-is already underway, or building something that we that we will not
+is already underway, or building something that we will not
 want to incorporate.
 
 First and foremost, please keep in mind that this is a highly
@@ -99,7 +99,7 @@ guidelines may result in your PR being rejected, ignored or forgotten.
 
 ### General guidance for your PR
 
-Obviously PRs will not be considered unless they pass the our Github
+Obviously PRs will not be considered unless they pass our Github
 CI. The Github CI is not executed for PRs from forks, but you can
 simulate the Github CI by running the commands in
 `.github/workflows/ci.yml`.
@@ -138,7 +138,7 @@ that (i) trigger the original bug and (ii) pass after applying the PR.
 
 #### The PR implements a new feature
 
-If you plan contribute an implementation of a new feature, please
+If you plan to contribute an implementation of a new feature, please
 double-check with the Polygon Zero team that it is a sufficient
 priority for us that it will be reviewed and integrated.
 
