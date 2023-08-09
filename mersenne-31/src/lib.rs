@@ -281,6 +281,7 @@ impl Div for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use p3_field::{AbstractField, Field, PrimeField32};
+    use rand::Rng;
 
     use crate::Mersenne31;
 
@@ -327,63 +328,17 @@ mod tests {
     fn inverse() {
         assert_eq!(F::new(172).inverse() * F::new(172), F::ONE);
     }
-}
-
-#[cfg(test)]
-mod test_inverses {
-    use p3_field::{AbstractField, Field, PrimeField32};
-    use rand::Rng;
-
-    use crate::Mersenne31;
-    type F = Mersenne31;
-
-    fn shift_inverse(x: F) -> Option<F> {
-        // Uses algorithm 9.4.5 in Crandall and Pomerance book
-        // "Prime Numbers: A Computational Perspective" to compute the inverse.
-        if x.is_zero() {
-            return None;
-        }
-        let mut a = F::ONE;
-        let mut b = F::ZERO;
-        let mut u = x.value;
-        let mut v = F::ORDER_U32;
-        loop {
-            // Shift off trailing zeros
-            let e = u.trailing_zeros() as u64;
-            u >>= e;
-            // Circular shift
-            a = a.mul_2exp_u64(31 - e);
-            if u == 1 {
-                return Some(a);
-            }
-            (a, b, u, v) = (a + b, a, u + v, u);
-        }
-    }
-
-    fn fermat_inverse(x: F) -> Option<F> {
-        if x.is_zero() {
-            return None;
-        }
-        let p1 = x;
-        let p2 = p1.square() * p1;
-        let p4 = p2.exp_power_of_2(2) * p2;
-        let p8 = p4.exp_power_of_2(4) * p4;
-        let p16 = p8.exp_power_of_2(8) * p8;
-        let p24 = p16.exp_power_of_2(8) * p8;
-        let p28 = p24.exp_power_of_2(4) * p4;
-        let p29 = p28.exp_power_of_2(1) * p1;
-        let p29_1 = p29.exp_power_of_2(2) * p1;
-        Some(p29_1)
-    }
 
     #[test]
-    fn test_inverse() {
+    fn inverse_random() {
         let mut rng = rand::thread_rng();
         for _ in 0..1000 {
             let x = rng.gen::<F>();
-            let y = shift_inverse(x);
-            let z = fermat_inverse(x);
-            assert_eq!(y.unwrap(), z.unwrap());
+            if !x.is_zero() && !x.is_one() {
+                let z = x.inverse();
+                assert_ne!(x, z);
+                assert_eq!(x * z, F::ONE);
+            }
         }
     }
 }
