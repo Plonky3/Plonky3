@@ -1,6 +1,6 @@
 use p3_air::{Air, AirBuilder};
 use p3_challenger::DuplexChallenger;
-use p3_fri::FRIBasedPCS;
+use p3_fri::{FRIBasedPCS, FriConfigImpl};
 use p3_goldilocks::Goldilocks;
 use p3_lde::NaiveCosetLDE;
 use p3_matrix::dense::RowMajorMatrix;
@@ -58,7 +58,9 @@ fn test_prove_goldilocks() {
 
     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C, RowMajorMatrix<Val>>;
     type LDE = NaiveCosetLDE;
-    type PCS = FRIBasedPCS<Val, Domain, Challenge, LDE, MMCS, MMCS>;
+
+    type MyFriConfig = FriConfigImpl<Val, Challenge, MMCS, MMCS>;
+    type PCS = FRIBasedPCS<MyFriConfig, LDE>;
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Challenge, PCS, LDE>;
 
     let mut rng = thread_rng();

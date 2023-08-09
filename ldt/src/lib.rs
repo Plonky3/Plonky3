@@ -20,13 +20,13 @@ pub trait LDT<F: Field, M: MMCS<F>> {
     type Error;
 
     /// Prove that each column of each matrix in `codewords` is a codeword.
-    fn prove<Chal>(&self, codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
+    fn prove<Chal>(&self, inputs: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
     where
         Chal: Challenger<F>;
 
     fn verify<Chal>(
         &self,
-        codeword_commits: &[M::Commitment],
+        input_commits: &[M::Commitment],
         proof: &Self::Proof,
         challenger: &mut Chal,
     ) -> Result<(), Self::Error>

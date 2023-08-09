@@ -1,19 +1,10 @@
 use p3_challenger::Challenger;
-use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{ExtensionField, Field};
 
-use crate::FriProof;
+use crate::{FriConfig, FriProof};
 
-pub(crate) fn verify<F, Challenge, M, MC, Chal>(
-    _proof: &FriProof<F, Challenge, M, MC>,
+pub(crate) fn verify<FC: FriConfig, Chal: Challenger<FC::Val>>(
+    _proof: &FriProof<FC>,
     _challenger: &mut Chal,
-) -> Result<(), ()>
-where
-    F: Field,
-    Challenge: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<Challenge>,
-    Chal: Challenger<F>,
-{
+) -> Result<(), ()> {
     todo!()
 }

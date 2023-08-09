@@ -4,11 +4,8 @@
 
 extern crate alloc;
 
-use core::marker::PhantomData;
-
 use p3_challenger::Challenger;
-use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_commit::MMCS;
 use p3_ldt::{LDTBasedPCS, LDT};
 
 pub use crate::proof::FriProof;
@@ -23,49 +20,42 @@ mod verifier;
 pub use config::*;
 pub use proof::*;
 
-pub struct FriLDT<F, Challenge, M, MC>
-where
-    F: Field,
-    Challenge: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<Challenge>,
-{
-    config: FriConfig,
-    _phantom_f: PhantomData<F>,
-    _phantom_fe: PhantomData<Challenge>,
-    _phantom_m: PhantomData<M>,
-    _phantom_mc: PhantomData<MC>,
+pub struct FriLDT<FC: FriConfig> {
+    config: FC,
 }
 
-impl<F, Challenge, M, MC> LDT<F, M> for FriLDT<F, Challenge, M, MC>
-where
-    F: PrimeField64,
-    Challenge: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<Challenge>,
-{
-    type Proof = FriProof<F, Challenge, M, MC>;
+impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs> for FriLDT<FC> {
+    type Proof = FriProof<FC>;
     type Error = ();
 
-    fn prove<Chal>(&self, codewords: &[M::ProverData], challenger: &mut Chal) -> Self::Proof
+    fn prove<Chal>(
+        &self,
+        inputs: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
+        challenger: &mut Chal,
+    ) -> Self::Proof
     where
-        Chal: Challenger<F>,
+        Chal: Challenger<FC::Val>,
     {
-        prove::<F, Challenge, M, MC, Chal>(codewords, &self.config, challenger)
+        prove::<FC, Chal>(&self.config, inputs, challenger)
     }
 
     fn verify<Chal>(
         &self,
-        _codeword_commits: &[M::Commitment],
+        _input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut Chal,
     ) -> Result<(), Self::Error>
     where
-        Chal: Challenger<F>,
+        Chal: Challenger<FC::Val>,
     {
-        verify::<F, Challenge, M, MC, Chal>(proof, challenger)
+        verify::<FC, Chal>(proof, challenger)
     }
 }
 
-pub type FRIBasedPCS<Val, Dom, Challenge, LDE, M, MC> =
-    LDTBasedPCS<Val, Dom, LDE, M, FriLDT<Dom, Challenge, M, MC>>;
+pub type FRIBasedPCS<FC, LDE> = LDTBasedPCS<
+    <FC as FriConfig>::Val,
+    <FC as FriConfig>::Challenge,
+    LDE,
+    <FC as FriConfig>::InputMmcs,
+    FriLDT<FC>,
+>;
