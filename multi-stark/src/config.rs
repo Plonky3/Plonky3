@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_commit::MultivariatePCS;
+use p3_commit::MultilinearPCS;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField};
 use p3_matrix::dense::RowMajorMatrixView;
 
@@ -15,7 +15,7 @@ pub trait StarkConfig {
         + AbstractExtensionField<<Self::Val as Field>::Packing>;
 
     /// The PCS used to commit to trace polynomials.
-    type PCS: for<'a> MultivariatePCS<Self::Val, RowMajorMatrixView<'a, Self::Val>>;
+    type PCS: for<'a> MultilinearPCS<Self::Val, RowMajorMatrixView<'a, Self::Val>>;
 
     fn pcs(&self) -> &Self::PCS;
 }
@@ -44,7 +44,7 @@ where
     Val: Field,
     Challenge: ExtensionField<Val>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Val::Packing>,
-    PCS: for<'a> MultivariatePCS<Val, RowMajorMatrixView<'a, Val>>,
+    PCS: for<'a> MultilinearPCS<Val, RowMajorMatrixView<'a, Val>>,
 {
     type Val = Val;
     type Challenge = Challenge;
