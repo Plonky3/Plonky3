@@ -3,7 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_challenger::Challenger;
+use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
@@ -13,7 +13,7 @@ use p3_matrix::MatrixRows;
 /// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
 /// and `MultivariatePCS` for more specific subtraits.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>> {
+pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>, Chal: FieldChallenger<F>> {
     /// The commitment that's sent to the verifier.
     type Commitment;
 
@@ -32,18 +32,22 @@ pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>> {
     }
 }
 
-pub trait UnivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
-    fn open_multi_batches<EF, Chal>(
+pub trait UnivariatePCS<F, In, Chal>: PCS<F, In, Chal>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Chal: FieldChallenger<F>,
+{
+    fn open_multi_batches<EF>(
         &self,
         prover_data: &[&Self::ProverData],
         points: &[EF],
         challenger: &mut Chal,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        EF: ExtensionField<F>,
-        Chal: Challenger<F>;
+        EF: ExtensionField<F>;
 
-    fn verify_multi_batches<EF, Chal>(
+    fn verify_multi_batches<EF>(
         &self,
         commits: &[Self::Commitment],
         points: &[EF],
@@ -52,11 +56,16 @@ pub trait UnivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>;
+        Chal: FieldChallenger<F>;
 }
 
-pub trait MultivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
-    fn open_multi_batches<EF, Chal>(
+pub trait MultivariatePCS<F, In, Chal>: PCS<F, In, Chal>
+where
+    F: Field,
+    In: for<'a> MatrixRows<'a, F>,
+    Chal: FieldChallenger<F>,
+{
+    fn open_multi_batches<EF>(
         &self,
         prover_data: &[&Self::ProverData],
         points: &[Vec<EF>],
@@ -64,9 +73,9 @@ pub trait MultivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>;
+        Chal: FieldChallenger<F>;
 
-    fn verify_multi_batches<EF, Chal>(
+    fn verify_multi_batches<EF>(
         &self,
         commits: &[Self::Commitment],
         points: &[Vec<EF>],
@@ -75,5 +84,5 @@ pub trait MultivariatePCS<F: Field, In: for<'a> MatrixRows<'a, F>>: PCS<F, In> {
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>;
+        Chal: FieldChallenger<F>;
 }

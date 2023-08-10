@@ -3,27 +3,27 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 
 use itertools::Itertools;
-use p3_challenger::Challenger;
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
 
 use crate::{FriConfig, FriProof, QueryProof};
 
-pub(crate) fn prove<FC: FriConfig, Chal: Challenger<FC::Val>>(
+pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
-    challenger: &mut Chal,
+    challenger: &mut FC::Chal,
 ) -> FriProof<FC> {
     let n = input_commits
         .iter()
-        .map(|cw| FC::InputMmcs::get_max_height(cw))
+        .map(FC::InputMmcs::get_max_height)
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
 
-    let commit_phase_commits = commit_phase::<FC, Chal>(config, input_commits, challenger);
+    let commit_phase_commits = commit_phase::<FC>(config, input_commits, challenger);
     let query_indices: Vec<usize> = (0..config.num_queries())
-        .map(|_| challenger.random_usize(n))
+        .map(|_| challenger.sample_bits(n))
         .collect();
     // TODO: into_par_iter?
     let query_proofs = query_indices
@@ -52,15 +52,15 @@ fn answer_query<FC: FriConfig>(
     }
 }
 
-fn commit_phase<FC: FriConfig, Chal: Challenger<FC::Val>>(
+fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
-    challenger: &mut Chal,
+    challenger: &mut FC::Chal,
 ) -> Vec<<FC::CommitPhaseMmcs as MMCS<FC::Challenge>>::ProverData> {
-    let alpha: FC::Challenge = challenger.random_ext_element();
+    let alpha: FC::Challenge = challenger.sample_ext_element();
     let inputs_by_desc_height = input_commits
         .iter()
-        .flat_map(|data| FC::InputMmcs::get_matrices(data))
+        .flat_map(FC::InputMmcs::get_matrices)
         .sorted_by_key(|mat| Reverse(mat.height()))
         .group_by(|mat| mat.height());
     let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();
@@ -71,9 +71,9 @@ fn commit_phase<FC: FriConfig, Chal: Challenger<FC::Val>>(
     let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
 
     // TODO: Can we avoid cloning?
-    let (_largest_commit, largest_prover_data) =
+    let (largest_commit, largest_prover_data) =
         config.commit_phase_mmcs().commit_vec(current.clone());
-    // challenger.observe(largest_commit); // TODO
+    challenger.observe(largest_commit);
     let mut committed = vec![largest_prover_data];
 
     for (height, matrices) in inputs_by_desc_height {
@@ -83,8 +83,8 @@ fn commit_phase<FC: FriConfig, Chal: Challenger<FC::Val>>(
         }
 
         // TODO: Can we avoid cloning?
-        let (_commit, prover_data) = config.commit_phase_mmcs().commit_vec(current.clone());
-        // challenger.observe(commit); // TODO
+        let (commit, prover_data) = config.commit_phase_mmcs().commit_vec(current.clone());
+        challenger.observe(commit);
         committed.push(prover_data);
 
         current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as MMCS<_>>::Mat>(

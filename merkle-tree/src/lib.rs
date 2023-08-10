@@ -59,7 +59,7 @@ impl<L, D> MerkleTree<L, D> {
                 h.hash_iter(
                     tallest_matrices
                         .iter()
-                        .flat_map(|m| m.row(i).into_iter().copied()),
+                        .flat_map(|m| m.row(i).iter().copied()),
                 )
             })
             .chain(iter::repeat(D::default()))
@@ -192,7 +192,7 @@ where
             .leaves
             .iter()
             // TODO: index should be shifted >> if this matrix is smaller?
-            .map(|matrix| matrix.row(index).into_iter().cloned().collect())
+            .map(|matrix| matrix.row(index).to_vec())
             .collect();
         let proof = vec![]; // TODO
         (leaf, proof)
