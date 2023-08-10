@@ -4,7 +4,7 @@ use core::cmp::Reverse;
 
 use itertools::Itertools;
 use p3_challenger::Challenger;
-use p3_commit::MMCS;
+use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
 
@@ -21,7 +21,7 @@ pub(crate) fn prove<FC: FriConfig, Chal: Challenger<FC::Val>>(
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
 
-    let commit_phase_commits = commit_phase::<FC, Chal>(input_commits, challenger);
+    let commit_phase_commits = commit_phase::<FC, Chal>(config, input_commits, challenger);
     let query_indices: Vec<usize> = (0..config.num_queries())
         .map(|_| challenger.random_usize(n))
         .collect();
@@ -53,6 +53,7 @@ fn answer_query<FC: FriConfig>(
 }
 
 fn commit_phase<FC: FriConfig, Chal: Challenger<FC::Val>>(
+    config: &FC,
     input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
     challenger: &mut Chal,
 ) -> Vec<<FC::CommitPhaseMmcs as MMCS<FC::Challenge>>::ProverData> {
@@ -68,14 +69,24 @@ fn commit_phase<FC: FriConfig, Chal: Challenger<FC::Val>>(
     let largest_matrices = largest_matrices_iter.collect_vec();
     let zero_vec = vec![FC::Challenge::ZERO; max_height];
     let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
-    let mut committed = vec![current.clone()];
+
+    // TODO: Can we avoid cloning?
+    let (_largest_commit, largest_prover_data) =
+        config.commit_phase_mmcs().commit_vec(current.clone());
+    // challenger.observe(largest_commit); // TODO
+    let mut committed = vec![largest_prover_data];
 
     for (height, matrices) in inputs_by_desc_height {
         while current.len() < height {
             let beta = FC::Challenge::ZERO; // TODO
             current = fold_even_odd(&current, beta);
         }
-        committed.push(current.clone());
+
+        // TODO: Can we avoid cloning?
+        let (_commit, prover_data) = config.commit_phase_mmcs().commit_vec(current.clone());
+        // challenger.observe(commit); // TODO
+        committed.push(prover_data);
+
         current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as MMCS<_>>::Mat>(
             height,
             current.clone(),

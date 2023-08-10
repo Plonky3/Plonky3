@@ -22,6 +22,17 @@ impl<T> RowMajorMatrix<T> {
         Self { values, width }
     }
 
+    #[must_use]
+    pub fn new_row(values: Vec<T>) -> Self {
+        let width = values.len();
+        Self { values, width }
+    }
+
+    #[must_use]
+    pub fn new_col(values: Vec<T>) -> Self {
+        Self { values, width: 1 }
+    }
+
     pub fn row_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]

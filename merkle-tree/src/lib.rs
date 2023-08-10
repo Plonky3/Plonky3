@@ -10,6 +10,7 @@ use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_commit::{Dimensions, DirectMMCS, MMCS};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
@@ -22,21 +23,18 @@ use p3_util::log2_ceil_usize;
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an `MMCS`,
 /// see `MerkleTreeMMCS`.
-pub struct MerkleTree<L, D, Mat: Matrix<L>> {
-    leaves: Vec<Mat>,
+pub struct MerkleTree<L, D> {
+    leaves: Vec<RowMajorMatrix<L>>,
     digest_layers: Vec<Vec<D>>,
     _phantom_l: PhantomData<L>,
 }
 
-impl<L, D, Mat> MerkleTree<L, D, Mat>
-where
-    Mat: for<'a> MatrixRows<'a, L>,
-{
+impl<L, D> MerkleTree<L, D> {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
-    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<Mat>) -> Self
+    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
-        L: Copy,
+        L: 'static + Copy,
         D: Copy + Default,
         H: CryptographicHasher<L, D>,
         C: PseudoCompressionFunction<D, 2>,
@@ -159,40 +157,37 @@ where
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeMMCS<L, D, H, C, Mat> {
+pub struct MerkleTreeMMCS<L, D, H, C> {
     hash: H,
     compress: C,
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
-    _phantom_mat: PhantomData<Mat>,
 }
 
-impl<L, D, H, C, Mat> MerkleTreeMMCS<L, D, H, C, Mat> {
+impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
     pub fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
             compress,
             _phantom_l: PhantomData,
             _phantom_d: PhantomData,
-            _phantom_mat: PhantomData,
         }
     }
 }
 
-impl<L, D, H, C, Mat> MMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
+impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
-    L: Clone,
+    L: 'static + Clone,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L>,
 {
-    type ProverData = MerkleTree<L, D, Mat>;
+    type ProverData = MerkleTree<L, D>;
     type Commitment = D;
     type Proof = Vec<D>;
     type Error = ();
-    type Mat = Mat;
+    type Mat = RowMajorMatrix<L>;
 
-    fn open_batch(index: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<Vec<L>>, Vec<D>) {
+    fn open_batch(index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
         let leaf = prover_data
             .leaves
             .iter()
@@ -203,7 +198,7 @@ where
         (leaf, proof)
     }
 
-    fn get_matrices(prover_data: &Self::ProverData) -> &[Mat] {
+    fn get_matrices(prover_data: &Self::ProverData) -> &[RowMajorMatrix<L>] {
         &prover_data.leaves
     }
 
@@ -218,15 +213,14 @@ where
     }
 }
 
-impl<L, D, H, C, Mat> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
+impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
-    L: Copy,
+    L: 'static + Copy,
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L>,
 {
-    fn commit(&self, inputs: Vec<Mat>) -> (Self::Commitment, Self::ProverData) {
+    fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::Commitment, Self::ProverData) {
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
@@ -252,7 +246,7 @@ mod tests {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
-        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C, RowMajorMatrix<u8>>;
+        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         let mut rng = thread_rng();

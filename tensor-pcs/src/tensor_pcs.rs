@@ -26,8 +26,8 @@ where
 impl<F, C, M> TensorPCS<F, C, M>
 where
     F: Field,
-    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F, Mat = C::Out>,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
+    M: DirectMMCS<F>,
 {
     pub fn new(codes: C, mmcs: M) -> Self {
         Self {
@@ -43,8 +43,8 @@ impl<F, In, C, M> PCS<F, In> for TensorPCS<F, C, M>
 where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,
-    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F, Mat = C::Out>,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
+    M: DirectMMCS<F>,
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
@@ -68,8 +68,8 @@ impl<F, In, C, M> MultivariatePCS<F, In> for TensorPCS<F, C, M>
 where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,
-    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F, Mat = C::Out>,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
+    M: DirectMMCS<F>,
 {
     fn open_multi_batches<EF, Chal>(
         &self,
