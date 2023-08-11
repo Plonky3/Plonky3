@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_air::{Air, TwoRowMatrixView};
-use p3_challenger::Challenger;
+use p3_challenger::FieldChallenger;
 use p3_commit::PCS;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
@@ -23,7 +23,7 @@ pub fn prove<SC, A, Chal>(
 ) where
     SC: StarkConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
-    Chal: Challenger<SC::Domain>,
+    Chal: FieldChallenger<SC::Domain>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
@@ -71,7 +71,7 @@ pub fn prove<SC, A, Chal>(
     let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
 
     // challenger.observe_ext_element(trace_commit); // TODO
-    let alpha = challenger.random_ext_element::<SC::Challenge>();
+    let alpha = challenger.sample_ext_element::<SC::Challenge>();
 
     let _quotient_values = (0..quotient_size)
         .into_par_iter()

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_challenger::Challenger;
+use p3_challenger::FieldChallenger;
 use p3_code::LinearCodeFamily;
 use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
 use p3_field::{ExtensionField, Field};
@@ -39,12 +39,13 @@ where
     }
 }
 
-impl<F, In, C, M> PCS<F, In> for TensorPCS<F, C, M>
+impl<F, In, C, M, Chal> PCS<F, In, Chal> for TensorPCS<F, C, M>
 where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
     M: DirectMMCS<F>,
+    Chal: FieldChallenger<F>,
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
@@ -64,14 +65,15 @@ where
     }
 }
 
-impl<F, In, C, M> MultivariatePCS<F, In> for TensorPCS<F, C, M>
+impl<F, In, C, M, Chal> MultivariatePCS<F, In, Chal> for TensorPCS<F, C, M>
 where
     F: Field,
     In: for<'a> MatrixRows<'a, F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
     M: DirectMMCS<F>,
+    Chal: FieldChallenger<F>,
 {
-    fn open_multi_batches<EF, Chal>(
+    fn open_multi_batches<EF>(
         &self,
         _prover_data: &[&Self::ProverData],
         _points: &[Vec<EF>],
@@ -79,12 +81,11 @@ where
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>,
     {
         todo!()
     }
 
-    fn verify_multi_batches<EF, Chal>(
+    fn verify_multi_batches<EF>(
         &self,
         _commits: &[Self::Commitment],
         _points: &[Vec<EF>],
@@ -93,7 +94,6 @@ where
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>,
     {
         todo!()
     }

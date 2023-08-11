@@ -10,10 +10,12 @@ pub struct FriProof<FC: FriConfig> {
 }
 
 #[allow(dead_code)] // TODO: fields should be used soon
+#[allow(clippy::type_complexity)]
 pub struct QueryProof<FC: FriConfig> {
     /// For each input commitment, this contains openings of each matrix at the queried location,
     /// along with an opening proof.
     pub(crate) input_openings: Vec<(Vec<Vec<FC::Val>>, <FC::InputMmcs as MMCS<FC::Val>>::Proof)>,
+
     /// For each commit phase commitment, this contains openings of each matrix at the queried
     /// location, along with an opening proof.
     pub(crate) commit_phase_openings: Vec<(

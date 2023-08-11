@@ -8,48 +8,51 @@ mod duplex_challenger;
 mod hash_challenger;
 
 use alloc::vec::Vec;
-use core::mem::size_of;
+use core::array;
 
 pub use duplex_challenger::*;
 pub use hash_challenger::*;
-use p3_field::{AbstractExtensionField, Field, PrimeField64};
+use p3_field::{AbstractExtensionField, Field};
 
 /// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.
-pub trait Challenger<F: Field> {
-    fn observe_element(&mut self, element: F);
+pub trait Challenger {}
 
-    fn observe_elements(&mut self, elements: &[F]) {
-        for &elt in elements {
-            self.observe_element(elt);
+pub trait CanObserve<T> {
+    fn observe(&mut self, value: T);
+
+    fn observe_slice(&mut self, values: &[T])
+    where
+        T: Clone,
+    {
+        for value in values {
+            self.observe(value.clone());
         }
     }
+}
 
+pub trait CanSample<T> {
+    fn sample(&mut self) -> T;
+
+    fn sample_array<const N: usize>(&mut self) -> [T; N] {
+        array::from_fn(|_| self.sample())
+    }
+
+    fn sample_vec(&mut self, n: usize) -> Vec<T> {
+        (0..n).map(|_| self.sample()).collect()
+    }
+}
+
+pub trait CanSampleBits<T> {
+    fn sample_bits(&mut self, bits: usize) -> T;
+}
+
+pub trait FieldChallenger<F: Field>: CanObserve<F> + CanSample<F> + CanSampleBits<usize> {
     fn observe_ext_element<EF: AbstractExtensionField<F>>(&mut self, ext: EF) {
-        self.observe_elements(ext.as_base_slice());
+        self.observe_slice(ext.as_base_slice());
     }
 
-    fn random_element(&mut self) -> F;
-
-    fn random_usize(&mut self, bits: usize) -> usize
-    where
-        F: PrimeField64,
-    {
-        debug_assert!(bits < size_of::<usize>());
-        let rand_f = self.random_element();
-        let rand_usize = rand_f.as_canonical_u64() as usize;
-        rand_usize & ((1 << bits) - 1)
-    }
-
-    fn random_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
-        let vec = self.random_vec(EF::D);
+    fn sample_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
+        let vec = self.sample_vec(EF::D);
         EF::from_base_slice(&vec)
-    }
-
-    fn random_array<const N: usize>(&mut self) -> [F; N] {
-        core::array::from_fn(|_| self.random_element())
-    }
-
-    fn random_vec(&mut self, n: usize) -> Vec<F> {
-        (0..n).map(|_| self.random_element()).collect()
     }
 }

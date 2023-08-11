@@ -4,7 +4,6 @@
 
 extern crate alloc;
 
-use p3_challenger::Challenger;
 use p3_commit::MMCS;
 use p3_ldt::{LDTBasedPCS, LDT};
 
@@ -24,31 +23,25 @@ pub struct FriLDT<FC: FriConfig> {
     config: FC,
 }
 
-impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs> for FriLDT<FC> {
+impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
-    fn prove<Chal>(
+    fn prove(
         &self,
         inputs: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
-        challenger: &mut Chal,
-    ) -> Self::Proof
-    where
-        Chal: Challenger<FC::Val>,
-    {
-        prove::<FC, Chal>(&self.config, inputs, challenger)
+        challenger: &mut FC::Chal,
+    ) -> Self::Proof {
+        prove::<FC>(&self.config, inputs, challenger)
     }
 
-    fn verify<Chal>(
+    fn verify(
         &self,
         _input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::Commitment],
         proof: &Self::Proof,
-        challenger: &mut Chal,
-    ) -> Result<(), Self::Error>
-    where
-        Chal: Challenger<FC::Val>,
-    {
-        verify::<FC, Chal>(proof, challenger)
+        challenger: &mut FC::Chal,
+    ) -> Result<(), Self::Error> {
+        verify::<FC>(proof, challenger)
     }
 }
 

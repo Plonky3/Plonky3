@@ -1,10 +1,8 @@
-use p3_challenger::Challenger;
-
 use crate::{FriConfig, FriProof};
 
-pub(crate) fn verify<FC: FriConfig, Chal: Challenger<FC::Val>>(
+pub(crate) fn verify<FC: FriConfig>(
     _proof: &FriProof<FC>,
-    _challenger: &mut Chal,
+    _challenger: &mut FC::Chal,
 ) -> Result<(), ()> {
     todo!()
 }

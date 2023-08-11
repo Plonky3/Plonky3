@@ -59,15 +59,16 @@ fn test_prove_goldilocks() {
     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
     type LDE = NaiveCosetLDE;
 
-    type MyFriConfig = FriConfigImpl<Val, Challenge, MMCS, MMCS>;
+    type Chal = DuplexChallenger<Val, Perm, 8>;
+    type MyFriConfig = FriConfigImpl<Val, Challenge, MMCS, MMCS, Chal>;
     type PCS = FRIBasedPCS<MyFriConfig, LDE>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Challenge, PCS, LDE>;
+    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Challenge, PCS, LDE, Chal>;
 
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
     let pcs = PCS::new(NaiveCosetLDE, 1, MMCS::new(h4, c));
     let config = StarkConfigImpl::new(pcs, NaiveCosetLDE);
-    let mut challenger = DuplexChallenger::new(perm);
+    let mut challenger = Chal::new(perm);
     prove::<MyConfig, _, _>(&MulAir, &config, &mut challenger, trace);
 }
 
