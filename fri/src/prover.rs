@@ -8,6 +8,7 @@ use p3_commit::{DirectMMCS, MMCS};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
 
+use crate::fold_even_odd::fold_even_odd;
 use crate::{FriConfig, FriProof, QueryProof};
 
 pub(crate) fn prove<FC: FriConfig>(
@@ -68,45 +69,40 @@ fn commit_phase<FC: FriConfig>(
     let (max_height, largest_matrices_iter) = inputs_by_desc_height.next().expect("No matrices?");
     let largest_matrices = largest_matrices_iter.collect_vec();
     let zero_vec = vec![FC::Challenge::ZERO; max_height];
-    let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
+    let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
 
     // TODO: Can we avoid cloning?
     let (largest_commit, largest_prover_data) =
         config.commit_phase_mmcs().commit_vec(current.clone());
     challenger.observe(largest_commit);
-    let mut committed = vec![largest_prover_data];
+    let mut commits = vec![largest_prover_data];
 
     for (height, matrices) in inputs_by_desc_height {
         while current.len() < height {
-            let beta = FC::Challenge::ZERO; // TODO
+            let beta: FC::Challenge = challenger.sample_ext_element();
             current = fold_even_odd(&current, beta);
         }
 
         // TODO: Can we avoid cloning?
         let (commit, prover_data) = config.commit_phase_mmcs().commit_vec(current.clone());
         challenger.observe(commit);
-        committed.push(prover_data);
+        commits.push(prover_data);
 
         current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as MMCS<_>>::Mat>(
             height,
-            current.clone(),
-            matrices.collect(),
+            &current,
+            &matrices.collect_vec(),
             alpha,
         );
     }
-    todo!()
+
+    commits
 }
 
-/// Fold a polynomial `p(x) = p_even(x^2) + x p_odd(x^2)` into `p_even(x) + beta * p_odd(x)`.
-fn fold_even_odd<F: Field>(_poly: &[F], _beta: F) -> Vec<F> {
-    todo!()
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
-    init: Vec<Challenge>,
-    matrices: Vec<&Mat>,
+    init: &[Challenge],
+    matrices: &[&Mat],
     alpha: Challenge,
 ) -> Vec<Challenge>
 where
@@ -117,7 +113,7 @@ where
     (0..height)
         .map(|r| {
             let mut reduced = init[r];
-            for mat in &matrices {
+            for mat in matrices {
                 for col in mat.row(r) {
                     reduced = reduced * alpha + *col;
                 }
