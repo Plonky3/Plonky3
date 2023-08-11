@@ -46,10 +46,10 @@ impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
     }
 }
 
-pub type FRIBasedPCS<FC, LDE> = LDTBasedPCS<
+pub type FRIBasedPCS<FC, DFT> = LDTBasedPCS<
     <FC as FriConfig>::Val,
     <FC as FriConfig>::Challenge,
-    LDE,
+    DFT,
     <FC as FriConfig>::InputMmcs,
     FriLDT<FC>,
 >;

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::{MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -79,6 +79,13 @@ impl<T> RowMajorMatrix<T> {
             values: self.values.iter().map(|v| f(v.clone())).collect(),
             width: self.width,
         }
+    }
+
+    pub fn to_ext<EF: ExtensionField<T>>(&self) -> RowMajorMatrix<EF>
+    where
+        T: Field,
+    {
+        self.map(EF::from_base)
     }
 
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self

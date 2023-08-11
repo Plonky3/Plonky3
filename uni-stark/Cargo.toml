@@ -9,7 +9,7 @@ p3-air = { path = "../air" }
 p3-field = { path = "../field" }
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
-p3-lde = { path = "../lde" }
+p3-dft = { path = "../dft" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }

@@ -2,8 +2,8 @@ use core::marker::PhantomData;
 
 use p3_challenger::FieldChallenger;
 use p3_commit::UnivariatePCS;
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
-use p3_lde::TwoAdicCosetLDE;
 use p3_matrix::dense::RowMajorMatrixView;
 
 pub trait StarkConfig {
@@ -22,18 +22,18 @@ pub trait StarkConfig {
     /// The PCS used to commit to trace polynomials.
     type PCS: for<'a> UnivariatePCS<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Chal>;
 
-    type LDE: TwoAdicCosetLDE<Self::Val, Self::Domain>;
+    type DFT: TwoAdicSubgroupDft<Self::Domain>;
 
     type Chal: FieldChallenger<Self::Val>;
 
     fn pcs(&self) -> &Self::PCS;
 
-    fn lde(&self) -> &Self::LDE;
+    fn dft(&self) -> &Self::DFT;
 }
 
-pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Chal> {
+pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Chal> {
     pcs: PCS,
-    lde: LDE,
+    dft: DFT,
     _phantom_val: PhantomData<Val>,
     _phantom_domain: PhantomData<Domain>,
     _phantom_challenge: PhantomData<Challenge>,
@@ -41,13 +41,13 @@ pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Ch
     _phantom_chal: PhantomData<Chal>,
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Chal>
-    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Chal>
+impl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Chal>
+    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Chal>
 {
-    pub fn new(pcs: PCS, lde: LDE) -> Self {
+    pub fn new(pcs: PCS, dft: DFT) -> Self {
         Self {
             pcs,
-            lde,
+            dft,
             _phantom_val: PhantomData,
             _phantom_domain: PhantomData,
             _phantom_challenge: PhantomData,
@@ -57,15 +57,15 @@ impl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Chal>
     }
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Chal> StarkConfig
-    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, LDE, Chal>
+impl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Chal> StarkConfig
+    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Chal>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Domain>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Domain::Packing>,
     PCS: for<'a> UnivariatePCS<Val, RowMajorMatrixView<'a, Val>, Chal>,
-    LDE: TwoAdicCosetLDE<Val, Domain>,
+    DFT: TwoAdicSubgroupDft<Domain>,
     Chal: FieldChallenger<Val>,
 {
     type Val = Val;
@@ -73,14 +73,14 @@ where
     type Challenge = Challenge;
     type PackedChallenge = PackedChallenge;
     type PCS = PCS;
-    type LDE = LDE;
+    type DFT = DFT;
     type Chal = Chal;
 
     fn pcs(&self) -> &Self::PCS {
         &self.pcs
     }
 
-    fn lde(&self) -> &Self::LDE {
-        &self.lde
+    fn dft(&self) -> &Self::DFT {
+        &self.dft
     }
 }

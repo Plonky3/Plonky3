@@ -13,7 +13,7 @@ use crate::TwoAdicSubgroupDft;
 #[derive(Default)]
 pub struct Radix2BowersFft;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F, F> for Radix2BowersFft {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2BowersFft {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);

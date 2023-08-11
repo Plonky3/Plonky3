@@ -1,8 +1,8 @@
 use p3_air::{Air, AirBuilder};
 use p3_challenger::DuplexChallenger;
+use p3_dft::Radix2BowersFft;
 use p3_fri::{FRIBasedPCS, FriConfigImpl};
 use p3_goldilocks::Goldilocks;
-use p3_lde::NaiveCosetLDE;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
 use p3_merkle_tree::MerkleTreeMMCS;
@@ -31,7 +31,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 #[allow(clippy::upper_case_acronyms)]
 fn test_prove_goldilocks() {
     type Val = Goldilocks;
-    type Domain = Goldilocks;
+    type Dom = Goldilocks;
     type Challenge = Goldilocks; // TODO
 
     #[derive(Clone)]
@@ -57,17 +57,17 @@ fn test_prove_goldilocks() {
     let c = C::new(perm.clone());
 
     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
-    type LDE = NaiveCosetLDE;
+    type DFT = Radix2BowersFft;
 
     type Chal = DuplexChallenger<Val, Perm, 8>;
     type MyFriConfig = FriConfigImpl<Val, Challenge, MMCS, MMCS, Chal>;
-    type PCS = FRIBasedPCS<MyFriConfig, LDE>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Challenge, PCS, LDE, Chal>;
+    type PCS = FRIBasedPCS<MyFriConfig, DFT>;
+    type MyConfig = StarkConfigImpl<Val, Dom, Challenge, Challenge, PCS, DFT, Chal>;
 
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
-    let pcs = PCS::new(NaiveCosetLDE, 1, MMCS::new(h4, c));
-    let config = StarkConfigImpl::new(pcs, NaiveCosetLDE);
+    let pcs = PCS::new(DFT::default(), 1, MMCS::new(h4, c));
+    let config = StarkConfigImpl::new(pcs, DFT::default());
     let mut challenger = Chal::new(perm);
     prove::<MyConfig, _, _>(&MulAir, &config, &mut challenger, trace);
 }
