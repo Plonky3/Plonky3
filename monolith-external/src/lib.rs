@@ -1,6 +1,8 @@
 //! The Monolith permutation, and hash functions built from it.
 
+#![no_std]
+
 extern crate alloc;
 
-pub mod monolith;
-pub mod monolith_mds;
+mod monolith_31;
+mod monolith_64;

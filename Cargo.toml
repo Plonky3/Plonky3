@@ -18,6 +18,7 @@ members = [
     "maybe-rayon",
     "mersenne-31",
     "monolith",
+    "monolith-external",
     "multi-stark",
     "poseidon",
     "reed-solomon",
