@@ -120,16 +120,9 @@ impl Field for BabyBear {
         let x3 = x1 * x2;
         let x6 = x3 * x3;
         let x7 = x1 * x6;
-        let x14 = x7.square();
-        let x28 = x14.square();
-        let x56 = x28.square();
+        let x56 = x7.exp_power_of_2(3);
         let x63 = x7 * x56;
-        let x126 = x63.square();
-        let x252 = x126.square();
-        let x504 = x252.square();
-        let x1008 = x504.square();
-        let x2016 = x1008.square();
-        let x4032 = x2016.square();
+        let x4032 = x63.exp_power_of_2(6);
         let x4095 = x63 * x4032;
         let x8190 = x4095.square();
         let x12285 = x4095 * x8190;
@@ -138,24 +131,9 @@ impl Field for BabyBear {
         let x28672 = x7 * x28665;
         let x32767 = x4095 * x28672;
         let x61439 = x28672 * x32767;
-        let x122878 = x61439.square();
-        let x245756 = x122878.square();
-        let x491512 = x245756.square();
-        let x983024 = x491512.square();
-        let x1966048 = x983024.square();
-        let x3932096 = x1966048.square();
-        let x7864192 = x3932096.square();
-        let x15728384 = x7864192.square();
-        let x31456768 = x15728384.square();
-        let x62913536 = x31456768.square();
-        let x125827072 = x62913536.square();
-        let x251654144 = x125827072.square();
-        let x503308288 = x251654144.square();
-        let x1006616576 = x503308288.square();
-        let x2013233152 = x1006616576.square();
+        let x2013233152 = x61439.exp_power_of_2(15);
         let x2013265919 = x32767 * x2013233152;
 
-        // Some(self.exp_u64(Self::ORDER_U64 - 2))
         Some(x2013265919)
     }
 }
