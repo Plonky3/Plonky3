@@ -4,7 +4,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField32, PrimeField64, TwoAdicField};
+use p3_field::{AbstractField, Field, PrimeField, PrimeField32, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
