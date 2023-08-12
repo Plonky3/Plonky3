@@ -161,28 +161,16 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
             });
     }
 
-    pub fn permutation(&self, input: &[F; WIDTH]) -> [F; WIDTH] {
-        let mut state = [0; WIDTH];
-        for (out, inp) in state.iter_mut().zip(input.iter()) {
-            *out = inp.as_canonical_u32() as u64;
-        }
-
+    pub fn permutation(&self, state: &mut [F; WIDTH]) {
         debug_assert_eq!(
             self.round_constants.len(),
             NUM_ROUNDS - 1
         );
-        self.concrete(&mut state, None);
+        self.concrete(state, None);
         for rc in self.round_constants.iter().map(Some).chain(iter::once(None)) {
-            self.bars(&mut state);
-            Self::bricks(&mut state);
-            self.concrete(&mut state, rc);
+            self.bars(state);
+            Self::bricks(state);
+            self.concrete(state, rc);
         }
-
-        // Convert back
-        let mut state_f = [F::ZERO; WIDTH];
-        for (out, inp) in state_f.iter_mut().zip(state.iter()) {
-            *out = F::from_canonical_u32(*inp as u32);
-        }
-        state_f
     }
 }
