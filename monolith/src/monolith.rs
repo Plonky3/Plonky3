@@ -116,14 +116,13 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
         })
     }
 
-    pub fn concrete(&self, state_u64: &mut [u64; T], round_constants: Option<&[F; T]>) {
+    pub fn concrete(&self, state: &mut [F; WIDTH], round_constants: Option<&[F; WIDTH]>) {
+        *state = self.mds.permute(state);
         // MDS multiplication
         // optionally add round constants
     }
 
-    // Performs the Bricks layer in place on `state_u64`, an array of field elements
-    // represented as `u64`s.
-    pub fn bricks(state: &mut [u64; WIDTH]) {
+    pub fn bricks(state: &mut [F; WIDTH]) {
         // Feistel Type-3
         for (x_, x) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
             // Every time at bricks the input is technically a u32, so we tell the compiler
@@ -133,26 +132,26 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
         }
     }
 
-    // Performs the Bar operation in place on `el`, an element of `F` represented as a `u32`.
-    pub fn bar(&self, el: &mut u32) {
-        debug_assert!(*el < F::ORDER_U32);
+    pub fn bar(&self, el: F) -> F {
+        let mut val = &el.as_canonical_u32();
 
         unsafe {
             // get_unchecked here is safe because lookup table 1 contains 2^16 elements
-            let low = *self.lookup1.get_unchecked(*el as u16 as usize);
+            let low = *self.lookup1.get_unchecked(*val as u16 as usize);
 
             // get_unchecked here is safe because lookup table 2 contains 2^15 elements,
             // and el >> 16 < 2^15 (since el < F::ORDER_U32 < 2^31)
             let high = *self
                 .lookup2
-                .get_unchecked((*el >> 16) as u16 as usize);
-            *el = (high as u32) << 16 | low as u32
+                .get_unchecked((*val >> 16) as u16 as usize);
+            *val = (high as u32) << 16 | low as u32
         }
+
+        F::from_canonical_u32(*val)
     }
 
-    // Performs the Bars layer 
-    pub fn bars(&self, state_u64: &mut [u64; WIDTH]) {
-        state_u64
+    pub fn bars(&self, state: &mut [F; WIDTH]) {
+        state
             .iter_mut()
             .take(Self::NUM_BARS)
             .for_each(|el| {
@@ -176,7 +175,7 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
         for rc in self.round_constants.iter().map(Some).chain(iter::once(None)) {
             self.bars(&mut state);
             Self::bricks(&mut state);
-            self.concrete(&mut state, Some(rc));
+            self.concrete(&mut state, rc);
         }
 
         // Convert back
