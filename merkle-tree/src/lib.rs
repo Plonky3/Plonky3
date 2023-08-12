@@ -14,7 +14,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_util::log2_ceil_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 // TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the MMCS methods take &mut self?
@@ -188,11 +188,18 @@ where
     type Mat = RowMajorMatrix<L>;
 
     fn open_batch(index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
+        let max_height = Self::get_max_height(prover_data);
+        let log_max_height = log2_strict_usize(max_height);
+
         let leaf = prover_data
             .leaves
             .iter()
-            // TODO: index should be shifted >> if this matrix is smaller?
-            .map(|matrix| matrix.row(index).to_vec())
+            .map(|matrix| {
+                let log2_height = log2_strict_usize(matrix.height());
+                let bits_reduced = log_max_height - log2_height;
+                let reduced_index = index >> bits_reduced;
+                matrix.row(reduced_index).to_vec()
+            })
             .collect();
         let proof = vec![]; // TODO
         (leaf, proof)
@@ -231,8 +238,8 @@ where
 mod tests {
     use alloc::vec;
 
-    use p3_commit::DirectMMCS;
-    use p3_keccak::Keccak256Hash;
+    use p3_commit::{DirectMMCS, MMCS};
+    use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
@@ -241,8 +248,6 @@ mod tests {
 
     #[test]
     fn commit() {
-        use p3_keccak::KeccakF;
-
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
@@ -258,5 +263,22 @@ mod tests {
         // Then a non-power-of-two height.
         let mat = RowMajorMatrix::rand(&mut rng, 200, 13);
         mmcs.commit(vec![mat]);
+    }
+
+    #[test]
+    fn open() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // large_mat has 8 rows and 1 col; small_mat has 4 rows and 2 cols.
+        let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let small_mat = RowMajorMatrix::new(vec![10, 11, 20, 21, 30, 31, 40, 41], 2);
+        let (_commit, prover_data) = mmcs.commit(vec![large_mat, small_mat]);
+
+        let (opened_values, _proof) = Mmcs::open_batch(3, &prover_data);
+        assert_eq!(opened_values, vec![vec![4], vec![20, 21]]);
     }
 }
