@@ -7,7 +7,7 @@ type F = Goldilocks;
 fn try_inverse(c: &mut Criterion) {
     c.bench_function("try_inverse", |b| {
         b.iter_batched(
-            || rand::random::<F>(),
+            rand::random::<F>,
             |x| x.try_inverse(),
             BatchSize::SmallInput,
         )
