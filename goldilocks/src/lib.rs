@@ -135,27 +135,17 @@ impl Field for Goldilocks {
         self.value == 0 || self.value == Self::ORDER_U64
     }
 
-    /// Returns the inverse of the Field element. According to the Fermat's little theorem, the
-    /// inverse of `a` is `a^(p-2)`, where `p` is the prime order of the field.
-    ///
-    /// NOTE: The inverse of `0` is undefined and will return `None`.
-    ///
-    /// Mathematically, this is equivalent to:
-    ///                $a^(p-1)     = 1 (mod p)$
-    ///                $a^(p-2) * a = 1 (mod p)$
-    /// Therefore      $a^(p-2)     = a^-1 (mod p)$
-    ///
-    /// The inverse happens in constant time.
-    ///
-    /// Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
         }
 
-        // compute base^(M - 2) using 72 multiplications
-        // The exponent M - 2 is represented in binary as:
+        // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
+        //
+        // compute a^(p - 2) using 72 multiplications
+        // The exponent p - 2 is represented in binary as:
         // 0b1111111111111111111111111111111011111111111111111111111111111111
+        // Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
 
         // compute base^11
         let t2 = self.square() * *self;
@@ -387,6 +377,8 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field_testing::test_inverse;
+
     use super::*;
 
     type F = Goldilocks;
@@ -473,15 +465,10 @@ mod tests {
         //           = - 2^32 - 1
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
+    }
 
-        // Check inverse
-        // --------- test inverse of identity elements ---------------------------------------------
-
-        assert_eq!(F::ONE, F::ONE.try_inverse().unwrap());
-
-        // --------- test inverse of field elements ------------------------------------------------
-
-        let r: Goldilocks = F::new(5);
-        assert_eq!(F::new(14757395255531667457), r.try_inverse().unwrap());
+    #[test]
+    fn inverse() {
+        test_inverse::<Goldilocks>();
     }
 }

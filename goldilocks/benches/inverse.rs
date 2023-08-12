@@ -14,5 +14,5 @@ fn try_inverse(c: &mut Criterion) {
     });
 }
 
-criterion_group!(goldilocks_arithmetics, try_inverse);
-criterion_main!(goldilocks_arithmetics);
+criterion_group!(goldilocks_arithmetic, try_inverse);
+criterion_main!(goldilocks_arithmetic);
