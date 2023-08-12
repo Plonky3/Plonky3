@@ -11,6 +11,6 @@ pub fn test_inverse<F: Field>() {
 
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
 
-    let r = F::from_canonical_u8(5);
-    assert_eq!(F::ONE, r.try_inverse().unwrap() * r);
+    let five = F::from_canonical_u8(5);
+    assert_eq!(F::ONE, five.inverse() * five);
 }
