@@ -7,3 +7,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-field = { path = "../field" }
 rand = "0.8.5"
+
+[dev-dependencies]
+p3-field-testing = { path = "../field-testing" }
+criterion = "0.5.1"
+
+[[bench]]
+name = "inverse"
+harness = false
