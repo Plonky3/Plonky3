@@ -14,7 +14,7 @@ pub struct UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
     lde: L,
     n: usize,
@@ -28,7 +28,7 @@ impl<F, L, In> UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
     pub fn new(lde: L, n: usize, k: usize) -> Self {
         Self {
@@ -45,7 +45,7 @@ where
 impl<F, L, In> CodeOrFamily<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     L: UndefinedLDE<F, F, In>,
 {
     type Out = L::Out;
@@ -59,7 +59,7 @@ impl<F, L, In> Code<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
     fn message_len(&self) -> usize {
         self.k
@@ -74,7 +74,7 @@ impl<F, L, In> LinearCode<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
 }
 
@@ -82,7 +82,7 @@ impl<F, L, In> SystematicCodeOrFamily<F, In> for UndefinedReedSolomonCode<F, L, 
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
 }
 
@@ -90,7 +90,7 @@ impl<F, L, In> SystematicCode<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
 }
 
@@ -98,6 +98,6 @@ impl<F, L, In> SystematicLinearCode<F, In> for UndefinedReedSolomonCode<F, L, In
 where
     F: Field,
     L: UndefinedLDE<F, F, In>,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
 }

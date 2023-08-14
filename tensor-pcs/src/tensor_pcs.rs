@@ -42,7 +42,7 @@ where
 impl<F, In, C, M, Chal> PCS<F, In, Chal> for TensorPCS<F, C, M>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
     M: DirectMMCS<F>,
     Chal: FieldChallenger<F>,
@@ -68,7 +68,7 @@ where
 impl<F, In, C, M, Chal> MultivariatePCS<F, In, Chal> for TensorPCS<F, C, M>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
     M: DirectMMCS<F>,
     Chal: FieldChallenger<F>,

@@ -1,11 +1,13 @@
 use alloc::vec::Vec;
+use core::iter::Cloned;
+use core::slice;
 
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::{MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{Matrix, MatrixGet, MatrixRows};
+use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRows};
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,12 +134,11 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrix<T> {
     }
 }
 
-impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrix<T> {
-    type Row = &'a [T];
+impl<T: Clone> MatrixRows<T> for RowMajorMatrix<T> {
+    type Row<'a> = Cloned<slice::Iter<'a, T>> where T: 'a;
 
-    fn row(&'a self, r: usize) -> &'a [T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        self.row_slice(r).iter().cloned()
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -145,6 +146,13 @@ impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrix<T> {
         Self: Sized,
     {
         self
+    }
+}
+
+impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrix<T> {
+    fn row_slice(&self, r: usize) -> &[T] {
+        debug_assert!(r < self.height());
+        &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
@@ -170,12 +178,11 @@ impl<T> Matrix<T> for RowMajorMatrixView<'_, T> {
     }
 }
 
-impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixView<'_, T> {
-    type Row = &'a [T];
+impl<T: Clone> MatrixRows<T> for RowMajorMatrixView<'_, T> {
+    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
 
-    fn row(&'a self, r: usize) -> &'a [T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        self.row_slice(r).iter().cloned()
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -184,6 +191,13 @@ impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixView<'_, T> {
         T: Clone,
     {
         RowMajorMatrix::new(self.values.to_vec(), self.width)
+    }
+}
+
+impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
+    fn row_slice(&self, r: usize) -> &[T] {
+        debug_assert!(r < self.height());
+        &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
@@ -245,12 +259,11 @@ impl<T> Matrix<T> for RowMajorMatrixViewMut<'_, T> {
     }
 }
 
-impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixViewMut<'_, T> {
-    type Row = &'a [T];
+impl<T: Clone> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
+    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
 
-    fn row(&'a self, r: usize) -> &'a [T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        self.row_slice(r).iter().cloned()
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -259,5 +272,12 @@ impl<'a, T: 'a> MatrixRows<'a, T> for RowMajorMatrixViewMut<'_, T> {
         T: Clone,
     {
         RowMajorMatrix::new(self.values.to_vec(), self.width)
+    }
+}
+
+impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
+    fn row_slice(&self, r: usize) -> &[T] {
+        debug_assert!(r < self.height());
+        &self.values[r * self.width..(r + 1) * self.width]
     }
 }

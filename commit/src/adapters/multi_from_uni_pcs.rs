@@ -11,7 +11,7 @@ use crate::MultivariatePCS;
 pub struct MultiFromUniPCS<F, In, U, Chal>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     U: UnivariatePCS<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
@@ -24,7 +24,7 @@ where
 impl<F, In, U, Chal> PCS<F, In, Chal> for MultiFromUniPCS<F, In, U, Chal>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     U: UnivariatePCS<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
@@ -41,7 +41,7 @@ where
 impl<F, In, U, Chal> MultivariatePCS<F, In, Chal> for MultiFromUniPCS<F, In, U, Chal>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     U: UnivariatePCS<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {

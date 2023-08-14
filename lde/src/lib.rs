@@ -18,9 +18,9 @@ pub trait UndefinedLDE<Val, Dom, In>
 where
     Val: Field,
     Dom: ExtensionField<Val>,
-    In: for<'a> MatrixRows<'a, Val>,
+    In: MatrixRows<Val>,
 {
-    type Out: for<'a> MatrixRows<'a, Dom>;
+    type Out: MatrixRows<Dom>;
 
     fn lde_batch(&self, polys: In, extended_height: usize) -> Self::Out;
 }

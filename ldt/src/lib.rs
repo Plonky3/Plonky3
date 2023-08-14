@@ -55,7 +55,7 @@ impl<Val, Dom, In, DFT, M, L, Chal> PCS<Val, In, Chal> for LDTBasedPCS<Val, Dom,
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
-    In: for<'a> MatrixRows<'a, Val>,
+    In: MatrixRows<Val>,
     DFT: TwoAdicSubgroupDft<Dom>,
     M: DirectMMCS<Dom>,
     L: LDT<Dom, M, Chal>,
@@ -85,7 +85,7 @@ impl<Val, Dom, In, DFT, M, L, Chal> UnivariatePCS<Val, In, Chal>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
-    In: for<'a> MatrixRows<'a, Val>,
+    In: MatrixRows<Val>,
     DFT: TwoAdicSubgroupDft<Dom>,
     M: DirectMMCS<Dom>,
     L: LDT<Dom, M, Chal>,

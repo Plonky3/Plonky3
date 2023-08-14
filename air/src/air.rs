@@ -2,7 +2,7 @@ use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::MatrixRowSlices;
 
 pub trait Air<AB: AirBuilder>: Sync {
     fn eval(&self, builder: &mut AB);
@@ -32,7 +32,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
-    type M: for<'a> MatrixRows<'a, Self::Var, Row = &'a [Self::Var]>;
+    type M: MatrixRowSlices<Self::Var>;
 
     fn main(&self) -> Self::M;
 
@@ -154,7 +154,7 @@ pub trait PermutationAirBuilder: AirBuilder {
         + Mul<Self::VarEF, Output = Self::ExprEF>
         + Mul<Self::ExprEF, Output = Self::ExprEF>;
 
-    type MP: for<'a> MatrixRows<'a, Self::VarEF, Row = &'a [Self::VarEF]>;
+    type MP: MatrixRowSlices<Self::VarEF>;
 
     fn permutation(&self) -> Self::MP;
 
@@ -210,7 +210,7 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
 #[cfg(test)]
 mod tests {
-    use p3_matrix::MatrixRows;
+    use p3_matrix::MatrixRowSlices;
 
     use crate::{Air, AirBuilder};
 
@@ -220,9 +220,9 @@ mod tests {
         fn eval(&self, builder: &mut AB) {
             let main = builder.main();
 
-            let x_0 = main.row(0)[0];
-            let x_1 = main.row(1)[0];
-            let x_2 = main.row(2)[0];
+            let x_0 = main.row_slice(0)[0];
+            let x_1 = main.row_slice(1)[0];
+            let x_2 = main.row_slice(2)[0];
 
             builder.when_first_row().assert_zero(x_0);
             builder.when_first_row().assert_one(x_1);

@@ -25,16 +25,18 @@ pub trait MatrixGet<T> {
 }
 
 /// A `Matrix` that supports randomly accessing particular rows.
-pub trait MatrixRows<'a, T: 'a>: Matrix<T> {
-    type Row: IntoIterator<Item = &'a T>;
+pub trait MatrixRows<T>: Matrix<T> {
+    type Row<'a>: IntoIterator<Item = T>
+    where
+        Self: 'a;
 
-    fn row(&'a self, r: usize) -> Self::Row;
+    fn row(&self, r: usize) -> Self::Row<'_>;
 
-    fn first_row(&'a self) -> Self::Row {
+    fn first_row(&self) -> Self::Row<'_> {
         self.row(0)
     }
 
-    fn last_row(&'a self) -> Self::Row {
+    fn last_row(&self) -> Self::Row<'_> {
         self.row(self.height() - 1)
     }
 
@@ -45,6 +47,11 @@ pub trait MatrixRows<'a, T: 'a>: Matrix<T> {
     {
         todo!()
     }
+}
+
+/// A `Matrix` which supports access its rows as slices.
+pub trait MatrixRowSlices<T>: Matrix<T> {
+    fn row_slice(&self, r: usize) -> &[T];
 }
 
 impl<T> Matrix<T> for Box<dyn Matrix<T>> {

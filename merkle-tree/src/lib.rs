@@ -55,13 +55,7 @@ impl<L, D> MerkleTree<L, D> {
             .collect_vec();
 
         let first_digest_layer = (0..max_height)
-            .map(|i| {
-                h.hash_iter(
-                    tallest_matrices
-                        .iter()
-                        .flat_map(|m| m.row(i).iter().copied()),
-                )
-            })
+            .map(|i| h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i))))
             .chain(iter::repeat(D::default()))
             .take(max_height_padded)
             .collect_vec();
@@ -111,7 +105,7 @@ where
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L>,
+    Mat: MatrixRows<L>,
 {
     let next_len_padded = prev_layer.len() >> 1;
     let mut next_digests = Vec::with_capacity(next_len_padded);
@@ -131,11 +125,8 @@ where
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let mut digest = c.compress([left, right]);
-        let tallest_digest = h.hash_iter(
-            tallest_matrices
-                .iter()
-                .flat_map(|m| m.row(i).into_iter().copied()),
-        );
+        let tallest_digest =
+            h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).into_iter()));
         digest = c.compress([digest, tallest_digest]);
         next_digests.push(digest);
     }
@@ -198,7 +189,7 @@ where
                 let log2_height = log2_strict_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                matrix.row(reduced_index).to_vec()
+                matrix.row(reduced_index).collect()
             })
             .collect();
         let proof = vec![]; // TODO

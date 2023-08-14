@@ -9,7 +9,7 @@ use crate::pcs::MultivariatePCS;
 pub struct UniFromMultiPCS<F, In, M, Chal>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
     M: MultivariatePCS<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
