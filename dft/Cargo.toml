@@ -1,18 +1,20 @@
 [package]
-name = "p3-goldilocks"
+name = "p3-dft"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field = { path = "../field" }
+p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
-rand = "0.8.5"
 
 [dev-dependencies]
-p3-field-testing = { path = "../field-testing" }
+p3-baby-bear = { path = "../baby-bear" }
+p3-goldilocks = { path = "../goldilocks" }
 criterion = "0.5.1"
+rand = "0.8.5"
 
 [[bench]]
-name = "inverse"
+name = "fft"
 harness = false

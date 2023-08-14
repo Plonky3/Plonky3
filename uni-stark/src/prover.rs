@@ -2,12 +2,12 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_air::{Air, TwoRowMatrixView};
-use p3_challenger::Challenger;
+use p3_challenger::FieldChallenger;
 use p3_commit::PCS;
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
 };
-use p3_lde::{TwoAdicCosetLDE, TwoAdicLDE};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
@@ -23,7 +23,7 @@ pub fn prove<SC, A, Chal>(
 ) where
     SC: StarkConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
-    Chal: Challenger<SC::Domain>,
+    Chal: FieldChallenger<SC::Domain>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
@@ -36,7 +36,7 @@ pub fn prove<SC, A, Chal>(
     let subgroup_last = g_subgroup.inverse();
     let next_step = 1 << quotient_degree_bits;
 
-    let coset_shift = config.lde().shift(quotient_size_bits);
+    let coset_shift = SC::Domain::multiplicative_group_generator();
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
@@ -66,12 +66,14 @@ pub fn prove<SC, A, Chal>(
         .map(|(x, z)| z / (x - subgroup_last))
         .collect();
 
-    let trace_lde = config.lde().lde_batch(trace.clone(), quotient_degree_bits);
+    let trace_lde = config
+        .dft()
+        .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift);
 
     let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
 
     // challenger.observe_ext_element(trace_commit); // TODO
-    let alpha = challenger.random_ext_element::<SC::Challenge>();
+    let alpha = challenger.sample_ext_element::<SC::Challenge>();
 
     let _quotient_values = (0..quotient_size)
         .into_par_iter()

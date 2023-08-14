@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::{MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -12,7 +12,7 @@ use crate::{Matrix, MatrixGet, MatrixRows};
 pub struct RowMajorMatrix<T> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,
-    width: usize,
+    pub width: usize,
 }
 
 impl<T> RowMajorMatrix<T> {
@@ -22,6 +22,17 @@ impl<T> RowMajorMatrix<T> {
         Self { values, width }
     }
 
+    #[must_use]
+    pub fn new_row(values: Vec<T>) -> Self {
+        let width = values.len();
+        Self { values, width }
+    }
+
+    #[must_use]
+    pub fn new_col(values: Vec<T>) -> Self {
+        Self { values, width: 1 }
+    }
+
     pub fn row_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
@@ -29,6 +40,10 @@ impl<T> RowMajorMatrix<T> {
 
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
         self.values.chunks_exact(self.width)
+    }
+
+    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
+        self.values.chunks_exact_mut(self.width)
     }
 
     #[must_use]
@@ -64,6 +79,13 @@ impl<T> RowMajorMatrix<T> {
             values: self.values.iter().map(|v| f(v.clone())).collect(),
             width: self.width,
         }
+    }
+
+    pub fn to_ext<EF: ExtensionField<T>>(&self) -> RowMajorMatrix<EF>
+    where
+        T: Field,
+    {
+        self.map(EF::from_base)
     }
 
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self

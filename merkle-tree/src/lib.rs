@@ -10,10 +10,11 @@ use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_commit::{Dimensions, DirectMMCS, MMCS};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_util::log2_ceil_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 // TODO: Add a variant that supports pruning overlapping paths?
 // How would we keep track of previously-seen paths - make the MMCS methods take &mut self?
@@ -22,21 +23,18 @@ use p3_util::log2_ceil_usize;
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an `MMCS`,
 /// see `MerkleTreeMMCS`.
-pub struct MerkleTree<L, D, Mat: Matrix<L>> {
-    leaves: Vec<Mat>,
+pub struct MerkleTree<L, D> {
+    leaves: Vec<RowMajorMatrix<L>>,
     digest_layers: Vec<Vec<D>>,
     _phantom_l: PhantomData<L>,
 }
 
-impl<L, D, Mat> MerkleTree<L, D, Mat>
-where
-    Mat: for<'a> MatrixRows<'a, L>,
-{
+impl<L, D> MerkleTree<L, D> {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
-    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<Mat>) -> Self
+    pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
-        L: Copy,
+        L: 'static + Copy,
         D: Copy + Default,
         H: CryptographicHasher<L, D>,
         C: PseudoCompressionFunction<D, 2>,
@@ -61,7 +59,7 @@ where
                 h.hash_iter(
                     tallest_matrices
                         .iter()
-                        .flat_map(|m| m.row(i).into_iter().copied()),
+                        .flat_map(|m| m.row(i).iter().copied()),
                 )
             })
             .chain(iter::repeat(D::default()))
@@ -159,50 +157,55 @@ where
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeMMCS<L, D, H, C, Mat> {
+pub struct MerkleTreeMMCS<L, D, H, C> {
     hash: H,
     compress: C,
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
-    _phantom_mat: PhantomData<Mat>,
 }
 
-impl<L, D, H, C, Mat> MerkleTreeMMCS<L, D, H, C, Mat> {
+impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
     pub fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
             compress,
             _phantom_l: PhantomData,
             _phantom_d: PhantomData,
-            _phantom_mat: PhantomData,
         }
     }
 }
 
-impl<L, D, H, C, Mat> MMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
+impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
-    L: Clone,
+    L: 'static + Clone,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L>,
 {
-    type ProverData = MerkleTree<L, D, Mat>;
+    type ProverData = MerkleTree<L, D>;
     type Commitment = D;
     type Proof = Vec<D>;
     type Error = ();
-    type Mat = Mat;
+    type Mat = RowMajorMatrix<L>;
 
-    fn open_batch(row: usize, prover_data: &MerkleTree<L, D, Mat>) -> (Vec<Vec<L>>, Vec<D>) {
+    fn open_batch(index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
+        let max_height = Self::get_max_height(prover_data);
+        let log_max_height = log2_strict_usize(max_height);
+
         let leaf = prover_data
             .leaves
             .iter()
-            .map(|matrix| matrix.row(row).into_iter().cloned().collect())
+            .map(|matrix| {
+                let log2_height = log2_strict_usize(matrix.height());
+                let bits_reduced = log_max_height - log2_height;
+                let reduced_index = index >> bits_reduced;
+                matrix.row(reduced_index).to_vec()
+            })
             .collect();
         let proof = vec![]; // TODO
         (leaf, proof)
     }
 
-    fn get_matrices(prover_data: &Self::ProverData) -> &[Mat] {
+    fn get_matrices(prover_data: &Self::ProverData) -> &[RowMajorMatrix<L>] {
         &prover_data.leaves
     }
 
@@ -210,22 +213,21 @@ where
         _commit: &D,
         _dimensions: &[Dimensions],
         _index: usize,
-        _item: Vec<L>,
+        _rows: Vec<Vec<L>>,
         _proof: &Vec<D>,
     ) -> Result<(), Self::Error> {
         todo!()
     }
 }
 
-impl<L, D, H, C, Mat> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C, Mat>
+impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
 where
-    L: Copy,
+    L: 'static + Copy,
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: for<'a> MatrixRows<'a, L>,
 {
-    fn commit(&self, inputs: Vec<Mat>) -> (Self::Commitment, Self::ProverData) {
+    fn commit(&self, inputs: Vec<RowMajorMatrix<L>>) -> (Self::Commitment, Self::ProverData) {
         let tree = MerkleTree::new(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
@@ -236,8 +238,8 @@ where
 mod tests {
     use alloc::vec;
 
-    use p3_commit::DirectMMCS;
-    use p3_keccak::Keccak256Hash;
+    use p3_commit::{DirectMMCS, MMCS};
+    use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
@@ -246,12 +248,10 @@ mod tests {
 
     #[test]
     fn commit() {
-        use p3_keccak::KeccakF;
-
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
-        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C, RowMajorMatrix<u8>>;
+        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         let mut rng = thread_rng();
@@ -263,5 +263,22 @@ mod tests {
         // Then a non-power-of-two height.
         let mat = RowMajorMatrix::rand(&mut rng, 200, 13);
         mmcs.commit(vec![mat]);
+    }
+
+    #[test]
+    fn open() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // large_mat has 8 rows and 1 col; small_mat has 4 rows and 2 cols.
+        let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let small_mat = RowMajorMatrix::new(vec![10, 11, 20, 21, 30, 31, 40, 41], 2);
+        let (_commit, prover_data) = mmcs.commit(vec![large_mat, small_mat]);
+
+        let (opened_values, _proof) = Mmcs::open_batch(3, &prover_data);
+        assert_eq!(opened_values, vec![vec![4], vec![20, 21]]);
     }
 }

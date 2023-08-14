@@ -136,7 +136,47 @@ impl Field for Goldilocks {
     }
 
     fn try_inverse(&self) -> Option<Self> {
-        todo!()
+        if self.is_zero() {
+            return None;
+        }
+
+        // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
+        //
+        // compute a^(p - 2) using 72 multiplications
+        // The exponent p - 2 is represented in binary as:
+        // 0b1111111111111111111111111111111011111111111111111111111111111111
+        // Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
+
+        // compute base^11
+        let t2 = self.square() * *self;
+
+        // compute base^111
+        let t3 = t2.square() * *self;
+
+        // compute base^111111 (6 ones)
+        // repeatedly square t3 3 times and multiply by t3
+        let t6 = exp_acc::<3>(t3, t3);
+
+        // compute base^111111111111 (12 ones)
+        // repeatedly square t6 6 times and multiply by t6
+        let t12 = exp_acc::<6>(t6, t6);
+
+        // compute base^111111111111111111111111 (24 ones)
+        // repeatedly square t12 12 times and multiply by t12
+        let t24 = exp_acc::<12>(t12, t12);
+
+        // compute base^1111111111111111111111111111111 (31 ones)
+        // repeatedly square t24 6 times and multiply by t6 first. then square t30 and
+        // multiply by base
+        let t30 = exp_acc::<6>(t24, t6);
+        let t31 = t30.square() * *self;
+
+        // compute base^111111111111111111111111111111101111111111111111111111111111111
+        // repeatedly square t31 32 times and multiply by t31
+        let t63 = exp_acc::<32>(t31, t31);
+
+        // compute base^1111111111111111111111111111111011111111111111111111111111111111
+        Some(t63.square() * *self)
     }
 }
 
@@ -262,6 +302,15 @@ impl Div for Goldilocks {
     }
 }
 
+// HELPER FUNCTIONS
+// ================================================================================================
+
+/// Squares the base N number of times and multiplies the result by the tail value.
+#[inline(always)]
+fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
+    base.exp_power_of_2(N) * tail
+}
+
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
@@ -328,6 +377,8 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field_testing::test_inverse;
+
     use super::*;
 
     type F = Goldilocks;
@@ -414,5 +465,10 @@ mod tests {
         //           = - 2^32 - 1
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
+    }
+
+    #[test]
+    fn inverse() {
+        test_inverse::<Goldilocks>();
     }
 }

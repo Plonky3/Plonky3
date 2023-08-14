@@ -2,11 +2,14 @@
 resolver = "2"
 members = [
     "air",
+    "baby-bear",
     "brakedown",
     "challenger",
     "code",
     "commit",
+    "dft",
     "field",
+    "field-testing",
     "fri",
     "goldilocks",
     "keccak",
