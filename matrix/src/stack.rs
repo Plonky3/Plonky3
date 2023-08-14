@@ -30,15 +30,14 @@ impl<T, First: Matrix<T>, Second: Matrix<T>> Matrix<T> for VerticalPair<T, First
     }
 }
 
-impl<'a, T, First, Second> MatrixRows<'a, T> for VerticalPair<T, First, Second>
+impl<T, First, Second> MatrixRows<T> for VerticalPair<T, First, Second>
 where
-    T: 'a,
-    First: MatrixRows<'a, T>,
-    Second: MatrixRows<'a, T>,
+    First: MatrixRows<T>,
+    Second: MatrixRows<T>,
 {
     type Row = EitherIterable<First::Row, Second::Row>;
 
-    fn row(&'a self, r: usize) -> Self::Row {
+    fn row(&self, r: usize) -> Self::Row {
         if r < self.first.height() {
             EitherIterable::Left(self.first.row(r))
         } else {

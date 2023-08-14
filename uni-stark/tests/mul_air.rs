@@ -4,7 +4,7 @@ use p3_dft::Radix2BowersFft;
 use p3_fri::{FRIBasedPCS, FriConfigImpl};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::MerkleTreeMMCS;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
@@ -19,7 +19,7 @@ struct MulAir;
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let main_local = main.row(0);
+        let main_local = main.row_slice(0);
         let diff = main_local[0] * main_local[1] - main_local[2];
         builder.assert_zero(diff);
     }

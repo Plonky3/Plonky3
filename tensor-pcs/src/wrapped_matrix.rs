@@ -2,13 +2,13 @@ use core::marker::PhantomData;
 
 use p3_matrix::{Matrix, MatrixRows};
 
-pub struct WrappedMatrix<T, M> {
+pub struct WrappedMatrix<'a, T, M> {
     inner: M,
     wraps: usize,
-    _phantom_t: PhantomData<T>,
+    _phantom: PhantomData<&'a T>,
 }
 
-impl<T, M> WrappedMatrix<T, M>
+impl<'a, T, M> WrappedMatrix<'a, T, M>
 where
     M: Matrix<T>,
 {
@@ -17,12 +17,12 @@ where
         Self {
             inner,
             wraps,
-            _phantom_t: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<T, M> Matrix<T> for WrappedMatrix<T, M>
+impl<'a, T, M> Matrix<T> for WrappedMatrix<'a, T, M>
 where
     M: Matrix<T>,
 {
@@ -35,14 +35,13 @@ where
     }
 }
 
-impl<'a, T, M> MatrixRows<'a, T> for WrappedMatrix<T, M>
+impl<'a, T, M> MatrixRows<T> for WrappedMatrix<'a, T, M>
 where
-    T: 'a,
-    M: MatrixRows<'a, T> + 'a,
+    M: MatrixRows< T> + 'a,
 {
     type Row = WrappedMatrixRow<'a, T, M>;
 
-    fn row(&'a self, r: usize) -> Self::Row {
+    fn row(&self, r: usize) -> Self::Row {
         WrappedMatrixRow {
             wrapped_matrix: self,
             row: r,
@@ -55,9 +54,9 @@ where
 pub struct WrappedMatrixRow<'a, T, M>
 where
     T: 'a,
-    M: MatrixRows<'a, T>,
+    M: MatrixRows< T>,
 {
-    wrapped_matrix: &'a WrappedMatrix<T, M>,
+    wrapped_matrix: &'a WrappedMatrix<'a, T, M>,
     row: usize,
     current_iter: <M::Row as IntoIterator>::IntoIter,
     next_wrap: usize,
@@ -66,9 +65,9 @@ where
 impl<'a, T, M> Iterator for WrappedMatrixRow<'a, T, M>
 where
     T: 'a,
-    M: MatrixRows<'a, T>,
+    M: MatrixRows<T>,
 {
-    type Item = &'a T;
+    type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.current_iter.next().or_else(|| {

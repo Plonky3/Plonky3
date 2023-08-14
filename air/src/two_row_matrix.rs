@@ -1,4 +1,4 @@
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::{Matrix, MatrixRowSlices};
 
 #[derive(Copy, Clone)]
 pub struct TwoRowMatrixView<'a, T> {
@@ -22,10 +22,8 @@ impl<'a, T> Matrix<T> for TwoRowMatrixView<'a, T> {
     }
 }
 
-impl<'a, T: 'a> MatrixRows<'a, T> for TwoRowMatrixView<'_, T> {
-    type Row = &'a [T];
-
-    fn row(&'a self, r: usize) -> &'a [T] {
+impl<T> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
+    fn row_slice(&self, r: usize) -> &[T] {
         match r {
             0 => self.local,
             1 => self.next,
