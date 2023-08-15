@@ -1,10 +1,16 @@
 use p3_baby_bear::BabyBear;
+use p3_dft::Radix2BowersFft;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::util::{apply_circulant, MATRIX_CIRC_MDS_12_SML, MATRIX_CIRC_MDS_8_SML};
+use crate::util::{
+    apply_circulant, apply_circulant_fft, first_row_to_first_col, MATRIX_CIRC_MDS_12_SML,
+    MATRIX_CIRC_MDS_8_SML,
+};
 use crate::MDSPermutation;
 
 pub struct MDSMatrixBabyBear;
+
+const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
 
 impl CryptographicPermutation<[BabyBear; 8]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
@@ -32,7 +38,8 @@ const MATRIX_CIRC_MDS_16_BABYBEAR: [u64; 16] = [
 
 impl CryptographicPermutation<[BabyBear; 16]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
-        apply_circulant(&MATRIX_CIRC_MDS_16_BABYBEAR, input)
+        const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
 impl ArrayPermutation<BabyBear, 16> for MDSMatrixBabyBear {}
@@ -50,7 +57,8 @@ const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
 
 impl CryptographicPermutation<[BabyBear; 24]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
-        apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
+        const ENTRIES: [u64; 24] = first_row_to_first_col(&MATRIX_CIRC_MDS_24_BABYBEAR);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
 impl ArrayPermutation<BabyBear, 24> for MDSMatrixBabyBear {}
@@ -70,7 +78,8 @@ const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
 
 impl CryptographicPermutation<[BabyBear; 32]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
-        apply_circulant(&MATRIX_CIRC_MDS_32_BABYBEAR, input)
+        const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
 impl ArrayPermutation<BabyBear, 32> for MDSMatrixBabyBear {}
@@ -98,8 +107,27 @@ const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
 
 impl CryptographicPermutation<[BabyBear; 64]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
-        apply_circulant(&MATRIX_CIRC_MDS_64_BABYBEAR, input)
+        const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
 impl ArrayPermutation<BabyBear, 64> for MDSMatrixBabyBear {}
 impl MDSPermutation<BabyBear, 64> for MDSMatrixBabyBear {}
+
+#[cfg(test)]
+mod test {
+    use p3_baby_bear::BabyBear;
+    use p3_field::AbstractField;
+    use p3_symmetric::permutation::CryptographicPermutation;
+
+    use super::MDSMatrixBabyBear;
+
+    #[test]
+    fn babybear16() {
+        let mds = MDSMatrixBabyBear;
+        let u: [BabyBear; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            .map(BabyBear::from_canonical_u64);
+        let v = mds.permute(u);
+        assert_ne!(u, v);
+    }
+}

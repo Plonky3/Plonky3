@@ -1,17 +1,22 @@
+use p3_dft::Radix2BowersFft;
 use p3_goldilocks::Goldilocks;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::util::{apply_circulant, MATRIX_CIRC_MDS_12_SML, MATRIX_CIRC_MDS_8_SML};
+use crate::util::{
+    apply_circulant, apply_circulant_fft, first_row_to_first_col, MATRIX_CIRC_MDS_12_SML,
+    MATRIX_CIRC_MDS_8_SML,
+};
 use crate::MDSPermutation;
 
 pub struct MDSMatrixGoldilocks;
+
+const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
 
 impl CryptographicPermutation<[Goldilocks; 8]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
         apply_circulant(&MATRIX_CIRC_MDS_8_SML, input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 8> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 8> for MDSMatrixGoldilocks {}
 
@@ -20,7 +25,6 @@ impl CryptographicPermutation<[Goldilocks; 12]> for MDSMatrixGoldilocks {
         apply_circulant(&MATRIX_CIRC_MDS_12_SML, input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 12> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 12> for MDSMatrixGoldilocks {}
 
@@ -34,10 +38,10 @@ const MATRIX_CIRC_MDS_16_GOLDILOCKS: [u64; 16] = [
 
 impl CryptographicPermutation<[Goldilocks; 16]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 16]) -> [Goldilocks; 16] {
-        apply_circulant(&MATRIX_CIRC_MDS_16_GOLDILOCKS, input)
+        const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_GOLDILOCKS);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 16> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 16> for MDSMatrixGoldilocks {}
 
@@ -53,10 +57,10 @@ const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
 
 impl CryptographicPermutation<[Goldilocks; 24]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 24]) -> [Goldilocks; 24] {
-        apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, input)
+        const ENTRIES: [u64; 24] = first_row_to_first_col(&MATRIX_CIRC_MDS_24_GOLDILOCKS);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 24> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 24> for MDSMatrixGoldilocks {}
 
@@ -74,10 +78,10 @@ const MATRIX_CIRC_MDS_32_GOLDILOCKS: [u64; 32] = [
 
 impl CryptographicPermutation<[Goldilocks; 32]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 32]) -> [Goldilocks; 32] {
-        apply_circulant(&MATRIX_CIRC_MDS_32_GOLDILOCKS, input)
+        const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_GOLDILOCKS);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 32> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 32> for MDSMatrixGoldilocks {}
 
@@ -103,10 +107,10 @@ const MATRIX_CIRC_MDS_64_GOLDILOCKS: [u64; 64] = [
 
 impl CryptographicPermutation<[Goldilocks; 64]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 64]) -> [Goldilocks; 64] {
-        apply_circulant(&MATRIX_CIRC_MDS_64_GOLDILOCKS, input)
+        const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_GOLDILOCKS);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 64> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 64> for MDSMatrixGoldilocks {}
 
@@ -133,9 +137,9 @@ const MATRIX_CIRC_MDS_68_GOLDILOCKS: [u64; 68] = [
 
 impl CryptographicPermutation<[Goldilocks; 68]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 68]) -> [Goldilocks; 68] {
-        apply_circulant(&MATRIX_CIRC_MDS_68_GOLDILOCKS, input)
+        const ENTRIES: [u64; 68] = first_row_to_first_col(&MATRIX_CIRC_MDS_68_GOLDILOCKS);
+        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-
 impl ArrayPermutation<Goldilocks, 68> for MDSMatrixGoldilocks {}
 impl MDSPermutation<Goldilocks, 68> for MDSMatrixGoldilocks {}
