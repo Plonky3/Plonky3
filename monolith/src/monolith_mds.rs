@@ -1,5 +1,5 @@
 use p3_field::PrimeField32;
-use p3_symmetric::mds::MDSPermutation;
+use p3_symmetric::mds::{MDSPermutation, NaiveMDSMatrix};
 use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
     Shake128, Shake128Reader,
@@ -23,6 +23,17 @@ pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(init_string: &str, num_
         cauchy_mds_matrix(&mut shake_finalized)
     };
     Box::new(NaiveMDSMatrix::new(matrix))
+}
+
+fn circulant_matrix<F: PrimeField32, const WIDTH: usize>(row: &[u64; WIDTH]) -> [[F; WIDTH]; WIDTH] {
+    let mut mat = [[F::ZERO; WIDTH]; WIDTH];
+    let mut rot: Vec<F> = row.iter().map(|i| F::from_canonical_u64(*i)).collect();
+    mat[0].copy_from_slice(&rot);
+    for row in mat.iter_mut().skip(1) {
+        rot.rotate_right(1);
+        row.copy_from_slice(&rot);
+    }
+    mat
 }
 
 fn cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(shake: &mut Shake128Reader) -> [[F; WIDTH]; WIDTH] {

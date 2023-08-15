@@ -2,19 +2,15 @@
 
 extern crate alloc;
 
-use alloc::sync::Arc;
-use p3_symmetric::mds::{MDSPermutation, NaiveMDSMatrix};
+use p3_symmetric::mds::MDSPermutation;
 use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
     Shake128, Shake128Reader,
 };
 
-use core::{iter, u64};
+use core::iter;
 
-use p3_field::{AbstractField, PrimeField32};
-use p3_mersenne_31::Mersenne31;
-use p3_symmetric::compression::PseudoCompressionFunction;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_field::PrimeField32;
 
 use crate::monolith_mds::monolith_mds;
 
@@ -117,23 +113,30 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
     }
 
     pub fn concrete(&self, state: &mut [F; WIDTH], round_constants: Option<&[F; WIDTH]>) {
-        *state = self.mds.permute(state);
-        // MDS multiplication
-        // optionally add round constants
+        *state = self.mds.permute(*state);
+
+        if let Some(round_constants) = round_constants {
+            for (x, rc) in state.iter_mut().zip(round_constants.iter()) {
+                *x += *rc;
+            }
+        }
     }
 
     pub fn bricks(state: &mut [F; WIDTH]) {
         // Feistel Type-3
-        for (x_, x) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
+        for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
+            let x_mut_u64 = &mut x_mut.as_canonical_u64();
+            let x_u64 = x.as_canonical_u64();
             // Every time at bricks the input is technically a u32, so we tell the compiler
-            let mut tmp_square = (x_ & 0xFFFFFFFF_u64) * (x_ & 0xFFFFFFFF_u64);
+            let mut tmp_square = (x_u64 & 0xFFFFFFFF_u64) * (x_u64 & 0xFFFFFFFF_u64);
             tmp_square %= F::ORDER_U64; // F::reduce64(&mut tmp_square);
-            *x = (*x & 0xFFFFFFFF_u64) + (tmp_square & 0xFFFFFFFF_u64);
+            *x_mut_u64 = (*x_mut_u64 & 0xFFFFFFFF_u64) + (tmp_square & 0xFFFFFFFF_u64);
+            *x_mut = F::from_canonical_u64(*x_mut_u64);
         }
     }
 
     pub fn bar(&self, el: F) -> F {
-        let mut val = &el.as_canonical_u32();
+        let val = &mut el.as_canonical_u32();
 
         unsafe {
             // get_unchecked here is safe because lookup table 1 contains 2^16 elements
@@ -154,11 +157,7 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
         state
             .iter_mut()
             .take(Self::NUM_BARS)
-            .for_each(|el| {
-                let mut tmp = *el as u32;
-                self.bar(&mut tmp);
-                *el = tmp as u64
-            });
+            .for_each(|el| *el = self.bar(*el));
     }
 
     pub fn permutation(&self, state: &mut [F; WIDTH]) {
