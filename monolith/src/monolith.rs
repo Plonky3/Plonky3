@@ -130,8 +130,9 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
             let x_u64 = x.as_canonical_u64();
             // Every time at bricks the input is technically a u32, so we tell the compiler
             let mut tmp_square = (x_u64 & 0xFFFFFFFF_u64) * (x_u64 & 0xFFFFFFFF_u64);
-            tmp_square %= F::ORDER_U64; // F::reduce64(&mut tmp_square);
+            tmp_square %= F::ORDER_U64;
             *x_mut_u64 = (*x_mut_u64 & 0xFFFFFFFF_u64) + (tmp_square & 0xFFFFFFFF_u64);
+            *x_mut_u64 %= F::ORDER_U64;
             *x_mut = F::from_canonical_u64(*x_mut_u64);
         }
     }
