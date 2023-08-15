@@ -171,28 +171,26 @@ where
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use p3_field::AbstractField;
-    use p3_mds::NaiveMDSMatrix;
+    use p3_mds::mersenne31::MDSMatrixMersenne31;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::hasher::CryptographicHasher;
     use p3_symmetric::permutation::CryptographicPermutation;
     use p3_symmetric::sponge::PaddingFreeSponge;
 
     use crate::inverse_sbox::BasicInverseSboxLayer;
-    use crate::mds_matrix_naive::rescue_prime_m31_width_12_mds_matrix;
     use crate::rescue::Rescue;
 
     const WIDTH: usize = 12;
     const ALPHA: u64 = 5;
     type RescuePrimeM31Default =
-        Rescue<Mersenne31, NaiveMDSMatrix<Mersenne31, WIDTH>, BasicInverseSboxLayer, WIDTH, ALPHA>;
+        Rescue<Mersenne31, MDSMatrixMersenne31, BasicInverseSboxLayer, WIDTH, ALPHA>;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
         let num_rounds = RescuePrimeM31Default::num_rounds(6, 128);
         let round_constants =
             RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
-        let mds = rescue_prime_m31_width_12_mds_matrix();
+        let mds = MDSMatrixMersenne31 {};
         let isl = BasicInverseSboxLayer {};
 
         RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl)
@@ -216,16 +214,16 @@ mod tests {
     // https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
     const PERMUTATION_OUTPUTS: [[u64; WIDTH]; NUM_TESTS] = [
         [
-            1174355075, 506638036, 1293741855, 669671042, 881673047, 1403310363, 1489659750,
-            106483224, 1578796769, 289825640, 498340024, 564347160,
+            983158113, 88736227, 182376113, 380581876, 1054929865, 873254619, 1742172525,
+            1018880997, 1922857524, 2128461101, 1878468735, 736900567,
         ],
         [
-            1341954293, 1462092714, 1382783160, 288894489, 1768710137, 1938423223, 288009985,
-            684142220, 1708749517, 773110691, 916511285, 553593472,
+            504747180, 1708979401, 1023327691, 414948293, 1811202621, 427591394, 666516466,
+            1900855073, 1511950466, 346735768, 708718627, 2070146754,
         ],
         [
-            868623386, 984305610, 478195671, 1835744746, 2122442506, 495239130, 1519185684,
-            1631691838, 1813476755, 1147911813, 2000740064, 986040905,
+            2043076197, 1832583290, 59074227, 991951621, 1166633601, 629305333, 1869192382,
+            1355209324, 1919016607, 175801753, 279984593, 2086613859,
         ],
     ];
 
@@ -234,19 +232,11 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
 
         for test_run in 0..NUM_TESTS {
-            let state: [Mersenne31; WIDTH] = PERMUTATION_INPUTS[test_run]
-                .iter()
-                .map(|x| Mersenne31::from_canonical_u64(*x))
-                .collect_vec()
-                .try_into()
-                .unwrap();
+            let state: [Mersenne31; WIDTH] =
+                PERMUTATION_INPUTS[test_run].map(Mersenne31::from_canonical_u64);
 
-            let expected: [Mersenne31; WIDTH] = PERMUTATION_OUTPUTS[test_run]
-                .iter()
-                .map(|x| Mersenne31::from_canonical_u64(*x))
-                .collect_vec()
-                .try_into()
-                .unwrap();
+            let expected: [Mersenne31; WIDTH] =
+                PERMUTATION_OUTPUTS[test_run].map(Mersenne31::from_canonical_u64);
 
             let actual = rescue_prime.permute(state);
             assert_eq!(actual, expected);
@@ -258,21 +248,12 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
         let rescue_sponge = PaddingFreeSponge::new(rescue_prime);
 
-        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6]
-            .iter()
-            .map(|x| Mersenne31::from_canonical_u64(*x))
-            .collect_vec()
-            .try_into()
-            .unwrap();
+        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(Mersenne31::from_canonical_u64);
 
         let expected: [Mersenne31; 6] = [
-            599387515, 345626813, 50230127, 538251572, 279746862, 2080222279,
+            337439389, 568168673, 983336666, 1144682541, 1342961449, 386074361,
         ]
-        .iter()
-        .map(|x| Mersenne31::from_canonical_u64(*x))
-        .collect_vec()
-        .try_into()
-        .unwrap();
+        .map(Mersenne31::from_canonical_u64);
 
         let actual = rescue_sponge.hash_iter(input);
         assert_eq!(actual, expected);

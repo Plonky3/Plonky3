@@ -12,8 +12,10 @@ num = "0.4.0"
 num-integer = "0.1.45"
 p3-field = { path = "../field" }
 p3-mds = { path = "../mds" }
-p3-mersenne-31 = { path = "../mersenne-31" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
 rand = "0.8.5"
 sha3 = "0.10.8"
+
+[dev-dependencies]
+p3-mersenne-31 = { path = "../mersenne-31" }
