@@ -5,7 +5,7 @@ use sha3::{
     Shake128, Shake128Reader,
 };
 
-pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(init_string: &str) -> Box<dyn MDSPermutation<F, WIDTH>> {
+pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(init_string: &str, num_rounds: usize) -> Box<dyn MDSPermutation<F, WIDTH>> {
     let matrix = if WIDTH == 16 {
         let row = [
             61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244,
@@ -15,7 +15,7 @@ pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(init_string: &str) -> B
     } else {
         let mut shake = Shake128::default();
         shake.update(init_string.as_bytes());
-        shake.update(&[WIDTH as u8, Self::NUM_ROUNDS as u8]);
+        shake.update(&[WIDTH as u8, num_rounds as u8]);
         shake.update(&F::ORDER_U32.to_le_bytes());
         shake.update(&[16, 15]);
         shake.update("MDS".as_bytes());
@@ -25,7 +25,7 @@ pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(init_string: &str) -> B
     Box::new(NaiveMDSMatrix::new(matrix))
 }
 
-fn cauchy_mds_matrix(shake: &mut Shake128Reader) -> [[F; WIDTH]; WIDTH] {
+fn cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(shake: &mut Shake128Reader) -> [[F; WIDTH]; WIDTH] {
     let mut p = F::ORDER_U32;
     let mut tmp = 0;
     while p != 0 {
@@ -37,7 +37,7 @@ fn cauchy_mds_matrix(shake: &mut Shake128Reader) -> [[F; WIDTH]; WIDTH] {
 
     let mut res = [[F::ZERO; WIDTH]; WIDTH];
 
-    let y = Self::get_random_y_i(shake, x_mask, y_mask);
+    let y = get_random_y_i::<F, WIDTH>(shake, x_mask, y_mask);
     let mut x = y.to_owned();
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
@@ -50,7 +50,7 @@ fn cauchy_mds_matrix(shake: &mut Shake128Reader) -> [[F; WIDTH]; WIDTH] {
     res
 }
 
-fn get_random_y_i(shake: &mut Shake128Reader, x_mask: u32, y_mask: u32) -> [u32; WIDTH] {
+fn get_random_y_i<F: PrimeField32, const WIDTH: usize>(shake: &mut Shake128Reader, x_mask: u32, y_mask: u32) -> [u32; WIDTH] {
     let mut res = [0; WIDTH];
     for i in 0..WIDTH {
         let mut valid = false;

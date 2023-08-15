@@ -38,7 +38,7 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
-        let mds = monolith_mds("Monolith");
+        let mds = monolith_mds("Monolith", NUM_ROUNDS);
 
         Self {
             round_constants,
