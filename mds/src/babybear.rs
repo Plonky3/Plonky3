@@ -1,37 +1,10 @@
-use p3_field::AbstractField;
-use p3_symmetric::mds::MDSPermutation;
+use p3_baby_bear::BabyBear;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::BabyBear;
-
-// NB: These four are MDS for M31, BabyBear and Goldilocks
-//const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
-const MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
-
-//const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
-const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
+use crate::util::{apply_circulant, MATRIX_CIRC_MDS_12_SML, MATRIX_CIRC_MDS_8_SML};
+use crate::MDSPermutation;
 
 pub struct MDSMatrixBabyBear;
-
-fn dot_vec<F: AbstractField, const N: usize>(u: &[F; N], v: &[F; N]) -> F {
-    u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
-}
-
-// F: Field ==> need dot_vec for each field
-fn apply_circulant<F: AbstractField, const N: usize>(
-    circ_matrix: &[u64; N],
-    input: [F; N],
-) -> [F; N] {
-    let mut matrix: [F; N] = circ_matrix.map(F::from_canonical_u64);
-
-    let mut output = [F::ZERO; N];
-    for i in 0..N - 1 {
-        output[i] = dot_vec(&input, &matrix);
-        matrix.rotate_right(1);
-    }
-    output[N - 1] = dot_vec(&input, &matrix);
-    output
-}
 
 impl CryptographicPermutation<[BabyBear; 8]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
@@ -57,6 +30,14 @@ const MATRIX_CIRC_MDS_16_BABYBEAR: [u64; 16] = [
     0x2C6D7501, 0x1D110184, 0x0E1F608D, 0x2032F0C6,
 ];
 
+impl CryptographicPermutation<[BabyBear; 16]> for MDSMatrixBabyBear {
+    fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
+        apply_circulant(&MATRIX_CIRC_MDS_16_BABYBEAR, input)
+    }
+}
+impl ArrayPermutation<BabyBear, 16> for MDSMatrixBabyBear {}
+impl MDSPermutation<BabyBear, 16> for MDSMatrixBabyBear {}
+
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
     0x2D0AAAAB, 0x64850517, 0x17F5551D, 0x04ECBEB5,
@@ -66,6 +47,14 @@ const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
     0x3C2C3DBE, 0x0C23DC41, 0x0524C7F2, 0x6BE4DF69,
     0x0A6E572C, 0x5C7790FA, 0x17E118F6, 0x0878A07F,
 ];
+
+impl CryptographicPermutation<[BabyBear; 24]> for MDSMatrixBabyBear {
+    fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
+        apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
+    }
+}
+impl ArrayPermutation<BabyBear, 24> for MDSMatrixBabyBear {}
+impl MDSPermutation<BabyBear, 24> for MDSMatrixBabyBear {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
@@ -78,6 +67,14 @@ const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
     0x2CB70B1D, 0x4E941E23, 0x174A61C1, 0x117A9426,
     0x73562137, 0x54596086, 0x487C560B, 0x68A4ACAB,
 ];
+
+impl CryptographicPermutation<[BabyBear; 32]> for MDSMatrixBabyBear {
+    fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
+        apply_circulant(&MATRIX_CIRC_MDS_32_BABYBEAR, input)
+    }
+}
+impl ArrayPermutation<BabyBear, 32> for MDSMatrixBabyBear {}
+impl MDSPermutation<BabyBear, 32> for MDSMatrixBabyBear {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
@@ -98,3 +95,11 @@ const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
     0x1AA486C8, 0x0C5095A9, 0x3833C0C6, 0x008FEBA5,
     0x52ECBE2E, 0x1D178A67, 0x58B3C04B, 0x6E95CB51,
 ];
+
+impl CryptographicPermutation<[BabyBear; 64]> for MDSMatrixBabyBear {
+    fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
+        apply_circulant(&MATRIX_CIRC_MDS_64_BABYBEAR, input)
+    }
+}
+impl ArrayPermutation<BabyBear, 64> for MDSMatrixBabyBear {}
+impl MDSPermutation<BabyBear, 64> for MDSMatrixBabyBear {}

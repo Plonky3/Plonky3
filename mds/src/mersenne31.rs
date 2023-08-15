@@ -1,40 +1,15 @@
-use p3_field::AbstractField;
-use p3_symmetric::mds::MDSPermutation;
+use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::Mersenne31;
-
-// NB: These four are MDS for M31, BabyBear and Goldilocks
-//const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
-const MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
-
-//const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
-const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
+use crate::util::{apply_circulant, MATRIX_CIRC_MDS_12_SML, MATRIX_CIRC_MDS_8_SML};
+use crate::MDSPermutation;
 
 pub struct MDSMatrixMersenne31;
 
-fn dot_vec<F: AbstractField, const N: usize>(u: &[F; N], v: &[F; N]) -> F {
-    u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
-}
-
-// F: Field ==> need dot_vec for each field
-fn apply_circulant<F: AbstractField, const N: usize>(
-    circ_matrix: &[u64; N],
-    input: [F; N],
-) -> [F; N] {
-    let mut matrix: [F; N] = circ_matrix.map(F::from_canonical_u64);
-
-    let mut output = [F::ZERO; N];
-    for i in 0..N - 1 {
-        output[i] = dot_vec(&input, &matrix);
-        matrix.rotate_right(1);
-    }
-    output[N - 1] = dot_vec(&input, &matrix);
-    output
-}
-
 impl CryptographicPermutation<[Mersenne31; 8]> for MDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
+        // An unreduced dot product is bounded above by s * p < 2^37,
+        // where s = sum(MATRIX_CIRC_MDS_8_SML).
         apply_circulant(&MATRIX_CIRC_MDS_8_SML, input)
     }
 }
@@ -43,6 +18,8 @@ impl MDSPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
 
 impl CryptographicPermutation<[Mersenne31; 12]> for MDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
+        // An unreduced dot product is bounded above by s * p < 2^40,
+        // where s = sum(MATRIX_CIRC_MDS_12_SML).
         apply_circulant(&MATRIX_CIRC_MDS_12_SML, input)
     }
 }

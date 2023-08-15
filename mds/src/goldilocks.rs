@@ -1,40 +1,10 @@
-use p3_field::AbstractField;
-use p3_symmetric::mds::MDSPermutation;
+use p3_goldilocks::Goldilocks;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::Goldilocks;
+use crate::util::{apply_circulant, MATRIX_CIRC_MDS_12_SML, MATRIX_CIRC_MDS_8_SML};
+use crate::MDSPermutation;
 
 pub struct MDSMatrixGoldilocks;
-
-//type Goldilocks8Array = [Goldilocks; 8];
-
-// make from_canonical_u16 const and use that instead?
-
-//const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
-const MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
-
-//const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
-const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
-
-fn dot_vec<F: AbstractField, const N: usize>(u: &[F; N], v: &[F; N]) -> F {
-    u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
-}
-
-// F: Field ==> need dot_vec for each field
-fn apply_circulant<F: AbstractField, const N: usize>(
-    circ_matrix: &[u64; N],
-    input: [F; N],
-) -> [F; N] {
-    let mut matrix: [F; N] = circ_matrix.map(F::from_canonical_u64);
-
-    let mut output = [F::ZERO; N];
-    for i in 0..N - 1 {
-        output[i] = dot_vec(&input, &matrix);
-        matrix.rotate_right(1);
-    }
-    output[N - 1] = dot_vec(&input, &matrix);
-    output
-}
 
 impl CryptographicPermutation<[Goldilocks; 8]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
@@ -62,6 +32,15 @@ const MATRIX_CIRC_MDS_16_GOLDILOCKS: [u64; 16] = [
     0x36665FFFCFFFFCCD, 0x8F7CFBE74FC1FE11, 0xF3C1DE178881E0F0, 0x511EC2B933D84731,
 ];
 
+impl CryptographicPermutation<[Goldilocks; 16]> for MDSMatrixGoldilocks {
+    fn permute(&self, input: [Goldilocks; 16]) -> [Goldilocks; 16] {
+        apply_circulant(&MATRIX_CIRC_MDS_16_GOLDILOCKS, input)
+    }
+}
+
+impl ArrayPermutation<Goldilocks, 16> for MDSMatrixGoldilocks {}
+impl MDSPermutation<Goldilocks, 16> for MDSMatrixGoldilocks {}
+
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
     0x5FFFFFFFA00AAAAB, 0x24021AB75BBFE656, 0x7BE9082D73B06DF5, 0x2282863E9C3A5A62,
@@ -71,6 +50,15 @@ const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
     0x5FFCF3CEDFFE79E8, 0x1C41DF105B82398E, 0x64444003DFFDDDDA, 0x76EDDBB6F7E51F95,
     0x1FF8E38E20038E39, 0x214139BD5C40A09D, 0x3065B7CCF3B3B621, 0x23B6F4622485CEDC,
 ];
+
+impl CryptographicPermutation<[Goldilocks; 24]> for MDSMatrixGoldilocks {
+    fn permute(&self, input: [Goldilocks; 24]) -> [Goldilocks; 24] {
+        apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, input)
+    }
+}
+
+impl ArrayPermutation<Goldilocks, 24> for MDSMatrixGoldilocks {}
+impl MDSPermutation<Goldilocks, 24> for MDSMatrixGoldilocks {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_32_GOLDILOCKS: [u64; 32] = [
@@ -83,6 +71,15 @@ const MATRIX_CIRC_MDS_32_GOLDILOCKS: [u64; 32] = [
     0xCB33333266666334, 0xD13B17619B13B277, 0x45B26D9326E9374A, 0x52AB552A5AA9556B,
     0x68ED2D2DB4B87697, 0x8B264C98A74E9D3B, 0x09EC23D83D847B09, 0x2C9A4D26669349A5,
 ];
+
+impl CryptographicPermutation<[Goldilocks; 32]> for MDSMatrixGoldilocks {
+    fn permute(&self, input: [Goldilocks; 32]) -> [Goldilocks; 32] {
+        apply_circulant(&MATRIX_CIRC_MDS_32_GOLDILOCKS, input)
+    }
+}
+
+impl ArrayPermutation<Goldilocks, 32> for MDSMatrixGoldilocks {}
+impl MDSPermutation<Goldilocks, 32> for MDSMatrixGoldilocks {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_64_GOLDILOCKS: [u64; 64] = [
@@ -104,6 +101,15 @@ const MATRIX_CIRC_MDS_64_GOLDILOCKS: [u64; 64] = [
     0xA8AE615C19CC2B99, 0xBC44444388444445, 0xDFE3F1F81CFC7E40, 0xDA4924916D24924A,
 ];
 
+impl CryptographicPermutation<[Goldilocks; 64]> for MDSMatrixGoldilocks {
+    fn permute(&self, input: [Goldilocks; 64]) -> [Goldilocks; 64] {
+        apply_circulant(&MATRIX_CIRC_MDS_64_GOLDILOCKS, input)
+    }
+}
+
+impl ArrayPermutation<Goldilocks, 64> for MDSMatrixGoldilocks {}
+impl MDSPermutation<Goldilocks, 64> for MDSMatrixGoldilocks {}
+
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_68_GOLDILOCKS: [u64; 68] = [
     0x03C3C3C3FC3C3C3C, 0x6799AFC54A69BC7D, 0xDA8C2C496A74B03B, 0x1E641D7AB35ED229,
@@ -124,3 +130,12 @@ const MATRIX_CIRC_MDS_68_GOLDILOCKS: [u64; 68] = [
     0xA88583816975CD56, 0x78B71DC516FF49CA, 0xC7BF095DF702FFA6, 0x78A60B3F971783B3,
     0xCB158EF40BC75CAC, 0xA97E818DBC152B4C, 0x9FC8339D415C3999, 0x006A88C0A0D8201C,
 ];
+
+impl CryptographicPermutation<[Goldilocks; 68]> for MDSMatrixGoldilocks {
+    fn permute(&self, input: [Goldilocks; 68]) -> [Goldilocks; 68] {
+        apply_circulant(&MATRIX_CIRC_MDS_68_GOLDILOCKS, input)
+    }
+}
+
+impl ArrayPermutation<Goldilocks, 68> for MDSMatrixGoldilocks {}
+impl MDSPermutation<Goldilocks, 68> for MDSMatrixGoldilocks {}
