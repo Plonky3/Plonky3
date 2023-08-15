@@ -35,14 +35,13 @@ where
     }
 }
 
-impl<'a, T, M> MatrixRows<'a, T> for WrappedMatrix<T, M>
+impl<T, M> MatrixRows<T> for WrappedMatrix<T, M>
 where
-    T: 'a,
-    M: MatrixRows<'a, T> + 'a,
+    M: MatrixRows<T>,
 {
-    type Row = WrappedMatrixRow<'a, T, M>;
+    type Row<'a> = WrappedMatrixRow<'a, T, M> where T: 'a, M: 'a;
 
-    fn row(&'a self, r: usize) -> Self::Row {
+    fn row(&self, r: usize) -> Self::Row<'_> {
         WrappedMatrixRow {
             wrapped_matrix: self,
             row: r,
@@ -55,20 +54,20 @@ where
 pub struct WrappedMatrixRow<'a, T, M>
 where
     T: 'a,
-    M: MatrixRows<'a, T>,
+    M: MatrixRows<T>,
 {
     wrapped_matrix: &'a WrappedMatrix<T, M>,
     row: usize,
-    current_iter: <M::Row as IntoIterator>::IntoIter,
+    current_iter: <M::Row<'a> as IntoIterator>::IntoIter,
     next_wrap: usize,
 }
 
 impl<'a, T, M> Iterator for WrappedMatrixRow<'a, T, M>
 where
     T: 'a,
-    M: MatrixRows<'a, T>,
+    M: MatrixRows<T>,
 {
-    type Item = &'a T;
+    type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.current_iter.next().or_else(|| {

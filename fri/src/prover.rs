@@ -108,14 +108,14 @@ fn reduce_matrices<F, Challenge, Mat>(
 where
     F: Field,
     Challenge: ExtensionField<F>,
-    Mat: for<'a> MatrixRows<'a, F>,
+    Mat: MatrixRows<F>,
 {
     (0..height)
         .map(|r| {
             let mut reduced = init[r];
             for mat in matrices {
                 for col in mat.row(r) {
-                    reduced = reduced * alpha + *col;
+                    reduced = reduced * alpha + col;
                 }
             }
             reduced

@@ -11,10 +11,10 @@ use crate::{Matrix, MatrixRows};
 ///
 /// # Panics
 /// Panics if dimensions of input matrices don't match.
-pub fn mul_csr_dense<'a, F, B>(a: &CsrMatrix<F>, b: &'a B) -> RowMajorMatrix<F>
+pub fn mul_csr_dense<F, B>(a: &CsrMatrix<F>, b: &B) -> RowMajorMatrix<F>
 where
     F: Field,
-    B: MatrixRows<'a, F> + Sync,
+    B: MatrixRows<F> + Sync,
 {
     assert_eq!(a.width(), b.height(), "A, B dimensions don't match");
     let c_width = b.width();
@@ -34,11 +34,11 @@ where
 }
 
 /// `x += y * s`, where `s` is a scalar.
-fn add_scaled_slice_in_place<'a, F, Y>(x: &mut [F], y: Y, s: F)
+fn add_scaled_slice_in_place<F, Y>(x: &mut [F], y: Y, s: F)
 where
     F: Field,
-    Y: Iterator<Item = &'a F>,
+    Y: Iterator<Item = F>,
 {
     // TODO: Use PackedField
-    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += *y_i * s);
+    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }

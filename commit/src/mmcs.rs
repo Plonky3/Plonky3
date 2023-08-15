@@ -21,7 +21,7 @@ pub trait MMCS<T> {
     type Commitment;
     type Proof;
     type Error;
-    type Mat: for<'a> MatrixRows<'a, T>;
+    type Mat: for<'a> MatrixRows<T>;
 
     fn open_batch(index: usize, prover_data: &Self::ProverData) -> (Vec<Vec<T>>, Self::Proof);
 
