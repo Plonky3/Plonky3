@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use p3_field::AbstractField;
+use p3_mds::NaiveMDSMatrix;
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::mds::NaiveMDSMatrix;
 
 // Generated with SageMath, using the get_mds_matrix function from the Rescue-Prime paper.
 const RESCUE_PRIME_M31_WIDTH_8_MDS_MATRIX: [[u32; 8]; 8] = [

@@ -2,7 +2,7 @@ use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
 use p3_field::{PrimeField, PrimeField64};
-use p3_symmetric::mds::MDSPermutation;
+use p3_mds::MDSPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
@@ -173,9 +173,9 @@ where
 mod tests {
     use itertools::Itertools;
     use p3_field::AbstractField;
+    use p3_mds::NaiveMDSMatrix;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::hasher::CryptographicHasher;
-    use p3_symmetric::mds::NaiveMDSMatrix;
     use p3_symmetric::permutation::CryptographicPermutation;
     use p3_symmetric::sponge::PaddingFreeSponge;
 

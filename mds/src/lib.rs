@@ -1,6 +1,5 @@
 use p3_field::PrimeField;
-
-use crate::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
 pub trait MDSPermutation<T, const WIDTH: usize>: ArrayPermutation<T, WIDTH> {}
 
