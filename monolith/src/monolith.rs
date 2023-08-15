@@ -17,7 +17,8 @@ use crate::monolith_mds::monolith_mds;
 // The Monolith-31 permutation.
 // Assumes that F is a 31-bit field (e.g. Mersenne31).
 pub struct Monolith31<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> {
-    pub round_constants: [[F; WIDTH]; NUM_ROUNDS],
+    // TODO: if possible, replace with [[F; WIDTH]; NUM_ROUNDS - 1]]
+    pub round_constants: Vec<[F; WIDTH]>,
     pub mds: Box<dyn MDSPermutation<F, WIDTH>>,
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
@@ -104,12 +105,12 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
         shake.finalize_xof()
     }
 
-    fn instantiate_round_constants() -> [[F; WIDTH]; NUM_ROUNDS] {
+    fn instantiate_round_constants() -> Vec<[F; WIDTH]> {
         let mut shake = Self::init_shake();
 
-        [[F::ZERO; WIDTH]; NUM_ROUNDS].map(|arr| {
+        vec![[F::ZERO; WIDTH]; NUM_ROUNDS - 1].iter().map(|arr| {
             arr.map(|_| Self::random_field_element(&mut shake))
-        })
+        }).collect()
     }
 
     pub fn concrete(&self, state: &mut [F; WIDTH], round_constants: Option<&[F; WIDTH]>) {
@@ -161,15 +162,47 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
     }
 
     pub fn permutation(&self, state: &mut [F; WIDTH]) {
-        debug_assert_eq!(
-            self.round_constants.len(),
-            NUM_ROUNDS - 1
-        );
         self.concrete(state, None);
         for rc in self.round_constants.iter().map(Some).chain(iter::once(None)) {
             self.bars(state);
             Self::bricks(state);
             self.concrete(state, rc);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_field::AbstractField;
+    use p3_mersenne_31::Mersenne31;
+
+    use crate::monolith::Monolith31;
+
+    #[test]
+    fn test_monolith_31() {
+        let monolith: Monolith31<Mersenne31, 16, 6> = Monolith31::new();
+
+        let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
+        for (i, inp) in input.iter_mut().enumerate() {
+            *inp = Mersenne31::from_canonical_usize(i);
+        }
+        monolith.permutation(&mut input);
+
+        assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
+        assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));
+        assert_eq!(input[2], Mersenne31::from_canonical_u64(1900746598));
+        assert_eq!(input[3], Mersenne31::from_canonical_u64(1734707571));
+        assert_eq!(input[4], Mersenne31::from_canonical_u64(2050994835));
+        assert_eq!(input[5], Mersenne31::from_canonical_u64(1648553244));
+        assert_eq!(input[6], Mersenne31::from_canonical_u64(1307647296));
+        assert_eq!(input[7], Mersenne31::from_canonical_u64(1941164548));
+        assert_eq!(input[8], Mersenne31::from_canonical_u64(1707113065));
+        assert_eq!(input[9], Mersenne31::from_canonical_u64(1477714255));
+        assert_eq!(input[10], Mersenne31::from_canonical_u64(1170160793));
+        assert_eq!(input[11], Mersenne31::from_canonical_u64(93800695));
+        assert_eq!(input[12], Mersenne31::from_canonical_u64(769879348));
+        assert_eq!(input[13], Mersenne31::from_canonical_u64(375548503));
+        assert_eq!(input[14], Mersenne31::from_canonical_u64(1989726444));
+        assert_eq!(input[15], Mersenne31::from_canonical_u64(1349325635));
     }
 }
