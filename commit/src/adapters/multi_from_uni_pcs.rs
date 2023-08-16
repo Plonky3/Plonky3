@@ -8,25 +8,25 @@ use p3_matrix::MatrixRows;
 use crate::pcs::{Pcs, UnivariatePcs};
 use crate::MultivariatePcs;
 
-pub struct MultiFromUniPcs<F, In, U, Chal>
+pub struct MultiFromUniPcs<F, In, U, Challenger>
 where
     F: Field,
     In: MatrixRows<F>,
-    U: UnivariatePcs<F, In, Chal>,
-    Chal: FieldChallenger<F>,
+    U: UnivariatePcs<F, In, Challenger>,
+    Challenger: FieldChallenger<F>,
 {
     _uni: U,
     _phantom_f: PhantomData<F>,
     _phantom_in: PhantomData<In>,
-    _phantom_chal: PhantomData<Chal>,
+    _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<F, In, U, Chal> Pcs<F, In, Chal> for MultiFromUniPcs<F, In, U, Chal>
+impl<F, In, U, Challenger> Pcs<F, In, Challenger> for MultiFromUniPcs<F, In, U, Challenger>
 where
     F: Field,
     In: MatrixRows<F>,
-    U: UnivariatePcs<F, In, Chal>,
-    Chal: FieldChallenger<F>,
+    U: UnivariatePcs<F, In, Challenger>,
+    Challenger: FieldChallenger<F>,
 {
     type Commitment = ();
     type ProverData = U::ProverData;
@@ -38,18 +38,19 @@ where
     }
 }
 
-impl<F, In, U, Chal> MultivariatePcs<F, In, Chal> for MultiFromUniPcs<F, In, U, Chal>
+impl<F, In, U, Challenger> MultivariatePcs<F, In, Challenger>
+    for MultiFromUniPcs<F, In, U, Challenger>
 where
     F: Field,
     In: MatrixRows<F>,
-    U: UnivariatePcs<F, In, Chal>,
-    Chal: FieldChallenger<F>,
+    U: UnivariatePcs<F, In, Challenger>,
+    Challenger: FieldChallenger<F>,
 {
     fn open_multi_batches<EF>(
         &self,
         _prover_data: &[&Self::ProverData],
         _points: &[Vec<EF>],
-        _challenger: &mut Chal,
+        _challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,

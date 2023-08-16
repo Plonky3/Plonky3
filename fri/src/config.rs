@@ -11,7 +11,7 @@ pub trait FriConfig {
     type InputMmcs: Mmcs<Self::Val>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
-    type Chal: FieldChallenger<Self::Val>
+    type Challenger: FieldChallenger<Self::Val>
         + CanObserve<<Self::InputMmcs as Mmcs<Self::Val>>::Commitment>
         + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
@@ -22,17 +22,17 @@ pub trait FriConfig {
     // TODO: grinding bits
 }
 
-pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal> {
+pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
     num_queries: usize,
     input_mmcs: InputMmcs,
     commit_phase_mmcs: CommitPhaseMmcs,
     _phantom_val: PhantomData<Val>,
     _phantom_challenge: PhantomData<Challenge>,
-    _phantom_chal: PhantomData<Chal>,
+    _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
-    FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
+impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
+    FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 {
     pub fn new(
         num_queries: usize,
@@ -50,14 +50,14 @@ impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
     }
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal> FriConfig
-    for FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
+impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> FriConfig
+    for FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 where
     Val: PrimeField64,
     Challenge: ExtensionField<Val> + TwoAdicField,
     InputMmcs: Mmcs<Val>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Chal: FieldChallenger<Val>
+    Challenger: FieldChallenger<Val>
         + CanObserve<<InputMmcs as Mmcs<Val>>::Commitment>
         + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
@@ -65,7 +65,7 @@ where
     type Challenge = Challenge;
     type InputMmcs = InputMmcs;
     type CommitPhaseMmcs = CommitPhaseMmcs;
-    type Chal = Chal;
+    type Challenger = Challenger;
 
     fn input_mmcs(&self) -> &InputMmcs {
         &self.input_mmcs

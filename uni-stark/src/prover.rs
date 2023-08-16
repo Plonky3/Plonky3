@@ -15,15 +15,15 @@ use p3_util::log2_strict_usize;
 
 use crate::{ConstraintFolder, StarkConfig};
 
-pub fn prove<SC, A, Chal>(
+pub fn prove<SC, A, Challenger>(
     air: &A,
     config: &SC,
-    challenger: &mut Chal,
+    challenger: &mut Challenger,
     trace: RowMajorMatrix<SC::Val>,
 ) where
     SC: StarkConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
-    Chal: FieldChallenger<SC::Domain>,
+    Challenger: FieldChallenger<SC::Domain>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);

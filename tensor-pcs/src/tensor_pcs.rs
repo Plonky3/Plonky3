@@ -39,13 +39,13 @@ where
     }
 }
 
-impl<F, In, C, M, Chal> Pcs<F, In, Chal> for TensorPcs<F, C, M>
+impl<F, In, C, M, Challenger> Pcs<F, In, Challenger> for TensorPcs<F, C, M>
 where
     F: Field,
     In: MatrixRows<F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
     M: DirectMmcs<F>,
-    Chal: FieldChallenger<F>,
+    Challenger: FieldChallenger<F>,
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
@@ -65,19 +65,19 @@ where
     }
 }
 
-impl<F, In, C, M, Chal> MultivariatePcs<F, In, Chal> for TensorPcs<F, C, M>
+impl<F, In, C, M, Challenger> MultivariatePcs<F, In, Challenger> for TensorPcs<F, C, M>
 where
     F: Field,
     In: MatrixRows<F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
     M: DirectMmcs<F>,
-    Chal: FieldChallenger<F>,
+    Challenger: FieldChallenger<F>,
 {
     fn open_multi_batches<EF>(
         &self,
         _prover_data: &[&Self::ProverData],
         _points: &[Vec<EF>],
-        _challenger: &mut Chal,
+        _challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,

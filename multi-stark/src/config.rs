@@ -16,23 +16,27 @@ pub trait StarkConfig {
         + AbstractExtensionField<<Self::Val as Field>::Packing>;
 
     /// The PCS used to commit to trace polynomials.
-    type PCS: for<'a> MultivariatePcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Chal>;
+    type PCS: for<'a> MultivariatePcs<
+        Self::Val,
+        RowMajorMatrixView<'a, Self::Val>,
+        Self::Challenger,
+    >;
 
-    type Chal: FieldChallenger<Self::Val>;
+    type Challenger: FieldChallenger<Self::Val>;
 
     fn pcs(&self) -> &Self::PCS;
 }
 
-pub struct StarkConfigImpl<Val, Challenge, PackedChallenge, PCS, Chal> {
+pub struct StarkConfigImpl<Val, Challenge, PackedChallenge, PCS, Challenger> {
     pcs: PCS,
     _phantom_val: PhantomData<Val>,
     _phantom_challenge: PhantomData<Challenge>,
     _phantom_packed_challenge: PhantomData<PackedChallenge>,
-    _phantom_chal: PhantomData<Chal>,
+    _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<Val, Challenge, PackedChallenge, PCS, Chal>
-    StarkConfigImpl<Val, Challenge, PackedChallenge, PCS, Chal>
+impl<Val, Challenge, PackedChallenge, PCS, Challenger>
+    StarkConfigImpl<Val, Challenge, PackedChallenge, PCS, Challenger>
 {
     pub fn new(pcs: PCS) -> Self {
         Self {
@@ -45,20 +49,20 @@ impl<Val, Challenge, PackedChallenge, PCS, Chal>
     }
 }
 
-impl<Val, Challenge, PackedChallenge, PCS, Chal> StarkConfig
-    for StarkConfigImpl<Val, Challenge, PackedChallenge, PCS, Chal>
+impl<Val, Challenge, PackedChallenge, PCS, Challenger> StarkConfig
+    for StarkConfigImpl<Val, Challenge, PackedChallenge, PCS, Challenger>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Val::Packing>,
-    PCS: for<'a> MultivariatePcs<Val, RowMajorMatrixView<'a, Val>, Chal>,
-    Chal: FieldChallenger<Val>,
+    PCS: for<'a> MultivariatePcs<Val, RowMajorMatrixView<'a, Val>, Challenger>,
+    Challenger: FieldChallenger<Val>,
 {
     type Val = Val;
     type Challenge = Challenge;
     type PackedChallenge = PackedChallenge;
     type PCS = PCS;
-    type Chal = Chal;
+    type Challenger = Challenger;
 
     fn pcs(&self) -> &Self::PCS {
         &self.pcs

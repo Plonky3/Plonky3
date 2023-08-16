@@ -31,15 +31,16 @@ impl<Val, Dom, DFT, M, L> LdtBasedPcs<Val, Dom, DFT, M, L> {
     }
 }
 
-impl<Val, Dom, In, DFT, M, L, Chal> Pcs<Val, In, Chal> for LdtBasedPcs<Val, Dom, DFT, M, L>
+impl<Val, Dom, In, DFT, M, L, Challenger> Pcs<Val, In, Challenger>
+    for LdtBasedPcs<Val, Dom, DFT, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
     DFT: TwoAdicSubgroupDft<Dom>,
     M: DirectMmcs<Dom>,
-    L: LDT<Dom, M, Chal>,
-    Chal: FieldChallenger<Val> + FieldChallenger<Dom>,
+    L: LDT<Dom, M, Challenger>,
+    Challenger: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
@@ -60,7 +61,7 @@ where
     }
 }
 
-impl<Val, Dom, In, DFT, M, L, Chal> UnivariatePcs<Val, In, Chal>
+impl<Val, Dom, In, DFT, M, L, Challenger> UnivariatePcs<Val, In, Challenger>
     for LdtBasedPcs<Val, Dom, DFT, M, L>
 where
     Val: Field,
@@ -68,14 +69,14 @@ where
     In: MatrixRows<Val>,
     DFT: TwoAdicSubgroupDft<Dom>,
     M: DirectMmcs<Dom>,
-    L: LDT<Dom, M, Chal>,
-    Chal: FieldChallenger<Val> + FieldChallenger<Dom>,
+    L: LDT<Dom, M, Challenger>,
+    Challenger: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
     fn open_multi_batches<EF>(
         &self,
         _prover_data: &[&Self::ProverData],
         _points: &[EF],
-        _challenger: &mut Chal,
+        _challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: AbstractExtensionField<Val>,

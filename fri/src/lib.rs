@@ -24,14 +24,14 @@ pub struct FriLDT<FC: FriConfig> {
     config: FC,
 }
 
-impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
+impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Challenger> for FriLDT<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
     fn prove(
         &self,
         inputs: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
-        challenger: &mut FC::Chal,
+        challenger: &mut FC::Challenger,
     ) -> Self::Proof {
         prove::<FC>(&self.config, inputs, challenger)
     }
@@ -40,7 +40,7 @@ impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
         &self,
         _input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
         proof: &Self::Proof,
-        challenger: &mut FC::Chal,
+        challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
         verify::<FC>(proof, challenger)
     }

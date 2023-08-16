@@ -14,7 +14,7 @@ use crate::{FriConfig, FriProof, QueryProof};
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
-    challenger: &mut FC::Chal,
+    challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
     let n = input_commits
         .iter()
@@ -56,7 +56,7 @@ fn answer_query<FC: FriConfig>(
 fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
-    challenger: &mut FC::Chal,
+    challenger: &mut FC::Challenger,
 ) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let inputs_by_desc_height = input_commits

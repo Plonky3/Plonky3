@@ -13,17 +13,17 @@ use p3_field::Field;
 extern crate alloc;
 
 /// A batch low-degree test (LDT).
-pub trait LDT<F: Field, M: Mmcs<F>, Chal: FieldChallenger<F>> {
+pub trait LDT<F: Field, M: Mmcs<F>, Challenger: FieldChallenger<F>> {
     type Proof;
     type Error;
 
     /// Prove that each column of each matrix in `codewords` is a codeword.
-    fn prove(&self, inputs: &[M::ProverData], challenger: &mut Chal) -> Self::Proof;
+    fn prove(&self, inputs: &[M::ProverData], challenger: &mut Challenger) -> Self::Proof;
 
     fn verify(
         &self,
         input_commits: &[M::Commitment],
         proof: &Self::Proof,
-        challenger: &mut Chal,
+        challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
 }
