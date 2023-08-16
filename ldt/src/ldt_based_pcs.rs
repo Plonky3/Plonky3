@@ -3,12 +3,12 @@ use core::marker::PhantomData;
 
 use crate::LDT;
 use p3_challenger::FieldChallenger;
-use p3_commit::{DirectMMCS, UnivariatePCS, PCS};
+use p3_commit::{DirectMmcs, UnivariatePcs, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
 
-pub struct LDTBasedPCS<Val, Dom, DFT, M, L> {
+pub struct LdtBasedPcs<Val, Dom, DFT, M, L> {
     dft: DFT,
     added_bits: usize,
     mmcs: M,
@@ -17,7 +17,7 @@ pub struct LDTBasedPCS<Val, Dom, DFT, M, L> {
     _phantom_l: PhantomData<L>,
 }
 
-impl<Val, Dom, DFT, M, L> LDTBasedPCS<Val, Dom, DFT, M, L> {
+impl<Val, Dom, DFT, M, L> LdtBasedPcs<Val, Dom, DFT, M, L> {
     pub fn new(dft: DFT, added_bits: usize, mmcs: M) -> Self {
         Self {
             dft,
@@ -30,13 +30,13 @@ impl<Val, Dom, DFT, M, L> LDTBasedPCS<Val, Dom, DFT, M, L> {
     }
 }
 
-impl<Val, Dom, In, DFT, M, L, Chal> PCS<Val, In, Chal> for LDTBasedPCS<Val, Dom, DFT, M, L>
+impl<Val, Dom, In, DFT, M, L, Chal> Pcs<Val, In, Chal> for LdtBasedPcs<Val, Dom, DFT, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
     DFT: TwoAdicSubgroupDft<Dom>,
-    M: DirectMMCS<Dom>,
+    M: DirectMmcs<Dom>,
     L: LDT<Dom, M, Chal>,
     Chal: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
@@ -59,14 +59,14 @@ where
     }
 }
 
-impl<Val, Dom, In, DFT, M, L, Chal> UnivariatePCS<Val, In, Chal>
-    for LDTBasedPCS<Val, Dom, DFT, M, L>
+impl<Val, Dom, In, DFT, M, L, Chal> UnivariatePcs<Val, In, Chal>
+    for LdtBasedPcs<Val, Dom, DFT, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
     DFT: TwoAdicSubgroupDft<Dom>,
-    M: DirectMMCS<Dom>,
+    M: DirectMmcs<Dom>,
     L: LDT<Dom, M, Chal>,
     Chal: FieldChallenger<Val> + FieldChallenger<Dom>,
 {

@@ -9,7 +9,7 @@ use core::iter;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::{Dimensions, DirectMMCS, MMCS};
+use p3_commit::{Dimensions, DirectMmcs, Mmcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
@@ -166,7 +166,7 @@ impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
     }
 }
 
-impl<L, D, H, C> MMCS<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C> Mmcs<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: 'static + Clone,
     H: CryptographicHasher<L, D>,
@@ -211,7 +211,7 @@ where
     }
 }
 
-impl<L, D, H, C> DirectMMCS<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C> DirectMmcs<L> for MerkleTreeMMCS<L, D, H, C>
 where
     L: 'static + Copy,
     D: Copy + Default,
@@ -229,7 +229,7 @@ where
 mod tests {
     use alloc::vec;
 
-    use p3_commit::{DirectMMCS, MMCS};
+    use p3_commit::{DirectMmcs, Mmcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::compression::TruncatedPermutation;

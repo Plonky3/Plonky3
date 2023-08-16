@@ -4,7 +4,7 @@ use core::cmp::Reverse;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
-use p3_commit::{DirectMMCS, MMCS};
+use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
 
@@ -13,7 +13,7 @@ use crate::{FriConfig, FriProof, QueryProof};
 
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
-    input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
+    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     challenger: &mut FC::Chal,
 ) -> FriProof<FC> {
     let n = input_commits
@@ -35,8 +35,8 @@ pub(crate) fn prove<FC: FriConfig>(
 }
 
 fn answer_query<FC: FriConfig>(
-    input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
-    commit_phase_commits: &[<FC::CommitPhaseMmcs as MMCS<FC::Challenge>>::ProverData],
+    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
     let input_openings = input_commits
@@ -55,9 +55,9 @@ fn answer_query<FC: FriConfig>(
 
 fn commit_phase<FC: FriConfig>(
     config: &FC,
-    input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
+    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     challenger: &mut FC::Chal,
-) -> Vec<<FC::CommitPhaseMmcs as MMCS<FC::Challenge>>::ProverData> {
+) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let inputs_by_desc_height = input_commits
         .iter()
@@ -88,7 +88,7 @@ fn commit_phase<FC: FriConfig>(
         challenger.observe(commit);
         commits.push(prover_data);
 
-        current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as MMCS<_>>::Mat>(
+        current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat>(
             height,
             &current,
             &matrices.collect_vec(),

@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::FieldChallenger;
-use p3_commit::UnivariatePCS;
+use p3_commit::UnivariatePcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrixView;
@@ -20,7 +20,7 @@ pub trait StarkConfig {
         + AbstractExtensionField<<Self::Domain as Field>::Packing>;
 
     /// The PCS used to commit to trace polynomials.
-    type PCS: for<'a> UnivariatePCS<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Chal>;
+    type PCS: for<'a> UnivariatePcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Chal>;
 
     type DFT: TwoAdicSubgroupDft<Self::Domain>;
 
@@ -64,7 +64,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Domain>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Domain::Packing>,
-    PCS: for<'a> UnivariatePCS<Val, RowMajorMatrixView<'a, Val>, Chal>,
+    PCS: for<'a> UnivariatePcs<Val, RowMajorMatrixView<'a, Val>, Chal>,
     DFT: TwoAdicSubgroupDft<Domain>,
     Chal: FieldChallenger<Val>,
 {

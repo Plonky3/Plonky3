@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::FieldChallenger;
 use p3_code::LinearCodeFamily;
-use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
+use p3_commit::{DirectMmcs, MultivariatePcs, Pcs};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
@@ -11,11 +11,11 @@ use p3_matrix::MatrixRows;
 use crate::reshape::optimal_wraps;
 use crate::wrapped_matrix::WrappedMatrix;
 
-pub struct TensorPCS<F, C, M>
+pub struct TensorPcs<F, C, M>
 where
     F: Field,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F>,
+    M: DirectMmcs<F>,
 {
     codes: C,
     mmcs: M,
@@ -23,11 +23,11 @@ where
     _phantom_m: PhantomData<M>,
 }
 
-impl<F, C, M> TensorPCS<F, C, M>
+impl<F, C, M> TensorPcs<F, C, M>
 where
     F: Field,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
-    M: DirectMMCS<F>,
+    M: DirectMmcs<F>,
 {
     pub fn new(codes: C, mmcs: M) -> Self {
         Self {
@@ -39,12 +39,12 @@ where
     }
 }
 
-impl<F, In, C, M, Chal> PCS<F, In, Chal> for TensorPCS<F, C, M>
+impl<F, In, C, M, Chal> Pcs<F, In, Chal> for TensorPcs<F, C, M>
 where
     F: Field,
     In: MatrixRows<F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
-    M: DirectMMCS<F>,
+    M: DirectMmcs<F>,
     Chal: FieldChallenger<F>,
 {
     type Commitment = M::Commitment;
@@ -65,12 +65,12 @@ where
     }
 }
 
-impl<F, In, C, M, Chal> MultivariatePCS<F, In, Chal> for TensorPCS<F, C, M>
+impl<F, In, C, M, Chal> MultivariatePcs<F, In, Chal> for TensorPcs<F, C, M>
 where
     F: Field,
     In: MatrixRows<F>,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
-    M: DirectMMCS<F>,
+    M: DirectMmcs<F>,
     Chal: FieldChallenger<F>,
 {
     fn open_multi_batches<EF>(

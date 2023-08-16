@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};
 
-/// A "Mixed Matrix Commitment Scheme" (MMCS) is a bit like a vector commitment scheme, but it
+/// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme; it
 /// supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
 /// to a batch of matrices at once even if their widths and heights differ.
 ///
@@ -16,7 +16,7 @@ use p3_matrix::{Matrix, MatrixRows};
 /// The `DirectMMCS` sub-trait represents an MMS which can be directly constructed from a set of
 /// matrices. Other MMCSs may be virtual combinations of child MMCSs, or may be constructed in a
 /// streaming manner.
-pub trait MMCS<T> {
+pub trait Mmcs<T> {
     type ProverData;
     type Commitment;
     type Proof;
@@ -53,7 +53,7 @@ pub struct Dimensions {
 }
 
 /// An MMCS over explicit inputs which are supplied upfront.
-pub trait DirectMMCS<T>: MMCS<T, Mat = RowMajorMatrix<T>> {
+pub trait DirectMmcs<T>: Mmcs<T, Mat = RowMajorMatrix<T>> {
     fn commit(&self, inputs: Vec<RowMajorMatrix<T>>) -> (Self::Commitment, Self::ProverData);
 
     fn commit_matrix(&self, input: RowMajorMatrix<T>) -> (Self::Commitment, Self::ProverData) {

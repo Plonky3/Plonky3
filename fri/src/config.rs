@@ -1,19 +1,19 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{DirectMMCS, MMCS};
+use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 
 pub trait FriConfig {
     type Val: PrimeField64;
     type Challenge: ExtensionField<Self::Val> + TwoAdicField;
 
-    type InputMmcs: MMCS<Self::Val>;
-    type CommitPhaseMmcs: DirectMMCS<Self::Challenge>;
+    type InputMmcs: Mmcs<Self::Val>;
+    type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Chal: FieldChallenger<Self::Val>
-        + CanObserve<<Self::InputMmcs as MMCS<Self::Val>>::Commitment>
-        + CanObserve<<Self::CommitPhaseMmcs as MMCS<Self::Challenge>>::Commitment>;
+        + CanObserve<<Self::InputMmcs as Mmcs<Self::Val>>::Commitment>
+        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
     fn input_mmcs(&self) -> &Self::InputMmcs;
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
@@ -55,11 +55,11 @@ impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal> FriConfig
 where
     Val: PrimeField64,
     Challenge: ExtensionField<Val> + TwoAdicField,
-    InputMmcs: MMCS<Val>,
-    CommitPhaseMmcs: DirectMMCS<Challenge>,
+    InputMmcs: Mmcs<Val>,
+    CommitPhaseMmcs: DirectMmcs<Challenge>,
     Chal: FieldChallenger<Val>
-        + CanObserve<<InputMmcs as MMCS<Val>>::Commitment>
-        + CanObserve<<CommitPhaseMmcs as MMCS<Challenge>>::Commitment>,
+        + CanObserve<<InputMmcs as Mmcs<Val>>::Commitment>
+        + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
     type Challenge = Challenge;

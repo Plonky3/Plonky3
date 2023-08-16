@@ -5,14 +5,14 @@ use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
-use crate::pcs::{UnivariatePCS, PCS};
-use crate::MultivariatePCS;
+use crate::pcs::{UnivariatePcs, Pcs};
+use crate::MultivariatePcs;
 
-pub struct MultiFromUniPCS<F, In, U, Chal>
+pub struct MultiFromUniPcs<F, In, U, Chal>
 where
     F: Field,
     In: MatrixRows<F>,
-    U: UnivariatePCS<F, In, Chal>,
+    U: UnivariatePcs<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
     _uni: U,
@@ -21,11 +21,11 @@ where
     _phantom_chal: PhantomData<Chal>,
 }
 
-impl<F, In, U, Chal> PCS<F, In, Chal> for MultiFromUniPCS<F, In, U, Chal>
+impl<F, In, U, Chal> Pcs<F, In, Chal> for MultiFromUniPcs<F, In, U, Chal>
 where
     F: Field,
     In: MatrixRows<F>,
-    U: UnivariatePCS<F, In, Chal>,
+    U: UnivariatePcs<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
     type Commitment = ();
@@ -38,11 +38,11 @@ where
     }
 }
 
-impl<F, In, U, Chal> MultivariatePCS<F, In, Chal> for MultiFromUniPCS<F, In, U, Chal>
+impl<F, In, U, Chal> MultivariatePcs<F, In, Chal> for MultiFromUniPcs<F, In, U, Chal>
 where
     F: Field,
     In: MatrixRows<F>,
-    U: UnivariatePCS<F, In, Chal>,
+    U: UnivariatePcs<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
     fn open_multi_batches<EF>(

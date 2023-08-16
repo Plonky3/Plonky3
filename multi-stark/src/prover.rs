@@ -1,6 +1,6 @@
 use p3_air::Air;
 use p3_challenger::FieldChallenger;
-use p3_commit::PCS;
+use p3_commit::Pcs;
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::{ConstraintFolder, StarkConfig};

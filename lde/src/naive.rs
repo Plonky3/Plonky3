@@ -9,18 +9,18 @@ use p3_matrix::stack::VerticalPair;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
-use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE, UndefinedLDE};
+use crate::{TwoAdicCosetLde, TwoAdicLde, TwoAdicSubgroupLde, UndefinedLde};
 
-/// A naive quadratic-time implementation of `LDE`, intended for testing.
-pub struct NaiveUndefinedLDE;
+/// A naive quadratic-time implementation of `Lde`, intended for testing.
+pub struct NaiveUndefinedLde;
 
-/// A naive quadratic-time implementation of `TwoAdicSubgroupLDE`, intended for testing.
-pub struct NaiveSubgroupLDE;
+/// A naive quadratic-time implementation of `TwoAdicSubgroupLde`, intended for testing.
+pub struct NaiveSubgroupLde;
 
-/// A naive quadratic-time implementation of `TwoAdicCosetLDE`, intended for testing.
-pub struct NaiveCosetLDE;
+/// A naive quadratic-time implementation of `TwoAdicCosetLde`, intended for testing.
+pub struct NaiveCosetLde;
 
-impl<F, In> UndefinedLDE<F, F, In> for NaiveUndefinedLDE
+impl<F, In> UndefinedLde<F, F, In> for NaiveUndefinedLde
 where
     F: Field,
     In: MatrixRows<F>,
@@ -43,7 +43,7 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveSubgroupLDE
+impl<Val, Dom> TwoAdicLde<Val, Dom> for NaiveSubgroupLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -65,7 +65,7 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveCosetLDE
+impl<Val, Dom> TwoAdicLde<Val, Dom> for NaiveCosetLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -88,14 +88,14 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicSubgroupLDE<Val, Dom> for NaiveSubgroupLDE
+impl<Val, Dom> TwoAdicSubgroupLde<Val, Dom> for NaiveSubgroupLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
 {
 }
 
-impl<Val, Dom> TwoAdicCosetLDE<Val, Dom> for NaiveCosetLDE
+impl<Val, Dom> TwoAdicCosetLde<Val, Dom> for NaiveCosetLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,

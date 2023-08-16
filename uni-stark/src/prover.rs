@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::FieldChallenger;
-use p3_commit::PCS;
+use p3_commit::Pcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,

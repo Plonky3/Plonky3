@@ -4,13 +4,13 @@ use p3_challenger::FieldChallenger;
 use p3_field::Field;
 use p3_matrix::MatrixRows;
 
-use crate::pcs::MultivariatePCS;
+use crate::pcs::MultivariatePcs;
 
-pub struct UniFromMultiPCS<F, In, M, Chal>
+pub struct UniFromMultiPcs<F, In, M, Chal>
 where
     F: Field,
     In: MatrixRows<F>,
-    M: MultivariatePCS<F, In, Chal>,
+    M: MultivariatePcs<F, In, Chal>,
     Chal: FieldChallenger<F>,
 {
     _multi: M,
@@ -19,4 +19,4 @@ where
     _phantom_chal: PhantomData<Chal>,
 }
 
-// impl<F: Field, M: MultivariatePCS<F>> UnivariatePCS<F> for UniFromMultiPCS<F> {}
+// impl<F: Field, M: MultivariatePcs<F>> UnivariatePcs<F> for UniFromMultiPcs<F> {}

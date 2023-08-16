@@ -4,8 +4,8 @@
 
 extern crate alloc;
 
-use p3_commit::MMCS;
-use p3_ldt::{LDTBasedPCS, LDT};
+use p3_commit::Mmcs;
+use p3_ldt::{LdtBasedPcs, LDT};
 
 pub use crate::proof::FriProof;
 use crate::prover::prove;
@@ -30,7 +30,7 @@ impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
 
     fn prove(
         &self,
-        inputs: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
+        inputs: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
         challenger: &mut FC::Chal,
     ) -> Self::Proof {
         prove::<FC>(&self.config, inputs, challenger)
@@ -38,7 +38,7 @@ impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
 
     fn verify(
         &self,
-        _input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::Commitment],
+        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Chal,
     ) -> Result<(), Self::Error> {
@@ -46,7 +46,7 @@ impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
     }
 }
 
-pub type FRIBasedPCS<FC, DFT> = LDTBasedPCS<
+pub type FRIBasedPCS<FC, DFT> = LdtBasedPcs<
     <FC as FriConfig>::Val,
     <FC as FriConfig>::Challenge,
     DFT,
