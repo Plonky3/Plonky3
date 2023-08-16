@@ -1,7 +1,7 @@
 use p3_air::{Air, AirBuilder};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2BowersFft;
-use p3_fri::{FRIBasedPcs, FriConfigImpl};
+use p3_fri::{FriBasedPcs, FriConfigImpl};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
@@ -61,7 +61,7 @@ fn test_prove_goldilocks() {
 
     type Challenger = DuplexChallenger<Val, Perm, 8>;
     type MyFriConfig = FriConfigImpl<Val, Challenge, Mmcs, Mmcs, Challenger>;
-    type Pcs = FRIBasedPcs<MyFriConfig, Dft>;
+    type Pcs = FriBasedPcs<MyFriConfig, Dft>;
     type MyConfig = StarkConfigImpl<Val, Dom, Challenge, Challenge, Pcs, Dft, Challenger>;
 
     let mut rng = thread_rng();
