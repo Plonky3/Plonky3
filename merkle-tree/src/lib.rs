@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_commit::{Dimensions, DirectMmcs, Mmcs};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
@@ -176,7 +176,7 @@ where
     type Commitment = D;
     type Proof = Vec<D>;
     type Error = ();
-    type Mat = RowMajorMatrix<L>;
+    type Mat<'a> = RowMajorMatrixView<'a, L> where D: 'a, H: 'a, C: 'a;
 
     fn open_batch(&self, index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
         let max_height = self.get_max_height(prover_data);
@@ -196,8 +196,11 @@ where
         (leaf, proof)
     }
 
-    fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> &'a [RowMajorMatrix<L>] {
-        &prover_data.leaves
+    fn get_matrices<'a>(
+        &'a self,
+        prover_data: &'a Self::ProverData,
+    ) -> Vec<RowMajorMatrixView<'a, L>> {
+        prover_data.leaves.iter().map(|mat| mat.as_view()).collect()
     }
 
     fn verify_batch(
@@ -205,7 +208,7 @@ where
         _commit: &D,
         _dimensions: &[Dimensions],
         _index: usize,
-        _rows: Vec<Vec<L>>,
+        _opened_values: Vec<Vec<L>>,
         _proof: &Vec<D>,
     ) -> Result<(), Self::Error> {
         todo!()

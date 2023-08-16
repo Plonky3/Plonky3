@@ -89,7 +89,7 @@ fn commit_phase<FC: FriConfig>(
         challenger.observe(commit);
         commits.push(prover_data);
 
-        current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat>(
+        current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat<'_>>(
             height,
             &current,
             &matrices.collect_vec(),
@@ -103,7 +103,7 @@ fn commit_phase<FC: FriConfig>(
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
     init: &[Challenge],
-    matrices: &[&Mat],
+    matrices: &[Mat],
     alpha: Challenge,
 ) -> Vec<Challenge>
 where

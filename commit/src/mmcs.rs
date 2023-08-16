@@ -21,7 +21,9 @@ pub trait Mmcs<T> {
     type Commitment;
     type Proof;
     type Error;
-    type Mat: for<'a> MatrixRows<T>;
+    type Mat<'a>: MatrixRows<T>
+    where
+        Self: 'a;
 
     fn open_batch(
         &self,
@@ -30,13 +32,19 @@ pub trait Mmcs<T> {
     ) -> (Vec<Vec<T>>, Self::Proof);
 
     /// Get the matrices that were committed to.
-    fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> &'a [Self::Mat];
+    fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> Vec<Self::Mat<'a>>;
 
-    /// Get the largest height of any committed matrix.
-    fn get_max_height(&self, prover_data: &Self::ProverData) -> usize {
+    fn get_matrix_heights(&self, prover_data: &Self::ProverData) -> Vec<usize> {
         self.get_matrices(prover_data)
             .iter()
             .map(|matrix| matrix.height())
+            .collect()
+    }
+
+    /// Get the largest height of any committed matrix.
+    fn get_max_height(&self, prover_data: &Self::ProverData) -> usize {
+        self.get_matrix_heights(prover_data)
+            .into_iter()
             .max()
             .unwrap_or_else(|| panic!("No committed matrices?"))
     }
@@ -47,7 +55,7 @@ pub trait Mmcs<T> {
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        rows: Vec<Vec<T>>,
+        opened_values: Vec<Vec<T>>,
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>;
 }
@@ -58,7 +66,7 @@ pub struct Dimensions {
 }
 
 /// An MMCS over explicit inputs which are supplied upfront.
-pub trait DirectMmcs<T>: Mmcs<T, Mat = RowMajorMatrix<T>> {
+pub trait DirectMmcs<T>: Mmcs<T> {
     fn commit(&self, inputs: Vec<RowMajorMatrix<T>>) -> (Self::Commitment, Self::ProverData);
 
     fn commit_matrix(&self, input: RowMajorMatrix<T>) -> (Self::Commitment, Self::ProverData) {
