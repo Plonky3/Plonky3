@@ -18,7 +18,7 @@ pub(crate) fn prove<FC: FriConfig>(
 ) -> FriProof<FC> {
     let n = input_commits
         .iter()
-        .map(FC::InputMmcs::get_max_height)
+        .map(|commit| config.input_mmcs().get_max_height(commit))
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
 
@@ -29,23 +29,24 @@ pub(crate) fn prove<FC: FriConfig>(
     // TODO: into_par_iter?
     let query_proofs = query_indices
         .into_iter()
-        .map(|index| answer_query(input_commits, &commit_phase_commits, index))
+        .map(|index| answer_query(config, input_commits, &commit_phase_commits, index))
         .collect();
     FriProof { query_proofs }
 }
 
 fn answer_query<FC: FriConfig>(
+    config: &FC,
     input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
     let input_openings = input_commits
         .iter()
-        .map(|commit| FC::InputMmcs::open_batch(index, commit))
+        .map(|commit| config.input_mmcs().open_batch(index, commit))
         .collect();
     let commit_phase_openings = commit_phase_commits
         .iter()
-        .map(|commit| FC::CommitPhaseMmcs::open_batch(index, commit))
+        .map(|commit| config.commit_phase_mmcs().open_batch(index, commit))
         .collect();
     QueryProof {
         input_openings,
@@ -61,7 +62,7 @@ fn commit_phase<FC: FriConfig>(
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let inputs_by_desc_height = input_commits
         .iter()
-        .flat_map(FC::InputMmcs::get_matrices)
+        .flat_map(|commit| config.input_mmcs().get_matrices(commit))
         .sorted_by_key(|mat| Reverse(mat.height()))
         .group_by(|mat| mat.height());
     let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();

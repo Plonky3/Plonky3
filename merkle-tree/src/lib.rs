@@ -178,8 +178,8 @@ where
     type Error = ();
     type Mat = RowMajorMatrix<L>;
 
-    fn open_batch(index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
-        let max_height = Self::get_max_height(prover_data);
+    fn open_batch(&self, index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
+        let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_strict_usize(max_height);
 
         let leaf = prover_data
@@ -196,11 +196,12 @@ where
         (leaf, proof)
     }
 
-    fn get_matrices(prover_data: &Self::ProverData) -> &[RowMajorMatrix<L>] {
+    fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> &'a [RowMajorMatrix<L>] {
         &prover_data.leaves
     }
 
     fn verify_batch(
+        &self,
         _commit: &D,
         _dimensions: &[Dimensions],
         _index: usize,
@@ -269,7 +270,7 @@ mod tests {
         let small_mat = RowMajorMatrix::new(vec![10, 11, 20, 21, 30, 31, 40, 41], 2);
         let (_commit, prover_data) = mmcs.commit(vec![large_mat, small_mat]);
 
-        let (opened_values, _proof) = Mmcs::open_batch(3, &prover_data);
+        let (opened_values, _proof) = mmcs.open_batch(3, &prover_data);
         assert_eq!(opened_values, vec![vec![4], vec![20, 21]]);
     }
 }

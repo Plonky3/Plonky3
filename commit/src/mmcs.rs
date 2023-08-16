@@ -23,14 +23,18 @@ pub trait Mmcs<T> {
     type Error;
     type Mat: for<'a> MatrixRows<T>;
 
-    fn open_batch(index: usize, prover_data: &Self::ProverData) -> (Vec<Vec<T>>, Self::Proof);
+    fn open_batch(
+        &self,
+        index: usize,
+        prover_data: &Self::ProverData,
+    ) -> (Vec<Vec<T>>, Self::Proof);
 
     /// Get the matrices that were committed to.
-    fn get_matrices(prover_data: &Self::ProverData) -> &[Self::Mat];
+    fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> &'a [Self::Mat];
 
     /// Get the largest height of any committed matrix.
-    fn get_max_height(prover_data: &Self::ProverData) -> usize {
-        Self::get_matrices(prover_data)
+    fn get_max_height(&self, prover_data: &Self::ProverData) -> usize {
+        self.get_matrices(prover_data)
             .iter()
             .map(|matrix| matrix.height())
             .max()
@@ -39,6 +43,7 @@ pub trait Mmcs<T> {
 
     /// Verify a batch opening.
     fn verify_batch(
+        &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
