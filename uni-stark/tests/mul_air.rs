@@ -1,11 +1,11 @@
 use p3_air::{Air, AirBuilder};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2BowersFft;
-use p3_fri::{FRIBasedPCS, FriConfigImpl};
+use p3_fri::{FRIBasedPcs, FriConfigImpl};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
-use p3_merkle_tree::MerkleTreeMMCS;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
 use p3_symmetric::mds::MDSPermutation;
@@ -56,18 +56,18 @@ fn test_prove_goldilocks() {
     type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
     let c = C::new(perm.clone());
 
-    type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
-    type DFT = Radix2BowersFft;
+    type Mmcs = MerkleTreeMmcs<Val, [Val; 4], H4, C>;
+    type Dft = Radix2BowersFft;
 
     type Challenger = DuplexChallenger<Val, Perm, 8>;
-    type MyFriConfig = FriConfigImpl<Val, Challenge, MMCS, MMCS, Challenger>;
-    type PCS = FRIBasedPCS<MyFriConfig, DFT>;
-    type MyConfig = StarkConfigImpl<Val, Dom, Challenge, Challenge, PCS, DFT, Challenger>;
+    type MyFriConfig = FriConfigImpl<Val, Challenge, Mmcs, Mmcs, Challenger>;
+    type Pcs = FRIBasedPcs<MyFriConfig, Dft>;
+    type MyConfig = StarkConfigImpl<Val, Dom, Challenge, Challenge, Pcs, Dft, Challenger>;
 
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
-    let pcs = PCS::new(DFT::default(), 1, MMCS::new(h4, c));
-    let config = StarkConfigImpl::new(pcs, DFT::default());
+    let pcs = Pcs::new(Dft::default(), 1, Mmcs::new(h4, c));
+    let config = StarkConfigImpl::new(pcs, Dft::default());
     let mut challenger = Challenger::new(perm);
     prove::<MyConfig, _, _>(&MulAir, &config, &mut challenger, trace);
 }

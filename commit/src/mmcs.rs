@@ -13,7 +13,7 @@ use p3_matrix::{Matrix, MatrixRows};
 /// removed (from the least-significant side) to get the effective row index. These semantics are
 /// useful in the FRI protocol.
 ///
-/// The `DirectMMCS` sub-trait represents an MMS which can be directly constructed from a set of
+/// The `DirectMmcs` sub-trait represents an MMS which can be directly constructed from a set of
 /// matrices. Other MMCSs may be virtual combinations of child MMCSs, or may be constructed in a
 /// streaming manner.
 pub trait Mmcs<T> {

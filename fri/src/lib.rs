@@ -5,7 +5,7 @@
 extern crate alloc;
 
 use p3_commit::Mmcs;
-use p3_ldt::{LdtBasedPcs, LDT};
+use p3_ldt::{Ldt, LdtBasedPcs};
 
 pub use crate::proof::FriProof;
 use crate::prover::prove;
@@ -20,11 +20,11 @@ mod verifier;
 pub use config::*;
 pub use proof::*;
 
-pub struct FriLDT<FC: FriConfig> {
+pub struct FriLdt<FC: FriConfig> {
     config: FC,
 }
 
-impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Challenger> for FriLDT<FC> {
+impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
@@ -46,10 +46,10 @@ impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Challenger> for FriLDT<FC> {
     }
 }
 
-pub type FRIBasedPCS<FC, DFT> = LdtBasedPcs<
+pub type FRIBasedPcs<FC, Dft> = LdtBasedPcs<
     <FC as FriConfig>::Val,
     <FC as FriConfig>::Challenge,
-    DFT,
+    Dft,
     <FC as FriConfig>::InputMmcs,
-    FriLDT<FC>,
+    FriLdt<FC>,
 >;

@@ -13,7 +13,7 @@ use p3_field::Field;
 extern crate alloc;
 
 /// A batch low-degree test (LDT).
-pub trait LDT<F: Field, M: Mmcs<F>, Challenger: FieldChallenger<F>> {
+pub trait Ldt<F: Field, M: Mmcs<F>, Challenger: FieldChallenger<F>> {
     type Proof;
     type Error;
 

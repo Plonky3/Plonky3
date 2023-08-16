@@ -53,7 +53,7 @@
 //     type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
 //     let c = C::new(perm.clone());
 //
-//     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
+//     type Mmcs = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
 //     type Pcs = TensorPcs<Val, MyCode>;
 //     type MyConfig = StarkConfigImpl<Val, Challenge, Challenge, Pcs>;
 //

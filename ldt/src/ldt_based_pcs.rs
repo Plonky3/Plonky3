@@ -7,10 +7,10 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
 
-use crate::LDT;
+use crate::Ldt;
 
-pub struct LdtBasedPcs<Val, Dom, DFT, M, L> {
-    dft: DFT,
+pub struct LdtBasedPcs<Val, Dom, Dft, M, L> {
+    dft: Dft,
     added_bits: usize,
     mmcs: M,
     _phantom_val: PhantomData<Val>,
@@ -18,8 +18,8 @@ pub struct LdtBasedPcs<Val, Dom, DFT, M, L> {
     _phantom_l: PhantomData<L>,
 }
 
-impl<Val, Dom, DFT, M, L> LdtBasedPcs<Val, Dom, DFT, M, L> {
-    pub fn new(dft: DFT, added_bits: usize, mmcs: M) -> Self {
+impl<Val, Dom, Dft, M, L> LdtBasedPcs<Val, Dom, Dft, M, L> {
+    pub fn new(dft: Dft, added_bits: usize, mmcs: M) -> Self {
         Self {
             dft,
             added_bits,
@@ -31,15 +31,15 @@ impl<Val, Dom, DFT, M, L> LdtBasedPcs<Val, Dom, DFT, M, L> {
     }
 }
 
-impl<Val, Dom, In, DFT, M, L, Challenger> Pcs<Val, In, Challenger>
-    for LdtBasedPcs<Val, Dom, DFT, M, L>
+impl<Val, Dom, In, Dft, M, L, Challenger> Pcs<Val, In, Challenger>
+    for LdtBasedPcs<Val, Dom, Dft, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
-    DFT: TwoAdicSubgroupDft<Dom>,
+    Dft: TwoAdicSubgroupDft<Dom>,
     M: DirectMmcs<Dom>,
-    L: LDT<Dom, M, Challenger>,
+    L: Ldt<Dom, M, Challenger>,
     Challenger: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
     type Commitment = M::Commitment;
@@ -61,15 +61,15 @@ where
     }
 }
 
-impl<Val, Dom, In, DFT, M, L, Challenger> UnivariatePcs<Val, In, Challenger>
-    for LdtBasedPcs<Val, Dom, DFT, M, L>
+impl<Val, Dom, In, Dft, M, L, Challenger> UnivariatePcs<Val, In, Challenger>
+    for LdtBasedPcs<Val, Dom, Dft, M, L>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
-    DFT: TwoAdicSubgroupDft<Dom>,
+    Dft: TwoAdicSubgroupDft<Dom>,
     M: DirectMmcs<Dom>,
-    L: LDT<Dom, M, Challenger>,
+    L: Ldt<Dom, M, Challenger>,
     Challenger: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
     fn open_multi_batches<EF>(

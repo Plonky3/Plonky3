@@ -20,20 +20,20 @@ pub trait StarkConfig {
         + AbstractExtensionField<<Self::Domain as Field>::Packing>;
 
     /// The PCS used to commit to trace polynomials.
-    type PCS: for<'a> UnivariatePcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Challenger>;
+    type Pcs: for<'a> UnivariatePcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Challenger>;
 
-    type DFT: TwoAdicSubgroupDft<Self::Domain>;
+    type Dft: TwoAdicSubgroupDft<Self::Domain>;
 
     type Challenger: FieldChallenger<Self::Val>;
 
-    fn pcs(&self) -> &Self::PCS;
+    fn pcs(&self) -> &Self::Pcs;
 
-    fn dft(&self) -> &Self::DFT;
+    fn dft(&self) -> &Self::Dft;
 }
 
-pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Challenger> {
-    pcs: PCS,
-    dft: DFT,
+pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> {
+    pcs: Pcs,
+    dft: Dft,
     _phantom_val: PhantomData<Val>,
     _phantom_domain: PhantomData<Domain>,
     _phantom_challenge: PhantomData<Challenge>,
@@ -41,10 +41,10 @@ pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Ch
     _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Challenger>
-    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Challenger>
+impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
+    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
 {
-    pub fn new(pcs: PCS, dft: DFT) -> Self {
+    pub fn new(pcs: Pcs, dft: Dft) -> Self {
         Self {
             pcs,
             dft,
@@ -57,30 +57,30 @@ impl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Challenger>
     }
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Challenger> StarkConfig
-    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, PCS, DFT, Challenger>
+impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> StarkConfig
+    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Domain>,
     PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Domain::Packing>,
-    PCS: for<'a> UnivariatePcs<Val, RowMajorMatrixView<'a, Val>, Challenger>,
-    DFT: TwoAdicSubgroupDft<Domain>,
+    Pcs: for<'a> UnivariatePcs<Val, RowMajorMatrixView<'a, Val>, Challenger>,
+    Dft: TwoAdicSubgroupDft<Domain>,
     Challenger: FieldChallenger<Val>,
 {
     type Val = Val;
     type Domain = Domain;
     type Challenge = Challenge;
     type PackedChallenge = PackedChallenge;
-    type PCS = PCS;
-    type DFT = DFT;
+    type Pcs = Pcs;
+    type Dft = Dft;
     type Challenger = Challenger;
 
-    fn pcs(&self) -> &Self::PCS {
+    fn pcs(&self) -> &Self::Pcs {
         &self.pcs
     }
 
-    fn dft(&self) -> &Self::DFT {
+    fn dft(&self) -> &Self::Dft {
         &self.dft
     }
 }

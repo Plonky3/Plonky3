@@ -21,8 +21,8 @@ use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 /// A binary Merkle tree, with leaves of type `L` and digests of type `D`.
 ///
-/// This generally shouldn't be used directly. If you're using a Merkle tree as an `MMCS`,
-/// see `MerkleTreeMMCS`.
+/// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
+/// see `MerkleTreeMmcs`.
 pub struct MerkleTree<L, D> {
     leaves: Vec<RowMajorMatrix<L>>,
     digest_layers: Vec<Vec<D>>,
@@ -148,14 +148,14 @@ where
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-pub struct MerkleTreeMMCS<L, D, H, C> {
+pub struct MerkleTreeMmcs<L, D, H, C> {
     hash: H,
     compress: C,
     _phantom_l: PhantomData<L>,
     _phantom_d: PhantomData<D>,
 }
 
-impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
+impl<L, D, H, C> MerkleTreeMmcs<L, D, H, C> {
     pub fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
@@ -166,7 +166,7 @@ impl<L, D, H, C> MerkleTreeMMCS<L, D, H, C> {
     }
 }
 
-impl<L, D, H, C> Mmcs<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C> Mmcs<L> for MerkleTreeMmcs<L, D, H, C>
 where
     L: 'static + Clone,
     H: CryptographicHasher<L, D>,
@@ -211,7 +211,7 @@ where
     }
 }
 
-impl<L, D, H, C> DirectMmcs<L> for MerkleTreeMMCS<L, D, H, C>
+impl<L, D, H, C> DirectMmcs<L> for MerkleTreeMmcs<L, D, H, C>
 where
     L: 'static + Copy,
     D: Copy + Default,
@@ -235,14 +235,14 @@ mod tests {
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
 
-    use crate::MerkleTreeMMCS;
+    use crate::MerkleTreeMmcs;
 
     #[test]
     fn commit() {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
-        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         let mut rng = thread_rng();
@@ -261,7 +261,7 @@ mod tests {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
-        type Mmcs = MerkleTreeMMCS<u8, [u8; 32], Keccak256Hash, C>;
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         // large_mat has 8 rows and 1 col; small_mat has 4 rows and 2 cols.
