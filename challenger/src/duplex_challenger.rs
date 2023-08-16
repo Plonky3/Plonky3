@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use p3_field::PrimeField64;
 use p3_symmetric::permutation::ArrayPermutation;
 
-use crate::{CanObserve, CanSample, CanSampleBits, Challenger, FieldChallenger};
+use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
 #[derive(Clone)]
 pub struct DuplexChallenger<F, P, const WIDTH: usize>
@@ -51,11 +51,6 @@ where
         self.output_buffer.clear();
         self.output_buffer.extend(self.sponge_state);
     }
-}
-
-impl<F, P, const WIDTH: usize> Challenger for DuplexChallenger<F, P, WIDTH> where
-    P: ArrayPermutation<F, WIDTH>
-{
 }
 
 impl<F, P, const WIDTH: usize> FieldChallenger<F> for DuplexChallenger<F, P, WIDTH>

@@ -5,7 +5,7 @@ use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
-use crate::pcs::{UnivariatePcs, Pcs};
+use crate::pcs::{Pcs, UnivariatePcs};
 use crate::MultivariatePcs;
 
 pub struct MultiFromUniPcs<F, In, U, Chal>

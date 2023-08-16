@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use p3_field::Field;
 use p3_symmetric::hasher::CryptographicHasher;
 
-use crate::{CanObserve, CanSample, Challenger};
+use crate::{CanObserve, CanSample};
 
 #[derive(Clone)]
 pub struct HashChallenger<F, H, const OUT_LEN: usize>
@@ -44,13 +44,6 @@ where
         // Chaining values.
         self.input_buffer.extend(output.to_vec());
     }
-}
-
-impl<F, H, const OUT_LEN: usize> Challenger for HashChallenger<F, H, OUT_LEN>
-where
-    F: Field,
-    H: CryptographicHasher<F, [F; OUT_LEN]>,
-{
 }
 
 impl<F, H, const OUT_LEN: usize> CanObserve<F> for HashChallenger<F, H, OUT_LEN>

@@ -1,12 +1,13 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use crate::LDT;
 use p3_challenger::FieldChallenger;
-use p3_commit::{DirectMmcs, UnivariatePcs, Pcs};
+use p3_commit::{DirectMmcs, Pcs, UnivariatePcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
+
+use crate::LDT;
 
 pub struct LdtBasedPcs<Val, Dom, DFT, M, L> {
     dft: DFT,
