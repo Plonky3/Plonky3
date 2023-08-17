@@ -7,6 +7,7 @@ use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
 
+#[derive(Default, Clone)]
 pub struct NaiveDft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {

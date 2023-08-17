@@ -6,7 +6,7 @@ use p3_matrix::Matrix;
 
 use crate::util::swap_rows;
 
-pub trait TwoAdicSubgroupDft<F: TwoAdicField> {
+pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone {
     /// Compute the discrete Fourier transform (DFT) `vec`.
     fn dft(&self, vec: Vec<F>) -> Vec<F> {
         self.dft_batch(RowMajorMatrix::new(vec, 1)).values

@@ -33,7 +33,7 @@ fn test_prove_goldilocks() {
     type Challenge = Goldilocks; // TODO
 
     type MyMds = NaiveMDSMatrix<Val, 8>;
-    let mds = MyMds::new([[Val::ONE; 8]; 8]);
+    let mds = MyMds::new([[Val::ONE; 8]; 8]); // TODO: Use a real MDS matrix
 
     type Perm = Poseidon<Val, MyMds, 8, 7>;
     let perm = Perm::new(5, 5, vec![Val::ONE; 120], mds);

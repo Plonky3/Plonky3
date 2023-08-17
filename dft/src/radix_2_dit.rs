@@ -9,7 +9,7 @@ use crate::util::reverse_matrix_index_bits;
 use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Radix2DitFft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitFft {
