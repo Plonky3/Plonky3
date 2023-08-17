@@ -2,15 +2,12 @@
 
 extern crate alloc;
 
-use p3_symmetric::mds::MDSPermutation;
-use sha3::{
-    digest::{ExtendableOutput, Update, XofReader},
-    Shake128, Shake128Reader,
-};
-
 use core::iter;
 
 use p3_field::PrimeField32;
+use p3_symmetric::mds::MDSPermutation;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::{Shake128, Shake128Reader};
 
 use crate::monolith_mds::monolith_mds;
 
@@ -24,7 +21,9 @@ pub struct Monolith31<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usi
     pub lookup2: Vec<u16>,
 }
 
-impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F, WIDTH, NUM_ROUNDS> {
+impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
+    Monolith31<F, WIDTH, NUM_ROUNDS>
+{
     pub const NUM_BARS: usize = 8;
 
     pub fn new() -> Self {
@@ -108,9 +107,10 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
     fn instantiate_round_constants() -> Vec<[F; WIDTH]> {
         let mut shake = Self::init_shake();
 
-        vec![[F::ZERO; WIDTH]; NUM_ROUNDS - 1].iter().map(|arr| {
-            arr.map(|_| Self::random_field_element(&mut shake))
-        }).collect()
+        vec![[F::ZERO; WIDTH]; NUM_ROUNDS - 1]
+            .iter()
+            .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
+            .collect()
     }
 
     pub fn concrete(&self, state: &mut [F; WIDTH], round_constants: Option<&[F; WIDTH]>) {
@@ -146,9 +146,7 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
 
             // get_unchecked here is safe because lookup table 2 contains 2^15 elements,
             // and el >> 16 < 2^15 (since el < F::ORDER_U32 < 2^31)
-            let high = *self
-                .lookup2
-                .get_unchecked((*val >> 16) as u16 as usize);
+            let high = *self.lookup2.get_unchecked((*val >> 16) as u16 as usize);
             *val = (high as u32) << 16 | low as u32
         }
 
@@ -164,7 +162,12 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F,
 
     pub fn permutation(&self, state: &mut [F; WIDTH]) {
         self.concrete(state, None);
-        for rc in self.round_constants.iter().map(Some).chain(iter::once(None)) {
+        for rc in self
+            .round_constants
+            .iter()
+            .map(Some)
+            .chain(iter::once(None))
+        {
             self.bars(state);
             Self::bricks(state);
             self.concrete(state, rc);
