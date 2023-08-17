@@ -98,6 +98,10 @@ impl AbstractField for BabyBear {
         }
     }
 
+    fn from_wrapped_u128(_n: u128) -> Self {
+        todo!()
+    }
+
     fn multiplicative_group_generator() -> Self {
         Self::from_canonical_u32(0x1f)
     }
@@ -145,6 +149,10 @@ impl PrimeField32 for BabyBear {
 
     fn as_canonical_u32(&self) -> u32 {
         from_monty(self.value)
+    }
+
+    fn as_noncanonical_u32(&self) -> u32 {
+        self.value
     }
 }
 

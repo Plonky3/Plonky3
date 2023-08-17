@@ -199,6 +199,10 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
         Self::new_real(AF::from_wrapped_u64(n))
     }
 
+    fn from_wrapped_u128(n: u128) -> Self {
+        Self::new_real(AF::from_wrapped_u128(n))
+    }
+
     // sage: p = 2^31 - 1
     // sage: F = GF(p)
     // sage: R.<x> = F[]

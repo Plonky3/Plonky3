@@ -121,6 +121,10 @@ impl AbstractField for Goldilocks {
         Self::new(n)
     }
 
+    fn from_wrapped_u128(n: u128) -> Self {
+        reduce128(n)
+    }
+
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     fn multiplicative_group_generator() -> Self {
         Self::new(7)
@@ -192,6 +196,10 @@ impl PrimeField64 for Goldilocks {
             c -= Self::ORDER_U64;
         }
         c
+    }
+
+    fn as_noncanonical_u64(&self) -> u64 {
+        self.value
     }
 }
 

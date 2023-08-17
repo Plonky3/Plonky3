@@ -41,6 +41,7 @@ pub trait AbstractField:
 
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
+    fn from_wrapped_u128(n: u128) -> Self;
 
     fn multiplicative_group_generator() -> Self;
 
@@ -151,14 +152,24 @@ pub trait PrimeField64: PrimeField {
         log2_ceil_u64(Self::ORDER_U64) as usize
     }
 
+    /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
+
+    /// Return a representative of `value` that is less than 2^64, but
+    /// not necessarily less than `ORDER_U64`.
+    fn as_noncanonical_u64(&self) -> u64;
 }
 
 /// A prime field of order less than `2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
 
+    /// Return the representative of `value` that is less than `ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
+
+    /// Return a representative of `value` that is less than 2^32, but
+    /// not necessarily less than `ORDER_U32`.
+    fn as_noncanonical_u32(&self) -> u32;
 }
 
 impl<F: PrimeField32> PrimeField64 for F {
@@ -166,6 +177,10 @@ impl<F: PrimeField32> PrimeField64 for F {
 
     fn as_canonical_u64(&self) -> u64 {
         u64::from(self.as_canonical_u32())
+    }
+
+    fn as_noncanonical_u64(&self) -> u64 {
+        self.as_noncanonical_u32() as u64
     }
 }
 
