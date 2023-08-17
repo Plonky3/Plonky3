@@ -13,36 +13,46 @@ use crate::{FriConfig, FriProof, QueryProof};
 
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    input_mmcs: &FC::InputMmcs,
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
     let n = input_commits
         .iter()
-        .map(|commit| config.input_mmcs().get_max_height(commit))
+        .map(|commit| input_mmcs.get_max_height(commit))
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
 
-    let commit_phase_commits = commit_phase::<FC>(config, input_commits, challenger);
+    let commit_phase_commits = commit_phase::<FC>(config, input_mmcs, input_commits, challenger);
     let query_indices: Vec<usize> = (0..config.num_queries())
         .map(|_| challenger.sample_bits(n))
         .collect();
     // TODO: into_par_iter?
     let query_proofs = query_indices
         .into_iter()
-        .map(|index| answer_query(config, input_commits, &commit_phase_commits, index))
+        .map(|index| {
+            answer_query(
+                config,
+                input_mmcs,
+                input_commits,
+                &commit_phase_commits,
+                index,
+            )
+        })
         .collect();
     FriProof { query_proofs }
 }
 
 fn answer_query<FC: FriConfig>(
     config: &FC,
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    input_mmcs: &FC::InputMmcs,
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
     let input_openings = input_commits
         .iter()
-        .map(|commit| config.input_mmcs().open_batch(index, commit))
+        .map(|commit| input_mmcs.open_batch(index, commit))
         .collect();
     let commit_phase_openings = commit_phase_commits
         .iter()
@@ -56,13 +66,14 @@ fn answer_query<FC: FriConfig>(
 
 fn commit_phase<FC: FriConfig>(
     config: &FC,
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    input_mmcs: &FC::InputMmcs,
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let inputs_by_desc_height = input_commits
         .iter()
-        .flat_map(|commit| config.input_mmcs().get_matrices(commit))
+        .flat_map(|commit| input_mmcs.get_matrices(commit))
         .sorted_by_key(|mat| Reverse(mat.height()))
         .group_by(|mat| mat.height());
     let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();

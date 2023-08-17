@@ -1,4 +1,4 @@
-pub trait CryptographicPermutation<T> {
+pub trait CryptographicPermutation<T>: Clone {
     fn permute(&self, input: T) -> T;
 
     fn permute_mut(&self, input: &mut T)

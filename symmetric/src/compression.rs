@@ -6,13 +6,14 @@ use crate::permutation::CryptographicPermutation;
 /// An `n`-to-1 compression function, like `CompressionFunction`, except that it need only be
 /// collision-resistant in a hash tree setting, where the preimage of a non-leaf node must consist
 /// of compression outputs.
-pub trait PseudoCompressionFunction<T, const N: usize> {
+pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
     fn compress(&self, input: [T; N]) -> T;
 }
 
 /// An `n`-to-1 compression function.
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
+#[derive(Clone)]
 pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize> {
     inner_permutation: InnerP,
     _phantom_t: PhantomData<T>,
@@ -46,6 +47,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct CompressionFunctionFromIterHasher<T, H, const N: usize, const CHUNK: usize>
 where
     T: Clone,

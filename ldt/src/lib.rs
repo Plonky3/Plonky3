@@ -9,6 +9,7 @@ pub use ldt_based_pcs::*;
 use p3_challenger::FieldChallenger;
 use p3_commit::Mmcs;
 use p3_field::Field;
+pub use quotient::*;
 
 extern crate alloc;
 
@@ -18,7 +19,12 @@ pub trait Ldt<F: Field, M: Mmcs<F>, Challenger: FieldChallenger<F>> {
     type Error;
 
     /// Prove that each column of each matrix in `codewords` is a codeword.
-    fn prove(&self, inputs: &[M::ProverData], challenger: &mut Challenger) -> Self::Proof;
+    fn prove(
+        &self,
+        mmcs: &M,
+        inputs: &[&M::ProverData],
+        challenger: &mut Challenger,
+    ) -> Self::Proof;
 
     fn verify(
         &self,

@@ -148,6 +148,7 @@ where
 /// - `D`: a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
+#[derive(Copy, Clone)]
 pub struct MerkleTreeMmcs<L, D, H, C> {
     hash: H,
     compress: C,
@@ -169,6 +170,7 @@ impl<L, D, H, C> MerkleTreeMmcs<L, D, H, C> {
 impl<L, D, H, C> Mmcs<L> for MerkleTreeMmcs<L, D, H, C>
 where
     L: 'static + Clone,
+    D: Clone,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {

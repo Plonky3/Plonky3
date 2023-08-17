@@ -15,7 +15,6 @@ pub trait FriConfig {
         + CanObserve<<Self::InputMmcs as Mmcs<Self::Val>>::Commitment>
         + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
-    fn input_mmcs(&self) -> &Self::InputMmcs;
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
 
     fn num_queries(&self) -> usize;
@@ -24,28 +23,24 @@ pub trait FriConfig {
 
 pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
     num_queries: usize,
-    input_mmcs: InputMmcs,
     commit_phase_mmcs: CommitPhaseMmcs,
     _phantom_val: PhantomData<Val>,
     _phantom_challenge: PhantomData<Challenge>,
-    _phantom_chal: PhantomData<Challenger>,
+    _phantom_input_mmcs: PhantomData<InputMmcs>,
+    _phantom_challenger: PhantomData<Challenger>,
 }
 
 impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
     FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 {
-    pub fn new(
-        num_queries: usize,
-        input_mmcs: InputMmcs,
-        commit_phase_mmcs: CommitPhaseMmcs,
-    ) -> Self {
+    pub fn new(num_queries: usize, commit_phase_mmcs: CommitPhaseMmcs) -> Self {
         Self {
             num_queries,
-            input_mmcs,
             commit_phase_mmcs,
             _phantom_val: PhantomData,
             _phantom_challenge: PhantomData,
-            _phantom_chal: PhantomData,
+            _phantom_input_mmcs: PhantomData,
+            _phantom_challenger: PhantomData,
         }
     }
 }
@@ -66,10 +61,6 @@ where
     type InputMmcs = InputMmcs;
     type CommitPhaseMmcs = CommitPhaseMmcs;
     type Challenger = Challenger;
-
-    fn input_mmcs(&self) -> &InputMmcs {
-        &self.input_mmcs
-    }
 
     fn commit_phase_mmcs(&self) -> &CommitPhaseMmcs {
         &self.commit_phase_mmcs

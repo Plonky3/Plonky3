@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -7,26 +8,27 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
 
+use crate::quotient::QuotientMmcs;
 use crate::Ldt;
 
 pub struct LdtBasedPcs<Val, Dom, Dft, M, L> {
     dft: Dft,
     added_bits: usize,
     mmcs: M,
+    ldt: L,
     _phantom_val: PhantomData<Val>,
     _phantom_dom: PhantomData<Dom>,
-    _phantom_l: PhantomData<L>,
 }
 
 impl<Val, Dom, Dft, M, L> LdtBasedPcs<Val, Dom, Dft, M, L> {
-    pub fn new(dft: Dft, added_bits: usize, mmcs: M) -> Self {
+    pub fn new(dft: Dft, added_bits: usize, mmcs: M, ldt: L) -> Self {
         Self {
             dft,
             added_bits,
             mmcs,
+            ldt,
             _phantom_val: PhantomData,
             _phantom_dom: PhantomData,
-            _phantom_l: PhantomData,
         }
     }
 }
@@ -39,7 +41,7 @@ where
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Dom>,
     M: DirectMmcs<Dom>,
-    L: Ldt<Dom, M, Challenger>,
+    L: Ldt<Dom, QuotientMmcs<Dom, M>, Challenger>,
     Challenger: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
     type Commitment = M::Commitment;
@@ -69,19 +71,26 @@ where
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Dom>,
     M: DirectMmcs<Dom>,
-    L: Ldt<Dom, M, Challenger>,
+    L: Ldt<Dom, QuotientMmcs<Dom, M>, Challenger>,
     Challenger: FieldChallenger<Val> + FieldChallenger<Dom>,
 {
     fn open_multi_batches<EF>(
         &self,
-        _prover_data: &[&Self::ProverData],
+        prover_data: &[&Self::ProverData],
         _points: &[EF],
-        _challenger: &mut Challenger,
+        challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
-        EF: AbstractExtensionField<Val>,
+        EF: ExtensionField<Val>,
     {
-        todo!()
+        let quotient_mmcs = QuotientMmcs {
+            inner: self.mmcs.clone(),
+            opened_point: Dom::ZERO, // TODO: points
+            opened_eval: Dom::ZERO,  // TODO
+        };
+        let proof = self.ldt.prove(&quotient_mmcs, prover_data, challenger);
+        let openings = vec![]; // TODO
+        (openings, proof)
     }
 
     fn verify_multi_batches<EF>(

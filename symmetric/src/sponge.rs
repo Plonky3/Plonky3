@@ -8,6 +8,7 @@ use crate::permutation::ArrayPermutation;
 /// A padding-free, overwrite-mode sponge function.
 ///
 /// WIDTH is the sponge's rate + sponge's capacity
+#[derive(Clone)]
 pub struct PaddingFreeSponge<T, P, const WIDTH: usize> {
     permutation: P,
     _phantom_f: PhantomData<T>,

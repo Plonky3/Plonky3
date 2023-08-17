@@ -97,6 +97,7 @@ mod tests {
     const OUT_LEN: usize = 2;
     type F = Goldilocks;
 
+    #[derive(Clone)]
     struct TestHasher {}
 
     impl CryptographicHasher<F, [F; OUT_LEN]> for TestHasher {

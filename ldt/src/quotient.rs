@@ -7,10 +7,11 @@ use p3_util::log2_strict_usize;
 
 /// A wrapper around an Inner MMCS, which transforms each inner value to
 /// `(inner - opened_point) / (x - opened_eval)`.
-pub(crate) struct QuotientMmcs<F, Inner: Mmcs<F>> {
-    inner: Inner,
-    opened_point: F,
-    opened_eval: F,
+#[derive(Clone)]
+pub struct QuotientMmcs<F, Inner: Mmcs<F>> {
+    pub inner: Inner,
+    pub opened_point: F,
+    pub opened_eval: F,
 }
 
 impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
@@ -99,7 +100,7 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
     }
 }
 
-pub(crate) struct QuotientMatrix<F, Inner: MatrixRows<F>> {
+pub struct QuotientMatrix<F, Inner: MatrixRows<F>> {
     inner: Inner,
     subgroup: Vec<F>,
     opened_point: F,
@@ -129,7 +130,7 @@ impl<F: TwoAdicField, Inner: MatrixRows<F>> MatrixRows<F> for QuotientMatrix<F, 
     }
 }
 
-pub(crate) struct QuotientRow<F, Inner: Iterator<Item = F>> {
+pub struct QuotientRow<F, Inner: Iterator<Item = F>> {
     inner: Inner,
     current_point: F,
     opened_point: F,

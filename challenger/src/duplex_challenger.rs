@@ -134,6 +134,7 @@ mod tests {
     type TestArray = [F; WIDTH];
     type F = Goldilocks;
 
+    #[derive(Clone)]
     struct TestPermutation {}
 
     impl CryptographicPermutation<TestArray> for TestPermutation {
