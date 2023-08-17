@@ -1,16 +1,14 @@
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::util::{apply_circulant, MATRIX_CIRC_MDS_12_SML, MATRIX_CIRC_MDS_8_SML};
+use crate::util::{apply_circulant, apply_circulant_prime32_12_sml, apply_circulant_prime32_8_sml};
 use crate::MDSPermutation;
 
 pub struct MDSMatrixMersenne31;
 
 impl CryptographicPermutation<[Mersenne31; 8]> for MDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
-        // An unreduced dot product is bounded above by s * p < 2^37,
-        // where s = sum(MATRIX_CIRC_MDS_8_SML).
-        apply_circulant(&MATRIX_CIRC_MDS_8_SML, input)
+        apply_circulant_prime32_8_sml(input)
     }
 }
 impl ArrayPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
@@ -18,9 +16,7 @@ impl MDSPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
 
 impl CryptographicPermutation<[Mersenne31; 12]> for MDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
-        // An unreduced dot product is bounded above by s * p < 2^40,
-        // where s = sum(MATRIX_CIRC_MDS_12_SML).
-        apply_circulant(&MATRIX_CIRC_MDS_12_SML, input)
+        apply_circulant_prime32_12_sml(input)
     }
 }
 impl ArrayPermutation<Mersenne31, 12> for MDSMatrixMersenne31 {}
