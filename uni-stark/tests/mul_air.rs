@@ -1,6 +1,7 @@
 use p3_air::{Air, AirBuilder};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2BowersFft;
+use p3_field::AbstractField;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
 use p3_goldilocks::Goldilocks;
 use p3_ldt::QuotientMmcs;
@@ -9,8 +10,7 @@ use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
-use p3_symmetric::mds::MDSPermutation;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::mds::NaiveMDSMatrix;
 use p3_symmetric::sponge::PaddingFreeSponge;
 use p3_uni_stark::{prove, StarkConfigImpl};
 use rand::thread_rng;
@@ -27,29 +27,16 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 
 #[test]
-#[ignore] // TODO: Not ready yet.
-#[allow(clippy::items_after_statements)]
-#[allow(clippy::upper_case_acronyms)]
 fn test_prove_goldilocks() {
     type Val = Goldilocks;
     type Dom = Goldilocks;
     type Challenge = Goldilocks; // TODO
 
-    #[derive(Clone)]
-    struct MyMds;
-    impl CryptographicPermutation<[Val; 8]> for MyMds {
-        fn permute(&self, input: [Val; 8]) -> [Val; 8] {
-            input // TODO
-        }
-    }
-    impl ArrayPermutation<Val, 8> for MyMds {}
-    impl MDSPermutation<Val, 8> for MyMds {}
+    type MyMds = NaiveMDSMatrix<Val, 8>;
+    let mds = MyMds::new([[Val::ONE; 8]; 8]);
 
-    type MDS = MyMds;
-    let mds = MyMds;
-
-    type Perm = Poseidon<Val, MDS, 8, 7>;
-    let perm = Perm::new(5, 5, vec![], mds);
+    type Perm = Poseidon<Val, MyMds, 8, 7>;
+    let perm = Perm::new(5, 5, vec![Val::ONE; 120], mds);
 
     type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;
     let h4 = H4::new(perm.clone());

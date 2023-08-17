@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -40,31 +41,15 @@ pub fn prove<SC, A, Challenger>(
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
-    // Evaluations of x^n on our coset s H. Note that
-    //     (s g^i)^n = s^n (g^n)^i,
-    // so this is the coset of <g^n> shifted by s^n.
-    let x_pow_n_evals = cyclic_subgroup_coset_known_order(
-        g_extended.exp_power_of_2(degree_bits),
-        coset_shift.exp_power_of_2(degree_bits),
-        quotient_size,
-    );
-
-    // Evaluations of Z_H(x) = (x^n - 1) on our coset s H.
-    let zerofier_evals = x_pow_n_evals.map(|y| y - SC::Val::ONE);
-
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
-    let lagrange_first_evals: Vec<_> = g_subgroup
-        .powers()
-        .zip(zerofier_evals.clone())
-        .map(|(x, z)| z / (x - SC::Val::ONE))
-        .collect();
+    let mut lagrange_first_evals = vec![SC::Domain::ZERO; degree];
+    lagrange_first_evals[0] = SC::Domain::ONE;
+    lagrange_first_evals = config.dft().lde(lagrange_first_evals, quotient_degree_bits);
 
     // Evaluations of L_last(x) = Z_H(x) / (x - g^-1) on our coset s H.
-    let lagrange_last_evals: Vec<_> = g_subgroup
-        .powers()
-        .zip(zerofier_evals)
-        .map(|(x, z)| z / (x - subgroup_last))
-        .collect();
+    let mut lagrange_last_evals = vec![SC::Domain::ZERO; degree];
+    lagrange_last_evals[degree - 1] = SC::Domain::ONE;
+    lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
 
     let trace_lde = config
         .dft()
