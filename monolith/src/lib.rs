@@ -3,5 +3,4 @@
 extern crate alloc;
 
 pub mod monolith;
-pub mod monolith_alternate;
 pub mod monolith_mds;
