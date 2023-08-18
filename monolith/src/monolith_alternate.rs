@@ -2,28 +2,27 @@
 
 extern crate alloc;
 
-use p3_symmetric::mds::MDSPermutation;
-use sha3::{
-    digest::{ExtendableOutput, Update, XofReader},
-    Shake128, Shake128Reader,
-};
-
 use core::{iter, u64};
 
 use p3_field::PrimeField32;
+use p3_symmetric::mds::MDSPermutation;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::{Shake128, Shake128Reader};
 
 use crate::monolith_mds::monolith_mds;
 
 // The Monolith-31 permutation.
 // Assumes that F is a 31-bit field (e.g. Mersenne31).
 pub struct Monolith31Alternate<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> {
-    pub round_constants: [[u64; WIDTH]; NUM_ROUNDS],
+    pub round_constants: Vec<[u64; WIDTH]>,
     pub mds: Box<dyn MDSPermutation<F, WIDTH>>,
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
 }
 
-impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31Alternate<F, WIDTH, NUM_ROUNDS> {
+impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
+    Monolith31Alternate<F, WIDTH, NUM_ROUNDS>
+{
     pub const NUM_BARS: usize = 8;
 
     pub fn new() -> Self {
@@ -104,12 +103,13 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31Alt
         shake.finalize_xof()
     }
 
-    fn instantiate_round_constants() -> [[u64; WIDTH]; NUM_ROUNDS] {
+    fn instantiate_round_constants() -> Vec<[u64; WIDTH]> {
         let mut shake = Self::init_shake();
 
-        [[0u64; WIDTH]; NUM_ROUNDS].map(|arr| {
-            arr.map(|_| Self::random_field_element(&mut shake))
-        })
+        vec![[F::ZERO; WIDTH]; NUM_ROUNDS - 1]
+            .iter()
+            .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
+            .collect()
     }
 
     pub fn concrete(&self, state: &mut [u64; WIDTH], round_constants: Option<&[u64; WIDTH]>) {
@@ -119,10 +119,12 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31Alt
         });
         let new_state_f = self.mds.permute(state_f);
 
-        if let Some(round_constants) = round_constants {
-            for ((x, el), c) in state.iter_mut().zip(new_state_f.iter()).zip(round_constants.iter()) {
-                *x = (el.as_canonical_u64() + c) % F::ORDER_U64;
-            }
+        for ((x, el), c) in state
+            .iter_mut()
+            .zip(new_state_f.iter())
+            .zip(round_constants.unwrap_or(&[0; WIDTH]).iter())
+        {
+            *x = (el.as_canonical_u64() + c) % F::ORDER_U64;
         }
     }
 
@@ -148,23 +150,18 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31Alt
 
             // get_unchecked here is safe because lookup table 2 contains 2^15 elements,
             // and el >> 16 < 2^15 (since el < F::ORDER_U32 < 2^31)
-            let high = *self
-                .lookup2
-                .get_unchecked((*el >> 16) as u16 as usize);
+            let high = *self.lookup2.get_unchecked((*el >> 16) as u16 as usize);
             *el = (high as u32) << 16 | low as u32
         }
     }
 
     // Performs the Bars layer in place on `state`, an array of field elements represented as `u64`s.
     pub fn bars(&self, state: &mut [u64; WIDTH]) {
-        state
-            .iter_mut()
-            .take(Self::NUM_BARS)
-            .for_each(|el| {
-                let mut tmp = *el as u32;
-                self.bar(&mut tmp);
-                *el = tmp as u64
-            });
+        state.iter_mut().take(Self::NUM_BARS).for_each(|el| {
+            let mut tmp = *el as u32;
+            self.bar(&mut tmp);
+            *el = tmp as u64
+        });
     }
 
     pub fn permutation(&self, state: &mut [F; WIDTH]) {
@@ -173,11 +170,22 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31Alt
             *out = inp.as_canonical_u32() as u64;
         }
 
+        dbg!(state_u64.clone());
+
         self.concrete(&mut state_u64, None);
-        for rc in self.round_constants.iter().map(Some).chain(iter::once(None)) {
+
+        dbg!(state_u64.clone());
+        
+        for rc in self
+        .round_constants
+        .iter()
+        .map(Some)
+        .chain(iter::once(None))
+        {
             self.bars(&mut state_u64);
             Self::bricks(&mut state_u64);
             self.concrete(&mut state_u64, rc);
+            dbg!(state_u64.clone());
         }
 
         // Convert back
@@ -205,8 +213,6 @@ mod tests {
             *inp = Mersenne31::from_canonical_usize(i);
         }
         monolith.permutation(&mut input);
-
-        dbg!(input);
 
         assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
         assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));

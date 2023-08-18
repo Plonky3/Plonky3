@@ -161,16 +161,19 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
     }
 
     pub fn permutation(&self, state: &mut [F; WIDTH]) {
+        dbg!(state.clone());
         self.concrete(state, None);
+        dbg!(state.clone());
         for rc in self
-            .round_constants
-            .iter()
-            .map(Some)
-            .chain(iter::once(None))
+        .round_constants
+        .iter()
+        .map(Some)
+        .chain(iter::once(None))
         {
             self.bars(state);
             Self::bricks(state);
             self.concrete(state, rc);
+            dbg!(state.clone());
         }
     }
 }
