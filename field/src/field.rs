@@ -163,7 +163,12 @@ pub trait PrimeField64: PrimeField {
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
 
-    // TODO: Mark unsafe because it assumes that sum(u) <= 2^64 or 2^32?
+    /// Return the value \sum_{i=0}^N u[i] * v[i].
+    ///
+    /// NB: Assumes that sum(u) <= 2^32 or 2^64 depending on whether
+    /// the underlying field is 32-bit or 64-bit.
+    ///
+    /// TODO: Mark unsafe because of the assumption?
     fn z_linear_combination_sml<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self;
 }
 

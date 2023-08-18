@@ -1,3 +1,9 @@
+//! MDS matrices over the Mersenne31 field, and permutations defined by them.
+//!
+//! NB: Not all sizes have fast implementations of their permutations.
+//! Supported sizes: 8, 12, 16, 32, 64.
+//! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
+
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 

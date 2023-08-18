@@ -13,6 +13,12 @@ fn dot_vec<F: AbstractField, const N: usize>(u: &[F; N], v: &[F; N]) -> F {
     u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
 }
 
+/// Given the first row `circ_matrix` of an NxN circulant matrix, say
+/// C, return the product `C*input`.
+///
+/// NB: This function is a naive implementation of the n²
+/// evaluation. It is a placeholder until we have FFT implementations
+/// for all combinations of field and size.
 pub(crate) fn apply_circulant<F: AbstractField, const N: usize>(
     circ_matrix: &[u64; N],
     input: [F; N],
@@ -28,6 +34,14 @@ pub(crate) fn apply_circulant<F: AbstractField, const N: usize>(
     output
 }
 
+/// Given an array `input` and an `offset`, return the array whose
+/// elements are those of `input` shifted `offset` places to the
+/// right.
+///
+/// NB: The algorithm is inefficient but simple enough that this
+/// function can be declared `const`, and that is the intended use. In
+/// non-`const` contexts you probably want `[T]::rotate_right()` from
+/// the standard library.
 pub(crate) const fn rotate_right<const N: usize>(input: [u64; N], offset: usize) -> [u64; N] {
     let mut output = [0u64; N];
     let mut i = 0;
@@ -41,6 +55,9 @@ pub(crate) const fn rotate_right<const N: usize>(input: [u64; N], offset: usize)
     output
 }
 
+/// As for `apply_circulant()` above, but with `circ_matrix` set to a
+/// fixed 8x8 MDS matrix with small entries that satisfy the condition
+/// on `PrimeField64::z_linear_combination_sml()`.
 pub(crate) fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     const N: usize = 8;
     let mut output = [F::ZERO; N];
@@ -65,6 +82,9 @@ pub(crate) fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     output
 }
 
+/// As for `apply_circulant()` above, but with `circ_matrix` set to a
+/// fixed 12x12 MDS matrix with small entries that satisfy the condition
+/// on `PrimeField64::z_linear_combination_sml()`.
 pub(crate) fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
     const N: usize = 12;
     let mut output = [F::ZERO; N];
@@ -101,6 +121,14 @@ pub(crate) fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12]
 /// of that circulant matrix. For example, v = [0, 1, 2, 3, 4, 5],
 /// then output = [0, 5, 4, 3, 2, 1], i.e. the first element is the
 /// same and the other elements are reversed.
+///
+/// This is useful to prepare a circulant matrix for input to an FFT
+/// algorithm, which expects the first column of the matrix rather
+/// than the first row (as we normally store them).
+///
+/// NB: The algorithm is inefficient but simple enough that this
+/// function can be declared `const`, and that is the intended context
+/// for use.
 pub(crate) const fn first_row_to_first_col<const N: usize>(v: &[u64; N]) -> [u64; N] {
     let mut output = [0u64; N];
     output[0] = v[0];
@@ -155,8 +183,8 @@ mod tests {
             [0, 1, 2, 3],
         ];
 
-        for i in 0..output.len() {
-            assert_eq!(rotate_right(input, i), output[i]);
+        for (i, &out_i) in output.iter().enumerate() {
+            assert_eq!(rotate_right(input, i), out_i);
         }
     }
 }
