@@ -9,9 +9,11 @@ mod field;
 mod helpers;
 mod packed;
 mod symbolic;
+mod utils;
 
 pub use batch_inverse::*;
 pub use field::*;
 pub use helpers::*;
 pub use packed::*;
 pub use symbolic::*;
+pub use utils::*;

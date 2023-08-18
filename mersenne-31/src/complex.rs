@@ -2,7 +2,9 @@ use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, Field, TwoAdicField};
+use p3_field::{
+    make_div_assign, AbstractExtensionField, AbstractField, AbstractionOf, Field, TwoAdicField,
+};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -218,6 +220,8 @@ impl Div<Self> for Mersenne31Complex<Mersenne31> {
         self * rhs.inverse()
     }
 }
+
+make_div_assign! {Mersenne31Complex<Mersenne31>}
 
 impl Display for Mersenne31Complex<Mersenne31> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
