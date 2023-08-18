@@ -3,8 +3,8 @@ use p3_goldilocks::Goldilocks;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
 use crate::util::{
-    apply_circulant, apply_circulant_fft, apply_circulant_prime64_12_sml,
-    apply_circulant_prime64_8_sml, first_row_to_first_col,
+    apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
+    first_row_to_first_col,
 };
 use crate::MDSPermutation;
 
@@ -14,7 +14,7 @@ const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
 
 impl CryptographicPermutation<[Goldilocks; 8]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
-        apply_circulant_prime64_8_sml(input)
+        apply_circulant_8_sml(input)
     }
 }
 impl ArrayPermutation<Goldilocks, 8> for MDSMatrixGoldilocks {}
@@ -22,7 +22,7 @@ impl MDSPermutation<Goldilocks, 8> for MDSMatrixGoldilocks {}
 
 impl CryptographicPermutation<[Goldilocks; 12]> for MDSMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {
-        apply_circulant_prime64_12_sml(input)
+        apply_circulant_12_sml(input)
     }
 }
 impl ArrayPermutation<Goldilocks, 12> for MDSMatrixGoldilocks {}

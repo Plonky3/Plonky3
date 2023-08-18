@@ -1,14 +1,14 @@
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
-use crate::util::{apply_circulant, apply_circulant_prime32_12_sml, apply_circulant_prime32_8_sml};
+use crate::util::{apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml};
 use crate::MDSPermutation;
 
 pub struct MDSMatrixMersenne31;
 
 impl CryptographicPermutation<[Mersenne31; 8]> for MDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
-        apply_circulant_prime32_8_sml(input)
+        apply_circulant_8_sml(input)
     }
 }
 impl ArrayPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
@@ -16,7 +16,7 @@ impl MDSPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
 
 impl CryptographicPermutation<[Mersenne31; 12]> for MDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
-        apply_circulant_prime32_12_sml(input)
+        apply_circulant_12_sml(input)
     }
 }
 impl ArrayPermutation<Mersenne31, 12> for MDSMatrixMersenne31 {}

@@ -62,6 +62,14 @@ pub trait AbstractField:
             current: Self::ONE,
         }
     }
+
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        let mut dot = u[0].clone() * v[0].clone();
+        for i in 1..N {
+            dot += u[i].clone() * v[i].clone();
+        }
+        dot
+    }
 }
 
 /// An `AbstractField` which abstracts the given field `F`.
@@ -155,9 +163,8 @@ pub trait PrimeField64: PrimeField {
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
 
-    /// Return a representative of `value` that is less than 2^64, but
-    /// not necessarily less than `ORDER_U64`.
-    fn as_noncanonical_u64(&self) -> u64;
+    // TODO: Mark unsafe because it assumes that sum(u) <= 2^64 or 2^32?
+    fn z_linear_combination_sml<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self;
 }
 
 /// A prime field of order less than `2^32`.
@@ -166,22 +173,6 @@ pub trait PrimeField32: PrimeField64 {
 
     /// Return the representative of `value` that is less than `ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
-
-    /// Return a representative of `value` that is less than 2^32, but
-    /// not necessarily less than `ORDER_U32`.
-    fn as_noncanonical_u32(&self) -> u32;
-}
-
-impl<F: PrimeField32> PrimeField64 for F {
-    const ORDER_U64: u64 = <F as PrimeField32>::ORDER_U32 as u64;
-
-    fn as_canonical_u64(&self) -> u64 {
-        u64::from(self.as_canonical_u32())
-    }
-
-    fn as_noncanonical_u64(&self) -> u64 {
-        self.as_noncanonical_u32() as u64
-    }
 }
 
 pub trait AbstractExtensionField<Base>:

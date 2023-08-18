@@ -198,8 +198,15 @@ impl PrimeField64 for Goldilocks {
         c
     }
 
-    fn as_noncanonical_u64(&self) -> u64 {
-        self.value
+    fn z_linear_combination_sml<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
+        // In order not to overflow a u128, we must have sum(u) <= 2^64.
+        debug_assert!(u.into_iter().map(u128::from).sum::<u128>() <= (1u128 << 64));
+
+        let mut dot = u[0] as u128 * v[0].value as u128;
+        for i in 1..N {
+            dot += u[i] as u128 * v[i].value as u128;
+        }
+        Self::from_wrapped_u128(dot)
     }
 }
 

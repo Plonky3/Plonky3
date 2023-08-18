@@ -3,8 +3,8 @@ use p3_dft::Radix2BowersFft;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
 use crate::util::{
-    apply_circulant, apply_circulant_fft, apply_circulant_prime32_12_sml,
-    apply_circulant_prime32_8_sml, first_row_to_first_col,
+    apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
+    first_row_to_first_col,
 };
 use crate::MDSPermutation;
 
@@ -14,7 +14,7 @@ const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
 
 impl CryptographicPermutation<[BabyBear; 8]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
-        apply_circulant_prime32_8_sml(input)
+        apply_circulant_8_sml(input)
     }
 }
 impl ArrayPermutation<BabyBear, 8> for MDSMatrixBabyBear {}
@@ -22,7 +22,7 @@ impl MDSPermutation<BabyBear, 8> for MDSMatrixBabyBear {}
 
 impl CryptographicPermutation<[BabyBear; 12]> for MDSMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
-        apply_circulant_prime32_12_sml(input)
+        apply_circulant_12_sml(input)
     }
 }
 impl ArrayPermutation<BabyBear, 12> for MDSMatrixBabyBear {}
