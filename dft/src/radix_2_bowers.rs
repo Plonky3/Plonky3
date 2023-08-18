@@ -10,10 +10,10 @@ use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G^T FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Radix2BowersFft;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F, F> for Radix2BowersFft {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2BowersFft {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -68,14 +68,14 @@ mod tests {
     use rand::thread_rng;
 
     use crate::radix_2_bowers::Radix2BowersFft;
-    use crate::{NaiveDFT, TwoAdicSubgroupDft};
+    use crate::{NaiveDft, TwoAdicSubgroupDft};
 
     #[test]
     fn matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft_naive = NaiveDFT.dft_batch(mat.clone());
+        let dft_naive = NaiveDft.dft_batch(mat.clone());
         let dft_radix_2_bowers = Radix2BowersFft.dft_batch(mat);
         assert_eq!(dft_naive, dft_radix_2_bowers);
     }

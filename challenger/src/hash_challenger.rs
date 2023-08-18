@@ -5,10 +5,14 @@ use core::marker::PhantomData;
 use p3_field::Field;
 use p3_symmetric::hasher::CryptographicHasher;
 
-use crate::Challenger;
+use crate::{CanObserve, CanSample};
 
 #[derive(Clone)]
-pub struct HashChallenger<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> {
+pub struct HashChallenger<F, H, const OUT_LEN: usize>
+where
+    F: Field,
+    H: CryptographicHasher<F, [F; OUT_LEN]>,
+{
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     hasher: H,
@@ -16,8 +20,10 @@ pub struct HashChallenger<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, con
     _phantom_h: PhantomData<H>,
 }
 
-impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize>
-    HashChallenger<F, H, OUT_LEN>
+impl<F, H, const OUT_LEN: usize> HashChallenger<F, H, OUT_LEN>
+where
+    F: Field,
+    H: CryptographicHasher<F, [F; OUT_LEN]>,
 {
     pub fn new(initial_state: Vec<F>, hasher: H) -> Self {
         Self {
@@ -40,17 +46,38 @@ impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize>
     }
 }
 
-impl<F: Field, H: CryptographicHasher<F, [F; OUT_LEN]>, const OUT_LEN: usize> Challenger<F>
-    for HashChallenger<F, H, OUT_LEN>
+impl<F, H, const OUT_LEN: usize> CanObserve<F> for HashChallenger<F, H, OUT_LEN>
+where
+    F: Field,
+    H: CryptographicHasher<F, [F; OUT_LEN]>,
 {
-    fn observe_element(&mut self, element: F) {
+    fn observe(&mut self, value: F) {
         // Any buffered output is now invalid.
         self.output_buffer.clear();
 
-        self.input_buffer.push(element);
+        self.input_buffer.push(value);
     }
+}
 
-    fn random_element(&mut self) -> F {
+impl<F, H, const N: usize, const OUT_LEN: usize> CanObserve<[F; N]>
+    for HashChallenger<F, H, OUT_LEN>
+where
+    F: Field,
+    H: CryptographicHasher<F, [F; OUT_LEN]>,
+{
+    fn observe(&mut self, values: [F; N]) {
+        for value in values {
+            self.observe(value);
+        }
+    }
+}
+
+impl<F, H, const OUT_LEN: usize> CanSample<F> for HashChallenger<F, H, OUT_LEN>
+where
+    F: Field,
+    H: CryptographicHasher<F, [F; OUT_LEN]>,
+{
+    fn sample(&mut self) -> F {
         if self.output_buffer.is_empty() {
             self.flush();
         }
@@ -70,6 +97,7 @@ mod tests {
     const OUT_LEN: usize = 2;
     type F = Goldilocks;
 
+    #[derive(Clone)]
     struct TestHasher {}
 
     impl CryptographicHasher<F, [F; OUT_LEN]> for TestHasher {
@@ -129,7 +157,7 @@ mod tests {
         );
 
         let new_element = F::from_canonical_u8(11);
-        hash_challenger.observe_element(new_element);
+        hash_challenger.observe(new_element);
         assert_eq!(
             hash_challenger.input_buffer,
             vec![expected_sum, expected_len, new_element]
@@ -139,7 +167,7 @@ mod tests {
         let new_expected_len = 3;
         let new_expected_sum = 76;
 
-        let new_element = hash_challenger.random_element();
+        let new_element = hash_challenger.sample();
         assert_eq!(new_element, F::from_canonical_u8(new_expected_len));
         assert_eq!(
             hash_challenger.output_buffer,

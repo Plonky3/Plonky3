@@ -107,6 +107,8 @@ pub trait Field:
     }
 
     /// The multiplicative inverse of this field element, if it exists.
+    ///
+    /// NOTE: The inverse of `0` is undefined and will return `None`.
     #[must_use]
     fn try_inverse(&self) -> Option<Self>;
 

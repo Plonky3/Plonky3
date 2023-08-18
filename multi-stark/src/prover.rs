@@ -1,19 +1,19 @@
 use p3_air::Air;
-use p3_challenger::Challenger;
-use p3_commit::PCS;
+use p3_challenger::FieldChallenger;
+use p3_commit::Pcs;
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::{ConstraintFolder, StarkConfig};
 
-pub fn prove<SC, A, Chal>(
+pub fn prove<SC, A, Challenger>(
     config: &SC,
     _air: &A,
-    _challenger: &mut Chal,
+    _challenger: &mut Challenger,
     trace: RowMajorMatrix<SC::Val>,
 ) where
     SC: StarkConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC::Val, SC::Challenge, SC::PackedChallenge>>,
-    Chal: Challenger<SC::Val>,
+    Challenger: FieldChallenger<SC::Val>,
 {
     let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
 

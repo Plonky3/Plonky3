@@ -22,7 +22,7 @@ macro_rules! brakedown_to_rs {
             $b_height,
             $b_density,
             p3_reed_solomon::UndefinedReedSolomonCode::new(
-                p3_lde::NaiveUndefinedLDE,
+                p3_lde::NaiveUndefinedLde,
                 $b_width,
                 $a_height
             )

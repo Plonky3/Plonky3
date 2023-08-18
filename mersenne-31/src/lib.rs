@@ -281,7 +281,7 @@ impl Div for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use p3_field::{AbstractField, Field, PrimeField32};
-    use rand::Rng;
+    use p3_field_testing::test_inverse;
 
     use crate::Mersenne31;
 
@@ -326,19 +326,6 @@ mod tests {
 
     #[test]
     fn inverse() {
-        assert_eq!(F::new(172).inverse() * F::new(172), F::ONE);
-    }
-
-    #[test]
-    fn inverse_random() {
-        let mut rng = rand::thread_rng();
-        for _ in 0..1000 {
-            let x = rng.gen::<F>();
-            if !x.is_zero() && !x.is_one() {
-                let z = x.inverse();
-                assert_ne!(x, z);
-                assert_eq!(x * z, F::ONE);
-            }
-        }
+        test_inverse::<Mersenne31>();
     }
 }

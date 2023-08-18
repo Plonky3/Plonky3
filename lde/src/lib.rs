@@ -14,20 +14,20 @@ use p3_matrix::MatrixRows;
 
 /// Performs low-degree extensions, where both the original domain and the extended domain are
 /// undefined, but must be consistent between calls with the same input height.
-pub trait UndefinedLDE<Val, Dom, In>
+pub trait UndefinedLde<Val, Dom, In>
 where
     Val: Field,
     Dom: ExtensionField<Val>,
-    In: for<'a> MatrixRows<'a, Val>,
+    In: MatrixRows<Val>,
 {
-    type Out: for<'a> MatrixRows<'a, Dom>;
+    type Out: MatrixRows<Dom>;
 
     fn lde_batch(&self, polys: In, extended_height: usize) -> Self::Out;
 }
 
 /// Performs low-degree extensions over (possibly trivial) cosets of multiplicative subgroups of the
 /// domain, `Dom`.
-pub trait TwoAdicLDE<Val, Dom>
+pub trait TwoAdicLde<Val, Dom>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -39,18 +39,18 @@ where
     fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Dom>;
 }
 
-/// A specialization of `TwoAdicLDE` where that evaluates polynomials over a multiplicative
+/// A specialization of `TwoAdicLde` where that evaluates polynomials over a multiplicative
 /// subgroup of the domain `Dom`, or in other words, a trivial coset thereof.
-pub trait TwoAdicSubgroupLDE<Val, Dom>: TwoAdicLDE<Val, Dom>
+pub trait TwoAdicSubgroupLde<Val, Dom>: TwoAdicLde<Val, Dom>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
 {
 }
 
-/// A specialization of `TwoAdicLDE` where that evaluates polynomials over a nontrivial coset of a
+/// A specialization of `TwoAdicLde` where that evaluates polynomials over a nontrivial coset of a
 /// multiplicative subgroup of the domain `Dom`.
-pub trait TwoAdicCosetLDE<Val, Dom>: TwoAdicLDE<Val, Dom>
+pub trait TwoAdicCosetLde<Val, Dom>: TwoAdicLde<Val, Dom>
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,

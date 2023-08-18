@@ -1,26 +1,23 @@
 use alloc::vec;
 
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
 
-pub struct NaiveDFT;
+#[derive(Default, Clone)]
+pub struct NaiveDft;
 
-impl<Val, Dom> TwoAdicSubgroupDft<Val, Dom> for NaiveDFT
-where
-    Val: Field,
-    Dom: ExtensionField<Val> + TwoAdicField,
-{
-    fn dft_batch(&self, mat: RowMajorMatrix<Val>) -> RowMajorMatrix<Dom> {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
+    fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let w = mat.width();
         let h = mat.height();
         let log_h = log2_strict_usize(h);
-        let g = Dom::primitive_root_of_unity(log_h);
+        let g = F::primitive_root_of_unity(log_h);
 
-        let mut res = RowMajorMatrix::new(vec![Dom::ZERO; w * h], w);
+        let mut res = RowMajorMatrix::new(vec![F::ZERO; w * h], w);
         for (res_r, point) in g.powers().take(h).enumerate() {
             for (src_r, point_power) in point.powers().take(h).enumerate() {
                 for c in 0..w {
@@ -42,7 +39,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDFT, TwoAdicSubgroupDft};
+    use crate::{NaiveDft, TwoAdicSubgroupDft};
 
     #[test]
     fn basic() {
@@ -64,7 +61,7 @@ mod tests {
             3,
         );
 
-        let dft = NaiveDFT.dft_batch(mat);
+        let dft = NaiveDft.dft_batch(mat);
         // Expected evaluations on {1, -1}:
         // 9, 1
         // 5, -1
@@ -90,8 +87,8 @@ mod tests {
         type F = Goldilocks;
         let mut rng = thread_rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
-        let dft = NaiveDFT.dft_batch(original.clone());
-        let idft = NaiveDFT.idft_batch(dft);
+        let dft = NaiveDft.dft_batch(original.clone());
+        let idft = NaiveDft.idft_batch(dft);
         assert_eq!(original, idft);
     }
 }

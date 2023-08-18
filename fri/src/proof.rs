@@ -1,41 +1,25 @@
 use alloc::vec::Vec;
 
-use p3_commit::{DirectMMCS, MMCS};
-use p3_field::{ExtensionField, Field};
+use p3_commit::Mmcs;
+
+use crate::FriConfig;
 
 #[allow(dead_code)] // TODO: fields should be used soon
-pub struct FriProof<F, EF, M, MC>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
-{
-    query_proofs: Vec<QueryProof<F, EF, M, MC>>,
+pub struct FriProof<FC: FriConfig> {
+    pub(crate) query_proofs: Vec<QueryProof<FC>>,
 }
 
 #[allow(dead_code)] // TODO: fields should be used soon
-pub struct QueryProof<F, EF, M, MC>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
-{
-    /// An opened row of each matrix that was part of this batch-FRI proof.
-    leaves: Vec<Vec<F>>,
-    leaf_opening_proofs: Vec<M::Proof>,
-    steps: Vec<QueryStepProof<F, EF, MC>>,
-}
+#[allow(clippy::type_complexity)]
+pub struct QueryProof<FC: FriConfig> {
+    /// For each input commitment, this contains openings of each matrix at the queried location,
+    /// along with an opening proof.
+    pub(crate) input_openings: Vec<(Vec<Vec<FC::Val>>, <FC::InputMmcs as Mmcs<FC::Val>>::Proof)>,
 
-#[allow(dead_code)] // TODO: fields should be used soon
-pub struct QueryStepProof<F, EF, MC>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    MC: DirectMMCS<F>,
-{
-    /// An opened row of each matrix that was part of this batch-FRI proof.
-    leaves: EF,
-    leaf_opening_proofs: MC::Proof,
+    /// For each commit phase commitment, this contains openings of each matrix at the queried
+    /// location, along with an opening proof.
+    pub(crate) commit_phase_openings: Vec<(
+        Vec<Vec<FC::Challenge>>,
+        <FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Proof,
+    )>,
 }

@@ -1,9 +1,9 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_challenger::Challenger;
+use p3_challenger::FieldChallenger;
 use p3_code::LinearCodeFamily;
-use p3_commit::{DirectMMCS, MultivariatePCS, PCS};
+use p3_commit::{DirectMmcs, MultivariatePcs, Pcs};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
@@ -11,11 +11,11 @@ use p3_matrix::MatrixRows;
 use crate::reshape::optimal_wraps;
 use crate::wrapped_matrix::WrappedMatrix;
 
-pub struct TensorPCS<F, C, M>
+pub struct TensorPcs<F, C, M>
 where
     F: Field,
     C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F>,
+    M: DirectMmcs<F>,
 {
     codes: C,
     mmcs: M,
@@ -23,11 +23,11 @@ where
     _phantom_m: PhantomData<M>,
 }
 
-impl<F, C, M> TensorPCS<F, C, M>
+impl<F, C, M> TensorPcs<F, C, M>
 where
     F: Field,
-    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F, Mat = C::Out>,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
+    M: DirectMmcs<F>,
 {
     pub fn new(codes: C, mmcs: M) -> Self {
         Self {
@@ -39,12 +39,13 @@ where
     }
 }
 
-impl<F, In, C, M> PCS<F, In> for TensorPCS<F, C, M>
+impl<F, In, C, M, Challenger> Pcs<F, In, Challenger> for TensorPcs<F, C, M>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F, Mat = C::Out>,
+    In: MatrixRows<F>,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
+    M: DirectMmcs<F>,
+    Challenger: FieldChallenger<F>,
 {
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
@@ -64,27 +65,27 @@ where
     }
 }
 
-impl<F, In, C, M> MultivariatePCS<F, In> for TensorPCS<F, C, M>
+impl<F, In, C, M, Challenger> MultivariatePcs<F, In, Challenger> for TensorPcs<F, C, M>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>>,
-    M: DirectMMCS<F, Mat = C::Out>,
+    In: MatrixRows<F>,
+    C: LinearCodeFamily<F, WrappedMatrix<F, RowMajorMatrix<F>>, Out = RowMajorMatrix<F>>,
+    M: DirectMmcs<F>,
+    Challenger: FieldChallenger<F>,
 {
-    fn open_multi_batches<EF, Chal>(
+    fn open_multi_batches<EF>(
         &self,
         _prover_data: &[&Self::ProverData],
         _points: &[Vec<EF>],
-        _challenger: &mut Chal,
+        _challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>,
     {
         todo!()
     }
 
-    fn verify_multi_batches<EF, Chal>(
+    fn verify_multi_batches<EF>(
         &self,
         _commits: &[Self::Commitment],
         _points: &[Vec<EF>],
@@ -93,7 +94,6 @@ where
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>,
     {
         todo!()
     }

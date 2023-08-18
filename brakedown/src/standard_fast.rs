@@ -16,7 +16,7 @@ pub fn fast_registry<F, In>() -> impl LinearCodeFamily<F, In>
 where
     F: Field,
     Standard: Distribution<F>,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
     #[rustfmt::skip]
     let height_14 = brakedown!(16384, 1967, 8, 2810, 4211, 20,

@@ -44,7 +44,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
     type Out = VerticalPair<F, In, VerticalPair<F, IC::Out, RowMajorMatrix<F>>>;
 
@@ -63,7 +63,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
     fn message_len(&self) -> usize {
         self.a.width()
@@ -80,7 +80,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
 }
 
@@ -89,7 +89,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
     fn parity_len(&self) -> usize {
         self.y_len() + self.z_parity_len() + self.v_len()
@@ -101,7 +101,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
 }
 
@@ -110,6 +110,6 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: for<'a> MatrixRows<'a, F> + Sync,
+    In: MatrixRows<F> + Sync,
 {
 }

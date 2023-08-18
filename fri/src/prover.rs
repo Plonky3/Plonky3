@@ -3,98 +3,131 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 
 use itertools::Itertools;
-use p3_challenger::Challenger;
-use p3_commit::{DirectMMCS, MMCS};
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
+use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 
-use crate::{FriConfig, FriProof};
+use crate::fold_even_odd::fold_even_odd;
+use crate::{FriConfig, FriProof, QueryProof};
 
-pub(crate) fn prove<F, Challenge, M, MC, Chal>(
-    codewords: &[M::ProverData],
-    config: &FriConfig,
-    challenger: &mut Chal,
-) -> FriProof<F, Challenge, M, MC>
-where
-    F: Field,
-    Challenge: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
-    Chal: Challenger<F>,
-{
-    let _commit_phase_commits = commit_phase::<F, Challenge, M, MC, Chal>(codewords, challenger);
-    let query_indices: Vec<Challenge> = (0..config.num_queries)
-        .map(|_| challenger.random_ext_element())
+pub(crate) fn prove<FC: FriConfig>(
+    config: &FC,
+    input_mmcs: &FC::InputMmcs,
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    challenger: &mut FC::Challenger,
+) -> FriProof<FC> {
+    let n = input_commits
+        .iter()
+        .map(|commit| input_mmcs.get_max_height(commit))
+        .max()
+        .unwrap_or_else(|| panic!("No matrices?"));
+
+    let commit_phase_commits = commit_phase::<FC>(config, input_mmcs, input_commits, challenger);
+    let query_indices: Vec<usize> = (0..config.num_queries())
+        .map(|_| challenger.sample_bits(n))
         .collect();
-    let _query_proofs = query_indices.into_par_iter().map(|_query_index| todo!());
-    todo!()
+    // TODO: into_par_iter?
+    let query_proofs = query_indices
+        .into_iter()
+        .map(|index| {
+            answer_query(
+                config,
+                input_mmcs,
+                input_commits,
+                &commit_phase_commits,
+                index,
+            )
+        })
+        .collect();
+    FriProof { query_proofs }
 }
 
-pub(crate) fn commit_phase<F, Challenge, M, MC, Chal>(
-    codewords: &[M::ProverData],
-    challenger: &mut Chal,
-) -> Vec<MC::ProverData>
-where
-    F: Field,
-    Challenge: ExtensionField<F>,
-    M: MMCS<F>,
-    MC: DirectMMCS<F>,
-    Chal: Challenger<F>,
-{
-    let alpha: Challenge = challenger.random_ext_element();
-    let matrices_by_desc_height = codewords
+fn answer_query<FC: FriConfig>(
+    config: &FC,
+    input_mmcs: &FC::InputMmcs,
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
+    index: usize,
+) -> QueryProof<FC> {
+    let input_openings = input_commits
         .iter()
-        .flat_map(|data| M::get_matrices(data))
+        .map(|commit| input_mmcs.open_batch(index, commit))
+        .collect();
+    let commit_phase_openings = commit_phase_commits
+        .iter()
+        .map(|commit| config.commit_phase_mmcs().open_batch(index, commit))
+        .collect();
+    QueryProof {
+        input_openings,
+        commit_phase_openings,
+    }
+}
+
+fn commit_phase<FC: FriConfig>(
+    config: &FC,
+    input_mmcs: &FC::InputMmcs,
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    challenger: &mut FC::Challenger,
+) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
+    let alpha: FC::Challenge = challenger.sample_ext_element();
+    let inputs_by_desc_height = input_commits
+        .iter()
+        .flat_map(|commit| input_mmcs.get_matrices(commit))
         .sorted_by_key(|mat| Reverse(mat.height()))
         .group_by(|mat| mat.height());
-    let mut matrices_by_desc_height = matrices_by_desc_height.into_iter();
+    let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();
 
-    let (max_height, largest_matrices_iter) = matrices_by_desc_height.next().expect("No matrices?");
+    let (max_height, largest_matrices_iter) = inputs_by_desc_height.next().expect("No matrices?");
     let largest_matrices = largest_matrices_iter.collect_vec();
-    let zero_vec = vec![<Challenge as AbstractField>::ZERO; max_height];
-    let mut current = reduce_matrices(max_height, zero_vec, largest_matrices, alpha);
-    let mut committed = vec![current.clone()];
+    let zero_vec = vec![FC::Challenge::ZERO; max_height];
+    let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
 
-    for (height, matrices) in matrices_by_desc_height {
+    // TODO: Can we avoid cloning?
+    let (largest_commit, largest_prover_data) =
+        config.commit_phase_mmcs().commit_vec(current.clone());
+    challenger.observe(largest_commit);
+    let mut commits = vec![largest_prover_data];
+
+    for (height, matrices) in inputs_by_desc_height {
         while current.len() < height {
-            let beta = <Challenge as AbstractField>::ZERO; // TODO
+            let beta: FC::Challenge = challenger.sample_ext_element();
             current = fold_even_odd(&current, beta);
         }
-        committed.push(current.clone());
-        current = reduce_matrices::<F, Challenge, M::Mat>(
+
+        // TODO: Can we avoid cloning?
+        let (commit, prover_data) = config.commit_phase_mmcs().commit_vec(current.clone());
+        challenger.observe(commit);
+        commits.push(prover_data);
+
+        current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat<'_>>(
             height,
-            current.clone(),
-            matrices.collect(),
+            &current,
+            &matrices.collect_vec(),
             alpha,
         );
     }
-    todo!()
+
+    commits
 }
 
-/// Fold a polynomial `p(x) = p_even(x^2) + x p_odd(x^2)` into `p_even(x) + beta * p_odd(x)`.
-fn fold_even_odd<F: Field>(_poly: &[F], _beta: F) -> Vec<F> {
-    todo!()
-}
-
-#[allow(clippy::needless_pass_by_value)]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
-    init: Vec<Challenge>,
-    matrices: Vec<&Mat>,
+    init: &[Challenge],
+    matrices: &[Mat],
     alpha: Challenge,
 ) -> Vec<Challenge>
 where
     F: Field,
     Challenge: ExtensionField<F>,
-    Mat: for<'a> MatrixRows<'a, F>,
+    Mat: MatrixRows<F>,
 {
     (0..height)
         .map(|r| {
             let mut reduced = init[r];
-            for mat in &matrices {
+            for mat in matrices {
                 for col in mat.row(r) {
-                    reduced = reduced * alpha + *col;
+                    reduced = reduced * alpha + col;
                 }
             }
             reduced

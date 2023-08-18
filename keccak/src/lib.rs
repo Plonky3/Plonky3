@@ -11,6 +11,7 @@ use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use tiny_keccak::{keccakf, Hasher, Keccak};
 
 /// The Keccak-f permutation.
+#[derive(Copy, Clone)]
 pub struct KeccakF;
 
 impl CryptographicPermutation<[u64; 25]> for KeccakF {
@@ -39,6 +40,7 @@ impl CryptographicPermutation<[u8; 200]> for KeccakF {
 
 /// The `Keccak` hash functions defined in
 /// [Keccak SHA3 submission](https://keccak.team/files/Keccak-submission-3.pdf).
+#[derive(Copy, Clone)]
 pub struct Keccak256Hash;
 
 impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {

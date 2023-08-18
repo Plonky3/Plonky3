@@ -1,29 +1,32 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_challenger::Challenger;
+use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
-use crate::pcs::{UnivariatePCS, PCS};
-use crate::MultivariatePCS;
+use crate::pcs::{Pcs, UnivariatePcs};
+use crate::MultivariatePcs;
 
-pub struct MultiFromUniPCS<F, In, U>
+pub struct MultiFromUniPcs<F, In, U, Challenger>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    U: UnivariatePCS<F, In>,
+    In: MatrixRows<F>,
+    U: UnivariatePcs<F, In, Challenger>,
+    Challenger: FieldChallenger<F>,
 {
     _uni: U,
     _phantom_f: PhantomData<F>,
     _phantom_in: PhantomData<In>,
+    _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<F, In, U> PCS<F, In> for MultiFromUniPCS<F, In, U>
+impl<F, In, U, Challenger> Pcs<F, In, Challenger> for MultiFromUniPcs<F, In, U, Challenger>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    U: UnivariatePCS<F, In>,
+    In: MatrixRows<F>,
+    U: UnivariatePcs<F, In, Challenger>,
+    Challenger: FieldChallenger<F>,
 {
     type Commitment = ();
     type ProverData = U::ProverData;
@@ -35,26 +38,27 @@ where
     }
 }
 
-impl<F, In, U> MultivariatePCS<F, In> for MultiFromUniPCS<F, In, U>
+impl<F, In, U, Challenger> MultivariatePcs<F, In, Challenger>
+    for MultiFromUniPcs<F, In, U, Challenger>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    U: UnivariatePCS<F, In>,
+    In: MatrixRows<F>,
+    U: UnivariatePcs<F, In, Challenger>,
+    Challenger: FieldChallenger<F>,
 {
-    fn open_multi_batches<EF, Chal>(
+    fn open_multi_batches<EF>(
         &self,
         _prover_data: &[&Self::ProverData],
         _points: &[Vec<EF>],
-        _challenger: &mut Chal,
+        _challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>,
     {
         todo!()
     }
 
-    fn verify_multi_batches<EF, Chal>(
+    fn verify_multi_batches<EF>(
         &self,
         _commits: &[Self::Commitment],
         _points: &[Vec<EF>],
@@ -63,7 +67,6 @@ where
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: Challenger<F>,
     {
         todo!()
     }
