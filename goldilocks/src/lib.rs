@@ -121,10 +121,6 @@ impl AbstractField for Goldilocks {
         Self::new(n)
     }
 
-    fn from_wrapped_u128(n: u128) -> Self {
-        reduce128(n)
-    }
-
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     fn multiplicative_group_generator() -> Self {
         Self::new(7)
@@ -206,7 +202,7 @@ impl PrimeField64 for Goldilocks {
         for i in 1..N {
             dot += u[i] as u128 * v[i].value as u128;
         }
-        Self::from_wrapped_u128(dot)
+        reduce128(dot)
     }
 }
 

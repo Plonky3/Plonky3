@@ -140,10 +140,6 @@ impl AbstractField for Mersenne31 {
         Self::from_wrapped_u32(lo + hi)
     }
 
-    fn from_wrapped_u128(_n: u128) -> Self {
-        todo!()
-    }
-
     // Sage: GF(2^31 - 1).multiplicative_generator()
     fn multiplicative_group_generator() -> Self {
         Self::new(7)

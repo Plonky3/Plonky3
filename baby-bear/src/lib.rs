@@ -98,10 +98,6 @@ impl AbstractField for BabyBear {
         }
     }
 
-    fn from_wrapped_u128(_n: u128) -> Self {
-        todo!()
-    }
-
     fn multiplicative_group_generator() -> Self {
         Self::from_canonical_u32(0x1f)
     }

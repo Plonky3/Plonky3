@@ -65,10 +65,6 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
         Self::Constant(F::from_wrapped_u64(n))
     }
 
-    fn from_wrapped_u128(n: u128) -> Self {
-        Self::Constant(F::from_wrapped_u128(n))
-    }
-
     fn multiplicative_group_generator() -> Self {
         Self::Constant(F::multiplicative_group_generator())
     }
