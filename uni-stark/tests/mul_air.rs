@@ -65,7 +65,7 @@ fn test_prove_goldilocks() {
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft::default());
     let mut challenger = Challenger::new(perm);
-    prove::<MyConfig, _, _>(&MulAir, &config, &mut challenger, trace);
+    prove::<MyConfig, _>(&MulAir, &config, &mut challenger, trace);
 }
 
 #[test]

@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_air::{Air, TwoRowMatrixView};
-use p3_challenger::FieldChallenger;
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Pcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
@@ -16,15 +16,14 @@ use p3_util::log2_strict_usize;
 
 use crate::{ConstraintFolder, StarkConfig};
 
-pub fn prove<SC, A, Challenger>(
+pub fn prove<SC, A>(
     air: &A,
     config: &SC,
-    challenger: &mut Challenger,
+    challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
 ) where
     SC: StarkConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
-    Challenger: FieldChallenger<SC::Domain>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
@@ -51,13 +50,14 @@ pub fn prove<SC, A, Challenger>(
     lagrange_last_evals[degree - 1] = SC::Domain::ONE;
     lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
 
+    let (trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
+
+    // TODO: Skip this if using FriBasedPcs, in which case we already computed the trace LDE.
     let trace_lde = config
         .dft()
         .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift);
 
-    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
-
-    // challenger.observe_ext_element(trace_commit); // TODO
+    challenger.observe(trace_commit);
     let alpha = challenger.sample_ext_element::<SC::Challenge>();
 
     let _quotient_values = (0..quotient_size)
@@ -107,7 +107,7 @@ pub fn prove<SC, A, Challenger>(
             };
             air.eval(&mut builder);
 
-            // TODO: divide the constraints evaluations by `Z_H(x)`.
+            // TODO: divide the constraints evaluations by `Z_H(x) = x^n - 1`.
 
             builder.accumulator.as_slice().to_vec()
         })
