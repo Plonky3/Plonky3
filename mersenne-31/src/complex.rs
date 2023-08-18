@@ -281,6 +281,7 @@ impl Distribution<Mersenne31Complex<Mersenne31>> for Standard {
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeField32;
+    use p3_field_testing::test_inverse;
 
     use super::*;
 
@@ -393,5 +394,10 @@ mod tests {
             Fi::new_imag(F::new(5)).mul_2exp_u64(2),
             Fi::new_imag(F::new(20))
         );
+    }
+
+    #[test]
+    fn inverse() {
+        test_inverse::<Mersenne31Complex<Mersenne31>>();
     }
 }
