@@ -10,6 +10,7 @@ use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use crate::util::{apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml};
 use crate::MDSPermutation;
 
+#[derive(Clone)]
 pub struct MDSMatrixMersenne31;
 
 impl CryptographicPermutation<[Mersenne31; 8]> for MDSMatrixMersenne31 {

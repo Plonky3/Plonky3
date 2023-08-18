@@ -9,21 +9,21 @@ use p3_matrix::stack::VerticalPair;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
-use crate::{TwoAdicCosetLDE, TwoAdicLDE, TwoAdicSubgroupLDE, UndefinedLDE};
+use crate::{TwoAdicCosetLde, TwoAdicLde, TwoAdicSubgroupLde, UndefinedLde};
 
-/// A naive quadratic-time implementation of `LDE`, intended for testing.
-pub struct NaiveUndefinedLDE;
+/// A naive quadratic-time implementation of `Lde`, intended for testing.
+pub struct NaiveUndefinedLde;
 
-/// A naive quadratic-time implementation of `TwoAdicSubgroupLDE`, intended for testing.
-pub struct NaiveSubgroupLDE;
+/// A naive quadratic-time implementation of `TwoAdicSubgroupLde`, intended for testing.
+pub struct NaiveSubgroupLde;
 
-/// A naive quadratic-time implementation of `TwoAdicCosetLDE`, intended for testing.
-pub struct NaiveCosetLDE;
+/// A naive quadratic-time implementation of `TwoAdicCosetLde`, intended for testing.
+pub struct NaiveCosetLde;
 
-impl<F, In> UndefinedLDE<F, F, In> for NaiveUndefinedLDE
+impl<F, In> UndefinedLde<F, F, In> for NaiveUndefinedLde
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
+    In: MatrixRows<F>,
 {
     type Out = VerticalPair<F, In, RowMajorMatrix<F>>;
 
@@ -43,7 +43,7 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveSubgroupLDE
+impl<Val, Dom> TwoAdicLde<Val, Dom> for NaiveSubgroupLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -65,7 +65,7 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicLDE<Val, Dom> for NaiveCosetLDE
+impl<Val, Dom> TwoAdicLde<Val, Dom> for NaiveCosetLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -88,14 +88,14 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicSubgroupLDE<Val, Dom> for NaiveSubgroupLDE
+impl<Val, Dom> TwoAdicSubgroupLde<Val, Dom> for NaiveSubgroupLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
 {
 }
 
-impl<Val, Dom> TwoAdicCosetLDE<Val, Dom> for NaiveCosetLDE
+impl<Val, Dom> TwoAdicCosetLde<Val, Dom> for NaiveCosetLde
 where
     Val: Field,
     Dom: ExtensionField<Val> + TwoAdicField,
@@ -119,7 +119,7 @@ fn barycentric_weights<F: Field>(points: &[F]) -> Vec<F> {
     )
 }
 
-fn interpolate<F: Field, Mat: for<'a> MatrixRows<'a, F>>(
+fn interpolate<F: Field, Mat: MatrixRows<F>>(
     points: &[F],
     values: &Mat,
     x: F,
@@ -128,7 +128,7 @@ fn interpolate<F: Field, Mat: for<'a> MatrixRows<'a, F>>(
     // If x is in the list of points, the Lagrange formula would divide by zero.
     for (i, &x_i) in points.iter().enumerate() {
         if x_i == x {
-            return values.row(i).into_iter().copied().collect();
+            return values.row(i).into_iter().collect();
         }
     }
 
@@ -136,7 +136,7 @@ fn interpolate<F: Field, Mat: for<'a> MatrixRows<'a, F>>(
 
     let sum = sum_vecs((0..points.len()).map(|i| {
         let x_i = points[i];
-        let y_i = values.row(i).into_iter().copied().collect();
+        let y_i = values.row(i).into_iter().collect();
         let w_i = barycentric_weights[i];
         scale_vec(w_i / (x - x_i), y_i)
     }));

@@ -1,4 +1,4 @@
-pub trait CryptographicHasher<Item: Clone, Out> {
+pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     fn hash_iter<I>(&self, input: I) -> Out
     where
         I: IntoIterator<Item = Item>;

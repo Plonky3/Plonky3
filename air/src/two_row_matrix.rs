@@ -1,4 +1,7 @@
-use p3_matrix::{Matrix, MatrixRows};
+use core::iter::Cloned;
+use core::slice;
+
+use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 
 #[derive(Copy, Clone)]
 pub struct TwoRowMatrixView<'a, T> {
@@ -22,10 +25,21 @@ impl<'a, T> Matrix<T> for TwoRowMatrixView<'a, T> {
     }
 }
 
-impl<'a, T: 'a> MatrixRows<'a, T> for TwoRowMatrixView<'_, T> {
-    type Row = &'a [T];
+impl<T: Clone> MatrixRows<T> for TwoRowMatrixView<'_, T> {
+    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
 
-    fn row(&'a self, r: usize) -> &'a [T] {
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        let slice = match r {
+            0 => self.local,
+            1 => self.next,
+            _ => panic!("Only two rows available"),
+        };
+        slice.iter().cloned()
+    }
+}
+
+impl<T> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
+    fn row_slice(&self, r: usize) -> &[T] {
         match r {
             0 => self.local,
             1 => self.next,

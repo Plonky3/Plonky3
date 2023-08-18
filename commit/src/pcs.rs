@@ -11,9 +11,9 @@ use p3_matrix::MatrixRows;
 /// polynomials defined over the field `F`.
 ///
 /// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
-/// and `MultivariatePCS` for more specific subtraits.
+/// and `MultivariatePcs` for more specific subtraits.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>, Chal: FieldChallenger<F>> {
+pub trait Pcs<F: Field, In: MatrixRows<F>, Challenger: FieldChallenger<F>> {
     /// The commitment that's sent to the verifier.
     type Commitment;
 
@@ -32,17 +32,17 @@ pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>, Chal: FieldChallenger<F>>
     }
 }
 
-pub trait UnivariatePCS<F, In, Chal>: PCS<F, In, Chal>
+pub trait UnivariatePcs<F, In, Challenger>: Pcs<F, In, Challenger>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    Chal: FieldChallenger<F>,
+    In: MatrixRows<F>,
+    Challenger: FieldChallenger<F>,
 {
     fn open_multi_batches<EF>(
         &self,
         prover_data: &[&Self::ProverData],
         points: &[EF],
-        challenger: &mut Chal,
+        challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>;
@@ -56,24 +56,24 @@ where
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: FieldChallenger<F>;
+        Challenger: FieldChallenger<F>;
 }
 
-pub trait MultivariatePCS<F, In, Chal>: PCS<F, In, Chal>
+pub trait MultivariatePcs<F, In, Challenger>: Pcs<F, In, Challenger>
 where
     F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    Chal: FieldChallenger<F>,
+    In: MatrixRows<F>,
+    Challenger: FieldChallenger<F>,
 {
     fn open_multi_batches<EF>(
         &self,
         prover_data: &[&Self::ProverData],
         points: &[Vec<EF>],
-        challenger: &mut Chal,
+        challenger: &mut Challenger,
     ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
     where
         EF: ExtensionField<F>,
-        Chal: FieldChallenger<F>;
+        Challenger: FieldChallenger<F>;
 
     fn verify_multi_batches<EF>(
         &self,
@@ -84,5 +84,5 @@ where
     ) -> Result<(), Self::Error>
     where
         EF: ExtensionField<F>,
-        Chal: FieldChallenger<F>;
+        Challenger: FieldChallenger<F>;
 }

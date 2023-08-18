@@ -14,6 +14,7 @@ use crate::util::{
 };
 use crate::MDSPermutation;
 
+#[derive(Clone)]
 pub struct MDSMatrixGoldilocks;
 
 const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};

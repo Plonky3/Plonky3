@@ -7,9 +7,10 @@ use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
 
-pub struct NaiveDFT;
+#[derive(Default, Clone)]
+pub struct NaiveDft;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDFT {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let w = mat.width();
         let h = mat.height();
@@ -38,7 +39,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDFT, TwoAdicSubgroupDft};
+    use crate::{NaiveDft, TwoAdicSubgroupDft};
 
     #[test]
     fn basic() {
@@ -60,7 +61,7 @@ mod tests {
             3,
         );
 
-        let dft = NaiveDFT.dft_batch(mat);
+        let dft = NaiveDft.dft_batch(mat);
         // Expected evaluations on {1, -1}:
         // 9, 1
         // 5, -1
@@ -86,8 +87,8 @@ mod tests {
         type F = Goldilocks;
         let mut rng = thread_rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
-        let dft = NaiveDFT.dft_batch(original.clone());
-        let idft = NaiveDFT.idft_batch(dft);
+        let dft = NaiveDft.dft_batch(original.clone());
+        let idft = NaiveDft.idft_batch(dft);
         assert_eq!(original, idft);
     }
 }
