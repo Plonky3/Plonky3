@@ -1,12 +1,13 @@
 use p3_field::PrimeField32;
-use p3_symmetric::mds::{MDSPermutation, NaiveMDSMatrix};
+use p3_symmetric::mds::NaiveMDSMatrix;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
-pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(
+
+pub fn monolith_mds_naive<F: PrimeField32, const WIDTH: usize>(
     init_string: &str,
     num_rounds: usize,
-) -> Box<dyn MDSPermutation<F, WIDTH>> {
+) -> NaiveMDSMatrix<F, WIDTH> {
     let matrix = if WIDTH == 16 {
         let row = [
             61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244,
@@ -23,7 +24,7 @@ pub fn monolith_mds<F: PrimeField32, const WIDTH: usize>(
         let mut shake_finalized = shake.finalize_xof();
         cauchy_mds_matrix(&mut shake_finalized)
     };
-    Box::new(NaiveMDSMatrix::new(matrix))
+    NaiveMDSMatrix::new(matrix)
 }
 
 fn circulant_matrix<F: PrimeField32, const WIDTH: usize>(

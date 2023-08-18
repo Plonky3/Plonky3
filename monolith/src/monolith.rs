@@ -9,7 +9,7 @@ use p3_symmetric::mds::MDSPermutation;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::monolith_mds::monolith_mds;
+use crate::monolith_mds::monolith_mds_naive;
 
 // The Monolith-31 permutation.
 // Assumes that F is a 31-bit field (e.g. Mersenne31).
@@ -34,7 +34,7 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
-        let mds = monolith_mds("Monolith", NUM_ROUNDS);
+        let mds = Box::new(monolith_mds_naive("Monolith", NUM_ROUNDS));
 
         Self {
             round_constants,
