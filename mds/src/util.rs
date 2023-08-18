@@ -9,10 +9,6 @@ const MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 //const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
 const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
 
-fn dot_vec<F: AbstractField, const N: usize>(u: &[F; N], v: &[F; N]) -> F {
-    u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
-}
-
 /// Given the first row `circ_matrix` of an NxN circulant matrix, say
 /// C, return the product `C*input`.
 ///
@@ -27,10 +23,10 @@ pub(crate) fn apply_circulant<F: AbstractField, const N: usize>(
 
     let mut output = [F::ZERO; N];
     for out_i in output.iter_mut().take(N - 1) {
-        *out_i = dot_vec(&input, &matrix);
+        *out_i = F::dot_product(&matrix, &input);
         matrix.rotate_right(1);
     }
-    output[N - 1] = dot_vec(&input, &matrix);
+    output[N - 1] = F::dot_product(&matrix, &input);
     output
 }
 

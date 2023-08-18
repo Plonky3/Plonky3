@@ -63,11 +63,7 @@ pub trait AbstractField:
     }
 
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        let mut dot = u[0].clone() * v[0].clone();
-        for i in 1..N {
-            dot += u[i].clone() * v[i].clone();
-        }
-        dot
+        u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
 }
 
