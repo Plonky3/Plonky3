@@ -7,7 +7,8 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Pcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, Field,
+    PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
@@ -39,6 +40,19 @@ pub fn prove<SC, A>(
     let coset_shift = SC::Domain::multiplicative_group_generator();
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
+
+    // Evaluations of x^n on our coset s H. Note that
+    //     (s g^i)^n = s^n (g^n)^i,
+    // so this is the coset of <g^n> shifted by s^n.
+    let x_pow_n_evals = cyclic_subgroup_coset_known_order(
+        g_extended.exp_power_of_2(degree_bits),
+        coset_shift.exp_power_of_2(degree_bits),
+        quotient_size,
+    );
+
+    // Evaluations of Z_H(x) = (x^n - 1) on our coset s H.
+    let zerofier_evals: Vec<_> = x_pow_n_evals.map(|y| y - SC::Val::ONE).collect();
+    let zerofier_inv_evals = batch_multiplicative_inverse(&zerofier_evals);
 
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
     let mut lagrange_first_evals = vec![SC::Domain::ZERO; degree];
@@ -73,7 +87,9 @@ pub fn prove<SC, A>(
             let is_first_row =
                 *<SC::Domain as Field>::Packing::from_slice(&lagrange_first_evals[i_range.clone()]);
             let is_last_row =
-                *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
+                *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range.clone()]);
+            let zerofier_inv =
+                *<SC::Domain as Field>::Packing::from_slice(&zerofier_inv_evals[i_range]);
 
             let local: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
@@ -107,9 +123,9 @@ pub fn prove<SC, A>(
             };
             air.eval(&mut builder);
 
-            // TODO: divide the constraints evaluations by `Z_H(x) = x^n - 1`.
-
-            builder.accumulator.as_slice().to_vec()
+            // quotient(x) = constraints(x) / Z_H(x)
+            let quotient = builder.accumulator * zerofier_inv;
+            quotient.as_slice().to_vec()
         })
         .collect::<Vec<SC::Challenge>>();
 }
