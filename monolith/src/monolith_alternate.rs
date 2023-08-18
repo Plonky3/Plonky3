@@ -170,22 +170,17 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
             *out = inp.as_canonical_u32() as u64;
         }
 
-        dbg!(state_u64.clone());
-
         self.concrete(&mut state_u64, None);
 
-        dbg!(state_u64.clone());
-        
         for rc in self
-        .round_constants
-        .iter()
-        .map(Some)
-        .chain(iter::once(None))
+            .round_constants
+            .iter()
+            .map(Some)
+            .chain(iter::once(None))
         {
             self.bars(&mut state_u64);
             Self::bricks(&mut state_u64);
             self.concrete(&mut state_u64, rc);
-            dbg!(state_u64.clone());
         }
 
         // Convert back
