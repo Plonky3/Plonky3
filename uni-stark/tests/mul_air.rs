@@ -58,7 +58,7 @@ fn test_prove_goldilocks() {
     let ldt = FriLdt { config: fri_config };
 
     type Pcs = FriBasedPcs<MyFriConfig, MyMmcs, Dft>;
-    type MyConfig = StarkConfigImpl<Val, Dom, Challenge, Challenge, Pcs, Dft, Challenger>;
+    type MyConfig = StarkConfigImpl<Val, Dom, Challenge, Pcs, Dft, Challenger>;
 
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);

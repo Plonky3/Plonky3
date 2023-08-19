@@ -9,15 +9,16 @@ use p3_matrix::dense::RowMajorMatrixView;
 pub trait StarkConfig {
     /// A value of the trace.
     type Val: Field;
+    // type PackedVal: PackedField<Scalar = Self::Val>;
 
     /// The domain over which trace polynomials are defined.
     type Domain: ExtensionField<Self::Val> + TwoAdicField;
+    type PackedDomain: PackedField<Scalar = Self::Domain>;
 
     /// The field from which most random challenges are drawn.
     type Challenge: ExtensionField<Self::Domain>;
-
     type PackedChallenge: PackedField<Scalar = Self::Challenge>
-        + AbstractExtensionField<<Self::Domain as Field>::Packing>;
+        + AbstractExtensionField<Self::PackedDomain>;
 
     /// The PCS used to commit to trace polynomials.
     type Pcs: for<'a> UnivariatePcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Challenger>;
@@ -32,18 +33,17 @@ pub trait StarkConfig {
     fn dft(&self) -> &Self::Dft;
 }
 
-pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> {
+pub struct StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger> {
     pcs: Pcs,
     dft: Dft,
     _phantom_val: PhantomData<Val>,
     _phantom_domain: PhantomData<Domain>,
     _phantom_challenge: PhantomData<Challenge>,
-    _phantom_packed_challenge: PhantomData<PackedChallenge>,
     _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
-    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
+impl<Val, Domain, Challenge, Pcs, Dft, Challenger>
+    StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>
 {
     pub fn new(pcs: Pcs, dft: Dft) -> Self {
         Self {
@@ -52,19 +52,18 @@ impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
             _phantom_val: PhantomData,
             _phantom_domain: PhantomData,
             _phantom_challenge: PhantomData,
-            _phantom_packed_challenge: PhantomData,
             _phantom_chal: PhantomData,
         }
     }
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> StarkConfig
-    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
+impl<Val, Domain, Challenge, Pcs, Dft, Challenger> StarkConfig
+    for StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Domain>,
-    PackedChallenge: PackedField<Scalar = Challenge> + AbstractExtensionField<Domain::Packing>,
+    Challenge::Packing: AbstractExtensionField<Domain::Packing>,
     Pcs: for<'a> UnivariatePcs<Val, RowMajorMatrixView<'a, Val>, Challenger>,
     Dft: TwoAdicSubgroupDft<Domain>,
     Challenger: FieldChallenger<Val>
@@ -74,9 +73,11 @@ where
         >,
 {
     type Val = Val;
+    // type PackedVal = Val::Packing;
     type Domain = Domain;
+    type PackedDomain = Domain::Packing;
     type Challenge = Challenge;
-    type PackedChallenge = PackedChallenge;
+    type PackedChallenge = Challenge::Packing;
     type Pcs = Pcs;
     type Dft = Dft;
     type Challenger = Challenger;
