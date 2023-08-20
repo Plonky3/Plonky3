@@ -5,8 +5,13 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+criterion = "0.5"
 p3-field = { path = "../field" }
 rand = "0.8.5"
+
+[[bench]]
+name = "inverse"
+harness = false
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }

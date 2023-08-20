@@ -6,6 +6,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field = { path = "../field" }
-
-[dev-dependencies]
 rand = "0.8.5"

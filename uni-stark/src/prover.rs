@@ -1,21 +1,19 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Pcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, Field,
-    PackedField, TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-use crate::{ConstraintFolder, StarkConfig};
+use crate::{ConstraintFolder, StarkConfig, ZerofierOnCoset};
 
 pub fn prove<SC, A>(
     air: &A,
@@ -24,7 +22,7 @@ pub fn prove<SC, A>(
     trace: RowMajorMatrix<SC::Val>,
 ) where
     SC: StarkConfig,
-    A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
+    A: for<'a> Air<ConstraintFolder<'a, SC>>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
@@ -41,18 +39,7 @@ pub fn prove<SC, A>(
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
-    // Evaluations of x^n on our coset s H. Note that
-    //     (s g^i)^n = s^n (g^n)^i,
-    // so this is the coset of <g^n> shifted by s^n.
-    let x_pow_n_evals = cyclic_subgroup_coset_known_order(
-        g_extended.exp_power_of_2(degree_bits),
-        coset_shift.exp_power_of_2(degree_bits),
-        quotient_size,
-    );
-
-    // Evaluations of Z_H(x) = (x^n - 1) on our coset s H.
-    let zerofier_evals: Vec<_> = x_pow_n_evals.map(|y| y - SC::Val::ONE).collect();
-    let zerofier_inv_evals = batch_multiplicative_inverse(&zerofier_evals);
+    let zerofier_on_coset = ZerofierOnCoset::new(degree_bits, quotient_degree_bits, coset_shift);
 
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
     let mut lagrange_first_evals = vec![SC::Domain::ZERO; degree];
@@ -76,24 +63,21 @@ pub fn prove<SC, A>(
 
     let _quotient_values = (0..quotient_size)
         .into_par_iter()
-        .step_by(<SC::Val as Field>::Packing::WIDTH)
+        .step_by(SC::PackedDomain::WIDTH)
         .flat_map_iter(|i_local_start| {
             let wrap = |i| i % quotient_size;
             let i_next_start = wrap(i_local_start + next_step);
-            let i_range = i_local_start..i_local_start + <SC::Val as Field>::Packing::WIDTH;
+            let i_range = i_local_start..i_local_start + SC::PackedDomain::WIDTH;
 
-            let x = *<SC::Domain as Field>::Packing::from_slice(&coset[i_range.clone()]);
+            let x = *SC::PackedDomain::from_slice(&coset[i_range.clone()]);
             let is_transition = x - subgroup_last;
             let is_first_row =
-                *<SC::Domain as Field>::Packing::from_slice(&lagrange_first_evals[i_range.clone()]);
-            let is_last_row =
-                *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range.clone()]);
-            let zerofier_inv =
-                *<SC::Domain as Field>::Packing::from_slice(&zerofier_inv_evals[i_range]);
+                *SC::PackedDomain::from_slice(&lagrange_first_evals[i_range.clone()]);
+            let is_last_row = *SC::PackedDomain::from_slice(&lagrange_last_evals[i_range.clone()]);
 
             let local: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
-                    <SC::Domain as Field>::Packing::from_fn(|offset| {
+                    SC::PackedDomain::from_fn(|offset| {
                         let row = wrap(i_local_start + offset);
                         trace_lde.get(row, col)
                     })
@@ -101,7 +85,7 @@ pub fn prove<SC, A>(
                 .collect();
             let next: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
-                    <SC::Domain as Field>::Packing::from_fn(|offset| {
+                    SC::PackedDomain::from_fn(|offset| {
                         let row = wrap(i_next_start + offset);
                         trace_lde.get(row, col)
                     })
@@ -119,11 +103,12 @@ pub fn prove<SC, A>(
                 is_transition,
                 alpha,
                 accumulator,
-                _phantom_f: PhantomData,
             };
             air.eval(&mut builder);
 
             // quotient(x) = constraints(x) / Z_H(x)
+            let zerofier_inv: SC::PackedDomain =
+                zerofier_on_coset.eval_inverse_packed(i_local_start);
             let quotient = builder.accumulator * zerofier_inv;
             quotient.as_slice().to_vec()
         })

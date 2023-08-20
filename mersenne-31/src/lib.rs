@@ -173,32 +173,19 @@ impl Field for Mersenne31 {
     }
 
     fn try_inverse(&self) -> Option<Self> {
-        // Uses algorithm 9.4.5 in Crandall and Pomerance book
-        // "Prime Numbers: A Computational Perspective" to compute the inverse.
-
         if self.is_zero() {
             return None;
         }
-
-        let mut a = Self::ONE;
-        let mut b = Self::ZERO;
-        let mut u = self.value;
-        let mut v = Self::ORDER_U32;
-
-        loop {
-            // Shift off trailing zeros
-            let e = u.trailing_zeros() as u64;
-            u >>= e;
-
-            // Circular shift
-            a = a.mul_2exp_u64(31 - e);
-
-            if u == 1 {
-                return Some(a);
-            }
-
-            (a, b, u, v) = (a + b, a, u + v, u);
-        }
+        let p1 = *self;
+        let p2 = p1.square() * p1;
+        let p4 = p2.exp_power_of_2(2) * p2;
+        let p8 = p4.exp_power_of_2(4) * p4;
+        let p16 = p8.exp_power_of_2(8) * p8;
+        let p24 = p16.exp_power_of_2(8) * p8;
+        let p28 = p24.exp_power_of_2(4) * p4;
+        let p29 = p28.exp_power_of_2(1) * p1;
+        let p29_1 = p29.exp_power_of_2(2) * p1;
+        Some(p29_1)
     }
 }
 

@@ -1,4 +1,4 @@
-//! A minimal STARK framework.
+//! A minimal multivariate STARK framework.
 
 #![no_std]
 
