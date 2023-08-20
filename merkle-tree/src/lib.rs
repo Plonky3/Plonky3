@@ -34,7 +34,7 @@ impl<L, D> MerkleTree<L, D> {
     /// round up to the same power of two, they must be equal.
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
-        L: 'static + Copy,
+        L: Copy,
         D: Copy + Default,
         H: CryptographicHasher<L, D>,
         C: PseudoCompressionFunction<D, 2>,

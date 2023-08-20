@@ -3,24 +3,28 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::Pcs;
+use p3_commit::{Pcs, UnivariatePcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
+    TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-use crate::{ConstraintFolder, StarkConfig, ZerofierOnCoset};
+use crate::{
+    decompose, Commitments, ConstraintFolder, OpenedValues, Proof, StarkConfig, ZerofierOnCoset,
+};
 
 pub fn prove<SC, A>(
-    air: &A,
     config: &SC,
+    air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
-) where
+) -> Proof<SC>
+where
     SC: StarkConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC>>,
 {
@@ -51,17 +55,17 @@ pub fn prove<SC, A>(
     lagrange_last_evals[degree - 1] = SC::Domain::ONE;
     lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
 
-    let (trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
-
     // TODO: Skip this if using FriBasedPcs, in which case we already computed the trace LDE.
     let trace_lde = config
         .dft()
         .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift);
 
-    challenger.observe(trace_commit);
-    let alpha = challenger.sample_ext_element::<SC::Challenge>();
+    let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
 
-    let _quotient_values = (0..quotient_size)
+    challenger.observe(trace_commit.clone());
+    let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
+
+    let quotient_values = (0..quotient_size)
         .into_par_iter()
         .step_by(SC::PackedDomain::WIDTH)
         .flat_map_iter(|i_local_start| {
@@ -113,4 +117,50 @@ pub fn prove<SC, A>(
             quotient.as_slice().to_vec()
         })
         .collect::<Vec<SC::Challenge>>();
+
+    let num_quotient_chunks = 1 << quotient_degree_bits;
+    let quotient_value_chunks = decompose(quotient_values, quotient_degree_bits);
+    let quotient_chunks_flattened: Vec<SC::Val> = (0..degree)
+        .into_par_iter()
+        .flat_map_iter(|row| {
+            quotient_value_chunks
+                .iter()
+                .flat_map(move |chunk| chunk[row].as_base_slice().iter().copied())
+        })
+        .collect();
+    let challenge_ext_degree = <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
+    let quotient_chunks_flattened = RowMajorMatrix::new(
+        quotient_chunks_flattened,
+        num_quotient_chunks * challenge_ext_degree,
+    );
+
+    let (quotient_commit, quotient_data) = config.pcs().commit_batch(quotient_chunks_flattened);
+    challenger.observe(quotient_commit.clone());
+
+    let commitments = Commitments {
+        trace: trace_commit,
+        quotient_chunks: quotient_commit,
+    };
+
+    let zeta: SC::Challenge = challenger.sample_ext_element();
+    let (opened_values, opening_proof) = config.pcs().open_multi_batches(
+        &[
+            (&trace_data, &[zeta, zeta * g_subgroup]),
+            (&quotient_data, &[zeta.square()]),
+        ],
+        challenger,
+    );
+    let trace_local = opened_values[0][0][0].clone();
+    let trace_next = opened_values[0][0][1].clone();
+    let quotient_chunks = opened_values[1][0][0].clone();
+    let opened_values = OpenedValues {
+        trace_local,
+        trace_next,
+        quotient_chunks,
+    };
+    Proof {
+        commitments,
+        opened_values,
+        opening_proof,
+    }
 }

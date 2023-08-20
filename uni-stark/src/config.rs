@@ -4,29 +4,33 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::dense::RowMajorMatrix;
 
 pub trait StarkConfig {
     /// A value of the trace.
     type Val: Field;
-    // type PackedVal: PackedField<Scalar = Self::Val>;
 
     /// The domain over which trace polynomials are defined.
     type Domain: ExtensionField<Self::Val> + TwoAdicField;
     type PackedDomain: PackedField<Scalar = Self::Domain>;
 
     /// The field from which most random challenges are drawn.
-    type Challenge: ExtensionField<Self::Domain>;
+    type Challenge: ExtensionField<Self::Val> + ExtensionField<Self::Domain> + TwoAdicField;
     type PackedChallenge: PackedField<Scalar = Self::Challenge>
         + AbstractExtensionField<Self::PackedDomain>;
 
     /// The PCS used to commit to trace polynomials.
-    type Pcs: for<'a> UnivariatePcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Challenger>;
+    type Pcs: for<'a> UnivariatePcs<
+        Self::Val,
+        Self::Domain,
+        RowMajorMatrix<Self::Val>,
+        Self::Challenger,
+    >;
 
-    type Dft: TwoAdicSubgroupDft<Self::Domain>;
+    type Dft: TwoAdicSubgroupDft<Self::Domain> + TwoAdicSubgroupDft<Self::Challenge>;
 
-    type Challenger: FieldChallenger<Self::Val> + FieldChallenger<Self::Domain>
-        + for<'a> CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrixView<'a, Self::Val>, Self::Challenger>>::Commitment>;
+    type Challenger: FieldChallenger<Self::Val>
+        + for<'a> CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
 
     fn pcs(&self) -> &Self::Pcs;
 
@@ -62,18 +66,14 @@ impl<Val, Domain, Challenge, Pcs, Dft, Challenger> StarkConfig
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
-    Challenge: ExtensionField<Domain>,
+    Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     Challenge::Packing: AbstractExtensionField<Domain::Packing>,
-    Pcs: for<'a> UnivariatePcs<Val, RowMajorMatrixView<'a, Val>, Challenger>,
-    Dft: TwoAdicSubgroupDft<Domain>,
+    Pcs: for<'a> UnivariatePcs<Val, Domain, RowMajorMatrix<Val>, Challenger>,
+    Dft: TwoAdicSubgroupDft<Domain> + TwoAdicSubgroupDft<Challenge>,
     Challenger: FieldChallenger<Val>
-        + FieldChallenger<Domain>
-        + for<'a> CanObserve<
-            <Pcs as p3_commit::Pcs<Val, RowMajorMatrixView<'a, Val>, Challenger>>::Commitment,
-        >,
+        + for<'a> CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
 {
     type Val = Val;
-    // type PackedVal = Val::Packing;
     type Domain = Domain;
     type PackedDomain = Domain::Packing;
     type Challenge = Challenge;
