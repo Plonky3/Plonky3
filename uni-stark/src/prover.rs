@@ -73,7 +73,7 @@ pub fn prove<SC, A>(
             let is_transition = x - subgroup_last;
             let is_first_row =
                 *SC::PackedDomain::from_slice(&lagrange_first_evals[i_range.clone()]);
-            let is_last_row = *SC::PackedDomain::from_slice(&lagrange_last_evals[i_range.clone()]);
+            let is_last_row = *SC::PackedDomain::from_slice(&lagrange_last_evals[i_range]);
 
             let local: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
