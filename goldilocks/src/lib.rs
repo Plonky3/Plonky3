@@ -194,9 +194,12 @@ impl PrimeField64 for Goldilocks {
         c
     }
 
-    fn z_linear_combination_sml<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
+    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
         // In order not to overflow a u128, we must have sum(u) <= 2^64.
-        debug_assert!(u.into_iter().map(u128::from).sum::<u128>() <= (1u128 << 64));
+        // However, we enforce the stronger condition sum(u) <= 2^32
+        // to ensure the semantics of this function are consistent
+        // between the implementations.
+        debug_assert!(u.into_iter().map(u128::from).sum::<u128>() <= (1u128 << 32));
 
         let mut dot = u[0] as u128 * v[0].value as u128;
         for i in 1..N {

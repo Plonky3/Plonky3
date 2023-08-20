@@ -212,7 +212,7 @@ impl PrimeField64 for Mersenne31 {
         u64::from(self.as_canonical_u32())
     }
 
-    fn z_linear_combination_sml<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
+    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
         // In order not to overflow a u64, we must have sum(u) <= 2^32.
         debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
 

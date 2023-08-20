@@ -160,11 +160,11 @@ pub trait PrimeField64: PrimeField {
 
     /// Return the value \sum_{i=0}^N u[i] * v[i].
     ///
-    /// NB: Assumes that sum(u) <= 2^32 or 2^64 depending on whether
-    /// the underlying field is 32-bit or 64-bit.
+    /// NB: Assumes that sum(u) <= 2^32 to allow implementations to avoid
+    /// overflow handling.
     ///
     /// TODO: Mark unsafe because of the assumption?
-    fn z_linear_combination_sml<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self;
+    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self;
 }
 
 /// A prime field of order less than `2^32`.
