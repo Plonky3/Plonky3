@@ -12,6 +12,7 @@ members = [
     "field-testing",
     "fri",
     "goldilocks",
+    "interpolation",
     "keccak",
     "keccak-air",
     "lde",

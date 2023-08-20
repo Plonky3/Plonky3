@@ -1,6 +1,6 @@
 use alloc::vec;
 
-use p3_field::Field;
+use p3_field::{add_scaled_slice_in_place, Field};
 use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 
 use crate::dense::RowMajorMatrix;
@@ -31,14 +31,4 @@ where
         .collect();
 
     RowMajorMatrix::new(c_values, c_width)
-}
-
-/// `x += y * s`, where `s` is a scalar.
-fn add_scaled_slice_in_place<F, Y>(x: &mut [F], y: Y, s: F)
-where
-    F: Field,
-    Y: Iterator<Item = F>,
-{
-    // TODO: Use PackedField
-    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }

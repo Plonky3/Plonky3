@@ -391,7 +391,9 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::test_inverse;
+    use p3_field_testing::{
+        test_inverse, test_two_adic_coset_zerofier, test_two_adic_subgroup_zerofier,
+    };
 
     use super::*;
 
@@ -484,5 +486,15 @@ mod tests {
     #[test]
     fn inverse() {
         test_inverse::<Goldilocks>();
+    }
+
+    #[test]
+    fn two_adic_subgroup_zerofier() {
+        test_two_adic_subgroup_zerofier::<Goldilocks>();
+    }
+
+    #[test]
+    fn two_adic_coset_zerofier() {
+        test_two_adic_coset_zerofier::<Goldilocks>();
     }
 }
