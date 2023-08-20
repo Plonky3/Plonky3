@@ -323,7 +323,9 @@ fn monty_reduce(x: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeField64;
-    use p3_field_testing::test_inverse;
+    use p3_field_testing::{
+        test_inverse, test_two_adic_coset_zerofier, test_two_adic_subgroup_zerofier,
+    };
 
     use super::*;
 
@@ -382,5 +384,15 @@ mod tests {
     #[test]
     fn inverse() {
         test_inverse::<BabyBear>();
+    }
+
+    #[test]
+    fn two_adic_subgroup_zerofier() {
+        test_two_adic_subgroup_zerofier::<BabyBear>();
+    }
+
+    #[test]
+    fn two_adic_coset_zerofier() {
+        test_two_adic_coset_zerofier::<BabyBear>();
     }
 }

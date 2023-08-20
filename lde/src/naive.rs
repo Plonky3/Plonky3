@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
-    ExtensionField, Field, TwoAdicField,
+    scale_vec, sum_vecs, ExtensionField, Field, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::VerticalPair;
@@ -105,6 +105,7 @@ where
     }
 }
 
+// TODO: Move to interpolation crate?
 fn barycentric_weights<F: Field>(points: &[F]) -> Vec<F> {
     let n = points.len();
     batch_multiplicative_inverse(
@@ -119,6 +120,7 @@ fn barycentric_weights<F: Field>(points: &[F]) -> Vec<F> {
     )
 }
 
+// TODO: Move to interpolation crate?
 fn interpolate<F: Field, Mat: MatrixRows<F>>(
     points: &[F],
     values: &Mat,
@@ -142,18 +144,4 @@ fn interpolate<F: Field, Mat: MatrixRows<F>>(
     }));
 
     scale_vec(l_x, sum)
-}
-
-fn add_vecs<F: Field>(v: Vec<F>, w: Vec<F>) -> Vec<F> {
-    assert_eq!(v.len(), w.len());
-    v.into_iter().zip(w).map(|(x, y)| x + y).collect()
-}
-
-fn sum_vecs<F: Field, I: Iterator<Item = Vec<F>>>(iter: I) -> Vec<F> {
-    iter.reduce(|v, w| add_vecs(v, w))
-        .expect("sum_vecs: empty iterator")
-}
-
-fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
-    vec.into_iter().map(|x| s * x).collect()
 }

@@ -80,7 +80,7 @@ where
         &self,
         prover_data_and_points: &[(&Self::ProverData, &[EF])],
         challenger: &mut Challenger,
-    ) -> (Vec<Vec<Vec<Vec<EF>>>>, Self::Proof)
+    ) -> (OpenedValues<EF>, Self::Proof)
     where
         EF: ExtensionField<Domain>,
     {
