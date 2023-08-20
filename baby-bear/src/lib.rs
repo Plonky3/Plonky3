@@ -4,7 +4,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField32, TwoAdicField};
+use p3_field::{AbstractField, Field, PrimeField, PrimeField32, PrimeField64, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -139,6 +139,27 @@ impl Field for BabyBear {
 }
 
 impl PrimeField for BabyBear {}
+
+impl PrimeField64 for BabyBear {
+    const ORDER_U64: u64 = <Self as PrimeField32>::ORDER_U32 as u64;
+
+    fn as_canonical_u64(&self) -> u64 {
+        u64::from(self.as_canonical_u32())
+    }
+
+    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
+        // In order not to overflow a u64, we must have sum(u) <= 2^32.
+        debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
+
+        let mut dot = u[0] * v[0].value as u64;
+        for i in 1..N {
+            dot += u[i] * v[i].value as u64;
+        }
+        Self {
+            value: (dot % (P as u64)) as u32,
+        }
+    }
+}
 
 impl PrimeField32 for BabyBear {
     const ORDER_U32: u32 = P;

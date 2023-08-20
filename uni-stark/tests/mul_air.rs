@@ -7,10 +7,10 @@ use p3_goldilocks::Goldilocks;
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
+use p3_mds::goldilocks::MDSMatrixGoldilocks;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
-use p3_symmetric::mds::NaiveMDSMatrix;
 use p3_symmetric::sponge::PaddingFreeSponge;
 use p3_uni_stark::{prove, StarkConfigImpl};
 use rand::thread_rng;
@@ -31,12 +31,10 @@ fn test_prove_goldilocks() {
     type Val = Goldilocks;
     type Dom = Goldilocks;
     type Challenge = Goldilocks; // TODO
+    type Mds = MDSMatrixGoldilocks;
 
-    type MyMds = NaiveMDSMatrix<Val, 8>;
-    let mds = MyMds::new([[Val::ONE; 8]; 8]); // TODO: Use a real MDS matrix
-
-    type Perm = Poseidon<Val, MyMds, 8, 7>;
-    let perm = Perm::new(5, 5, vec![Val::ONE; 120], mds);
+    type Perm = Poseidon<Val, Mds, 8, 7>;
+    let perm = Perm::new(5, 5, vec![Val::ONE; 120], Mds {});
 
     type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;
     let h4 = H4::new(perm.clone());
@@ -48,7 +46,7 @@ fn test_prove_goldilocks() {
     let mmcs = MyMmcs::new(h4, c);
 
     type Dft = Radix2BowersFft;
-    let dft = Dft::default();
+    let dft = Dft {};
 
     type Challenger = DuplexChallenger<Val, Perm, 8>;
 
@@ -63,7 +61,7 @@ fn test_prove_goldilocks() {
     let mut rng = thread_rng();
     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
-    let config = StarkConfigImpl::new(pcs, Dft::default());
+    let config = StarkConfigImpl::new(pcs, Dft {});
     let mut challenger = Challenger::new(perm);
     prove::<MyConfig, _>(&MulAir, &config, &mut challenger, trace);
 }

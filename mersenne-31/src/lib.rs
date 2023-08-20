@@ -11,7 +11,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
-use p3_field::{AbstractField, Field, PrimeField, PrimeField32};
+use p3_field::{AbstractField, Field, PrimeField, PrimeField32, PrimeField64};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -125,8 +125,19 @@ impl AbstractField for Mersenne31 {
         Self::new(n ^ msb) + Self::new(msb_reduced)
     }
 
-    fn from_wrapped_u64(_n: u64) -> Self {
-        todo!()
+    fn from_wrapped_u64(n: u64) -> Self {
+        // TODO: Check whether Jacqui has a smarter way to do this...
+
+        let (lo, hi) = (n as u32 as u64, n >> 32);
+        // 2^32 = 2 (mod Mersenne31)
+        // t <= (2^32 - 1) + 2 * (2^32 - 1) = 3 * 2^32 - 3 = 6 * 2^31 - 3
+        let t = lo + 2 * hi;
+
+        const MASK: u64 = (1 << 31) - 1;
+        let (lo, hi) = ((t & MASK) as u32, (t >> 31) as u32);
+        // 2^31 = 1 (mod Mersenne31)
+        // lo < 2^31, hi < 6, so lo + hi < 2^32.
+        Self::from_wrapped_u32(lo + hi)
     }
 
     // Sage: GF(2^31 - 1).multiplicative_generator()
@@ -191,6 +202,25 @@ impl PrimeField32 for Mersenne31 {
         } else {
             self.value
         }
+    }
+}
+
+impl PrimeField64 for Mersenne31 {
+    const ORDER_U64: u64 = <Self as PrimeField32>::ORDER_U32 as u64;
+
+    fn as_canonical_u64(&self) -> u64 {
+        u64::from(self.as_canonical_u32())
+    }
+
+    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
+        // In order not to overflow a u64, we must have sum(u) <= 2^32.
+        debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
+
+        let mut dot = u[0] * v[0].value as u64;
+        for i in 1..N {
+            dot += u[i] * v[i].value as u64;
+        }
+        Self::from_wrapped_u64(dot)
     }
 }
 
