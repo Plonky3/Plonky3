@@ -4,8 +4,6 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
-
 use crate::dense::RowMajorMatrix;
 
 pub mod dense;
@@ -52,14 +50,4 @@ pub trait MatrixRows<T>: Matrix<T> {
 /// A `Matrix` which supports access its rows as slices.
 pub trait MatrixRowSlices<T>: Matrix<T> {
     fn row_slice(&self, r: usize) -> &[T];
-}
-
-impl<T> Matrix<T> for Box<dyn Matrix<T>> {
-    fn width(&self) -> usize {
-        self.as_ref().width()
-    }
-
-    fn height(&self) -> usize {
-        self.as_ref().height()
-    }
 }

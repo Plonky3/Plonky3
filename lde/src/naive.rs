@@ -43,21 +43,21 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicLde<Val, Dom> for NaiveSubgroupLde
+impl<Val, Domain> TwoAdicLde<Val, Domain> for NaiveSubgroupLde
 where
     Val: Field,
-    Dom: ExtensionField<Val> + TwoAdicField,
+    Domain: ExtensionField<Val> + TwoAdicField,
 {
-    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Dom> {
+    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Domain> {
         let bits = log2_strict_usize(polys.height());
-        let g = Dom::primitive_root_of_unity(bits);
-        let subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << bits).collect::<Vec<_>>();
+        let g = Domain::primitive_root_of_unity(bits);
+        let subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
-        let lde_subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << lde_bits);
+        let lde_subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << lde_bits);
 
-        let polys_fe = polys.map(|x| Dom::from_base(x));
+        let polys_fe = polys.map(|x| Domain::from_base(x));
         let values = lde_subgroup
             .flat_map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
             .collect();
@@ -65,22 +65,22 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicLde<Val, Dom> for NaiveCosetLde
+impl<Val, Domain> TwoAdicLde<Val, Domain> for NaiveCosetLde
 where
     Val: Field,
-    Dom: ExtensionField<Val> + TwoAdicField,
+    Domain: ExtensionField<Val> + TwoAdicField,
 {
-    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Dom> {
+    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Domain> {
         let bits = log2_strict_usize(polys.height());
-        let g = Dom::primitive_root_of_unity(bits);
-        let subgroup = cyclic_subgroup_known_order::<Dom>(g, 1 << bits).collect::<Vec<_>>();
+        let g = Domain::primitive_root_of_unity(bits);
+        let subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
         let lde_subgroup =
             cyclic_subgroup_coset_known_order(g, self.shift(lde_bits), 1 << lde_bits);
 
-        let polys_fe = polys.map(|x| Dom::from_base(x));
+        let polys_fe = polys.map(|x| Domain::from_base(x));
         let values = lde_subgroup
             .flat_map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
             .collect();
@@ -88,20 +88,20 @@ where
     }
 }
 
-impl<Val, Dom> TwoAdicSubgroupLde<Val, Dom> for NaiveSubgroupLde
+impl<Val, Domain> TwoAdicSubgroupLde<Val, Domain> for NaiveSubgroupLde
 where
     Val: Field,
-    Dom: ExtensionField<Val> + TwoAdicField,
+    Domain: ExtensionField<Val> + TwoAdicField,
 {
 }
 
-impl<Val, Dom> TwoAdicCosetLde<Val, Dom> for NaiveCosetLde
+impl<Val, Domain> TwoAdicCosetLde<Val, Domain> for NaiveCosetLde
 where
     Val: Field,
-    Dom: ExtensionField<Val> + TwoAdicField,
+    Domain: ExtensionField<Val> + TwoAdicField,
 {
-    fn shift(&self, _lde_bits: usize) -> Dom {
-        Dom::multiplicative_group_generator()
+    fn shift(&self, _lde_bits: usize) -> Domain {
+        Domain::multiplicative_group_generator()
     }
 }
 

@@ -23,14 +23,14 @@ pub struct FriLdt<FC: FriConfig> {
     pub config: FC,
 }
 
-impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
+impl<FC: FriConfig> Ldt<FC::Val, FC::Domain, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
     fn prove(
         &self,
         mmcs: &FC::InputMmcs,
-        inputs: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+        inputs: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
         challenger: &mut FC::Challenger,
     ) -> Self::Proof {
         prove::<FC>(&self.config, mmcs, inputs, challenger)
@@ -38,7 +38,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
 
     fn verify(
         &self,
-        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
+        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Domain>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
@@ -46,5 +46,11 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     }
 }
 
-pub type FriBasedPcs<FC, Mmcs, Dft> =
-    LdtBasedPcs<<FC as FriConfig>::Val, <FC as FriConfig>::Challenge, Dft, Mmcs, FriLdt<FC>>;
+pub type FriBasedPcs<FC, Mmcs, Dft, Challenger> = LdtBasedPcs<
+    <FC as FriConfig>::Val,
+    <FC as FriConfig>::Domain,
+    Dft,
+    Mmcs,
+    FriLdt<FC>,
+    Challenger,
+>;

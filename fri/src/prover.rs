@@ -7,6 +7,7 @@ use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
+use p3_util::log2_strict_usize;
 
 use crate::fold_even_odd::fold_even_odd;
 use crate::{FriConfig, FriProof, QueryProof};
@@ -14,7 +15,7 @@ use crate::{FriConfig, FriProof, QueryProof};
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_mmcs: &FC::InputMmcs,
-    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
     let n = input_commits
@@ -22,10 +23,11 @@ pub(crate) fn prove<FC: FriConfig>(
         .map(|commit| input_mmcs.get_max_height(commit))
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
+    let log_n = log2_strict_usize(n);
 
     let commit_phase_commits = commit_phase::<FC>(config, input_mmcs, input_commits, challenger);
     let query_indices: Vec<usize> = (0..config.num_queries())
-        .map(|_| challenger.sample_bits(n))
+        .map(|_| challenger.sample_bits(log_n))
         .collect();
     // TODO: into_par_iter?
     let query_proofs = query_indices
@@ -46,7 +48,7 @@ pub(crate) fn prove<FC: FriConfig>(
 fn answer_query<FC: FriConfig>(
     config: &FC,
     input_mmcs: &FC::InputMmcs,
-    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
@@ -56,7 +58,8 @@ fn answer_query<FC: FriConfig>(
         .collect();
     let commit_phase_openings = commit_phase_commits
         .iter()
-        .map(|commit| config.commit_phase_mmcs().open_batch(index, commit))
+        .enumerate()
+        .map(|(i, commit)| config.commit_phase_mmcs().open_batch(index >> i, commit))
         .collect();
     QueryProof {
         input_openings,
@@ -67,10 +70,9 @@ fn answer_query<FC: FriConfig>(
 fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_mmcs: &FC::InputMmcs,
-    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
-    let alpha: FC::Challenge = challenger.sample_ext_element();
     let inputs_by_desc_height = input_commits
         .iter()
         .flat_map(|commit| input_mmcs.get_matrices(commit))
@@ -81,6 +83,7 @@ fn commit_phase<FC: FriConfig>(
     let (max_height, largest_matrices_iter) = inputs_by_desc_height.next().expect("No matrices?");
     let largest_matrices = largest_matrices_iter.collect_vec();
     let zero_vec = vec![FC::Challenge::ZERO; max_height];
+    let alpha: FC::Challenge = challenger.sample_ext_element();
     let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
 
     // TODO: Can we avoid cloning?
@@ -100,7 +103,7 @@ fn commit_phase<FC: FriConfig>(
         challenger.observe(commit);
         commits.push(prover_data);
 
-        current = reduce_matrices::<FC::Val, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat<'_>>(
+        current = reduce_matrices::<FC::Domain, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat<'_>>(
             height,
             &current,
             &matrices.collect_vec(),

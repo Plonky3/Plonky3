@@ -18,7 +18,7 @@ use p3_matrix::{Matrix, MatrixRows};
 /// streaming manner.
 pub trait Mmcs<T>: Clone {
     type ProverData;
-    type Commitment;
+    type Commitment: Clone;
     type Proof;
     type Error;
     type Mat<'a>: MatrixRows<T>
