@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
@@ -195,7 +196,22 @@ pub trait AbstractExtensionField<Base>:
     fn as_base_slice(&self) -> &[Base];
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {}
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+    fn is_in_basefield(&self) -> bool {
+        self.as_base_slice()[1..].iter().all(|x| x.is_zero())
+    }
+
+    fn scalar_mul(&self, scalar: Base) -> Self {
+        let value: &[Base] = self.as_base_slice();
+        Self::from_base_slice(
+            value
+                .iter()
+                .map(|&x| x * scalar)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
+    }
+}
 
 impl<Base: Field, Ext: Field + AbstractExtensionField<Base>> ExtensionField<Base> for Ext {}
 
