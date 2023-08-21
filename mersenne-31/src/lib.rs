@@ -3,6 +3,7 @@
 #![no_std]
 
 mod complex;
+mod extension;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -11,6 +12,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
+pub use extension::*;
 use p3_field::{AbstractField, Field, PrimeField, PrimeField32, PrimeField64};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
