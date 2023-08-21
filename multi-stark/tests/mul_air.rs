@@ -39,12 +39,12 @@
 //         }
 //     }
 //     impl ArrayPermutation<Val, 8> for MyMds {}
-//     impl MDSPermutation<Val, 8> for MyMds {}
+//     impl MdsPermutation<Val, 8> for MyMds {}
 //
-//     type MDS = MyMds;
+//     type Mds = MyMds;
 //     let mds = MyMds;
 //
-//     type Perm = Poseidon<Val, MDS, 8, 7>;
+//     type Perm = Poseidon<Val, Mds, 8, 7>;
 //     let perm = Perm::new(5, 5, vec![], mds);
 //
 //     type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;

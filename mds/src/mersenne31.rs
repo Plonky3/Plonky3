@@ -8,26 +8,26 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
 use crate::util::{apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml};
-use crate::MDSPermutation;
+use crate::MdsPermutation;
 
 #[derive(Clone)]
-pub struct MDSMatrixMersenne31;
+pub struct MdsMatrixMersenne31;
 
-impl CryptographicPermutation<[Mersenne31; 8]> for MDSMatrixMersenne31 {
+impl CryptographicPermutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         apply_circulant_8_sml(input)
     }
 }
-impl ArrayPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
-impl MDSPermutation<Mersenne31, 8> for MDSMatrixMersenne31 {}
+impl ArrayPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
+impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
-impl CryptographicPermutation<[Mersenne31; 12]> for MDSMatrixMersenne31 {
+impl CryptographicPermutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
         apply_circulant_12_sml(input)
     }
 }
-impl ArrayPermutation<Mersenne31, 12> for MDSMatrixMersenne31 {}
-impl MDSPermutation<Mersenne31, 12> for MDSMatrixMersenne31 {}
+impl ArrayPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
+impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_16_MERSENNE31: [u64; 16] = [
@@ -37,13 +37,13 @@ const MATRIX_CIRC_MDS_16_MERSENNE31: [u64; 16] = [
     0x7AEDC4EC, 0x653B794A, 0x47366EC7, 0x6D85346D
 ];
 
-impl CryptographicPermutation<[Mersenne31; 16]> for MDSMatrixMersenne31 {
+impl CryptographicPermutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         apply_circulant(&MATRIX_CIRC_MDS_16_MERSENNE31, input)
     }
 }
-impl ArrayPermutation<Mersenne31, 16> for MDSMatrixMersenne31 {}
-impl MDSPermutation<Mersenne31, 16> for MDSMatrixMersenne31 {}
+impl ArrayPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
+impl MdsPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
@@ -57,13 +57,13 @@ const MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
     0x500BB628, 0x0B1428CE, 0x3A62E1D6, 0x77692387
 ];
 
-impl CryptographicPermutation<[Mersenne31; 32]> for MDSMatrixMersenne31 {
+impl CryptographicPermutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
         apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
     }
 }
-impl ArrayPermutation<Mersenne31, 32> for MDSMatrixMersenne31 {}
-impl MDSPermutation<Mersenne31, 32> for MDSMatrixMersenne31 {}
+impl ArrayPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
+impl MdsPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
@@ -85,13 +85,13 @@ const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
     0x130EC21C, 0x3C84C4F5, 0x50FD67C0, 0x30FDD85A,
 ];
 
-impl CryptographicPermutation<[Mersenne31; 64]> for MDSMatrixMersenne31 {
+impl CryptographicPermutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
         apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
     }
 }
-impl ArrayPermutation<Mersenne31, 64> for MDSMatrixMersenne31 {}
-impl MDSPermutation<Mersenne31, 64> for MDSMatrixMersenne31 {}
+impl ArrayPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
+impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
@@ -99,7 +99,7 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::permutation::CryptographicPermutation;
 
-    use super::MDSMatrixMersenne31;
+    use super::MdsMatrixMersenne31;
 
     #[test]
     fn mersenne8() {
@@ -109,7 +109,7 @@ mod tests {
         ]
         .map(Mersenne31::from_canonical_u64);
 
-        let output = MDSMatrixMersenne31.permute(input);
+        let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 8] = [
             1796260072, 48130602, 971886692, 1460399885, 745498940, 352898876, 223078564,
@@ -128,7 +128,7 @@ mod tests {
         ]
         .map(Mersenne31::from_canonical_u64);
 
-        let output = MDSMatrixMersenne31.permute(input);
+        let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 12] = [
             492952161, 916402585, 1541871876, 799921480, 707671572, 1293088641, 866554196,
@@ -148,7 +148,7 @@ mod tests {
         ]
         .map(Mersenne31::from_canonical_u64);
 
-        let output = MDSMatrixMersenne31.permute(input);
+        let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 16] = [
             1929166367, 1352685756, 1090911983, 379953343, 62410403, 637712268, 1637633936,
@@ -171,7 +171,7 @@ mod tests {
         ]
         .map(Mersenne31::from_canonical_u64);
 
-        let output = MDSMatrixMersenne31.permute(input);
+        let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 32] = [
             1439049928, 890642852, 694402307, 713403244, 553213342, 1049445650, 321709533,
@@ -201,7 +201,7 @@ mod tests {
         ]
         .map(Mersenne31::from_canonical_u64);
 
-        let output = MDSMatrixMersenne31.permute(input);
+        let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 64] = [
             1599981950, 252630853, 1171557270, 116468420, 1269245345, 666203050, 46155642,

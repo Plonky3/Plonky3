@@ -7,7 +7,7 @@ use p3_goldilocks::Goldilocks;
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
-use p3_mds::goldilocks::MDSMatrixGoldilocks;
+use p3_mds::goldilocks::MdsMatrixGoldilocks;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
@@ -32,7 +32,7 @@ fn test_prove_goldilocks() {
     type Val = Goldilocks;
     type Domain = Goldilocks;
     type Challenge = Goldilocks; // TODO
-    type Mds = MDSMatrixGoldilocks;
+    type Mds = MdsMatrixGoldilocks;
 
     type Perm = Poseidon<Val, Mds, 8, 7>;
     let perm = Perm::new(5, 5, vec![Val::ONE; 120], Mds {});
