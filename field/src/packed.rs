@@ -1,7 +1,7 @@
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
+use core::ops::{Add, Div, Mul, Sub};
 use core::slice;
 
-use crate::field::{AbstractField, AbstractionOf, Field};
+use crate::field::{AbstractionOf, Field};
 
 /// # Safety
 /// - `WIDTH` is assumed to be a power of 2.
@@ -11,23 +11,14 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
     + 'static
     + Copy
     + Default
-    + AddAssign<Self::Scalar>
-    + SubAssign<Self::Scalar>
-    + MulAssign<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
     + Send
     + Sync
-    where
-        Self::Scalar: Add<Self, Output = Self>,
-        Self::Scalar: Mul<Self, Output = Self>,
-        Self::Scalar: Sub<Self, Output = Self>,
 {
-    type Scalar: Field;
+    type Scalar: Field + Add<Self, Output = Self> + Mul<Self, Output = Self> + Sub<Self, Output = Self>;
 
     const WIDTH: usize;
-    const ZEROS: Self;
-    const ONES: Self;
 
     fn from_slice(slice: &[Self::Scalar]) -> &Self;
     fn from_slice_mut(slice: &mut [Self::Scalar]) -> &mut Self;
@@ -97,19 +88,12 @@ pub unsafe trait PackedField: AbstractionOf<Self::Scalar>
         let n = buf.len() / Self::WIDTH;
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
-
-    #[must_use]
-    fn doubles(&self) -> Self {
-        *self * Self::Scalar::TWO
-    }
 }
 
 unsafe impl<F: Field> PackedField for F {
     type Scalar = Self;
 
     const WIDTH: usize = 1;
-    const ZEROS: Self = F::ZERO;
-    const ONES: Self = F::ONE;
 
     fn from_slice(slice: &[Self::Scalar]) -> &Self {
         &slice[0]
