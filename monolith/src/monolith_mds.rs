@@ -6,6 +6,7 @@ use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
+#[derive(Clone)]
 pub struct MonolithMDSMatrixMersenne31;
 
 const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
@@ -16,7 +17,8 @@ const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
 impl<const WIDTH: usize> CryptographicPermutation<[Mersenne31; WIDTH]> for MonolithMDSMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         if WIDTH == 16 {
-            apply_circulant(MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH, input)
+            let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH.try_into().unwrap();
+            apply_circulant(&matrix, input)
         } else {
             let mut shake = Shake128::default();
             shake.update(init_string.as_bytes());
@@ -36,8 +38,8 @@ impl<const WIDTH: usize> MDSPermutation<Mersenne31, WIDTH> for MonolithMDSMatrix
 fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     shake: &mut Shake128Reader,
     to_multiply: [F; WIDTH],
-) -> [[F; WIDTH]; WIDTH] {
-    let mut output: [[F; WIDTH]; WIDTH] = [[F::ZERO; WIDTH]; WIDTH];
+) -> [F; WIDTH] {
+    let mut output: [F; WIDTH] = [F::ZERO; WIDTH];
 
     let mut p = F::ORDER_U32;
     let mut tmp = 0;

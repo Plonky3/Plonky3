@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use core::iter;
+use core::marker::PhantomData;
 
 use p3_field::PrimeField32;
 use p3_mds::MDSPermutation;
@@ -22,6 +23,9 @@ where
     pub round_constants: Vec<[F; WIDTH]>,
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
+    pub mds: MDS,
+
+    _phantom: PhantomData<MDS>,
 }
 
 impl<F, MDS, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F, MDS, WIDTH, NUM_ROUNDS>
@@ -39,11 +43,14 @@ where
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
+        let mds = MDS {};
 
         Self {
             round_constants,
             lookup1,
             lookup2,
+            mds,
+            _phantom: PhantomData,
         }
     }
 
@@ -117,7 +124,7 @@ where
     }
 
     pub fn concrete(&self, state: &mut [F; WIDTH], round_constants: Option<&[F; WIDTH]>) {
-        *state = MDS::permute(*state);
+        *state = self.mds.permute(*state);
 
         if let Some(round_constants) = round_constants {
             for (x, rc) in state.iter_mut().zip(round_constants.iter()) {
