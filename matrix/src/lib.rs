@@ -48,6 +48,6 @@ pub trait MatrixRows<T>: Matrix<T> {
 }
 
 /// A `Matrix` which supports access its rows as slices.
-pub trait MatrixRowSlices<T>: Matrix<T> {
+pub trait MatrixRowSlices<T>: MatrixRows<T> {
     fn row_slice(&self, r: usize) -> &[T];
 }
