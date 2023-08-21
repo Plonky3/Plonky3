@@ -1,0 +1,14 @@
+[package]
+name = "p3-mds"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-dft = { path = "../dft" }
+p3-field = { path = "../field" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-matrix = { path = "../matrix" }
+p3-mersenne-31 = { path = "../mersenne-31" }
+p3-symmetric = { path = "../symmetric" }

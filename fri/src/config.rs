@@ -1,75 +1,72 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{DirectMMCS, MMCS};
+use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 
 pub trait FriConfig {
     type Val: PrimeField64;
-    type Challenge: ExtensionField<Self::Val> + TwoAdicField;
+    type Domain: ExtensionField<Self::Val> + TwoAdicField;
+    type Challenge: ExtensionField<Self::Val> + ExtensionField<Self::Domain> + TwoAdicField;
 
-    type InputMmcs: MMCS<Self::Val>;
-    type CommitPhaseMmcs: DirectMMCS<Self::Challenge>;
+    type InputMmcs: Mmcs<Self::Domain>;
+    type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
-    type Chal: FieldChallenger<Self::Val>
-        + CanObserve<<Self::InputMmcs as MMCS<Self::Val>>::Commitment>
-        + CanObserve<<Self::CommitPhaseMmcs as MMCS<Self::Challenge>>::Commitment>;
+    type Challenger: FieldChallenger<Self::Val>
+        + CanObserve<<Self::InputMmcs as Mmcs<Self::Domain>>::Commitment>
+        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
-    fn input_mmcs(&self) -> &Self::InputMmcs;
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
 
     fn num_queries(&self) -> usize;
+
     // TODO: grinding bits
 }
 
-pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal> {
+pub struct FriConfigImpl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
     num_queries: usize,
-    input_mmcs: InputMmcs,
     commit_phase_mmcs: CommitPhaseMmcs,
     _phantom_val: PhantomData<Val>,
+    _phantom_dom: PhantomData<Domain>,
     _phantom_challenge: PhantomData<Challenge>,
-    _phantom_chal: PhantomData<Chal>,
+    _phantom_input_mmcs: PhantomData<InputMmcs>,
+    _phantom_challenger: PhantomData<Challenger>,
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
-    FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
+impl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
+    FriConfigImpl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 {
-    pub fn new(
-        num_queries: usize,
-        input_mmcs: InputMmcs,
-        commit_phase_mmcs: CommitPhaseMmcs,
-    ) -> Self {
+    pub fn new(num_queries: usize, commit_phase_mmcs: CommitPhaseMmcs) -> Self {
         Self {
             num_queries,
-            input_mmcs,
             commit_phase_mmcs,
             _phantom_val: PhantomData,
+            _phantom_dom: PhantomData,
             _phantom_challenge: PhantomData,
-            _phantom_chal: PhantomData,
+            _phantom_input_mmcs: PhantomData,
+            _phantom_challenger: PhantomData,
         }
     }
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal> FriConfig
-    for FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Chal>
+impl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> FriConfig
+    for FriConfigImpl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 where
     Val: PrimeField64,
-    Challenge: ExtensionField<Val> + TwoAdicField,
-    InputMmcs: MMCS<Val>,
-    CommitPhaseMmcs: DirectMMCS<Challenge>,
-    Chal: FieldChallenger<Val>
-        + CanObserve<<InputMmcs as MMCS<Val>>::Commitment>
-        + CanObserve<<CommitPhaseMmcs as MMCS<Challenge>>::Commitment>,
+    Domain: ExtensionField<Val> + TwoAdicField,
+    Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
+    InputMmcs: Mmcs<Domain>,
+    CommitPhaseMmcs: DirectMmcs<Challenge>,
+    Challenger: FieldChallenger<Val>
+        + CanObserve<<InputMmcs as Mmcs<Domain>>::Commitment>
+        + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
+    type Domain = Domain;
     type Challenge = Challenge;
     type InputMmcs = InputMmcs;
     type CommitPhaseMmcs = CommitPhaseMmcs;
-    type Chal = Chal;
-
-    fn input_mmcs(&self) -> &InputMmcs {
-        &self.input_mmcs
-    }
+    type Challenger = Challenger;
 
     fn commit_phase_mmcs(&self) -> &CommitPhaseMmcs {
         &self.commit_phase_mmcs

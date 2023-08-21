@@ -193,6 +193,20 @@ impl PrimeField64 for Goldilocks {
         }
         c
     }
+
+    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
+        // In order not to overflow a u128, we must have sum(u) <= 2^64.
+        // However, we enforce the stronger condition sum(u) <= 2^32
+        // to ensure the semantics of this function are consistent
+        // between the implementations.
+        debug_assert!(u.into_iter().map(u128::from).sum::<u128>() <= (1u128 << 32));
+
+        let mut dot = u[0] as u128 * v[0].value as u128;
+        for i in 1..N {
+            dot += u[i] as u128 * v[i].value as u128;
+        }
+        reduce128(dot)
+    }
 }
 
 impl TwoAdicField for Goldilocks {
@@ -377,7 +391,9 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::test_inverse;
+    use p3_field_testing::{
+        test_inverse, test_two_adic_coset_zerofier, test_two_adic_subgroup_zerofier,
+    };
 
     use super::*;
 
@@ -470,5 +486,15 @@ mod tests {
     #[test]
     fn inverse() {
         test_inverse::<Goldilocks>();
+    }
+
+    #[test]
+    fn two_adic_subgroup_zerofier() {
+        test_two_adic_subgroup_zerofier::<Goldilocks>();
+    }
+
+    #[test]
+    fn two_adic_coset_zerofier() {
+        test_two_adic_coset_zerofier::<Goldilocks>();
     }
 }

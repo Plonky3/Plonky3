@@ -1,29 +1,32 @@
+use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_air::{Air, TwoRowMatrixView};
-use p3_challenger::FieldChallenger;
-use p3_commit::PCS;
+use p3_challenger::{CanObserve, FieldChallenger};
+use p3_commit::{Pcs, UnivariatePcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
+    TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-use crate::{ConstraintFolder, StarkConfig};
+use crate::{
+    decompose, Commitments, ConstraintFolder, OpenedValues, Proof, StarkConfig, ZerofierOnCoset,
+};
 
-pub fn prove<SC, A, Chal>(
-    air: &A,
+pub fn prove<SC, A>(
     config: &SC,
-    challenger: &mut Chal,
+    air: &A,
+    challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
-) where
+) -> Proof<SC>
+where
     SC: StarkConfig,
-    A: for<'a> Air<ConstraintFolder<'a, SC::Domain, SC::Challenge, SC::PackedChallenge>>,
-    Chal: FieldChallenger<SC::Domain>,
+    A: for<'a> Air<ConstraintFolder<'a, SC>>,
 {
     let degree = trace.height();
     let degree_bits = log2_strict_usize(degree);
@@ -40,59 +43,45 @@ pub fn prove<SC, A, Chal>(
     let coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
-    // Evaluations of x^n on our coset s H. Note that
-    //     (s g^i)^n = s^n (g^n)^i,
-    // so this is the coset of <g^n> shifted by s^n.
-    let x_pow_n_evals = cyclic_subgroup_coset_known_order(
-        g_extended.exp_power_of_2(degree_bits),
-        coset_shift.exp_power_of_2(degree_bits),
-        quotient_size,
-    );
-
-    // Evaluations of Z_H(x) = (x^n - 1) on our coset s H.
-    let zerofier_evals = x_pow_n_evals.map(|y| y - SC::Val::ONE);
+    let zerofier_on_coset = ZerofierOnCoset::new(degree_bits, quotient_degree_bits, coset_shift);
 
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
-    let lagrange_first_evals: Vec<_> = g_subgroup
-        .powers()
-        .zip(zerofier_evals.clone())
-        .map(|(x, z)| z / (x - SC::Val::ONE))
-        .collect();
+    let mut lagrange_first_evals = vec![SC::Domain::ZERO; degree];
+    lagrange_first_evals[0] = SC::Domain::ONE;
+    lagrange_first_evals = config.dft().lde(lagrange_first_evals, quotient_degree_bits);
 
     // Evaluations of L_last(x) = Z_H(x) / (x - g^-1) on our coset s H.
-    let lagrange_last_evals: Vec<_> = g_subgroup
-        .powers()
-        .zip(zerofier_evals)
-        .map(|(x, z)| z / (x - subgroup_last))
-        .collect();
+    let mut lagrange_last_evals = vec![SC::Domain::ZERO; degree];
+    lagrange_last_evals[degree - 1] = SC::Domain::ONE;
+    lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
 
+    // TODO: Skip this if using FriBasedPcs, in which case we already computed the trace LDE.
     let trace_lde = config
         .dft()
         .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift);
 
-    let (_trace_commit, _trace_data) = config.pcs().commit_batch(trace.as_view());
+    let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
 
-    // challenger.observe_ext_element(trace_commit); // TODO
-    let alpha = challenger.sample_ext_element::<SC::Challenge>();
+    challenger.observe(trace_commit.clone());
+    let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
-    let _quotient_values = (0..quotient_size)
+    let quotient_values = (0..quotient_size)
         .into_par_iter()
-        .step_by(<SC::Val as Field>::Packing::WIDTH)
+        .step_by(SC::PackedDomain::WIDTH)
         .flat_map_iter(|i_local_start| {
             let wrap = |i| i % quotient_size;
             let i_next_start = wrap(i_local_start + next_step);
-            let i_range = i_local_start..i_local_start + <SC::Val as Field>::Packing::WIDTH;
+            let i_range = i_local_start..i_local_start + SC::PackedDomain::WIDTH;
 
-            let x = *<SC::Domain as Field>::Packing::from_slice(&coset[i_range.clone()]);
+            let x = *SC::PackedDomain::from_slice(&coset[i_range.clone()]);
             let is_transition = x - subgroup_last;
             let is_first_row =
-                *<SC::Domain as Field>::Packing::from_slice(&lagrange_first_evals[i_range.clone()]);
-            let is_last_row =
-                *<SC::Domain as Field>::Packing::from_slice(&lagrange_last_evals[i_range]);
+                *SC::PackedDomain::from_slice(&lagrange_first_evals[i_range.clone()]);
+            let is_last_row = *SC::PackedDomain::from_slice(&lagrange_last_evals[i_range]);
 
             let local: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
-                    <SC::Domain as Field>::Packing::from_fn(|offset| {
+                    SC::PackedDomain::from_fn(|offset| {
                         let row = wrap(i_local_start + offset);
                         trace_lde.get(row, col)
                     })
@@ -100,7 +89,7 @@ pub fn prove<SC, A, Chal>(
                 .collect();
             let next: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
-                    <SC::Domain as Field>::Packing::from_fn(|offset| {
+                    SC::PackedDomain::from_fn(|offset| {
                         let row = wrap(i_next_start + offset);
                         trace_lde.get(row, col)
                     })
@@ -118,13 +107,60 @@ pub fn prove<SC, A, Chal>(
                 is_transition,
                 alpha,
                 accumulator,
-                _phantom_f: PhantomData,
             };
             air.eval(&mut builder);
 
-            // TODO: divide the constraints evaluations by `Z_H(x)`.
-
-            builder.accumulator.as_slice().to_vec()
+            // quotient(x) = constraints(x) / Z_H(x)
+            let zerofier_inv: SC::PackedDomain =
+                zerofier_on_coset.eval_inverse_packed(i_local_start);
+            let quotient = builder.accumulator * zerofier_inv;
+            quotient.as_slice().to_vec()
         })
         .collect::<Vec<SC::Challenge>>();
+
+    let num_quotient_chunks = 1 << quotient_degree_bits;
+    let quotient_value_chunks = decompose(quotient_values, quotient_degree_bits);
+    let quotient_chunks_flattened: Vec<SC::Val> = (0..degree)
+        .into_par_iter()
+        .flat_map_iter(|row| {
+            quotient_value_chunks
+                .iter()
+                .flat_map(move |chunk| chunk[row].as_base_slice().iter().copied())
+        })
+        .collect();
+    let challenge_ext_degree = <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
+    let quotient_chunks_flattened = RowMajorMatrix::new(
+        quotient_chunks_flattened,
+        num_quotient_chunks * challenge_ext_degree,
+    );
+
+    let (quotient_commit, quotient_data) = config.pcs().commit_batch(quotient_chunks_flattened);
+    challenger.observe(quotient_commit.clone());
+
+    let commitments = Commitments {
+        trace: trace_commit,
+        quotient_chunks: quotient_commit,
+    };
+
+    let zeta: SC::Challenge = challenger.sample_ext_element();
+    let (opened_values, opening_proof) = config.pcs().open_multi_batches(
+        &[
+            (&trace_data, &[zeta, zeta * g_subgroup]),
+            (&quotient_data, &[zeta.square()]),
+        ],
+        challenger,
+    );
+    let trace_local = opened_values[0][0][0].clone();
+    let trace_next = opened_values[0][0][1].clone();
+    let quotient_chunks = opened_values[1][0][0].clone();
+    let opened_values = OpenedValues {
+        trace_local,
+        trace_next,
+        quotient_chunks,
+    };
+    Proof {
+        commitments,
+        opened_values,
+        opening_proof,
+    }
 }

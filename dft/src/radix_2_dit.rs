@@ -9,7 +9,7 @@ use crate::util::reverse_matrix_index_bits;
 use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Radix2DitFft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitFft {
@@ -70,14 +70,14 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDFT, Radix2DitFft, TwoAdicSubgroupDft};
+    use crate::{NaiveDft, Radix2DitFft, TwoAdicSubgroupDft};
 
     #[test]
     fn matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft_naive = NaiveDFT.dft_batch(mat.clone());
+        let dft_naive = NaiveDft.dft_batch(mat.clone());
         let dft_radix_2_dit = Radix2DitFft.dft_batch(mat);
         assert_eq!(dft_naive, dft_radix_2_dit);
     }

@@ -1,8 +1,8 @@
 // use p3_air::{Air, AirBuilder};
 // use p3_multi_stark::{prove, StarkConfigImpl};
 // use p3_challenger::DuplexChallenger;
-// use p3_fri::FRIBasedPCS;
-// use p3_lde::NaiveCosetLDE;
+// use p3_fri::FRIBasedPcs;
+// use p3_lde::NaiveCosetLde;
 // use p3_matrix::dense::RowMajorMatrix;
 // use p3_matrix::Matrix;
 // use p3_merkle_tree::MerkleTreeMMCS;
@@ -12,7 +12,7 @@
 // use p3_symmetric::sponge::PaddingFreeSponge;
 // use rand::thread_rng;
 // use p3_mersenne_31::Mersenne31;
-// use p3_tensor_pcs::TensorPCS;
+// use p3_tensor_pcs::TensorPcs;
 //
 // struct MulAir;
 //
@@ -53,9 +53,9 @@
 //     type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
 //     let c = C::new(perm.clone());
 //
-//     type MMCS = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
-//     type PCS = TensorPCS<Val, MyCode>;
-//     type MyConfig = StarkConfigImpl<Val, Challenge, Challenge, PCS>;
+//     type Mmcs = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
+//     type Pcs = TensorPcs<Val, MyCode>;
+//     type MyConfig = StarkConfigImpl<Val, Challenge, Challenge, Pcs>;
 //
 //     let mut rng = thread_rng();
 //     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);

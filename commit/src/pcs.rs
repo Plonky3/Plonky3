@@ -4,18 +4,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
 /// polynomials defined over the field `F`.
 ///
 /// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
-/// and `MultivariatePCS` for more specific subtraits.
+/// and `MultivariatePcs` for more specific subtraits.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>, Chal: FieldChallenger<F>> {
+pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     /// The commitment that's sent to the verifier.
-    type Commitment;
+    type Commitment: Clone;
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
     type ProverData;
@@ -32,57 +32,58 @@ pub trait PCS<F: Field, In: for<'a> MatrixRows<'a, F>, Chal: FieldChallenger<F>>
     }
 }
 
-pub trait UnivariatePCS<F, In, Chal>: PCS<F, In, Chal>
+pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
+pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
+pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
+pub type OpenedValuesForPoint<F> = Vec<F>;
+
+pub trait UnivariatePcs<Val, Domain, In, Challenger>: Pcs<Val, In>
 where
-    F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    Chal: FieldChallenger<F>,
+    Val: Field,
+    Domain: ExtensionField<Val> + TwoAdicField,
+    In: MatrixRows<Val>,
+    Challenger: FieldChallenger<Val>,
 {
     fn open_multi_batches<EF>(
         &self,
-        prover_data: &[&Self::ProverData],
-        points: &[EF],
-        challenger: &mut Chal,
-    ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
+        prover_data_and_points: &[(&Self::ProverData, &[EF])],
+        challenger: &mut Challenger,
+    ) -> (OpenedValues<EF>, Self::Proof)
     where
-        EF: ExtensionField<F>;
+        EF: ExtensionField<Domain> + TwoAdicField;
 
     fn verify_multi_batches<EF>(
         &self,
-        commits: &[Self::Commitment],
-        points: &[EF],
-        values: &[Vec<Vec<EF>>],
+        commits_and_points: &[(Self::Commitment, &[EF])],
+        values: OpenedValues<EF>,
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        EF: ExtensionField<F>,
-        Chal: FieldChallenger<F>;
+        EF: ExtensionField<Domain> + TwoAdicField;
 }
 
-pub trait MultivariatePCS<F, In, Chal>: PCS<F, In, Chal>
+pub trait MultivariatePcs<Val, In, Challenger>: Pcs<Val, In>
 where
-    F: Field,
-    In: for<'a> MatrixRows<'a, F>,
-    Chal: FieldChallenger<F>,
+    Val: Field,
+    In: MatrixRows<Val>,
+    Challenger: FieldChallenger<Val>,
 {
     fn open_multi_batches<EF>(
         &self,
-        prover_data: &[&Self::ProverData],
-        points: &[Vec<EF>],
-        challenger: &mut Chal,
-    ) -> (Vec<Vec<Vec<EF>>>, Self::Proof)
+        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
+        challenger: &mut Challenger,
+    ) -> (OpenedValues<EF>, Self::Proof)
     where
-        EF: ExtensionField<F>,
-        Chal: FieldChallenger<F>;
+        EF: ExtensionField<Val>,
+        Challenger: FieldChallenger<Val>;
 
     fn verify_multi_batches<EF>(
         &self,
-        commits: &[Self::Commitment],
-        points: &[Vec<EF>],
-        values: &[Vec<Vec<EF>>],
+        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
+        values: OpenedValues<EF>,
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        EF: ExtensionField<F>,
-        Chal: FieldChallenger<F>;
+        EF: ExtensionField<Val>,
+        Challenger: FieldChallenger<Val>;
 }

@@ -14,9 +14,6 @@ pub use duplex_challenger::*;
 pub use hash_challenger::*;
 use p3_field::{AbstractExtensionField, Field};
 
-/// Observes prover messages during an IOP, and generates Fiat-Shamir challenges in response.
-pub trait Challenger {}
-
 pub trait CanObserve<T> {
     fn observe(&mut self, value: T);
 

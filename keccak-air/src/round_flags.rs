@@ -1,15 +1,15 @@
 use core::borrow::Borrow;
 
 use p3_air::AirBuilder;
-use p3_matrix::MatrixRows;
+use p3_matrix::MatrixRowSlices;
 
 use crate::columns::KeccakCols;
 use crate::NUM_ROUNDS;
 
 pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     let main = builder.main();
-    let local: &KeccakCols<AB::Var> = main.row(0).borrow();
-    let next: &KeccakCols<AB::Var> = main.row(1).borrow();
+    let local: &KeccakCols<AB::Var> = main.row_slice(0).borrow();
+    let next: &KeccakCols<AB::Var> = main.row_slice(1).borrow();
 
     // Initially, the first step flag should be 1 while the others should be 0.
     builder.when_first_row().assert_one(local.step_flags[0]);

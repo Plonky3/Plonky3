@@ -4,10 +4,9 @@
 
 extern crate alloc;
 
-use p3_commit::MMCS;
-use p3_ldt::{LDTBasedPCS, LDT};
+use p3_commit::Mmcs;
+use p3_ldt::{Ldt, LdtBasedPcs};
 
-pub use crate::proof::FriProof;
 use crate::prover::prove;
 use crate::verifier::verify;
 
@@ -20,36 +19,38 @@ mod verifier;
 pub use config::*;
 pub use proof::*;
 
-pub struct FriLDT<FC: FriConfig> {
-    config: FC,
+pub struct FriLdt<FC: FriConfig> {
+    pub config: FC,
 }
 
-impl<FC: FriConfig> LDT<FC::Val, FC::InputMmcs, FC::Chal> for FriLDT<FC> {
+impl<FC: FriConfig> Ldt<FC::Val, FC::Domain, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
     fn prove(
         &self,
-        inputs: &[<FC::InputMmcs as MMCS<FC::Val>>::ProverData],
-        challenger: &mut FC::Chal,
+        mmcs: &FC::InputMmcs,
+        inputs: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
+        challenger: &mut FC::Challenger,
     ) -> Self::Proof {
-        prove::<FC>(&self.config, inputs, challenger)
+        prove::<FC>(&self.config, mmcs, inputs, challenger)
     }
 
     fn verify(
         &self,
-        _input_commits: &[<FC::InputMmcs as MMCS<FC::Val>>::Commitment],
+        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Domain>>::Commitment],
         proof: &Self::Proof,
-        challenger: &mut FC::Chal,
+        challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
         verify::<FC>(proof, challenger)
     }
 }
 
-pub type FRIBasedPCS<FC, DFT> = LDTBasedPCS<
+pub type FriBasedPcs<FC, Mmcs, Dft, Challenger> = LdtBasedPcs<
     <FC as FriConfig>::Val,
-    <FC as FriConfig>::Challenge,
-    DFT,
-    <FC as FriConfig>::InputMmcs,
-    FriLDT<FC>,
+    <FC as FriConfig>::Domain,
+    Dft,
+    Mmcs,
+    FriLdt<FC>,
+    Challenger,
 >;
