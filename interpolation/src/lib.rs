@@ -16,7 +16,7 @@ use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
 /// the polynomials at `point`.
-pub fn interpolate_subgroup<F, EF, Mat>(subgroup_evals: Mat, point: EF) -> Vec<EF>
+pub fn interpolate_subgroup<F, EF, Mat>(subgroup_evals: &Mat, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -27,7 +27,7 @@ where
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two
 /// subgroup, evaluate the polynomials at `point`.
-pub fn interpolate_coset<F, EF, Mat>(coset_evals: Mat, shift: F, point: EF) -> Vec<EF>
+pub fn interpolate_coset<F, EF, Mat>(coset_evals: &Mat, shift: F, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -76,7 +76,7 @@ mod tests {
         .map(F::from_canonical_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
         let point = F::from_canonical_u32(100);
-        let result = interpolate_subgroup(evals_mat, point);
+        let result = interpolate_subgroup(&evals_mat, point);
         assert_eq!(result, vec![F::from_canonical_u32(10203)]);
     }
 
@@ -91,7 +91,7 @@ mod tests {
         .map(F::from_canonical_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
         let point = F::from_canonical_u32(100);
-        let result = interpolate_coset(evals_mat, shift, point);
+        let result = interpolate_coset(&evals_mat, shift, point);
         assert_eq!(result, vec![F::from_canonical_u32(10203)]);
     }
 }
