@@ -12,6 +12,7 @@ use zkhash::monolith_31::monolith_31::Monolith31 as ZKHashMonolith31;
 use zkhash::monolith_31::monolith_31_params::Monolith31Params;
 
 // The Monolith-31 permutation.
+#[derive(Clone)]
 pub struct Monolith31;
 
 fn m31_to_f31(x: Mersenne31) -> F31 {
@@ -34,6 +35,7 @@ impl CryptographicPermutation<[Mersenne31; 16]> for Monolith31 {
 
 impl ArrayPermutation<Mersenne31, 16> for Monolith31 {}
 
+#[derive(Clone)]
 pub struct Monolith31Hash;
 
 impl PseudoCompressionFunction<[Mersenne31; 8], 2> for Monolith31Hash {

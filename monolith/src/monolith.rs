@@ -5,24 +5,29 @@ extern crate alloc;
 use core::iter;
 
 use p3_field::PrimeField32;
-use p3_symmetric::mds::MDSPermutation;
+use p3_mds::MDSPermutation;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::monolith_mds::monolith_mds_naive;
+use crate::monolith_mds::{monolith_mds_naive, MonolithMDSMatrixMersenne31};
 
 // The Monolith-31 permutation.
 // Assumes that F is a 31-bit field (e.g. Mersenne31).
-pub struct Monolith31<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize> {
+pub struct Monolith31<F, MDS, const WIDTH: usize, const NUM_ROUNDS: usize>
+where
+    F: PrimeField32,
+    MDS: MDSPermutation<F, WIDTH>,
+{
     // TODO: if possible, replace with [[F; WIDTH]; NUM_ROUNDS - 1]]
     pub round_constants: Vec<[F; WIDTH]>,
-    pub mds: Box<dyn MDSPermutation<F, WIDTH>>,
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
 }
 
-impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
-    Monolith31<F, WIDTH, NUM_ROUNDS>
+impl<F, MDS, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F, MDS, WIDTH, NUM_ROUNDS>
+where
+    F: PrimeField32,
+    MDS: MDSPermutation<F, WIDTH>,
 {
     pub const NUM_BARS: usize = 8;
 
@@ -34,11 +39,9 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
-        let mds = Box::new(monolith_mds_naive("Monolith", NUM_ROUNDS));
 
         Self {
             round_constants,
-            mds,
             lookup1,
             lookup2,
         }
@@ -114,7 +117,7 @@ impl<F: PrimeField32, const WIDTH: usize, const NUM_ROUNDS: usize>
     }
 
     pub fn concrete(&self, state: &mut [F; WIDTH], round_constants: Option<&[F; WIDTH]>) {
-        *state = self.mds.permute(*state);
+        *state = MDS::permute(*state);
 
         if let Some(round_constants) = round_constants {
             for (x, rc) in state.iter_mut().zip(round_constants.iter()) {

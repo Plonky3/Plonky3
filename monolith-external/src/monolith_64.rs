@@ -12,6 +12,7 @@ use zkhash::monolith_64::monolith_64::Monolith64 as ZKHashMonolith64;
 use zkhash::monolith_64::monolith_64_params::Monolith64Params;
 
 // The Monolith-64 permutation.
+#[derive(Clone)]
 pub struct Monolith64;
 
 fn m64_to_f64(x: &Goldilocks) -> F64 {
@@ -44,6 +45,7 @@ impl CryptographicPermutation<[Goldilocks; 16]> for Monolith64 {
 
 impl ArrayPermutation<Goldilocks, 16> for Monolith64 {}
 
+#[derive(Clone)]
 pub struct Monolith64Hash;
 
 impl PseudoCompressionFunction<[Goldilocks; 8], 2> for Monolith64Hash {

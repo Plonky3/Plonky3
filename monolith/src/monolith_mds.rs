@@ -1,48 +1,44 @@
 use p3_field::PrimeField32;
-use p3_symmetric::mds::NaiveMDSMatrix;
+use p3_mds::util::apply_circulant;
+use p3_mds::MDSPermutation;
+use p3_mersenne_31::Mersenne31;
+use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
+pub struct MonolithMDSMatrixMersenne31;
 
-pub fn monolith_mds_naive<F: PrimeField32, const WIDTH: usize>(
-    init_string: &str,
-    num_rounds: usize,
-) -> NaiveMDSMatrix<F, WIDTH> {
-    let matrix = if WIDTH == 16 {
-        let row = [
-            61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244,
-            7454, 33823, 28750, 1108,
-        ];
-        circulant_matrix(row.as_ref().try_into().unwrap())
-    } else {
-        let mut shake = Shake128::default();
-        shake.update(init_string.as_bytes());
-        shake.update(&[WIDTH as u8, num_rounds as u8]);
-        shake.update(&F::ORDER_U32.to_le_bytes());
-        shake.update(&[16, 15]);
-        shake.update("MDS".as_bytes());
-        let mut shake_finalized = shake.finalize_xof();
-        cauchy_mds_matrix(&mut shake_finalized)
-    };
-    NaiveMDSMatrix::new(matrix)
-}
+const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
+    61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244,
+    7454, 33823, 28750, 1108,
+];
 
-fn circulant_matrix<F: PrimeField32, const WIDTH: usize>(
-    row: &[u64; WIDTH],
-) -> [[F; WIDTH]; WIDTH] {
-    let mut mat = [[F::ZERO; WIDTH]; WIDTH];
-    let mut rot: Vec<F> = row.iter().map(|i| F::from_canonical_u64(*i)).collect();
-    mat[0].copy_from_slice(&rot);
-    for row in mat.iter_mut().skip(1) {
-        rot.rotate_right(1);
-        row.copy_from_slice(&rot);
+impl<const WIDTH: usize> CryptographicPermutation<[Mersenne31; WIDTH]> for MonolithMDSMatrixMersenne31 {
+    fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
+        if WIDTH == 16 {
+            apply_circulant(MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH, input)
+        } else {
+            let mut shake = Shake128::default();
+            shake.update(init_string.as_bytes());
+            shake.update(&[WIDTH as u8, num_rounds as u8]);
+            shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
+            shake.update(&[16, 15]);
+            shake.update("MDS".as_bytes());
+            let mut shake_finalized = shake.finalize_xof();
+            apply_cauchy_mds_matrix(&mut shake_finalized, input)
+        }
     }
-    mat
 }
 
-fn cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
+impl<const WIDTH: usize> ArrayPermutation<Mersenne31, WIDTH> for MonolithMDSMatrixMersenne31 {}
+impl<const WIDTH: usize> MDSPermutation<Mersenne31, WIDTH> for MonolithMDSMatrixMersenne31 {}
+
+fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     shake: &mut Shake128Reader,
+    to_multiply: [F; WIDTH],
 ) -> [[F; WIDTH]; WIDTH] {
+    let mut output: [[F; WIDTH]; WIDTH] = [[F::ZERO; WIDTH]; WIDTH];
+
     let mut p = F::ORDER_U32;
     let mut tmp = 0;
     while p != 0 {
@@ -52,19 +48,17 @@ fn cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     let x_mask = (1 << (tmp - 7 - 2)) - 1;
     let y_mask = ((1 << tmp) - 1) >> 2;
 
-    let mut res = [[F::ZERO; WIDTH]; WIDTH];
-
     let y = get_random_y_i::<F, WIDTH>(shake, x_mask, y_mask);
     let mut x = y.to_owned();
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
     for (i, x_i) in x.iter().enumerate() {
         for (j, yj) in y.iter().enumerate() {
-            res[i][j] = F::from_canonical_u32(x_i + yj).inverse();
+            output[i] += F::from_canonical_u32(x_i + yj).inverse() * to_multiply[j];
         }
     }
 
-    res
+    output
 }
 
 fn get_random_y_i<F: PrimeField32, const WIDTH: usize>(
