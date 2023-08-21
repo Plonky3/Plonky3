@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -104,8 +105,7 @@ where
             .collect();
         let quotient_mmcs = QuotientMmcs {
             inner: self.mmcs.clone(),
-            opened_point: Domain::ZERO, // TODO: points
-            opened_eval: Domain::ZERO,  // TODO
+            openings: vec![], // TODO
         };
         let prover_data: Vec<_> = prover_data_and_points
             .iter()

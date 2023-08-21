@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
 
+use itertools::{izip, Itertools};
 use p3_commit::{Dimensions, Mmcs};
-use p3_field::{Field, TwoAdicField};
+use p3_field::TwoAdicField;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
@@ -10,8 +11,16 @@ use p3_util::log2_strict_usize;
 #[derive(Clone)]
 pub struct QuotientMmcs<F, Inner: Mmcs<F>> {
     pub inner: Inner,
-    pub opened_point: F,
-    pub opened_eval: F,
+    /// For each matrix, a list of claimed openings, one for each point that we open that batch of
+    /// polynomials at.
+    pub openings: Vec<Vec<Opening<F>>>,
+}
+
+/// A claimed opening.
+#[derive(Clone)]
+pub struct Opening<F> {
+    pub point: F,
+    pub values: Vec<F>,
 }
 
 impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
@@ -26,21 +35,24 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
         index: usize,
         prover_data: &Self::ProverData,
     ) -> (Vec<Vec<F>>, Self::Proof) {
-        let (openings, proof) = self.inner.open_batch(index, prover_data);
+        let (values, proof) = self.inner.open_batch(index, prover_data);
         let matrix_heights = self.inner.get_matrix_heights(prover_data);
         let max_height = *matrix_heights.iter().max().unwrap();
         let log_max_height = log2_strict_usize(max_height);
 
-        let quotients = openings
-            .into_iter()
-            .zip(matrix_heights)
-            .map(|(row, height)| {
+        let quotients = izip!(values, self.openings.clone(), matrix_heights)
+            .map(|(row, openings, height)| {
                 let log2_height = log2_strict_usize(height);
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
                 let x = F::primitive_root_of_unity(log2_height).exp_u64(reduced_index as u64);
                 row.into_iter()
-                    .map(|value| (value - self.opened_eval) / (x - self.opened_point))
+                    .enumerate()
+                    .flat_map(|(i, eval)| {
+                        openings
+                            .iter()
+                            .map(move |Opening { point, values }| (eval - values[i]) / (x - *point))
+                    })
                     .collect()
             })
             .collect();
@@ -52,15 +64,16 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
         self.inner
             .get_matrices(prover_data)
             .into_iter()
-            .map(|inner| {
+            .zip(self.openings.clone())
+            .map(|(inner, openings)| {
                 let height = inner.height();
-                let g = F::primitive_root_of_unity(log2_strict_usize(height));
+                let log2_height = log2_strict_usize(height);
+                let g = F::primitive_root_of_unity(log2_height);
                 let subgroup = g.powers().take(height).collect();
                 QuotientMatrix {
                     inner,
                     subgroup,
-                    opened_point: self.opened_point,
-                    opened_eval: self.opened_eval,
+                    openings,
                 }
             })
             .collect()
@@ -86,15 +99,30 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
         let opened_original_values = opened_quotient_values
             .into_iter()
             .zip(dimensions)
-            .map(|(row, dims)| {
+            .enumerate()
+            .map(|(i, (quotient_row, dims))| {
                 let bits_reduced = log_max_height - dims.log2_height;
                 let reduced_index = index >> bits_reduced;
                 let x = F::primitive_root_of_unity(dims.log2_height).exp_u64(reduced_index as u64);
-                row.into_iter()
-                    .map(|quotient| quotient * (x - self.opened_point) + self.opened_eval)
+
+                let openings = &self.openings[i];
+                quotient_row
+                    .chunks(openings.len())
+                    .enumerate()
+                    .map(|(poly_index, chunk)| {
+                        let mut originals =
+                            chunk.iter().zip_eq(openings).map(|(&quotient, opening)| {
+                                quotient * (x - opening.point) + opening.values[poly_index]
+                            });
+                        // They should all agree.
+                        let first = originals.next().unwrap();
+                        assert!(originals.all(|o| o == first));
+                        first
+                    })
                     .collect()
             })
             .collect();
+
         self.inner
             .verify_batch(commit, dimensions, index, opened_original_values, proof)
     }
@@ -103,13 +131,12 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
 pub struct QuotientMatrix<F, Inner: MatrixRows<F>> {
     inner: Inner,
     subgroup: Vec<F>,
-    opened_point: F,
-    opened_eval: F,
+    openings: Vec<Opening<F>>,
 }
 
 impl<F, Inner: MatrixRows<F>> Matrix<F> for QuotientMatrix<F, Inner> {
     fn width(&self) -> usize {
-        self.inner.width()
+        self.inner.width() * self.openings.len()
     }
 
     fn height(&self) -> usize {
@@ -118,31 +145,20 @@ impl<F, Inner: MatrixRows<F>> Matrix<F> for QuotientMatrix<F, Inner> {
 }
 
 impl<F: TwoAdicField, Inner: MatrixRows<F>> MatrixRows<F> for QuotientMatrix<F, Inner> {
-    type Row<'a> = QuotientRow<F, <Inner::Row<'a> as IntoIterator>::IntoIter> where Inner: 'a;
+    // TODO: Probably better to implement a custom iterator to avoid allocation...
+    type Row<'a> = Vec<F> where Inner: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
-        QuotientRow {
-            inner: self.inner.row(r).into_iter(),
-            current_point: self.subgroup[r],
-            opened_point: self.opened_point,
-            opened_eval: self.opened_eval,
-        }
-    }
-}
-
-pub struct QuotientRow<F, Inner: Iterator<Item = F>> {
-    inner: Inner,
-    current_point: F,
-    opened_point: F,
-    opened_eval: F,
-}
-
-impl<F: Field, Inner: Iterator<Item = F>> Iterator for QuotientRow<F, Inner> {
-    type Item = F;
-
-    fn next(&mut self) -> Option<Self::Item> {
+        let x = self.subgroup[r];
         self.inner
-            .next()
-            .map(|value| (value - self.opened_eval) / (self.current_point - self.opened_point))
+            .row(r)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(i, eval)| {
+                self.openings
+                    .iter()
+                    .map(move |Opening { point, values }| (eval - values[i]) / (x - *point))
+            })
+            .collect()
     }
 }
