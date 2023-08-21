@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
@@ -40,7 +40,7 @@ pub type OpenedValuesForPoint<F> = Vec<F>;
 pub trait UnivariatePcs<Val, Domain, In, Challenger>: Pcs<Val, In>
 where
     Val: Field,
-    Domain: ExtensionField<Val>,
+    Domain: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
@@ -50,7 +50,7 @@ where
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof)
     where
-        EF: ExtensionField<Domain>;
+        EF: ExtensionField<Domain> + TwoAdicField;
 
     fn verify_multi_batches<EF>(
         &self,
@@ -59,7 +59,7 @@ where
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>
     where
-        EF: ExtensionField<Domain>;
+        EF: ExtensionField<Domain> + TwoAdicField;
 }
 
 pub trait MultivariatePcs<Val, In, Challenger>: Pcs<Val, In>

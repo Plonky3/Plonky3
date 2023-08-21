@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::MatrixRows;
 
 use crate::pcs::UnivariatePcs;
@@ -9,7 +9,7 @@ use crate::pcs::UnivariatePcs;
 pub struct MultiFromUniPcs<Val, Domain, In, U, Challenger>
 where
     Val: Field,
-    Domain: ExtensionField<Val>,
+    Domain: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
     U: UnivariatePcs<Val, Domain, In, Challenger>,
     Challenger: FieldChallenger<Val>,

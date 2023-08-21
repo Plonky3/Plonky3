@@ -9,5 +9,6 @@ p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
+p3-interpolation = { path = "../interpolation" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }

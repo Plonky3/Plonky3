@@ -166,6 +166,19 @@ impl<'a, T> RowMajorMatrixView<'a, T> {
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
         self.values.chunks_exact(self.width)
     }
+
+    pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
+        let (upper_values, lower_values) = self.values.split_at(r * self.width);
+        let upper = RowMajorMatrixView {
+            values: upper_values,
+            width: self.width,
+        };
+        let lower = RowMajorMatrixView {
+            values: lower_values,
+            width: self.width,
+        };
+        (upper, lower)
+    }
 }
 
 impl<T> Matrix<T> for RowMajorMatrixView<'_, T> {

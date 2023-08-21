@@ -18,29 +18,25 @@ use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
 /// the polynomials at `point`.
-pub fn interpolate_subgroup<F, EF>(coset_evals: RowMajorMatrixView<F>, point: EF) -> Vec<EF>
+pub fn interpolate_subgroup<F, EF>(subgroup_evals: RowMajorMatrixView<F>, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
 {
-    interpolate_coset(coset_evals, F::ONE, point)
+    interpolate_coset(subgroup_evals, F::ONE, point)
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two
 /// subgroup, evaluate the polynomials at `point`.
-pub fn interpolate_coset<F, EF>(
-    subgroup_evals: RowMajorMatrixView<F>,
-    shift: F,
-    point: EF,
-) -> Vec<EF>
+pub fn interpolate_coset<F, EF>(coset_evals: RowMajorMatrixView<F>, shift: F, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
 
-    let width = subgroup_evals.width();
-    let height = subgroup_evals.height();
+    let width = coset_evals.width();
+    let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
     let g = F::primitive_root_of_unity(log_height);
 
@@ -50,7 +46,7 @@ where
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
     let mut sum = vec![EF::ZERO; width];
-    for (subgroup_i, row, diff_inv) in izip!(g.powers(), subgroup_evals.rows(), diff_invs) {
+    for (subgroup_i, row, diff_inv) in izip!(g.powers(), coset_evals.rows(), diff_invs) {
         let row = row.iter().map(|&y| EF::from_base(y));
         add_scaled_slice_in_place(&mut sum, row, diff_inv * subgroup_i);
     }
