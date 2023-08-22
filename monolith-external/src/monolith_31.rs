@@ -28,7 +28,7 @@ impl CryptographicPermutation<[Mersenne31; 16]> for Monolith31 {
         let m = ZKHashMonolith31::new(&Arc::new(Monolith31Params::new()));
 
         let mut input_f: [F31; 16] = input.map(m31_to_f31);
-        m.permutation_u64(&mut input_f);
+        input_f = m.permutation_u64(&input_f);
         input_f.map(f31_to_m31)
     }
 }

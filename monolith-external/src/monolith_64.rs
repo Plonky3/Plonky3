@@ -33,7 +33,7 @@ impl CryptographicPermutation<[Goldilocks; 16]> for Monolith64 {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        m.permutation_u128(&mut input_f);
+        input_f = m.permutation_u128(&input_f);
         input_f
             .iter()
             .map(f64_to_m64)
