@@ -60,7 +60,7 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     let x_mask = (1 << (tmp - 7 - 2)) - 1;
     let y_mask = ((1 << tmp) - 1) >> 2;
 
-    let y = get_random_y_i::<F, WIDTH>(shake, x_mask, y_mask);
+    let y = get_random_y_i::<WIDTH>(shake, x_mask, y_mask);
     let mut x = y.to_owned();
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
@@ -73,7 +73,7 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     output
 }
 
-fn get_random_y_i<F: PrimeField32, const WIDTH: usize>(
+fn get_random_y_i<const WIDTH: usize>(
     shake: &mut Shake128Reader,
     x_mask: u32,
     y_mask: u32,
