@@ -1,3 +1,6 @@
+//! Monolith-31's default MDS permutation.
+//! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
+
 use p3_field::PrimeField32;
 use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;

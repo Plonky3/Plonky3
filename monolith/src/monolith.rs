@@ -1,4 +1,5 @@
-//! The Monolith permutation, and hash functions built from it.
+//! The Monolith-31 permutation.
+//! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
 extern crate alloc;
 
