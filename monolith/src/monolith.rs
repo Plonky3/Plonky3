@@ -3,12 +3,14 @@
 
 extern crate alloc;
 
+use crate::util::get_random_u32;
+
 use core::iter;
 use core::marker::PhantomData;
 
 use p3_field::PrimeField32;
 use p3_mds::MdsPermutation;
-use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
 // The Monolith-31 permutation.
@@ -92,14 +94,11 @@ where
     }
 
     fn random_field_element(shake: &mut Shake128Reader) -> F {
-        let val = loop {
-            let mut rnd = [0u8; 4];
-            shake.read(&mut rnd);
-            let res = u32::from_le_bytes(rnd);
-            if res < F::ORDER_U32 {
-                break res;
-            }
-        };
+        let mut val = get_random_u32(shake);
+        while val >= F::ORDER_U32 {
+            val = get_random_u32(shake);
+        }
+
         F::from_canonical_u32(val)
     }
 
