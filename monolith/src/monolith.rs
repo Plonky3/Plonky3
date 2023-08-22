@@ -192,8 +192,8 @@ mod tests {
 
     #[test]
     fn test_monolith_31() {
-        let mds = MonolithMdsMatrixMersenne31;
-        let monolith: Monolith31<Mersenne31, 16, 6> = Monolith31::new(mds);
+        let mds = MonolithMdsMatrixMersenne31::<6>;
+        let monolith: Monolith31<Mersenne31, _, 16, 6> = Monolith31::new(mds);
 
         let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
         for (i, inp) in input.iter_mut().enumerate() {
