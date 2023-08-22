@@ -49,9 +49,3 @@ impl PseudoCompressionFunction<[Mersenne31; 8], 2> for Monolith31Hash {
         output.map(f31_to_m31)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_monolith_31() {}
-}

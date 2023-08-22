@@ -54,17 +54,12 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
 ) -> [F; WIDTH] {
     let mut output: [F; WIDTH] = [F::ZERO; WIDTH];
 
-    let mut p = F::ORDER_U32;
-    let mut tmp = 0;
-    while p != 0 {
-        tmp += 1;
-        p >>= 1;
-    }
-    let x_mask = (1 << (tmp - 7 - 2)) - 1;
-    let y_mask = ((1 << tmp) - 1) >> 2;
+    let bits = F::bits();
+    let x_mask = (1 << (bits - 9)) - 1;
+    let y_mask = ((1 << bits) - 1) >> 2;
 
     let y = get_random_y_i::<WIDTH>(shake, x_mask, y_mask);
-    let mut x = y.to_owned();
+    let mut x = y.clone();
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
     for (i, x_i) in x.iter().enumerate() {
@@ -76,33 +71,27 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     output
 }
 
+fn get_random_u32(shake: &mut Shake128Reader) -> u32 {
+    let mut rand = [0u8; 4];
+    shake.read(&mut rand);
+    u32::from_le_bytes(rand)
+}
+
 fn get_random_y_i<const WIDTH: usize>(
     shake: &mut Shake128Reader,
     x_mask: u32,
     y_mask: u32,
 ) -> [u32; WIDTH] {
     let mut res = [0; WIDTH];
+
     for i in 0..WIDTH {
-        let mut valid = false;
-        while !valid {
-            let mut rand = [0u8; 4];
-            shake.read(&mut rand);
-
-            let y_i = u32::from_le_bytes(rand) & y_mask;
-
-            // check distinct x_i
-            let x_i = y_i & x_mask;
-            valid = true;
-            for r in res.iter().take(i) {
-                if r & x_mask == x_i {
-                    valid = false;
-                    break;
-                }
-            }
-            if valid {
-                res[i] = y_i;
-            }
+        let mut y_i = get_random_u32(shake) & y_mask;
+        let mut x_i = y_i & x_mask;
+        while res.iter().take(i).any(|r| r & x_mask == x_i) {
+            y_i = get_random_u32(shake) & y_mask;
+            x_i = y_i & x_mask;
         }
+        res[i] = y_i;
     }
 
     res
