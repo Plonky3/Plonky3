@@ -38,7 +38,7 @@ impl<T: Clone> MatrixRows<T> for TwoRowMatrixView<'_, T> {
     }
 }
 
-impl<T> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
+impl<T: Clone> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
     fn row_slice(&self, r: usize) -> &[T] {
         match r {
             0 => self.local,

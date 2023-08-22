@@ -12,3 +12,5 @@ p3-field = { path = "../field" }
 p3-interpolation = { path = "../interpolation" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
+
+itertools = "0.11.0"

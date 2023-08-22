@@ -7,31 +7,31 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::izip;
 use p3_field::{
     add_scaled_slice_in_place, batch_multiplicative_inverse, cyclic_subgroup_coset_known_order,
     scale_vec, two_adic_coset_zerofier, ExtensionField, TwoAdicField,
 };
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::Matrix;
+use p3_matrix::MatrixRows;
 use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
 /// the polynomials at `point`.
-pub fn interpolate_subgroup<F, EF>(subgroup_evals: RowMajorMatrixView<F>, point: EF) -> Vec<EF>
+pub fn interpolate_subgroup<F, EF, Mat>(subgroup_evals: &Mat, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
+    Mat: MatrixRows<F>,
 {
     interpolate_coset(subgroup_evals, F::ONE, point)
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two
 /// subgroup, evaluate the polynomials at `point`.
-pub fn interpolate_coset<F, EF>(coset_evals: RowMajorMatrixView<F>, shift: F, point: EF) -> Vec<EF>
+pub fn interpolate_coset<F, EF, Mat>(coset_evals: &Mat, shift: F, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
+    Mat: MatrixRows<F>,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
 
@@ -46,8 +46,8 @@ where
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
     let mut sum = vec![EF::ZERO; width];
-    for (subgroup_i, row, diff_inv) in izip!(g.powers(), coset_evals.rows(), diff_invs) {
-        let row = row.iter().map(|&y| EF::from_base(y));
+    for (i, (subgroup_i, diff_inv)) in g.powers().zip(diff_invs).enumerate() {
+        let row = coset_evals.row(i).into_iter().map(EF::from_base);
         add_scaled_slice_in_place(&mut sum, row, diff_inv * subgroup_i);
     }
 
@@ -76,7 +76,7 @@ mod tests {
         .map(F::from_canonical_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
         let point = F::from_canonical_u32(100);
-        let result = interpolate_subgroup(evals_mat.as_view(), point);
+        let result = interpolate_subgroup(&evals_mat, point);
         assert_eq!(result, vec![F::from_canonical_u32(10203)]);
     }
 
@@ -91,7 +91,7 @@ mod tests {
         .map(F::from_canonical_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
         let point = F::from_canonical_u32(100);
-        let result = interpolate_coset(evals_mat.as_view(), shift, point);
+        let result = interpolate_coset(&evals_mat, shift, point);
         assert_eq!(result, vec![F::from_canonical_u32(10203)]);
     }
 }

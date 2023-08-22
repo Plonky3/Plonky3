@@ -5,11 +5,13 @@
 extern crate alloc;
 
 use crate::dense::RowMajorMatrix;
+use crate::strided::VerticallyStridedMatrixView;
 
 pub mod dense;
 pub mod mul;
 pub mod sparse;
 pub mod stack;
+pub mod strided;
 
 pub trait Matrix<T> {
     fn width(&self) -> usize;
@@ -45,9 +47,20 @@ pub trait MatrixRows<T>: Matrix<T> {
     {
         todo!()
     }
+
+    fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
+    where
+        Self: Sized,
+    {
+        VerticallyStridedMatrixView {
+            inner: self,
+            stride,
+            offset,
+        }
+    }
 }
 
 /// A `Matrix` which supports access its rows as slices.
-pub trait MatrixRowSlices<T>: Matrix<T> {
+pub trait MatrixRowSlices<T>: MatrixRows<T> {
     fn row_slice(&self, r: usize) -> &[T];
 }

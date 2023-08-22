@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -7,7 +8,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::MatrixRows;
 
 use crate::quotient::QuotientMmcs;
 use crate::Ldt;
@@ -92,12 +93,11 @@ where
                     .get_matrices(data)
                     .into_iter()
                     .map(|mat| {
-                        // TODO: This is wrong, the low coset should actually be every `2^self.added_bits` rows.
-                        let (low_coset, _rest) = mat.split_rows(mat.height() >> self.added_bits);
+                        let low_coset = mat.vertically_strided(1 << self.added_bits, 0);
                         let shift = Domain::multiplicative_group_generator();
                         points
                             .iter()
-                            .map(|&point| interpolate_coset(low_coset, shift, point))
+                            .map(|&point| interpolate_coset(&low_coset, shift, point))
                             .collect()
                     })
                     .collect()
@@ -105,8 +105,7 @@ where
             .collect();
         let quotient_mmcs = QuotientMmcs {
             inner: self.mmcs.clone(),
-            opened_point: Domain::ZERO, // TODO: points
-            opened_eval: Domain::ZERO,  // TODO
+            openings: vec![], // TODO
         };
         let prover_data: Vec<_> = prover_data_and_points
             .iter()

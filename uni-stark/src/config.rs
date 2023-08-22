@@ -7,7 +7,7 @@ use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAd
 use p3_matrix::dense::RowMajorMatrix;
 
 pub trait StarkConfig {
-    /// A value of the trace.
+    /// The field over which trace data is encoded.
     type Val: Field;
 
     /// The domain over which trace polynomials are defined.

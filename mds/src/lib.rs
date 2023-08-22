@@ -5,4 +5,4 @@ pub mod goldilocks;
 pub mod mersenne31;
 pub mod util;
 
-pub trait MDSPermutation<T, const WIDTH: usize>: ArrayPermutation<T, WIDTH> {}
+pub trait MdsPermutation<T, const WIDTH: usize>: ArrayPermutation<T, WIDTH> {}

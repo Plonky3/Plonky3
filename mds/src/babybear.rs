@@ -12,28 +12,28 @@ use crate::util::{
     apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
     first_row_to_first_col,
 };
-use crate::MDSPermutation;
+use crate::MdsPermutation;
 
 #[derive(Clone)]
-pub struct MDSMatrixBabyBear;
+pub struct MdsMatrixBabyBear;
 
 const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
 
-impl CryptographicPermutation<[BabyBear; 8]> for MDSMatrixBabyBear {
+impl CryptographicPermutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
         apply_circulant_8_sml(input)
     }
 }
-impl ArrayPermutation<BabyBear, 8> for MDSMatrixBabyBear {}
-impl MDSPermutation<BabyBear, 8> for MDSMatrixBabyBear {}
+impl ArrayPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
+impl MdsPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 
-impl CryptographicPermutation<[BabyBear; 12]> for MDSMatrixBabyBear {
+impl CryptographicPermutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
         apply_circulant_12_sml(input)
     }
 }
-impl ArrayPermutation<BabyBear, 12> for MDSMatrixBabyBear {}
-impl MDSPermutation<BabyBear, 12> for MDSMatrixBabyBear {}
+impl ArrayPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
+impl MdsPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_16_BABYBEAR: [u64; 16] = [
@@ -43,14 +43,14 @@ const MATRIX_CIRC_MDS_16_BABYBEAR: [u64; 16] = [
     0x2C6D7501, 0x1D110184, 0x0E1F608D, 0x2032F0C6,
 ];
 
-impl CryptographicPermutation<[BabyBear; 16]> for MDSMatrixBabyBear {
+impl CryptographicPermutation<[BabyBear; 16]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
         const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<BabyBear, 16> for MDSMatrixBabyBear {}
-impl MDSPermutation<BabyBear, 16> for MDSMatrixBabyBear {}
+impl ArrayPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
+impl MdsPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
@@ -62,13 +62,13 @@ const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
     0x0A6E572C, 0x5C7790FA, 0x17E118F6, 0x0878A07F,
 ];
 
-impl CryptographicPermutation<[BabyBear; 24]> for MDSMatrixBabyBear {
+impl CryptographicPermutation<[BabyBear; 24]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
         apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
     }
 }
-impl ArrayPermutation<BabyBear, 24> for MDSMatrixBabyBear {}
-impl MDSPermutation<BabyBear, 24> for MDSMatrixBabyBear {}
+impl ArrayPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
+impl MdsPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
@@ -82,14 +82,14 @@ const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
     0x73562137, 0x54596086, 0x487C560B, 0x68A4ACAB,
 ];
 
-impl CryptographicPermutation<[BabyBear; 32]> for MDSMatrixBabyBear {
+impl CryptographicPermutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
         const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<BabyBear, 32> for MDSMatrixBabyBear {}
-impl MDSPermutation<BabyBear, 32> for MDSMatrixBabyBear {}
+impl ArrayPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
+impl MdsPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
@@ -111,14 +111,14 @@ const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
     0x52ECBE2E, 0x1D178A67, 0x58B3C04B, 0x6E95CB51,
 ];
 
-impl CryptographicPermutation<[BabyBear; 64]> for MDSMatrixBabyBear {
+impl CryptographicPermutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
         const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<BabyBear, 64> for MDSMatrixBabyBear {}
-impl MDSPermutation<BabyBear, 64> for MDSMatrixBabyBear {}
+impl ArrayPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
+impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 
 #[cfg(test)]
 mod tests {
@@ -126,7 +126,7 @@ mod tests {
     use p3_field::AbstractField;
     use p3_symmetric::permutation::CryptographicPermutation;
 
-    use super::MDSMatrixBabyBear;
+    use super::MdsMatrixBabyBear;
 
     #[test]
     fn babybear8() {
@@ -136,7 +136,7 @@ mod tests {
         ]
         .map(BabyBear::from_canonical_u64);
 
-        let output = MDSMatrixBabyBear.permute(input);
+        let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 8] = [
             504128309, 1915631392, 1485872679, 1192473153, 1425656962, 634837116, 1385055496,
@@ -155,7 +155,7 @@ mod tests {
         ]
         .map(BabyBear::from_canonical_u64);
 
-        let output = MDSMatrixBabyBear.permute(input);
+        let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 12] = [
             772551966, 2009480750, 430187688, 1134406614, 351991333, 1100020355, 777201441,
@@ -175,7 +175,7 @@ mod tests {
         ]
         .map(BabyBear::from_canonical_u64);
 
-        let output = MDSMatrixBabyBear.permute(input);
+        let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 16] = [
             556401834, 683220320, 1810464928, 1169932617, 638040805, 1006828793, 1808829293,
@@ -197,7 +197,7 @@ mod tests {
         ]
         .map(BabyBear::from_canonical_u64);
 
-        let output = MDSMatrixBabyBear.permute(input);
+        let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 24] = [
             1537871777, 1626055274, 1705000179, 1426678258, 1688760658, 1347225494, 1291221794,
@@ -221,7 +221,7 @@ mod tests {
         ]
         .map(BabyBear::from_canonical_u64);
 
-        let output = MDSMatrixBabyBear.permute(input);
+        let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 32] = [
             1359576919, 1657405784, 1031581836, 212090105, 699048671, 877916349, 205627787,
@@ -251,7 +251,7 @@ mod tests {
         ]
         .map(BabyBear::from_canonical_u64);
 
-        let output = MDSMatrixBabyBear.permute(input);
+        let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 64] = [
             442300274, 756862170, 167612495, 1103336044, 546496433, 1211822920, 329094196,
