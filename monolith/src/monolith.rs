@@ -6,36 +6,34 @@ use core::iter;
 use core::marker::PhantomData;
 
 use p3_field::PrimeField32;
-use p3_mds::MDSPermutation;
+use p3_mds::MdsPermutation;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::monolith_mds::{monolith_mds_naive, MonolithMDSMatrixMersenne31};
-
 // The Monolith-31 permutation.
 // Assumes that F is a 31-bit field (e.g. Mersenne31).
-pub struct Monolith31<F, MDS, const WIDTH: usize, const NUM_ROUNDS: usize>
+pub struct Monolith31<F, Mds, const WIDTH: usize, const NUM_ROUNDS: usize>
 where
     F: PrimeField32,
-    MDS: MDSPermutation<F, WIDTH>,
+    Mds: MdsPermutation<F, WIDTH>,
 {
     // TODO: if possible, replace with [[F; WIDTH]; NUM_ROUNDS - 1]]
     pub round_constants: Vec<[F; WIDTH]>,
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
-    pub mds: MDS,
+    pub mds: Mds,
 
-    _phantom: PhantomData<MDS>,
+    _phantom: PhantomData<Mds>,
 }
 
-impl<F, MDS, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F, MDS, WIDTH, NUM_ROUNDS>
+impl<F, Mds, const WIDTH: usize, const NUM_ROUNDS: usize> Monolith31<F, Mds, WIDTH, NUM_ROUNDS>
 where
     F: PrimeField32,
-    MDS: MDSPermutation<F, WIDTH>,
+    Mds: MdsPermutation<F, WIDTH>,
 {
     pub const NUM_BARS: usize = 8;
 
-    pub fn new() -> Self {
+    pub fn new(mds: Mds) -> Self {
         assert_eq!(F::bits(), 31);
         assert!(WIDTH >= 16);
         assert_eq!(WIDTH % 4, 0);
@@ -43,7 +41,6 @@ where
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
-        let mds = MDS {};
 
         Self {
             round_constants,
@@ -191,10 +188,12 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
 
     use crate::monolith::Monolith31;
+    use crate::monolith_mds::MonolithMdsMatrixMersenne31;
 
     #[test]
     fn test_monolith_31() {
-        let monolith: Monolith31<Mersenne31, 16, 6> = Monolith31::new();
+        let mds = MonolithMdsMatrixMersenne31;
+        let monolith: Monolith31<Mersenne31, 16, 6> = Monolith31::new(mds);
 
         let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
         for (i, inp) in input.iter_mut().enumerate() {

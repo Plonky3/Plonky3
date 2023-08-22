@@ -1,28 +1,32 @@
 use p3_field::PrimeField32;
 use p3_mds::util::apply_circulant;
-use p3_mds::MDSPermutation;
+use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Shake128, Shake128Reader};
 
 #[derive(Clone)]
-pub struct MonolithMDSMatrixMersenne31;
+pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
 
 const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
-    61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244,
-    7454, 33823, 28750, 1108,
+    61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244, 7454,
+    33823, 28750, 1108,
 ];
 
-impl<const WIDTH: usize> CryptographicPermutation<[Mersenne31; WIDTH]> for MonolithMDSMatrixMersenne31 {
+impl<const WIDTH: usize, const NUM_ROUNDS: usize> CryptographicPermutation<[Mersenne31; WIDTH]>
+    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+{
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         if WIDTH == 16 {
-            let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH.try_into().unwrap();
+            let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
+                .try_into()
+                .unwrap();
             apply_circulant(&matrix, input)
         } else {
             let mut shake = Shake128::default();
-            shake.update(init_string.as_bytes());
-            shake.update(&[WIDTH as u8, num_rounds as u8]);
+            shake.update("Monolith".as_bytes());
+            shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
             shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
             shake.update(&[16, 15]);
             shake.update("MDS".as_bytes());
@@ -32,8 +36,14 @@ impl<const WIDTH: usize> CryptographicPermutation<[Mersenne31; WIDTH]> for Monol
     }
 }
 
-impl<const WIDTH: usize> ArrayPermutation<Mersenne31, WIDTH> for MonolithMDSMatrixMersenne31 {}
-impl<const WIDTH: usize> MDSPermutation<Mersenne31, WIDTH> for MonolithMDSMatrixMersenne31 {}
+impl<const WIDTH: usize, const NUM_ROUNDS: usize> ArrayPermutation<Mersenne31, WIDTH>
+    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+{
+}
+impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
+    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+{
+}
 
 fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     shake: &mut Shake128Reader,
