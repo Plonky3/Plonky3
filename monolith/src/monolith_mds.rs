@@ -59,7 +59,7 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     let y_mask = ((1 << bits) - 1) >> 2;
 
     let y = get_random_y_i::<WIDTH>(shake, x_mask, y_mask);
-    let mut x = y.clone();
+    let mut x = y;
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
     for (i, x_i) in x.iter().enumerate() {
