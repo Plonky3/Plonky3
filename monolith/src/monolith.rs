@@ -3,8 +3,6 @@
 
 extern crate alloc;
 
-use crate::util::get_random_u32;
-
 use core::iter;
 use core::marker::PhantomData;
 
@@ -12,6 +10,8 @@ use p3_field::PrimeField32;
 use p3_mds::MdsPermutation;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
+
+use crate::util::get_random_u32;
 
 // The Monolith-31 permutation.
 // Assumes that F is a 31-bit field (e.g. Mersenne31).

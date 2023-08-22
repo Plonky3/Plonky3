@@ -1,8 +1,6 @@
 //! Monolith-31's default MDS permutation.
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
-use crate::util::get_random_u32;
-
 use p3_field::PrimeField32;
 use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
@@ -10,6 +8,8 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
+
+use crate::util::get_random_u32;
 
 #[derive(Clone)]
 pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
