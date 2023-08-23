@@ -103,6 +103,9 @@ impl AbstractField for BabyBear {
 }
 
 impl Field for BabyBear {
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    type Packing = crate::PackedBabyBearNeon;
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
     type Packing = Self;
 
     fn try_inverse(&self) -> Option<Self> {
