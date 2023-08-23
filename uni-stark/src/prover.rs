@@ -96,7 +96,7 @@ where
                 })
                 .collect();
 
-            let accumulator = SC::PackedChallenge::ZEROS;
+            let accumulator = SC::PackedChallenge::ZERO;
             let mut builder = ConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
