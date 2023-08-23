@@ -281,7 +281,7 @@ impl Distribution<Mersenne31Complex<Mersenne31>> for Standard {
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeField32;
-    use p3_field_testing::test_inverse;
+    use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;
 
@@ -396,8 +396,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inverse() {
-        test_inverse::<Mersenne31Complex<Mersenne31>>();
-    }
+    test_field!(crate::Mersenne31Complex<crate::Mersenne31>);
+    test_two_adic_field!(crate::Mersenne31Complex<crate::Mersenne31>);
 }

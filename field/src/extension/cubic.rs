@@ -2,6 +2,9 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
+
 use crate::extension::{OptimallyExtendable, OEF};
 use crate::field::Field;
 use crate::{AbstractExtensionField, AbstractField, ExtensionField};
@@ -291,4 +294,17 @@ impl<F: OptimallyExtendable<3>> OEF<F> for CubicOef<F> {
     const W: F = F::W;
 
     const DTH_ROOT: F = F::DTH_ROOT;
+}
+
+impl<F: OptimallyExtendable<3>> Distribution<CubicOef<F>> for Standard
+where
+    Standard: Distribution<F>,
+{
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> CubicOef<F> {
+        CubicOef::<F>::from_base_slice(&[
+            Standard.sample(rng),
+            Standard.sample(rng),
+            Standard.sample(rng),
+        ])
+    }
 }

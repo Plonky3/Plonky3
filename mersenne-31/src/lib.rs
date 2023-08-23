@@ -313,7 +313,7 @@ impl Div for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use p3_field::{AbstractField, Field, PrimeField32};
-    use p3_field_testing::test_inverse;
+    use p3_field_testing::test_field;
 
     use crate::Mersenne31;
 
@@ -356,8 +356,5 @@ mod tests {
         assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
     }
 
-    #[test]
-    fn inverse() {
-        test_inverse::<Mersenne31>();
-    }
+    test_field!(crate::Mersenne31);
 }
