@@ -14,7 +14,7 @@ use crate::util::{
 };
 use crate::MdsPermutation;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
 const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
