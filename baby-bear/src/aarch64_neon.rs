@@ -60,7 +60,6 @@ impl PackedBabyBearNeon {
 impl Add for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
@@ -75,7 +74,6 @@ impl Add for PackedBabyBearNeon {
 impl Mul for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
@@ -90,7 +88,6 @@ impl Mul for PackedBabyBearNeon {
 impl Neg for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn neg(self) -> Self {
         let val = self.to_vector();
         let res = neg(val);
@@ -104,7 +101,6 @@ impl Neg for PackedBabyBearNeon {
 impl Sub for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
@@ -292,7 +288,6 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
 
 impl From<BabyBear> for PackedBabyBearNeon {
     #[inline]
-    #[must_use]
     fn from(value: BabyBear) -> Self {
         Self::broadcast(value)
     }
@@ -300,7 +295,6 @@ impl From<BabyBear> for PackedBabyBearNeon {
 
 impl Default for PackedBabyBearNeon {
     #[inline]
-    #[must_use]
     fn default() -> Self {
         BabyBear::default().into()
     }
@@ -329,7 +323,6 @@ impl SubAssign for PackedBabyBearNeon {
 
 impl Sum for PackedBabyBearNeon {
     #[inline]
-    #[must_use]
     fn sum<I>(iter: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -340,7 +333,6 @@ impl Sum for PackedBabyBearNeon {
 
 impl Product for PackedBabyBearNeon {
     #[inline]
-    #[must_use]
     fn product<I>(iter: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -356,49 +348,40 @@ impl AbstractField for PackedBabyBearNeon {
     const NEG_ONE: Self = Self::broadcast(BabyBear::NEG_ONE);
 
     #[inline]
-    #[must_use]
     fn from_bool(b: bool) -> Self {
         BabyBear::from_bool(b).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u8(n: u8) -> Self {
         BabyBear::from_canonical_u8(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u16(n: u16) -> Self {
         BabyBear::from_canonical_u16(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u32(n: u32) -> Self {
         BabyBear::from_canonical_u32(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u64(n: u64) -> Self {
         BabyBear::from_canonical_u64(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_usize(n: usize) -> Self {
         BabyBear::from_canonical_usize(n).into()
     }
 
     #[inline]
-    #[must_use]
     fn from_wrapped_u32(n: u32) -> Self {
         BabyBear::from_wrapped_u32(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_wrapped_u64(n: u64) -> Self {
         BabyBear::from_wrapped_u64(n).into()
     }
 
     #[inline]
-    #[must_use]
     fn multiplicative_group_generator() -> Self {
         BabyBear::multiplicative_group_generator().into()
     }
@@ -407,7 +390,6 @@ impl AbstractField for PackedBabyBearNeon {
 impl Add<BabyBear> for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn add(self, rhs: BabyBear) -> Self {
         self + Self::from(rhs)
     }
@@ -416,7 +398,6 @@ impl Add<BabyBear> for PackedBabyBearNeon {
 impl Mul<BabyBear> for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn mul(self, rhs: BabyBear) -> Self {
         self * Self::from(rhs)
     }
@@ -425,7 +406,6 @@ impl Mul<BabyBear> for PackedBabyBearNeon {
 impl Sub<BabyBear> for PackedBabyBearNeon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn sub(self, rhs: BabyBear) -> Self {
         self - Self::from(rhs)
     }
@@ -454,7 +434,6 @@ impl SubAssign<BabyBear> for PackedBabyBearNeon {
 
 impl Sum<BabyBear> for PackedBabyBearNeon {
     #[inline]
-    #[must_use]
     fn sum<I>(iter: I) -> Self
     where
         I: Iterator<Item = BabyBear>,
@@ -465,7 +444,6 @@ impl Sum<BabyBear> for PackedBabyBearNeon {
 
 impl Product<BabyBear> for PackedBabyBearNeon {
     #[inline]
-    #[must_use]
     fn product<I>(iter: I) -> Self
     where
         I: Iterator<Item = BabyBear>,
@@ -480,7 +458,6 @@ impl Div<BabyBear> for PackedBabyBearNeon {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
-    #[must_use]
     fn div(self, rhs: BabyBear) -> Self {
         self * rhs.inverse()
     }
@@ -489,7 +466,6 @@ impl Div<BabyBear> for PackedBabyBearNeon {
 impl Add<PackedBabyBearNeon> for BabyBear {
     type Output = PackedBabyBearNeon;
     #[inline]
-    #[must_use]
     fn add(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
         PackedBabyBearNeon::from(self) + rhs
     }
@@ -498,7 +474,6 @@ impl Add<PackedBabyBearNeon> for BabyBear {
 impl Mul<PackedBabyBearNeon> for BabyBear {
     type Output = PackedBabyBearNeon;
     #[inline]
-    #[must_use]
     fn mul(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
         PackedBabyBearNeon::from(self) * rhs
     }
@@ -507,7 +482,6 @@ impl Mul<PackedBabyBearNeon> for BabyBear {
 impl Sub<PackedBabyBearNeon> for BabyBear {
     type Output = PackedBabyBearNeon;
     #[inline]
-    #[must_use]
     fn sub(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
         PackedBabyBearNeon::from(self) - rhs
     }
@@ -554,7 +528,6 @@ unsafe impl PackedField for PackedBabyBearNeon {
     const WIDTH: usize = WIDTH;
 
     #[inline]
-    #[must_use]
     fn from_slice(slice: &[BabyBear]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
@@ -565,7 +538,6 @@ unsafe impl PackedField for PackedBabyBearNeon {
         }
     }
     #[inline]
-    #[must_use]
     fn from_slice_mut(slice: &mut [BabyBear]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
@@ -584,18 +556,15 @@ unsafe impl PackedField for PackedBabyBearNeon {
     }
 
     #[inline]
-    #[must_use]
     fn as_slice(&self) -> &[BabyBear] {
         &self.0[..]
     }
     #[inline]
-    #[must_use]
     fn as_slice_mut(&mut self) -> &mut [BabyBear] {
         &mut self.0[..]
     }
 
     #[inline]
-    #[must_use]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());
         let (res0, res1) = match block_len {
