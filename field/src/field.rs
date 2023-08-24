@@ -122,6 +122,7 @@ pub trait Field:
     }
 
     #[must_use]
+    #[inline]
     fn exp_u64(&self, power: u64) -> Self {
         let mut current = *self;
         let mut product = Self::ONE;
