@@ -95,12 +95,12 @@ where
 
     fn full_sbox_layer(state: &mut [F; WIDTH]) {
         for x in state.iter_mut() {
-            *x = x.exp_u64(ALPHA);
+            *x = x.exp_const_u64::<ALPHA>();
         }
     }
 
     fn partial_sbox_layer(state: &mut [F; WIDTH]) {
-        state[0] = state[0].exp_u64(ALPHA);
+        state[0] = state[0].exp_const_u64::<ALPHA>();
     }
 
     fn constant_layer(&self, state: &mut [F; WIDTH], round: usize) {
