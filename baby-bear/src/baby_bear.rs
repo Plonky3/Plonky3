@@ -201,9 +201,9 @@ impl Add for BabyBear {
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let mut sum = self.value + rhs.value;
-        let (sum_minus_P, over) = sum.overflowing_sub(P);
+        let (corr_sum, over) = sum.overflowing_sub(P);
         if !over {
-            sum = sum_minus_P;
+            sum = corr_sum;
         }
         Self { value: sum }
     }
