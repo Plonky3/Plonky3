@@ -56,7 +56,7 @@ pub trait AbstractField:
 
     #[must_use]
     fn cube(&self) -> Self {
-        self.clone() * self.clone() * self.clone()
+        self.square() * self.clone()
     }
 
     #[must_use]
