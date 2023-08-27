@@ -27,7 +27,6 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 
 #[test]
-#[ignore] // TODO: Not quite working yet.
 fn test_prove_goldilocks() {
     type Val = Goldilocks;
     type Domain = Goldilocks;
@@ -51,7 +50,7 @@ fn test_prove_goldilocks() {
 
     type Challenger = DuplexChallenger<Val, Perm, 8>;
 
-    type Quotient = QuotientMmcs<Domain, MyMmcs>;
+    type Quotient = QuotientMmcs<Domain, Challenge, MyMmcs>;
     type MyFriConfig = FriConfigImpl<Val, Domain, Challenge, Quotient, MyMmcs, Challenger>;
     let fri_config = MyFriConfig::new(40, mmcs.clone());
     let ldt = FriLdt { config: fri_config };

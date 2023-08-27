@@ -151,7 +151,7 @@ where
         challenger,
     );
     let trace_local = opened_values[0][0][0].clone();
-    let trace_next = opened_values[0][0][1].clone();
+    let trace_next = opened_values[0][1][0].clone();
     let quotient_chunks = opened_values[1][0][0].clone();
     let opened_values = OpenedValues {
         trace_local,

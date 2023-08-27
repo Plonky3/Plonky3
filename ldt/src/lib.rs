@@ -27,7 +27,7 @@ where
     /// Prove that each column of each matrix in `codewords` is a codeword.
     fn prove(
         &self,
-        mmcs: &M,
+        mmcs: &[M],
         inputs: &[&M::ProverData],
         challenger: &mut Challenger,
     ) -> Self::Proof;

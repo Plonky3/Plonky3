@@ -23,6 +23,7 @@ pub trait StarkConfig {
     type Pcs: for<'a> UnivariatePcs<
         Self::Val,
         Self::Domain,
+        Self::Challenge,
         RowMajorMatrix<Self::Val>,
         Self::Challenger,
     >;
@@ -68,7 +69,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     Challenge::Packing: AbstractExtensionField<Domain::Packing>,
-    Pcs: for<'a> UnivariatePcs<Val, Domain, RowMajorMatrix<Val>, Challenger>,
+    Pcs: for<'a> UnivariatePcs<Val, Domain, Challenge, RowMajorMatrix<Val>, Challenger>,
     Dft: TwoAdicSubgroupDft<Domain> + TwoAdicSubgroupDft<Challenge>,
     Challenger: FieldChallenger<Val>
         + for<'a> CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
