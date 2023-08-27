@@ -115,8 +115,10 @@ impl Sub for PackedBabyBearNeon {
 }
 
 /// No-op. Prevents the compiler from deducing the value of the vector.
-/// This can be used to stop the compiler applying undesirable "optimizations", but also prevents
-/// nice things like constant folding.
+///
+/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
+/// and then read from the stack.
 #[inline]
 #[must_use]
 fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
@@ -127,9 +129,10 @@ fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
             inlateout(vreg) x => y,
             options(nomem, nostack, preserves_flags, pure),
         );
-        // Below is an attempt to tell the compiler the semantics of this so it can still do
-        // constant folding, etc. I've definitely seen constructs like it work, although it doesn't
-        // appear to do anything in this case?? I'm leaving it here in case LLVM gets smarter.
+        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
+        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
+        // what it does? The answer is that we still inhibit the transform we want to avoid, so
+        // apparently not. Idk, LLVM works in mysterious ways.
         if transmute::<_, [u32; 4]>(x) != transmute::<_, [u32; 4]>(y) {
             unreachable_unchecked();
         }
