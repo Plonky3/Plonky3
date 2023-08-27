@@ -1,13 +1,13 @@
 use p3_air::{Air, AirBuilder};
+use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2BowersFft;
 use p3_field::AbstractField;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
-use p3_goldilocks::Goldilocks;
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
-use p3_mds::goldilocks::MdsMatrixGoldilocks;
+use p3_mds::babybear::MdsMatrixBabyBear;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
@@ -27,11 +27,11 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 
 #[test]
-fn test_prove_goldilocks() {
-    type Val = Goldilocks;
-    type Domain = Goldilocks;
-    type Challenge = Goldilocks; // TODO
-    type Mds = MdsMatrixGoldilocks;
+fn test_prove_baby_bear() {
+    type Val = BabyBear;
+    type Domain = Val;
+    type Challenge = Val; // TODO
+    type Mds = MdsMatrixBabyBear;
 
     type Perm = Poseidon<Val, Mds, 8, 7>;
     let perm = Perm::new(5, 5, vec![Val::ONE; 120], Mds {});
