@@ -1,4 +1,6 @@
 use core::arch::aarch64::{self, uint32x4_t};
+use core::arch::asm;
+use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -110,6 +112,32 @@ impl Sub for PackedBabyBearNeon {
             Self::from_vector(res)
         }
     }
+}
+
+/// No-op. Prevents the compiler from deducing the value of the vector.
+///
+/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
+/// and then read from the stack.
+#[inline]
+#[must_use]
+fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
+    let y;
+    unsafe {
+        asm!(
+            "/*{0:v}*/",
+            inlateout(vreg) x => y,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
+        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
+        // what it does? The answer is that we still inhibit the transform we want to avoid, so
+        // apparently not. Idk, LLVM works in mysterious ways.
+        if transmute::<_, [u32; 4]>(x) != transmute::<_, [u32; 4]>(y) {
+            unreachable_unchecked();
+        }
+    }
+    y
 }
 
 /// Add two vectors of Baby Bear field elements in canonical form.
@@ -282,7 +310,10 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let diff = aarch64::vsubq_u32(lhs, rhs);
         let underflow = aarch64::vcltq_u32(lhs, rhs);
-        aarch64::vmlsq_u32(diff, underflow, P)
+        // We really want to emit a `mls` instruction here. The compiler knows that `underflow` is
+        // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
+        // The `confuse_compiler` prevents this "optimization".
+        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), P)
     }
 }
 
