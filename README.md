@@ -18,7 +18,7 @@ Fields:
   - [ ] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
-  - [ ] NEON
+  - [x] NEON
 - [x] Goldilocks
   - [ ] ~128 bit extension field
   - [ ] AVX2
@@ -29,15 +29,14 @@ Vector-ish commitment schemes
 - [x] generalized Merkle tree
 
 Polynomial commitment schemes
-- [ ] FRI-based PCS
+- [x] FRI-based PCS
 - [ ] tensor PCS
 - [ ] univariate-to-multivariate adapter
 - [ ] multivariate-to-univariate adapter
 
 PIOPs
-- [ ] STARK
-  - [ ] univariate
-  - [ ] multivariate
+- [x] univariate STARK
+- [ ] multivariate STARK
 - [ ] PLONK
 
 Codes
