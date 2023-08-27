@@ -33,33 +33,30 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
-pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
-pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
-pub type OpenedValuesForPoint<F> = Vec<F>;
+pub type OpenedValuesForRound<F> = Vec<OpenedValuesForPoint<F>>;
+pub type OpenedValuesForPoint<F> = Vec<OpenedValuesForMatrix<F>>;
+pub type OpenedValuesForMatrix<F> = Vec<F>;
 
-pub trait UnivariatePcs<Val, Domain, In, Challenger>: Pcs<Val, In>
+pub trait UnivariatePcs<Val, Domain, EF, In, Challenger>: Pcs<Val, In>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Domain>,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
-    fn open_multi_batches<EF>(
+    fn open_multi_batches(
         &self,
         prover_data_and_points: &[(&Self::ProverData, &[EF])],
         challenger: &mut Challenger,
-    ) -> (OpenedValues<EF>, Self::Proof)
-    where
-        EF: ExtensionField<Domain> + TwoAdicField;
+    ) -> (OpenedValues<EF>, Self::Proof);
 
-    fn verify_multi_batches<EF>(
+    fn verify_multi_batches(
         &self,
         commits_and_points: &[(Self::Commitment, &[EF])],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
-    ) -> Result<(), Self::Error>
-    where
-        EF: ExtensionField<Domain> + TwoAdicField;
+    ) -> Result<(), Self::Error>;
 }
 
 pub trait MultivariatePcs<Val, In, Challenger>: Pcs<Val, In>

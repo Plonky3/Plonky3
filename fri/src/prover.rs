@@ -14,13 +14,14 @@ use crate::{FriConfig, FriProof, QueryProof};
 
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
-    input_mmcs: &FC::InputMmcs,
+    input_mmcs: &[FC::InputMmcs],
     input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
-    let n = input_commits
+    let n = input_mmcs
         .iter()
-        .map(|commit| input_mmcs.get_max_height(commit))
+        .zip(input_commits)
+        .map(|(mmcs, commit)| mmcs.get_max_height(commit))
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
     let log_n = log2_strict_usize(n);
@@ -47,14 +48,15 @@ pub(crate) fn prove<FC: FriConfig>(
 
 fn answer_query<FC: FriConfig>(
     config: &FC,
-    input_mmcs: &FC::InputMmcs,
+    input_mmcs: &[FC::InputMmcs],
     input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
-    let input_openings = input_commits
+    let input_openings = input_mmcs
         .iter()
-        .map(|commit| input_mmcs.open_batch(index, commit))
+        .zip(input_commits)
+        .map(|(mmcs, commit)| mmcs.open_batch(index, commit))
         .collect();
     let commit_phase_openings = commit_phase_commits
         .iter()
@@ -69,13 +71,14 @@ fn answer_query<FC: FriConfig>(
 
 fn commit_phase<FC: FriConfig>(
     config: &FC,
-    input_mmcs: &FC::InputMmcs,
+    input_mmcs: &[FC::InputMmcs],
     input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
-    let inputs_by_desc_height = input_commits
+    let inputs_by_desc_height = input_mmcs
         .iter()
-        .flat_map(|commit| input_mmcs.get_matrices(commit))
+        .zip(input_commits)
+        .flat_map(|(mmcs, commit)| mmcs.get_matrices(commit))
         .sorted_by_key(|mat| Reverse(mat.height()))
         .group_by(|mat| mat.height());
     let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();

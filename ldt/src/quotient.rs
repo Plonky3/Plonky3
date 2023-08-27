@@ -1,57 +1,71 @@
 use alloc::vec::Vec;
+use core::fmt::Debug;
+use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_commit::{Dimensions, Mmcs};
-use p3_field::TwoAdicField;
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
 /// A wrapper around an Inner MMCS, which transforms each inner value to
 /// `(inner - opened_point) / (x - opened_eval)`.
+///
+/// Since there can be multiple opening points, for each matrix, this transforms an inner opened row
+/// into a concatenation of rows, transformed as above, for each point.
 #[derive(Clone)]
-pub struct QuotientMmcs<F, Inner: Mmcs<F>> {
-    pub inner: Inner,
+pub struct QuotientMmcs<F, EF, Inner: Mmcs<F>> {
+    pub(crate) inner: Inner,
+
     /// For each matrix, a list of claimed openings, one for each point that we open that batch of
     /// polynomials at.
-    pub openings: Vec<Vec<Opening<F>>>,
+    pub(crate) openings: Vec<Vec<Opening<EF>>>,
+
+    pub(crate) _phantom_f: PhantomData<F>,
 }
 
 /// A claimed opening.
 #[derive(Clone)]
-pub struct Opening<F> {
-    pub point: F,
-    pub values: Vec<F>,
+pub(crate) struct Opening<F> {
+    pub(crate) point: F,
+    pub(crate) values: Vec<F>,
 }
 
-impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
+impl<F: TwoAdicField, EF: ExtensionField<F>, Inner: Mmcs<F>> Mmcs<EF>
+    for QuotientMmcs<F, EF, Inner>
+{
     type ProverData = Inner::ProverData;
     type Commitment = Inner::Commitment;
     type Proof = Inner::Proof;
     type Error = Inner::Error;
-    type Mat<'a> = QuotientMatrix<F, Inner::Mat<'a>> where Self: 'a;
+    type Mat<'a> = QuotientMatrix<F, EF, Inner::Mat<'a>> where Self: 'a;
 
     fn open_batch(
         &self,
         index: usize,
         prover_data: &Self::ProverData,
-    ) -> (Vec<Vec<F>>, Self::Proof) {
-        let (values, proof) = self.inner.open_batch(index, prover_data);
+    ) -> (Vec<Vec<EF>>, Self::Proof) {
+        let (inner_values, proof) = self.inner.open_batch(index, prover_data);
         let matrix_heights = self.inner.get_matrix_heights(prover_data);
         let max_height = *matrix_heights.iter().max().unwrap();
         let log_max_height = log2_strict_usize(max_height);
 
-        let quotients = izip!(values, self.openings.clone(), matrix_heights)
-            .map(|(row, openings, height)| {
+        let quotients = izip!(inner_values, self.openings.clone(), matrix_heights)
+            .map(|(inner_row, openings_for_mat, height)| {
                 let log2_height = log2_strict_usize(height);
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
                 let x = F::primitive_root_of_unity(log2_height).exp_u64(reduced_index as u64);
-                row.into_iter()
-                    .enumerate()
-                    .flat_map(|(i, eval)| {
-                        openings
+                openings_for_mat
+                    .iter()
+                    .flat_map(|Opening { point, values }| {
+                        inner_row
                             .iter()
-                            .map(move |Opening { point, values }| (eval - values[i]) / (x - *point))
+                            .zip(values)
+                            .map(|(&inner_value, &opened_value)| {
+                                (EF::from_base(inner_value) - opened_value)
+                                    / (EF::from_base(x) - *point)
+                            })
                     })
                     .collect()
             })
@@ -84,7 +98,7 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_quotient_values: Vec<Vec<F>>,
+        opened_quotient_values: Vec<Vec<EF>>,
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         // quotient = (original - opened_eval) / (x - opened_point)
@@ -96,30 +110,28 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
             .max()
             .unwrap();
 
-        let opened_original_values = opened_quotient_values
-            .into_iter()
-            .zip(dimensions)
-            .enumerate()
-            .map(|(i, (quotient_row, dims))| {
+        let opened_original_values = izip!(opened_quotient_values, &self.openings, dimensions)
+            .map(|(quotient_row, openings, dims)| {
                 let bits_reduced = log_max_height - dims.log2_height;
                 let reduced_index = index >> bits_reduced;
                 let x = F::primitive_root_of_unity(dims.log2_height).exp_u64(reduced_index as u64);
 
-                let openings = &self.openings[i];
-                quotient_row
-                    .chunks(openings.len())
-                    .enumerate()
-                    .map(|(poly_index, chunk)| {
-                        let mut originals =
-                            chunk.iter().zip_eq(openings).map(|(&quotient, opening)| {
-                                quotient * (x - opening.point) + opening.values[poly_index]
-                            });
-                        // They should all agree.
-                        let first = originals.next().unwrap();
-                        assert!(originals.all(|o| o == first));
-                        first
+                let original_width = quotient_row.len() / openings.len();
+                let original_row_repeated: Vec<Vec<EF>> = quotient_row
+                    .chunks(original_width)
+                    .zip(openings)
+                    .map(|(quotient_row_chunk, opening)| {
+                        quotient_row_chunk
+                            .iter()
+                            .zip(&opening.values)
+                            .map(|(&quotient_value, &opened_value)| {
+                                quotient_value * (EF::from_base(x) - opening.point) + opened_value
+                            })
+                            .collect_vec()
                     })
-                    .collect()
+                    .collect_vec();
+                let original_row = get_repeated(original_row_repeated.into_iter());
+                to_base::<F, EF>(original_row)
             })
             .collect();
 
@@ -128,13 +140,13 @@ impl<F: TwoAdicField, Inner: Mmcs<F>> Mmcs<F> for QuotientMmcs<F, Inner> {
     }
 }
 
-pub struct QuotientMatrix<F, Inner: MatrixRows<F>> {
+pub struct QuotientMatrix<F, EF, Inner: MatrixRows<F>> {
     inner: Inner,
     subgroup: Vec<F>,
-    openings: Vec<Opening<F>>,
+    openings: Vec<Opening<EF>>,
 }
 
-impl<F, Inner: MatrixRows<F>> Matrix<F> for QuotientMatrix<F, Inner> {
+impl<F, EF, Inner: MatrixRows<F>> Matrix<EF> for QuotientMatrix<F, EF, Inner> {
     fn width(&self) -> usize {
         self.inner.width() * self.openings.len()
     }
@@ -144,9 +156,11 @@ impl<F, Inner: MatrixRows<F>> Matrix<F> for QuotientMatrix<F, Inner> {
     }
 }
 
-impl<F: TwoAdicField, Inner: MatrixRows<F>> MatrixRows<F> for QuotientMatrix<F, Inner> {
+impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRows<F>> MatrixRows<EF>
+    for QuotientMatrix<F, EF, Inner>
+{
     // TODO: Probably better to implement a custom iterator to avoid allocation...
-    type Row<'a> = Vec<F> where Inner: 'a;
+    type Row<'a> = Vec<EF> where Inner: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         let x = self.subgroup[r];
@@ -155,10 +169,34 @@ impl<F: TwoAdicField, Inner: MatrixRows<F>> MatrixRows<F> for QuotientMatrix<F, 
             .into_iter()
             .enumerate()
             .flat_map(|(i, eval)| {
-                self.openings
-                    .iter()
-                    .map(move |Opening { point, values }| (eval - values[i]) / (x - *point))
+                self.openings.iter().map(move |Opening { point, values }| {
+                    let val: EF = values[i];
+                    let num: EF = EF::from_base(eval) - val;
+                    let den: EF = EF::from_base(x) - *point;
+                    num / den
+                })
             })
             .collect()
     }
+}
+
+/// Checks that the given iterator contains repetitions of a single item, and return that item.
+fn get_repeated<T: Eq + Debug, I: Iterator<Item = T>>(mut iter: I) -> T {
+    let first = iter.next().expect("get_repeated on empty iterator");
+    for x in iter {
+        assert_eq!(x, first, "{:?} != {:?}", x, first);
+    }
+    first
+}
+
+fn to_base<F: Field, EF: ExtensionField<F>>(vec: Vec<EF>) -> Vec<F> {
+    vec.into_iter()
+        .map(|x| {
+            let base = x.as_base_slice();
+            for b in &base[1..] {
+                assert!(b.is_zero());
+            }
+            base[0]
+        })
+        .collect()
 }
