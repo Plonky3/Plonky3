@@ -200,7 +200,7 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {}
 
 impl<Base: Field, Ext: Field + AbstractExtensionField<Base>> ExtensionField<Base> for Ext {}
 
-impl<F: Field> AbstractExtensionField<F> for F {
+impl<F: AbstractField> AbstractExtensionField<F> for F {
     const D: usize = 1;
 
     fn from_base(b: F) -> Self {
@@ -209,7 +209,7 @@ impl<F: Field> AbstractExtensionField<F> for F {
 
     fn from_base_slice(bs: &[F]) -> Self {
         assert_eq!(bs.len(), 1);
-        bs[0]
+        bs[0].clone()
     }
 
     fn as_base_slice(&self) -> &[F] {
