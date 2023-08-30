@@ -1,7 +1,7 @@
 use p3_air::{Air, AirBuilder};
 use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
-use p3_dft::Radix2BowersGT;
+use p3_dft::Radix2Bowers;
 use p3_field::AbstractField;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
 use p3_ldt::QuotientMmcs;
@@ -45,7 +45,7 @@ fn test_prove_baby_bear() {
     type MyMmcs = MerkleTreeMmcs<Val, [Val; 4], H4, C>;
     let mmcs = MyMmcs::new(h4, c);
 
-    type Dft = Radix2BowersGT;
+    type Dft = Radix2Bowers;
     let dft = Dft {};
 
     type Challenger = DuplexChallenger<Val, Perm, 8>;

@@ -1,3 +1,4 @@
+use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -21,7 +22,9 @@ pub(crate) fn swap_rows<F>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
     row_i.swap_with_slice(row_j);
 }
 
+#[inline]
 pub(crate) fn reverse_bits(x: usize, n: usize) -> usize {
+    debug_assert!(n.is_power_of_two());
     // NB: The only reason we need overflowing_shr() here as opposed
     // to plain '>>' is to accommodate the case n == num_bits == 0,
     // which would become `0 >> 64`. Rust thinks that any shift of 64
@@ -29,4 +32,11 @@ pub(crate) fn reverse_bits(x: usize, n: usize) -> usize {
     x.reverse_bits()
         .overflowing_shr(usize::BITS - n.trailing_zeros())
         .0
+}
+
+/// Divide each coefficient of the given matrix by its height.
+pub(crate) fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
+    let h = mat.height();
+    let h_inv = F::from_canonical_usize(h).inverse();
+    mat.values.iter_mut().for_each(|coeff| *coeff *= h_inv);
 }

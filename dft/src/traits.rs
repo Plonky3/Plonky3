@@ -4,7 +4,7 @@ use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
-use crate::util::swap_rows;
+use crate::util::{divide_by_height, swap_rows};
 
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone {
     /// Compute the discrete Fourier transform (DFT) `vec`.
@@ -50,8 +50,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone {
         let mut dft = self.dft_batch(mat);
         let h = dft.height();
 
-        let inv_height = F::from_canonical_usize(h).inverse();
-        dft.values.iter_mut().for_each(|coeff| *coeff *= inv_height);
+        divide_by_height(&mut dft);
 
         for row in 1..h / 2 {
             swap_rows(&mut dft, row, h - row);
