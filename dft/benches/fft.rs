@@ -2,7 +2,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2BowersFft, Radix2DitFft, TwoAdicSubgroupDft};
+use p3_dft::{Radix2BowersGT, Radix2DitFft, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
@@ -11,9 +11,9 @@ use rand::thread_rng;
 
 fn bench_fft(c: &mut Criterion) {
     fft::<BabyBear, Radix2DitFft, 10>(c);
-    fft::<BabyBear, Radix2BowersFft, 10>(c);
+    fft::<BabyBear, Radix2BowersGT, 10>(c);
     fft::<Goldilocks, Radix2DitFft, 10>(c);
-    fft::<Goldilocks, Radix2BowersFft, 10>(c);
+    fft::<Goldilocks, Radix2BowersGT, 10>(c);
 
     ifft::<Goldilocks, Radix2DitFft, 10>(c);
 }

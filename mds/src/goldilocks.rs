@@ -4,7 +4,7 @@
 //! Supported sizes: 8, 12, 16, 24, 32, 64, 68.
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
-use p3_dft::Radix2BowersFft;
+use p3_dft::Radix2BowersGT;
 use p3_goldilocks::Goldilocks;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
@@ -17,7 +17,7 @@ use crate::MdsPermutation;
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
 
-const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
+const FFT_ALGO: Radix2BowersGT = Radix2BowersGT {};
 
 impl CryptographicPermutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {

@@ -6,7 +6,7 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::util::reverse_matrix_index_bits;
-use crate::TwoAdicSubgroupDft;
+use crate::{dit_butterfly, TwoAdicSubgroupDft};
 
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]
@@ -47,19 +47,6 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, layer: usize, root: F) {
             let neighbor = k + half_block_size;
             dit_butterfly(mat, k, neighbor, root_power);
         }
-    }
-}
-
-#[inline]
-fn dit_butterfly<F: Field>(mat: &mut RowMajorMatrix<F>, row_1: usize, row_2: usize, root_power: F) {
-    let RowMajorMatrix { values, width } = mat;
-    for col in 0..*width {
-        let idx_1 = row_1 * *width + col;
-        let idx_2 = row_2 * *width + col;
-        let val_1 = values[idx_1];
-        let val_2 = values[idx_2] * root_power;
-        values[idx_1] = val_1 + val_2;
-        values[idx_2] = val_1 - val_2;
     }
 }
 

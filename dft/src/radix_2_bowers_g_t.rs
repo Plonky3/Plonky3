@@ -6,14 +6,14 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::util::{reverse_bits, reverse_matrix_index_bits};
-use crate::TwoAdicSubgroupDft;
+use crate::{dit_butterfly, TwoAdicSubgroupDft};
 
 /// The Bowers G^T FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
 #[derive(Default, Clone)]
-pub struct Radix2BowersFft;
+pub struct Radix2BowersGT;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2BowersFft {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2BowersGT {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -42,21 +42,8 @@ fn bowers_layer<F: Field>(mat: &mut RowMajorMatrix<F>, log_half_block_size: usiz
         let twiddle = twiddles[reverse_bits(block, num_blocks) * half_block_size];
         for butterfly_hi in block_start..block_start + half_block_size {
             let butterfly_lo = butterfly_hi + half_block_size;
-            bowers_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
+            dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
         }
-    }
-}
-
-#[inline]
-fn bowers_butterfly<F: Field>(mat: &mut RowMajorMatrix<F>, row_1: usize, row_2: usize, twiddle: F) {
-    let RowMajorMatrix { values, width } = mat;
-    for col in 0..*width {
-        let idx_1 = row_1 * *width + col;
-        let idx_2 = row_2 * *width + col;
-        let val_1 = values[idx_1];
-        let val_2 = values[idx_2] * twiddle;
-        values[idx_1] = val_1 + val_2;
-        values[idx_2] = val_1 - val_2;
     }
 }
 
@@ -67,7 +54,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::radix_2_bowers::Radix2BowersFft;
+    use crate::radix_2_bowers_g_t::Radix2BowersGT;
     use crate::{NaiveDft, TwoAdicSubgroupDft};
 
     #[test]
@@ -76,8 +63,8 @@ mod tests {
         let mut rng = thread_rng();
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
         let dft_naive = NaiveDft.dft_batch(mat.clone());
-        let dft_radix_2_bowers = Radix2BowersFft.dft_batch(mat);
-        assert_eq!(dft_naive, dft_radix_2_bowers);
+        let dft_bowers_gt = Radix2BowersGT.dft_batch(mat);
+        assert_eq!(dft_naive, dft_bowers_gt);
     }
 
     #[test]
@@ -85,8 +72,8 @@ mod tests {
         type F = Goldilocks;
         let mut rng = thread_rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft = Radix2BowersFft.dft_batch(original.clone());
-        let idft = Radix2BowersFft.idft_batch(dft);
+        let dft = Radix2BowersGT.dft_batch(original.clone());
+        let idft = Radix2BowersGT.idft_batch(dft);
         assert_eq!(original, idft);
     }
 }
