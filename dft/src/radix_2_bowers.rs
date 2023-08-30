@@ -6,7 +6,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::util::{divide_by_height, reverse_bits, reverse_matrix_index_bits};
+use crate::util::{
+    divide_by_height, reverse_bits, reverse_matrix_index_bits, reverse_slice_index_bits,
+};
 use crate::{dif_butterfly, dit_butterfly, TwoAdicSubgroupDft};
 
 /// The Bowers G FFT algorithm.
@@ -67,7 +69,8 @@ fn dft_input_reversed<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     let log_h = log2_strict_usize(h);
 
     let root = F::primitive_root_of_unity(log_h);
-    let twiddles: Vec<F> = root.powers().take(h / 2).collect();
+    let mut twiddles: Vec<F> = root.powers().take(h / 2).collect();
+    reverse_slice_index_bits(&mut twiddles);
 
     bowers_g(mat, &twiddles);
 }
@@ -77,7 +80,8 @@ fn idft_output_reversed<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     let log_h = log2_strict_usize(h);
 
     let root_inv = F::primitive_root_of_unity(log_h).inverse();
-    let twiddles: Vec<F> = root_inv.powers().take(h / 2).collect();
+    let mut twiddles: Vec<F> = root_inv.powers().take(h / 2).collect();
+    reverse_slice_index_bits(&mut twiddles);
 
     bowers_g_t(mat, &twiddles);
     divide_by_height(mat);
@@ -132,12 +136,10 @@ fn bowers_g_layer<F: Field>(
     let h = mat.height();
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
-    let block_size = 1 << log_block_size;
     let num_blocks = h >> log_block_size;
 
-    for block in 0..num_blocks {
-        let block_start = block * block_size;
-        let twiddle = twiddles[reverse_bits(block, num_blocks) * half_block_size];
+    for (block, &twiddle) in twiddles.iter().enumerate().take(num_blocks) {
+        let block_start = block << log_block_size;
         for butterfly_hi in block_start..block_start + half_block_size {
             let butterfly_lo = butterfly_hi + half_block_size;
             dif_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
@@ -154,12 +156,10 @@ fn bowers_g_t_layer<F: Field>(
     let h = mat.height();
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
-    let block_size = 1 << log_block_size;
     let num_blocks = h >> log_block_size;
 
-    for block in 0..num_blocks {
-        let block_start = block * block_size;
-        let twiddle = twiddles[reverse_bits(block, num_blocks) * half_block_size];
+    for (block, &twiddle) in twiddles.iter().enumerate().take(num_blocks) {
+        let block_start = block << log_block_size;
         for butterfly_hi in block_start..block_start + half_block_size {
             let butterfly_lo = butterfly_hi + half_block_size;
             dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);

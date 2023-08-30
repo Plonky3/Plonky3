@@ -2,6 +2,17 @@ use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
+pub(crate) fn reverse_slice_index_bits<F>(vals: &mut [F]) {
+    let n = vals.len();
+    assert!(n.is_power_of_two());
+    for i in 0..n {
+        let j = reverse_bits(i, n);
+        if i < j {
+            vals.swap(i, j);
+        }
+    }
+}
+
 pub(crate) fn reverse_matrix_index_bits<F>(vals: &mut RowMajorMatrix<F>) {
     let h = vals.height();
     assert!(h.is_power_of_two());
