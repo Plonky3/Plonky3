@@ -16,3 +16,4 @@ pub use naive::*;
 pub use radix_2_bowers::*;
 pub use radix_2_dit::*;
 pub use traits::*;
+pub use util::*;

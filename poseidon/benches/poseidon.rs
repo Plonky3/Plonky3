@@ -5,6 +5,7 @@ use p3_baby_bear::BabyBear;
 use p3_field::PrimeField64;
 use p3_goldilocks::Goldilocks;
 use p3_mds::babybear::MdsMatrixBabyBear;
+use p3_mds::coset_mds::CosetMds;
 use p3_mds::goldilocks::MdsMatrixGoldilocks;
 use p3_mds::mersenne31::MdsMatrixMersenne31;
 use p3_mds::MdsPermutation;
@@ -17,7 +18,7 @@ use rand::thread_rng;
 fn bench_poseidon(c: &mut Criterion) {
     poseidon::<BabyBear, MdsMatrixBabyBear, 16, 7>(c);
     poseidon::<BabyBear, MdsMatrixBabyBear, 24, 7>(c);
-    poseidon::<BabyBear, MdsMatrixBabyBear, 32, 7>(c);
+    poseidon::<BabyBear, CosetMds<BabyBear, 32>, 32, 7>(c);
 
     poseidon::<Goldilocks, MdsMatrixGoldilocks, 8, 7>(c);
     poseidon::<Goldilocks, MdsMatrixGoldilocks, 12, 7>(c);
