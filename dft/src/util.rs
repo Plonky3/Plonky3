@@ -4,6 +4,10 @@ use p3_matrix::Matrix;
 
 pub(crate) fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let n = vals.len();
+    if n == 0 {
+        return;
+    }
+
     assert!(n.is_power_of_two());
     for i in 0..n {
         let j = reverse_bits(i, n);

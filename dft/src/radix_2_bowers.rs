@@ -208,50 +208,65 @@ mod tests {
     fn dft_matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft_naive = NaiveDft.dft_batch(mat.clone());
-        let dft_bowers = Radix2Bowers.dft_batch(mat);
-        assert_eq!(dft_naive, dft_bowers);
+        for log_h in 0..5 {
+            let h = 1 << log_h;
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+            let dft_naive = NaiveDft.dft_batch(mat.clone());
+            let dft_bowers = Radix2Bowers.dft_batch(mat);
+            assert_eq!(dft_naive, dft_bowers);
+        }
     }
 
     #[test]
     fn idft_matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let idft_naive = NaiveDft.idft_batch(mat.clone());
-        let idft_bowers = Radix2Bowers.idft_batch(mat);
-        assert_eq!(idft_naive, idft_bowers);
+        for log_h in 0..5 {
+            let h = 1 << log_h;
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+            let idft_naive = NaiveDft.idft_batch(mat.clone());
+            let idft_bowers = Radix2Bowers.idft_batch(mat);
+            assert_eq!(idft_naive, idft_bowers);
+        }
     }
 
     #[test]
     fn lde_matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let lde_naive = NaiveDft.lde_batch(mat.clone(), 1);
-        let lde_bowers = Radix2Bowers.lde_batch(mat, 1);
-        assert_eq!(lde_naive, lde_bowers);
+        for log_h in 0..5 {
+            let h = 1 << log_h;
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+            let lde_naive = NaiveDft.lde_batch(mat.clone(), 1);
+            let lde_bowers = Radix2Bowers.lde_batch(mat, 1);
+            assert_eq!(lde_naive, lde_bowers);
+        }
     }
 
     #[test]
     fn coset_lde_matches_naive() {
         type F = BabyBear;
         let mut rng = thread_rng();
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let shift = F::multiplicative_group_generator();
-        let coset_lde_naive = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
-        let coset_lde_bowers = Radix2Bowers.coset_lde_batch(mat, 1, shift);
-        assert_eq!(coset_lde_naive, coset_lde_bowers);
+        for log_h in 0..5 {
+            let h = 1 << log_h;
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+            let shift = F::multiplicative_group_generator();
+            let coset_lde_naive = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
+            let coset_lde_bowers = Radix2Bowers.coset_lde_batch(mat, 1, shift);
+            assert_eq!(coset_lde_naive, coset_lde_bowers);
+        }
     }
 
     #[test]
     fn dft_idft_consistency() {
         type F = Goldilocks;
         let mut rng = thread_rng();
-        let original = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft = Radix2Bowers.dft_batch(original.clone());
-        let idft = Radix2Bowers.idft_batch(dft);
-        assert_eq!(original, idft);
+        for log_h in 0..5 {
+            let h = 1 << log_h;
+            let original = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+            let dft = Radix2Bowers.dft_batch(original.clone());
+            let idft = Radix2Bowers.idft_batch(dft);
+            assert_eq!(original, idft);
+        }
     }
 }
