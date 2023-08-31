@@ -138,7 +138,13 @@ fn bowers_g_layer<F: Field>(
     let half_block_size = 1 << log_half_block_size;
     let num_blocks = h >> log_block_size;
 
-    for (block, &twiddle) in twiddles.iter().enumerate().take(num_blocks) {
+    // Unroll first iteration with twiddle o=1.
+    for butterfly_hi in 0..half_block_size {
+        let butterfly_lo = butterfly_hi + half_block_size;
+        butterfly_twiddle_one(mat, butterfly_hi, butterfly_lo);
+    }
+
+    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
         let block_start = block << log_block_size;
         for butterfly_hi in block_start..block_start + half_block_size {
             let butterfly_lo = butterfly_hi + half_block_size;
@@ -158,12 +164,32 @@ fn bowers_g_t_layer<F: Field>(
     let half_block_size = 1 << log_half_block_size;
     let num_blocks = h >> log_block_size;
 
-    for (block, &twiddle) in twiddles.iter().enumerate().take(num_blocks) {
+    // Unroll first iteration with twiddle o=1.
+    for butterfly_hi in 0..half_block_size {
+        let butterfly_lo = butterfly_hi + half_block_size;
+        butterfly_twiddle_one(mat, butterfly_hi, butterfly_lo);
+    }
+
+    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
         let block_start = block << log_block_size;
         for butterfly_hi in block_start..block_start + half_block_size {
             let butterfly_lo = butterfly_hi + half_block_size;
             dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
         }
+    }
+}
+
+/// Butterfly with twiddle factor 1 (works in either DIT or DIF).
+#[inline]
+fn butterfly_twiddle_one<F: Field>(mat: &mut RowMajorMatrix<F>, row_1: usize, row_2: usize) {
+    let RowMajorMatrix { values, width } = mat;
+    for col in 0..*width {
+        let idx_1 = row_1 * *width + col;
+        let idx_2 = row_2 * *width + col;
+        let val_1 = values[idx_1];
+        let val_2 = values[idx_2];
+        values[idx_1] = val_1 + val_2;
+        values[idx_2] = val_1 - val_2;
     }
 }
 
