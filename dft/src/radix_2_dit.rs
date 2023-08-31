@@ -10,9 +10,9 @@ use crate::{dit_butterfly, TwoAdicSubgroupDft};
 
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]
-pub struct Radix2DitFft;
+pub struct Radix2Dit;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitFft {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -57,7 +57,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDft, Radix2DitFft, TwoAdicSubgroupDft};
+    use crate::{NaiveDft, Radix2Dit, TwoAdicSubgroupDft};
 
     #[test]
     fn matches_naive() {
@@ -65,7 +65,7 @@ mod tests {
         let mut rng = thread_rng();
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
         let dft_naive = NaiveDft.dft_batch(mat.clone());
-        let dft_radix_2_dit = Radix2DitFft.dft_batch(mat);
+        let dft_radix_2_dit = Radix2Dit.dft_batch(mat);
         assert_eq!(dft_naive, dft_radix_2_dit);
     }
 
@@ -74,8 +74,8 @@ mod tests {
         type F = Goldilocks;
         let mut rng = thread_rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft = Radix2DitFft.dft_batch(original.clone());
-        let idft = Radix2DitFft.idft_batch(dft);
+        let dft = Radix2Dit.dft_batch(original.clone());
+        let idft = Radix2Dit.idft_batch(dft);
         assert_eq!(original, idft);
     }
 }
