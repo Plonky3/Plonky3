@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, TwoAdicField};
+use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
@@ -19,21 +19,23 @@ pub struct Radix2Bowers;
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         reverse_matrix_index_bits(&mut mat);
-        dft_input_reversed(&mut mat);
+        bowers_g(&mut mat);
         mat
     }
 
     /// Compute the inverse DFT of each column in `mat`.
     fn idft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        idft_output_reversed(&mut mat);
+        bowers_g_t(&mut mat);
+        divide_by_height(&mut mat);
         reverse_matrix_index_bits(&mut mat);
         mat
     }
 
     fn lde_batch(&self, mut mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
-        idft_output_reversed(&mut mat);
+        bowers_g_t(&mut mat);
+        divide_by_height(&mut mat);
         bit_reversed_zero_pad(&mut mat, added_bits);
-        dft_input_reversed(&mut mat);
+        bowers_g(&mut mat);
         mat
     }
 
@@ -44,27 +46,37 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         shift: F,
     ) -> RowMajorMatrix<F> {
         let h = mat.height();
+        let h_inv = F::from_canonical_usize(h).inverse();
 
-        idft_output_reversed(&mut mat);
+        bowers_g_t(&mut mat);
 
-        // Rescale coefficients; see the default impl for an explanation.
-        // The difference here is that we stay in bit-reversed order.
-        for (row, power) in shift.powers().take(h).enumerate() {
+        // Rescale coefficients in two ways:
+        // - divide by height (since we're doing an inverse DFT)
+        // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
+        let weights = Powers {
+            base: shift,
+            current: h_inv,
+        }
+        .take(h);
+        for (row, weight) in weights.enumerate() {
+            // reverse_bits because mat is encoded in bit-reversed order
             let row = mat.row_mut(reverse_bits(row, h));
             row.iter_mut().for_each(|coeff| {
-                *coeff *= power;
+                *coeff *= weight;
             })
         }
 
         bit_reversed_zero_pad(&mut mat, added_bits);
 
-        dft_input_reversed(&mut mat);
+        bowers_g(&mut mat);
 
         mat
     }
 }
 
-fn dft_input_reversed<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
+/// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
+/// bit-reversed order.
+fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -72,10 +84,15 @@ fn dft_input_reversed<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     let mut twiddles: Vec<F> = root.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
 
-    bowers_g(mat, &twiddles);
+    let log_h = log2_strict_usize(mat.height());
+    for log_half_block_size in 0..log_h {
+        bowers_g_layer(mat, log_half_block_size, &twiddles);
+    }
 }
 
-fn idft_output_reversed<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
+/// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
+/// 1/height, and the output is bit-reversed.
+fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -83,8 +100,10 @@ fn idft_output_reversed<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     let mut twiddles: Vec<F> = root_inv.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
 
-    bowers_g_t(mat, &twiddles);
-    divide_by_height(mat);
+    let log_h = log2_strict_usize(mat.height());
+    for log_half_block_size in (0..log_h).rev() {
+        bowers_g_t_layer(mat, log_half_block_size, &twiddles);
+    }
 }
 
 /// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,
@@ -112,21 +131,6 @@ fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: usiz
     *mat = RowMajorMatrix::new(values, w);
 }
 
-/// Bowers G FFT, minus the bit reversal.
-fn bowers_g<F: Field>(mat: &mut RowMajorMatrix<F>, twiddles: &[F]) {
-    let log_h = log2_strict_usize(mat.height());
-    for log_half_block_size in 0..log_h {
-        bowers_g_layer(mat, log_half_block_size, twiddles);
-    }
-}
-
-fn bowers_g_t<F: Field>(mat: &mut RowMajorMatrix<F>, twiddles: &[F]) {
-    let log_h = log2_strict_usize(mat.height());
-    for log_half_block_size in (0..log_h).rev() {
-        bowers_g_t_layer(mat, log_half_block_size, twiddles);
-    }
-}
-
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
 fn bowers_g_layer<F: Field>(
     mat: &mut RowMajorMatrix<F>,
@@ -138,7 +142,7 @@ fn bowers_g_layer<F: Field>(
     let half_block_size = 1 << log_half_block_size;
     let num_blocks = h >> log_block_size;
 
-    // Unroll first iteration with twiddle o=1.
+    // Unroll first iteration with a twiddle factor of 1.
     for butterfly_hi in 0..half_block_size {
         let butterfly_lo = butterfly_hi + half_block_size;
         butterfly_twiddle_one(mat, butterfly_hi, butterfly_lo);
@@ -164,7 +168,7 @@ fn bowers_g_t_layer<F: Field>(
     let half_block_size = 1 << log_half_block_size;
     let num_blocks = h >> log_block_size;
 
-    // Unroll first iteration with twiddle o=1.
+    // Unroll first iteration with a twiddle factor of 1.
     for butterfly_hi in 0..half_block_size {
         let butterfly_lo = butterfly_hi + half_block_size;
         butterfly_twiddle_one(mat, butterfly_hi, butterfly_lo);

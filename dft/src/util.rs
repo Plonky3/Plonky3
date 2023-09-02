@@ -2,7 +2,7 @@ use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
-pub(crate) fn reverse_slice_index_bits<F>(vals: &mut [F]) {
+pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let n = vals.len();
     if n == 0 {
         return;
@@ -28,18 +28,8 @@ pub(crate) fn reverse_matrix_index_bits<F>(vals: &mut RowMajorMatrix<F>) {
     }
 }
 
-/// Assumes `i < j`.
-pub(crate) fn swap_rows<F>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
-    let w = mat.width();
-    let (upper, lower) = mat.values.split_at_mut(j * w);
-    let row_i = &mut upper[i * w..(i + 1) * w];
-    let row_j = &mut lower[..w];
-    row_i.swap_with_slice(row_j);
-}
-
 #[inline]
-pub(crate) fn reverse_bits(x: usize, n: usize) -> usize {
-    debug_assert!(n.is_power_of_two());
+pub const fn reverse_bits(x: usize, n: usize) -> usize {
     // NB: The only reason we need overflowing_shr() here as opposed
     // to plain '>>' is to accommodate the case n == num_bits == 0,
     // which would become `0 >> 64`. Rust thinks that any shift of 64
@@ -47,6 +37,15 @@ pub(crate) fn reverse_bits(x: usize, n: usize) -> usize {
     x.reverse_bits()
         .overflowing_shr(usize::BITS - n.trailing_zeros())
         .0
+}
+
+/// Assumes `i < j`.
+pub(crate) fn swap_rows<F>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
+    let w = mat.width();
+    let (upper, lower) = mat.values.split_at_mut(j * w);
+    let row_i = &mut upper[i * w..(i + 1) * w];
+    let row_j = &mut lower[..w];
+    row_i.swap_with_slice(row_j);
 }
 
 /// Divide each coefficient of the given matrix by its height.
