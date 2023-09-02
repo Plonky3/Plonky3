@@ -10,15 +10,15 @@ use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_fft(c: &mut Criterion) {
-    fft::<BabyBear, Radix2Dit, 10>(c);
-    fft::<BabyBear, Radix2Bowers, 10>(c);
-    fft::<Goldilocks, Radix2Dit, 10>(c);
-    fft::<Goldilocks, Radix2Bowers, 10>(c);
+    fft::<BabyBear, Radix2Dit, 100>(c);
+    fft::<BabyBear, Radix2Bowers, 100>(c);
+    fft::<Goldilocks, Radix2Dit, 100>(c);
+    fft::<Goldilocks, Radix2Bowers, 100>(c);
 
-    ifft::<Goldilocks, Radix2Dit, 10>(c);
+    ifft::<Goldilocks, Radix2Dit, 100>(c);
 
-    coset_lde::<BabyBear, Radix2Bowers, 10>(c);
-    coset_lde::<Goldilocks, Radix2Bowers, 10>(c);
+    coset_lde::<BabyBear, Radix2Bowers, 100>(c);
+    coset_lde::<Goldilocks, Radix2Bowers, 100>(c);
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)

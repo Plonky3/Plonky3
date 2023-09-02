@@ -61,10 +61,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         .take(h);
         for (row, weight) in weights.enumerate() {
             // reverse_bits because mat is encoded in bit-reversed order
-            let row = mat.row_mut(reverse_bits(row, h));
-            row.iter_mut().for_each(|coeff| {
-                *coeff *= weight;
-            })
+            mat.scale_row(reverse_bits(row, h), weight);
         }
 
         bit_reversed_zero_pad(&mut mat, added_bits);
