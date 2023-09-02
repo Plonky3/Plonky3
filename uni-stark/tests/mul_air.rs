@@ -27,6 +27,9 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
 #[test]
 fn test_prove_baby_bear() {
+    const WIDTH: usize = 10;
+    const HEIGHT: usize = 1 << 8;
+
     type Val = BabyBear;
     type Domain = Val;
     type Challenge = Val; // TODO
@@ -60,7 +63,7 @@ fn test_prove_baby_bear() {
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>;
 
     let mut rng = thread_rng();
-    let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
+    let trace = RowMajorMatrix::rand(&mut rng, HEIGHT, WIDTH);
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft {});
     let mut challenger = Challenger::new(perm);

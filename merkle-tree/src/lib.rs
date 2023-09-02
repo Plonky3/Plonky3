@@ -48,7 +48,7 @@ impl<L, D> MerkleTree<L, D> {
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
         let max_height = leaves_largest_first.peek().unwrap().height();
-        let max_height_padded = log2_ceil_usize(max_height);
+        let max_height_padded = max_height.next_power_of_two();
 
         let tallest_matrices = leaves_largest_first
             .peeking_take_while(|m| m.height() == max_height)
