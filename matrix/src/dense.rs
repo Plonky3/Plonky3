@@ -103,6 +103,7 @@ impl<T> RowMajorMatrix<T> {
 
     /// Return a pair of rows, each in the form (prefix, shorts, suffix), as they would be returned
     /// by the `align_to_mut` method.
+    #[allow(clippy::type_complexity)]
     pub fn packing_aligned_rows(
         &mut self,
         row_1: usize,
