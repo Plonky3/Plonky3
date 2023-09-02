@@ -6,10 +6,11 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
+use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::util::{
     divide_by_height, reverse_bits, reverse_matrix_index_bits, reverse_slice_index_bits,
 };
-use crate::{dif_butterfly, dit_butterfly, TwoAdicSubgroupDft};
+use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
@@ -145,7 +146,7 @@ fn bowers_g_layer<F: Field>(
     // Unroll first iteration with a twiddle factor of 1.
     for butterfly_hi in 0..half_block_size {
         let butterfly_lo = butterfly_hi + half_block_size;
-        butterfly_twiddle_one(mat, butterfly_hi, butterfly_lo);
+        twiddle_free_butterfly(mat, butterfly_hi, butterfly_lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
@@ -171,7 +172,7 @@ fn bowers_g_t_layer<F: Field>(
     // Unroll first iteration with a twiddle factor of 1.
     for butterfly_hi in 0..half_block_size {
         let butterfly_lo = butterfly_hi + half_block_size;
-        butterfly_twiddle_one(mat, butterfly_hi, butterfly_lo);
+        twiddle_free_butterfly(mat, butterfly_hi, butterfly_lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
@@ -180,20 +181,6 @@ fn bowers_g_t_layer<F: Field>(
             let butterfly_lo = butterfly_hi + half_block_size;
             dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
         }
-    }
-}
-
-/// Butterfly with twiddle factor 1 (works in either DIT or DIF).
-#[inline]
-fn butterfly_twiddle_one<F: Field>(mat: &mut RowMajorMatrix<F>, row_1: usize, row_2: usize) {
-    let RowMajorMatrix { values, width } = mat;
-    for col in 0..*width {
-        let idx_1 = row_1 * *width + col;
-        let idx_2 = row_2 * *width + col;
-        let val_1 = values[idx_1];
-        let val_2 = values[idx_2];
-        values[idx_1] = val_1 + val_2;
-        values[idx_2] = val_1 - val_2;
     }
 }
 

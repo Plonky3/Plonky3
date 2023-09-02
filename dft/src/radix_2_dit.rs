@@ -5,8 +5,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
+use crate::butterflies::dit_butterfly;
 use crate::util::reverse_matrix_index_bits;
-use crate::{dit_butterfly, TwoAdicSubgroupDft};
+use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]

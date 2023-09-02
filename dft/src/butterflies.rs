@@ -3,7 +3,7 @@ use p3_matrix::dense::RowMajorMatrix;
 
 /// DIT butterfly.
 #[inline]
-pub fn dit_butterfly<F: Field>(
+pub(crate) fn dit_butterfly<F: Field>(
     mat: &mut RowMajorMatrix<F>,
     row_1: usize,
     row_2: usize,
@@ -22,7 +22,7 @@ pub fn dit_butterfly<F: Field>(
 
 /// DIF butterfly.
 #[inline]
-pub fn dif_butterfly<F: Field>(
+pub(crate) fn dif_butterfly<F: Field>(
     mat: &mut RowMajorMatrix<F>,
     row_1: usize,
     row_2: usize,
@@ -36,5 +36,23 @@ pub fn dif_butterfly<F: Field>(
         let val_2 = values[idx_2];
         values[idx_1] = val_1 + val_2;
         values[idx_2] = (val_1 - val_2) * twiddle;
+    }
+}
+
+/// Butterfly with twiddle factor 1 (works in either DIT or DIF).
+#[inline]
+pub(crate) fn twiddle_free_butterfly<F: Field>(
+    mat: &mut RowMajorMatrix<F>,
+    row_1: usize,
+    row_2: usize,
+) {
+    let RowMajorMatrix { values, width } = mat;
+    for col in 0..*width {
+        let idx_1 = row_1 * *width + col;
+        let idx_2 = row_2 * *width + col;
+        let val_1 = values[idx_1];
+        let val_2 = values[idx_2];
+        values[idx_1] = val_1 + val_2;
+        values[idx_2] = val_1 - val_2;
     }
 }
