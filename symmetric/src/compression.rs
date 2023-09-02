@@ -10,7 +10,7 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
     fn compress(&self, input: [T; N]) -> T;
 }
 
-/// An `n`-to-1 compression function.
+/// An `N`-to-1 compression function.
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
 #[derive(Clone)]

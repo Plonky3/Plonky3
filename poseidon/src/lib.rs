@@ -9,7 +9,6 @@ use alloc::vec::Vec;
 use p3_field::Field;
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
-use p3_symmetric::sponge::PaddingFreeSponge;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -132,6 +131,3 @@ where
     Mds: MdsPermutation<F, WIDTH>,
 {
 }
-
-pub type PaddingFreePoseidonSponge<F, Mds, const WIDTH: usize, const ALPHA: u64> =
-    PaddingFreeSponge<F, Poseidon<F, Mds, WIDTH, ALPHA>, WIDTH>;

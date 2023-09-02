@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_rescue_sponge() {
         let rescue_prime = new_rescue_prime_m31_default();
-        let rescue_sponge = PaddingFreeSponge::new(rescue_prime);
+        let rescue_sponge = PaddingFreeSponge::<_, _, WIDTH, 8, 6>::new(rescue_prime);
 
         let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(Mersenne31::from_canonical_u64);
 

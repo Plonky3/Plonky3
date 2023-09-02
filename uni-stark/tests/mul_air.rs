@@ -2,12 +2,11 @@ use p3_air::{Air, AirBuilder};
 use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2Bowers;
-use p3_field::AbstractField;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
-use p3_mds::babybear::MdsMatrixBabyBear;
+use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
@@ -31,24 +30,26 @@ fn test_prove_baby_bear() {
     type Val = BabyBear;
     type Domain = Val;
     type Challenge = Val; // TODO
-    type Mds = MdsMatrixBabyBear;
 
-    type Perm = Poseidon<Val, Mds, 8, 7>;
-    let perm = Perm::new(5, 5, vec![Val::ONE; 120], Mds {});
+    type MyMds = CosetMds<Val, 16>;
+    let mds = MyMds::default();
 
-    type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;
+    type Perm = Poseidon<Val, MyMds, 16, 5>;
+    let perm = Perm::new_from_rng(4, 22, mds, &mut thread_rng()); // TODO: Use deterministic RNG
+
+    type H4 = PaddingFreeSponge<Val, Perm, 16, 8, 8>;
     let h4 = H4::new(perm.clone());
 
-    type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
+    type C = TruncatedPermutation<Val, Perm, 2, 8, 16>;
     let c = C::new(perm.clone());
 
-    type MyMmcs = MerkleTreeMmcs<Val, [Val; 4], H4, C>;
+    type MyMmcs = MerkleTreeMmcs<Val, [Val; 8], H4, C>;
     let mmcs = MyMmcs::new(h4, c);
 
     type Dft = Radix2Bowers;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 8>;
+    type Challenger = DuplexChallenger<Val, Perm, 16>;
 
     type Quotient = QuotientMmcs<Domain, Challenge, MyMmcs>;
     type MyFriConfig = FriConfigImpl<Val, Domain, Challenge, Quotient, MyMmcs, Challenger>;
