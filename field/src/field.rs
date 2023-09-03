@@ -252,6 +252,6 @@ impl<F: AbstractField> Iterator for Powers<F> {
     }
 }
 
-fn bits_u64(n: u64) -> usize {
+const fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize
 }
