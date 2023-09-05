@@ -7,14 +7,16 @@ use crate::permutation::ArrayPermutation;
 
 /// A padding-free, overwrite-mode sponge function.
 ///
-/// WIDTH is the sponge's rate + sponge's capacity
+/// `WIDTH` is the sponge's rate plus the sponge's capacity.
 #[derive(Clone)]
-pub struct PaddingFreeSponge<T, P, const WIDTH: usize> {
+pub struct PaddingFreeSponge<T, P, const WIDTH: usize, const RATE: usize, const OUT: usize> {
     permutation: P,
     _phantom_f: PhantomData<T>,
 }
 
-impl<T, P, const WIDTH: usize> PaddingFreeSponge<T, P, WIDTH> {
+impl<T, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
+    PaddingFreeSponge<T, P, WIDTH, RATE, OUT>
+{
     pub fn new(permutation: P) -> Self {
         Self {
             permutation,
@@ -23,13 +25,13 @@ impl<T, P, const WIDTH: usize> PaddingFreeSponge<T, P, WIDTH> {
     }
 }
 
-impl<T, P, const RATE: usize, const WIDTH: usize> CryptographicHasher<T, [T; RATE]>
-    for PaddingFreeSponge<T, P, WIDTH>
+impl<T, P, const WIDTH: usize, const RATE: usize, const OUT: usize> CryptographicHasher<T, [T; OUT]>
+    for PaddingFreeSponge<T, P, WIDTH, RATE, OUT>
 where
     T: Default + Copy,
     P: ArrayPermutation<T, WIDTH>,
 {
-    fn hash_iter<I>(&self, input: I) -> [T; RATE]
+    fn hash_iter<I>(&self, input: I) -> [T; OUT]
     where
         I: IntoIterator<Item = T>,
     {
@@ -39,6 +41,6 @@ where
             state.iter_mut().zip(input_chunk).for_each(|(s, i)| *s = i);
             state = self.permutation.permute(state);
         }
-        state[..RATE].try_into().unwrap()
+        state[..OUT].try_into().unwrap()
     }
 }

@@ -55,6 +55,11 @@ pub trait AbstractField:
     }
 
     #[must_use]
+    fn cube(&self) -> Self {
+        self.square() * self.clone()
+    }
+
+    #[must_use]
     fn powers(&self) -> Powers<Self> {
         Powers {
             base: self.clone(),
@@ -122,6 +127,28 @@ pub trait Field:
     }
 
     #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => self.square().square() * *self,
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[must_use]
+    #[inline]
     fn exp_u64(&self, power: u64) -> Self {
         let mut current = *self;
         let mut product = Self::ONE;
@@ -199,7 +226,7 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {}
 
 impl<Base: Field, Ext: Field + AbstractExtensionField<Base>> ExtensionField<Base> for Ext {}
 
-impl<F: Field> AbstractExtensionField<F> for F {
+impl<F: AbstractField> AbstractExtensionField<F> for F {
     const D: usize = 1;
 
     fn from_base(b: F) -> Self {
@@ -208,7 +235,7 @@ impl<F: Field> AbstractExtensionField<F> for F {
 
     fn from_base_slice(bs: &[F]) -> Self {
         assert_eq!(bs.len(), 1);
-        bs[0]
+        bs[0].clone()
     }
 
     fn as_base_slice(&self) -> &[F] {
@@ -251,6 +278,6 @@ impl<F: AbstractField> Iterator for Powers<F> {
     }
 }
 
-fn bits_u64(n: u64) -> usize {
+const fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize
 }

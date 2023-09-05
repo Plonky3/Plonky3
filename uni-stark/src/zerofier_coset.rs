@@ -44,7 +44,7 @@ impl<F: TwoAdicField> ZerofierOnCoset<F> {
 
     /// Like `eval_inverse`, but for a range of indices starting with `i_start`.
     pub fn eval_inverse_packed<P: PackedField<Scalar = F>>(&self, i_start: usize) -> P {
-        let mut packed = P::ZEROS;
+        let mut packed = P::ZERO;
         packed
             .as_slice_mut()
             .iter_mut()

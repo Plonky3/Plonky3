@@ -14,10 +14,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_util::{log2_ceil_usize, log2_strict_usize};
-
-// TODO: Add a variant that supports pruning overlapping paths?
-// How would we keep track of previously-seen paths - make the MMCS methods take &mut self?
+use p3_util::log2_strict_usize;
 
 /// A binary Merkle tree, with leaves of type `L` and digests of type `D`.
 ///
@@ -48,7 +45,7 @@ impl<L, D> MerkleTree<L, D> {
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
         let max_height = leaves_largest_first.peek().unwrap().height();
-        let max_height_padded = log2_ceil_usize(max_height);
+        let max_height_padded = max_height.next_power_of_two();
 
         let tallest_matrices = leaves_largest_first
             .peeking_take_while(|m| m.height() == max_height)
@@ -66,13 +63,14 @@ impl<L, D> MerkleTree<L, D> {
             if prev_layer.len() == 1 {
                 break;
             }
+            let next_layer_len = prev_layer.len() / 2;
 
-            // The matrices that get inserted at this layer.
-            let tallest_matrices = leaves_largest_first
-                .peeking_take_while(|m| log2_ceil_usize(m.height()) == prev_layer.len())
+            // The matrices that get injected at this layer.
+            let matrices_to_inject = leaves_largest_first
+                .peeking_take_while(|m| m.height().next_power_of_two() == next_layer_len)
                 .collect_vec();
 
-            let next_digests = compression_layer(prev_layer, tallest_matrices, h, c);
+            let next_digests = compression_layer(prev_layer, matrices_to_inject, h, c);
             digest_layers.push(next_digests);
         }
 
@@ -96,7 +94,7 @@ impl<L, D> MerkleTree<L, D> {
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
 fn compression_layer<L, D, H, C, Mat>(
     prev_layer: &[D],
-    tallest_matrices: Vec<&Mat>,
+    matrices_to_inject: Vec<&Mat>,
     h: &H,
     c: &C,
 ) -> Vec<D>
@@ -107,10 +105,10 @@ where
     C: PseudoCompressionFunction<D, 2>,
     Mat: MatrixRows<L>,
 {
-    let next_len_padded = prev_layer.len() >> 1;
+    let next_len_padded = prev_layer.len() / 2;
     let mut next_digests = Vec::with_capacity(next_len_padded);
 
-    if tallest_matrices.is_empty() {
+    if matrices_to_inject.is_empty() {
         for i in 0..next_len_padded {
             let left = prev_layer[2 * i];
             let right = prev_layer[2 * i + 1];
@@ -120,13 +118,13 @@ where
         return next_digests;
     }
 
-    let next_len = tallest_matrices[0].height();
+    let next_len = matrices_to_inject[0].height();
     for i in 0..next_len {
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let mut digest = c.compress([left, right]);
         let tallest_digest =
-            h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i).into_iter()));
+            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row(i).into_iter()));
         digest = c.compress([digest, tallest_digest]);
         next_digests.push(digest);
     }

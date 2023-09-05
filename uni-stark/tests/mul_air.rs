@@ -1,13 +1,12 @@
 use p3_air::{Air, AirBuilder};
+use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
-use p3_dft::Radix2BowersFft;
-use p3_field::AbstractField;
+use p3_dft::Radix2Bowers;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
-use p3_goldilocks::Goldilocks;
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
-use p3_mds::goldilocks::MdsMatrixGoldilocks;
+use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::TruncatedPermutation;
@@ -27,31 +26,35 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 
 #[test]
-#[ignore] // TODO: Not quite working yet.
-fn test_prove_goldilocks() {
-    type Val = Goldilocks;
-    type Domain = Goldilocks;
-    type Challenge = Goldilocks; // TODO
-    type Mds = MdsMatrixGoldilocks;
+fn test_prove_baby_bear() {
+    const WIDTH: usize = 10;
+    const HEIGHT: usize = 1 << 8;
 
-    type Perm = Poseidon<Val, Mds, 8, 7>;
-    let perm = Perm::new(5, 5, vec![Val::ONE; 120], Mds {});
+    type Val = BabyBear;
+    type Domain = Val;
+    type Challenge = Val; // TODO
 
-    type H4 = PaddingFreeSponge<Val, Perm, { 4 + 4 }>;
+    type MyMds = CosetMds<Val, 16>;
+    let mds = MyMds::default();
+
+    type Perm = Poseidon<Val, MyMds, 16, 5>;
+    let perm = Perm::new_from_rng(4, 22, mds, &mut thread_rng()); // TODO: Use deterministic RNG
+
+    type H4 = PaddingFreeSponge<Val, Perm, 16, 8, 8>;
     let h4 = H4::new(perm.clone());
 
-    type C = TruncatedPermutation<Val, Perm, 2, 4, { 2 * 4 }>;
+    type C = TruncatedPermutation<Val, Perm, 2, 8, 16>;
     let c = C::new(perm.clone());
 
-    type MyMmcs = MerkleTreeMmcs<Val, [Val; 4], H4, C>;
+    type MyMmcs = MerkleTreeMmcs<Val, [Val; 8], H4, C>;
     let mmcs = MyMmcs::new(h4, c);
 
-    type Dft = Radix2BowersFft;
+    type Dft = Radix2Bowers;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 8>;
+    type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    type Quotient = QuotientMmcs<Domain, MyMmcs>;
+    type Quotient = QuotientMmcs<Domain, Challenge, MyMmcs>;
     type MyFriConfig = FriConfigImpl<Val, Domain, Challenge, Quotient, MyMmcs, Challenger>;
     let fri_config = MyFriConfig::new(40, mmcs.clone());
     let ldt = FriLdt { config: fri_config };
@@ -60,7 +63,7 @@ fn test_prove_goldilocks() {
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>;
 
     let mut rng = thread_rng();
-    let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
+    let trace = RowMajorMatrix::rand(&mut rng, HEIGHT, WIDTH);
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft {});
     let mut challenger = Challenger::new(perm);

@@ -4,4 +4,5 @@ mod inverse_sbox;
 mod rescue;
 mod util;
 
+pub use inverse_sbox::*;
 pub use rescue::*;

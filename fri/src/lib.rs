@@ -29,7 +29,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Domain, FC::InputMmcs, FC::Challenger> for 
 
     fn prove(
         &self,
-        mmcs: &FC::InputMmcs,
+        mmcs: &[FC::InputMmcs],
         inputs: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
         challenger: &mut FC::Challenger,
     ) -> Self::Proof {
@@ -49,6 +49,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Domain, FC::InputMmcs, FC::Challenger> for 
 pub type FriBasedPcs<FC, Mmcs, Dft, Challenger> = LdtBasedPcs<
     <FC as FriConfig>::Val,
     <FC as FriConfig>::Domain,
+    <FC as FriConfig>::Challenge,
     Dft,
     Mmcs,
     FriLdt<FC>,

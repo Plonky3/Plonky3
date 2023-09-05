@@ -5,7 +5,7 @@
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
 use p3_baby_bear::BabyBear;
-use p3_dft::Radix2BowersFft;
+use p3_dft::Radix2Bowers;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 
 use crate::util::{
@@ -14,10 +14,10 @@ use crate::util::{
 };
 use crate::MdsPermutation;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
-const FFT_ALGO: Radix2BowersFft = Radix2BowersFft {};
+const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
 impl CryptographicPermutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {

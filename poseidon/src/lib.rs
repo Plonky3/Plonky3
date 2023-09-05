@@ -9,7 +9,6 @@ use alloc::vec::Vec;
 use p3_field::Field;
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
-use p3_symmetric::sponge::PaddingFreeSponge;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -95,12 +94,12 @@ where
 
     fn full_sbox_layer(state: &mut [F; WIDTH]) {
         for x in state.iter_mut() {
-            *x = x.exp_u64(ALPHA);
+            *x = x.exp_const_u64::<ALPHA>();
         }
     }
 
     fn partial_sbox_layer(state: &mut [F; WIDTH]) {
-        state[0] = state[0].exp_u64(ALPHA);
+        state[0] = state[0].exp_const_u64::<ALPHA>();
     }
 
     fn constant_layer(&self, state: &mut [F; WIDTH], round: usize) {
@@ -132,6 +131,3 @@ where
     Mds: MdsPermutation<F, WIDTH>,
 {
 }
-
-pub type PaddingFreePoseidonSponge<F, Mds, const WIDTH: usize, const ALPHA: u64> =
-    PaddingFreeSponge<F, Poseidon<F, Mds, WIDTH, ALPHA>, WIDTH>;
