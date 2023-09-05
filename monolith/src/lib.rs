@@ -1,7 +1,12 @@
 //! The Monolith permutation, and hash functions built from it.
 
+#![no_std]
+
 extern crate alloc;
 
-pub mod monolith;
-pub mod monolith_mds;
+mod monolith;
+mod monolith_mds;
 mod util;
+
+pub use monolith::Monolith31;
+pub use monolith_mds::MonolithMdsMatrixMersenne31;

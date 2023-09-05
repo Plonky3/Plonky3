@@ -3,6 +3,10 @@
 
 extern crate alloc;
 
+use alloc::borrow::ToOwned;
+use alloc::vec::Vec;
+use alloc::vec;
+
 use core::iter;
 use core::marker::PhantomData;
 
