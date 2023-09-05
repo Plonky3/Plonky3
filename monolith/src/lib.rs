@@ -8,5 +8,5 @@ mod monolith;
 mod monolith_mds;
 mod util;
 
-pub use monolith::Monolith31;
+pub use monolith::MonolithMersenne31;
 pub use monolith_mds::MonolithMdsMatrixMersenne31;
