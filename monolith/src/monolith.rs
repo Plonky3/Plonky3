@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 use core::iter;
 use core::marker::PhantomData;
 
-use p3_field::{PrimeField32, AbstractField, PrimeField64};
-use p3_mersenne_31::Mersenne31;
+use p3_field::{AbstractField, PrimeField32, PrimeField64};
 use p3_mds::MdsPermutation;
+use p3_mersenne_31::Mersenne31;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
@@ -121,7 +121,11 @@ where
             .collect()
     }
 
-    pub fn concrete(&self, state: &mut [Mersenne31; WIDTH], round_constants: Option<&[Mersenne31; WIDTH]>) {
+    pub fn concrete(
+        &self,
+        state: &mut [Mersenne31; WIDTH],
+        round_constants: Option<&[Mersenne31; WIDTH]>,
+    ) {
         *state = self.mds.permute(*state);
 
         if let Some(round_constants) = round_constants {
