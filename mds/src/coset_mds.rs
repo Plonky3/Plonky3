@@ -99,7 +99,7 @@ fn bowers_g_layer<F: Field, const N: usize>(
     // Unroll first iteration with a twiddle factor of 1.
     for butterfly_hi in 0..half_block_size {
         let butterfly_lo = butterfly_hi + half_block_size;
-        butterfly_twiddle_one(values, butterfly_hi, butterfly_lo);
+        twiddle_free_butterfly(values, butterfly_hi, butterfly_lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
@@ -124,7 +124,7 @@ fn bowers_g_t_layer<F: Field, const N: usize>(
     // Unroll first iteration with a twiddle factor of 1.
     for butterfly_hi in 0..half_block_size {
         let butterfly_lo = butterfly_hi + half_block_size;
-        butterfly_twiddle_one(values, butterfly_hi, butterfly_lo);
+        twiddle_free_butterfly(values, butterfly_hi, butterfly_lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
@@ -166,7 +166,7 @@ pub fn dif_butterfly<F: Field, const N: usize>(
 
 /// Butterfly with twiddle factor 1 (works in either DIT or DIF).
 #[inline]
-fn butterfly_twiddle_one<F: Field, const N: usize>(
+fn twiddle_free_butterfly<F: Field, const N: usize>(
     values: &mut [F; N],
     idx_1: usize,
     idx_2: usize,

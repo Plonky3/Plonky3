@@ -5,7 +5,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::butterflies::dit_butterfly;
+use crate::butterflies::{dit_butterfly, twiddle_free_butterfly};
 use crate::util::reverse_matrix_index_bits;
 use crate::TwoAdicSubgroupDft;
 
@@ -18,35 +18,38 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        // roots: sequence of root squares from {2^-1, 2^-2, 2^-4, ..., root=2^-N}
         let root = F::primitive_root_of_unity(log_h);
-        let roots: Vec<F> = (0..log_h)
-            .scan(root, |root_i, _| {
-                let ret = *root_i;
-                *root_i = root_i.square();
-                Some(ret)
-            })
-            .collect();
+        let twiddles: Vec<F> = root.powers().take(h / 2).collect();
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
-        for (layer, root) in roots.iter().rev().enumerate() {
-            dit_layer(&mut mat, layer, *root);
+        for layer in 0..log_h {
+            dit_layer(&mut mat, layer, &twiddles);
         }
         mat
     }
 }
 
-/// One layer of a DIT butterfly.
-fn dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, layer: usize, root: F) {
+/// One layer of a DIT butterfly network.
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, layer: usize, twiddles: &[F]) {
     let h = mat.height();
+    let log_h = log2_strict_usize(h);
+    let layer_rev = log_h - 1 - layer;
+
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
 
     for j in (0..h).step_by(block_size) {
-        for (k, root_power) in (j..j + half_block_size).zip(root.powers()) {
-            let neighbor = k + half_block_size;
-            dit_butterfly(mat, k, neighbor, root_power);
+        // Unroll i=0 case
+        let hi = j;
+        let lo = hi + half_block_size;
+        twiddle_free_butterfly(mat, hi, lo);
+
+        for i in 1..half_block_size {
+            let hi = j + i;
+            let lo = hi + half_block_size;
+            let twiddle = twiddles[i << layer_rev];
+            dit_butterfly(mat, hi, lo, twiddle);
         }
     }
 }
