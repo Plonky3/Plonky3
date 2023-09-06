@@ -59,7 +59,10 @@ where
     pub fn final_s_box(y: u8) -> u8 {
         debug_assert_eq!(y >> 7, 0); // must be a 7-bit value
 
-        let tmp = (y ^ !y.rotate_left(1) & y.rotate_left(2)) & 0x7F;
+        let y_rot_1 = (y >> 6) | (y << 1);
+        let y_rot_2 = (y >> 5) | (y << 2);
+
+        let tmp = (y ^ !y_rot_1 & y_rot_2) & 0x7F;
         ((tmp >> 6) | (tmp << 1)) & 0x7F
     }
 
