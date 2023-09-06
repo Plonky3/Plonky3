@@ -164,14 +164,15 @@ where
         for rc in self
             .round_constants
             .iter()
-            .map(Some)
-            .chain(iter::once(None))
         {
             self.bars(state);
             Self::bricks(state);
-            self.concrete(statex);
+            self.concrete(state);
             self.add_round_constants(state, rc);
         }
+        self.bars(state);
+        Self::bricks(state);
+        self.concrete(state);
     }
 }
 
