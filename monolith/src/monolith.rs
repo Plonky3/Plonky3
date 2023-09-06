@@ -27,8 +27,6 @@ where
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
     pub mds: Mds,
-
-    _phantom: PhantomData<Mds>,
 }
 
 impl<Mds, const WIDTH: usize, const NUM_ROUNDS: usize> MonolithMersenne31<Mds, WIDTH, NUM_ROUNDS>
@@ -51,35 +49,27 @@ where
             lookup1,
             lookup2,
             mds,
-            _phantom: PhantomData,
         }
     }
 
     fn s_box(y: u8) -> u8 {
-        let y_rot_1 = (y >> 7) | (y << 1);
-        let y_rot_2 = (y >> 6) | (y << 2);
-        let y_rot_3 = (y >> 5) | (y << 3);
-
-        let tmp = y ^ !y_rot_1 & y_rot_2 & y_rot_3;
-        (tmp >> 7) | (tmp << 1)
+        let tmp = y ^ !y.rotate_left(1) & y.rotate_left(2) & y.rotate_left(3);
+        tmp.rotate_left(1)
     }
 
     pub fn final_s_box(y: u8) -> u8 {
         debug_assert_eq!(y >> 7, 0); // must be a 7-bit value
 
-        let y_rot_1 = (y >> 6) | (y << 1);
-        let y_rot_2 = (y >> 5) | (y << 2);
-
-        let tmp = (y ^ !y_rot_1 & y_rot_2) & 0x7F;
+        let tmp = (y ^ !y.rotate_left(1) & y.rotate_left(2)) & 0x7F;
         ((tmp >> 6) | (tmp << 1)) & 0x7F
     }
 
     fn instantiate_lookup1() -> Vec<u16> {
         (0..=u16::MAX)
             .map(|i| {
-                let lo = (i >> 8) as u8;
-                let hi = i as u8;
-                ((Self::s_box(lo) as u16) << 8) | Self::s_box(hi) as u16
+                let hi = (i >> 8) as u8;
+                let lo = i as u8;
+                ((Self::s_box(hi) as u16) << 8) | Self::s_box(lo) as u16
             })
             .collect()
     }
@@ -87,9 +77,9 @@ where
     fn instantiate_lookup2() -> Vec<u16> {
         (0..(1 << 15))
             .map(|i| {
-                let lo = (i >> 8) as u8;
-                let hi: u8 = i as u8;
-                ((Self::final_s_box(lo) as u16) << 8) | Self::s_box(hi) as u16
+                let hi = (i >> 8) as u8;
+                let lo: u8 = i as u8;
+                ((Self::final_s_box(hi) as u16) << 8) | Self::s_box(lo) as u16
             })
             .collect()
     }
@@ -124,14 +114,18 @@ where
     pub fn concrete(
         &self,
         state: &mut [Mersenne31; WIDTH],
-        round_constants: Option<&[Mersenne31; WIDTH]>,
     ) {
-        *state = self.mds.permute(*state);
+        self.mds.permute_mut(state);
+    }
 
-        if let Some(round_constants) = round_constants {
-            for (x, rc) in state.iter_mut().zip(round_constants.iter()) {
-                *x += *rc;
-            }
+    pub fn add_round_constants(
+        &self,
+        state: &mut [Mersenne31; WIDTH],
+        round_constants: &[Mersenne31; WIDTH],
+    ) {
+        // TODO: vectorize?
+        for (x, rc) in state.iter_mut().zip(round_constants) {
+            *x += *rc;
         }
     }
 
@@ -166,7 +160,7 @@ where
     }
 
     pub fn permutation(&self, state: &mut [Mersenne31; WIDTH]) {
-        self.concrete(state, None);
+        self.concrete(state);
         for rc in self
             .round_constants
             .iter()
@@ -175,7 +169,8 @@ where
         {
             self.bars(state);
             Self::bricks(state);
-            self.concrete(state, rc);
+            self.concrete(statex);
+            self.add_round_constants(state, rc);
         }
     }
 }
