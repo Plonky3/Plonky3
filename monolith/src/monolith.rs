@@ -6,10 +6,8 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
-use core::marker::PhantomData;
 
-use p3_field::{AbstractField, PrimeField32, PrimeField64};
+use p3_field::{AbstractField, PrimeField32};
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use sha3::digest::{ExtendableOutput, Update};
@@ -111,10 +109,7 @@ where
             .collect()
     }
 
-    pub fn concrete(
-        &self,
-        state: &mut [Mersenne31; WIDTH],
-    ) {
+    pub fn concrete(&self, state: &mut [Mersenne31; WIDTH]) {
         self.mds.permute_mut(state);
     }
 
@@ -161,10 +156,7 @@ where
 
     pub fn permutation(&self, state: &mut [Mersenne31; WIDTH]) {
         self.concrete(state);
-        for rc in self
-            .round_constants
-            .iter()
-        {
+        for rc in self.round_constants.iter() {
             self.bars(state);
             Self::bricks(state);
             self.concrete(state);
