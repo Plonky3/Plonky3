@@ -3,7 +3,7 @@ use core::iter::Cloned;
 use core::slice;
 
 use p3_field::{ExtensionField, Field};
-use p3_maybe_rayon::{MaybeParChunksMut, ParallelIterator};
+use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -46,6 +46,18 @@ impl<T> RowMajorMatrix<T> {
 
     pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
         self.values.chunks_exact_mut(self.width)
+    }
+
+    pub fn row_chunks_mut(
+        &mut self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
+    where
+        T: Send,
+    {
+        self.values
+            .par_chunks_exact_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
     #[must_use]
@@ -99,34 +111,6 @@ impl<T> RowMajorMatrix<T> {
         prefix.iter_mut().for_each(|x| *x *= scale);
         shorts.iter_mut().for_each(|x| *x *= scale);
         suffix.iter_mut().for_each(|x| *x *= scale);
-    }
-
-    /// Return a pair of rows, each in the form (prefix, shorts, suffix), as they would be returned
-    /// by the `align_to_mut` method.
-    #[allow(clippy::type_complexity)]
-    pub fn packing_aligned_rows(
-        &mut self,
-        row_1: usize,
-        row_2: usize,
-    ) -> (
-        (&mut [T], &mut [T::Packing], &mut [T]),
-        (&mut [T], &mut [T::Packing], &mut [T]),
-    )
-    where
-        T: Field,
-    {
-        let RowMajorMatrix { values, width } = self;
-        let start_1 = row_1 * *width;
-        let start_2 = row_2 * *width;
-        let (hi_part, lo_part) = values.as_mut_slice().split_at_mut(start_2);
-        let slice_1 = &mut hi_part[start_1..][..*width];
-        let slice_2 = &mut lo_part[..*width];
-        unsafe {
-            (
-                slice_1.align_to_mut::<T::Packing>(),
-                slice_2.align_to_mut::<T::Packing>(),
-            )
-        }
     }
 
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
@@ -205,10 +189,16 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
 #[derive(Copy, Clone)]
 pub struct RowMajorMatrixView<'a, T> {
     pub values: &'a [T],
-    width: usize,
+    pub width: usize,
 }
 
 impl<'a, T> RowMajorMatrixView<'a, T> {
+    #[must_use]
+    pub fn new(values: &'a mut [T], width: usize) -> Self {
+        debug_assert_eq!(values.len() % width, 0);
+        Self { values, width }
+    }
+
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
         self.values.chunks_exact(self.width)
     }
@@ -262,10 +252,16 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
 
 pub struct RowMajorMatrixViewMut<'a, T> {
     pub values: &'a mut [T],
-    width: usize,
+    pub width: usize,
 }
 
 impl<'a, T> RowMajorMatrixViewMut<'a, T> {
+    #[must_use]
+    pub fn new(values: &'a mut [T], width: usize) -> Self {
+        debug_assert_eq!(values.len() % width, 0);
+        Self { values, width }
+    }
+
     pub fn row_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
@@ -305,6 +301,34 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
             width: self.width,
         };
         (upper, lower)
+    }
+
+    /// Return a pair of rows, each in the form (prefix, shorts, suffix), as they would be returned
+    /// by the `align_to_mut` method.
+    #[allow(clippy::type_complexity)]
+    pub fn packing_aligned_rows(
+        &mut self,
+        row_1: usize,
+        row_2: usize,
+    ) -> (
+        (&mut [T], &mut [T::Packing], &mut [T]),
+        (&mut [T], &mut [T::Packing], &mut [T]),
+    )
+    where
+        T: Field,
+    {
+        let RowMajorMatrixViewMut { values, width } = self;
+        let start_1 = row_1 * *width;
+        let start_2 = row_2 * *width;
+        let (hi_part, lo_part) = values.split_at_mut(start_2);
+        let slice_1 = &mut hi_part[start_1..][..*width];
+        let slice_2 = &mut lo_part[..*width];
+        unsafe {
+            (
+                slice_1.align_to_mut::<T::Packing>(),
+                slice_2.align_to_mut::<T::Packing>(),
+            )
+        }
     }
 }
 

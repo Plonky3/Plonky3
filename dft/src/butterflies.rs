@@ -1,10 +1,11 @@
 use p3_field::Field;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::RowMajorMatrixViewMut;
+use p3_matrix::Matrix;
 
 /// DIT butterfly.
 #[inline]
 pub(crate) fn dit_butterfly<F: Field>(
-    mat: &mut RowMajorMatrix<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
     row_1: usize,
     row_2: usize,
     twiddle: F,
@@ -38,11 +39,14 @@ pub(crate) fn dit_butterfly<F: Field>(
 /// DIF butterfly.
 #[inline]
 pub(crate) fn dif_butterfly<F: Field>(
-    mat: &mut RowMajorMatrix<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
     row_1: usize,
     row_2: usize,
     twiddle: F,
 ) {
+    debug_assert!(row_1 < mat.height());
+    debug_assert!(row_2 < mat.height());
+
     let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
         mat.packing_aligned_rows(row_1, row_2);
 
@@ -69,7 +73,7 @@ pub(crate) fn dif_butterfly<F: Field>(
 /// Butterfly with twiddle factor 1 (works in either DIT or DIF).
 #[inline]
 pub(crate) fn twiddle_free_butterfly<F: Field>(
-    mat: &mut RowMajorMatrix<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
     row_1: usize,
     row_2: usize,
 ) {

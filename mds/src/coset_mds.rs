@@ -97,16 +97,16 @@ fn bowers_g_layer<F: Field, const N: usize>(
     let num_blocks = N >> log_block_size;
 
     // Unroll first iteration with a twiddle factor of 1.
-    for butterfly_hi in 0..half_block_size {
-        let butterfly_lo = butterfly_hi + half_block_size;
-        twiddle_free_butterfly(values, butterfly_hi, butterfly_lo);
+    for hi in 0..half_block_size {
+        let lo = hi + half_block_size;
+        twiddle_free_butterfly(values, hi, lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
         let block_start = block << log_block_size;
-        for butterfly_hi in block_start..block_start + half_block_size {
-            let butterfly_lo = butterfly_hi + half_block_size;
-            dif_butterfly(values, butterfly_hi, butterfly_lo, twiddle);
+        for hi in block_start..block_start + half_block_size {
+            let lo = hi + half_block_size;
+            dif_butterfly(values, hi, lo, twiddle);
         }
     }
 }
@@ -122,16 +122,16 @@ fn bowers_g_t_layer<F: Field, const N: usize>(
     let num_blocks = N >> log_block_size;
 
     // Unroll first iteration with a twiddle factor of 1.
-    for butterfly_hi in 0..half_block_size {
-        let butterfly_lo = butterfly_hi + half_block_size;
-        twiddle_free_butterfly(values, butterfly_hi, butterfly_lo);
+    for hi in 0..half_block_size {
+        let lo = hi + half_block_size;
+        twiddle_free_butterfly(values, hi, lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
         let block_start = block << log_block_size;
-        for butterfly_hi in block_start..block_start + half_block_size {
-            let butterfly_lo = butterfly_hi + half_block_size;
-            dit_butterfly(values, butterfly_hi, butterfly_lo, twiddle);
+        for hi in block_start..block_start + half_block_size {
+            let lo = hi + half_block_size;
+            dit_butterfly(values, hi, lo, twiddle);
         }
     }
 }
