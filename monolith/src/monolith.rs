@@ -4,7 +4,6 @@
 extern crate alloc;
 
 use alloc::borrow::ToOwned;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{AbstractField, PrimeField32};
@@ -16,18 +15,19 @@ use sha3::{Shake128, Shake128Reader};
 use crate::util::get_random_u32;
 
 // The Monolith-31 permutation over Mersenne31.
-pub struct MonolithMersenne31<Mds, const WIDTH: usize, const NUM_ROUNDS: usize>
+// NUM_FULL_ROUNDS is the number of rounds - 1
+// (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
+pub struct MonolithMersenne31<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,
 {
-    // TODO: if possible, replace with [[Mersenne31; WIDTH]; NUM_ROUNDS - 1]]
-    pub round_constants: Vec<[Mersenne31; WIDTH]>,
+    pub round_constants: [[Mersenne31; WIDTH]; NUM_FULL_ROUNDS],
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
     pub mds: Mds,
 }
 
-impl<Mds, const WIDTH: usize, const NUM_ROUNDS: usize> MonolithMersenne31<Mds, WIDTH, NUM_ROUNDS>
+impl<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize> MonolithMersenne31<Mds, WIDTH, NUM_FULL_ROUNDS>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,
 {
@@ -92,21 +92,25 @@ where
     }
 
     fn init_shake() -> Shake128Reader {
+        let num_rounds = (NUM_FULL_ROUNDS + 1) as u8;
+
         let mut shake = Shake128::default();
         shake.update("Monolith".as_bytes());
-        shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
+        shake.update(&[WIDTH as u8, num_rounds]);
         shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
         shake.update(&[8, 8, 8, 7]);
         shake.finalize_xof()
     }
 
-    fn instantiate_round_constants() -> Vec<[Mersenne31; WIDTH]> {
+    fn instantiate_round_constants() -> [[Mersenne31; WIDTH]; NUM_FULL_ROUNDS] {
         let mut shake = Self::init_shake();
 
-        vec![[Mersenne31::ZERO; WIDTH]; NUM_ROUNDS - 1]
+        [[Mersenne31::ZERO; WIDTH]; NUM_FULL_ROUNDS]
             .iter()
             .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
-            .collect()
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
     }
 
     pub fn concrete(&self, state: &mut [Mersenne31; WIDTH]) {
@@ -156,11 +160,11 @@ where
 
     pub fn permutation(&self, state: &mut [Mersenne31; WIDTH]) {
         self.concrete(state);
-        for rc in self.round_constants.iter() {
+        for rc in self.round_constants {
             self.bars(state);
             Self::bricks(state);
             self.concrete(state);
-            self.add_round_constants(state, rc);
+            self.add_round_constants(state, &rc);
         }
         self.bars(state);
         Self::bricks(state);
