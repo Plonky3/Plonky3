@@ -138,14 +138,7 @@ where
     pub fn bricks(state: &mut [Mersenne31; WIDTH]) {
         // Feistel Type-3
         for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
-            let x_mut_u64 = &mut x_mut.as_canonical_u64();
-            let x_u64 = x.as_canonical_u64();
-            // Every time at bricks the input is technically a u32, so we tell the compiler
-            let mut tmp_square = (x_u64 & 0xFFFFFFFF_u64) * (x_u64 & 0xFFFFFFFF_u64);
-            tmp_square %= Mersenne31::ORDER_U64;
-            *x_mut_u64 = (*x_mut_u64 & 0xFFFFFFFF_u64) + (tmp_square & 0xFFFFFFFF_u64);
-            *x_mut_u64 %= Mersenne31::ORDER_U64;
-            *x_mut = Mersenne31::from_canonical_u64(*x_mut_u64);
+            *x_mut += x.square();
         }
     }
 
