@@ -7,7 +7,7 @@ use p3_maybe_rayon::{MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRows};
+use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows};
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +90,45 @@ impl<T> RowMajorMatrix<T> {
         self.map(EF::from_base)
     }
 
+    pub fn scale_row(&mut self, r: usize, scale: T)
+    where
+        T: Field,
+    {
+        let row = self.row_slice_mut(r);
+        let (prefix, shorts, suffix) = unsafe { row.align_to_mut::<T::Packing>() };
+        prefix.iter_mut().for_each(|x| *x *= scale);
+        shorts.iter_mut().for_each(|x| *x *= scale);
+        suffix.iter_mut().for_each(|x| *x *= scale);
+    }
+
+    /// Return a pair of rows, each in the form (prefix, shorts, suffix), as they would be returned
+    /// by the `align_to_mut` method.
+    #[allow(clippy::type_complexity)]
+    pub fn packing_aligned_rows(
+        &mut self,
+        row_1: usize,
+        row_2: usize,
+    ) -> (
+        (&mut [T], &mut [T::Packing], &mut [T]),
+        (&mut [T], &mut [T::Packing], &mut [T]),
+    )
+    where
+        T: Field,
+    {
+        let RowMajorMatrix { values, width } = self;
+        let start_1 = row_1 * *width;
+        let start_2 = row_2 * *width;
+        let (hi_part, lo_part) = values.as_mut_slice().split_at_mut(start_2);
+        let slice_1 = &mut hi_part[start_1..][..*width];
+        let slice_2 = &mut lo_part[..*width];
+        unsafe {
+            (
+                slice_1.align_to_mut::<T::Packing>(),
+                slice_2.align_to_mut::<T::Packing>(),
+            )
+        }
+    }
+
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         Standard: Distribution<T>,
@@ -153,6 +192,13 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrix<T> {
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
+    }
+}
+
+impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
+    fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
+        debug_assert!(r < self.height());
+        &mut self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
@@ -292,5 +338,12 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
+    }
+}
+
+impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
+    fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
+        debug_assert!(r < self.height());
+        &mut self.values[r * self.width..(r + 1) * self.width]
     }
 }

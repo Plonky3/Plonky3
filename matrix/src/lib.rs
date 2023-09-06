@@ -64,3 +64,8 @@ pub trait MatrixRows<T>: Matrix<T> {
 pub trait MatrixRowSlices<T>: MatrixRows<T> {
     fn row_slice(&self, r: usize) -> &[T];
 }
+
+/// A `Matrix` which supports access its rows as mutable slices.
+pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
+    fn row_slice_mut(&mut self, r: usize) -> &mut [T];
+}

@@ -9,14 +9,29 @@ pub(crate) fn dit_butterfly<F: Field>(
     row_2: usize,
     twiddle: F,
 ) {
-    let RowMajorMatrix { values, width } = mat;
-    for col in 0..*width {
-        let idx_1 = row_1 * *width + col;
-        let idx_2 = row_2 * *width + col;
-        let val_1 = values[idx_1];
-        let val_2 = values[idx_2] * twiddle;
-        values[idx_1] = val_1 + val_2;
-        values[idx_2] = val_1 - val_2;
+    let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
+        mat.packing_aligned_rows(row_1, row_2);
+
+    for (x_1, x_2) in prefix_1.iter_mut().zip(prefix_2) {
+        let x_2_twiddle = *x_2 * twiddle;
+        let sum = *x_1 + x_2_twiddle;
+        let diff = *x_1 - x_2_twiddle;
+        *x_1 = sum;
+        *x_2 = diff;
+    }
+    for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2) {
+        let x_2_twiddle = *x_2 * twiddle;
+        let sum = *x_1 + x_2_twiddle;
+        let diff = *x_1 - x_2_twiddle;
+        *x_1 = sum;
+        *x_2 = diff;
+    }
+    for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2) {
+        let x_2_twiddle = *x_2 * twiddle;
+        let sum = *x_1 + x_2_twiddle;
+        let diff = *x_1 - x_2_twiddle;
+        *x_1 = sum;
+        *x_2 = diff;
     }
 }
 
@@ -28,14 +43,26 @@ pub(crate) fn dif_butterfly<F: Field>(
     row_2: usize,
     twiddle: F,
 ) {
-    let RowMajorMatrix { values, width } = mat;
-    for col in 0..*width {
-        let idx_1 = row_1 * *width + col;
-        let idx_2 = row_2 * *width + col;
-        let val_1 = values[idx_1];
-        let val_2 = values[idx_2];
-        values[idx_1] = val_1 + val_2;
-        values[idx_2] = (val_1 - val_2) * twiddle;
+    let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
+        mat.packing_aligned_rows(row_1, row_2);
+
+    for (x_1, x_2) in prefix_1.iter_mut().zip(prefix_2) {
+        let sum = *x_1 + *x_2;
+        let diff = *x_1 - *x_2;
+        *x_1 = sum;
+        *x_2 = diff * twiddle;
+    }
+    for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2) {
+        let sum: F::Packing = *x_1 + *x_2;
+        let diff: F::Packing = *x_1 - *x_2;
+        *x_1 = sum;
+        *x_2 = diff * twiddle;
+    }
+    for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2) {
+        let sum = *x_1 + *x_2;
+        let diff = *x_1 - *x_2;
+        *x_1 = sum;
+        *x_2 = diff * twiddle;
     }
 }
 
@@ -46,13 +73,25 @@ pub(crate) fn twiddle_free_butterfly<F: Field>(
     row_1: usize,
     row_2: usize,
 ) {
-    let RowMajorMatrix { values, width } = mat;
-    for col in 0..*width {
-        let idx_1 = row_1 * *width + col;
-        let idx_2 = row_2 * *width + col;
-        let val_1 = values[idx_1];
-        let val_2 = values[idx_2];
-        values[idx_1] = val_1 + val_2;
-        values[idx_2] = val_1 - val_2;
+    let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
+        mat.packing_aligned_rows(row_1, row_2);
+
+    for (x_1, x_2) in prefix_1.iter_mut().zip(prefix_2) {
+        let sum = *x_1 + *x_2;
+        let diff = *x_1 - *x_2;
+        *x_1 = sum;
+        *x_2 = diff;
+    }
+    for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2) {
+        let sum = *x_1 + *x_2;
+        let diff = *x_1 - *x_2;
+        *x_1 = sum;
+        *x_2 = diff;
+    }
+    for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2) {
+        let sum = *x_1 + *x_2;
+        let diff = *x_1 - *x_2;
+        *x_1 = sum;
+        *x_2 = diff;
     }
 }
