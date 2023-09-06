@@ -27,7 +27,8 @@ where
     pub mds: Mds,
 }
 
-impl<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize> MonolithMersenne31<Mds, WIDTH, NUM_FULL_ROUNDS>
+impl<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
+    MonolithMersenne31<Mds, WIDTH, NUM_FULL_ROUNDS>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,
 {
