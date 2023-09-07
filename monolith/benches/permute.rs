@@ -5,7 +5,7 @@ use p3_monolith::{MonolithMdsMatrixMersenne31, MonolithMersenne31};
 
 fn permute_benchmark(c: &mut Criterion) {
     let mds = MonolithMdsMatrixMersenne31::<6>;
-    let monolith: MonolithMersenne31<_, 16, 6> = MonolithMersenne31::new(mds);
+    let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
 
     let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
     for (i, inp) in input.iter_mut().enumerate() {

@@ -110,11 +110,7 @@ where
         let mut shake = Self::init_shake();
 
         [[Mersenne31::ZERO; WIDTH]; NUM_FULL_ROUNDS]
-            .iter()
             .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap()
     }
 
     pub fn concrete(&self, state: &mut [Mersenne31; WIDTH]) {
@@ -187,7 +183,7 @@ mod tests {
     #[test]
     fn test_monolith_31() {
         let mds = MonolithMdsMatrixMersenne31::<6>;
-        let monolith: MonolithMersenne31<_, 16, 6> = MonolithMersenne31::new(mds);
+        let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
 
         let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
         for (i, inp) in input.iter_mut().enumerate() {
