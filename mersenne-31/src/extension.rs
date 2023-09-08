@@ -1,12 +1,8 @@
-use p3_field::extension::cubic::CubicOef;
-use p3_field::extension::quadratic::QuadraticOef;
 use p3_field::extension::OptimallyExtendable;
 
 use crate::{Mersenne31, Mersenne31Complex};
 
 impl OptimallyExtendable<2> for Mersenne31Complex<Mersenne31> {
-    type Extension = QuadraticOef<Self>;
-
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
@@ -38,8 +34,6 @@ impl OptimallyExtendable<2> for Mersenne31Complex<Mersenne31> {
 }
 
 impl OptimallyExtendable<3> for Mersenne31Complex<Mersenne31> {
-    type Extension = CubicOef<Self>;
-
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
