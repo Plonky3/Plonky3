@@ -5,7 +5,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::extension::{OptimallyExtendable, OEF};
+use crate::extension::OptimallyExtendable;
 use crate::field::Field;
 use crate::{AbstractExtensionField, AbstractField, ExtensionField};
 
@@ -37,7 +37,7 @@ impl<F: OptimallyExtendable<2>> AbstractField for QuadraticOef<F> {
 
         let Self([a0, a1]) = *self;
 
-        let c0 = a0.square() + <Self as OEF<F>>::W * a1.square();
+        let c0 = a0.square() + F::W * a1.square();
         let c1 = a0 * a1.double();
 
         Self([c0, c1])
@@ -91,7 +91,7 @@ impl<F: OptimallyExtendable<2>> Field for QuadraticOef<F> {
         }
         let Self([a0, a1]) = *self;
         let base = Self([a0, -a1]);
-        let scalar = (a0.square() - <Self as OEF<F>>::W * a1.square()).inverse();
+        let scalar = (a0.square() - F::W * a1.square()).inverse();
         Some(ExtensionField::scalar_mul(&base, scalar))
     }
 }
@@ -193,7 +193,7 @@ impl<F: OptimallyExtendable<2>> Mul for QuadraticOef<F> {
         let Self([a0, a1]) = self;
         let Self([b0, b1]) = rhs;
 
-        let c0 = a0 * b0 + <Self as OEF<F>>::W * a1 * b1;
+        let c0 = a0 * b0 + F::W * a1 * b1;
         let c1 = a0 * b1 + a1 * b0;
 
         Self([c0, c1])
@@ -256,12 +256,6 @@ impl<F: OptimallyExtendable<2>> AbstractExtensionField<F> for QuadraticOef<F> {
     fn as_base_slice(&self) -> &[F] {
         self.0.as_ref()
     }
-}
-
-impl<F: OptimallyExtendable<2>> OEF<F> for QuadraticOef<F> {
-    const W: F = F::W;
-
-    const DTH_ROOT: F = F::DTH_ROOT;
 }
 
 impl<F: OptimallyExtendable<2>> Distribution<QuadraticOef<F>> for Standard

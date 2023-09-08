@@ -5,7 +5,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::extension::{OptimallyExtendable, OEF};
+use crate::extension::OptimallyExtendable;
 use crate::field::Field;
 use crate::{AbstractExtensionField, AbstractField, ExtensionField};
 
@@ -33,7 +33,7 @@ impl<F: OptimallyExtendable<3>> AbstractField for CubicOef<F> {
     #[inline(always)]
     fn square(&self) -> Self {
         let Self([a0, a1, a2]) = *self;
-        let w = <Self as OEF<F>>::W;
+        let w = F::W;
 
         let w_a2 = w * a2;
 
@@ -91,7 +91,7 @@ impl<F: OptimallyExtendable<3>> Field for CubicOef<F> {
             return None;
         }
         let Self([a0, a1, a2]) = *self;
-        let w = <Self as OEF<F>>::W;
+        let w = F::W;
 
         let a0_square = a0.square();
         let a1_square = a1.square();
@@ -221,7 +221,7 @@ impl<F: OptimallyExtendable<3>> Mul for CubicOef<F> {
         let a1_b1 = a1 * b1;
         let a2_b2 = a2 * b2;
 
-        let w = <Self as OEF<F>>::W;
+        let w = F::W;
 
         let c0 = a0_b0 + ((a1 + a2) * (b1 + b2) - a1_b1 - a2_b2) * w;
         let c1 = (a0 + a1) * (b0 + b1) - a0_b0 - a1_b1 + a2_b2 * w;
@@ -288,12 +288,6 @@ impl<F: OptimallyExtendable<3>> AbstractExtensionField<F> for CubicOef<F> {
     fn as_base_slice(&self) -> &[F] {
         self.0.as_ref()
     }
-}
-
-impl<F: OptimallyExtendable<3>> OEF<F> for CubicOef<F> {
-    const W: F = F::W;
-
-    const DTH_ROOT: F = F::DTH_ROOT;
 }
 
 impl<F: OptimallyExtendable<3>> Distribution<CubicOef<F>> for Standard
