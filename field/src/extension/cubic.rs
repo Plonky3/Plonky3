@@ -7,7 +7,7 @@ use rand::prelude::Distribution;
 
 use crate::extension::OptimallyExtendable;
 use crate::field::Field;
-use crate::{AbstractExtensionField, AbstractField, ExtensionField};
+use crate::{AbstractExtensionField, AbstractField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct CubicOef<F: OptimallyExtendable<3>>(pub [F; 3]);
@@ -109,12 +109,6 @@ impl<F: OptimallyExtendable<3>> Field for CubicOef<F> {
             scalar * (a2_w * a2 - a0_a1),
             scalar * (a1_square - a0 * a2),
         ]))
-    }
-}
-
-impl<F: OptimallyExtendable<3>> ExtensionField<F> for CubicOef<F> {
-    fn scalar_mul(&self, scalar: F) -> Self {
-        Self([self.0[0] * scalar, self.0[1] * scalar, self.0[2] * scalar])
     }
 }
 
@@ -242,7 +236,7 @@ impl<F: OptimallyExtendable<3>> Mul<F> for CubicOef<F> {
 
     #[inline]
     fn mul(self, rhs: F) -> Self {
-        self.scalar_mul(rhs)
+        Self([self.0[0] * rhs, self.0[1] * rhs, self.0[2] * rhs])
     }
 }
 
@@ -276,7 +270,7 @@ impl<F: OptimallyExtendable<3>> MulAssign for CubicOef<F> {
 
 impl<F: OptimallyExtendable<3>> MulAssign<F> for CubicOef<F> {
     fn mul_assign(&mut self, rhs: F) {
-        *self = self.scalar_mul(rhs);
+        *self = *self * rhs;
     }
 }
 impl<F: OptimallyExtendable<3>> AbstractExtensionField<F> for CubicOef<F> {

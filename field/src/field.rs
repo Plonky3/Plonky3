@@ -199,15 +199,9 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(|x| x.is_zero())
     }
-
-    fn scalar_mul(&self, scalar: Base) -> Self;
 }
 
-impl<F: Field> ExtensionField<F> for F {
-    fn scalar_mul(&self, scalar: F) -> Self {
-        *self * scalar
-    }
-}
+impl<F: Field> ExtensionField<F> for F {}
 
 impl<F: Field> AbstractExtensionField<F> for F {
     const D: usize = 1;
