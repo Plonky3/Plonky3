@@ -96,6 +96,12 @@ impl<F: OptimallyExtendable<2>> Field for QuadraticOef<F> {
     }
 }
 
+impl<F: OptimallyExtendable<2>> ExtensionField<F> for QuadraticOef<F> {
+    fn scalar_mul(&self, scalar: F) -> Self {
+        Self([self.0[0] * scalar, self.0[1] * scalar])
+    }
+}
+
 impl<F: OptimallyExtendable<2>> Display for QuadraticOef<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} + {}*a", self.0[0], self.0[1])

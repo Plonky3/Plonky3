@@ -112,6 +112,12 @@ impl<F: OptimallyExtendable<3>> Field for CubicOef<F> {
     }
 }
 
+impl<F: OptimallyExtendable<3>> ExtensionField<F> for CubicOef<F> {
+    fn scalar_mul(&self, scalar: F) -> Self {
+        Self([self.0[0] * scalar, self.0[1] * scalar, self.0[2] * scalar])
+    }
+}
+
 impl<F: OptimallyExtendable<3>> Display for CubicOef<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} + {}*a + {}*a^2", self.0[0], self.0[1], self.0[2])
