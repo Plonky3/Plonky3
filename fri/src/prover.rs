@@ -8,10 +8,12 @@ use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
+use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
 use crate::{FriConfig, FriProof, QueryProof};
 
+#[instrument(name="FRI prover", skip_all)]
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
@@ -30,19 +32,21 @@ pub(crate) fn prove<FC: FriConfig>(
     let query_indices: Vec<usize> = (0..config.num_queries())
         .map(|_| challenger.sample_bits(log_n))
         .collect();
-    // TODO: into_par_iter?
-    let query_proofs = query_indices
-        .into_iter()
-        .map(|index| {
-            answer_query(
-                config,
-                input_mmcs,
-                input_commits,
-                &commit_phase_commits,
-                index,
-            )
-        })
-        .collect();
+
+    let query_proofs = info_span!("query phase").in_scope(|| {
+        query_indices
+            .into_iter() // TODO: into_par_iter?
+            .map(|index| {
+                answer_query(
+                    config,
+                    input_mmcs,
+                    input_commits,
+                    &commit_phase_commits,
+                    index,
+                )
+            })
+            .collect()
+    });
     FriProof { query_proofs }
 }
 
@@ -69,6 +73,7 @@ fn answer_query<FC: FriConfig>(
     }
 }
 
+#[instrument(name="commit phase", skip_all)]
 fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
@@ -117,6 +122,7 @@ fn commit_phase<FC: FriConfig>(
     commits
 }
 
+#[instrument(name="fold in matrices", skip_all)]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
     init: &[Challenge],

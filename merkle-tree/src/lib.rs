@@ -15,6 +15,7 @@ use p3_matrix::{Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
 use p3_util::log2_strict_usize;
+use tracing::instrument;
 
 /// A binary Merkle tree, with leaves of type `L` and digests of type `D`.
 ///
@@ -29,6 +30,7 @@ pub struct MerkleTree<L, D> {
 impl<L, D> MerkleTree<L, D> {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
+    #[instrument(name="build merkle tree", skip_all)]
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         L: Copy,

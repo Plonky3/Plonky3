@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::Field;
+use tracing::instrument;
 
 /// Fold a polynomial
 /// ```ignore
@@ -11,6 +12,7 @@ use p3_field::Field;
 /// ```ignore
 /// p_even(x) + beta p_odd(x)
 /// ```
+#[instrument(skip_all)]
 pub(crate) fn fold_even_odd<F: Field>(poly: &[F], beta: F) -> Vec<F> {
     // We use the fact that
     //     p_e(x^2) = (p(x) + p(-x)) / 2

@@ -14,6 +14,10 @@ use p3_symmetric::compression::CompressionFunctionFromHasher;
 use p3_symmetric::hasher::SerializingHasher32;
 use p3_uni_stark::{prove, StarkConfigImpl};
 use rand::thread_rng;
+use tracing_forest::ForestLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Registry;
 
 struct MulAir;
 
@@ -28,6 +32,8 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
 #[test]
 fn test_prove_baby_bear() {
+    Registry::default().with(ForestLayer::default()).init();
+
     const WIDTH: usize = 32;
     const HEIGHT: usize = 1 << 6;
 

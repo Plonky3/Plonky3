@@ -13,11 +13,13 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
+use tracing::{info_span, instrument};
 
 use crate::{
     decompose, Commitments, ConstraintFolder, OpenedValues, Proof, StarkConfig, ZerofierOnCoset,
 };
 
+#[instrument(skip_all)]
 pub fn prove<SC, A>(
     config: &SC,
     air: &A,
@@ -60,63 +62,66 @@ where
         .dft()
         .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift);
 
-    let (trace_commit, trace_data) = config.pcs().commit_batch(trace);
+    let (trace_commit, trace_data) =
+        info_span!("commit to trace data").in_scope(|| config.pcs().commit_batch(trace));
 
     challenger.observe(trace_commit.clone());
     let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
-    let quotient_values = (0..quotient_size)
-        .into_par_iter()
-        .step_by(SC::PackedDomain::WIDTH)
-        .flat_map_iter(|i_local_start| {
-            let wrap = |i| i % quotient_size;
-            let i_next_start = wrap(i_local_start + next_step);
-            let i_range = i_local_start..i_local_start + SC::PackedDomain::WIDTH;
+    let quotient_values = info_span!("compute quotient poly").in_scope(|| {
+        (0..quotient_size)
+            .into_par_iter()
+            .step_by(SC::PackedDomain::WIDTH)
+            .flat_map_iter(|i_local_start| {
+                let wrap = |i| i % quotient_size;
+                let i_next_start = wrap(i_local_start + next_step);
+                let i_range = i_local_start..i_local_start + SC::PackedDomain::WIDTH;
 
-            let x = *SC::PackedDomain::from_slice(&coset[i_range.clone()]);
-            let is_transition = x - subgroup_last;
-            let is_first_row =
-                *SC::PackedDomain::from_slice(&lagrange_first_evals[i_range.clone()]);
-            let is_last_row = *SC::PackedDomain::from_slice(&lagrange_last_evals[i_range]);
+                let x = *SC::PackedDomain::from_slice(&coset[i_range.clone()]);
+                let is_transition = x - subgroup_last;
+                let is_first_row =
+                    *SC::PackedDomain::from_slice(&lagrange_first_evals[i_range.clone()]);
+                let is_last_row = *SC::PackedDomain::from_slice(&lagrange_last_evals[i_range]);
 
-            let local: Vec<_> = (0..trace_lde.width())
-                .map(|col| {
-                    SC::PackedDomain::from_fn(|offset| {
-                        let row = wrap(i_local_start + offset);
-                        trace_lde.get(row, col)
+                let local: Vec<_> = (0..trace_lde.width())
+                    .map(|col| {
+                        SC::PackedDomain::from_fn(|offset| {
+                            let row = wrap(i_local_start + offset);
+                            trace_lde.get(row, col)
+                        })
                     })
-                })
-                .collect();
-            let next: Vec<_> = (0..trace_lde.width())
-                .map(|col| {
-                    SC::PackedDomain::from_fn(|offset| {
-                        let row = wrap(i_next_start + offset);
-                        trace_lde.get(row, col)
+                    .collect();
+                let next: Vec<_> = (0..trace_lde.width())
+                    .map(|col| {
+                        SC::PackedDomain::from_fn(|offset| {
+                            let row = wrap(i_next_start + offset);
+                            trace_lde.get(row, col)
+                        })
                     })
-                })
-                .collect();
+                    .collect();
 
-            let accumulator = SC::PackedChallenge::ZERO;
-            let mut builder = ConstraintFolder {
-                main: TwoRowMatrixView {
-                    local: &local,
-                    next: &next,
-                },
-                is_first_row,
-                is_last_row,
-                is_transition,
-                alpha,
-                accumulator,
-            };
-            air.eval(&mut builder);
+                let accumulator = SC::PackedChallenge::ZERO;
+                let mut builder = ConstraintFolder {
+                    main: TwoRowMatrixView {
+                        local: &local,
+                        next: &next,
+                    },
+                    is_first_row,
+                    is_last_row,
+                    is_transition,
+                    alpha,
+                    accumulator,
+                };
+                air.eval(&mut builder);
 
-            // quotient(x) = constraints(x) / Z_H(x)
-            let zerofier_inv: SC::PackedDomain =
-                zerofier_on_coset.eval_inverse_packed(i_local_start);
-            let quotient = builder.accumulator * zerofier_inv;
-            quotient.as_slice().to_vec()
-        })
-        .collect::<Vec<SC::Challenge>>();
+                // quotient(x) = constraints(x) / Z_H(x)
+                let zerofier_inv: SC::PackedDomain =
+                    zerofier_on_coset.eval_inverse_packed(i_local_start);
+                let quotient = builder.accumulator * zerofier_inv;
+                quotient.as_slice().to_vec()
+            })
+            .collect::<Vec<SC::Challenge>>()
+    });
 
     let num_quotient_chunks = 1 << quotient_degree_bits;
     let quotient_value_chunks = decompose(quotient_values, quotient_degree_bits);
@@ -134,7 +139,8 @@ where
         num_quotient_chunks * challenge_ext_degree,
     );
 
-    let (quotient_commit, quotient_data) = config.pcs().commit_batch(quotient_chunks_flattened);
+    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
+        .in_scope(|| config.pcs().commit_batch(quotient_chunks_flattened));
     challenger.observe(quotient_commit.clone());
 
     let commitments = Commitments {
