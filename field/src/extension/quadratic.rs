@@ -7,7 +7,7 @@ use rand::prelude::Distribution;
 
 use crate::extension::OptimallyExtendable;
 use crate::field::Field;
-use crate::{AbstractExtensionField, AbstractField, ExtensionField};
+use crate::{AbstractExtensionField, AbstractField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct QuadraticOef<F: OptimallyExtendable<2>>(pub [F; 2]);
@@ -92,13 +92,7 @@ impl<F: OptimallyExtendable<2>> Field for QuadraticOef<F> {
         let Self([a0, a1]) = *self;
         let base = Self([a0, -a1]);
         let scalar = (a0.square() - F::W * a1.square()).inverse();
-        Some(ExtensionField::scalar_mul(&base, scalar))
-    }
-}
-
-impl<F: OptimallyExtendable<2>> ExtensionField<F> for QuadraticOef<F> {
-    fn scalar_mul(&self, scalar: F) -> Self {
-        Self([self.0[0] * scalar, self.0[1] * scalar])
+        Some(base * scalar)
     }
 }
 
@@ -211,7 +205,7 @@ impl<F: OptimallyExtendable<2>> Mul<F> for QuadraticOef<F> {
 
     #[inline]
     fn mul(self, rhs: F) -> Self {
-        self.scalar_mul(rhs)
+        Self([self.0[0] * rhs, self.0[1] * rhs])
     }
 }
 
@@ -245,9 +239,10 @@ impl<F: OptimallyExtendable<2>> MulAssign for QuadraticOef<F> {
 
 impl<F: OptimallyExtendable<2>> MulAssign<F> for QuadraticOef<F> {
     fn mul_assign(&mut self, rhs: F) {
-        *self = self.scalar_mul(rhs);
+        *self = *self * rhs;
     }
 }
+
 impl<F: OptimallyExtendable<2>> AbstractExtensionField<F> for QuadraticOef<F> {
     const D: usize = F::D;
 
