@@ -15,7 +15,7 @@ pub trait OptimallyExtendable<const D: usize>: Field + Sized {
 
     const DTH_ROOT: Self;
 
-    fn ext_multiplicate_group_generator() -> [Self; D];
+    fn ext_multiplicative_group_generator() -> [Self; D];
 }
 
 impl<F: Field + ExtensionField<F>> OptimallyExtendable<1> for F {
@@ -23,7 +23,7 @@ impl<F: Field + ExtensionField<F>> OptimallyExtendable<1> for F {
     const W: Self = F::ONE;
     const DTH_ROOT: Self = F::ONE;
 
-    fn ext_multiplicate_group_generator() -> [Self; 1] {
+    fn ext_multiplicative_group_generator() -> [Self; 1] {
         [F::multiplicative_group_generator()]
     }
 }

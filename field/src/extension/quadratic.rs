@@ -78,7 +78,7 @@ impl<F: OptimallyExtendable<2>> AbstractField for QuadraticOef<F> {
     }
 
     fn multiplicative_group_generator() -> Self {
-        Self(F::ext_multiplicate_group_generator())
+        Self(F::ext_multiplicative_group_generator())
     }
 }
 
