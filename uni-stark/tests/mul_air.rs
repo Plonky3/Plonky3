@@ -3,14 +3,15 @@ use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2Bowers;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
+use p3_keccak::Keccak256Hash;
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
-use p3_symmetric::compression::TruncatedPermutation;
-use p3_symmetric::sponge::PaddingFreeSponge;
+use p3_symmetric::compression::CompressionFunctionFromHasher;
+use p3_symmetric::hasher::SerializingHasher32;
 use p3_uni_stark::{prove, StarkConfigImpl};
 use rand::thread_rng;
 
@@ -27,8 +28,8 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
 #[test]
 fn test_prove_baby_bear() {
-    const WIDTH: usize = 10;
-    const HEIGHT: usize = 1 << 8;
+    const WIDTH: usize = 32;
+    const HEIGHT: usize = 1 << 6;
 
     type Val = BabyBear;
     type Domain = Val;
@@ -40,14 +41,14 @@ fn test_prove_baby_bear() {
     type Perm = Poseidon<Val, MyMds, 16, 5>;
     let perm = Perm::new_from_rng(4, 22, mds, &mut thread_rng()); // TODO: Use deterministic RNG
 
-    type H4 = PaddingFreeSponge<Val, Perm, 16, 8, 8>;
-    let h4 = H4::new(perm.clone());
+    type MyHash = SerializingHasher32<Val, Keccak256Hash>;
+    let hash = MyHash::new(Keccak256Hash {});
 
-    type C = TruncatedPermutation<Val, Perm, 2, 8, 16>;
-    let c = C::new(perm.clone());
+    type MyCompress = CompressionFunctionFromHasher<Val, MyHash, 2, 8>;
+    let compress = MyCompress::new(hash);
 
-    type MyMmcs = MerkleTreeMmcs<Val, [Val; 8], H4, C>;
-    let mmcs = MyMmcs::new(h4, c);
+    type MyMmcs = MerkleTreeMmcs<Val, [Val; 8], MyHash, MyCompress>;
+    let mmcs = MyMmcs::new(hash, compress);
 
     type Dft = Radix2Bowers;
     let dft = Dft {};

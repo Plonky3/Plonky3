@@ -48,7 +48,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct CompressionFunctionFromIterHasher<T, H, const N: usize, const CHUNK: usize>
+pub struct CompressionFunctionFromHasher<T, H, const N: usize, const CHUNK: usize>
 where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
@@ -57,8 +57,21 @@ where
     hasher: H,
 }
 
+impl<T, H, const N: usize, const CHUNK: usize> CompressionFunctionFromHasher<T, H, N, CHUNK>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; CHUNK]>,
+{
+    pub fn new(hasher: H) -> Self {
+        Self {
+            hasher,
+            _phantom_t: PhantomData,
+        }
+    }
+}
+
 impl<T, H, const N: usize, const CHUNK: usize> PseudoCompressionFunction<[T; CHUNK], N>
-    for CompressionFunctionFromIterHasher<T, H, N, CHUNK>
+    for CompressionFunctionFromHasher<T, H, N, CHUNK>
 where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
@@ -69,7 +82,7 @@ where
 }
 
 impl<T, H, const N: usize, const CHUNK: usize> CompressionFunction<[T; CHUNK], N>
-    for CompressionFunctionFromIterHasher<T, H, N, CHUNK>
+    for CompressionFunctionFromHasher<T, H, N, CHUNK>
 where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
