@@ -30,7 +30,7 @@ pub struct MerkleTree<L, D> {
 impl<L, D> MerkleTree<L, D> {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
-    #[instrument(name="build merkle tree", skip_all)]
+    #[instrument(name = "build merkle tree", skip_all)]
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         L: Copy,

@@ -13,7 +13,7 @@ use tracing::{info_span, instrument};
 use crate::fold_even_odd::fold_even_odd;
 use crate::{FriConfig, FriProof, QueryProof};
 
-#[instrument(name="FRI prover", skip_all)]
+#[instrument(name = "FRI prover", skip_all)]
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
@@ -73,7 +73,7 @@ fn answer_query<FC: FriConfig>(
     }
 }
 
-#[instrument(name="commit phase", skip_all)]
+#[instrument(name = "commit phase", skip_all)]
 fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
@@ -122,7 +122,7 @@ fn commit_phase<FC: FriConfig>(
     commits
 }
 
-#[instrument(name="fold in matrices", skip_all)]
+#[instrument(name = "fold in matrices", skip_all)]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
     init: &[Challenge],

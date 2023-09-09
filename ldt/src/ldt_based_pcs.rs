@@ -85,7 +85,7 @@ where
     L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
-    #[instrument(name="prove batch opening", skip_all)]
+    #[instrument(name = "prove batch opening", skip_all)]
     fn open_multi_batches(
         &self,
         prover_data_and_points: &[(&Self::ProverData, &[EF])],
