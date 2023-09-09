@@ -11,6 +11,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::MatrixRows;
+use tracing::instrument;
 
 use crate::quotient::QuotientMmcs;
 use crate::{Ldt, Opening};
@@ -64,7 +65,7 @@ where
         let ldes = polynomials
             .into_iter()
             .map(|poly| {
-                let input = poly.to_row_major_matrix().map(Domain::from_base);
+                let input = poly.to_row_major_matrix().to_ext::<Domain>();
                 self.dft.coset_lde_batch(input, self.added_bits, shift)
             })
             .collect();
@@ -84,6 +85,7 @@ where
     L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
+    #[instrument(name="prove batch opening", skip_all)]
     fn open_multi_batches(
         &self,
         prover_data_and_points: &[(&Self::ProverData, &[EF])],
