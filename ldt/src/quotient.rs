@@ -159,24 +159,53 @@ impl<F, EF, Inner: MatrixRows<F>> Matrix<EF> for QuotientMatrix<F, EF, Inner> {
 impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRows<F>> MatrixRows<EF>
     for QuotientMatrix<F, EF, Inner>
 {
-    // TODO: Probably better to implement a custom iterator to avoid allocation...
-    type Row<'a> = Vec<EF> where Inner: 'a;
+    type Row<'a> = QuotientMatrixRow<'a, F, EF, <Inner::Row<'a> as IntoIterator>::IntoIter> where Inner: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
-        let x = self.subgroup[r];
-        self.inner
-            .row(r)
-            .into_iter()
-            .enumerate()
-            .flat_map(|(i, eval)| {
-                self.openings.iter().map(move |Opening { point, values }| {
-                    let val: EF = values[i];
-                    let num: EF = EF::from_base(eval) - val;
-                    let den: EF = EF::from_base(x) - *point;
-                    num / den
-                })
-            })
-            .collect()
+        let inner_row = r / self.openings.len();
+        let opening_index = r % self.openings.len();
+
+        let x = self.subgroup[inner_row];
+        let opening = &self.openings[opening_index];
+        let inv_denominator: EF = (EF::from_base(x) - opening.point).inverse();
+
+        QuotientMatrixRow {
+            opened_values: opening.values.iter(),
+            inner_row_iter: self.inner.row(inner_row).into_iter(),
+            inv_denominator,
+            _phantom_f: PhantomData,
+        }
+    }
+}
+
+pub struct QuotientMatrixRow<'a, F, EF, InnerRowIter> {
+    opened_values: core::slice::Iter<'a, EF>,
+    inner_row_iter: InnerRowIter,
+    /// `1 / (x - opened_point)`
+    inv_denominator: EF,
+    _phantom_f: PhantomData<F>,
+}
+
+impl<'a, F, EF, InnerRowIter> Iterator for QuotientMatrixRow<'a, F, EF, InnerRowIter>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    InnerRowIter: Iterator<Item = F>,
+{
+    type Item = EF;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let opt_eval = self.inner_row_iter.next();
+        let opt_opened_value = self.opened_values.next();
+
+        if let (Some(eval), Some(opened_value)) = (opt_eval, opt_opened_value) {
+            let num: EF = EF::from_base(eval) - *opened_value;
+            Some(num * self.inv_denominator)
+        } else {
+            debug_assert!(opt_eval.is_none());
+            debug_assert!(opt_opened_value.is_none());
+            None
+        }
     }
 }
 
@@ -184,7 +213,7 @@ impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRows<F>> MatrixRows<EF>
 fn get_repeated<T: Eq + Debug, I: Iterator<Item = T>>(mut iter: I) -> T {
     let first = iter.next().expect("get_repeated on empty iterator");
     for x in iter {
-        assert_eq!(x, first, "{:?} != {:?}", x, first);
+        debug_assert_eq!(x, first, "{:?} != {:?}", x, first);
     }
     first
 }

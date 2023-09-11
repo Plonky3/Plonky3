@@ -122,7 +122,7 @@ fn commit_phase<FC: FriConfig>(
     commits
 }
 
-#[instrument(name = "fold in matrices", skip_all)]
+#[instrument(name = "fold in matrices", skip(init, matrices, alpha))]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
     init: &[Challenge],
