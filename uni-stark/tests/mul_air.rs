@@ -17,7 +17,7 @@ use rand::thread_rng;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Registry;
+use tracing_subscriber::{EnvFilter, Registry};
 
 /// How many `a * b = c` operations to do per row in the AIR.
 const REPETITIONS: usize = 10;
@@ -42,7 +42,10 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
 #[test]
 fn test_prove_baby_bear() {
-    Registry::default().with(ForestLayer::default()).init();
+    Registry::default()
+        .with(EnvFilter::from_default_env())
+        .with(ForestLayer::default())
+        .init();
 
     const HEIGHT: usize = 1 << 6;
 

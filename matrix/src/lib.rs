@@ -17,6 +17,19 @@ pub trait Matrix<T> {
     fn width(&self) -> usize;
 
     fn height(&self) -> usize;
+
+    fn dimensions(&self) -> Dimensions {
+        Dimensions {
+            width: self.width(),
+            height: self.height(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Dimensions {
+    pub width: usize,
+    pub height: usize,
 }
 
 /// A `Matrix` that supports randomly accessing particular coefficients.
