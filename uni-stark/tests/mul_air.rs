@@ -19,14 +19,24 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Registry;
 
+/// How many `a * b = c` operations to do per row in the AIR.
+const REPETITIONS: usize = 10;
+const TRACE_WIDTH: usize = REPETITIONS * 3;
+
 struct MulAir;
 
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let main_local = main.row_slice(0);
-        let diff = main_local[0] * main_local[1] - main_local[2];
-        builder.assert_zero(diff);
+
+        for i in 0..REPETITIONS {
+            let start = i * 3;
+            let a = main_local[start];
+            let b = main_local[start + 1];
+            let c = main_local[start + 2];
+            builder.assert_zero(a * b - c);
+        }
     }
 }
 
@@ -34,7 +44,6 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 fn test_prove_baby_bear() {
     Registry::default().with(ForestLayer::default()).init();
 
-    const WIDTH: usize = 32;
     const HEIGHT: usize = 1 << 6;
 
     type Val = BabyBear;
@@ -70,7 +79,7 @@ fn test_prove_baby_bear() {
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>;
 
     let mut rng = thread_rng();
-    let trace = RowMajorMatrix::rand(&mut rng, HEIGHT, WIDTH);
+    let trace = RowMajorMatrix::rand(&mut rng, HEIGHT, TRACE_WIDTH);
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft {});
     let mut challenger = Challenger::new(perm);
