@@ -251,6 +251,7 @@ impl<F: OptimallyExtendable<2>> AbstractExtensionField<F> for QuadraticOef<F> {
     }
 
     fn from_base_slice(bs: &[F]) -> Self {
+        assert_eq!(bs.len(), 2);
         Self([bs[0], bs[1]])
     }
 
