@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::cmp::Reverse;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
@@ -20,17 +19,23 @@ pub(crate) fn prove<FC: FriConfig>(
     input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
-    let n = input_mmcs
+    let max_height = input_mmcs
         .iter()
         .zip(input_commits)
         .map(|(mmcs, commit)| mmcs.get_max_height(commit))
         .max()
         .unwrap_or_else(|| panic!("No matrices?"));
-    let log_n = log2_strict_usize(n);
+    let log_max_height = log2_strict_usize(max_height);
 
-    let commit_phase_commits = commit_phase::<FC>(config, input_mmcs, input_commits, challenger);
+    let commit_phase_commits = commit_phase::<FC>(
+        config,
+        input_mmcs,
+        input_commits,
+        log_max_height,
+        challenger,
+    );
     let query_indices: Vec<usize> = (0..config.num_queries())
-        .map(|_| challenger.sample_bits(log_n))
+        .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
     let query_proofs = info_span!("query phase").in_scope(|| {
@@ -78,18 +83,20 @@ fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
     input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
+    log_max_height: usize,
     challenger: &mut FC::Challenger,
 ) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
-    let inputs_by_desc_height = input_mmcs
-        .iter()
-        .zip(input_commits)
-        .flat_map(|(mmcs, commit)| mmcs.get_matrices(commit))
-        .sorted_by_key(|mat| Reverse(mat.height()))
-        .group_by(|mat| mat.height());
-    let mut inputs_by_desc_height = inputs_by_desc_height.into_iter();
+    let max_height = 1 << log_max_height;
+    let matrices_with_log_height = |log_height| {
+        input_mmcs
+            .iter()
+            .zip(input_commits)
+            .flat_map(|(mmcs, commit)| mmcs.get_matrices(commit))
+            .filter(|mat| mat.height() == 1usize << log_height)
+            .collect_vec()
+    };
 
-    let (max_height, largest_matrices_iter) = inputs_by_desc_height.next().expect("No matrices?");
-    let largest_matrices = largest_matrices_iter.collect_vec();
+    let largest_matrices = matrices_with_log_height(log_max_height);
     let zero_vec = vec![FC::Challenge::ZERO; max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
@@ -100,29 +107,28 @@ fn commit_phase<FC: FriConfig>(
     challenger.observe(largest_commit);
     let mut commits = vec![largest_prover_data];
 
-    for (height, matrices) in inputs_by_desc_height {
-        while current.len() < height {
-            let beta: FC::Challenge = challenger.sample_ext_element();
-            current = fold_even_odd(&current, beta);
-        }
+    for log_height in (1..log_max_height).rev() {
+        let height = 1 << log_height;
+        let beta: FC::Challenge = challenger.sample_ext_element();
+        current = fold_even_odd(&current, beta);
 
         // TODO: Can we avoid cloning?
         let (commit, prover_data) = config.commit_phase_mmcs().commit_vec(current.clone());
         challenger.observe(commit);
         commits.push(prover_data);
 
-        current = reduce_matrices::<FC::Domain, FC::Challenge, <FC::InputMmcs as Mmcs<_>>::Mat<'_>>(
-            height,
-            &current,
-            &matrices.collect_vec(),
-            alpha,
-        );
+        let matrices = matrices_with_log_height(log_height);
+        current = reduce_matrices(height, &current, &matrices, alpha);
     }
 
     commits
 }
 
-#[instrument(name = "fold in matrices", skip(init, matrices, alpha))]
+#[instrument(
+    name = "fold in matrices",
+    level = "debug",
+    skip(init, matrices, alpha)
+)]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
     init: &[Challenge],

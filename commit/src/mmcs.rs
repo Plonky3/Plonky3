@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::{Dimensions, Matrix, MatrixRows};
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme; it
 /// supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
@@ -58,11 +58,6 @@ pub trait Mmcs<T>: Clone {
         opened_values: Vec<Vec<T>>,
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>;
-}
-
-pub struct Dimensions {
-    pub width: usize,
-    pub log2_height: usize,
 }
 
 /// An MMCS over explicit inputs which are supplied upfront.

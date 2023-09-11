@@ -3,9 +3,9 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
-use p3_commit::{Dimensions, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
 /// A wrapper around an Inner MMCS, which transforms each inner value to
@@ -106,15 +106,16 @@ impl<F: TwoAdicField, EF: ExtensionField<F>, Inner: Mmcs<F>> Mmcs<EF>
 
         let log_max_height = dimensions
             .iter()
-            .map(|dims| dims.log2_height)
+            .map(|dims| log2_strict_usize(dims.height))
             .max()
             .unwrap();
 
         let opened_original_values = izip!(opened_quotient_values, &self.openings, dimensions)
             .map(|(quotient_row, openings, dims)| {
-                let bits_reduced = log_max_height - dims.log2_height;
+                let log_height = log2_strict_usize(dims.height);
+                let bits_reduced = log_max_height - log_height;
                 let reduced_index = index >> bits_reduced;
-                let x = F::primitive_root_of_unity(dims.log2_height).exp_u64(reduced_index as u64);
+                let x = F::primitive_root_of_unity(log_height).exp_u64(reduced_index as u64);
 
                 let original_width = quotient_row.len() / openings.len();
                 let original_row_repeated: Vec<Vec<EF>> = quotient_row

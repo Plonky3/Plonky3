@@ -12,7 +12,7 @@ use tracing::instrument;
 /// ```ignore
 /// p_even(x) + beta p_odd(x)
 /// ```
-#[instrument(skip_all)]
+#[instrument(skip_all, level = "debug")]
 pub(crate) fn fold_even_odd<F: Field>(poly: &[F], beta: F) -> Vec<F> {
     // We use the fact that
     //     p_e(x^2) = (p(x) + p(-x)) / 2

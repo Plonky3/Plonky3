@@ -9,9 +9,9 @@ use core::iter;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::{Dimensions, DirectMmcs, Mmcs};
+use p3_commit::{DirectMmcs, Mmcs};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
 use p3_util::log2_strict_usize;
@@ -30,7 +30,8 @@ pub struct MerkleTree<L, D> {
 impl<L, D> MerkleTree<L, D> {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
-    #[instrument(name = "build merkle tree", skip_all)]
+    #[instrument(name = "build merkle tree", level = "debug", skip_all,
+                 fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         L: Copy,
