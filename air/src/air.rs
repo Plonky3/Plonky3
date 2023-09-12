@@ -4,13 +4,15 @@ use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionFi
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 
-pub trait BaseAir<F> {
+/// An AIR (algebraic intermediate representation).
+pub trait BaseAir<F>: Sync {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
 }
 
-pub trait Air<AB: AirBuilder>: BaseAir<AB::F> + Sync {
+/// An AIR that works with a particular `AirBuilder`.
+pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     fn eval(&self, builder: &mut AB);
 }
 
