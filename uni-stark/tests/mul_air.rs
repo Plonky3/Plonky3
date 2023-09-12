@@ -1,4 +1,4 @@
-use p3_air::{Air, AirBuilder};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2Bowers;
@@ -24,6 +24,8 @@ const REPETITIONS: usize = 10;
 const TRACE_WIDTH: usize = REPETITIONS * 3;
 
 struct MulAir;
+
+impl<F> BaseAir<F> for MulAir {}
 
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
