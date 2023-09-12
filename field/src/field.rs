@@ -215,10 +215,31 @@ pub trait AbstractExtensionField<Base>:
 
     fn from_base(b: Base) -> Self;
 
+    /// Suppose this field extension is represented by the quotient
+    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// polynomial of degree `D`. This function takes a slice `bs` of
+    /// length at most D, and constructs the field element
+    /// \sum_i bs[i] * X^i.
+    ///
+    /// NB: The value produced by this function fundamentally depends
+    /// on the choice of irreducible polynomial f. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different f might have been used.
     fn from_base_slice(bs: &[Base]) -> Self;
 
-    /// Return the coefficients in little-endian order, i.e. starting with the coefficient of the
-    /// degree 0 monomial, and ending with the coefficient of the degree `D-1` monomial.
+    /// Suppose this field extension is represented by the quotient
+    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// polynomial of degree `D`. This function takes a field element
+    /// \sum_i bs[i] * X^i and returns the coefficients as a slice
+    /// `bs` of length at most D containing, from lowest degree to
+    /// highest.
+    ///
+    /// NB: The value produced by this function fundamentally depends
+    /// on the choice of irreducible polynomial f. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different f might have been used.
     fn as_base_slice(&self) -> &[Base];
 }
 
