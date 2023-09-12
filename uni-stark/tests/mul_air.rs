@@ -12,7 +12,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::compression::CompressionFunctionFromHasher;
 use p3_symmetric::hasher::SerializingHasher32;
-use p3_uni_stark::{prove, StarkConfigImpl};
+use p3_uni_stark::{prove, verify, StarkConfigImpl, VerificationError};
 use rand::thread_rng;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -41,7 +41,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 
 #[test]
-fn test_prove_baby_bear() {
+fn test_prove_baby_bear() -> Result<(), VerificationError> {
     Registry::default()
         .with(EnvFilter::from_default_env())
         .with(ForestLayer::default())
@@ -85,8 +85,11 @@ fn test_prove_baby_bear() {
     let trace = RowMajorMatrix::rand(&mut rng, HEIGHT, TRACE_WIDTH);
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft {});
+    let mut challenger = Challenger::new(perm.clone());
+    let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
+
     let mut challenger = Challenger::new(perm);
-    prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
+    verify(&config, &MulAir, &mut challenger, &proof)
 }
 
 #[test]

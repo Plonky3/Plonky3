@@ -152,7 +152,7 @@ where
         _values: OpenedValues<EF>,
         _proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
-        todo!()
+        Ok(()) // TODO
     }
 }
 

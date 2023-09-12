@@ -9,7 +9,7 @@ use p3_field::{AbstractField, TwoAdicField};
 use crate::{ConstraintFolder, Proof, StarkConfig};
 
 pub fn verify<SC, A>(
-    config: SC,
+    config: &SC,
     _air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
