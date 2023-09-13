@@ -4,12 +4,16 @@ use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionFi
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 
-pub trait Air<AB: AirBuilder>: Sync {
-    fn eval(&self, builder: &mut AB);
-
-    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<AB::F>> {
+/// An AIR (algebraic intermediate representation).
+pub trait BaseAir<F>: Sync {
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
+}
+
+/// An AIR that works with a particular `AirBuilder`.
+pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
+    fn eval(&self, builder: &mut AB);
 }
 
 pub trait AirBuilder: Sized {
@@ -212,9 +216,11 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 mod tests {
     use p3_matrix::MatrixRowSlices;
 
-    use crate::{Air, AirBuilder};
+    use crate::{Air, AirBuilder, BaseAir};
 
     struct FibonacciAir;
+
+    impl<F> BaseAir<F> for FibonacciAir {}
 
     impl<AB: AirBuilder> Air<AB> for FibonacciAir {
         fn eval(&self, builder: &mut AB) {

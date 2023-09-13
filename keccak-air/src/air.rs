@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
 use p3_matrix::MatrixRowSlices;
 
@@ -12,6 +12,8 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 /// Assumes the field size is at least 16 bits.
 pub struct KeccakAir {}
+
+impl<F> BaseAir<F> for KeccakAir {}
 
 impl<AB: AirBuilder> Air<AB> for KeccakAir {
     fn eval(&self, builder: &mut AB) {
