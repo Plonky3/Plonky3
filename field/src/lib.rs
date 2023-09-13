@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod batch_inverse;
+pub mod extension;
 mod field;
 mod helpers;
 mod packed;

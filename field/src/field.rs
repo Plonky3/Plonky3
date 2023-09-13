@@ -243,9 +243,13 @@ pub trait AbstractExtensionField<Base>:
     fn as_base_slice(&self) -> &[Base];
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {}
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+    fn is_in_basefield(&self) -> bool {
+        self.as_base_slice()[1..].iter().all(|x| x.is_zero())
+    }
+}
 
-impl<Base: Field, Ext: Field + AbstractExtensionField<Base>> ExtensionField<Base> for Ext {}
+impl<F: Field> ExtensionField<F> for F {}
 
 impl<F: AbstractField> AbstractExtensionField<F> for F {
     const D: usize = 1;
