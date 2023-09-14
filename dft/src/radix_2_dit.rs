@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{Field, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
@@ -24,14 +24,14 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
-            dit_layer(&mut mat, layer, &twiddles);
+            dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }
         mat
     }
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, layer: usize, twiddles: &[F]) {
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddles: &[F]) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
     let layer_rev = log_h - 1 - layer;
@@ -41,15 +41,15 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, layer: usize, twiddles: &[F]
 
     for j in (0..h).step_by(block_size) {
         // Unroll i=0 case
-        let hi = j;
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(mat, hi, lo);
+        let butterfly_hi = j;
+        let butterfly_lo = butterfly_hi + half_block_size;
+        twiddle_free_butterfly(mat, butterfly_hi, butterfly_lo);
 
         for i in 1..half_block_size {
-            let hi = j + i;
-            let lo = hi + half_block_size;
+            let butterfly_hi = j + i;
+            let butterfly_lo = butterfly_hi + half_block_size;
             let twiddle = twiddles[i << layer_rev];
-            dit_butterfly(mat, hi, lo, twiddle);
+            dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
         }
     }
 }
@@ -58,28 +58,32 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, layer: usize, twiddles: &[F]
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_goldilocks::Goldilocks;
-    use p3_matrix::dense::RowMajorMatrix;
-    use rand::thread_rng;
 
-    use crate::{NaiveDft, Radix2Dit, TwoAdicSubgroupDft};
+    use crate::testing::*;
+    use crate::Radix2Dit;
 
     #[test]
-    fn matches_naive() {
-        type F = BabyBear;
-        let mut rng = thread_rng();
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft_naive = NaiveDft.dft_batch(mat.clone());
-        let dft_radix_2_dit = Radix2Dit.dft_batch(mat);
-        assert_eq!(dft_naive, dft_radix_2_dit);
+    fn dft_matches_naive() {
+        test_dft_matches_naive::<BabyBear, Radix2Dit>();
+    }
+
+    #[test]
+    fn idft_matches_naive() {
+        test_idft_matches_naive::<Goldilocks, Radix2Dit>();
+    }
+
+    #[test]
+    fn lde_matches_naive() {
+        test_lde_matches_naive::<BabyBear, Radix2Dit>();
+    }
+
+    #[test]
+    fn coset_lde_matches_naive() {
+        test_coset_lde_matches_naive::<BabyBear, Radix2Dit>();
     }
 
     #[test]
     fn dft_idft_consistency() {
-        type F = Goldilocks;
-        let mut rng = thread_rng();
-        let original = RowMajorMatrix::<F>::rand(&mut rng, 64, 3);
-        let dft = Radix2Dit.dft_batch(original.clone());
-        let idft = Radix2Dit.idft_batch(dft);
-        assert_eq!(original, idft);
+        test_dft_idft_consistency::<BabyBear, Radix2Dit>();
     }
 }

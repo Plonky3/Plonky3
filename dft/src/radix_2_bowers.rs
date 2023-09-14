@@ -1,14 +1,14 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::util::{
-    divide_by_height, reverse_bits, reverse_matrix_index_bits, reverse_slice_index_bits,
+    bit_reversed_zero_pad, divide_by_height, reverse_bits, reverse_matrix_index_bits,
+    reverse_slice_index_bits,
 };
 use crate::TwoAdicSubgroupDft;
 
@@ -20,23 +20,23 @@ pub struct Radix2Bowers;
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         reverse_matrix_index_bits(&mut mat);
-        bowers_g(&mut mat);
+        bowers_g(&mut mat.as_view_mut());
         mat
     }
 
     /// Compute the inverse DFT of each column in `mat`.
     fn idft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        bowers_g_t(&mut mat);
+        bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
         reverse_matrix_index_bits(&mut mat);
         mat
     }
 
     fn lde_batch(&self, mut mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
-        bowers_g_t(&mut mat);
+        bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
         bit_reversed_zero_pad(&mut mat, added_bits);
-        bowers_g(&mut mat);
+        bowers_g(&mut mat.as_view_mut());
         mat
     }
 
@@ -49,7 +49,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         let h = mat.height();
         let h_inv = F::from_canonical_usize(h).inverse();
 
-        bowers_g_t(&mut mat);
+        bowers_g_t(&mut mat.as_view_mut());
 
         // Rescale coefficients in two ways:
         // - divide by height (since we're doing an inverse DFT)
@@ -66,7 +66,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
         bit_reversed_zero_pad(&mut mat, added_bits);
 
-        bowers_g(&mut mat);
+        bowers_g(&mut mat.as_view_mut());
 
         mat
     }
@@ -74,7 +74,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
-fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
+fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -90,7 +90,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
 
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// 1/height, and the output is bit-reversed.
-fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
+fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -104,34 +104,9 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrix<F>) {
     }
 }
 
-/// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,
-/// so in actuality we're interleaving zero rows.
-#[inline]
-fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: usize) {
-    if added_bits == 0 {
-        return;
-    }
-
-    // This is equivalent to:
-    //     reverse_matrix_index_bits(mat);
-    //     mat
-    //         .values
-    //         .resize(mat.values.len() << added_bits, F::ZERO);
-    //     reverse_matrix_index_bits(mat);
-    // But rather than implement it with bit reversals, we directly construct the resulting matrix,
-    // whose rows are zero except for rows whose low `added_bits` bits are zero.
-
-    let w = mat.width;
-    let mut values = vec![F::ZERO; mat.values.len() << added_bits];
-    for i in (0..mat.values.len()).step_by(w) {
-        values[(i << added_bits)..((i << added_bits) + w)].copy_from_slice(&mat.values[i..i + w]);
-    }
-    *mat = RowMajorMatrix::new(values, w);
-}
-
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
 fn bowers_g_layer<F: Field>(
-    mat: &mut RowMajorMatrix<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
@@ -141,23 +116,24 @@ fn bowers_g_layer<F: Field>(
     let num_blocks = h >> log_block_size;
 
     // Unroll first iteration with a twiddle factor of 1.
-    for butterfly_hi in 0..half_block_size {
-        let butterfly_lo = butterfly_hi + half_block_size;
-        twiddle_free_butterfly(mat, butterfly_hi, butterfly_lo);
+    for hi in 0..half_block_size {
+        let lo = hi + half_block_size;
+        twiddle_free_butterfly(mat, hi, lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
         let block_start = block << log_block_size;
-        for butterfly_hi in block_start..block_start + half_block_size {
-            let butterfly_lo = butterfly_hi + half_block_size;
-            dif_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
+        for i in 0..half_block_size {
+            let hi = block_start + i;
+            let lo = hi + half_block_size;
+            dif_butterfly(mat, hi, lo, twiddle);
         }
     }
 }
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
 fn bowers_g_t_layer<F: Field>(
-    mat: &mut RowMajorMatrix<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
@@ -167,16 +143,17 @@ fn bowers_g_t_layer<F: Field>(
     let num_blocks = h >> log_block_size;
 
     // Unroll first iteration with a twiddle factor of 1.
-    for butterfly_hi in 0..half_block_size {
-        let butterfly_lo = butterfly_hi + half_block_size;
-        twiddle_free_butterfly(mat, butterfly_hi, butterfly_lo);
+    for hi in 0..half_block_size {
+        let lo = hi + half_block_size;
+        twiddle_free_butterfly(mat, hi, lo);
     }
 
     for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
         let block_start = block << log_block_size;
-        for butterfly_hi in block_start..block_start + half_block_size {
-            let butterfly_lo = butterfly_hi + half_block_size;
-            dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
+        for i in 0..half_block_size {
+            let hi = block_start + i;
+            let lo = hi + half_block_size;
+            dit_butterfly(mat, hi, lo, twiddle);
         }
     }
 }
@@ -184,77 +161,33 @@ fn bowers_g_t_layer<F: Field>(
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
-    use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_matrix::dense::RowMajorMatrix;
-    use rand::thread_rng;
 
     use crate::radix_2_bowers::Radix2Bowers;
-    use crate::{NaiveDft, TwoAdicSubgroupDft};
+    use crate::testing::*;
 
     #[test]
     fn dft_matches_naive() {
-        type F = BabyBear;
-        let mut rng = thread_rng();
-        for log_h in 0..5 {
-            let h = 1 << log_h;
-            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-            let dft_naive = NaiveDft.dft_batch(mat.clone());
-            let dft_bowers = Radix2Bowers.dft_batch(mat);
-            assert_eq!(dft_naive, dft_bowers);
-        }
+        test_dft_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
     fn idft_matches_naive() {
-        type F = BabyBear;
-        let mut rng = thread_rng();
-        for log_h in 0..5 {
-            let h = 1 << log_h;
-            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-            let idft_naive = NaiveDft.idft_batch(mat.clone());
-            let idft_bowers = Radix2Bowers.idft_batch(mat);
-            assert_eq!(idft_naive, idft_bowers);
-        }
+        test_idft_matches_naive::<Goldilocks, Radix2Bowers>();
     }
 
     #[test]
     fn lde_matches_naive() {
-        type F = BabyBear;
-        let mut rng = thread_rng();
-        for log_h in 0..5 {
-            let h = 1 << log_h;
-            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-            let lde_naive = NaiveDft.lde_batch(mat.clone(), 1);
-            let lde_bowers = Radix2Bowers.lde_batch(mat, 1);
-            assert_eq!(lde_naive, lde_bowers);
-        }
+        test_lde_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
     fn coset_lde_matches_naive() {
-        type F = BabyBear;
-        let mut rng = thread_rng();
-        for log_h in 0..5 {
-            let h = 1 << log_h;
-            let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-            let shift = F::multiplicative_group_generator();
-            let coset_lde_naive = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
-            let coset_lde_bowers = Radix2Bowers.coset_lde_batch(mat, 1, shift);
-            assert_eq!(coset_lde_naive, coset_lde_bowers);
-        }
+        test_coset_lde_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
     fn dft_idft_consistency() {
-        type F = Goldilocks;
-        let mut rng = thread_rng();
-        for log_h in 0..5 {
-            let h = 1 << log_h;
-            let original = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-            let dft = Radix2Bowers.dft_batch(original.clone());
-            let idft = Radix2Bowers.idft_batch(dft);
-            assert_eq!(original, idft);
-        }
+        test_dft_idft_consistency::<BabyBear, Radix2Bowers>();
     }
 }

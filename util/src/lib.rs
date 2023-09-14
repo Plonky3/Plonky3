@@ -25,6 +25,7 @@ pub fn log2_ceil_u64(n: u64) -> u64 {
 /// # Panics
 /// Panics if `n` is not a power of two.
 #[must_use]
+#[inline]
 pub fn log2_strict_usize(n: usize) -> usize {
     let res = n.trailing_zeros();
     assert_eq!(n.wrapping_shr(res), 1, "Not a power of two: {n}");
