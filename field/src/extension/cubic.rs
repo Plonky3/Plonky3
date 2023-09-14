@@ -30,20 +30,6 @@ impl<F: OptimallyExtendable<3>> AbstractField for CubicOef<F> {
     const TWO: Self = Self([F::TWO, F::ZERO, F::ZERO]);
     const NEG_ONE: Self = Self([F::NEG_ONE, F::ZERO, F::ZERO]);
 
-    #[inline(always)]
-    fn square(&self) -> Self {
-        let Self([a0, a1, a2]) = *self;
-        let w = F::W;
-
-        let w_a2 = w * a2;
-
-        let c0 = a0.square() + (a1 * w_a2).double();
-        let c1 = w_a2 * a2 + (a0 * a1).double();
-        let c2 = a1.square() + (a0 * a2).double();
-
-        Self([c0, c1, c2])
-    }
-
     fn from_bool(b: bool) -> Self {
         F::from_bool(b).into()
     }
@@ -80,6 +66,20 @@ impl<F: OptimallyExtendable<3>> AbstractField for CubicOef<F> {
 
     fn multiplicative_group_generator() -> Self {
         Self(F::ext_multiplicative_group_generator())
+    }
+
+    #[inline(always)]
+    fn square(&self) -> Self {
+        let Self([a0, a1, a2]) = *self;
+        let w = F::W;
+
+        let w_a2 = w * a2;
+
+        let c0 = a0.square() + (a1 * w_a2).double();
+        let c1 = w_a2 * a2 + (a0 * a1).double();
+        let c2 = a1.square() + (a0 * a2).double();
+
+        Self([c0, c1, c2])
     }
 }
 

@@ -30,19 +30,6 @@ impl<F: OptimallyExtendable<2>> AbstractField for QuadraticOef<F> {
     const TWO: Self = Self([F::TWO, F::ZERO]);
     const NEG_ONE: Self = Self([F::NEG_ONE, F::ZERO]);
 
-    #[inline(always)]
-    fn square(&self) -> Self {
-        // Specialising mul reduces the computation of c1 from 2 muls
-        // and one add to one mul and a shift
-
-        let Self([a0, a1]) = *self;
-
-        let c0 = a0.square() + F::W * a1.square();
-        let c1 = a0 * a1.double();
-
-        Self([c0, c1])
-    }
-
     fn from_bool(b: bool) -> Self {
         F::from_bool(b).into()
     }
@@ -79,6 +66,19 @@ impl<F: OptimallyExtendable<2>> AbstractField for QuadraticOef<F> {
 
     fn multiplicative_group_generator() -> Self {
         Self(F::ext_multiplicative_group_generator())
+    }
+
+    #[inline(always)]
+    fn square(&self) -> Self {
+        // Specialising mul reduces the computation of c1 from 2 muls
+        // and one add to one mul and a shift
+
+        let Self([a0, a1]) = *self;
+
+        let c0 = a0.square() + F::W * a1.square();
+        let c1 = a0 * a1.double();
+
+        Self([c0, c1])
     }
 }
 
