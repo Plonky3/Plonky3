@@ -58,9 +58,11 @@ where
     lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
 
     // TODO: Skip this if using FriBasedPcs, in which case we already computed the trace LDE.
-    let trace_lde = config
-        .dft()
-        .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift);
+    let trace_lde = info_span!("compute LDEs used in quotient computation").in_scope(|| {
+        config
+            .dft()
+            .coset_lde_batch(trace.to_ext(), quotient_degree_bits, coset_shift)
+    });
 
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| config.pcs().commit_batch(trace));

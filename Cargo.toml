@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "air",
     "baby-bear",
+    "blake3",
     "brakedown",
     "challenger",
     "code",
