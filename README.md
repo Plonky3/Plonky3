@@ -10,7 +10,7 @@ This is the "core" repo, but the plan is to move each crate into its own repo on
 Fields:
 - [x] Mersenne31
   - [x] "complex" extension field
-  - [ ] ~128 bit extension field
+  - [x] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
   - [ ] NEON
@@ -21,11 +21,8 @@ Fields:
   - [x] NEON
 - [x] Goldilocks
   - [ ] ~128 bit extension field
-  - [ ] AVX2
-  - [ ] AVX-512
-  - [ ] NEON
 
-Vector-ish commitment schemes
+Generalized vector commitment schemes
 - [x] generalized Merkle tree
 
 Polynomial commitment schemes
@@ -43,7 +40,7 @@ Codes
 - [x] Brakedown
 - [x] Reed-Solomon
 
-Algorithms
+Interpolation
 - [x] Barycentric interpolation
 - [x] radix-2 DIT FFT
 - [x] radix-2 Bowers FFT
@@ -54,9 +51,10 @@ Hashes
 - [x] Rescue
 - [x] Poseidon
 - [ ] Poseidon2
+- [x] BLAKE3
+  - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
-- [ ] Monolith
-- [ ] BLAKE3-modified
+- [x] Monolith
 
 
 ## License
@@ -120,11 +118,10 @@ separate PRs. The goal is to make reviewing your PR as simple as
 possible, and you should be thinking about how to compose the PR to
 minimise the burden on the reviewer.
 
-Also note that any PR that depends on unstable features will be
-automatically rejected. The Polygon Zero Team may enable a small
-number of unstable features in the future for our exclusive use;
-nevertheless we aim to minimise the number of such features, and the
-number of uses of them, to the greatest extent possible.
+Plonky3 uses stable Rust, so any PR that depends on unstable features
+is likely to be rejected. It's possible that we may relax this policy
+in the future, but we aim to minimize the use of unstable features;
+please discuss with us before enabling any.
 
 Here are a few specific guidelines for the three main categories of
 PRs that we expect:
@@ -177,4 +174,3 @@ Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the
 Apache-2.0 license, shall be dual licensed as above, without any
 additional terms or conditions.
-
