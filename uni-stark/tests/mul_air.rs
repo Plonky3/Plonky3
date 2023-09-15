@@ -1,9 +1,9 @@
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
+use p3_blake3::Blake3;
 use p3_challenger::DuplexChallenger;
-use p3_dft::Radix2Bowers;
+use p3_dft::Radix2DitParallel;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
-use p3_keccak::Keccak256Hash;
 use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
@@ -61,8 +61,8 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type Perm = Poseidon<Val, MyMds, 16, 5>;
     let perm = Perm::new_from_rng(4, 22, mds, &mut thread_rng()); // TODO: Use deterministic RNG
 
-    type MyHash = SerializingHasher32<Val, Keccak256Hash>;
-    let hash = MyHash::new(Keccak256Hash {});
+    type MyHash = SerializingHasher32<Val, Blake3>;
+    let hash = MyHash::new(Blake3);
 
     type MyCompress = CompressionFunctionFromHasher<Val, MyHash, 2, 8>;
     let compress = MyCompress::new(hash);
@@ -70,7 +70,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type MyMmcs = MerkleTreeMmcs<Val, [Val; 8], MyHash, MyCompress>;
     let mmcs = MyMmcs::new(hash, compress);
 
-    type Dft = Radix2Bowers;
+    type Dft = Radix2DitParallel;
     let dft = Dft {};
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;

@@ -16,6 +16,7 @@ p3-util = { path = "../util" }
 tracing = "0.1.37"
 
 [dev-dependencies]
+p3-blake3 = { path = "../blake3" }
 p3-fri = { path = "../fri" }
 p3-ldt = { path = "../ldt" }
 p3-mds = { path = "../mds" }

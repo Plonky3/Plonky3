@@ -1,0 +1,9 @@
+[package]
+name = "p3-blake3"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-symmetric = { path = "../symmetric" }
+blake3 = "1.4.1"
