@@ -15,31 +15,39 @@ use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
-    poseidon2::<BabyBear, MdsMatrixBabyBear, 16, 7>(c);
-    poseidon2::<BabyBear, MdsMatrixBabyBear, 24, 7>(c);
+    poseidon2::<BabyBear, MdsMatrixBabyBear, MdsMatrixBabyBear, 16, 7>(c);
+    poseidon2::<BabyBear, MdsMatrixBabyBear, MdsMatrixBabyBear, 24, 7>(c);
 
-    poseidon2::<Goldilocks, MdsMatrixGoldilocks, 8, 7>(c);
-    poseidon2::<Goldilocks, MdsMatrixGoldilocks, 12, 7>(c);
-    poseidon2::<Goldilocks, MdsMatrixGoldilocks, 16, 7>(c);
+    poseidon2::<Goldilocks, MdsMatrixGoldilocks, MdsMatrixGoldilocks, 8, 7>(c);
+    poseidon2::<Goldilocks, MdsMatrixGoldilocks, MdsMatrixGoldilocks, 12, 7>(c);
+    poseidon2::<Goldilocks, MdsMatrixGoldilocks, MdsMatrixGoldilocks, 16, 7>(c);
 
-    poseidon2::<Mersenne31, MdsMatrixMersenne31, 16, 5>(c);
-    poseidon2::<Mersenne31, MdsMatrixMersenne31, 32, 5>(c);
+    poseidon2::<Mersenne31, MdsMatrixMersenne31, MdsMatrixMersenne31, 16, 5>(c);
+    poseidon2::<Mersenne31, MdsMatrixMersenne31, MdsMatrixMersenne31, 32, 5>(c);
 }
 
-fn poseidon2<F, Mds, const WIDTH: usize, const D: usize>(c: &mut Criterion)
+fn poseidon2<F, ExternalMds, InternalMds, const WIDTH: usize, const D: u64>(c: &mut Criterion)
 where
     F: PrimeField64,
     Standard: Distribution<F>,
-    Mds: MdsPermutation<F, WIDTH> + Default,
+    ExternalMds: MdsPermutation<F, WIDTH> + Default,
+    InternalMds: MdsPermutation<F, WIDTH> + Default,
 {
     let mut rng = thread_rng();
-    let mds = Mds::default();
+    let external_mds = ExternalMds::default();
+    let internal_mds = InternalMds::default();
 
     // TODO: Should be calculated for the particular field, width and ALPHA.
     let rounds_f = 8;
     let rounds_p = 22;
 
-    let poseidon = Poseidon2::<F, Mds, WIDTH, D>::new_from_rng(rounds_f, rounds_p, mds, &mut rng);
+    let poseidon = Poseidon2::<F, ExternalMds, InternalMds, WIDTH, D>::new_from_rng(
+        rounds_f,
+        rounds_p,
+        external_mds,
+        internal_mds,
+        &mut rng,
+    );
     let input = [F::ZERO; WIDTH];
     let name = format!("poseidon2::<{}, {}>", type_name::<F>(), D);
     let id = BenchmarkId::new(name, WIDTH);
