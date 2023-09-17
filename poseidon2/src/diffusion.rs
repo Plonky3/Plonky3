@@ -36,6 +36,7 @@ pub fn matmul_internal<F: Field, const WIDTH: usize>(
         }
         4 | 8 | 12 | 16 | 20 | 24 => {
             let mut sum = state[0];
+            #[allow(clippy::needless_range_loop)]
             for i in 1..WIDTH {
                 sum += state[i];
             }
