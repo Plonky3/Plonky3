@@ -1,5 +1,5 @@
 use p3_dft::reverse_slice_index_bits;
-use p3_field::{Field, Powers, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use p3_util::log2_strict_usize;
 
@@ -9,26 +9,37 @@ use crate::MdsPermutation;
 /// power-of-two subgroup, and computing evaluations over a coset of that subgroup. This can be
 /// viewed as returning the parity elements of a systematic Reed-Solomon code. Since Reed-Solomon
 /// codes are MDS, this is an MDS permutation.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct CosetMds<F: TwoAdicField, const N: usize> {
+    fft_twiddles: Vec<F>,
+    ifft_twiddles: Vec<F>,
     weights: [F; N],
 }
 
 impl<F: TwoAdicField, const N: usize> Default for CosetMds<F, N> {
     fn default() -> Self {
-        assert!(N.is_power_of_two());
+        let log_n = log2_strict_usize(N);
+
+        let root = F::primitive_root_of_unity(log_n);
+        let root_inv = root.inverse();
+        let mut fft_twiddles: Vec<F> = root.powers().take(N / 2).collect();
+        let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
+        reverse_slice_index_bits(&mut fft_twiddles);
+        reverse_slice_index_bits(&mut ifft_twiddles);
+
         let shift = F::multiplicative_group_generator();
-        let n_inv = F::from_canonical_usize(N).inverse();
-        let mut weights: [F; N] = Powers {
-            base: shift,
-            current: n_inv,
-        }
-        .take(N)
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap();
+        let mut weights: [F; N] = shift
+            .powers()
+            .take(N)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
         reverse_slice_index_bits(&mut weights);
-        Self { weights }
+        Self {
+            fft_twiddles,
+            ifft_twiddles,
+            weights,
+        }
     }
 }
 
@@ -42,17 +53,15 @@ impl<F: TwoAdicField, const N: usize> CryptographicPermutation<[F; N]> for Coset
 
     fn permute_mut(&self, values: &mut [F; N]) {
         // Inverse DFT, except we skip bit reversal and rescaling by 1/N.
-        bowers_g_t(values);
+        bowers_g_t(values, &self.ifft_twiddles);
 
-        // Rescale coefficients in two ways:
-        // - divide by N (since we're doing an inverse DFT)
-        // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
+        // Multiply by powers of the coset shift (see default coset LDE impl for an explanation)
         for (value, weight) in values.iter_mut().zip(self.weights) {
             *value *= weight;
         }
 
         // DFT, assuming bit-reversed input.
-        bowers_g(values);
+        bowers_g(values, &self.fft_twiddles);
     }
 }
 
@@ -60,33 +69,26 @@ impl<F: TwoAdicField, const N: usize> MdsPermutation<F, N> for CosetMds<F, N> {}
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
-fn bowers_g<F: TwoAdicField, const N: usize>(values: &mut [F; N]) {
+#[inline]
+fn bowers_g<F: TwoAdicField, const N: usize>(values: &mut [F; N], twiddles: &[F]) {
     let log_n = log2_strict_usize(N);
-
-    let root = F::primitive_root_of_unity(log_n);
-    let mut twiddles: Vec<F> = root.powers().take(N / 2).collect();
-    reverse_slice_index_bits(&mut twiddles);
-
     for log_half_block_size in 0..log_n {
-        bowers_g_layer(values, log_half_block_size, &twiddles);
+        bowers_g_layer(values, log_half_block_size, twiddles);
     }
 }
 
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// `1/N`, and the output is bit-reversed.
-fn bowers_g_t<F: TwoAdicField, const N: usize>(values: &mut [F; N]) {
+#[inline]
+fn bowers_g_t<F: TwoAdicField, const N: usize>(values: &mut [F; N], twiddles: &[F]) {
     let log_n = log2_strict_usize(N);
-
-    let root_inv = F::primitive_root_of_unity(log_n).inverse();
-    let mut twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
-    reverse_slice_index_bits(&mut twiddles);
-
     for log_half_block_size in (0..log_n).rev() {
-        bowers_g_t_layer(values, log_half_block_size, &twiddles);
+        bowers_g_t_layer(values, log_half_block_size, twiddles);
     }
 }
 
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
+#[inline]
 fn bowers_g_layer<F: Field, const N: usize>(
     values: &mut [F; N],
     log_half_block_size: usize,
@@ -112,6 +114,7 @@ fn bowers_g_layer<F: Field, const N: usize>(
 }
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
+#[inline]
 fn bowers_g_t_layer<F: Field, const N: usize>(
     values: &mut [F; N],
     log_half_block_size: usize,
@@ -196,7 +199,10 @@ mod tests {
         let mut arr: [F; N] = rng.gen();
 
         let shift = F::multiplicative_group_generator();
-        let coset_lde_naive = NaiveDft.coset_lde(arr.to_vec(), 0, shift);
+        let mut coset_lde_naive = NaiveDft.coset_lde(arr.to_vec(), 0, shift);
+        coset_lde_naive
+            .iter_mut()
+            .for_each(|x| *x *= F::from_canonical_usize(N));
         CosetMds::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
     }
