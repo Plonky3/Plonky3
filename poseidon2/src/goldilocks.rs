@@ -1,4 +1,4 @@
-//! Diffusion matrices for Goldilocks8, Goldilocks16, and Goldilocks20.
+//! Diffusion matrices for Goldilocks8, Goldilocks12, Goldilocks16, and Goldilocks20.
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
 
