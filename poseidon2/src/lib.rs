@@ -6,6 +6,13 @@
 
 #![no_std]
 
+mod babybear;
+mod diffusion;
+mod goldilocks;
+pub use babybear::DiffusionMatrixBabybear;
+pub use diffusion::DiffusionPermutation;
+pub use goldilocks::DiffusionMatrixGoldilocks;
+
 extern crate alloc;
 
 use alloc::borrow::ToOwned;
@@ -20,11 +27,11 @@ use rand::Rng;
 
 /// The Poseidon2 permutation.
 #[derive(Clone)]
-pub struct Poseidon2<F, ExternalMds, InternalMds, const WIDTH: usize, const D: u64>
+pub struct Poseidon2<F, Mds, Diffusion, const WIDTH: usize, const D: u64>
 where
     F: Field,
-    ExternalMds: MdsPermutation<F, WIDTH>,
-    InternalMds: MdsPermutation<F, WIDTH>,
+    Mds: MdsPermutation<F, WIDTH>,
+    Diffusion: DiffusionPermutation<F, WIDTH>,
 {
     /// The number of external rounds.
     rounds_f: usize,
@@ -36,33 +43,32 @@ where
     constants: Vec<[F; WIDTH]>,
 
     /// The linear layer used in external rounds.
-    external_mds: ExternalMds,
+    external_linear_layer: Mds,
 
     /// The linear layer used in internal rounds (only needs diffusion property, not MDS).
-    internal_mds: InternalMds,
+    internal_linear_layer: Diffusion,
 }
 
-impl<F, ExternalMds, InternalMds, const WIDTH: usize, const D: u64>
-    Poseidon2<F, ExternalMds, InternalMds, WIDTH, D>
+impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> Poseidon2<F, Mds, Diffusion, WIDTH, D>
 where
     F: Field,
-    ExternalMds: MdsPermutation<F, WIDTH>,
-    InternalMds: MdsPermutation<F, WIDTH>,
+    Mds: MdsPermutation<F, WIDTH>,
+    Diffusion: DiffusionPermutation<F, WIDTH>,
 {
     /// Create a new Poseidon2 configuration.
     pub fn new(
         rounds_f: usize,
         rounds_p: usize,
         constants: Vec<[F; WIDTH]>,
-        external_mds: ExternalMds,
-        internal_mds: InternalMds,
+        external_linear_layer: Mds,
+        internal_linear_layer: Diffusion,
     ) -> Self {
         Self {
             rounds_f,
             rounds_p,
             constants,
-            external_mds,
-            internal_mds,
+            external_linear_layer,
+            internal_linear_layer,
         }
     }
 
@@ -70,8 +76,8 @@ where
     pub fn new_from_rng<R: Rng>(
         rounds_f: usize,
         rounds_p: usize,
-        external_mds: ExternalMds,
-        internal_mds: InternalMds,
+        external_mds: Mds,
+        internal_mds: Diffusion,
         rng: &mut R,
     ) -> Self
     where
@@ -92,8 +98,8 @@ where
             rounds_f,
             rounds_p,
             constants,
-            external_mds,
-            internal_mds,
+            external_linear_layer: external_mds,
+            internal_linear_layer: internal_mds,
         }
     }
 
@@ -121,18 +127,18 @@ where
     }
 }
 
-impl<F, ExternalMds, InternalMds, const WIDTH: usize, const D: u64>
-    CryptographicPermutation<[F; WIDTH]> for Poseidon2<F, ExternalMds, InternalMds, WIDTH, D>
+impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[F; WIDTH]>
+    for Poseidon2<F, Mds, Diffusion, WIDTH, D>
 where
     F: Field,
-    ExternalMds: MdsPermutation<F, WIDTH>,
-    InternalMds: MdsPermutation<F, WIDTH>,
+    Mds: MdsPermutation<F, WIDTH>,
+    Diffusion: DiffusionPermutation<F, WIDTH>,
 {
     fn permute(&self, state: [F; WIDTH]) -> [F; WIDTH] {
         let mut state = state.to_owned();
 
         // The initial linear layer.
-        self.external_mds.permute_mut(&mut state);
+        self.external_linear_layer.permute_mut(&mut state);
 
         // The first half of the external rounds.
         let rounds = self.rounds_f + self.rounds_p;
@@ -140,7 +146,7 @@ where
         for r in 0..rounds_f_beggining {
             state = self.add_rc(&state, &self.constants[r]);
             state = self.sbox(&state);
-            self.external_mds.permute_mut(&mut state);
+            self.external_linear_layer.permute_mut(&mut state);
         }
 
         // The internal rounds.
@@ -148,25 +154,25 @@ where
         for r in self.rounds_f..p_end {
             state[0] += self.constants[r][0];
             state[0] = self.sbox_p(&state[0]);
-            self.internal_mds.permute_mut(&mut state);
+            self.internal_linear_layer.permute_mut(&mut state);
         }
 
         // The second half of the external rounds.
         for r in p_end..rounds {
             state = self.add_rc(&state, &self.constants[r]);
             state = self.sbox(&state);
-            self.external_mds.permute_mut(&mut state);
+            self.external_linear_layer.permute_mut(&mut state);
         }
 
         state
     }
 }
 
-impl<F: Field, ExternalMds, InternalMds, const T: usize, const D: u64> ArrayPermutation<F, T>
-    for Poseidon2<F, ExternalMds, InternalMds, T, D>
+impl<F: Field, Mds, Diffusion, const T: usize, const D: u64> ArrayPermutation<F, T>
+    for Poseidon2<F, Mds, Diffusion, T, D>
 where
     F: Field,
-    ExternalMds: MdsPermutation<F, T>,
-    InternalMds: MdsPermutation<F, T>,
+    Mds: MdsPermutation<F, T>,
+    Diffusion: DiffusionPermutation<F, T>,
 {
 }
