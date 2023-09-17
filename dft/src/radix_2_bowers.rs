@@ -172,6 +172,11 @@ mod tests {
     }
 
     #[test]
+    fn coset_dft_matches_naive() {
+        test_coset_dft_matches_naive::<BabyBear, Radix2Bowers>();
+    }
+
+    #[test]
     fn idft_matches_naive() {
         test_idft_matches_naive::<Goldilocks, Radix2Bowers>();
     }
