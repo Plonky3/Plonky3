@@ -1,3 +1,9 @@
+//! Implementation of the quadratic extension of the Mersenne31 field
+//! by X^2 + 1.
+//!
+//! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
+//! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
+
 use core::fmt::{Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -206,7 +212,7 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     // sage: F2.multiplicative_generator()
     // u + 12
     fn multiplicative_group_generator() -> Self {
-        Self::new(AF::ONE, AF::from(Mersenne31::new(12)))
+        Self::new(AF::from(Mersenne31::new(12)), AF::ONE)
     }
 }
 
@@ -247,8 +253,8 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     // sage: assert(g.multiplicative_order() == 2^32)
     fn power_of_two_generator() -> Self {
         Self::new(
-            Mersenne31::new(1_117_296_306),
             Mersenne31::new(1_166_849_849),
+            Mersenne31::new(1_117_296_306),
         )
     }
 }
@@ -285,14 +291,6 @@ mod tests {
 
     use super::*;
 
-    // The Euler criteria:
-    // https://en.wikipedia.org/wiki/Euler%27s_criterion,
-    // implies that every prime field whose order is not divisible by 4,
-    // does not admit a square root of -1.
-    // Over the Mersenne31 prime field (of order 2^31 - 1), we know
-    // that p = (2^31 - 1) - 1 = 2^31 - 2 = 2 * (2^30 - 1), is not divisible
-    // by 4. Therefore, it makes sense to consider a complex field extension,
-    // F_p[X] / (X^2 + 1) = F_[i] / F_p, of the Mersennes31 field.
     type Fi = Mersenne31Complex<Mersenne31>;
     type F = Mersenne31;
 
