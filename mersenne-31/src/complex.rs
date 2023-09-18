@@ -206,7 +206,7 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     // sage: F2.multiplicative_generator()
     // u + 12
     fn multiplicative_group_generator() -> Self {
-        Self::new(AF::ONE, AF::from(Mersenne31::new(12)))
+        Self::new(AF::from(Mersenne31::new(12)), AF::ONE)
     }
 }
 
@@ -247,8 +247,8 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     // sage: assert(g.multiplicative_order() == 2^32)
     fn power_of_two_generator() -> Self {
         Self::new(
-            Mersenne31::new(1_117_296_306),
             Mersenne31::new(1_166_849_849),
+            Mersenne31::new(1_117_296_306),
         )
     }
 }
