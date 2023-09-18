@@ -5,26 +5,26 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::extension::OptimallyExtendable;
+use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{AbstractExtensionField, AbstractField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct CubicOef<F: OptimallyExtendable<3>>(pub [F; 3]);
+pub struct CubicBEF<F: BinomiallyExtendable<3>>(pub [F; 3]);
 
-impl<F: OptimallyExtendable<3>> Default for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Default for CubicBEF<F> {
     fn default() -> Self {
         Self::ZERO
     }
 }
 
-impl<F: OptimallyExtendable<3>> From<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> From<F> for CubicBEF<F> {
     fn from(x: F) -> Self {
         Self([x, F::ZERO, F::ZERO])
     }
 }
 
-impl<F: OptimallyExtendable<3>> AbstractField for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> AbstractField for CubicBEF<F> {
     const ZERO: Self = Self([F::ZERO; 3]);
     const ONE: Self = Self([F::ONE, F::ZERO, F::ZERO]);
     const TWO: Self = Self([F::TWO, F::ZERO, F::ZERO]);
@@ -83,7 +83,7 @@ impl<F: OptimallyExtendable<3>> AbstractField for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Field for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Field for CubicBEF<F> {
     type Packing = Self;
     // Algorithm 11.3.6.b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     fn try_inverse(&self) -> Option<Self> {
@@ -112,19 +112,19 @@ impl<F: OptimallyExtendable<3>> Field for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Display for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Display for CubicBEF<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} + {}*a + {}*a^2", self.0[0], self.0[1], self.0[2])
     }
 }
 
-impl<F: OptimallyExtendable<3>> Debug for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Debug for CubicBEF<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
 }
 
-impl<F: OptimallyExtendable<3>> Neg for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Neg for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -133,7 +133,7 @@ impl<F: OptimallyExtendable<3>> Neg for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Add for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Add for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -146,7 +146,7 @@ impl<F: OptimallyExtendable<3>> Add for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Add<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Add<F> for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -155,25 +155,25 @@ impl<F: OptimallyExtendable<3>> Add<F> for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> AddAssign for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> AddAssign for CubicBEF<F> {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<F: OptimallyExtendable<3>> AddAssign<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> AddAssign<F> for CubicBEF<F> {
     fn add_assign(&mut self, rhs: F) {
         *self = *self + rhs;
     }
 }
 
-impl<F: OptimallyExtendable<3>> Sum for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Sum for CubicBEF<F> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |acc, x| acc + x)
     }
 }
 
-impl<F: OptimallyExtendable<3>> Sub for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Sub for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -186,7 +186,7 @@ impl<F: OptimallyExtendable<3>> Sub for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Sub<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Sub<F> for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -195,21 +195,21 @@ impl<F: OptimallyExtendable<3>> Sub<F> for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> SubAssign for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> SubAssign for CubicBEF<F> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl<F: OptimallyExtendable<3>> SubAssign<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> SubAssign<F> for CubicBEF<F> {
     #[inline]
     fn sub_assign(&mut self, rhs: F) {
         *self = *self - rhs;
     }
 }
 
-impl<F: OptimallyExtendable<3>> Mul for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Mul for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -231,7 +231,7 @@ impl<F: OptimallyExtendable<3>> Mul for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Mul<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Mul<F> for CubicBEF<F> {
     type Output = Self;
 
     #[inline]
@@ -240,13 +240,13 @@ impl<F: OptimallyExtendable<3>> Mul<F> for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Product for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Product for CubicBEF<F> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ONE, |acc, x| acc * x)
     }
 }
 
-impl<F: OptimallyExtendable<3>> Div for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> Div for CubicBEF<F> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
@@ -255,25 +255,25 @@ impl<F: OptimallyExtendable<3>> Div for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> DivAssign for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> DivAssign for CubicBEF<F> {
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
     }
 }
 
-impl<F: OptimallyExtendable<3>> MulAssign for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> MulAssign for CubicBEF<F> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl<F: OptimallyExtendable<3>> MulAssign<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> MulAssign<F> for CubicBEF<F> {
     fn mul_assign(&mut self, rhs: F) {
         *self = *self * rhs;
     }
 }
-impl<F: OptimallyExtendable<3>> AbstractExtensionField<F> for CubicOef<F> {
+impl<F: BinomiallyExtendable<3>> AbstractExtensionField<F> for CubicBEF<F> {
     const D: usize = F::D;
 
     fn from_base(b: F) -> Self {
@@ -290,12 +290,12 @@ impl<F: OptimallyExtendable<3>> AbstractExtensionField<F> for CubicOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<3>> Distribution<CubicOef<F>> for Standard
+impl<F: BinomiallyExtendable<3>> Distribution<CubicBEF<F>> for Standard
 where
     Standard: Distribution<F>,
 {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> CubicOef<F> {
-        CubicOef::<F>::from_base_slice(&[
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> CubicBEF<F> {
+        CubicBEF::<F>::from_base_slice(&[
             Standard.sample(rng),
             Standard.sample(rng),
             Standard.sample(rng),
