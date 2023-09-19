@@ -15,9 +15,6 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // ```
     const W: Self = Self::new(Mersenne31::new(2), Mersenne31::new(1));
 
-    // DTH_ROOT = W^((p - 1)/2)
-    const DTH_ROOT: Self = Self::new(Mersenne31::new(21189756), Mersenne31::new(42379512));
-
     // Verifiable in Sage with
     // ```sage
     // K2.<j> = K.extension(f2)
@@ -45,9 +42,6 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // assert f2.is_irreducible()
     // ```
     const W: Self = Self::new(Mersenne31::new(0), Mersenne31::new(5));
-
-    // DTH_ROOT = W^((p - 1)/3)
-    const DTH_ROOT: Self = Self::new(Mersenne31::new(634005912), Mersenne31::new(0));
 
     // Verifiable in Sage with
     // ```sage
