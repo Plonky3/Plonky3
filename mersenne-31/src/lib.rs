@@ -179,14 +179,13 @@ impl Field for Mersenne31 {
             return None;
         }
         let p1 = *self;
-        let p2 = p1.square() * p1;
-        let p4 = p2.exp_power_of_2(2) * p2;
+        let p1_1 = p1.exp_power_of_2(2) * p1;
+        let p4 = p1_1.square() * p1_1;
         let p8 = p4.exp_power_of_2(4) * p4;
         let p16 = p8.exp_power_of_2(8) * p8;
         let p24 = p16.exp_power_of_2(8) * p8;
         let p28 = p24.exp_power_of_2(4) * p4;
-        let p29 = p28.exp_power_of_2(1) * p1;
-        let p29_1 = p29.exp_power_of_2(2) * p1;
+        let p29_1 = p28.exp_power_of_2(3) * p1_1;
         Some(p29_1)
     }
 }
