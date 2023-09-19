@@ -8,7 +8,5 @@ pub mod quadratic;
 /// such that the extension is `F[X]/(X^d-W)`.
 pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
     const W: Self;
-    const DTH_ROOT: Self;
-
     fn ext_multiplicative_group_generator() -> [Self; D];
 }

@@ -7,9 +7,6 @@ impl BinomiallyExtendable<2> for Goldilocks {
     // `R.<x> = GF(p)[]; assert (x^2 - 7).is_irreducible()`.
     const W: Self = Self::new(7);
 
-    // DTH_ROOT = W^((ORDER - 1)/2)
-    const DTH_ROOT: Self = Self::new(18446744069414584320);
-
     fn ext_multiplicative_group_generator() -> [Self; 2] {
         [
             Self::new(18081566051660590251),
