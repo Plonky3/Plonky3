@@ -120,6 +120,13 @@ impl Field for BabyBear {
     #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
     type Packing = Self;
 
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        let product = (self.value as u64) << exp;
+        let value = (product % (P as u64)) as u32;
+        Self { value }
+    }
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
