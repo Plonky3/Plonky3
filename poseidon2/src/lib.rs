@@ -6,24 +6,25 @@
 
 #![no_std]
 
+extern crate alloc;
+
 mod babybear;
 mod diffusion;
 mod goldilocks;
-pub use babybear::DiffusionMatrixBabybear;
-pub use diffusion::DiffusionPermutation;
-pub use goldilocks::DiffusionMatrixGoldilocks;
-
-extern crate alloc;
-
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
+pub use babybear::DiffusionMatrixBabybear;
+pub use diffusion::DiffusionPermutation;
+pub use goldilocks::DiffusionMatrixGoldilocks;
 use p3_field::Field;
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
+
+const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
 /// The Poseidon2 permutation.
 #[derive(Clone)]
@@ -63,6 +64,7 @@ where
         external_linear_layer: Mds,
         internal_linear_layer: Diffusion,
     ) -> Self {
+        assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
         Self {
             rounds_f,
             rounds_p,
@@ -104,7 +106,7 @@ where
     }
 
     #[inline]
-    fn add_rc(&self, state: &[F], rc: &[F]) -> [F; WIDTH] {
+    fn add_rc(&self, state: &[F; WIDTH], rc: &[F; WIDTH]) -> [F; WIDTH] {
         let mut result = [F::ZERO; WIDTH];
         for i in 0..WIDTH {
             result[i] = state[i] + rc[i];
@@ -118,7 +120,7 @@ where
     }
 
     #[inline]
-    fn sbox(&self, state: &[F]) -> [F; WIDTH] {
+    fn sbox(&self, state: &[F; WIDTH]) -> [F; WIDTH] {
         let mut result = [F::ZERO; WIDTH];
         for i in 0..WIDTH {
             result[i] = self.sbox_p(&state[i]);
