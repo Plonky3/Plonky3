@@ -10,14 +10,16 @@ use crate::util::{
     bit_reversed_zero_pad, divide_by_height, reverse_bits, reverse_matrix_index_bits,
     reverse_slice_index_bits,
 };
-use crate::TwoAdicSubgroupDft;
+use crate::FourierTransform;
 
 /// The Bowers G FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
 #[derive(Default, Clone)]
 pub struct Radix2Bowers;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
+impl<F: TwoAdicField> FourierTransform<F> for Radix2Bowers {
+    type Range = F;
+
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         reverse_matrix_index_bits(&mut mat);
         bowers_g(&mut mat.as_view_mut());

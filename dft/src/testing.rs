@@ -3,13 +3,13 @@ use p3_matrix::dense::RowMajorMatrix;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
-use crate::{NaiveDft, TwoAdicSubgroupDft};
+use crate::{FourierTransform, NaiveDft};
 
 pub(crate) fn test_dft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: FourierTransform<F, Range = F> + Default,
 {
     let dft = Dft::default();
     let mut rng = thread_rng();
@@ -26,7 +26,7 @@ pub(crate) fn test_coset_dft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: FourierTransform<F, Range = F> + Default,
 {
     let dft = Dft::default();
     let mut rng = thread_rng();
@@ -44,7 +44,7 @@ pub(crate) fn test_idft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: FourierTransform<F, Range = F> + Default,
 {
     let dft = Dft::default();
     let mut rng = thread_rng();
@@ -61,7 +61,7 @@ pub(crate) fn test_lde_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: FourierTransform<F, Range = F> + Default,
 {
     let dft = Dft::default();
     let mut rng = thread_rng();
@@ -78,7 +78,7 @@ pub(crate) fn test_coset_lde_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: FourierTransform<F, Range = F> + Default,
 {
     let dft = Dft::default();
     let mut rng = thread_rng();
@@ -96,7 +96,7 @@ pub(crate) fn test_dft_idft_consistency<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: FourierTransform<F> + Default,
 {
     let dft = Dft::default();
     let mut rng = thread_rng();

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs};
-use p3_dft::TwoAdicSubgroupDft;
+use p3_dft::FourierTransform;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
@@ -50,12 +50,20 @@ where
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
     let mut lagrange_first_evals = vec![SC::Domain::ZERO; degree];
     lagrange_first_evals[0] = SC::Domain::ONE;
-    lagrange_first_evals = config.dft().lde(lagrange_first_evals, quotient_degree_bits);
+    lagrange_first_evals = <SC::Dft as FourierTransform<SC::Domain>>::lde(
+        config.dft(),
+        lagrange_first_evals,
+        quotient_degree_bits,
+    );
 
     // Evaluations of L_last(x) = Z_H(x) / (x - g^-1) on our coset s H.
     let mut lagrange_last_evals = vec![SC::Domain::ZERO; degree];
     lagrange_last_evals[degree - 1] = SC::Domain::ONE;
-    lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
+    lagrange_last_evals = <SC::Dft as FourierTransform<SC::Domain>>::lde(
+        config.dft(),
+        lagrange_last_evals,
+        quotient_degree_bits,
+    );
 
     // TODO: Skip this if using FriBasedPcs, in which case we already computed the trace LDE.
     let trace_lde = info_span!("compute LDEs used in quotient computation").in_scope(|| {

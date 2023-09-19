@@ -6,14 +6,17 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dit_butterfly, twiddle_free_butterfly};
-use crate::util::reverse_matrix_index_bits;
-use crate::TwoAdicSubgroupDft;
+use crate::util::{divide_by_height, reverse_matrix_index_bits, swap_rows};
+
+use crate::FourierTransform;
 
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]
 pub struct Radix2Dit;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
+impl<F: TwoAdicField> FourierTransform<F> for Radix2Dit {
+    type Range = F;
+
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -27,6 +30,19 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
             dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }
         mat
+    }
+
+    fn idft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        let mut dft = self.dft_batch(mat);
+        let h = dft.height();
+
+        divide_by_height(&mut dft);
+
+        for row in 1..h / 2 {
+            swap_rows(&mut dft, row, h - row);
+        }
+
+        dft
     }
 }
 

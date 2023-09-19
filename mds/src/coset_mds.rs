@@ -180,7 +180,7 @@ fn twiddle_free_butterfly<F: Field, const N: usize>(
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
-    use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
+    use p3_dft::{FourierTransform, NaiveDft};
     use p3_field::AbstractField;
     use p3_symmetric::permutation::CryptographicPermutation;
     use rand::{thread_rng, Rng};

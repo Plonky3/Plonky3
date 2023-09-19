@@ -7,8 +7,9 @@ use p3_maybe_rayon::{IndexedParallelIterator, ParallelIterator};
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::dit_butterfly;
-use crate::util::{bit_reversed_zero_pad, reverse_matrix_index_bits};
-use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
+use crate::util::{bit_reversed_zero_pad, divide_by_height, reverse_matrix_index_bits, swap_rows};
+
+use crate::{reverse_bits, reverse_slice_index_bits, FourierTransform};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -20,7 +21,9 @@ use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
 #[derive(Default, Clone)]
 pub struct Radix2DitParallel;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
+impl<F: TwoAdicField> FourierTransform<F> for Radix2DitParallel {
+    type Range = F;
+
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -41,6 +44,19 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
 
         mat
+    }
+
+    fn idft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        let mut dft = self.dft_batch(mat);
+        let h = dft.height();
+
+        divide_by_height(&mut dft);
+
+        for row in 1..h / 2 {
+            swap_rows(&mut dft, row, h - row);
+        }
+
+        dft
     }
 
     fn coset_lde_batch(

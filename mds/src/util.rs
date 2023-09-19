@@ -1,4 +1,4 @@
-use p3_dft::TwoAdicSubgroupDft;
+use p3_dft::FourierTransform;
 use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 
 // NB: These four are MDS for M31, BabyBear and Goldilocks
@@ -143,7 +143,7 @@ pub(crate) const fn first_row_to_first_col<const N: usize>(v: &[u64; N]) -> [u64
 /// be specified by its first *column*, not its first row. If you have
 /// the row as an array, you can obtain the column with `first_row_to_first_col()`.
 #[inline]
-pub(crate) fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroupDft<F>>(
+pub(crate) fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: FourierTransform<F>>(
     fft: FFT,
     column: [u64; N],
     input: &[F; N],

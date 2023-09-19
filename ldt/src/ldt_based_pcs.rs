@@ -6,7 +6,7 @@ use p3_challenger::FieldChallenger;
 use p3_commit::{
     DirectMmcs, OpenedValues, OpenedValuesForPoint, OpenedValuesForRound, Pcs, UnivariatePcs,
 };
-use p3_dft::TwoAdicSubgroupDft;
+use p3_dft::FourierTransform;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
@@ -49,7 +49,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     EF: ExtensionField<Val> + ExtensionField<Domain>,
     In: MatrixRows<Val>,
-    Dft: TwoAdicSubgroupDft<Domain>,
+    Dft: FourierTransform<Domain, Range = Domain>,
     M: DirectMmcs<Domain>,
     L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
@@ -80,7 +80,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     In: MatrixRows<Val>,
-    Dft: TwoAdicSubgroupDft<Domain>,
+    Dft: FourierTransform<Domain, Range = Domain>,
     M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
     L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,

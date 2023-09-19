@@ -2,8 +2,8 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::TwoAdicField;
+use p3_dft::{FourierTransform, Radix2Bowers, Radix2Dit, Radix2DitParallel};
+use p3_field::Field;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::distributions::{Distribution, Standard};
@@ -26,8 +26,8 @@ fn bench_fft(c: &mut Criterion) {
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
-    F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    F: Field,
+    Dft: FourierTransform<F> + Default,
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
@@ -55,9 +55,9 @@ where
 
 fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
-    F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
-    Standard: Distribution<F>,
+    F: Field,
+    Dft: FourierTransform<F> + Default,
+    Standard: Distribution<Dft::Range>,
 {
     let mut group = c.benchmark_group(&format!(
         "ifft::<{}, {}, {}>",
@@ -84,9 +84,9 @@ where
 
 fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
-    F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
-    Standard: Distribution<F>,
+    F: Field,
+    Dft: FourierTransform<F> + Default,
+    Standard: Distribution<Dft::Range>,
 {
     let mut group = c.benchmark_group(&format!(
         "coset_lde::<{}, {}, {}>",

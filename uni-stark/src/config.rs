@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs};
-use p3_dft::TwoAdicSubgroupDft;
+use p3_dft::FourierTransform;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -28,7 +28,8 @@ pub trait StarkConfig {
         Self::Challenger,
     >;
 
-    type Dft: TwoAdicSubgroupDft<Self::Domain> + TwoAdicSubgroupDft<Self::Challenge>;
+    type Dft: FourierTransform<Self::Domain, Range = Self::Domain>
+        + FourierTransform<Self::Challenge, Range = Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
         + for<'a> CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
@@ -70,7 +71,7 @@ where
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     Challenge::Packing: AbstractExtensionField<Domain::Packing>,
     Pcs: for<'a> UnivariatePcs<Val, Domain, Challenge, RowMajorMatrix<Val>, Challenger>,
-    Dft: TwoAdicSubgroupDft<Domain> + TwoAdicSubgroupDft<Challenge>,
+    Dft: FourierTransform<Domain, Range = Domain> + FourierTransform<Challenge, Range = Challenge>,
     Challenger: FieldChallenger<Val>
         + for<'a> CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
 {

@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
@@ -40,7 +40,7 @@ pub type OpenedValuesForMatrix<F> = Vec<F>;
 pub trait UnivariatePcs<Val, Domain, EF, In, Challenger>: Pcs<Val, In>
 where
     Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
+    Domain: ExtensionField<Val>,
     EF: ExtensionField<Domain>,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,

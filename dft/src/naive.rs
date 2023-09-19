@@ -5,12 +5,15 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::TwoAdicSubgroupDft;
+use crate::util::{divide_by_height, swap_rows};
+use crate::FourierTransform;
 
 #[derive(Default, Clone)]
 pub struct NaiveDft;
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
+impl<F: TwoAdicField> FourierTransform<F> for NaiveDft {
+    type Range = F;
+
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let w = mat.width();
         let h = mat.height();
@@ -27,6 +30,19 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
         }
         res
     }
+
+    fn idft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        let mut dft = self.dft_batch(mat);
+        let h = dft.height();
+
+        divide_by_height(&mut dft);
+
+        for row in 1..h / 2 {
+            swap_rows(&mut dft, row, h - row);
+        }
+
+        dft
+    }
 }
 
 #[cfg(test)]
@@ -39,7 +55,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
 
-    use crate::{NaiveDft, TwoAdicSubgroupDft};
+    use crate::{FourierTransform, NaiveDft};
 
     #[test]
     fn basic() {
