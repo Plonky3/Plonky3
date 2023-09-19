@@ -18,6 +18,12 @@ pub struct BabyBear {
     value: u32,
 }
 
+impl BabyBear {
+    pub(crate) const fn new(n: u32) -> Self {
+        Self { value: to_monty(n) }
+    }
+}
+
 impl Ord for BabyBear {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -292,7 +298,7 @@ impl Div for BabyBear {
 
 #[inline]
 #[must_use]
-fn to_monty(x: u32) -> u32 {
+const fn to_monty(x: u32) -> u32 {
     (((x as u64) << 31) % P as u64) as u32
 }
 
