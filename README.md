@@ -50,7 +50,7 @@ Interpolation
 Hashes
 - [x] Rescue
 - [x] Poseidon
-- [ ] Poseidon2
+- [x] Poseidon2
 - [x] BLAKE3
   - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
