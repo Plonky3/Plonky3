@@ -11,13 +11,12 @@ extern crate alloc;
 mod babybear;
 mod diffusion;
 mod goldilocks;
-pub use babybear::DiffusionMatrixBabybear;
-pub use diffusion::DiffusionPermutation;
-pub use goldilocks::DiffusionMatrixGoldilocks;
-
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
+pub use babybear::DiffusionMatrixBabybear;
+pub use diffusion::DiffusionPermutation;
+pub use goldilocks::DiffusionMatrixGoldilocks;
 use p3_field::Field;
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
