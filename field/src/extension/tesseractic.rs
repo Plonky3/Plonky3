@@ -218,12 +218,40 @@ impl<F: OptimallyExtendable<4>> Mul for TesseracticOef<F> {
         let Self([b0, b1, b2, b3]) = rhs;
         let w = F::W;
 
-        let c0 = a0 * b0 + w * (a1 * b3 + a2 * b2 + a3 * b1);
-        let c1 = a0 * b1 + a1 * b0 + w * (a2 * b3 + a3 * b2);
-        let c2 = a0 * b2 + a1 * b1 + a2 * b0 + w * (a3 * b3);
-        let c3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0;
+        // use karatsuba's method to reduce the multiplications
+        // let self = A0+A1X^2; rhs = B0+B1X^2
+        // low = A0B0, mid = (A0+A1)(B0+B1)-A0B0-A1B1, high = A1B1
+        // result = low + (mid-low-high)*X^2+ high*X^4
 
-        Self([c0, c1, c2, c3])
+        let a0_b0 = a0 * b0;
+        let a1_b1 = a1 * b1;
+        let a2_b2 = a2 * b2;
+        let a3_b3 = a3 * b3;
+
+        // compute low degree terms
+        // low0 = a0_b0 , low2= a1b1
+        let low1 = (a0 + a1) * (b0 + b1) - a0_b0 - a1_b1;
+
+        // compute high degree terms
+        // high0 = a2_b2, high2 = a3_b3
+        let high1 = (a2 + a3) * (b2 + b3) - a2_b2 - a3_b3;
+
+        // compute mid degree terms
+        let c0 = a0 + a2;
+        let d0 = b0 + b2;
+        let c1 = a1 + a3;
+        let d1 = b1 + b3;
+
+        let mid0 = c0 * d0;
+        let mid2 = c1 * d1;
+        let mid1 = (c0 + c1) * (d0 + d1) - mid0 - mid2 - low1 - high1;
+
+        Self([
+            a0_b0 + (mid2 - a1_b1 - a3_b3 + a2_b2) * w,
+            low1 + high1 * w,
+            a1_b1 + mid0 - a0_b0 - a2_b2 + a3_b3 * w,
+            mid1,
+        ])
     }
 }
 

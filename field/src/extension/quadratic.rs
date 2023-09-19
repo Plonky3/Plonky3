@@ -193,10 +193,11 @@ impl<F: BinomiallyExtendable<2>> Mul for QuadraticBef<F> {
         let Self([a0, a1]) = self;
         let Self([b0, b1]) = rhs;
 
-        let c0 = a0 * b0 + F::W * a1 * b1;
-        let c1 = a0 * b1 + a1 * b0;
+        let c0 = a0 * b0;
+        let c2 = a1 * b1;
+        let c1 = (a0 + a1) * (b0 + b1) - c0 - c2;
 
-        Self([c0, c1])
+        Self([c0 + c2 * F::W, c1])
     }
 }
 
