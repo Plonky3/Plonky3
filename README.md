@@ -15,12 +15,12 @@ Fields:
   - [ ] AVX-512
   - [ ] NEON
 - [x] BabyBear
-  - [ ] ~128 bit extension field
+  - [x] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
   - [x] NEON
 - [x] Goldilocks
-  - [ ] ~128 bit extension field
+  - [x] ~128 bit extension field
 
 Generalized vector commitment schemes
 - [x] generalized Merkle tree
