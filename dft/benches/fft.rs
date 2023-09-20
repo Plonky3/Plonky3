@@ -27,7 +27,7 @@ fn bench_fft(c: &mut Criterion) {
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
     F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
@@ -56,7 +56,7 @@ where
 fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
     F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
@@ -85,7 +85,7 @@ where
 fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
 where
     F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(

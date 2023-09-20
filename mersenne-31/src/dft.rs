@@ -132,19 +132,17 @@ fn idft_postprocess(
 pub struct Mersenne31Dft;
 
 impl Mersenne31Dft {
-    // FIXME: Shouldn't need to require Default here
-    pub fn dft_batch<DFT: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>> + Default>(
+    pub fn dft_batch<Dft: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>>>(
         mat: RowMajorMatrix<Mersenne31>,
     ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
-        let dft = DFT::default();
+        let dft = Dft::default();
         dft_postprocess(dft.dft_batch(dft_preprocess(mat)))
     }
 
-    // FIXME: Shouldn't need to require Default here
-    pub fn idft_batch<DFT: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>> + Default>(
+    pub fn idft_batch<Dft: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>>>(
         mat: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
     ) -> RowMajorMatrix<Mersenne31> {
-        let dft = DFT::default();
+        let dft = Dft::default();
         idft_postprocess(dft.idft_batch(idft_preprocess(mat)))
     }
 }
