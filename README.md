@@ -13,7 +13,7 @@ Fields:
   - [x] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
-  - [ ] NEON
+  - [x] NEON
 - [x] BabyBear
   - [ ] ~128 bit extension field
   - [ ] AVX2
