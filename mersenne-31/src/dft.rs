@@ -1,10 +1,11 @@
 use crate::{Mersenne31, Mersenne31Complex};
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
 use alloc::vec::Vec;
-
-// TODO: Redo this in terms of RowMajorMatrix{,View{,Mut}}
+use itertools::Itertools;
 
 /// Given a vector u = (u_0, ..., u_{n-1}), where n is even, return a
 /// vector U = (U_0, ..., U_{N/2 - 1}) whose jth entry is
@@ -14,83 +15,145 @@ use alloc::vec::Vec;
 ///
 /// This packing is suitable as input to a Fourier Transform over the
 /// domain Mersenne31Complex.
-pub fn dft_preprocess(input: Vec<Mersenne31>) -> Vec<Mersenne31Complex<Mersenne31>> {
-    assert!(input.len() % 2 == 0, "input vector length must be even");
-    input
-        .chunks_exact(2)
-        .map(|pair| Mersenne31Complex::new(pair[0], pair[1]))
-        .collect()
+fn dft_preprocess(
+    input: RowMajorMatrix<Mersenne31>,
+) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
+    assert!(input.height() % 2 == 0, "input height must be even");
+    RowMajorMatrix::new(
+        input
+            .rows()
+            .tuples()
+            .map(|(row_0, row_1)| {
+                // For each pair of rows in input, convert each
+                // two-element column into a Mersenne31Complex
+                // treating the first row as the real part and the
+                // second row as the imaginary part.
+                row_0
+                    .iter()
+                    .zip(row_1)
+                    .map(|(&x, &y)| Mersenne31Complex::new(x, y))
+            })
+            .flatten()
+            .collect(),
+        input.width(),
+    )
 }
 
-pub fn dft_postprocess(
-    input: Vec<Mersenne31Complex<Mersenne31>>,
-) -> Vec<Mersenne31Complex<Mersenne31>> {
-    let n = input.len();
-    let log2_n = log2_strict_usize(n); // checks that n is a power of two
+fn dft_postprocess(
+    input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
+) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
+    let h = input.height();
+    let log2_h = log2_strict_usize(h); // checks that h is a power of two
 
-    // NB: The original vector was length 2n, hence log2(2n) = log2(n) + 1.
-    // omega is a 2n-th root of unity
-    let omega = Mersenne31Complex::primitive_root_of_unity(log2_n + 1);
+    // NB: The original real matrix had height 2h, hence log2(2h) = log2(h) + 1.
+    // omega is a 2h-th root of unity
+    let omega = Mersenne31Complex::primitive_root_of_unity(log2_h + 1);
     let mut omega_j = omega;
 
-    let mut output = Vec::with_capacity(n + 1);
-    output.push(Mersenne31Complex::new_real(
-        input[0].real() + input[0].imag(),
-    ));
-    for j in 1..n {
-        let even = input[j] + input[n - j].conjugate();
-        let odd = input[j] - input[n - j].conjugate();
-        // TODO: pull apart components and integrate the multiplication-by-i
-        let odd = Mersenne31Complex::new(odd.imag(), -odd.real()); // odd *= -i
-        output.push((even + odd * omega_j).div_2exp_u64(1));
+    let mut output = Vec::with_capacity((h + 1) * input.width());
+    output.extend(
+        input
+            .first_row()
+            .map(|x| Mersenne31Complex::new_real(x.real() + x.imag())),
+    );
+
+    for j in 1..h {
+        let row_x = input.row_slice(j);
+        let row_y = input.row_slice(h - j);
+
+        let row = row_x.iter().zip(row_y).map(|(&x, y)| {
+            let even = x + y.conjugate();
+            let odd = Mersenne31Complex::new(x.imag() + y.imag(), y.real() - x.real());
+            (even + odd * omega_j).div_2exp_u64(1)
+        });
+        output.extend(row);
         omega_j *= omega;
     }
-    output.push(Mersenne31Complex::new_real(
-        input[0].real() - input[0].imag(),
-    ));
-    output
+
+    output.extend(
+        input
+            .first_row()
+            .map(|x| Mersenne31Complex::new_real(x.real() - x.imag())),
+    );
+    debug_assert_eq!(output.len(), (h + 1) * input.width());
+    RowMajorMatrix::new(output, input.width())
 }
 
-pub fn idft_preprocess(
-    input: Vec<Mersenne31Complex<Mersenne31>>,
-) -> Vec<Mersenne31Complex<Mersenne31>> {
-    let n = input.len() - 1;
-    let log2_n = log2_strict_usize(n); // checks that n is a power of two
+fn idft_preprocess(
+    input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
+) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
+    let h = input.height() - 1;
+    let log2_h = log2_strict_usize(h); // checks that h is a power of two
 
-    // NB: The original vector was length 2n, hence log2(2n) = log2(n) + 1.
+    // NB: The original real matrix had length 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2n-th root of unity
-    let omega = Mersenne31Complex::primitive_root_of_unity(log2_n + 1).inverse();
+    let omega = Mersenne31Complex::primitive_root_of_unity(log2_h + 1).inverse();
     let mut omega_j = Mersenne31Complex::ONE;
 
-    let mut output = Vec::with_capacity(n);
+    let mut output = Vec::with_capacity(h * input.width());
     // TODO: Specialise j = 0 and j = n (which we know must be real)?
-    for j in 0..n {
-        let even = input[j] + input[n - j].conjugate();
-        let odd = input[j] - input[n - j].conjugate();
-        // TODO: pull apart components and integrate the multiplication-by-i
-        let odd = Mersenne31Complex::new(-odd.imag(), odd.real());
-        output.push((even + odd * omega_j).div_2exp_u64(1));
+    for j in 0..h {
+        let row_x = input.row_slice(j);
+        let row_y = input.row_slice(h - j);
+
+        let row = row_x.iter().zip(row_y).map(|(&x, y)| {
+            let even = x + y.conjugate();
+            let odd = Mersenne31Complex::new(x.imag() + y.imag(), y.real() - x.real());
+            (even - odd * omega_j).div_2exp_u64(1)
+        });
+        output.extend(row);
         omega_j *= omega;
     }
-    output
+    RowMajorMatrix::new(output, input.width())
 }
 
-pub fn idft_postprocess(input: Vec<Mersenne31Complex<Mersenne31>>) -> Vec<Mersenne31> {
-    // TODO: The memory layout of input and output are identical; find a way
-    // to just do a memcpy.
-    let mut output = Vec::with_capacity(2 * input.len());
-    for x in input {
-        output.push(x.real());
-        output.push(x.imag());
+fn idft_postprocess(
+    input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
+) -> RowMajorMatrix<Mersenne31> {
+    RowMajorMatrix::new(
+        input
+            .rows()
+            .map(|row| {
+                // Convert each row of input into two rows, the first row
+                // having the real parts of the input, the second row
+                // having the imaginary parts.
+                let (reals, imags): (Vec<_>, Vec<_>) =
+                    row.iter().map(|x| (x.real(), x.imag())).unzip();
+                reals.into_iter().chain(imags.into_iter())
+            })
+            .flatten()
+            .collect(),
+        input.width(),
+    )
+}
+
+/// The DFT for Mersenne31
+#[derive(Default, Clone)]
+pub struct Mersenne31Dft;
+
+impl Mersenne31Dft {
+    // FIXME: Shouldn't need to require Default here
+    pub fn dft_batch<DFT: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>> + Default>(
+        mat: RowMajorMatrix<Mersenne31>,
+    ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
+        let dft = DFT::default();
+        dft_postprocess(dft.dft_batch(dft_preprocess(mat)))
     }
-    output
+
+    // FIXME: Shouldn't need to require Default here
+    pub fn idft_batch<DFT: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>> + Default>(
+        mat: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
+    ) -> RowMajorMatrix<Mersenne31> {
+        let dft = DFT::default();
+        idft_postprocess(dft.idft_batch(idft_preprocess(mat)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Mersenne31;
-    use p3_dft::{NaiveDft, Radix2Dit, TwoAdicSubgroupDft};
+    use p3_dft::Radix2Dit;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
 
@@ -100,18 +163,14 @@ mod tests {
         Standard: Distribution<Mersenne31>,
     {
         const N: usize = 1 << 12;
-        let a = thread_rng()
+        let input = thread_rng()
             .sample_iter(Standard)
-            .take(32)
+            .take(N)
             .collect::<Vec<Mersenne31>>();
-        let b = dft_preprocess(a.clone());
-        let c = Radix2Dit.dft(b.clone());
-        let d = dft_postprocess(c);
-        let e = idft_preprocess(d);
-        let f = Radix2Dit.idft(e);
-        let g = idft_postprocess(f);
-
-        assert!(a == g);
+        let input = RowMajorMatrix::new_col(input);
+        let fft_input = Mersenne31Dft::dft_batch::<Radix2Dit>(input.clone());
+        let output = Mersenne31Dft::idft_batch::<Radix2Dit>(fft_input);
+        assert_eq!(input, output);
     }
 
     #[test]
@@ -124,37 +183,35 @@ mod tests {
             .sample_iter(Standard)
             .take(N)
             .collect::<Vec<Mersenne31>>();
+        let a = RowMajorMatrix::new_col(a);
         let b = thread_rng()
             .sample_iter(Standard)
             .take(N)
             .collect::<Vec<Mersenne31>>();
+        let b = RowMajorMatrix::new_col(b);
 
-        let fft_a = dft_preprocess(a.clone());
-        let fft_a = Radix2Dit.dft(fft_a);
-        let fft_a = dft_postprocess(fft_a);
-
-        let fft_b = dft_preprocess(b.clone());
-        let fft_b = Radix2Dit.dft(fft_b);
-        let fft_b = dft_postprocess(fft_b);
+        let fft_a = Mersenne31Dft::dft_batch::<Radix2Dit>(a.clone());
+        let fft_b = Mersenne31Dft::dft_batch::<Radix2Dit>(b.clone());
 
         let fft_c = fft_a
+            .values
             .iter()
-            .zip(fft_b.iter())
+            .zip(fft_b.values.iter())
             .map(|(&xi, &yi)| xi * yi)
             .collect();
-        let c = idft_preprocess(fft_c);
-        let c = Radix2Dit.idft(c);
-        let c = idft_postprocess(c);
+        let fft_c = RowMajorMatrix::new_col(fft_c);
+
+        let c = Mersenne31Dft::idft_batch::<Radix2Dit>(fft_c);
 
         let mut conv = Vec::with_capacity(N);
         for i in 0..N {
             let mut t = Mersenne31::ZERO;
             for j in 0..N {
-                t += a[j] * b[(N + i - j) % N];
+                t += a.values[j] * b.values[(N + i - j) % N];
             }
             conv.push(t);
         }
 
-        assert!(c == conv);
+        assert_eq!(c.values, conv);
     }
 }

@@ -1,6 +1,6 @@
 //! The prime field `F_p` where `p = 2^31 - 1`.
 
-//#![no_std]
+#![no_std]
 
 extern crate alloc;
 
