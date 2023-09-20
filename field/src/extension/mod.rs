@@ -14,7 +14,10 @@ pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
     fn ext_multiplicative_group_generator() -> [Self; D];
 }
 
+/// Optimally extendable field trait.
+/// An bionomial extension field with a prime base field.
 pub trait OptimallyExtendable<const D: usize>: BinomiallyExtendable<D> + PrimeField {
+    // DTH_ROOT = W^((p - 1)/D)
     const DTH_ROOT: Self;
 }
 

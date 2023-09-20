@@ -223,18 +223,16 @@ impl<F: OptimallyExtendable<4>> Mul for TesseracticOef<F> {
         // low = A0B0, mid = (A0+A1)(B0+B1)-A0B0-A1B1, high = A1B1
         // result = low + (mid-low-high)*X^2+ high*X^4
 
-        let a0_b0 = a0 * b0;
-        let a1_b1 = a1 * b1;
-        let a2_b2 = a2 * b2;
-        let a3_b3 = a3 * b3;
-
         // compute low degree terms
-        // low0 = a0_b0 , low2= a1b1
-        let low1 = (a0 + a1) * (b0 + b1) - a0_b0 - a1_b1;
+        let low0 = a0 * b0;
+        let low2 = a1 * b1;
+        let low1 = (a0 + a1) * (b0 + b1) - low0 - low2;
 
         // compute high degree terms
         // high0 = a2_b2, high2 = a3_b3
-        let high1 = (a2 + a3) * (b2 + b3) - a2_b2 - a3_b3;
+        let high0 = a2 * b2;
+        let high2 = a3 * b3;
+        let high1 = (a2 + a3) * (b2 + b3) - high0 - high2;
 
         // compute mid degree terms
         let c0 = a0 + a2;
@@ -244,13 +242,13 @@ impl<F: OptimallyExtendable<4>> Mul for TesseracticOef<F> {
 
         let mid0 = c0 * d0;
         let mid2 = c1 * d1;
-        let mid1 = (c0 + c1) * (d0 + d1) - mid0 - mid2 - low1 - high1;
+        let mid1 = (c0 + c1) * (d0 + d1) - mid0 - mid2;
 
         Self([
-            a0_b0 + (mid2 - a1_b1 - a3_b3 + a2_b2) * w,
+            low0 + (mid2 - low2 - high2 + high0) * w,
             low1 + high1 * w,
-            a1_b1 + mid0 - a0_b0 - a2_b2 + a3_b3 * w,
-            mid1,
+            low2 + mid0 - low0 - high0 + high2 * w,
+            mid1 - low1 - high1,
         ])
     }
 }
