@@ -1,3 +1,10 @@
+//! Implementation of DFT for `Mersenne31`.
+//!
+//! Strategy follows: https://www.robinscheibler.org/2013/02/13/real-fft.html
+//! In short, fold a Mersenne31 DFT of length n into a Mersenne31Complex DFT
+//! of length n/2. Some pre/post-processing is necessary so that the result
+//! of the transform behaves as expected wrt the convolution theorem etc.
+
 use crate::{Mersenne31, Mersenne31Complex};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, Field, TwoAdicField};
@@ -7,14 +14,17 @@ use p3_util::log2_strict_usize;
 use alloc::vec::Vec;
 use itertools::Itertools;
 
-/// Given a vector u = (u_0, ..., u_{n-1}), where n is even, return a
-/// vector U = (U_0, ..., U_{N/2 - 1}) whose jth entry is
-/// Mersenne31Complex(u_{2j}, u_{2j + 1}); i.e. the even elements
-/// become the real parts and the odd elements become the imaginary
-/// parts.
+/// Given an hxw matrix M = (m_{ij}) where h is even, return an
+/// (h/2)xw matrix N whose (k,l) entry is
+///
+///    Mersenne31Complex(m_{2k,l}, m_{2k+1,l})
+///
+/// i.e. the even rows become the real parts and the odd rows become
+/// the imaginary parts.
 ///
 /// This packing is suitable as input to a Fourier Transform over the
-/// domain Mersenne31Complex.
+/// domain Mersenne31Complex; it is inverse to `idft_postprocess()`
+/// below.
 fn dft_preprocess(
     input: RowMajorMatrix<Mersenne31>,
 ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
@@ -39,6 +49,12 @@ fn dft_preprocess(
     )
 }
 
+/// Transform the result of applying the DFT to the packed
+/// `Mersenne31` values so that the convolution theorem holds.
+///
+/// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
+///
+/// NB: This function and `idft_preprocess()` are inverses.
 fn dft_postprocess(
     input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
 ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
@@ -63,6 +79,7 @@ fn dft_postprocess(
 
         let row = row_x.iter().zip(row_y).map(|(&x, y)| {
             let even = x + y.conjugate();
+            // odd = (x - y.conjugate()) * -i
             let odd = Mersenne31Complex::new(x.imag() + y.imag(), y.real() - x.real());
             (even + odd * omega_j).div_2exp_u64(1)
         });
@@ -79,6 +96,12 @@ fn dft_postprocess(
     RowMajorMatrix::new(output, input.width())
 }
 
+/// Undo the transform of the DFT matrix in `dft_postprocess()` so
+/// that the inverse DFT can be applied.
+///
+/// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
+///
+/// NB: This function and `dft_preprocess()` are inverses.
 fn idft_preprocess(
     input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
 ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
@@ -98,6 +121,7 @@ fn idft_preprocess(
 
         let row = row_x.iter().zip(row_y).map(|(&x, y)| {
             let even = x + y.conjugate();
+            // odd = (x - y.conjugate()) * -i
             let odd = Mersenne31Complex::new(x.imag() + y.imag(), y.real() - x.real());
             (even - odd * omega_j).div_2exp_u64(1)
         });
@@ -107,9 +131,16 @@ fn idft_preprocess(
     RowMajorMatrix::new(output, input.width())
 }
 
+/// Given an (h/2)xw matrix M = (m_{kl}) = (a_{kl} + I*b_{kl}) (where
+/// I is the imaginary unit), return the hxw matrix N whose (i,j)
+/// entry is a_{i/2,j} if i is even and b_{(i-1)/2,j} if i is odd.
+///
+/// This function is inverse to `dft_preprocess()` above.
 fn idft_postprocess(
     input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
 ) -> RowMajorMatrix<Mersenne31> {
+    // TODO: Re-write this without using `unzip()`, which needlessly
+    // allocates two new temporary vectors while processing each row.
     RowMajorMatrix::new(
         input
             .rows()
@@ -132,6 +163,12 @@ fn idft_postprocess(
 pub struct Mersenne31Dft;
 
 impl Mersenne31Dft {
+    /// Compute the DFT of each column of `mat`.
+    ///
+    /// NB: The DFT works by packing pairs of `Mersenne31` values into
+    /// a `Mersenne31Complex` and doing a (half-length) DFT on the
+    /// result. In particular, the type of the result elements are in
+    /// the extension field, not the domain field.
     pub fn dft_batch<Dft: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>>>(
         mat: RowMajorMatrix<Mersenne31>,
     ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
@@ -139,6 +176,9 @@ impl Mersenne31Dft {
         dft_postprocess(dft.dft_batch(dft_preprocess(mat)))
     }
 
+    /// Compute the inverse DFT of each column of `mat`.
+    ///
+    /// NB: See comment on `dft_batch()` for information on packing.
     pub fn idft_batch<Dft: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>>>(
         mat: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
     ) -> RowMajorMatrix<Mersenne31> {
