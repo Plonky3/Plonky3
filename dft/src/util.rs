@@ -6,6 +6,8 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 
+use crate::FourierTransform;
+
 pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let n = vals.len();
     if n == 0 {
@@ -103,4 +105,20 @@ pub(crate) fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added
         values[(i << added_bits)..((i << added_bits) + w)].copy_from_slice(&mat.values[i..i + w]);
     }
     *mat = RowMajorMatrix::new(values, w);
+}
+
+pub(crate) fn idft_batch<F: Field, Dft: FourierTransform<F, Range = F>>(
+    algo: &Dft,
+    mat: RowMajorMatrix<F>,
+) -> RowMajorMatrix<F> {
+    let mut dft = algo.dft_batch(mat);
+    let h = dft.height();
+
+    divide_by_height(&mut dft);
+
+    for row in 1..h / 2 {
+        swap_rows(&mut dft, row, h - row);
+    }
+
+    dft
 }

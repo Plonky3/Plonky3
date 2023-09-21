@@ -6,7 +6,7 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dit_butterfly, twiddle_free_butterfly};
-use crate::util::{divide_by_height, reverse_matrix_index_bits, swap_rows};
+use crate::util::{self, reverse_matrix_index_bits};
 
 use crate::FourierTransform;
 
@@ -33,16 +33,7 @@ impl<F: TwoAdicField> FourierTransform<F> for Radix2Dit {
     }
 
     fn idft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        let mut dft = self.dft_batch(mat);
-        let h = dft.height();
-
-        divide_by_height(&mut dft);
-
-        for row in 1..h / 2 {
-            swap_rows(&mut dft, row, h - row);
-        }
-
-        dft
+        util::idft_batch(self, mat)
     }
 }
 
