@@ -227,6 +227,12 @@ impl<T> Matrix<T> for RowMajorMatrixView<'_, T> {
     }
 }
 
+impl<T: Clone> MatrixGet<T> for RowMajorMatrixView<'_, T> {
+    fn get(&self, r: usize, c: usize) -> T {
+        self.values[r * self.width + c].clone()
+    }
+}
+
 impl<T: Clone> MatrixRows<T> for RowMajorMatrixView<'_, T> {
     type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
 
@@ -339,6 +345,12 @@ impl<T> Matrix<T> for RowMajorMatrixViewMut<'_, T> {
 
     fn height(&self) -> usize {
         self.values.len() / self.width
+    }
+}
+
+impl<T: Clone> MatrixGet<T> for RowMajorMatrixViewMut<'_, T> {
+    fn get(&self, r: usize, c: usize) -> T {
+        self.values[r * self.width + c].clone()
     }
 }
 

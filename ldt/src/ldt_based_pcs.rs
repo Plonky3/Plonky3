@@ -5,13 +5,14 @@ use itertools::Itertools;
 use p3_challenger::FieldChallenger;
 use p3_commit::{
     DirectMmcs, OpenedValues, OpenedValuesForPoint, OpenedValuesForRound, Pcs, UnivariatePcs,
+    UnivariatePcsWithLde,
 };
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::MatrixRows;
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::quotient::QuotientMmcs;
 use crate::{Ldt, Opening};
@@ -60,13 +61,13 @@ where
     type Error = L::Error;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        // TODO: Streaming?
         let shift = Domain::multiplicative_group_generator();
         let ldes = polynomials
             .into_iter()
             .map(|poly| {
                 let input = poly.to_row_major_matrix().to_ext::<Domain>();
-                self.dft.coset_lde_batch(input, self.added_bits, shift)
+                info_span!("compute LDEs for LDT-based commitment")
+                    .in_scope(|| self.dft.coset_lde_batch(input, self.added_bits, shift))
             })
             .collect();
         self.mmcs.commit(ldes)
@@ -153,6 +154,34 @@ where
         _proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         Ok(()) // TODO
+    }
+}
+
+impl<Val, Domain, EF, In, Dft, M, L, Challenger>
+    UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>
+    for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
+where
+    Val: Field,
+    Domain: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
+    In: MatrixRows<Val>,
+    Dft: TwoAdicSubgroupDft<Domain>,
+    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
+    L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
+    Challenger: FieldChallenger<Val>,
+{
+    fn coset_shift(&self) -> Domain {
+        Domain::multiplicative_group_generator()
+    }
+
+    fn get_ldes<'a, 'b>(
+        &'a self,
+        prover_data: &'b Self::ProverData,
+    ) -> Vec<RowMajorMatrixView<'b, Domain>>
+    where
+        'a: 'b,
+    {
+        self.mmcs.get_matrices(prover_data)
     }
 }
 
