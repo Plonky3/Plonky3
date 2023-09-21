@@ -33,7 +33,7 @@ fn dft_preprocess(
         input
             .rows()
             .tuples()
-            .map(|(row_0, row_1)| {
+            .flat_map(|(row_0, row_1)| {
                 // For each pair of rows in input, convert each
                 // two-element column into a Mersenne31Complex
                 // treating the first row as the real part and the
@@ -43,7 +43,6 @@ fn dft_preprocess(
                     .zip(row_1)
                     .map(|(&x, &y)| Mersenne31Complex::new(x, y))
             })
-            .flatten()
             .collect(),
         input.width(),
     )
@@ -144,15 +143,14 @@ fn idft_postprocess(
     RowMajorMatrix::new(
         input
             .rows()
-            .map(|row| {
+            .flat_map(|row| {
                 // Convert each row of input into two rows, the first row
                 // having the real parts of the input, the second row
                 // having the imaginary parts.
                 let (reals, imags): (Vec<_>, Vec<_>) =
                     row.iter().map(|x| (x.real(), x.imag())).unzip();
-                reals.into_iter().chain(imags.into_iter())
+                reals.into_iter().chain(imags)
             })
-            .flatten()
             .collect(),
         input.width(),
     )
