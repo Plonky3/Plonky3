@@ -5,14 +5,16 @@
 //! of length n/2. Some pre/post-processing is necessary so that the result
 //! of the transform behaves as expected wrt the convolution theorem etc.
 
-use crate::{Mersenne31, Mersenne31Complex};
+use alloc::vec::Vec;
+
+use itertools::Itertools;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, Field, TwoAdicField};
-use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixRowSlices, MatrixRows};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
-use alloc::vec::Vec;
-use itertools::Itertools;
+use crate::{Mersenne31, Mersenne31Complex};
 
 /// Given an hxw matrix M = (m_{ij}) where h is even, return an
 /// (h/2)xw matrix N whose (k,l) entry is
@@ -187,11 +189,12 @@ impl Mersenne31Dft {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Mersenne31;
     use p3_dft::Radix2Dit;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
+
+    use super::*;
+    use crate::Mersenne31;
 
     #[test]
     fn consistency()
