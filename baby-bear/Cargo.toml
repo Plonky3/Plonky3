@@ -15,3 +15,7 @@ criterion = "0.5.1"
 [[bench]]
 name = "inverse"
 harness = false
+
+[[bench]]
+name = "root_7"
+harness = false

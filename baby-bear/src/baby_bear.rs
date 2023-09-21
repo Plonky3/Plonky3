@@ -134,6 +134,7 @@ impl Field for BabyBear {
 
         // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
         // Here p-2 = 2013265919.
+        // Uses 30 Squares + 7 Multiplications => 37 Operations total.
 
         let x1 = *self;
         let x256 = x1.exp_power_of_2(8);
@@ -152,6 +153,38 @@ impl Field for BabyBear {
         let x2013265919 = x1894838512 * x118427407;
 
         Some(x2013265919)
+    }
+
+    // We hard code computing the 7'th root for rescue.
+    fn exp_root(&self, _power: u64) -> Self {
+        if self.is_zero() {
+            return *self;
+        }
+
+        // Note that 7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1).
+        // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1725656503})^7 = a.
+        // Note the binary expansion: 1725656503 = 1100110110110110110110110110111_2
+        // This uses 29 Squares + 8 Multiplications => 37 Operations total.
+        // Suspect it's possible to improve this with enough effort.
+
+        let p1 = *self;
+        let p10 = p1.square();
+        let p11 = p10 * p1;
+        let p11000 = p11.exp_power_of_2(3);
+        let p11000000 = p11000.exp_power_of_2(3);
+        let p11011000 = p11000000 * p11000;
+        let p11011011 = p11011000 * p11;
+        let p110011011 = p11011011 * p11000000;
+        let p110011011000000000 = p110011011.exp_power_of_2(9);
+        let p110011011011011011 = p110011011000000000 * p11011011;
+        let p110011011011011011000000000 = p110011011011011011.exp_power_of_2(9);
+        let p110011011011011011011011011 = p110011011011011011000000000 * p11011011;
+        let p110011011011011011011011011000 = p110011011011011011011011011.exp_power_of_2(3);
+        let p110011011011011011011011011011 = p110011011011011011011011011000 * p11;
+        let p1100110110110110110110110110110 = p110011011011011011011011011011.square();
+        let p1100110110110110110110110110111 = p1100110110110110110110110110110 * p1;
+
+        p1100110110110110110110110110111
     }
 }
 
@@ -378,6 +411,10 @@ mod tests {
         let m2 = F::from_canonical_u32(0x61f3207b);
         let expected_prod = F::from_canonical_u32(0x1b5c8046);
         assert_eq!(m1 * m2, expected_prod);
+
+        assert_eq!(m1.exp_root(1725656503).exp_const_u64::<7>(), m1);
+        assert_eq!(m2.exp_root(1725656503).exp_const_u64::<7>(), m2);
+        assert_eq!(f_2.exp_root(1725656503).exp_const_u64::<7>(), f_2);
     }
 
     test_field!(crate::BabyBear);

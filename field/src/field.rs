@@ -172,6 +172,22 @@ pub trait Field:
         }
         res
     }
+
+    // Initially root will be identical to exp_u64 but for specific fields/operations we will optimise by
+    // choosing specific addition chains.
+    #[must_use]
+    fn exp_root(&self, power: u64) -> Self {
+        let mut current = *self;
+        let mut product = Self::ONE;
+
+        for j in 0..bits_u64(power) {
+            if (power >> j & 1) != 0 {
+                product *= current;
+            }
+            current = current.square();
+        }
+        product
+    }
 }
 
 pub trait PrimeField: Field + Ord {}
