@@ -5,8 +5,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::util;
-use crate::FourierTransform;
+use crate::{util, FourierTransform};
 
 #[derive(Default, Clone)]
 pub struct NaiveDft;

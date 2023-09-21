@@ -8,7 +8,6 @@ use p3_util::log2_strict_usize;
 
 use crate::butterflies::dit_butterfly;
 use crate::util::{self, bit_reversed_zero_pad, reverse_matrix_index_bits};
-
 use crate::{reverse_bits, reverse_slice_index_bits, FourierTransform};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.

@@ -7,7 +7,6 @@ use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dit_butterfly, twiddle_free_butterfly};
 use crate::util::{self, reverse_matrix_index_bits};
-
 use crate::FourierTransform;
 
 /// The DIT FFT algorithm.
