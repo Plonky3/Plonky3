@@ -1,8 +1,8 @@
-use p3_field::extension::OptimallyExtendable;
+use p3_field::extension::BinomiallyExtendable;
 
 use crate::{Mersenne31, Mersenne31Complex};
 
-impl OptimallyExtendable<2> for Mersenne31Complex<Mersenne31> {
+impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
@@ -14,9 +14,6 @@ impl OptimallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // assert f2.is_irreducible()
     // ```
     const W: Self = Self::new(Mersenne31::new(2), Mersenne31::new(1));
-
-    // DTH_ROOT = W^((p - 1)/2)
-    const DTH_ROOT: Self = Self::new(Mersenne31::new(21189756), Mersenne31::new(42379512));
 
     // Verifiable in Sage with
     // ```sage
@@ -33,7 +30,7 @@ impl OptimallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     }
 }
 
-impl OptimallyExtendable<3> for Mersenne31Complex<Mersenne31> {
+impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
@@ -45,9 +42,6 @@ impl OptimallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // assert f2.is_irreducible()
     // ```
     const W: Self = Self::new(Mersenne31::new(0), Mersenne31::new(5));
-
-    // DTH_ROOT = W^((p - 1)/3)
-    const DTH_ROOT: Self = Self::new(Mersenne31::new(634005912), Mersenne31::new(0));
 
     // Verifiable in Sage with
     // ```sage
@@ -70,7 +64,7 @@ mod test_cubic_extension {
 
     use p3_field_testing::test_field;
 
-    test_field!(p3_field::extension::cubic::CubicOef<crate::Mersenne31Complex<crate::Mersenne31>>);
+    test_field!(p3_field::extension::cubic::CubicBef<crate::Mersenne31Complex<crate::Mersenne31>>);
 }
 
 #[cfg(test)]
@@ -79,6 +73,6 @@ mod test_quadratic_extension {
     use p3_field_testing::test_field;
 
     test_field!(
-        p3_field::extension::quadratic::QuadraticOef<crate::Mersenne31Complex<crate::Mersenne31>>
+        p3_field::extension::quadratic::QuadraticBef<crate::Mersenne31Complex<crate::Mersenne31>>
     );
 }

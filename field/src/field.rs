@@ -105,12 +105,14 @@ pub trait Field:
 
     /// self * 2^exp
     #[must_use]
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         *self * Self::TWO.exp_u64(exp)
     }
 
     /// self / 2^exp
     #[must_use]
+    #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         *self / Self::TWO.exp_u64(exp)
     }

@@ -13,7 +13,7 @@ Fields:
   - [x] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
-  - [ ] NEON
+  - [x] NEON
 - [x] BabyBear
   - [ ] ~128 bit extension field
   - [ ] AVX2
@@ -50,7 +50,7 @@ Interpolation
 Hashes
 - [x] Rescue
 - [x] Poseidon
-- [ ] Poseidon2
+- [x] Poseidon2
 - [x] BLAKE3
   - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
