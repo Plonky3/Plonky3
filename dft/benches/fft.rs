@@ -6,16 +6,26 @@ use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_fft(c: &mut Criterion) {
-    fft::<BabyBear, Radix2Dit, 100>(c);
-    fft::<BabyBear, Radix2Bowers, 100>(c);
-    fft::<BabyBear, Radix2DitParallel, 100>(c);
-    fft::<Goldilocks, Radix2Dit, 100>(c);
-    fft::<Goldilocks, Radix2Bowers, 100>(c);
-    fft::<Goldilocks, Radix2DitParallel, 100>(c);
+    // log_sizes correspond to the sizes of DFT we want to benchmark;
+    // for the DFT over the quadratic extension "Mersenne31Complex" a
+    // fairer comparison is to use half sizes, which is the log minus 1.
+    let log_sizes = &[14, 16, 18];
+    let log_half_sizes = &[13, 15, 17];
+
+    fft::<BabyBear, Radix2Dit, 100>(c, log_sizes);
+    fft::<BabyBear, Radix2Bowers, 100>(c, log_sizes);
+    fft::<BabyBear, Radix2DitParallel, 100>(c, log_sizes);
+    fft::<Goldilocks, Radix2Dit, 100>(c, log_sizes);
+    fft::<Goldilocks, Radix2Bowers, 100>(c, log_sizes);
+    fft::<Goldilocks, Radix2DitParallel, 100>(c, log_sizes);
+    fft::<Mersenne31Complex<Mersenne31>, Radix2Dit, 100>(c, log_half_sizes);
+    fft::<Mersenne31Complex<Mersenne31>, Radix2Bowers, 100>(c, log_half_sizes);
+    fft::<Mersenne31Complex<Mersenne31>, Radix2DitParallel, 100>(c, log_half_sizes);
 
     ifft::<Goldilocks, Radix2Dit, 100>(c);
 
@@ -24,7 +34,7 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<BabyBear, Radix2DitParallel, 100>(c);
 }
 
-fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
+fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
@@ -39,7 +49,7 @@ where
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [14, 16, 18] {
+    for n_log in log_sizes {
         let n = 1 << n_log;
 
         let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
