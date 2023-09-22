@@ -11,7 +11,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::MatrixRows;
+use p3_matrix::{MatrixRowSlices, MatrixRows};
 use tracing::{info_span, instrument};
 
 use crate::quotient::QuotientMmcs;
@@ -52,6 +52,7 @@ where
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Domain>,
     M: DirectMmcs<Domain>,
+    for<'a> M::Mat<'a>: MatrixRowSlices<Domain>,
     L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
