@@ -2,7 +2,9 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField32, PrimeField64, TwoAdicField};
+use p3_field::{
+    exp_u64, AbstractField, Field, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -133,38 +135,37 @@ impl Field for BabyBear {
         }
 
         // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2013265919.
+        // Here p-2 = 2013265919 = 1110111111111111111111111111111_2.
         // Uses 30 Squares + 7 Multiplications => 37 Operations total.
 
-        let x1 = *self;
-        let x256 = x1.exp_power_of_2(8);
-        let x257 = x256 * x1;
-        let x65792 = x257.exp_power_of_2(8);
-        let x65793 = x65792 * x1;
-        let x526344 = x65793.exp_power_of_2(3);
-        let x16843008 = x526344.exp_power_of_2(5);
-        let x16843009 = x16843008 * x1;
-        let x33686018 = x16843009.square();
-        let x50529027 = x33686018 * x16843009;
-        let x101058054 = x50529027.square();
-        let x117901063 = x101058054 * x16843009;
-        let x118427407 = x117901063 * x526344;
-        let x1894838512 = x118427407.exp_power_of_2(4);
-        let x2013265919 = x1894838512 * x118427407;
+        let p1 = *self;
+        let p100000000 = p1.exp_power_of_2(8);
+        let p100000001 = p100000000 * p1;
+        let p10000000000000000 = p100000000.exp_power_of_2(8);
+        let p10000000100000001 = p10000000000000000 * p100000001;
+        let p10000000100000001000 = p10000000100000001.exp_power_of_2(3);
+        let p1000000010000000100000000 = p10000000100000001000.exp_power_of_2(5);
+        let p1000000010000000100000001 = p1000000010000000100000000 * p1;
+        let p1000010010000100100001001 = p1000000010000000100000001 * p10000000100000001000;
+        let p10000000100000001000000010 = p1000000010000000100000001.square();
+        let p11000010110000101100001011 = p10000000100000001000000010 * p1000010010000100100001001;
+        let p100000001000000010000000100 = p10000000100000001000000010.square();
+        let p111000011110000111100001111 =
+            p100000001000000010000000100 * p11000010110000101100001011;
+        let p1110000111100001111000011110000 = p111000011110000111100001111.exp_power_of_2(4);
+        let p1110111111111111111111111111111 =
+            p1110000111100001111000011110000 * p111000011110000111100001111;
 
-        Some(x2013265919)
+        Some(p1110111111111111111111111111111)
     }
 
     // We hard code computing the 7'th root for rescue.
     fn exp_u64(&self, power: u64) -> Self {
-        if self.is_zero() {
-            return *self;
-        }
         // We hard code an addition chain for computing the 5'th root which is 1717986917.
         // This will be used in rescue.
         match power {
             1725656503 => root_7(self),
-            _ => self.exp_u64_default(power),
+            _ => exp_u64(self, power),
         }
     }
 }
@@ -178,19 +179,19 @@ fn root_7(val: &BabyBear) -> BabyBear {
     let p1 = *val;
     let p10 = p1.square();
     let p11 = p10 * p1;
-    let p11000 = p11.exp_power_of_2(3);
+    let p110 = p11.square();
+    let p111 = p110 * p1;
+    let p11000 = p110.exp_power_of_2(2);
+    let p11011 = p11000 * p11;
     let p11000000 = p11000.exp_power_of_2(3);
-    let p11011000 = p11000000 * p11000;
-    let p11011011 = p11011000 * p11;
+    let p11011011 = p11000000 * p11011;
     let p110011011 = p11011011 * p11000000;
     let p110011011000000000 = p110011011.exp_power_of_2(9);
     let p110011011011011011 = p110011011000000000 * p11011011;
     let p110011011011011011000000000 = p110011011011011011.exp_power_of_2(9);
     let p110011011011011011011011011 = p110011011011011011000000000 * p11011011;
-    let p110011011011011011011011011000 = p110011011011011011011011011.exp_power_of_2(3);
-    let p110011011011011011011011011011 = p110011011011011011011011011000 * p11;
-    let p1100110110110110110110110110110 = p110011011011011011011011011011.square();
-    p1100110110110110110110110110110 * p1
+    let p1100110110110110110110110110000 = p110011011011011011011011011.exp_power_of_2(4);
+    p1100110110110110110110110110000 * p111
 }
 
 impl PrimeField for BabyBear {}

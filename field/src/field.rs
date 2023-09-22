@@ -6,6 +6,7 @@ use core::slice;
 
 use p3_util::log2_ceil_u64;
 
+use crate::helpers::exp_u64;
 use crate::packed::PackedField;
 
 /// A generalization of `Field` which permits things like
@@ -149,26 +150,12 @@ pub trait Field:
         }
     }
 
-    // Default naive square and multiply implementation for powers.
+    // Just calls the naive square and multiply implementation in helpers.rs
+    // For specific fields we will hard code some addition chains.
     #[must_use]
     #[inline]
-    fn exp_u64_default(&self, power: u64) -> Self {
-        let mut current = *self;
-        let mut product = Self::ONE;
-
-        for j in 0..bits_u64(power) {
-            if (power >> j & 1) != 0 {
-                product *= current;
-            }
-            current = current.square();
-        }
-        product
-    }
-
-    // For specific fields we hard code some addition chains whilst defaulting back to the naive implementation in other cases.
-    #[must_use]
     fn exp_u64(&self, power: u64) -> Self {
-        self.exp_u64_default(power)
+        exp_u64(self, power)
     }
 
     #[must_use]
@@ -310,8 +297,4 @@ impl<F: AbstractField> Iterator for Powers<F> {
         self.current *= self.base.clone();
         Some(result)
     }
-}
-
-const fn bits_u64(n: u64) -> usize {
-    (64 - n.leading_zeros()) as usize
 }
