@@ -10,7 +10,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
+use p3_field::{exp_u64, AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -158,10 +158,12 @@ impl Field for Goldilocks {
         // compute base^111111 (6 ones)
         // repeatedly square t3 3 times and multiply by t3
         let t6 = exp_acc::<3>(t3, t3);
+        let t60 = t6.square();
+        let t7 = t60 * *self;
 
         // compute base^111111111111 (12 ones)
         // repeatedly square t6 6 times and multiply by t6
-        let t12 = exp_acc::<6>(t6, t6);
+        let t12 = exp_acc::<5>(t60, t6);
 
         // compute base^111111111111111111111111 (24 ones)
         // repeatedly square t12 12 times and multiply by t12
@@ -170,8 +172,7 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111 (31 ones)
         // repeatedly square t24 6 times and multiply by t6 first. then square t30 and
         // multiply by base
-        let t30 = exp_acc::<6>(t24, t6);
-        let t31 = t30.square() * *self;
+        let t31 = exp_acc::<7>(t24, t7);
 
         // compute base^111111111111111111111111111111101111111111111111111111111111111
         // repeatedly square t31 32 times and multiply by t31
@@ -180,6 +181,48 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
+
+    // We hard code computing the 7'th root for rescue.
+    fn exp_u64(&self, power: u64) -> Self {
+        match power {
+            10540996611094048183 => root_7(self),
+            _ => exp_u64(self, power),
+        }
+    }
+}
+
+fn root_7(val: &Goldilocks) -> Goldilocks {
+    // Note that 7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1).
+    // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{10540996611094048183})^7 = a.
+    // Also: 10540996611094048183 = 1001001001001001001001001001000110110110110110110110110110110111_2.
+    // This uses 63 Squares + 9 Multiplications => 72 Operations total.
+    // Suspect it's possible to improve this a little with enough effort.
+    let p1 = *val;
+    let p10 = p1.square();
+    let p11 = p10 * p1;
+    let p100 = p10.square();
+    let p111 = p100 * p11;
+    let p1000 = p100.square();
+    let p1001 = p1000 * p1;
+    let p1001000000 = p1001.exp_power_of_2(6);
+    let p1001001001 = p1001000000 * p1001;
+    let p1001001001000000 = p1001001001.exp_power_of_2(6);
+    let p1001001001001001 = p1001001001000000 * p1001;
+    let p1001001001000000000000000000 = p1001001001000000.exp_power_of_2(12);
+    let p1001001001001001001001001001 = p1001001001000000000000000000 * p1001001001001001;
+    let p10010010010010010010010010010 = p1001001001001001001001001001.square();
+    let p100100100100100100100100100100000000000000000000000000000000 =
+        p10010010010010010010010010010.exp_power_of_2(31);
+    let p11011011011011011011011011011 =
+        p10010010010010010010010010010 * p1001001001001001001001001001;
+    let p100100100100100100100100100100011011011011011011011011011011 =
+        p100100100100100100100100100100000000000000000000000000000000
+            * p11011011011011011011011011011;
+
+    let p1001001001001001001001001001000110110110110110110110110110110000 =
+        p100100100100100100100100100100011011011011011011011011011011.exp_power_of_2(4);
+
+    p1001001001001001001001001001000110110110110110110110110110110000 * p111
 }
 
 impl PrimeField for Goldilocks {}
@@ -481,6 +524,10 @@ mod tests {
         //           = - 2^32 - 1
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
+
+        assert_eq!(root_7(&f).exp_const_u64::<7>(), f);
+        assert_eq!(root_7(&y).exp_const_u64::<7>(), y);
+        assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
     }
 
     test_field!(crate::Goldilocks);
