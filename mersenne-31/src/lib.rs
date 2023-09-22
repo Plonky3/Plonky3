@@ -346,12 +346,10 @@ impl Div for Mersenne31 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::Mersenne31;
     use p3_field::{AbstractField, Field, PrimeField32};
     use p3_field_testing::test_field;
-
-    use crate::Mersenne31;
-
-    use super::*;
 
     type F = Mersenne31;
 
