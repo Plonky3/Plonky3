@@ -10,7 +10,7 @@ use rand::prelude::Distribution;
 use rand::Rng;
 
 use crate::inverse_sbox::InverseSboxLayer;
-use crate::util::shake256_hash;
+use crate::util::{get_inverse, shake256_hash};
 
 #[derive(Clone)]
 pub struct Rescue<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64>
@@ -117,7 +117,7 @@ where
 impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
     for Rescue<F, Mds, Isl, WIDTH, ALPHA>
 where
-    F: PrimeField,
+    F: PrimeField64,
     Mds: MdsPermutation<F, WIDTH>,
     Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
@@ -125,6 +125,9 @@ where
         // Rescue-XLIX permutation
 
         let mut state = state;
+
+        // It might be worth adding this to the inputs as opposed to computing it every time.
+        let alpha_inv = get_inverse::<F>(ALPHA);
 
         for round in 0..self.num_rounds {
             // S-box
@@ -142,7 +145,7 @@ where
             }
 
             // Inverse S-box
-            self.isl.inverse_sbox_layer(&mut state);
+            self.isl.inverse_sbox_layer(&mut state, &alpha_inv);
 
             // MDS
             self.mds.permute_mut(&mut state);
@@ -163,7 +166,7 @@ where
 impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> ArrayPermutation<F, WIDTH>
     for Rescue<F, Mds, Isl, WIDTH, ALPHA>
 where
-    F: PrimeField,
+    F: PrimeField64,
     Mds: MdsPermutation<F, WIDTH>,
     Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
 {

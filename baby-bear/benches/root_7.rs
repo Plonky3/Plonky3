@@ -8,7 +8,7 @@ fn root_7(c: &mut Criterion) {
     c.bench_function("7th_root", |b| {
         b.iter_batched(
             rand::random::<F>,
-            |x| x.exp_root(1725656503),
+            |x| x.exp_u64(1725656503),
             BatchSize::SmallInput,
         )
     });

@@ -190,33 +190,39 @@ impl Field for Mersenne31 {
     }
 
     // We hard code computing the 5'th root for rescue.
-    fn exp_root(&self, _power: u64) -> Self {
+    fn exp_u64(&self, power: u64) -> Self {
         if self.is_zero() {
             return *self;
         }
 
-        // Note that 5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1.
-        // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1717986917})^5 = a.
-        // Note the binary expansion: 1717986917 = 1100110011001100110011001100101_2
-        // This uses 30 Squares + 7 Multiplications => 37 Operations total.
-        // Suspect it's possible to improve this with enough effort. For example 1717986918 takes only 4 Multiplications.
-
-        let p1 = *self;
-        let p10 = p1.square();
-        let p11 = p10 * p1;
-        let p110000 = p11.exp_power_of_2(4);
-        let p110011 = p110000 * p11;
-        let p11001100000000 = p110011.exp_power_of_2(8);
-        let p11001100110011 = p11001100000000 * p110011;
-        let p1100110011001100000000 = p11001100110011.exp_power_of_2(8);
-        let p1100110011001100110011 = p1100110011001100000000 * p110011;
-        let p11001100110011001100110000 = p1100110011001100110011.exp_power_of_2(4);
-        let p11001100110011001100110011 = p11001100110011001100110000 * p11;
-        let p11001100110011001100110011000 = p11001100110011001100110011.exp_power_of_2(3);
-        let p11001100110011001100110011001 = p11001100110011001100110011000 * p1;
-        let p1100110011001100110011001100100 = p11001100110011001100110011001.exp_power_of_2(2);
-        p1100110011001100110011001100100 * p1
+        match power {
+            1717986917 => root_5(self),
+            _ => self.exp_u64_default(power),
+        }
     }
+}
+
+fn root_5(val: &Mersenne31) -> Mersenne31 {
+    // Note that 5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1.
+    // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1717986917})^5 = a.
+    // Note the binary expansion: 1717986917 = 1100110011001100110011001100101_2
+    // This uses 30 Squares + 7 Multiplications => 37 Operations total.
+    // Suspect it's possible to improve this with enough effort. For example 1717986918 takes only 4 Multiplications.
+    let p1 = *val;
+    let p10 = p1.square();
+    let p11 = p10 * p1;
+    let p110000 = p11.exp_power_of_2(4);
+    let p110011 = p110000 * p11;
+    let p11001100000000 = p110011.exp_power_of_2(8);
+    let p11001100110011 = p11001100000000 * p110011;
+    let p1100110011001100000000 = p11001100110011.exp_power_of_2(8);
+    let p1100110011001100110011 = p1100110011001100000000 * p110011;
+    let p11001100110011001100110000 = p1100110011001100110011.exp_power_of_2(4);
+    let p11001100110011001100110011 = p11001100110011001100110000 * p11;
+    let p11001100110011001100110011000 = p11001100110011001100110011.exp_power_of_2(3);
+    let p11001100110011001100110011001 = p11001100110011001100110011000 * p1;
+    let p1100110011001100110011001100100 = p11001100110011001100110011001.exp_power_of_2(2);
+    p1100110011001100110011001100100 * p1
 }
 
 impl PrimeField for Mersenne31 {}
@@ -345,6 +351,8 @@ mod tests {
 
     use crate::Mersenne31;
 
+    use super::*;
+
     type F = Mersenne31;
 
     #[test]
@@ -391,9 +399,9 @@ mod tests {
         let m1 = F::from_canonical_u32(0x34167c58);
         let m2 = F::from_canonical_u32(0x61f3207b);
 
-        assert_eq!(m1.exp_root(1717986917).exp_const_u64::<5>(), m1);
-        assert_eq!(m2.exp_root(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::TWO.exp_root(1717986917).exp_const_u64::<5>(), F::TWO);
+        assert_eq!(root_5(&m1).exp_const_u64::<5>(), m1);
+        assert_eq!(root_5(&m2).exp_const_u64::<5>(), m2);
+        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
     }
 
     test_field!(crate::Mersenne31);

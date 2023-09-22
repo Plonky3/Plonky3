@@ -149,9 +149,10 @@ pub trait Field:
         }
     }
 
+    // Default naive square and multiply implementation for powers.
     #[must_use]
     #[inline]
-    fn exp_u64(&self, power: u64) -> Self {
+    fn exp_u64_default(&self, power: u64) -> Self {
         let mut current = *self;
         let mut product = Self::ONE;
 
@@ -162,6 +163,12 @@ pub trait Field:
             current = current.square();
         }
         product
+    }
+
+    // For specific fields we hard code some addition chains whilst defaulting back to the naive implementation in other cases.
+    #[must_use]
+    fn exp_u64(&self, power: u64) -> Self {
+        self.exp_u64_default(power)
     }
 
     #[must_use]
@@ -171,22 +178,6 @@ pub trait Field:
             res = res.square();
         }
         res
-    }
-
-    // Initially root will be identical to exp_u64 but for specific fields/operations we will optimise by
-    // choosing specific addition chains.
-    #[must_use]
-    fn exp_root(&self, power: u64) -> Self {
-        let mut current = *self;
-        let mut product = Self::ONE;
-
-        for j in 0..bits_u64(power) {
-            if (power >> j & 1) != 0 {
-                product *= current;
-            }
-            current = current.square();
-        }
-        product
     }
 }
 
