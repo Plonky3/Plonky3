@@ -5,28 +5,28 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use super::{Frobenius, OptimallyExtendable};
+use super::{Frobenius, HasFrobenuis};
 use crate::field::Field;
 use crate::{AbstractExtensionField, AbstractField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct TesseracticOef<F: OptimallyExtendable<4>>(pub [F; 4]);
+pub struct TesseracticBef<F: HasFrobenuis<4>>(pub [F; 4]);
 
-impl<F: OptimallyExtendable<4>> Frobenius<F, 4> for TesseracticOef<F> {}
+impl<F: HasFrobenuis<4>> Frobenius<F, 4> for TesseracticBef<F> {}
 
-impl<F: OptimallyExtendable<4>> Default for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Default for TesseracticBef<F> {
     fn default() -> Self {
         Self::ZERO
     }
 }
 
-impl<F: OptimallyExtendable<4>> From<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> From<F> for TesseracticBef<F> {
     fn from(x: F) -> Self {
         Self([x, F::ZERO, F::ZERO, F::ZERO])
     }
 }
 
-impl<F: OptimallyExtendable<4>> AbstractField for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> AbstractField for TesseracticBef<F> {
     const ZERO: Self = Self([F::ZERO; 4]);
     const ONE: Self = Self([F::ONE, F::ZERO, F::ZERO, F::ZERO]);
     const TWO: Self = Self([F::TWO, F::ZERO, F::ZERO, F::ZERO]);
@@ -85,7 +85,7 @@ impl<F: OptimallyExtendable<4>> AbstractField for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Field for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Field for TesseracticBef<F> {
     type Packing = Self;
     // Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     fn try_inverse(&self) -> Option<Self> {
@@ -110,19 +110,19 @@ impl<F: OptimallyExtendable<4>> Field for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Display for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Display for TesseracticBef<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} + {}*a", self.0[0], self.0[1])
     }
 }
 
-impl<F: OptimallyExtendable<4>> Debug for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Debug for TesseracticBef<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
 }
 
-impl<F: OptimallyExtendable<4>> Neg for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Neg for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -131,7 +131,7 @@ impl<F: OptimallyExtendable<4>> Neg for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Add for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Add for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -145,7 +145,7 @@ impl<F: OptimallyExtendable<4>> Add for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Add<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Add<F> for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -154,25 +154,25 @@ impl<F: OptimallyExtendable<4>> Add<F> for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> AddAssign for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> AddAssign for TesseracticBef<F> {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> AddAssign<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> AddAssign<F> for TesseracticBef<F> {
     fn add_assign(&mut self, rhs: F) {
         *self = *self + rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> Sum for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Sum for TesseracticBef<F> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |acc, x| acc + x)
     }
 }
 
-impl<F: OptimallyExtendable<4>> Sub for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Sub for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -186,7 +186,7 @@ impl<F: OptimallyExtendable<4>> Sub for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Sub<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Sub<F> for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -195,21 +195,21 @@ impl<F: OptimallyExtendable<4>> Sub<F> for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> SubAssign for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> SubAssign for TesseracticBef<F> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> SubAssign<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> SubAssign<F> for TesseracticBef<F> {
     #[inline]
     fn sub_assign(&mut self, rhs: F) {
         *self = *self - rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> Mul for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Mul for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -253,7 +253,7 @@ impl<F: OptimallyExtendable<4>> Mul for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Mul<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Mul<F> for TesseracticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -267,13 +267,13 @@ impl<F: OptimallyExtendable<4>> Mul<F> for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> Product for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Product for TesseracticBef<F> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ONE, |acc, x| acc * x)
     }
 }
 
-impl<F: OptimallyExtendable<4>> Div for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> Div for TesseracticBef<F> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
@@ -282,26 +282,26 @@ impl<F: OptimallyExtendable<4>> Div for TesseracticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<4>> DivAssign for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> DivAssign for TesseracticBef<F> {
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> MulAssign for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> MulAssign for TesseracticBef<F> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> MulAssign<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> MulAssign<F> for TesseracticBef<F> {
     fn mul_assign(&mut self, rhs: F) {
         *self = *self * rhs;
     }
 }
 
-impl<F: OptimallyExtendable<4>> AbstractExtensionField<F> for TesseracticOef<F> {
+impl<F: HasFrobenuis<4>> AbstractExtensionField<F> for TesseracticBef<F> {
     const D: usize = F::D;
 
     fn from_base(b: F) -> Self {
@@ -318,12 +318,12 @@ impl<F: OptimallyExtendable<4>> AbstractExtensionField<F> for TesseracticOef<F> 
     }
 }
 
-impl<F: OptimallyExtendable<4>> Distribution<TesseracticOef<F>> for Standard
+impl<F: HasFrobenuis<4>> Distribution<TesseracticBef<F>> for Standard
 where
     Standard: Distribution<F>,
 {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> TesseracticOef<F> {
-        TesseracticOef::<F>::from_base_slice(&[
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> TesseracticBef<F> {
+        TesseracticBef::<F>::from_base_slice(&[
             Standard.sample(rng),
             Standard.sample(rng),
             Standard.sample(rng),

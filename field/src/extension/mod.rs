@@ -1,5 +1,5 @@
 use crate::field::Field;
-use crate::{AbstractExtensionField, PrimeField};
+use crate::AbstractExtensionField;
 
 pub mod cubic;
 pub mod quadratic;
@@ -14,14 +14,15 @@ pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
     fn ext_multiplicative_group_generator() -> [Self; D];
 }
 
-/// Optimally extendable field trait.
+/// Trait for defining frobenuis endomorphism of extension field.
 /// An bionomial extension field with a prime base field.
-pub trait OptimallyExtendable<const D: usize>: BinomiallyExtendable<D> + PrimeField {
-    // DTH_ROOT = W^((p - 1)/D)
+pub trait HasFrobenuis<const D: usize>: BinomiallyExtendable<D> {
+    // DTH_ROOT = W^((n - 1)/D)
+    // n is the order of base field.
     const DTH_ROOT: Self;
 }
 
-pub trait Frobenius<F: OptimallyExtendable<D>, const D: usize>:
+pub trait Frobenius<F: HasFrobenuis<D>, const D: usize>:
     Field + Sized + AbstractExtensionField<F>
 {
     /// FrobeniusField automorphisms: x -> x^p, where p is the order of BaseField.

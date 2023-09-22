@@ -5,28 +5,28 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use super::{Frobenius, OptimallyExtendable};
+use super::{Frobenius, HasFrobenuis};
 use crate::field::Field;
 use crate::{AbstractExtensionField, AbstractField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct QuinticOef<F: OptimallyExtendable<5>>(pub [F; 5]);
+pub struct QuinticBef<F: HasFrobenuis<5>>(pub [F; 5]);
 
-impl<F: OptimallyExtendable<5>> Frobenius<F, 5> for QuinticOef<F> {}
+impl<F: HasFrobenuis<5>> Frobenius<F, 5> for QuinticBef<F> {}
 
-impl<F: OptimallyExtendable<5>> Default for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Default for QuinticBef<F> {
     fn default() -> Self {
         Self::ZERO
     }
 }
 
-impl<F: OptimallyExtendable<5>> From<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> From<F> for QuinticBef<F> {
     fn from(x: F) -> Self {
         Self([x, F::ZERO, F::ZERO, F::ZERO, F::ZERO])
     }
 }
 
-impl<F: OptimallyExtendable<5>> AbstractField for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> AbstractField for QuinticBef<F> {
     const ZERO: Self = Self([F::ZERO; 5]);
     const ONE: Self = Self([F::ONE, F::ZERO, F::ZERO, F::ZERO, F::ZERO]);
     const TWO: Self = Self([F::TWO, F::ZERO, F::ZERO, F::ZERO, F::ZERO]);
@@ -88,7 +88,7 @@ impl<F: OptimallyExtendable<5>> AbstractField for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Field for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Field for QuinticBef<F> {
     type Packing = Self;
     // Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     fn try_inverse(&self) -> Option<Self> {
@@ -113,19 +113,19 @@ impl<F: OptimallyExtendable<5>> Field for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Display for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Display for QuinticBef<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} + {}*a", self.0[0], self.0[1])
     }
 }
 
-impl<F: OptimallyExtendable<5>> Debug for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Debug for QuinticBef<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
 }
 
-impl<F: OptimallyExtendable<5>> Neg for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Neg for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -134,7 +134,7 @@ impl<F: OptimallyExtendable<5>> Neg for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Add for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Add for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -149,7 +149,7 @@ impl<F: OptimallyExtendable<5>> Add for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Add<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Add<F> for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -158,25 +158,25 @@ impl<F: OptimallyExtendable<5>> Add<F> for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> AddAssign for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> AddAssign for QuinticBef<F> {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> AddAssign<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> AddAssign<F> for QuinticBef<F> {
     fn add_assign(&mut self, rhs: F) {
         *self = *self + rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> Sum for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Sum for QuinticBef<F> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |acc, x| acc + x)
     }
 }
 
-impl<F: OptimallyExtendable<5>> Sub for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Sub for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -191,7 +191,7 @@ impl<F: OptimallyExtendable<5>> Sub for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Sub<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Sub<F> for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -200,21 +200,21 @@ impl<F: OptimallyExtendable<5>> Sub<F> for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> SubAssign for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> SubAssign for QuinticBef<F> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> SubAssign<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> SubAssign<F> for QuinticBef<F> {
     #[inline]
     fn sub_assign(&mut self, rhs: F) {
         *self = *self - rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> Mul for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Mul for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -269,7 +269,7 @@ impl<F: OptimallyExtendable<5>> Mul for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Mul<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Mul<F> for QuinticBef<F> {
     type Output = Self;
 
     #[inline]
@@ -284,13 +284,13 @@ impl<F: OptimallyExtendable<5>> Mul<F> for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Product for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Product for QuinticBef<F> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ONE, |acc, x| acc * x)
     }
 }
 
-impl<F: OptimallyExtendable<5>> Div for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> Div for QuinticBef<F> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
@@ -299,26 +299,26 @@ impl<F: OptimallyExtendable<5>> Div for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> DivAssign for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> DivAssign for QuinticBef<F> {
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> MulAssign for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> MulAssign for QuinticBef<F> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> MulAssign<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> MulAssign<F> for QuinticBef<F> {
     fn mul_assign(&mut self, rhs: F) {
         *self = *self * rhs;
     }
 }
 
-impl<F: OptimallyExtendable<5>> AbstractExtensionField<F> for QuinticOef<F> {
+impl<F: HasFrobenuis<5>> AbstractExtensionField<F> for QuinticBef<F> {
     const D: usize = F::D;
 
     fn from_base(b: F) -> Self {
@@ -335,12 +335,12 @@ impl<F: OptimallyExtendable<5>> AbstractExtensionField<F> for QuinticOef<F> {
     }
 }
 
-impl<F: OptimallyExtendable<5>> Distribution<QuinticOef<F>> for Standard
+impl<F: HasFrobenuis<5>> Distribution<QuinticBef<F>> for Standard
 where
     Standard: Distribution<F>,
 {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticOef<F> {
-        QuinticOef::<F>::from_base_slice(&[
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticBef<F> {
+        QuinticBef::<F>::from_base_slice(&[
             Standard.sample(rng),
             Standard.sample(rng),
             Standard.sample(rng),

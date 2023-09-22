@@ -1,4 +1,4 @@
-use p3_field::extension::{BinomiallyExtendable, OptimallyExtendable};
+use p3_field::extension::{BinomiallyExtendable, HasFrobenuis};
 use p3_field::AbstractField;
 
 use crate::BabyBear;
@@ -12,7 +12,7 @@ impl BinomiallyExtendable<4> for BabyBear {
         [Self::new(8), Self::ONE, Self::ZERO, Self::ZERO]
     }
 }
-impl OptimallyExtendable<4> for BabyBear {
+impl HasFrobenuis<4> for BabyBear {
     // DTH_ROOT = W^((p - 1)/4)
     const DTH_ROOT: Self = Self::new(1728404513);
 }
@@ -26,7 +26,7 @@ impl BinomiallyExtendable<5> for BabyBear {
         [Self::new(8), Self::ONE, Self::ZERO, Self::ZERO, Self::ZERO]
     }
 }
-impl OptimallyExtendable<5> for BabyBear {
+impl HasFrobenuis<5> for BabyBear {
     // DTH_ROOT = W^((p - 1)/5)
     const DTH_ROOT: Self = Self::new(815036133);
 }
@@ -36,12 +36,12 @@ mod test_tesseractic_extension {
 
     use p3_field_testing::test_field;
 
-    test_field!(p3_field::extension::tesseractic::TesseracticOef<crate::BabyBear>);
+    test_field!(p3_field::extension::tesseractic::TesseracticBef<crate::BabyBear>);
 }
 #[cfg(test)]
 mod test_quintic_extension {
 
     use p3_field_testing::test_field;
 
-    test_field!(p3_field::extension::quintic::QuinticOef<crate::BabyBear>);
+    test_field!(p3_field::extension::quintic::QuinticBef<crate::BabyBear>);
 }

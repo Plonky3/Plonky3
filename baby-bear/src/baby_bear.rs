@@ -19,6 +19,7 @@ pub struct BabyBear {
 }
 
 impl BabyBear {
+    /// create a new `BabyBear` from a canonical `u32`.
     pub(crate) const fn new(n: u32) -> Self {
         Self { value: to_monty(n) }
     }
