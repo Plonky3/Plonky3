@@ -55,7 +55,7 @@ pub fn assume(p: bool) {
 
 /// Try to force Rust to emit a branch. Example:
 ///
-/// ```
+/// ```no_run
 /// let x = 100;
 /// if x > 20 {
 ///     println!("x is big!");

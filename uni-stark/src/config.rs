@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, UnivariatePcs};
+use p3_commit::{Pcs, UnivariatePcsWithLde};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
@@ -20,7 +20,7 @@ pub trait StarkConfig {
         + AbstractExtensionField<Self::PackedDomain>;
 
     /// The PCS used to commit to trace polynomials.
-    type Pcs: for<'a> UnivariatePcs<
+    type Pcs: UnivariatePcsWithLde<
         Self::Val,
         Self::Domain,
         Self::Challenge,
@@ -31,7 +31,7 @@ pub trait StarkConfig {
     type Dft: TwoAdicSubgroupDft<Self::Domain> + TwoAdicSubgroupDft<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
-        + for<'a> CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
+        + CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
 
     fn pcs(&self) -> &Self::Pcs;
 
@@ -69,10 +69,10 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     Challenge::Packing: AbstractExtensionField<Domain::Packing>,
-    Pcs: for<'a> UnivariatePcs<Val, Domain, Challenge, RowMajorMatrix<Val>, Challenger>,
+    Pcs: UnivariatePcsWithLde<Val, Domain, Challenge, RowMajorMatrix<Val>, Challenger>,
     Dft: TwoAdicSubgroupDft<Domain> + TwoAdicSubgroupDft<Challenge>,
     Challenger: FieldChallenger<Val>
-        + for<'a> CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
+        + CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
 {
     type Val = Val;
     type Domain = Domain;
