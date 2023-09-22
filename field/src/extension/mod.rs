@@ -17,20 +17,21 @@ pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
 /// Trait for defining frobenuis endomorphism of extension field.
 /// An bionomial extension field with a prime base field.
 pub trait HasFrobenuis<const D: usize>: BinomiallyExtendable<D> {
-    // DTH_ROOT = W^((n - 1)/D)
+    // DTH_ROOT = W^((n - 1)/D).
     // n is the order of base field.
+    // Only works when exists k such that n = kD + 1.
     const DTH_ROOT: Self;
 }
 
 pub trait Frobenius<F: HasFrobenuis<D>, const D: usize>:
     Field + Sized + AbstractExtensionField<F>
 {
-    /// FrobeniusField automorphisms: x -> x^p, where p is the order of BaseField.
+    /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     fn frobenius(&self) -> Self {
         self.repeated_frobenius(1)
     }
 
-    /// Repeated Frobenius automorphisms: x -> x^(p^count).
+    /// Repeated Frobenius automorphisms: x -> x^(n^count).
     ///
     /// Follows precomputation suggestion in Section 11.3.3 of the
     /// Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -38,13 +39,13 @@ pub trait Frobenius<F: HasFrobenuis<D>, const D: usize>:
         if count == 0 {
             return *self;
         } else if count >= D {
-            // x |-> x^(p^D) is the identity, so x^(p^count) ==
-            // x^(p^(count % D))
+            // x |-> x^(n^D) is the identity, so x^(n^count) ==
+            // x^(n^(count % D))
             return self.repeated_frobenius(count % D);
         }
         let arr: &[F] = self.as_base_slice();
 
-        // z0 = DTH_ROOT^count = W^(k * count) where k = floor((p-1)/D)
+        // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
         let mut z0 = F::DTH_ROOT;
         for _ in 1..count {
             z0 *= F::DTH_ROOT;
