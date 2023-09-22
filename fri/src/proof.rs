@@ -21,6 +21,7 @@ pub struct QueryProof<FC: FriConfig> {
 
     /// For each commit phase commitment, this contains openings of each matrix at the queried
     /// location, along with an opening proof.
+    // TODO: There should be two opened values for each matrix, as in `[FC::Challenge; 2]`.
     pub(crate) commit_phase_openings: Vec<(
         Vec<Vec<FC::Challenge>>,
         <FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Proof,
