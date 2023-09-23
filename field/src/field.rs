@@ -28,6 +28,10 @@ pub trait AbstractField:
     + Product
     + Debug
 {
+    type F: Field;
+
+    // fn from_f(f: Self::F) -> Self;
+
     const ZERO: Self;
     const ONE: Self;
     const TWO: Self;
@@ -60,12 +64,16 @@ pub trait AbstractField:
         self.square() * self.clone()
     }
 
-    /// The default implementation uses naive square and multiply.
-    /// This can be overridden for specific fields and powers.
+    /// Exponentiation by a `u64` power.
+    ///
+    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
+    /// by squaring. Rather than override this method, it is generally recommended to have the
+    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
+    /// abstract fields.
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        exp_u64_by_squaring(self.clone(), power)
+        Self::F::exp_u64_generic(self.clone(), power)
     }
 
     #[must_use]
@@ -111,26 +119,17 @@ pub trait AbstractField:
     }
 }
 
-/// An `AbstractField` which abstracts the given field `F`.
-pub trait AbstractionOf<F: Field>:
-    AbstractField
-    + From<F>
-    + Add<F, Output = Self>
-    + AddAssign<F>
-    + Sub<F, Output = Self>
-    + SubAssign<F>
-    + Mul<F, Output = Self>
-    + MulAssign<F>
-    + Sum<F>
-    + Product<F>
-{
-}
-
-impl<F: Field> AbstractionOf<F> for F {}
-
 /// An element of a finite field.
 pub trait Field:
-    AbstractField + 'static + Copy + Div<Self, Output = Self> + Eq + Hash + Send + Sync + Display
+    AbstractField<F = Self>
+    + 'static
+    + Copy
+    + Div<Self, Output = Self>
+    + Eq
+    + Hash
+    + Send
+    + Sync
+    + Display
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -154,6 +153,17 @@ pub trait Field:
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         *self / Self::TWO.exp_u64(exp)
+    }
+
+    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
+    /// can be used with `AbstractField`s, not just this concrete field.
+    ///
+    /// The default implementation uses naive square and multiply. Implementations may want to
+    /// override this and handle certain powers with more optimal addition chains.
+    #[must_use]
+    #[inline]
+    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+        exp_u64_by_squaring(val, power)
     }
 
     /// The multiplicative inverse of this field element, if it exists.
@@ -198,7 +208,7 @@ pub trait PrimeField32: PrimeField64 {
     fn as_canonical_u32(&self) -> u32;
 }
 
-pub trait AbstractExtensionField<Base>:
+pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
     + Add<Base, Output = Self>
     + AddAssign<Base>
@@ -239,7 +249,7 @@ pub trait AbstractExtensionField<Base>:
     fn as_base_slice(&self) -> &[Base];
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(|x| x.is_zero())
     }

@@ -25,6 +25,8 @@ impl<F: BinomiallyExtendable<2>> From<F> for QuadraticBef<F> {
 }
 
 impl<F: BinomiallyExtendable<2>> AbstractField for QuadraticBef<F> {
+    type F = Self;
+
     const ZERO: Self = Self([F::ZERO; 2]);
     const ONE: Self = Self([F::ONE, F::ZERO]);
     const TWO: Self = Self([F::TWO, F::ZERO]);

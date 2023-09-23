@@ -1,6 +1,6 @@
 use core::ops::{Add, Mul, Sub};
 
-use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
+use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 
@@ -19,7 +19,11 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type Expr: AbstractionOf<Self::F>
+    type Expr: AbstractField<F = Self::F>
+        + From<Self::F>
+        + Add<Self::F, Output = Self::Expr>
+        + Sub<Self::F, Output = Self::Expr>
+        + Mul<Self::F, Output = Self::Expr>
         + Add<Self::Var, Output = Self::Expr>
         + Sub<Self::Var, Output = Self::Expr>
         + Mul<Self::Var, Output = Self::Expr>;
@@ -140,8 +144,11 @@ pub trait PairBuilder: AirBuilder {
 pub trait PermutationAirBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
-    type ExprEF: AbstractionOf<Self::EF>
-        + AbstractExtensionField<Self::Expr>
+    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>
+        + From<Self::EF>
+        + Add<Self::EF, Output = Self::ExprEF>
+        + Sub<Self::EF, Output = Self::ExprEF>
+        + Mul<Self::EF, Output = Self::ExprEF>
         + Add<Self::VarEF, Output = Self::ExprEF>
         + Sub<Self::VarEF, Output = Self::ExprEF>
         + Mul<Self::VarEF, Output = Self::ExprEF>;
