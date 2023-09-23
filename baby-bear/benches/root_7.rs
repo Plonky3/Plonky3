@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use p3_baby_bear::BabyBear;
-use p3_field::Field;
+use p3_field::AbstractField;
 
 type F = BabyBear;
 

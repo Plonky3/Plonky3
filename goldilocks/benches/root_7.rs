@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use p3_field::Field;
+use p3_field::AbstractField;
 use p3_goldilocks::Goldilocks;
 
 type F = Goldilocks;

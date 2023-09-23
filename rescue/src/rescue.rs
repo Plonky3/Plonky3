@@ -145,7 +145,7 @@ where
             }
 
             // Inverse S-box
-            self.isl.inverse_sbox_layer(&mut state, &alpha_inv);
+            self.isl.inverse_sbox_layer(&mut state, alpha_inv);
 
             // MDS
             self.mds.permute_mut(&mut state);
