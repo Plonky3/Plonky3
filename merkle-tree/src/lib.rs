@@ -11,7 +11,7 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
 use p3_util::log2_strict_usize;
@@ -55,7 +55,7 @@ impl<L, D> MerkleTree<L, D> {
             .collect_vec();
 
         let first_digest_layer = (0..max_height)
-            .map(|i| h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i))))
+            .map(|i| h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row_slice(i))))
             .chain(iter::repeat(D::default()))
             .take(max_height_padded)
             .collect_vec();
@@ -95,9 +95,9 @@ impl<L, D> MerkleTree<L, D> {
 
 /// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
-fn compression_layer<L, D, H, C, Mat>(
+fn compression_layer<L, D, H, C>(
     prev_layer: &[D],
-    matrices_to_inject: Vec<&Mat>,
+    matrices_to_inject: Vec<&RowMajorMatrix<L>>,
     h: &H,
     c: &C,
 ) -> Vec<D>
@@ -106,7 +106,6 @@ where
     D: Copy + Default,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
-    Mat: MatrixRows<L>,
 {
     let next_len_padded = prev_layer.len() / 2;
     let mut next_digests = Vec::with_capacity(next_len_padded);
@@ -126,8 +125,7 @@ where
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let mut digest = c.compress([left, right]);
-        let tallest_digest =
-            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row(i).into_iter()));
+        let tallest_digest = h.hash_iter_slices(matrices_to_inject.iter().map(|m| m.row_slice(i)));
         digest = c.compress([digest, tallest_digest]);
         next_digests.push(digest);
     }
