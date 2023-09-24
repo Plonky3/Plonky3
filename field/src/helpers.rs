@@ -54,20 +54,3 @@ where
     // TODO: Use PackedField
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
-
-pub fn exp_u64<F: Field>(val: &F, power: u64) -> F {
-    let mut current = *val;
-    let mut product = F::ONE;
-
-    for j in 0..bits_u64(power) {
-        if (power >> j & 1) != 0 {
-            product *= current;
-        }
-        current = current.square();
-    }
-    product
-}
-
-const fn bits_u64(n: u64) -> usize {
-    (64 - n.leading_zeros()) as usize
-}

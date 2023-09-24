@@ -6,7 +6,7 @@ use core::slice;
 
 use p3_util::log2_ceil_u64;
 
-use crate::helpers::exp_u64;
+use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
 
 /// A generalization of `Field` which permits things like
@@ -58,6 +58,44 @@ pub trait AbstractField:
     #[must_use]
     fn cube(&self) -> Self {
         self.square() * self.clone()
+    }
+
+    /// The default implementation uses naive square and multiply.
+    /// This can be overridden for specific fields and powers.
+    #[must_use]
+    #[inline]
+    fn exp_u64(&self, power: u64) -> Self {
+        exp_u64_by_squaring(self.clone(), power)
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::ONE,
+            1 => self.clone(),
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => self.square().square() * self.clone(),
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2.clone() * self.clone();
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[must_use]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        let mut res = self.clone();
+        for _ in 0..power_log {
+            res = res.square();
+        }
+        res
     }
 
     #[must_use]
@@ -127,44 +165,6 @@ pub trait Field:
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
-    }
-
-    #[must_use]
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => self.square().square() * *self,
-            6 => self.square().cube(),
-            7 => {
-                let x2 = self.square();
-                let x3 = x2 * *self;
-                let x4 = x2.square();
-                x3 * x4
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-
-    // Just calls the naive square and multiply implementation in helpers.rs
-    // For specific fields we will hard code some addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64(&self, power: u64) -> Self {
-        exp_u64(self, power)
-    }
-
-    #[must_use]
-    fn exp_power_of_2(&self, power_log: usize) -> Self {
-        let mut res = *self;
-        for _ in 0..power_log {
-            res = res.square();
-        }
-        res
     }
 }
 
