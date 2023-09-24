@@ -2,10 +2,7 @@ use core::array;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::{
-    exp_10540996611094048183, exp_1717986917, exp_1725656503, exp_u64_by_squaring, AbstractField,
-    Field,
-};
+use crate::{AbstractField, Field};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
@@ -16,6 +13,12 @@ impl<F: Field, const N: usize> Default for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> From<F> for FieldArray<F, N> {
+    fn from(val: F) -> Self {
+        [val; N].into()
+    }
+}
+
 impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
     fn from(arr: [F; N]) -> Self {
         Self(arr)
@@ -23,6 +26,8 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 }
 
 impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
+    type F = F;
+
     const ZERO: Self = FieldArray([F::ZERO; N]);
     const ONE: Self = FieldArray([F::ONE; N]);
     const TWO: Self = FieldArray([F::TWO; N]);
@@ -62,16 +67,6 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
 
     fn multiplicative_group_generator() -> Self {
         [F::multiplicative_group_generator(); N].into()
-    }
-
-    #[inline]
-    fn exp_u64(&self, power: u64) -> Self {
-        match power {
-            1717986917 => exp_1717986917(*self),
-            1725656503 => exp_1725656503(*self),
-            10540996611094048183 => exp_10540996611094048183(*self),
-            _ => exp_u64_by_squaring(*self, power),
-        }
     }
 }
 

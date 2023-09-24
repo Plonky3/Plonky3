@@ -25,6 +25,8 @@ impl<F: BinomiallyExtendable<3>> From<F> for CubicBef<F> {
 }
 
 impl<F: BinomiallyExtendable<3>> AbstractField for CubicBef<F> {
+    type F = Self;
+
     const ZERO: Self = Self([F::ZERO; 3]);
     const ONE: Self = Self([F::ONE, F::ZERO, F::ZERO]);
     const TWO: Self = Self([F::TWO, F::ZERO, F::ZERO]);

@@ -85,6 +85,8 @@ impl Distribution<Mersenne31> for Standard {
 }
 
 impl AbstractField for Mersenne31 {
+    type F = Self;
+
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
     const TWO: Self = Self::new(2);
@@ -149,14 +151,6 @@ impl AbstractField for Mersenne31 {
     fn multiplicative_group_generator() -> Self {
         Self::new(7)
     }
-
-    // We hard code computing the 5'th root for rescue.
-    fn exp_u64(&self, power: u64) -> Self {
-        match power {
-            1717986917 => root_5(*self),
-            _ => exp_u64_by_squaring(*self, power),
-        }
-    }
 }
 
 impl Field for Mersenne31 {
@@ -185,6 +179,14 @@ impl Field for Mersenne31 {
         Self::new(rotated)
     }
 
+    #[inline]
+    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+        match power {
+            1717986917 => exp_1717986917(val), // used in x^{1/5}
+            _ => exp_u64_by_squaring(val, power),
+        }
+    }
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -206,10 +208,6 @@ impl Field for Mersenne31 {
             p1111111111111111111111111111.exp_power_of_2(3) * p101;
         Some(p1111111111111111111111111111101)
     }
-}
-
-fn root_5(val: Mersenne31) -> Mersenne31 {
-    exp_1717986917(val)
 }
 
 impl PrimeField for Mersenne31 {}
@@ -336,7 +334,6 @@ mod tests {
     use p3_field::{AbstractField, Field, PrimeField32};
     use p3_field_testing::test_field;
 
-    use super::*;
     use crate::Mersenne31;
 
     type F = Mersenne31;
@@ -385,8 +382,8 @@ mod tests {
         let m1 = F::from_canonical_u32(0x34167c58);
         let m2 = F::from_canonical_u32(0x61f3207b);
 
-        assert_eq!(root_5(m1).exp_const_u64::<5>(), m1);
-        assert_eq!(root_5(m2).exp_const_u64::<5>(), m2);
+        assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
+        assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
         assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
     }
 

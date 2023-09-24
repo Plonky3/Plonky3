@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, AbstractionOf, Field, PackedField};
+use p3_field::{AbstractField, Field, PackedField};
 
 use crate::BabyBear;
 
@@ -373,6 +373,8 @@ impl Product for PackedBabyBearNeon {
 }
 
 impl AbstractField for PackedBabyBearNeon {
+    type F = BabyBear;
+
     const ZERO: Self = Self::broadcast(BabyBear::ZERO);
     const ONE: Self = Self::broadcast(BabyBear::ONE);
     const TWO: Self = Self::broadcast(BabyBear::TWO);
@@ -482,8 +484,6 @@ impl Product<BabyBear> for PackedBabyBearNeon {
         iter.product::<BabyBear>().into()
     }
 }
-
-impl AbstractionOf<BabyBear> for PackedBabyBearNeon {}
 
 impl Div<BabyBear> for PackedBabyBearNeon {
     type Output = Self;

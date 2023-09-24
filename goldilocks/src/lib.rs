@@ -85,6 +85,8 @@ impl Distribution<Goldilocks> for Standard {
 }
 
 impl AbstractField for Goldilocks {
+    type F = Self;
+
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
     const TWO: Self = Self::new(2);
@@ -130,14 +132,6 @@ impl AbstractField for Goldilocks {
     fn multiplicative_group_generator() -> Self {
         Self::new(7)
     }
-
-    // We hard code computing the 7'th root for rescue.
-    fn exp_u64(&self, power: u64) -> Self {
-        match power {
-            10540996611094048183 => root_7(*self),
-            _ => exp_u64_by_squaring(*self, power),
-        }
-    }
 }
 
 impl Field for Goldilocks {
@@ -146,6 +140,14 @@ impl Field for Goldilocks {
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U64
+    }
+
+    #[inline]
+    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+        match power {
+            10540996611094048183 => exp_10540996611094048183(val), // used to compute x^{1/7}
+            _ => exp_u64_by_squaring(val, power),
+        }
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -192,10 +194,6 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
-}
-
-fn root_7(val: Goldilocks) -> Goldilocks {
-    exp_10540996611094048183(val)
 }
 
 impl PrimeField for Goldilocks {}
@@ -498,8 +496,8 @@ mod tests {
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
 
-        assert_eq!(root_7(f).exp_const_u64::<7>(), f);
-        assert_eq!(root_7(y).exp_const_u64::<7>(), y);
+        assert_eq!(f.exp_u64(10540996611094048183).exp_const_u64::<7>(), f);
+        assert_eq!(y.exp_u64(10540996611094048183).exp_const_u64::<7>(), y);
         assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
     }
 
