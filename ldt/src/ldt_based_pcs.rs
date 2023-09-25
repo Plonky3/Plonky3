@@ -63,14 +63,15 @@ where
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
         let shift = Domain::multiplicative_group_generator();
-        let ldes = polynomials
-            .into_iter()
-            .map(|poly| {
-                let input = poly.to_row_major_matrix().to_ext::<Domain>();
-                info_span!("compute LDEs for LDT-based commitment")
-                    .in_scope(|| self.dft.coset_lde_batch(input, self.added_bits, shift))
-            })
-            .collect();
+        let ldes = info_span!("compute all coset LDEs").in_scope(|| {
+            polynomials
+                .into_iter()
+                .map(|poly| {
+                    let input = poly.to_row_major_matrix().to_ext::<Domain>();
+                    self.dft.coset_lde_batch(input, self.added_bits, shift)
+                })
+                .collect()
+        });
         self.mmcs.commit(ldes)
     }
 }
