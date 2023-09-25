@@ -79,6 +79,15 @@ impl<F: Field, const N: usize> Add for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> Add<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: F) -> Self::Output {
+        self.0.map(|x| x + rhs).into()
+    }
+}
+
 impl<F: Field, const N: usize> AddAssign for FieldArray<F, N> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
@@ -92,6 +101,15 @@ impl<F: Field, const N: usize> Sub for FieldArray<F, N> {
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
         array::from_fn(|i| self.0[i] - rhs.0[i]).into()
+    }
+}
+
+impl<F: Field, const N: usize> Sub<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: F) -> Self::Output {
+        self.0.map(|x| x - rhs).into()
     }
 }
 
@@ -117,6 +135,15 @@ impl<F: Field, const N: usize> Mul for FieldArray<F, N> {
     #[inline]
     fn mul(self, rhs: Self) -> Self::Output {
         array::from_fn(|i| self.0[i] * rhs.0[i]).into()
+    }
+}
+
+impl<F: Field, const N: usize> Mul<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: F) -> Self::Output {
+        self.0.map(|x| x * rhs).into()
     }
 }
 
