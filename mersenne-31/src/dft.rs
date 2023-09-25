@@ -4,6 +4,11 @@
 //! In short, fold a Mersenne31 DFT of length n into a Mersenne31Complex DFT
 //! of length n/2. Some pre/post-processing is necessary so that the result
 //! of the transform behaves as expected wrt the convolution theorem etc.
+//!
+//! Note that we don't return the final n/2 - 1 elements since we know that
+//! the "complex conjugate" of the (n-k)th element equals the kth element.
+//! The convolution theorem maintains this relationship and so these final
+//! n/2 - 1 elements are essentially redundant.
 
 use alloc::vec::Vec;
 
@@ -102,7 +107,7 @@ fn dft_postprocess(
 ///
 /// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
 ///
-/// NB: This function and `dft_preprocess()` are inverses.
+/// NB: This function and `dft_postprocess()` are inverses.
 fn idft_preprocess(
     input: RowMajorMatrix<Mersenne31Complex<Mersenne31>>,
 ) -> RowMajorMatrix<Mersenne31Complex<Mersenne31>> {
