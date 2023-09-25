@@ -15,22 +15,24 @@ use crate::packed::PackedField;
 /// - a vector of field elements
 pub trait AbstractField:
     Sized
+    + From<Self::F>
     + Default
     + Clone
     + Add<Output = Self>
+    + Add<Self::F, Output = Self>
     + AddAssign
     + Sub<Output = Self>
+    + Sub<Self::F, Output = Self>
     + SubAssign
     + Neg<Output = Self>
     + Mul<Output = Self>
+    + Mul<Self::F, Output = Self>
     + MulAssign
     + Sum
     + Product
     + Debug
 {
     type F: Field;
-
-    // fn from_f(f: Self::F) -> Self;
 
     const ZERO: Self;
     const ONE: Self;

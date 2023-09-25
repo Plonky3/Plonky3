@@ -4,7 +4,7 @@
 //! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
-use core::fmt::{Display, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
@@ -82,7 +82,8 @@ impl<AF: AbstractField<F = Mersenne31>> AddAssign<AF> for Mersenne31Complex<AF> 
 
 impl<AF: AbstractField<F = Mersenne31>> Sum for Mersenne31Complex<AF> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y)
+            .unwrap_or(Self::new_real(AF::ZERO))
     }
 }
 
@@ -163,11 +164,17 @@ impl<AF: AbstractField<F = Mersenne31>> MulAssign<AF> for Mersenne31Complex<AF> 
 
 impl<AF: AbstractField<F = Mersenne31>> Product for Mersenne31Complex<AF> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::new_real(AF::ONE))
     }
 }
 
-impl<AF: AbstractField<F = Mersenne31>> AbstractField for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> AbstractField for Mersenne31Complex<AF>
+where
+    Self: From<Mersenne31Complex<Mersenne31>>,
+    Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
+{
     type F = Mersenne31Complex<Mersenne31>;
 
     const ZERO: Self = Self::new_real(AF::ZERO);
@@ -275,7 +282,13 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     }
 }
 
-impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne31Complex<AF>
+where
+    Self: From<Mersenne31Complex<Mersenne31>>,
+    Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
+{
     const D: usize = 2;
 
     fn from_base(b: AF) -> Self {
