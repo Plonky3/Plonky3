@@ -2,7 +2,10 @@
 
 #![no_std]
 
+extern crate alloc;
+
 mod complex;
+mod dft;
 mod extension;
 
 use core::fmt;
@@ -12,6 +15,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
+pub use dft::Mersenne31Dft;
 pub use extension::*;
 use p3_field::{
     exp_1717986917, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,

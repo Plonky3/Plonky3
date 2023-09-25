@@ -241,6 +241,20 @@ impl Field for Mersenne31Complex<Mersenne31> {
             .try_inverse()
             .map(|x| self.conjugate() * x)
     }
+
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(
+            self.parts[0].mul_2exp_u64(exp),
+            self.parts[1].mul_2exp_u64(exp),
+        )
+    }
+
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(
+            self.parts[0].div_2exp_u64(exp),
+            self.parts[1].div_2exp_u64(exp),
+        )
+    }
 }
 
 impl TwoAdicField for Mersenne31Complex<Mersenne31> {
