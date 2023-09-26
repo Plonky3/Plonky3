@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
-use p3_field::{PrimeField, PrimeField64};
+use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
 use p3_util::ceil_div_usize;
@@ -9,41 +9,44 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
 
-use crate::inverse_sbox::InverseSboxLayer;
-use crate::util::{get_inverse, shake256_hash};
+use crate::inverse_sbox::SboxLayers;
+use crate::util::shake256_hash;
 
+/// The Rescue-XLIX permutation.
 #[derive(Clone)]
-pub struct Rescue<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64>
+pub struct Rescue<F, Mds, Sbox, const WIDTH: usize>
 where
-    F: PrimeField,
+    F: AbstractField,
+    F::F: PrimeField,
     Mds: MdsPermutation<F, WIDTH>,
-    Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
+    Sbox: SboxLayers<F, WIDTH>,
 {
     num_rounds: usize,
     mds: Mds,
-    isl: Isl,
-    round_constants: Vec<F>,
+    sbox: Sbox,
+    round_constants: Vec<F::F>,
 }
 
-impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, Isl, WIDTH, ALPHA>
+impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
 where
-    F: PrimeField,
+    F: AbstractField,
+    F::F: PrimeField,
     Mds: MdsPermutation<F, WIDTH>,
-    Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
+    Sbox: SboxLayers<F, WIDTH>,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds, isl: Isl) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<F::F>, mds: Mds, sbox: Sbox) -> Self {
         Self {
             num_rounds,
             mds,
-            isl,
+            sbox,
             round_constants,
         }
     }
 
-    fn num_rounds(capacity: usize, sec_level: usize) -> usize {
+    fn num_rounds(capacity: usize, sec_level: usize, alpha: u64) -> usize {
         let rate = WIDTH - capacity;
         let dcon = |n: usize| {
-            (0.5 * ((ALPHA - 1) * WIDTH as u64 * (n as u64 - 1)) as f64 + 2.0).floor() as usize
+            (0.5 * ((alpha - 1) * WIDTH as u64 * (n as u64 - 1)) as f64 + 2.0).floor() as usize
         };
         let v = |n: usize| WIDTH * (n - 1) + rate;
         let target = BigUint::one() << sec_level;
@@ -58,12 +61,6 @@ where
         (l1.max(5) as f32 * 1.5).ceil() as usize
     }
 
-    fn sbox_layer(state: &mut [F; WIDTH]) {
-        for x in state.iter_mut() {
-            *x = x.exp_u64(ALPHA);
-        }
-    }
-
     // For a general field, we provide a generic constructor for the round constants.
     pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
     where
@@ -74,24 +71,28 @@ where
     }
 }
 
-impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, Isl, WIDTH, ALPHA>
+impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
 where
-    F: PrimeField64,
+    F: AbstractField,
+    F::F: PrimeField,
     Mds: MdsPermutation<F, WIDTH>,
-    Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
+    Sbox: SboxLayers<F, WIDTH>,
 {
     fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
         sec_level: usize,
-    ) -> Vec<F> {
+    ) -> Vec<F>
+    where
+        F::F: PrimeField64,
+    {
         let num_constants = 2 * WIDTH * num_rounds;
-        let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
+        let bytes_per_constant = ceil_div_usize(F::F::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
             "Rescue-XLIX({},{},{},{})",
-            F::ORDER_U64,
+            F::F::ORDER_U64,
             WIDTH,
             capacity,
             sec_level,
@@ -108,26 +109,23 @@ where
                     .iter()
                     .rev()
                     .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
-                F::from_canonical_u64(integer % F::ORDER_U64)
+                F::from_canonical_u64(integer % F::F::ORDER_U64)
             })
             .collect()
     }
 }
 
-impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> Permutation<[F; WIDTH]>
-    for Rescue<F, Mds, Isl, WIDTH, ALPHA>
+impl<F, Mds, Sbox, const WIDTH: usize> Permutation<[F; WIDTH]> for Rescue<F, Mds, Sbox, WIDTH>
 where
-    F: PrimeField64,
+    F: AbstractField,
+    F::F: PrimeField,
     Mds: MdsPermutation<F, WIDTH>,
-    Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
+    Sbox: SboxLayers<F, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [F; WIDTH]) {
-        // It might be worth adding this to the inputs as opposed to computing it every time.
-        let alpha_inv = get_inverse::<F>(ALPHA);
-
         for round in 0..self.num_rounds {
             // S-box
-            Self::sbox_layer(state);
+            self.sbox.sbox_layer(state);
 
             // MDS
             self.mds.permute_mut(state);
@@ -141,7 +139,7 @@ where
             }
 
             // Inverse S-box
-            self.isl.inverse_sbox_layer(state, alpha_inv);
+            self.sbox.inverse_sbox_layer(state);
 
             // MDS
             self.mds.permute_mut(state);
@@ -157,12 +155,12 @@ where
     }
 }
 
-impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
-    for Rescue<F, Mds, Isl, WIDTH, ALPHA>
+impl<F, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[F; WIDTH]>
+    for Rescue<F, Mds, Sbox, WIDTH>
 where
     F: PrimeField64,
     Mds: MdsPermutation<F, WIDTH>,
-    Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
+    Sbox: SboxLayers<F, WIDTH>,
 {
 }
 
@@ -175,22 +173,22 @@ mod tests {
     use p3_symmetric::permutation::Permutation;
     use p3_symmetric::sponge::PaddingFreeSponge;
 
-    use crate::inverse_sbox::BasicInverseSboxLayer;
+    use crate::inverse_sbox::BasicSboxLayer;
     use crate::rescue::Rescue;
 
     const WIDTH: usize = 12;
     const ALPHA: u64 = 5;
     type RescuePrimeM31Default =
-        Rescue<Mersenne31, MdsMatrixMersenne31, BasicInverseSboxLayer, WIDTH, ALPHA>;
+        Rescue<Mersenne31, MdsMatrixMersenne31, BasicSboxLayer<Mersenne31>, WIDTH>;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
-        let num_rounds = RescuePrimeM31Default::num_rounds(6, 128);
+        let num_rounds = RescuePrimeM31Default::num_rounds(6, 128, ALPHA);
         let round_constants =
             RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
         let mds = MdsMatrixMersenne31 {};
-        let isl = BasicInverseSboxLayer {};
+        let sbox = BasicSboxLayer::for_alpha(ALPHA);
 
-        RescuePrimeM31Default::new(num_rounds, round_constants, mds, isl)
+        RescuePrimeM31Default::new(num_rounds, round_constants, mds, sbox)
     }
 
     const NUM_TESTS: usize = 3;

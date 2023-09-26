@@ -191,6 +191,7 @@ pub trait PrimeField: Field + Ord {}
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
+    // TODO: Move to Field itself? Limiting it to `PrimeField64` seems unusual.
     fn bits() -> usize {
         log2_ceil_u64(Self::ORDER_U64) as usize
     }
