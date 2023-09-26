@@ -3,7 +3,7 @@
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
 
 use p3_goldilocks::Goldilocks;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 
 use crate::diffusion::matmul_internal;
 use crate::DiffusionPermutation;
@@ -86,7 +86,6 @@ impl CryptographicPermutation<[Goldilocks; 8]> for DiffusionMatrixGoldilocks {
         input
     }
 }
-impl ArrayPermutation<Goldilocks, 8> for DiffusionMatrixGoldilocks {}
 impl DiffusionPermutation<Goldilocks, 8> for DiffusionMatrixGoldilocks {}
 
 impl CryptographicPermutation<[Goldilocks; 12]> for DiffusionMatrixGoldilocks {
@@ -96,7 +95,6 @@ impl CryptographicPermutation<[Goldilocks; 12]> for DiffusionMatrixGoldilocks {
         input
     }
 }
-impl ArrayPermutation<Goldilocks, 12> for DiffusionMatrixGoldilocks {}
 impl DiffusionPermutation<Goldilocks, 12> for DiffusionMatrixGoldilocks {}
 
 impl CryptographicPermutation<[Goldilocks; 16]> for DiffusionMatrixGoldilocks {
@@ -106,7 +104,6 @@ impl CryptographicPermutation<[Goldilocks; 16]> for DiffusionMatrixGoldilocks {
         input
     }
 }
-impl ArrayPermutation<Goldilocks, 16> for DiffusionMatrixGoldilocks {}
 impl DiffusionPermutation<Goldilocks, 16> for DiffusionMatrixGoldilocks {}
 
 impl CryptographicPermutation<[Goldilocks; 20]> for DiffusionMatrixGoldilocks {
@@ -116,5 +113,4 @@ impl CryptographicPermutation<[Goldilocks; 20]> for DiffusionMatrixGoldilocks {
         input
     }
 }
-impl ArrayPermutation<Goldilocks, 20> for DiffusionMatrixGoldilocks {}
 impl DiffusionPermutation<Goldilocks, 20> for DiffusionMatrixGoldilocks {}

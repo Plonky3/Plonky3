@@ -6,7 +6,7 @@
 
 use p3_dft::Radix2Bowers;
 use p3_goldilocks::Goldilocks;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 
 use crate::util::{
     apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
@@ -24,7 +24,6 @@ impl CryptographicPermutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
         apply_circulant_8_sml(input)
     }
 }
-impl ArrayPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
 impl CryptographicPermutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
@@ -32,7 +31,6 @@ impl CryptographicPermutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
         apply_circulant_12_sml(input)
     }
 }
-impl ArrayPermutation<Goldilocks, 12> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 12> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
@@ -49,7 +47,6 @@ impl CryptographicPermutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<Goldilocks, 16> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 16> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
@@ -67,7 +64,6 @@ impl CryptographicPermutation<[Goldilocks; 24]> for MdsMatrixGoldilocks {
         apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, input)
     }
 }
-impl ArrayPermutation<Goldilocks, 24> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 24> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
@@ -88,7 +84,6 @@ impl CryptographicPermutation<[Goldilocks; 32]> for MdsMatrixGoldilocks {
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<Goldilocks, 32> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 32> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
@@ -117,7 +112,6 @@ impl CryptographicPermutation<[Goldilocks; 64]> for MdsMatrixGoldilocks {
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<Goldilocks, 64> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 64> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
@@ -146,7 +140,6 @@ impl CryptographicPermutation<[Goldilocks; 68]> for MdsMatrixGoldilocks {
         apply_circulant(&MATRIX_CIRC_MDS_68_GOLDILOCKS, input)
     }
 }
-impl ArrayPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]

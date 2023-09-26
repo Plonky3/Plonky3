@@ -11,7 +11,6 @@ extern crate alloc;
 mod babybear;
 mod diffusion;
 mod goldilocks;
-use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 pub use babybear::DiffusionMatrixBabybear;
@@ -19,7 +18,7 @@ pub use diffusion::DiffusionPermutation;
 pub use goldilocks::DiffusionMatrixGoldilocks;
 use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -128,9 +127,7 @@ where
     Mds: MdsPermutation<F, WIDTH>,
     Diffusion: DiffusionPermutation<F, WIDTH>,
 {
-    fn permute(&self, state: [F; WIDTH]) -> [F; WIDTH] {
-        let mut state = state.to_owned();
-
+    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
         // The initial linear layer.
         self.external_linear_layer.permute_mut(&mut state);
 
@@ -160,13 +157,4 @@ where
 
         state
     }
-}
-
-impl<F, Mds, Diffusion, const T: usize, const D: u64> ArrayPermutation<F, T>
-    for Poseidon2<F, Mds, Diffusion, T, D>
-where
-    F: AbstractField,
-    Mds: MdsPermutation<F, T>,
-    Diffusion: DiffusionPermutation<F, T>,
-{
 }

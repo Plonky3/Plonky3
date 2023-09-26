@@ -5,7 +5,7 @@ use p3_field::PrimeField32;
 use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
@@ -41,10 +41,6 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> CryptographicPermutation<[Mers
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> ArrayPermutation<Mersenne31, WIDTH>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
-{
-}
 impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
     for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
 {
