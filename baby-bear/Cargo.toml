@@ -19,3 +19,8 @@ harness = false
 [[bench]]
 name = "root_7"
 harness = false
+
+[[bench]]
+name = "field_array_exponentiation"
+harness = false
+
