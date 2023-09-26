@@ -22,13 +22,16 @@ pub trait AbstractField:
     + Add<Output = Self>
     + Add<Self::F, Output = Self>
     + AddAssign
+    + AddAssign<Self::F>
     + Sub<Output = Self>
     + Sub<Self::F, Output = Self>
     + SubAssign
+    + SubAssign<Self::F>
     + Neg<Output = Self>
     + Mul<Output = Self>
     + Mul<Self::F, Output = Self>
     + MulAssign
+    + MulAssign<Self::F>
     + Sum
     + Product
     + Debug

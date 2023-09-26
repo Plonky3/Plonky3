@@ -95,6 +95,13 @@ impl<F: Field, const N: usize> AddAssign for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> AddAssign<F> for FieldArray<F, N> {
+    #[inline]
+    fn add_assign(&mut self, rhs: F) {
+        self.0.iter_mut().for_each(|x| *x += rhs);
+    }
+}
+
 impl<F: Field, const N: usize> Sub for FieldArray<F, N> {
     type Output = Self;
 
@@ -117,6 +124,13 @@ impl<F: Field, const N: usize> SubAssign for FieldArray<F, N> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         self.0.iter_mut().zip(rhs.0).for_each(|(x, y)| *x -= y);
+    }
+}
+
+impl<F: Field, const N: usize> SubAssign<F> for FieldArray<F, N> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: F) {
+        self.0.iter_mut().for_each(|x| *x -= rhs);
     }
 }
 
@@ -151,6 +165,13 @@ impl<F: Field, const N: usize> MulAssign for FieldArray<F, N> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         self.0.iter_mut().zip(rhs.0).for_each(|(x, y)| *x *= y);
+    }
+}
+
+impl<F: Field, const N: usize> MulAssign<F> for FieldArray<F, N> {
+    #[inline]
+    fn mul_assign(&mut self, rhs: F) {
+        self.0.iter_mut().for_each(|x| *x *= rhs);
     }
 }
 

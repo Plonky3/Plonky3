@@ -172,8 +172,11 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractField for Mersenne31Complex<AF>
 where
     Self: From<Mersenne31Complex<Mersenne31>>,
     Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: AddAssign<Mersenne31Complex<Mersenne31>>,
     Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: SubAssign<Mersenne31Complex<Mersenne31>>,
     Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: MulAssign<Mersenne31Complex<Mersenne31>>,
 {
     type F = Mersenne31Complex<Mersenne31>;
 
@@ -286,8 +289,11 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne3
 where
     Self: From<Mersenne31Complex<Mersenne31>>,
     Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: AddAssign<Mersenne31Complex<Mersenne31>>,
     Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: SubAssign<Mersenne31Complex<Mersenne31>>,
     Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: MulAssign<Mersenne31Complex<Mersenne31>>,
 {
     const D: usize = 2;
 

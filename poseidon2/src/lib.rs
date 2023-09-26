@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 pub use babybear::DiffusionMatrixBabybear;
 pub use diffusion::DiffusionPermutation;
 pub use goldilocks::DiffusionMatrixGoldilocks;
-use p3_field::Field;
+use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use rand::distributions::Standard;
@@ -30,7 +30,7 @@ const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 #[derive(Clone)]
 pub struct Poseidon2<F, Mds, Diffusion, const WIDTH: usize, const D: u64>
 where
-    F: Field,
+    F: AbstractField,
     Mds: MdsPermutation<F, WIDTH>,
     Diffusion: DiffusionPermutation<F, WIDTH>,
 {
@@ -41,7 +41,7 @@ where
     rounds_p: usize,
 
     /// The round constants.
-    constants: Vec<[F; WIDTH]>,
+    constants: Vec<[F::F; WIDTH]>,
 
     /// The linear layer used in external rounds.
     external_linear_layer: Mds,
@@ -52,7 +52,7 @@ where
 
 impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> Poseidon2<F, Mds, Diffusion, WIDTH, D>
 where
-    F: Field,
+    F: AbstractField,
     Mds: MdsPermutation<F, WIDTH>,
     Diffusion: DiffusionPermutation<F, WIDTH>,
 {
@@ -60,7 +60,7 @@ where
     pub fn new(
         rounds_f: usize,
         rounds_p: usize,
-        constants: Vec<[F; WIDTH]>,
+        constants: Vec<[F::F; WIDTH]>,
         external_linear_layer: Mds,
         internal_linear_layer: Diffusion,
     ) -> Self {
@@ -83,12 +83,12 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<F>,
+        Standard: Distribution<F::F>,
     {
         let mut constants = Vec::new();
         let rounds = rounds_f + rounds_p;
         for _ in 0..rounds {
-            let mut round_constant = [F::ZERO; WIDTH];
+            let mut round_constant = [F::F::ZERO; WIDTH];
             #[allow(clippy::needless_range_loop)]
             for j in 0..WIDTH {
                 round_constant[j] = rng.sample(Standard);
@@ -106,12 +106,8 @@ where
     }
 
     #[inline]
-    fn add_rc(&self, state: &[F; WIDTH], rc: &[F; WIDTH]) -> [F; WIDTH] {
-        let mut result = [F::ZERO; WIDTH];
-        for i in 0..WIDTH {
-            result[i] = state[i] + rc[i];
-        }
-        result
+    fn add_rc(&self, state: &mut [F; WIDTH], rc: &[F::F; WIDTH]) {
+        state.iter_mut().zip(rc).for_each(|(a, b)| *a += *b);
     }
 
     #[inline]
@@ -120,19 +116,15 @@ where
     }
 
     #[inline]
-    fn sbox(&self, state: &[F; WIDTH]) -> [F; WIDTH] {
-        let mut result = [F::ZERO; WIDTH];
-        for i in 0..WIDTH {
-            result[i] = self.sbox_p(&state[i]);
-        }
-        result
+    fn sbox(&self, state: &mut [F; WIDTH]) {
+        state.iter_mut().for_each(|a| *a = self.sbox_p(a));
     }
 }
 
 impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[F; WIDTH]>
     for Poseidon2<F, Mds, Diffusion, WIDTH, D>
 where
-    F: Field,
+    F: AbstractField,
     Mds: MdsPermutation<F, WIDTH>,
     Diffusion: DiffusionPermutation<F, WIDTH>,
 {
@@ -146,8 +138,8 @@ where
         let rounds = self.rounds_f + self.rounds_p;
         let rounds_f_beggining = self.rounds_f / 2;
         for r in 0..rounds_f_beggining {
-            state = self.add_rc(&state, &self.constants[r]);
-            state = self.sbox(&state);
+            self.add_rc(&mut state, &self.constants[r]);
+            self.sbox(&mut state);
             self.external_linear_layer.permute_mut(&mut state);
         }
 
@@ -161,8 +153,8 @@ where
 
         // The second half of the external rounds.
         for r in p_end..rounds {
-            state = self.add_rc(&state, &self.constants[r]);
-            state = self.sbox(&state);
+            self.add_rc(&mut state, &self.constants[r]);
+            self.sbox(&mut state);
             self.external_linear_layer.permute_mut(&mut state);
         }
 
@@ -170,10 +162,10 @@ where
     }
 }
 
-impl<F: Field, Mds, Diffusion, const T: usize, const D: u64> ArrayPermutation<F, T>
+impl<F, Mds, Diffusion, const T: usize, const D: u64> ArrayPermutation<F, T>
     for Poseidon2<F, Mds, Diffusion, T, D>
 where
-    F: Field,
+    F: AbstractField,
     Mds: MdsPermutation<F, T>,
     Diffusion: DiffusionPermutation<F, T>,
 {
