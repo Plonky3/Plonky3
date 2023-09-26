@@ -154,6 +154,7 @@ where
         _commits_and_points: &[(Self::Commitment, &[EF])],
         _values: OpenedValues<EF>,
         _proof: &Self::Proof,
+        _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         Ok(()) // TODO
     }

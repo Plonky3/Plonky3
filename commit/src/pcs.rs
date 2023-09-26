@@ -57,6 +57,7 @@ where
         commits_and_points: &[(Self::Commitment, &[EF])],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
+        challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
 }
 
