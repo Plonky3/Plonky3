@@ -3,6 +3,7 @@ use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
 use p3_util::log2_strict_usize;
 
+use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;
 
 /// An MDS permutation which works by interpreting the input as evaluations of a polynomial over a
@@ -159,47 +160,6 @@ fn bowers_g_t_layer<F: AbstractField, const N: usize>(
             dit_butterfly(values, hi, lo, twiddle);
         }
     }
-}
-
-/// DIT butterfly.
-#[inline]
-pub fn dit_butterfly<F: AbstractField, const N: usize>(
-    values: &mut [F; N],
-    idx_1: usize,
-    idx_2: usize,
-    twiddle: F::F,
-) {
-    let val_1 = values[idx_1].clone();
-    let val_2 = values[idx_2].clone() * twiddle;
-    values[idx_1] = val_1.clone() + val_2.clone();
-    values[idx_2] = val_1 - val_2;
-}
-
-/// DIF butterfly.
-#[inline]
-pub fn dif_butterfly<F: AbstractField, const N: usize>(
-    values: &mut [F; N],
-    idx_1: usize,
-    idx_2: usize,
-    twiddle: F::F,
-) {
-    let val_1 = values[idx_1].clone();
-    let val_2 = values[idx_2].clone();
-    values[idx_1] = val_1.clone() + val_2.clone();
-    values[idx_2] = (val_1 - val_2) * twiddle;
-}
-
-/// Butterfly with twiddle factor 1 (works in either DIT or DIF).
-#[inline]
-fn twiddle_free_butterfly<F: AbstractField, const N: usize>(
-    values: &mut [F; N],
-    idx_1: usize,
-    idx_2: usize,
-) {
-    let val_1 = values[idx_1].clone();
-    let val_2 = values[idx_2].clone();
-    values[idx_1] = val_1.clone() + val_2.clone();
-    values[idx_2] = val_1 - val_2;
 }
 
 #[cfg(test)]
