@@ -11,7 +11,6 @@ extern crate alloc;
 mod babybear;
 mod diffusion;
 mod goldilocks;
-use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 pub use babybear::DiffusionMatrixBabybear;
@@ -128,9 +127,7 @@ where
     Mds: MdsPermutation<F, WIDTH>,
     Diffusion: DiffusionPermutation<F, WIDTH>,
 {
-    fn permute(&self, state: [F; WIDTH]) -> [F; WIDTH] {
-        let mut state = state.to_owned();
-
+    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
         // The initial linear layer.
         self.external_linear_layer.permute_mut(&mut state);
 
