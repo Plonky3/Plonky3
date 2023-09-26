@@ -1,3 +1,4 @@
+use alloc::vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
@@ -247,6 +248,13 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// (or rederived within) another compilation environment where a
     /// different f might have been used.
     fn as_base_slice(&self) -> &[Base];
+
+    /// Returns the monomial `X^exponent`.
+    fn monomial(exponent: usize) -> Self {
+        let mut vec = vec![Base::ZERO; Self::D];
+        vec[exponent] = Base::ONE;
+        Self::from_base_slice(&vec)
+    }
 }
 
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {

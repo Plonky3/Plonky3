@@ -1,13 +1,10 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
-use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
-    TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
@@ -16,7 +13,8 @@ use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
 use crate::{
-    decompose, Commitments, ConstraintFolder, OpenedValues, Proof, StarkConfig, ZerofierOnCoset,
+    decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder, StarkConfig,
+    ZerofierOnCoset,
 };
 
 #[instrument(skip_all)]
@@ -28,13 +26,13 @@ pub fn prove<SC, A>(
 ) -> Proof<SC>
 where
     SC: StarkConfig,
-    A: for<'a> Air<ConstraintFolder<'a, SC>>,
+    A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     let degree = trace.height();
-    let degree_bits = log2_strict_usize(degree);
-    let quotient_degree_bits = 1; // TODO
+    let log_degree = log2_strict_usize(degree);
+    let log_quotient_degree = 1; // TODO
 
-    let g_subgroup = SC::Domain::primitive_root_of_unity(degree_bits);
+    let g_subgroup = SC::Domain::primitive_root_of_unity(log_degree);
 
     let pcs = config.pcs();
     let (trace_commit, trace_data) =
@@ -49,28 +47,14 @@ where
     let quotient_values = quotient_values(
         config,
         air,
-        degree_bits,
-        quotient_degree_bits,
+        log_degree,
+        log_quotient_degree,
         trace_lde,
         alpha,
     );
 
-    let num_quotient_chunks = 1 << quotient_degree_bits;
-    let quotient_value_chunks = decompose(quotient_values, quotient_degree_bits);
-    let quotient_chunks_flattened: Vec<SC::Val> = (0..degree)
-        .into_par_iter()
-        .flat_map_iter(|row| {
-            quotient_value_chunks
-                .iter()
-                .flat_map(move |chunk| chunk[row].as_base_slice().iter().copied())
-        })
-        .collect();
-    let challenge_ext_degree = <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
-    let quotient_chunks_flattened = RowMajorMatrix::new(
-        quotient_chunks_flattened,
-        num_quotient_chunks * challenge_ext_degree,
-    );
-
+    let quotient_chunks_flattened = info_span!("decompose quotient polynomial")
+        .in_scope(|| decompose_and_flatten::<SC>(quotient_values, log_quotient_degree));
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
         .in_scope(|| pcs.commit_batch(quotient_chunks_flattened));
     challenger.observe(quotient_commit.clone());
@@ -84,7 +68,7 @@ where
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
             (&trace_data, &[zeta, zeta * g_subgroup]),
-            (&quotient_data, &[zeta.square()]),
+            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
         ],
         challenger,
     );
@@ -114,7 +98,7 @@ fn quotient_values<SC, A, Mat>(
 ) -> Vec<SC::Challenge>
 where
     SC: StarkConfig,
-    A: for<'a> Air<ConstraintFolder<'a, SC>>,
+    A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: MatrixGet<SC::Domain> + Sync,
 {
     let degree = 1 << degree_bits;
@@ -132,14 +116,8 @@ where
     let zerofier_on_coset = ZerofierOnCoset::new(degree_bits, quotient_degree_bits, coset_shift);
 
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
-    let mut lagrange_first_evals = vec![SC::Domain::ZERO; degree];
-    lagrange_first_evals[0] = SC::Domain::ONE;
-    lagrange_first_evals = config.dft().lde(lagrange_first_evals, quotient_degree_bits);
-
-    // Evaluations of L_last(x) = Z_H(x) / (x - g^-1) on our coset s H.
-    let mut lagrange_last_evals = vec![SC::Domain::ZERO; degree];
-    lagrange_last_evals[degree - 1] = SC::Domain::ONE;
-    lagrange_last_evals = config.dft().lde(lagrange_last_evals, quotient_degree_bits);
+    let lagrange_first_evals = zerofier_on_coset.lagrange_basis_unnormalized(0);
+    let lagrange_last_evals = zerofier_on_coset.lagrange_basis_unnormalized(degree - 1);
 
     (0..quotient_size)
         .into_par_iter()
@@ -173,7 +151,7 @@ where
                 .collect();
 
             let accumulator = SC::PackedChallenge::ZERO;
-            let mut builder = ConstraintFolder {
+            let mut folder = ProverConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
@@ -184,12 +162,12 @@ where
                 alpha,
                 accumulator,
             };
-            air.eval(&mut builder);
+            air.eval(&mut folder);
 
             // quotient(x) = constraints(x) / Z_H(x)
             let zerofier_inv: SC::PackedDomain =
                 zerofier_on_coset.eval_inverse_packed(i_local_start);
-            let quotient = builder.accumulator * zerofier_inv;
+            let quotient = folder.accumulator * zerofier_inv;
             quotient.as_slice().to_vec()
         })
         .collect()
