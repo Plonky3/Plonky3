@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::PrimeField64;
-use p3_symmetric::permutation::ArrayPermutation;
+use p3_symmetric::permutation::CryptographicPermutation;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -11,7 +11,7 @@ use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 pub struct DuplexChallenger<F, P, const WIDTH: usize>
 where
     F: Clone,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
     sponge_state: [F; WIDTH],
     input_buffer: Vec<F>,
@@ -23,7 +23,7 @@ where
 impl<F, P, const WIDTH: usize> DuplexChallenger<F, P, WIDTH>
 where
     F: Copy,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
     pub fn new(permutation: P) -> Self
     where
@@ -57,14 +57,14 @@ where
 impl<F, P, const WIDTH: usize> FieldChallenger<F> for DuplexChallenger<F, P, WIDTH>
 where
     F: PrimeField64,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
 }
 
 impl<F, P, const WIDTH: usize> CanObserve<F> for DuplexChallenger<F, P, WIDTH>
 where
     F: Copy,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, value: F) {
         // Any buffered output is now invalid.
@@ -81,7 +81,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize> CanObserve<[F; N]> for DuplexChallenger<F, P, WIDTH>
 where
     F: Copy,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, values: [F; N]) {
         for value in values {
@@ -93,7 +93,7 @@ where
 impl<F, P, const WIDTH: usize> CanSample<F> for DuplexChallenger<F, P, WIDTH>
 where
     F: Copy,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn sample(&mut self) -> F {
         // If we have buffered inputs, we must perform a duplexing so that the challenge will
@@ -111,7 +111,7 @@ where
 impl<F, P, const WIDTH: usize> CanSampleBits<usize> for DuplexChallenger<F, P, WIDTH>
 where
     F: PrimeField64,
-    P: ArrayPermutation<F, WIDTH>,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         debug_assert!(bits < (usize::BITS as usize));
@@ -148,8 +148,6 @@ mod tests {
             input.reverse()
         }
     }
-
-    impl ArrayPermutation<F, WIDTH> for TestPermutation {}
 
     #[test]
     fn test_duplex_challenger() {

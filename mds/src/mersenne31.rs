@@ -5,7 +5,7 @@
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 
 use crate::util::{apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml};
 use crate::MdsPermutation;
@@ -18,7 +18,6 @@ impl CryptographicPermutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
         apply_circulant_8_sml(input)
     }
 }
-impl ArrayPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
 impl CryptographicPermutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
@@ -26,7 +25,6 @@ impl CryptographicPermutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
         apply_circulant_12_sml(input)
     }
 }
-impl ArrayPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
 impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
@@ -42,7 +40,6 @@ impl CryptographicPermutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
         apply_circulant(&MATRIX_CIRC_MDS_16_MERSENNE31, input)
     }
 }
-impl ArrayPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
 impl MdsPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
@@ -62,7 +59,6 @@ impl CryptographicPermutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
         apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
     }
 }
-impl ArrayPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
 impl MdsPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
@@ -90,7 +86,6 @@ impl CryptographicPermutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
         apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
     }
 }
-impl ArrayPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]

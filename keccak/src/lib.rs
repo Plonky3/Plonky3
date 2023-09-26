@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 use tiny_keccak::{keccakf, Hasher, Keccak};
 
 /// The Keccak-f permutation.
@@ -20,8 +20,6 @@ impl CryptographicPermutation<[u64; 25]> for KeccakF {
         input
     }
 }
-
-impl ArrayPermutation<u64, 25> for KeccakF {}
 
 impl CryptographicPermutation<[u8; 200]> for KeccakF {
     fn permute(&self, input_u8s: [u8; 200]) -> [u8; 200] {

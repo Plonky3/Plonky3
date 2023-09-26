@@ -1,6 +1,6 @@
 use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractField, Field, Powers, TwoAdicField};
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
@@ -49,8 +49,6 @@ where
         }
     }
 }
-
-impl<F: AbstractField, const N: usize> ArrayPermutation<F, N> for IntegratedCosetMds<F, N> {}
 
 impl<F: AbstractField, const N: usize> CryptographicPermutation<[F; N]>
     for IntegratedCosetMds<F, N>

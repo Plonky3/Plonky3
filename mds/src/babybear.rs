@@ -6,7 +6,7 @@
 
 use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Bowers;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 
 use crate::util::{
     apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
@@ -24,7 +24,6 @@ impl CryptographicPermutation<[BabyBear; 8]> for MdsMatrixBabyBear {
         apply_circulant_8_sml(input)
     }
 }
-impl ArrayPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 
 impl CryptographicPermutation<[BabyBear; 12]> for MdsMatrixBabyBear {
@@ -32,7 +31,6 @@ impl CryptographicPermutation<[BabyBear; 12]> for MdsMatrixBabyBear {
         apply_circulant_12_sml(input)
     }
 }
-impl ArrayPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -49,7 +47,6 @@ impl CryptographicPermutation<[BabyBear; 16]> for MdsMatrixBabyBear {
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -67,7 +64,6 @@ impl CryptographicPermutation<[BabyBear; 24]> for MdsMatrixBabyBear {
         apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
     }
 }
-impl ArrayPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -88,7 +84,6 @@ impl CryptographicPermutation<[BabyBear; 32]> for MdsMatrixBabyBear {
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -117,7 +112,6 @@ impl CryptographicPermutation<[BabyBear; 64]> for MdsMatrixBabyBear {
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 }
-impl ArrayPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 
 #[cfg(test)]

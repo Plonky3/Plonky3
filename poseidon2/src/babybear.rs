@@ -3,7 +3,7 @@
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
 
 use p3_baby_bear::BabyBear;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 
 use crate::diffusion::matmul_internal;
 use crate::DiffusionPermutation;
@@ -29,7 +29,6 @@ impl CryptographicPermutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
         input
     }
 }
-impl ArrayPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
 impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
 
 impl CryptographicPermutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
@@ -39,5 +38,4 @@ impl CryptographicPermutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
         input
     }
 }
-impl ArrayPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}
 impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}

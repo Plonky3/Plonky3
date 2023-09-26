@@ -5,8 +5,3 @@ pub trait CryptographicPermutation<T: Clone>: Clone {
         *input = self.permute(input.clone());
     }
 }
-
-pub trait ArrayPermutation<T: Clone, const WIDTH: usize>:
-    CryptographicPermutation<[T; WIDTH]>
-{
-}

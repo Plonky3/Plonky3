@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use p3_field::Field;
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -122,12 +122,4 @@ where
         self.half_full_rounds(&mut state, &mut round_ctr);
         state
     }
-}
-
-impl<F: Field, Mds, const WIDTH: usize, const ALPHA: u64> ArrayPermutation<F, WIDTH>
-    for Poseidon<F, Mds, WIDTH, ALPHA>
-where
-    F: Field,
-    Mds: MdsPermutation<F, WIDTH>,
-{
 }

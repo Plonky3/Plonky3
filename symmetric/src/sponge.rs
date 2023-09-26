@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 
 use crate::hasher::CryptographicHasher;
-use crate::permutation::ArrayPermutation;
+use crate::permutation::CryptographicPermutation;
 
 /// A padding-free, overwrite-mode sponge function.
 ///
@@ -29,7 +29,7 @@ impl<T, P, const WIDTH: usize, const RATE: usize, const OUT: usize> Cryptographi
     for PaddingFreeSponge<T, P, WIDTH, RATE, OUT>
 where
     T: Default + Copy,
-    P: ArrayPermutation<T, WIDTH>,
+    P: CryptographicPermutation<[T; WIDTH]>,
 {
     fn hash_iter<I>(&self, input: I) -> [T; OUT]
     where

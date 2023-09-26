@@ -3,7 +3,7 @@ use num::{BigUint, One};
 use num_integer::binomial;
 use p3_field::{PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::CryptographicPermutation;
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -161,15 +161,6 @@ where
 
         state
     }
-}
-
-impl<F, Mds, Isl, const WIDTH: usize, const ALPHA: u64> ArrayPermutation<F, WIDTH>
-    for Rescue<F, Mds, Isl, WIDTH, ALPHA>
-where
-    F: PrimeField64,
-    Mds: MdsPermutation<F, WIDTH>,
-    Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
-{
 }
 
 #[cfg(test)]
