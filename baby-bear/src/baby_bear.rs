@@ -3,7 +3,8 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_u64, AbstractField, Field, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+    exp_1725656503, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
+    PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -60,6 +61,8 @@ impl Distribution<BabyBear> for Standard {
 }
 
 impl AbstractField for BabyBear {
+    type F = Self;
+
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 0x7ffffff };
     const TWO: Self = Self { value: 0xffffffe };
@@ -129,6 +132,14 @@ impl Field for BabyBear {
         Self { value }
     }
 
+    #[inline]
+    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+        match power {
+            1725656503 => exp_1725656503(val), // used to compute x^{1/7}
+            _ => exp_u64_by_squaring(val, power),
+        }
+    }
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -158,40 +169,6 @@ impl Field for BabyBear {
 
         Some(p1110111111111111111111111111111)
     }
-
-    // We hard code computing the 7'th root for rescue.
-    fn exp_u64(&self, power: u64) -> Self {
-        // We hard code an addition chain for computing the 5'th root which is 1717986917.
-        // This will be used in rescue.
-        match power {
-            1725656503 => root_7(self),
-            _ => exp_u64(self, power),
-        }
-    }
-}
-
-fn root_7(val: &BabyBear) -> BabyBear {
-    // Note that 7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1).
-    // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1725656503})^7 = a.
-    // Note the binary expansion: 1725656503 = 1100110110110110110110110110111_2
-    // This uses 29 Squares + 8 Multiplications => 37 Operations total.
-    // Suspect it's possible to improve this with enough effort.
-    let p1 = *val;
-    let p10 = p1.square();
-    let p11 = p10 * p1;
-    let p110 = p11.square();
-    let p111 = p110 * p1;
-    let p11000 = p110.exp_power_of_2(2);
-    let p11011 = p11000 * p11;
-    let p11000000 = p11000.exp_power_of_2(3);
-    let p11011011 = p11000000 * p11011;
-    let p110011011 = p11011011 * p11000000;
-    let p110011011000000000 = p110011011.exp_power_of_2(9);
-    let p110011011011011011 = p110011011000000000 * p11011011;
-    let p110011011011011011000000000 = p110011011011011011.exp_power_of_2(9);
-    let p110011011011011011011011011 = p110011011011011011000000000 * p11011011;
-    let p1100110110110110110110110110000 = p110011011011011011011011011.exp_power_of_2(4);
-    p1100110110110110110110110110000 * p111
 }
 
 impl PrimeField for BabyBear {}
@@ -418,8 +395,8 @@ mod tests {
         let expected_prod = F::from_canonical_u32(0x1b5c8046);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(root_7(&m1).exp_const_u64::<7>(), m1);
-        assert_eq!(root_7(&m2).exp_const_u64::<7>(), m2);
+        assert_eq!(m1.exp_u64(1725656503).exp_const_u64::<7>(), m1);
+        assert_eq!(m2.exp_u64(1725656503).exp_const_u64::<7>(), m2);
         assert_eq!(f_2.exp_u64(1725656503).exp_const_u64::<7>(), f_2);
     }
 

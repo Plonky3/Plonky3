@@ -1,3 +1,4 @@
+use alloc::vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
@@ -6,7 +7,7 @@ use core::slice;
 
 use p3_util::log2_ceil_u64;
 
-use crate::helpers::exp_u64;
+use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
 
 /// A generalization of `Field` which permits things like
@@ -15,19 +16,28 @@ use crate::packed::PackedField;
 /// - a vector of field elements
 pub trait AbstractField:
     Sized
+    + From<Self::F>
     + Default
     + Clone
     + Add<Output = Self>
+    + Add<Self::F, Output = Self>
     + AddAssign
+    + AddAssign<Self::F>
     + Sub<Output = Self>
+    + Sub<Self::F, Output = Self>
     + SubAssign
+    + SubAssign<Self::F>
     + Neg<Output = Self>
     + Mul<Output = Self>
+    + Mul<Self::F, Output = Self>
     + MulAssign
+    + MulAssign<Self::F>
     + Sum
     + Product
     + Debug
 {
+    type F: Field;
+
     const ZERO: Self;
     const ONE: Self;
     const TWO: Self;
@@ -60,6 +70,48 @@ pub trait AbstractField:
         self.square() * self.clone()
     }
 
+    /// Exponentiation by a `u64` power.
+    ///
+    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
+    /// by squaring. Rather than override this method, it is generally recommended to have the
+    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
+    /// abstract fields.
+    #[must_use]
+    #[inline]
+    fn exp_u64(&self, power: u64) -> Self {
+        Self::F::exp_u64_generic(self.clone(), power)
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::ONE,
+            1 => self.clone(),
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => self.square().square() * self.clone(),
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2.clone() * self.clone();
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[must_use]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        let mut res = self.clone();
+        for _ in 0..power_log {
+            res = res.square();
+        }
+        res
+    }
+
     #[must_use]
     fn powers(&self) -> Powers<Self> {
         Powers {
@@ -73,26 +125,17 @@ pub trait AbstractField:
     }
 }
 
-/// An `AbstractField` which abstracts the given field `F`.
-pub trait AbstractionOf<F: Field>:
-    AbstractField
-    + From<F>
-    + Add<F, Output = Self>
-    + AddAssign<F>
-    + Sub<F, Output = Self>
-    + SubAssign<F>
-    + Mul<F, Output = Self>
-    + MulAssign<F>
-    + Sum<F>
-    + Product<F>
-{
-}
-
-impl<F: Field> AbstractionOf<F> for F {}
-
 /// An element of a finite field.
 pub trait Field:
-    AbstractField + 'static + Copy + Div<Self, Output = Self> + Eq + Hash + Send + Sync + Display
+    AbstractField<F = Self>
+    + 'static
+    + Copy
+    + Div<Self, Output = Self>
+    + Eq
+    + Hash
+    + Send
+    + Sync
+    + Display
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -118,6 +161,17 @@ pub trait Field:
         *self / Self::TWO.exp_u64(exp)
     }
 
+    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
+    /// can be used with `AbstractField`s, not just this concrete field.
+    ///
+    /// The default implementation uses naive square and multiply. Implementations may want to
+    /// override this and handle certain powers with more optimal addition chains.
+    #[must_use]
+    #[inline]
+    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+        exp_u64_by_squaring(val, power)
+    }
+
     /// The multiplicative inverse of this field element, if it exists.
     ///
     /// NOTE: The inverse of `0` is undefined and will return `None`.
@@ -127,44 +181,6 @@ pub trait Field:
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
-    }
-
-    #[must_use]
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => self.square().square() * *self,
-            6 => self.square().cube(),
-            7 => {
-                let x2 = self.square();
-                let x3 = x2 * *self;
-                let x4 = x2.square();
-                x3 * x4
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-
-    // Just calls the naive square and multiply implementation in helpers.rs
-    // For specific fields we will hard code some addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64(&self, power: u64) -> Self {
-        exp_u64(self, power)
-    }
-
-    #[must_use]
-    fn exp_power_of_2(&self, power_log: usize) -> Self {
-        let mut res = *self;
-        for _ in 0..power_log {
-            res = res.square();
-        }
-        res
     }
 }
 
@@ -198,7 +214,7 @@ pub trait PrimeField32: PrimeField64 {
     fn as_canonical_u32(&self) -> u32;
 }
 
-pub trait AbstractExtensionField<Base>:
+pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
     + Add<Base, Output = Self>
     + AddAssign<Base>
@@ -237,9 +253,16 @@ pub trait AbstractExtensionField<Base>:
     /// (or rederived within) another compilation environment where a
     /// different f might have been used.
     fn as_base_slice(&self) -> &[Base];
+
+    /// Returns the monomial `X^exponent`.
+    fn monomial(exponent: usize) -> Self {
+        let mut vec = vec![Base::ZERO; Self::D];
+        vec[exponent] = Base::ONE;
+        Self::from_base_slice(&vec)
+    }
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(|x| x.is_zero())
     }

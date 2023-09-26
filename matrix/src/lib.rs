@@ -33,7 +33,7 @@ pub struct Dimensions {
 }
 
 /// A `Matrix` that supports randomly accessing particular coefficients.
-pub trait MatrixGet<T> {
+pub trait MatrixGet<T>: Matrix<T> {
     fn get(&self, r: usize, c: usize) -> T;
 }
 

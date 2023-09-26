@@ -4,22 +4,22 @@
 //! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
-use core::fmt::{Display, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, Field, TwoAdicField};
+use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 use crate::Mersenne31;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
-pub struct Mersenne31Complex<AF: AbstractionOf<Mersenne31>> {
+pub struct Mersenne31Complex<AF: AbstractField<F = Mersenne31>> {
     parts: [AF; 2],
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Mersenne31Complex<AF> {
     pub const fn new(real: AF, imag: AF) -> Self {
         Self {
             parts: [real, imag],
@@ -51,7 +51,7 @@ impl<AF: AbstractionOf<Mersenne31>> Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Add for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Add for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -59,7 +59,7 @@ impl<AF: AbstractionOf<Mersenne31>> Add for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Add<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Add<AF> for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn add(self, rhs: AF) -> Self {
@@ -67,26 +67,27 @@ impl<AF: AbstractionOf<Mersenne31>> Add<AF> for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> AddAssign for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> AddAssign for Mersenne31Complex<AF> {
     fn add_assign(&mut self, rhs: Self) {
         self.parts[0] += rhs.real();
         self.parts[1] += rhs.imag();
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> AddAssign<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> AddAssign<AF> for Mersenne31Complex<AF> {
     fn add_assign(&mut self, rhs: AF) {
         self.parts[0] += rhs;
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Sum for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Sum for Mersenne31Complex<AF> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y)
+            .unwrap_or(Self::new_real(AF::ZERO))
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Sub for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Sub for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -94,7 +95,7 @@ impl<AF: AbstractionOf<Mersenne31>> Sub for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Sub<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Sub<AF> for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn sub(self, rhs: AF) -> Self {
@@ -102,20 +103,20 @@ impl<AF: AbstractionOf<Mersenne31>> Sub<AF> for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> SubAssign for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> SubAssign for Mersenne31Complex<AF> {
     fn sub_assign(&mut self, rhs: Self) {
         self.parts[0] -= rhs.real();
         self.parts[1] -= rhs.imag();
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> SubAssign<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> SubAssign<AF> for Mersenne31Complex<AF> {
     fn sub_assign(&mut self, rhs: AF) {
         self.parts[0] -= rhs;
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Neg for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Neg for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn neg(self) -> Self {
@@ -123,7 +124,7 @@ impl<AF: AbstractionOf<Mersenne31>> Neg for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Mul for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Mul for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -140,7 +141,7 @@ impl<AF: AbstractionOf<Mersenne31>> Mul for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Mul<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Mul<AF> for Mersenne31Complex<AF> {
     type Output = Self;
 
     fn mul(self, rhs: AF) -> Self {
@@ -148,26 +149,37 @@ impl<AF: AbstractionOf<Mersenne31>> Mul<AF> for Mersenne31Complex<AF> {
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> MulAssign for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> MulAssign for Mersenne31Complex<AF> {
     fn mul_assign(&mut self, rhs: Self) {
         *self = self.clone() * rhs;
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> MulAssign<AF> for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> MulAssign<AF> for Mersenne31Complex<AF> {
     fn mul_assign(&mut self, rhs: AF) {
         self.parts[0] *= rhs.clone();
         self.parts[1] *= rhs;
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> Product for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> Product for Mersenne31Complex<AF> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::new_real(AF::ONE))
     }
 }
 
-impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
+impl<AF: AbstractField<F = Mersenne31>> AbstractField for Mersenne31Complex<AF>
+where
+    Self: From<Mersenne31Complex<Mersenne31>>,
+    Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: AddAssign<Mersenne31Complex<Mersenne31>>,
+    Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: SubAssign<Mersenne31Complex<Mersenne31>>,
+    Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: MulAssign<Mersenne31Complex<Mersenne31>>,
+{
+    type F = Mersenne31Complex<Mersenne31>;
+
     const ZERO: Self = Self::new_real(AF::ZERO);
     const ONE: Self = Self::new_real(AF::ONE);
     const TWO: Self = Self::new_real(AF::TWO);
@@ -212,7 +224,7 @@ impl<AF: AbstractionOf<Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     // sage: F2.multiplicative_generator()
     // u + 12
     fn multiplicative_group_generator() -> Self {
-        Self::new(AF::from(Mersenne31::new(12)), AF::ONE)
+        Self::new(AF::from_canonical_u8(12), AF::ONE)
     }
 }
 
@@ -239,6 +251,20 @@ impl Field for Mersenne31Complex<Mersenne31> {
             .try_inverse()
             .map(|x| self.conjugate() * x)
     }
+
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(
+            self.parts[0].mul_2exp_u64(exp),
+            self.parts[1].mul_2exp_u64(exp),
+        )
+    }
+
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(
+            self.parts[0].div_2exp_u64(exp),
+            self.parts[1].div_2exp_u64(exp),
+        )
+    }
 }
 
 impl TwoAdicField for Mersenne31Complex<Mersenne31> {
@@ -259,8 +285,15 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     }
 }
 
-impl<AF: AbstractField + AbstractionOf<Mersenne31>> AbstractExtensionField<AF>
-    for Mersenne31Complex<AF>
+impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne31Complex<AF>
+where
+    Self: From<Mersenne31Complex<Mersenne31>>,
+    Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: AddAssign<Mersenne31Complex<Mersenne31>>,
+    Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: SubAssign<Mersenne31Complex<Mersenne31>>,
+    Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
+    Self: MulAssign<Mersenne31Complex<Mersenne31>>,
 {
     const D: usize = 2;
 

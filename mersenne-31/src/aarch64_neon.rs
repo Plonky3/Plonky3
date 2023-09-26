@@ -1,37 +1,31 @@
 use core::arch::aarch64::{self, uint32x4_t};
-use core::arch::asm;
-use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField};
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
+use p3_field::{AbstractField, AbstractionOf, Field, PackedField};
 
-use crate::BabyBear;
+use crate::Mersenne31;
 
 const WIDTH: usize = 4;
-const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
-const MU: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x08000001; WIDTH]) };
-const TOP_BIT: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x80000000; WIDTH]) };
+const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
-/// Vectorized NEON implementation of `BabyBear` arithmetic.
+/// Vectorized NEON implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedBabyBearNeon(pub [BabyBear; WIDTH]);
+pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
-impl PackedBabyBearNeon {
+impl PackedMersenne31Neon {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
     fn to_vector(self) -> uint32x4_t {
         unsafe {
-            // Safety: `BabyBear` is `repr(transparent)` so it can be transmuted to `u32`. It
-            // follows that `[BabyBear; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
+            // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
+            // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
             // transmuted to `uint32x4_t`, since arrays are guaranteed to be contiguous in memory.
-            // Finally `PackedBabyBearNeon` is `repr(transparent)` so it can be transmuted to
-            // `[BabyBear; WIDTH]`.
+            // Finally `PackedMersenne31Neon` is `repr(transparent)` so it can be transmuted to
+            // `[Mersenne31; WIDTH]`.
             transmute(self)
         }
     }
@@ -40,110 +34,105 @@ impl PackedBabyBearNeon {
     #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
-    /// SAFETY: The caller must ensure that each element of `vector` represents a valid `BabyBear`.
-    /// In particular, each element of vector must be in `0..P` (canonical form).
+    /// SAFETY: The caller must ensure that each element of `vector` represents a valid
+    /// `Mersenne31`.  In particular, each element of vector must be in `0..=P` (i.e. it fits in 31
+    /// bits).
     unsafe fn from_vector(vector: uint32x4_t) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `BabyBear` values. We must only reason about memory representations. `uint32x4_t` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[BabyBear; WIDTH]` (since `BabyBear` is `repr(transparent)`), which in
-        // turn can be transmuted to `PackedBabyBearNeon` (since `PackedBabyBearNeon` is also
-        // `repr(transparent)`).
+        // `Mersenne31` values. We must only reason about memory representations. `uint32x4_t` can
+        // be transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which
+        // can be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`),
+        // which in turn can be transmuted to `PackedMersenne31Neon` (since `PackedMersenne31Neon`
+        // is also `repr(transparent)`).
         transmute(vector)
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
-    /// `From<BabyBear>::from`, but `const`.
+    /// `From<Mersenne31>::from`, but `const`.
     #[inline]
     #[must_use]
-    const fn broadcast(value: BabyBear) -> Self {
+    const fn broadcast(value: Mersenne31) -> Self {
         Self([value; WIDTH])
     }
 }
 
-impl Add for PackedBabyBearNeon {
+impl Add for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
+    #[must_use]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
         let res = add(lhs, rhs);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `add` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
 }
 
-impl Mul for PackedBabyBearNeon {
+impl Mul for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
+    #[must_use]
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
         let res = mul(lhs, rhs);
         unsafe {
-            // Safety: `mul` returns values in canonical form when given values in canonical form.
+            // Safety: `mul` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
 }
 
-impl Neg for PackedBabyBearNeon {
+impl Neg for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
+    #[must_use]
     fn neg(self) -> Self {
         let val = self.to_vector();
         let res = neg(val);
         unsafe {
-            // Safety: `neg` returns values in canonical form when given values in canonical form.
+            // Safety: `neg` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
 }
 
-impl Sub for PackedBabyBearNeon {
+impl Sub for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
+    #[must_use]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
         let res = sub(lhs, rhs);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `sub` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
 }
 
-/// No-op. Prevents the compiler from deducing the value of the vector.
-///
-/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
-/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
-/// and then read from the stack.
+/// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
 #[must_use]
-fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
-    let y;
+fn reduce_sum(val: uint32x4_t) -> uint32x4_t {
+    // val is in 0, ..., 2 P. If val is in 0, ..., P - 1 then it is valid and
+    // u := (val - P) mod 2^32 is in P <u 2^32 - P, ..., 2^32 - 1 and unsigned_min(val, u) = val as
+    // desired. If val is in P + 1, ..., 2 P, then u is in 1, ..., P < P + 1 so u is valid, and
+    // unsigned_min(val, u) = u as desired. The remaining case of val = P, u = 0 is trivial.
+
     unsafe {
-        asm!(
-            "/*{0:v}*/",
-            inlateout(vreg) x => y,
-            options(nomem, nostack, preserves_flags, pure),
-        );
-        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
-        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
-        // what it does? The answer is that we still inhibit the transform we want to avoid, so
-        // apparently not. Idk, LLVM works in mysterious ways.
-        if transmute::<_, [u32; 4]>(x) != transmute::<_, [u32; 4]>(y) {
-            unreachable_unchecked();
-        }
+        // Safety: If this code got compiled then NEON intrinsics are available.
+        let u = aarch64::vsubq_u32(val, P);
+        aarch64::vminq_u32(val, u)
     }
-    y
 }
 
-/// Add two vectors of Baby Bear field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Add two vectors of Mersenne-31 field elements that fit in 31 bits.
+/// If the inputs do not fit in 31 bits, the result is undefined.
 #[inline]
 #[must_use]
 fn add(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
@@ -154,19 +143,13 @@ fn add(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     // throughput: .75 cyc/vec (5.33 els/cyc)
     // latency: 6 cyc
 
-    //   Let `t := lhs + rhs`. We want to return `t mod P`. Recall that `lhs` and `rhs` are in
-    // `0, ..., P - 1`, so `t` is in `0, ..., 2 P - 2 (< 2^32)`. It suffices to return `t` if
-    // `t < P` and `t - P` otherwise.
-    //   Let `u := (t - P) mod 2^32` and `r := unsigned_min(t, u)`.
-    //   If `t` is in `0, ..., P - 1`, then `u` is in `(P - 1 <) 2^32 - P, ..., 2^32 - 1` and
-    // `r = t`. Otherwise `t` is in `P, ..., 2 P - 2`, `u` is in `0, ..., P - 2 (< P)` and `r = u`.
-    // Hence, `r` is `t` if `t < P` and `t - P` otherwise, as desired.
+    // lhs and rhs are in 0, ..., P, and we want the result to also be in that range.
+    // t := lhs + rhs is in 0, ..., 2 P, so we apply reduce_sum.
 
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let t = aarch64::vaddq_u32(lhs, rhs);
-        let u = aarch64::vsubq_u32(t, P);
-        aarch64::vminq_u32(t, u)
+        reduce_sum(t)
     }
 }
 
@@ -186,110 +169,63 @@ fn mul_31x31_to_hi_31(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     }
 }
 
-// MONTGOMERY MULTIPLICATION
-//   This implementation is based on [1] but with minor changes. The reduction is as follows:
-//
-// Constants: P = 2^31 - 2^27 + 1
-//            B = 2^31
-//            mu = P^-1 mod B
-// Input: 0 <= C < P B
-// Output: 0 <= R < P such that R = C B^-1 (mod P)
-//   1. Q := mu C mod B
-//   2. T := (C - Q P) / B
-//   3. R := if T < 0 then T + P else T
-//
-// We first show that the division in step 2. is exact. It suffices to show that C = Q P (mod B). By
-// definition of Q and mu, we have Q P = mu C P = P^-1 C P = C (mod B). We also have
-// C - Q P = C (mod P), so thus T = C B^-1 (mod P).
-//
-// It remains to show that R is in the correct range. It suffices to show that -P <= T < P. We know
-// that 0 <= C < P B and 0 <= Q P < P B. Then -P B < C - QP < P B and -P < T < P, as desired.
-//
-// In practice, we take advantage of the fact that C = Q P (mod B) to avoid a long multiplication
-// when computing Q P: we only need the top half of the product. A more practical implementation is
-// as follows:
-//   1. Q := mu C mod B
-//   2. T := C // B - Q P // B
-//   3. R := if T < 0 then T + P else T
-// "//" denotes truncated division.
-//
-// [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
-//     2010, algorithm 2.7.
-
-/// Compute the high 31 bits of the long product. This is `C // B` in the description above.
-#[inline]
-#[must_use]
-fn monty_mul_hi(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      sqdmulh  res.4s, lhs.4s, rhs.4s
-    // throughput: .25 cyc/vec (16 els/cyc)
-    // latency: 3 cyc
-    mul_31x31_to_hi_31(lhs, rhs)
-}
-
-/// Compute `Q P // B` in the description above.
-#[allow(non_snake_case)]
-#[inline]
-#[must_use]
-fn monty_mul_lo(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      mul      rhs_mu_mod_2pow32.rs, rhs.4s, MU.4s
-    //      mul      mu_C_mod_2pow32.rs, lhs.4s, rhs_mu_mod_2pow32.4s
-    //      bic      mu_C_mod_2pow31.rs, mu_C_mod_2pow32.rs, 0x80, lsl #24
-    //      sqdmulh  res.4s, mu_C_mod_2pow31.4s, P.4s
-    // throughput: 1 cyc/vec (4 els/cyc)
-    // latency: (1->1) 8 cyc
-    //          (2->1) 11 cyc
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let rhs_mu_mod_2pow32 = aarch64::vmulq_u32(rhs, MU);
-        let mu_C_mod_2pow32 = aarch64::vmulq_u32(lhs, rhs_mu_mod_2pow32);
-        let mu_C_mod_2pow31 = aarch64::vbicq_u32(mu_C_mod_2pow32, TOP_BIT);
-        mul_31x31_to_hi_31(mu_C_mod_2pow31, P)
-    }
-}
-
-/// Multiply vectors of Baby Bear field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Multiply vectors of Mersenne-31 field elements that fit in 31 bits.
+/// If the inputs do not fit in 31 bits, the result is undefined.
 #[inline]
 #[must_use]
 fn mul(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // throughput: 2 cyc/vec (2 els/cyc)
-    // latency: (1->1) 13 cyc
-    //          (2->1) 16 cyc
-    let hi = monty_mul_hi(lhs, rhs);
-    let lo = monty_mul_lo(lhs, rhs);
-    sub(hi, lo)
+    // We want this to compile to:
+    //      sqdmulh  prod_hi31.4s, lhs.4s, rhs.4s
+    //      mul      t.4s, lhs.4s, rhs.4s
+    //      mla      t.4s, prod_hi31.4s, P.4s
+    //      sub      u.4s, t.4s, P.4s
+    //      umin     res.4s, t.4s, u.4s
+    // throughput: 1.25 cyc/vec (3.2 els/cyc)
+    // latency: 10 cyc
+
+    // We want to return res in 0, ..., P such that res = lhs * rhs (mod P).
+    // Let prod := lhs * rhs. Break it up into prod = 2^31 prod_hi31 + prod_lo31, where both limbs
+    // are in 0, ..., 2^31 - 1. Then prod = prod_hi31 + prod_lo31 (mod P), so let
+    // t := prod_hi31 + prod_lo31.
+    // Define prod_lo32 = prod mod 2^32 and observe that
+    //   prod_lo32 = prod_lo31 + 2^31 (prod_hi31 mod 2)
+    //             = prod_lo31 + 2^31 prod_hi31                                          (mod 2^32)
+    // Then
+    //   t = prod_lo32 - 2^31 prod_hi31 + prod_hi31                                      (mod 2^32)
+    //     = prod_lo32 - (2^31 - 1) prod_hi31                                            (mod 2^32)
+    //     = prod_lo32 - prod_hi31 * P                                                   (mod 2^32)
+    //
+    // t is in 0, ..., 2 P, so we apply reduce_sum to get the result.
+    
+    unsafe {
+        // Safety: If this code got compiled then NEON intrinsics are available.
+        let prod_hi31 = mul_31x31_to_hi_31(lhs, rhs);
+        let prod_lo32 = aarch64::vmulq_u32(lhs, rhs);
+        let t = aarch64::vmlsq_u32(prod_lo32, prod_hi31, P);
+        reduce_sum(t)
+    }
 }
 
-/// Negate a vector of Baby Bear field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Negate a vector of Mersenne-31 field elements that fit in 31 bits.
+/// If the inputs do not fit in 31 bits, the result is undefined.
 #[inline]
 #[must_use]
 fn neg(val: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
-    //      sub   t.4s, P.4s, val.4s
-    //      cmeq  is_zero.4s, val.4s, #0
-    //      bic   res.4s, t.4s, is_zero.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 4 cyc
+    //      eor  res.16b, val.16b, P.16b
+    // throughput: .25 cyc/vec (16 els/cyc)
+    // latency: 2 cyc
 
-    // This has the same throughput as `sub(0, val)` but slightly lower latency.
+    // val is in 0, ..., P, so res := P - val is also in 0, ..., P.
 
-    //   We want to return (-val) mod P. This is equivalent to returning `0` if `val = 0` and
-    // `P - val` otherwise, since `val` is in `0, ..., P - 1`.
-    //   Let `t := P - val` and let `is_zero := (-1) mod 2^32` if `val = 0` and `0` otherwise.
-    //   We return `r := t & ~is_zero`, which is `t` if `val > 0` and `0` otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vsubq_u32(P, val);
-        let is_zero = aarch64::vceqzq_u32(val);
-        aarch64::vbicq_u32(t, is_zero)
+        aarch64::vsubq_u32(P, val)
     }
 }
 
-/// Subtract vectors of Baby Bear field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Subtract vectors of Mersenne-31 field elements that fit in 31 bits.
+/// If the inputs do not fit in 31 bits, the result is undefined.
 #[inline]
 #[must_use]
 fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
@@ -300,62 +236,63 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     // throughput: .75 cyc/vec (5.33 els/cyc)
     // latency: 5 cyc
 
-    //   Let `d := lhs - rhs`. We want to return `d mod P`.
-    //   Since `lhs` and `rhs` are both in `0, ..., P - 1`, `d` is in `-P + 1, ..., P - 1`. It
-    // suffices to return `d + P` if `d < 0` and `d` otherwise.
-    //   Equivalently, we return `d + P` if `rhs > lhs` and `d` otherwise.  Observe that this
-    // permits us to perform all calculations `mod 2^32`, so define `diff := d mod 2^32`.
-    //   Let `underflow` be `-1 mod 2^32` if `rhs > lhs` and `0` otherwise.
-    //   Finally, let `r := (diff - underflow * P) mod 2^32` and observe that
-    // `r = (diff + P) mod 2^32` if `rhs > lhs` and `diff` otherwise, as desired.
+    // lhs and rhs are in 0, ..., P, and we want the result to also be in that range.
+    // Define: diff := (lhs - rhs) mod 2^32
+    //         underflow := 2^32 - 1 if lhs <u rhs else 0
+    //         res := (diff - underflow * P) mod 2^32
+    // By cases:
+    // 1. If lhs >=u rhs, then diff is in 0, ..., P and underflow is 0. res = diff is valid.
+    // 2. Otherwise, lhs <u rhs, so diff is in 2^32 - P, ..., 2^32 - 1 and underflow is 2^32 - 1.
+    //    res = (diff + P) mod 2^32 is in 0, ..., P - 1, so it is valid.
+
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let diff = aarch64::vsubq_u32(lhs, rhs);
         let underflow = aarch64::vcltq_u32(lhs, rhs);
-        // We really want to emit a `mls` instruction here. The compiler knows that `underflow` is
-        // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
-        // The `confuse_compiler` prevents this "optimization".
-        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), P)
+        aarch64::vmlsq_u32(diff, underflow, P)
     }
 }
 
-impl From<BabyBear> for PackedBabyBearNeon {
+impl From<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    fn from(value: BabyBear) -> Self {
+    #[must_use]
+    fn from(value: Mersenne31) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl Default for PackedBabyBearNeon {
+impl Default for PackedMersenne31Neon {
     #[inline]
+    #[must_use]
     fn default() -> Self {
-        BabyBear::default().into()
+        Mersenne31::default().into()
     }
 }
 
-impl AddAssign for PackedBabyBearNeon {
+impl AddAssign for PackedMersenne31Neon {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl MulAssign for PackedBabyBearNeon {
+impl MulAssign for PackedMersenne31Neon {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl SubAssign for PackedBabyBearNeon {
+impl SubAssign for PackedMersenne31Neon {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl Sum for PackedBabyBearNeon {
+impl Sum for PackedMersenne31Neon {
     #[inline]
+    #[must_use]
     fn sum<I>(iter: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -364,8 +301,9 @@ impl Sum for PackedBabyBearNeon {
     }
 }
 
-impl Product for PackedBabyBearNeon {
+impl Product for PackedMersenne31Neon {
     #[inline]
+    #[must_use]
     fn product<I>(iter: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -374,156 +312,167 @@ impl Product for PackedBabyBearNeon {
     }
 }
 
-impl AbstractField for PackedBabyBearNeon {
-    type F = BabyBear;
-
-    const ZERO: Self = Self::broadcast(BabyBear::ZERO);
-    const ONE: Self = Self::broadcast(BabyBear::ONE);
-    const TWO: Self = Self::broadcast(BabyBear::TWO);
-    const NEG_ONE: Self = Self::broadcast(BabyBear::NEG_ONE);
+impl AbstractField for PackedMersenne31Neon {
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
+    #[must_use]
     fn from_bool(b: bool) -> Self {
-        BabyBear::from_bool(b).into()
+        Mersenne31::from_bool(b).into()
     }
     #[inline]
+    #[must_use]
     fn from_canonical_u8(n: u8) -> Self {
-        BabyBear::from_canonical_u8(n).into()
+        Mersenne31::from_canonical_u8(n).into()
     }
     #[inline]
+    #[must_use]
     fn from_canonical_u16(n: u16) -> Self {
-        BabyBear::from_canonical_u16(n).into()
+        Mersenne31::from_canonical_u16(n).into()
     }
     #[inline]
+    #[must_use]
     fn from_canonical_u32(n: u32) -> Self {
-        BabyBear::from_canonical_u32(n).into()
+        Mersenne31::from_canonical_u32(n).into()
     }
     #[inline]
+    #[must_use]
     fn from_canonical_u64(n: u64) -> Self {
-        BabyBear::from_canonical_u64(n).into()
+        Mersenne31::from_canonical_u64(n).into()
     }
     #[inline]
+    #[must_use]
     fn from_canonical_usize(n: usize) -> Self {
-        BabyBear::from_canonical_usize(n).into()
+        Mersenne31::from_canonical_usize(n).into()
     }
 
     #[inline]
+    #[must_use]
     fn from_wrapped_u32(n: u32) -> Self {
-        BabyBear::from_wrapped_u32(n).into()
+        Mersenne31::from_wrapped_u32(n).into()
     }
     #[inline]
+    #[must_use]
     fn from_wrapped_u64(n: u64) -> Self {
-        BabyBear::from_wrapped_u64(n).into()
+        Mersenne31::from_wrapped_u64(n).into()
     }
 
     #[inline]
+    #[must_use]
     fn multiplicative_group_generator() -> Self {
-        BabyBear::multiplicative_group_generator().into()
+        Mersenne31::multiplicative_group_generator().into()
     }
 }
 
-impl Add<BabyBear> for PackedBabyBearNeon {
+impl Add<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    fn add(self, rhs: BabyBear) -> Self {
+    #[must_use]
+    fn add(self, rhs: Mersenne31) -> Self {
         self + Self::from(rhs)
     }
 }
 
-impl Mul<BabyBear> for PackedBabyBearNeon {
+impl Mul<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: BabyBear) -> Self {
+    #[must_use]
+    fn mul(self, rhs: Mersenne31) -> Self {
         self * Self::from(rhs)
     }
 }
 
-impl Sub<BabyBear> for PackedBabyBearNeon {
+impl Sub<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: BabyBear) -> Self {
+    #[must_use]
+    fn sub(self, rhs: Mersenne31) -> Self {
         self - Self::from(rhs)
     }
 }
 
-impl AddAssign<BabyBear> for PackedBabyBearNeon {
+impl AddAssign<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    fn add_assign(&mut self, rhs: BabyBear) {
+    fn add_assign(&mut self, rhs: Mersenne31) {
         *self += Self::from(rhs)
     }
 }
 
-impl MulAssign<BabyBear> for PackedBabyBearNeon {
+impl MulAssign<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    fn mul_assign(&mut self, rhs: BabyBear) {
+    fn mul_assign(&mut self, rhs: Mersenne31) {
         *self *= Self::from(rhs)
     }
 }
 
-impl SubAssign<BabyBear> for PackedBabyBearNeon {
+impl SubAssign<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    fn sub_assign(&mut self, rhs: BabyBear) {
+    fn sub_assign(&mut self, rhs: Mersenne31) {
         *self -= Self::from(rhs)
     }
 }
 
-impl Sum<BabyBear> for PackedBabyBearNeon {
+impl Sum<Mersenne31> for PackedMersenne31Neon {
     #[inline]
+    #[must_use]
     fn sum<I>(iter: I) -> Self
     where
-        I: Iterator<Item = BabyBear>,
+        I: Iterator<Item = Mersenne31>,
     {
-        iter.sum::<BabyBear>().into()
+        iter.sum::<Mersenne31>().into()
     }
 }
 
-impl Product<BabyBear> for PackedBabyBearNeon {
+impl Product<Mersenne31> for PackedMersenne31Neon {
     #[inline]
+    #[must_use]
     fn product<I>(iter: I) -> Self
     where
-        I: Iterator<Item = BabyBear>,
+        I: Iterator<Item = Mersenne31>,
     {
-        iter.product::<BabyBear>().into()
+        iter.product::<Mersenne31>().into()
     }
 }
 
-impl Div<BabyBear> for PackedBabyBearNeon {
+impl AbstractionOf<Mersenne31> for PackedMersenne31Neon {}
+
+impl Div<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
-    fn div(self, rhs: BabyBear) -> Self {
+    #[must_use]
+    fn div(self, rhs: Mersenne31) -> Self {
         self * rhs.inverse()
     }
 }
 
-impl Add<PackedBabyBearNeon> for BabyBear {
-    type Output = PackedBabyBearNeon;
+impl Add<PackedMersenne31Neon> for Mersenne31 {
+    type Output = PackedMersenne31Neon;
     #[inline]
-    fn add(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
-        PackedBabyBearNeon::from(self) + rhs
+    #[must_use]
+    fn add(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
+        PackedMersenne31Neon::from(self) + rhs
     }
 }
 
-impl Mul<PackedBabyBearNeon> for BabyBear {
-    type Output = PackedBabyBearNeon;
+impl Mul<PackedMersenne31Neon> for Mersenne31 {
+    type Output = PackedMersenne31Neon;
     #[inline]
-    fn mul(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
-        PackedBabyBearNeon::from(self) * rhs
+    #[must_use]
+    fn mul(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
+        PackedMersenne31Neon::from(self) * rhs
     }
 }
 
-impl Sub<PackedBabyBearNeon> for BabyBear {
-    type Output = PackedBabyBearNeon;
+impl Sub<PackedMersenne31Neon> for Mersenne31 {
+    type Output = PackedMersenne31Neon;
     #[inline]
-    fn sub(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
-        PackedBabyBearNeon::from(self) - rhs
-    }
-}
-
-impl Distribution<PackedBabyBearNeon> for Standard {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedBabyBearNeon {
-        PackedBabyBearNeon(rng.gen())
+    #[must_use]
+    fn sub(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
+        PackedMersenne31Neon::from(self) - rhs
     }
 }
 
@@ -562,49 +511,54 @@ fn interleave2(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
     }
 }
 
-unsafe impl PackedField for PackedBabyBearNeon {
-    type Scalar = BabyBear;
+unsafe impl PackedField for PackedMersenne31Neon {
+    type Scalar = Mersenne31;
 
     const WIDTH: usize = WIDTH;
 
     #[inline]
-    fn from_slice(slice: &[BabyBear]) -> &Self {
+    #[must_use]
+    fn from_slice(slice: &[Mersenne31]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[BabyBear; WIDTH]` can be transmuted to `PackedBabyBearNeon` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
+            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31Neon` since the
+            // latter is `repr(transparent)`. They have the same alignment, so the reference cast
+            // is safe too.
             &*slice.as_ptr().cast()
         }
     }
     #[inline]
-    fn from_slice_mut(slice: &mut [BabyBear]) -> &mut Self {
+    #[must_use]
+    fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[BabyBear; WIDTH]` can be transmuted to `PackedBabyBearNeon` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
+            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31Neon` since the
+            // latter is `repr(transparent)`. They have the same alignment, so the reference cast
+            // is safe too.
             &mut *slice.as_mut_ptr().cast()
         }
     }
 
     /// Similar to `core:array::from_fn`.
     #[inline]
-    fn from_fn<F: FnMut(usize) -> BabyBear>(f: F) -> Self {
+    fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
         let vals_arr: [_; WIDTH] = core::array::from_fn(f);
         Self(vals_arr)
     }
 
     #[inline]
-    fn as_slice(&self) -> &[BabyBear] {
+    #[must_use]
+    fn as_slice(&self) -> &[Mersenne31] {
         &self.0[..]
     }
     #[inline]
-    fn as_slice_mut(&mut self) -> &mut [BabyBear] {
+    #[must_use]
+    fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
         &mut self.0[..]
     }
 
     #[inline]
+    #[must_use]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());
         let (res0, res1) = match block_len {
@@ -624,15 +578,15 @@ unsafe impl PackedField for PackedBabyBearNeon {
 mod tests {
     use super::*;
 
-    type F = BabyBear;
-    type P = PackedBabyBearNeon;
+    type F = Mersenne31;
+    type P = PackedMersenne31Neon;
 
     fn array_from_canonical(vals: [u32; WIDTH]) -> [F; WIDTH] {
-        vals.map(F::from_canonical_u32)
+        vals.map(|v| F::from_canonical_u32(v))
     }
 
     fn packed_from_canonical(vals: [u32; WIDTH]) -> P {
-        PackedBabyBearNeon(array_from_canonical(vals))
+        PackedMersenne31Neon(array_from_canonical(vals))
     }
 
     #[test]
@@ -752,7 +706,7 @@ mod tests {
     #[test]
     fn test_neg_own_inverse() {
         let vec = packed_from_canonical([0x25335335, 0x32d48910, 0x74468a5f, 0x61906a18]);
-        let res = -(-vec);
+        let res = --vec;
         assert_eq!(res, vec);
     }
 
@@ -805,7 +759,7 @@ mod tests {
     #[test]
     fn test_multiplicative_inverse() {
         let vec = packed_from_canonical([0x1b288c21, 0x600c50af, 0x3ea44d7a, 0x62209fc9]);
-        let inverses = packed_from_canonical([0x654400cb, 0x060e1058, 0x2b9a681f, 0x4fea4617]);
+        let inverses = packed_from_canonical([0x3a133939, 0x4736cf9a, 0x1e94daf7, 0x40eb93f3]);
         let res = vec * inverses;
         assert_eq!(res, P::ONE);
     }
@@ -933,8 +887,8 @@ mod tests {
         let arr0 = array_from_canonical([0x496d8163, 0x68125590, 0x191cd03b, 0x65b9abef]);
         let arr1 = array_from_canonical([0x6db594e1, 0x5b1f6289, 0x74f15e13, 0x546936a8]);
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -947,8 +901,8 @@ mod tests {
         let arr0 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
         let arr1 = array_from_canonical([0x4205a2f6, 0x6f4715f1, 0x29ed7f70, 0x70915992]);
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -961,8 +915,8 @@ mod tests {
         let arr0 = array_from_canonical([0x5f8329a7, 0x0f1166bb, 0x657bcb14, 0x0185c34a]);
         let arr1 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -975,8 +929,8 @@ mod tests {
         let arr0 = array_from_canonical([0x6daef778, 0x0e868440, 0x54e7ca64, 0x01a9acab]);
         let arr1 = array_from_canonical([0x45609584, 0x67b63536, 0x0f72a573, 0x234a312e]);
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -989,8 +943,8 @@ mod tests {
         let arr0 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
         let arr1 = array_from_canonical([0x4205a2f6, 0x6f4715f1, 0x29ed7f70, 0x70915992]);
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1003,8 +957,8 @@ mod tests {
         let arr0 = array_from_canonical([0x5f8329a7, 0x0f1166bb, 0x657bcb14, 0x0185c34a]);
         let arr1 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1017,8 +971,8 @@ mod tests {
         let arr0 = array_from_canonical([0x13655880, 0x5223ea02, 0x5d7f4f90, 0x1494b624]);
         let arr1 = array_from_canonical([0x0ad5743c, 0x44956741, 0x533bc885, 0x7723a25b]);
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1031,8 +985,8 @@ mod tests {
         let arr0 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
         let arr1 = array_from_canonical([0x4205a2f6, 0x6f4715f1, 0x29ed7f70, 0x70915992]);
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1045,8 +999,8 @@ mod tests {
         let arr0 = array_from_canonical([0x5f8329a7, 0x0f1166bb, 0x657bcb14, 0x0185c34a]);
         let arr1 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
 
-        let vec0 = PackedBabyBearNeon(arr0);
-        let vec1 = PackedBabyBearNeon(arr1);
+        let vec0 = PackedMersenne31Neon(arr0);
+        let vec1 = PackedMersenne31Neon(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1058,10 +1012,9 @@ mod tests {
     fn test_neg_vs_scalar() {
         let arr = array_from_canonical([0x1971a7b5, 0x00305be1, 0x52c08410, 0x39cb2586]);
 
-        let vec = PackedBabyBearNeon(arr);
+        let vec = PackedMersenne31Neon(arr);
         let vec_res = -vec;
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
@@ -1071,10 +1024,9 @@ mod tests {
     fn test_neg_vs_scalar_special_vals() {
         let arr = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
 
-        let vec = PackedBabyBearNeon(arr);
+        let vec = PackedMersenne31Neon(arr);
         let vec_res = -vec;
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }

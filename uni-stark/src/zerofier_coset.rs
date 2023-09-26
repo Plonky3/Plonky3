@@ -1,13 +1,18 @@
 use alloc::vec::Vec;
 
-use p3_field::{batch_multiplicative_inverse, Field, PackedField, TwoAdicField};
+use itertools::Itertools;
+use p3_field::{
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, Field, PackedField,
+    TwoAdicField,
+};
 
-/// Precomputations of the evaluation of `Z_H(X) = X^n - 1` on a coset `gK` with `H <= K`.
+/// Precomputations of the evaluation of `Z_H(X) = X^n - 1` on a coset `s K` with `H <= K`.
 pub struct ZerofierOnCoset<F: Field> {
     /// `n = |H|`.
-    n: F,
+    log_n: usize,
     /// `rate = |K|/|H|`.
     rate_bits: usize,
+    coset_shift: F,
     /// Holds `g^n * (w^n)^i - 1 = g^n * v^i - 1` for `i in 0..rate`, with `w` a generator of `K` and `v` a
     /// `rate`-primitive root of unity.
     evals: Vec<F>,
@@ -16,17 +21,18 @@ pub struct ZerofierOnCoset<F: Field> {
 }
 
 impl<F: TwoAdicField> ZerofierOnCoset<F> {
-    pub fn new(n_log: usize, rate_bits: usize, coset_shift: F) -> Self {
-        let g_pow_n = coset_shift.exp_power_of_2(n_log);
+    pub fn new(log_n: usize, rate_bits: usize, coset_shift: F) -> Self {
+        let s_pow_n = coset_shift.exp_power_of_2(log_n);
         let evals = F::primitive_root_of_unity(rate_bits)
             .powers()
             .take(1 << rate_bits)
-            .map(|x| g_pow_n * x - F::ONE)
+            .map(|x| s_pow_n * x - F::ONE)
             .collect::<Vec<_>>();
         let inverses = batch_multiplicative_inverse(&evals);
         Self {
-            n: F::from_canonical_usize(1 << n_log),
+            log_n,
             rate_bits,
+            coset_shift,
             evals,
             inverses,
         }
@@ -53,9 +59,26 @@ impl<F: TwoAdicField> ZerofierOnCoset<F> {
         packed
     }
 
-    /// Returns `L_0(x) = Z_H(x)/(n * (x - 1))` with `x = w^i`.
-    pub fn eval_l_0(&self, i: usize, x: F) -> F {
-        // Could also precompute the inverses using Montgomery.
-        self.eval(i) * (self.n * (x - F::ONE)).inverse()
+    /// Evaluate the Langrange basis polynomial, `L_i(x) = Z_H(x) / (x - g_H^i)`, on our coset `s K`.
+    /// Here `L_i(x)` is unnormalized in the sense that it evaluates to some nonzero value at `g_H^i`,
+    /// not necessarily 1.
+    pub(crate) fn lagrange_basis_unnormalized(&self, i: usize) -> Vec<F> {
+        let log_coset_size = self.log_n + self.rate_bits;
+        let coset_size = 1 << log_coset_size;
+        let g_h = F::primitive_root_of_unity(self.log_n);
+        let g_k = F::primitive_root_of_unity(log_coset_size);
+
+        let target_point = g_h.exp_u64(i as u64);
+        let denominators = cyclic_subgroup_coset_known_order(g_k, self.coset_shift, coset_size)
+            .map(|x| x - target_point)
+            .collect_vec();
+        let inverses = batch_multiplicative_inverse(&denominators);
+
+        self.evals
+            .iter()
+            .cycle()
+            .zip(inverses)
+            .map(|(&z_h, inv)| z_h * inv)
+            .collect()
     }
 }

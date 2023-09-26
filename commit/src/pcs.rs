@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::MatrixRows;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
@@ -56,31 +57,49 @@ where
         commits_and_points: &[(Self::Commitment, &[EF])],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
+        challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
 }
 
-pub trait MultivariatePcs<Val, In, Challenger>: Pcs<Val, In>
+/// A `UnivariatePcs` where the commitment process involves computing a low-degree extension (LDE)
+/// of each polynomial. These LDEs can be reused in other prover work.
+pub trait UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>:
+    UnivariatePcs<Val, Domain, EF, In, Challenger>
 where
     Val: Field,
+    Domain: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Domain>,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
-    fn open_multi_batches<EF>(
+    fn coset_shift(&self) -> Domain;
+
+    fn get_ldes<'a, 'b>(
+        &'a self,
+        _prover_data: &'b Self::ProverData,
+    ) -> Vec<RowMajorMatrixView<'b, Domain>>
+    where
+        'a: 'b;
+}
+
+pub trait MultivariatePcs<Val, Domain, EF, In, Challenger>: Pcs<Val, In>
+where
+    Val: Field,
+    Domain: ExtensionField<Val>,
+    EF: ExtensionField<Domain>,
+    In: MatrixRows<Val>,
+    Challenger: FieldChallenger<Val>,
+{
+    fn open_multi_batches(
         &self,
         prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
         challenger: &mut Challenger,
-    ) -> (OpenedValues<EF>, Self::Proof)
-    where
-        EF: ExtensionField<Val>,
-        Challenger: FieldChallenger<Val>;
+    ) -> (OpenedValues<EF>, Self::Proof);
 
-    fn verify_multi_batches<EF>(
+    fn verify_multi_batches(
         &self,
         commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
-    ) -> Result<(), Self::Error>
-    where
-        EF: ExtensionField<Val>,
-        Challenger: FieldChallenger<Val>;
+    ) -> Result<(), Self::Error>;
 }

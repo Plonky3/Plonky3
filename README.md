@@ -13,7 +13,7 @@ Fields:
   - [x] ~128 bit extension field
   - [ ] AVX2
   - [ ] AVX-512
-  - [ ] NEON
+  - [x] NEON
 - [x] BabyBear
   - [ ] ~128 bit extension field
   - [ ] AVX2
@@ -45,7 +45,7 @@ Interpolation
 - [x] radix-2 DIT FFT
 - [x] radix-2 Bowers FFT
 - [ ] four-step FFT
-- [ ] Mersenne circle group FFT
+- [x] Mersenne circle group FFT
 
 Hashes
 - [x] Rescue

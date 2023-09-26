@@ -11,7 +11,7 @@
 use p3_field::Field;
 use p3_symmetric::permutation::ArrayPermutation;
 
-pub trait DiffusionPermutation<T, const WIDTH: usize>: ArrayPermutation<T, WIDTH> {}
+pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: ArrayPermutation<T, WIDTH> {}
 
 pub fn matmul_internal<F: Field, const WIDTH: usize>(
     state: &mut [F; WIDTH],

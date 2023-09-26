@@ -10,6 +10,7 @@ use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 #[derive(Clone)]
 pub struct DuplexChallenger<F, P, const WIDTH: usize>
 where
+    F: Clone,
     P: ArrayPermutation<F, WIDTH>,
 {
     sponge_state: [F; WIDTH],

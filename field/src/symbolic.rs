@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::field::{AbstractField, AbstractionOf, Field};
+use crate::field::{AbstractField, Field};
 
 #[derive(Clone, Debug)]
 pub enum SymbolicField<F: Field, Var> {
@@ -28,6 +28,8 @@ impl<F: Field, Var> From<F> for SymbolicField<F, Var> {
 }
 
 impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
+    type F = F;
+
     const ZERO: Self = Self::Constant(F::ZERO);
     const ONE: Self = Self::Constant(F::ONE);
     const TWO: Self = Self::Constant(F::TWO);
@@ -69,8 +71,6 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
         Self::Constant(F::multiplicative_group_generator())
     }
 }
-
-impl<F: Field, Var: Clone + Debug> AbstractionOf<F> for SymbolicField<F, Var> {}
 
 impl<F: Field, Var: Clone + Debug> Add for SymbolicField<F, Var> {
     type Output = Self;

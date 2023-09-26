@@ -10,7 +10,10 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{exp_u64, AbstractField, Field, PrimeField, PrimeField64, TwoAdicField};
+use p3_field::{
+    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField64,
+    TwoAdicField,
+};
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -82,6 +85,8 @@ impl Distribution<Goldilocks> for Standard {
 }
 
 impl AbstractField for Goldilocks {
+    type F = Self;
+
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
     const TWO: Self = Self::new(2);
@@ -137,6 +142,14 @@ impl Field for Goldilocks {
         self.value == 0 || self.value == Self::ORDER_U64
     }
 
+    #[inline]
+    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+        match power {
+            10540996611094048183 => exp_10540996611094048183(val), // used to compute x^{1/7}
+            _ => exp_u64_by_squaring(val, power),
+        }
+    }
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -181,48 +194,6 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
-
-    // We hard code computing the 7'th root for rescue.
-    fn exp_u64(&self, power: u64) -> Self {
-        match power {
-            10540996611094048183 => root_7(self),
-            _ => exp_u64(self, power),
-        }
-    }
-}
-
-fn root_7(val: &Goldilocks) -> Goldilocks {
-    // Note that 7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1).
-    // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{10540996611094048183})^7 = a.
-    // Also: 10540996611094048183 = 1001001001001001001001001001000110110110110110110110110110110111_2.
-    // This uses 63 Squares + 9 Multiplications => 72 Operations total.
-    // Suspect it's possible to improve this a little with enough effort.
-    let p1 = *val;
-    let p10 = p1.square();
-    let p11 = p10 * p1;
-    let p100 = p10.square();
-    let p111 = p100 * p11;
-    let p1000 = p100.square();
-    let p1001 = p1000 * p1;
-    let p1001000000 = p1001.exp_power_of_2(6);
-    let p1001001001 = p1001000000 * p1001;
-    let p1001001001000000 = p1001001001.exp_power_of_2(6);
-    let p1001001001001001 = p1001001001000000 * p1001;
-    let p1001001001000000000000000000 = p1001001001000000.exp_power_of_2(12);
-    let p1001001001001001001001001001 = p1001001001000000000000000000 * p1001001001001001;
-    let p10010010010010010010010010010 = p1001001001001001001001001001.square();
-    let p100100100100100100100100100100000000000000000000000000000000 =
-        p10010010010010010010010010010.exp_power_of_2(31);
-    let p11011011011011011011011011011 =
-        p10010010010010010010010010010 * p1001001001001001001001001001;
-    let p100100100100100100100100100100011011011011011011011011011011 =
-        p100100100100100100100100100100000000000000000000000000000000
-            * p11011011011011011011011011011;
-
-    let p1001001001001001001001001001000110110110110110110110110110110000 =
-        p100100100100100100100100100100011011011011011011011011011011.exp_power_of_2(4);
-
-    p1001001001001001001001001001000110110110110110110110110110110000 * p111
 }
 
 impl PrimeField for Goldilocks {}
@@ -525,8 +496,8 @@ mod tests {
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
 
-        assert_eq!(root_7(&f).exp_const_u64::<7>(), f);
-        assert_eq!(root_7(&y).exp_const_u64::<7>(), y);
+        assert_eq!(f.exp_u64(10540996611094048183).exp_const_u64::<7>(), f);
+        assert_eq!(y.exp_u64(10540996611094048183).exp_const_u64::<7>(), y);
         assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
     }
 
