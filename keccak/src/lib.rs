@@ -7,21 +7,23 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
 use tiny_keccak::{keccakf, Hasher, Keccak};
 
 /// The Keccak-f permutation.
 #[derive(Copy, Clone)]
 pub struct KeccakF;
 
-impl CryptographicPermutation<[u64; 25]> for KeccakF {
+impl Permutation<[u64; 25]> for KeccakF {
     fn permute(&self, mut input: [u64; 25]) -> [u64; 25] {
         keccakf(&mut input);
         input
     }
 }
 
-impl CryptographicPermutation<[u8; 200]> for KeccakF {
+impl CryptographicPermutation<[u64; 25]> for KeccakF {}
+
+impl Permutation<[u8; 200]> for KeccakF {
     fn permute(&self, input_u8s: [u8; 200]) -> [u8; 200] {
         let mut state_u64s: [u64; 25] = core::array::from_fn(|i| {
             u64::from_le_bytes(input_u8s[i * 8..][..8].try_into().unwrap())
@@ -35,6 +37,8 @@ impl CryptographicPermutation<[u8; 200]> for KeccakF {
         })
     }
 }
+
+impl CryptographicPermutation<[u8; 200]> for KeccakF {}
 
 /// The `Keccak` hash functions defined in
 /// [Keccak SHA3 submission](https://keccak.team/files/Keccak-submission-3.pdf).

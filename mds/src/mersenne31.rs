@@ -5,7 +5,7 @@
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::Permutation;
 
 use crate::util::{apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml};
 use crate::MdsPermutation;
@@ -13,14 +13,14 @@ use crate::MdsPermutation;
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
 
-impl CryptographicPermutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
+impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         apply_circulant_8_sml(input)
     }
 }
 impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
-impl CryptographicPermutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
+impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
         apply_circulant_12_sml(input)
     }
@@ -35,7 +35,7 @@ const MATRIX_CIRC_MDS_16_MERSENNE31: [u64; 16] = [
     0x7AEDC4EC, 0x653B794A, 0x47366EC7, 0x6D85346D
 ];
 
-impl CryptographicPermutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
+impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         apply_circulant(&MATRIX_CIRC_MDS_16_MERSENNE31, input)
     }
@@ -54,7 +54,7 @@ const MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
     0x500BB628, 0x0B1428CE, 0x3A62E1D6, 0x77692387
 ];
 
-impl CryptographicPermutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
+impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
         apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
     }
@@ -81,7 +81,7 @@ const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
     0x130EC21C, 0x3C84C4F5, 0x50FD67C0, 0x30FDD85A,
 ];
 
-impl CryptographicPermutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
+impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
         apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
     }
@@ -92,7 +92,7 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::permutation::CryptographicPermutation;
+    use p3_symmetric::permutation::Permutation;
 
     use super::MdsMatrixMersenne31;
 

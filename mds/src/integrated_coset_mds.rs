@@ -1,6 +1,6 @@
 use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractField, Field, Powers, TwoAdicField};
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::Permutation;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
@@ -50,9 +50,7 @@ where
     }
 }
 
-impl<F: AbstractField, const N: usize> CryptographicPermutation<[F; N]>
-    for IntegratedCosetMds<F, N>
-{
+impl<F: AbstractField, const N: usize> Permutation<[F; N]> for IntegratedCosetMds<F, N> {
     fn permute(&self, mut input: [F; N]) -> [F; N] {
         self.permute_mut(&mut input);
         input
@@ -124,7 +122,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{reverse_slice_index_bits, NaiveDft, TwoAdicSubgroupDft};
     use p3_field::AbstractField;
-    use p3_symmetric::permutation::CryptographicPermutation;
+    use p3_symmetric::permutation::Permutation;
     use rand::{thread_rng, Rng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;

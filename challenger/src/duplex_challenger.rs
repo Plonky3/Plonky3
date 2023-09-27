@@ -126,7 +126,7 @@ where
 mod tests {
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_symmetric::permutation::CryptographicPermutation;
+    use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
 
     use super::*;
 
@@ -138,7 +138,7 @@ mod tests {
     #[derive(Clone)]
     struct TestPermutation {}
 
-    impl CryptographicPermutation<TestArray> for TestPermutation {
+    impl Permutation<TestArray> for TestPermutation {
         fn permute(&self, mut input: TestArray) -> TestArray {
             self.permute_mut(&mut input);
             input
@@ -148,6 +148,8 @@ mod tests {
             input.reverse()
         }
     }
+
+    impl CryptographicPermutation<TestArray> for TestPermutation {}
 
     #[test]
     fn test_duplex_challenger() {

@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use p3_field::{AbstractField, PrimeField};
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -109,7 +109,7 @@ where
     }
 }
 
-impl<F, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
+impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[F; WIDTH]>
     for Poseidon<F, Mds, WIDTH, ALPHA>
 where
     F: AbstractField,
@@ -123,4 +123,13 @@ where
         self.half_full_rounds(&mut state, &mut round_ctr);
         state
     }
+}
+
+impl<F, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
+    for Poseidon<F, Mds, WIDTH, ALPHA>
+where
+    F: AbstractField,
+    F::F: PrimeField,
+    Mds: MdsPermutation<F, WIDTH>,
+{
 }

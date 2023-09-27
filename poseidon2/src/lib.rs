@@ -18,7 +18,7 @@ pub use diffusion::DiffusionPermutation;
 pub use goldilocks::DiffusionMatrixGoldilocks;
 use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -120,7 +120,7 @@ where
     }
 }
 
-impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[F; WIDTH]>
+impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> Permutation<[F; WIDTH]>
     for Poseidon2<F, Mds, Diffusion, WIDTH, D>
 where
     F: AbstractField,
@@ -157,4 +157,13 @@ where
 
         state
     }
+}
+
+impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[F; WIDTH]>
+    for Poseidon2<F, Mds, Diffusion, WIDTH, D>
+where
+    F: AbstractField,
+    Mds: MdsPermutation<F, WIDTH>,
+    Diffusion: DiffusionPermutation<F, WIDTH>,
+{
 }
