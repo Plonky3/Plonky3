@@ -32,7 +32,7 @@ where
     let log_degree = log2_strict_usize(degree);
     let log_quotient_degree = 1; // TODO
 
-    let g_subgroup = SC::Domain::primitive_root_of_unity(log_degree);
+    let g_subgroup = SC::Domain::two_adic_generator(log_degree);
 
     let pcs = config.pcs();
     let (trace_commit, trace_data) =
@@ -104,8 +104,8 @@ where
     let degree = 1 << degree_bits;
     let quotient_size_bits = degree_bits + quotient_degree_bits;
     let quotient_size = 1 << quotient_size_bits;
-    let g_subgroup = SC::Domain::primitive_root_of_unity(degree_bits);
-    let g_extended = SC::Domain::primitive_root_of_unity(quotient_size_bits);
+    let g_subgroup = SC::Domain::two_adic_generator(degree_bits);
+    let g_extended = SC::Domain::two_adic_generator(quotient_size_bits);
     let subgroup_last = g_subgroup.inverse();
     let coset_shift = config.pcs().coset_shift();
     let next_step = 1 << quotient_degree_bits;

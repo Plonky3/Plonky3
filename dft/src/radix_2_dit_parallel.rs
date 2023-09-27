@@ -25,7 +25,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        let root = F::primitive_root_of_unity(log_h);
+        let root = F::two_adic_generator(log_h);
         let mut twiddles: Vec<F> = root.powers().take(h / 2).collect();
 
         let mid = log_h / 2;
@@ -54,7 +54,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let mid = log_h / 2;
         let h_inv = F::from_canonical_usize(h).inverse();
 
-        let root = F::primitive_root_of_unity(log_h);
+        let root = F::two_adic_generator(log_h);
         let root_inv = root.inverse();
 
         let mut twiddles_inv: Vec<F> = root_inv.powers().take(h / 2).collect();
@@ -88,7 +88,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let log_h = log2_strict_usize(h);
         let mid = log_h / 2;
 
-        let root = F::primitive_root_of_unity(log_h);
+        let root = F::two_adic_generator(log_h);
 
         let mut twiddles: Vec<F> = root.powers().take(h / 2).collect();
 

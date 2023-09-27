@@ -23,7 +23,7 @@ pub struct ZerofierOnCoset<F: Field> {
 impl<F: TwoAdicField> ZerofierOnCoset<F> {
     pub fn new(log_n: usize, rate_bits: usize, coset_shift: F) -> Self {
         let s_pow_n = coset_shift.exp_power_of_2(log_n);
-        let evals = F::primitive_root_of_unity(rate_bits)
+        let evals = F::two_adic_generator(rate_bits)
             .powers()
             .take(1 << rate_bits)
             .map(|x| s_pow_n * x - F::ONE)
@@ -65,8 +65,8 @@ impl<F: TwoAdicField> ZerofierOnCoset<F> {
     pub(crate) fn lagrange_basis_unnormalized(&self, i: usize) -> Vec<F> {
         let log_coset_size = self.log_n + self.rate_bits;
         let coset_size = 1 << log_coset_size;
-        let g_h = F::primitive_root_of_unity(self.log_n);
-        let g_k = F::primitive_root_of_unity(log_coset_size);
+        let g_h = F::two_adic_generator(self.log_n);
+        let g_k = F::two_adic_generator(log_coset_size);
 
         let target_point = g_h.exp_u64(i as u64);
         let denominators = cyclic_subgroup_coset_known_order(g_k, self.coset_shift, coset_size)

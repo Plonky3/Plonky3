@@ -65,8 +65,8 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
         [F::from_wrapped_u64(n); N].into()
     }
 
-    fn multiplicative_group_generator() -> Self {
-        [F::multiplicative_group_generator(); N].into()
+    fn generator() -> Self {
+        [F::generator(); N].into()
     }
 }
 

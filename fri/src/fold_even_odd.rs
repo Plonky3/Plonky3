@@ -30,7 +30,7 @@ pub(crate) fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     debug_assert!(n > 1);
     let log_n = log2_strict_usize(n);
 
-    let g_inv = F::primitive_root_of_unity(log_n).inverse();
+    let g_inv = F::two_adic_generator(log_n).inverse();
     let one_half = F::TWO.inverse();
     let half_beta = beta * one_half;
 

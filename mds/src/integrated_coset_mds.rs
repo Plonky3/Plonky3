@@ -23,9 +23,9 @@ where
 {
     fn default() -> Self {
         let log_n = log2_strict_usize(N);
-        let root = F::F::primitive_root_of_unity(log_n);
+        let root = F::F::two_adic_generator(log_n);
         let root_inv = root.inverse();
-        let coset_shift = F::F::multiplicative_group_generator();
+        let coset_shift = F::F::generator();
 
         let mut ifft_twiddles: Vec<F::F> = root_inv.powers().take(N / 2).collect();
         reverse_slice_index_bits(&mut ifft_twiddles);
@@ -138,7 +138,7 @@ mod tests {
         let mut arr_rev = arr.to_vec();
         reverse_slice_index_bits(&mut arr_rev);
 
-        let shift = F::multiplicative_group_generator();
+        let shift = F::generator();
         let mut coset_lde_naive = NaiveDft.coset_lde(arr_rev, 0, shift);
         reverse_slice_index_bits(&mut coset_lde_naive);
         coset_lde_naive

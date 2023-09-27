@@ -59,7 +59,7 @@ where
                 let log2_height = log2_strict_usize(height);
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                let x = F::primitive_root_of_unity(log2_height).exp_u64(reduced_index as u64);
+                let x = F::two_adic_generator(log2_height).exp_u64(reduced_index as u64);
                 openings_for_mat
                     .iter()
                     .flat_map(|Opening { point, values }| {
@@ -86,7 +86,7 @@ where
             .map(|(inner, openings)| {
                 let height = inner.height();
                 let log2_height = log2_strict_usize(height);
-                let g = F::primitive_root_of_unity(log2_height);
+                let g = F::two_adic_generator(log2_height);
                 let subgroup = g.powers().take(height).collect_vec();
 
                 let denominators: Vec<EF> = subgroup
@@ -131,7 +131,7 @@ where
                 let log_height = log2_strict_usize(dims.height);
                 let bits_reduced = log_max_height - log_height;
                 let reduced_index = index >> bits_reduced;
-                let x = F::primitive_root_of_unity(log_height).exp_u64(reduced_index as u64);
+                let x = F::two_adic_generator(log_height).exp_u64(reduced_index as u64);
 
                 let original_width = quotient_row.len() / openings.len();
                 let original_row_repeated: Vec<Vec<EF>> = quotient_row
