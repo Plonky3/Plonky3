@@ -1,6 +1,8 @@
 #![no_std]
 
 mod baby_bear;
+mod extension;
+
 pub use baby_bear::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
