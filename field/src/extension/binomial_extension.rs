@@ -147,8 +147,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Add for BinomialExtensionField<
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let mut res = self.0;
-        for i in 0..D {
-            res[i] += rhs.0[i];
+        for (r, &rhs_val) in res.iter_mut().zip(&rhs.0) {
+            *r += rhs_val;
         }
         Self(res)
     }
@@ -189,8 +189,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Sub for BinomialExtensionField<
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let mut res = self.0;
-        for i in 0..D {
-            res[i] -= rhs.0[i];
+        for (r, &rhs_val) in res.iter_mut().zip(&rhs.0) {
+            *r -= rhs_val;
         }
         Self(res)
     }
@@ -202,7 +202,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Sub<F> for BinomialExtensionFie
     #[inline]
     fn sub(self, rhs: F) -> Self {
         let mut res = self.0;
-        res[0] += rhs;
+        res[0] -= rhs;
         Self(res)
     }
 }
@@ -321,8 +321,8 @@ where
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         let mut res = [F::ZERO; D];
-        for i in 0..D {
-            res[i] = Standard.sample(rng);
+        for r in res.iter_mut() {
+            *r = Standard.sample(rng);
         }
         BinomialExtensionField::<F, D>::from_base_slice(&res)
     }
