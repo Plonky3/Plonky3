@@ -23,12 +23,20 @@ impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
         apply_circulant_8_sml(input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 8]) {
+        *input = self.permute(*input);
+    }
 }
 impl MdsPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 
 impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
         apply_circulant_12_sml(input)
+    }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 12]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
@@ -46,6 +54,10 @@ impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
         const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 16]) {
+        *input = self.permute(*input);
+    }
 }
 impl MdsPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 
@@ -62,6 +74,10 @@ const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
 impl Permutation<[BabyBear; 24]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
         apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
+    }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 24]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
@@ -82,6 +98,10 @@ impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
         const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+    }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 32]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
@@ -110,6 +130,10 @@ impl Permutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
         const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+    }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 64]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}

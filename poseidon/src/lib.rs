@@ -116,12 +116,11 @@ where
     F::F: PrimeField,
     Mds: MdsPermutation<F, WIDTH>,
 {
-    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
+    fn permute_mut(&self, state: &mut [F; WIDTH]) {
         let mut round_ctr = 0;
-        self.half_full_rounds(&mut state, &mut round_ctr);
-        self.partial_rounds(&mut state, &mut round_ctr);
-        self.half_full_rounds(&mut state, &mut round_ctr);
-        state
+        self.half_full_rounds(state, &mut round_ctr);
+        self.partial_rounds(state, &mut round_ctr);
+        self.half_full_rounds(state, &mut round_ctr);
     }
 }
 

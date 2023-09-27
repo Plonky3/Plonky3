@@ -17,12 +17,20 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         apply_circulant_8_sml(input)
     }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
+        *input = self.permute(*input);
+    }
 }
 impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
 impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
         apply_circulant_12_sml(input)
+    }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; 12]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
@@ -38,6 +46,10 @@ const MATRIX_CIRC_MDS_16_MERSENNE31: [u64; 16] = [
 impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         apply_circulant(&MATRIX_CIRC_MDS_16_MERSENNE31, input)
+    }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; 16]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
@@ -57,6 +69,10 @@ const MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
 impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
         apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
+    }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; 32]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
@@ -84,6 +100,10 @@ const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
 impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
         apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
+    }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; 64]) {
+        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}

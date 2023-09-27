@@ -121,45 +121,39 @@ where
     Mds: MdsPermutation<F, WIDTH>,
     Isl: InverseSboxLayer<F, WIDTH, ALPHA>,
 {
-    fn permute(&self, state: [F; WIDTH]) -> [F; WIDTH] {
-        // Rescue-XLIX permutation
-
-        let mut state = state;
-
+    fn permute_mut(&self, state: &mut [F; WIDTH]) {
         // It might be worth adding this to the inputs as opposed to computing it every time.
         let alpha_inv = get_inverse::<F>(ALPHA);
 
         for round in 0..self.num_rounds {
             // S-box
-            Self::sbox_layer(&mut state);
+            Self::sbox_layer(state);
 
             // MDS
-            self.mds.permute_mut(&mut state);
+            self.mds.permute_mut(state);
 
             // Constants
-            for (state_item, &round_constant) in itertools::izip!(
-                state.iter_mut(),
-                self.round_constants[round * WIDTH * 2..].iter()
-            ) {
+            for (state_item, &round_constant) in state
+                .iter_mut()
+                .zip(&self.round_constants[round * WIDTH * 2..])
+            {
                 *state_item += round_constant;
             }
 
             // Inverse S-box
-            self.isl.inverse_sbox_layer(&mut state, alpha_inv);
+            self.isl.inverse_sbox_layer(state, alpha_inv);
 
             // MDS
-            self.mds.permute_mut(&mut state);
+            self.mds.permute_mut(state);
 
             // Constants
-            for (state_item, &round_constant) in itertools::izip!(
-                state.iter_mut(),
-                self.round_constants[round * WIDTH * 2 + WIDTH..].iter()
-            ) {
+            for (state_item, &round_constant) in state
+                .iter_mut()
+                .zip(&self.round_constants[round * WIDTH * 2 + WIDTH..])
+            {
                 *state_item += round_constant;
             }
         }
-
-        state
     }
 }
 

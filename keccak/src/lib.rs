@@ -15,9 +15,8 @@ use tiny_keccak::{keccakf, Hasher, Keccak};
 pub struct KeccakF;
 
 impl Permutation<[u64; 25]> for KeccakF {
-    fn permute(&self, mut input: [u64; 25]) -> [u64; 25] {
-        keccakf(&mut input);
-        input
+    fn permute_mut(&self, input: &mut [u64; 25]) {
+        keccakf(input);
     }
 }
 
@@ -35,6 +34,10 @@ impl Permutation<[u8; 200]> for KeccakF {
             let u64_limb = state_u64s[i / 8];
             u64_limb.to_le_bytes()[i % 8]
         })
+    }
+
+    fn permute_mut(&self, input: &mut [u8; 200]) {
+        *input = self.permute(*input);
     }
 }
 
