@@ -5,7 +5,7 @@ use p3_field::PrimeField32;
 use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
@@ -19,7 +19,7 @@ const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
     33823, 28750, 1108,
 ];
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> CryptographicPermutation<[Mersenne31; WIDTH]>
+impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
     for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {

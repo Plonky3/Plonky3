@@ -11,7 +11,7 @@ use p3_mds::mersenne31::MdsMatrixMersenne31;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use p3_poseidon::Poseidon;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
