@@ -1,6 +1,7 @@
 use crate::field::Field;
 use crate::AbstractExtensionField;
 
+pub mod binomial_extension;
 pub mod cubic;
 pub mod quadratic;
 

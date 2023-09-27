@@ -1,0 +1,329 @@
+use alloc::vec::Vec;
+use core::fmt::{self, Debug, Display, Formatter};
+use core::iter::{Product, Sum};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
+
+use super::Frobenius;
+use crate::extension::BinomiallyExtendable;
+use crate::field::Field;
+use crate::{field_to_array, AbstractExtensionField, AbstractField};
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize>(pub [F; D]);
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Default for BinomialExtensionField<F, D> {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> From<F> for BinomialExtensionField<F, D> {
+    fn from(x: F) -> Self {
+        Self(field_to_array::<F, D>(x))
+    }
+}
+impl<F: BinomiallyExtendable<D>, const D: usize> Frobenius<F, D> for BinomialExtensionField<F, D> {}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExtensionField<F, D> {
+    type F = Self;
+
+    const ZERO: Self = Self([F::ZERO; D]);
+    const ONE: Self = Self(field_to_array::<F, D>(F::ONE));
+    const TWO: Self = Self(field_to_array::<F, D>(F::TWO));
+    const NEG_ONE: Self = Self(field_to_array::<F, D>(F::NEG_ONE));
+
+    fn from_bool(b: bool) -> Self {
+        F::from_bool(b).into()
+    }
+
+    fn from_canonical_u8(n: u8) -> Self {
+        F::from_canonical_u8(n).into()
+    }
+
+    fn from_canonical_u16(n: u16) -> Self {
+        F::from_canonical_u16(n).into()
+    }
+
+    fn from_canonical_u32(n: u32) -> Self {
+        F::from_canonical_u32(n).into()
+    }
+
+    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
+    fn from_canonical_u64(n: u64) -> Self {
+        F::from_canonical_u64(n).into()
+    }
+
+    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
+    fn from_canonical_usize(n: usize) -> Self {
+        F::from_canonical_usize(n).into()
+    }
+
+    fn from_wrapped_u32(n: u32) -> Self {
+        F::from_wrapped_u32(n).into()
+    }
+
+    fn from_wrapped_u64(n: u64) -> Self {
+        F::from_wrapped_u64(n).into()
+    }
+
+    fn multiplicative_group_generator() -> Self {
+        Self(F::ext_multiplicative_group_generator())
+    }
+
+    #[inline(always)]
+    fn square(&self) -> Self {
+        // Specialising mul reduces the computation of c1 from 2 muls
+        // and one add to one mul and a shift
+        *self * *self
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
+    type Packing = Self;
+    // Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    fn try_inverse(&self) -> Option<Self> {
+        if self.is_zero() {
+            return None;
+        }
+
+        // Writing 'a' for self, we need to compute a^(r-1):
+        // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
+        let mut f = Self::ONE;
+        for _ in 1..D {
+            f = (f * *self).frobenius();
+        }
+
+        // g = a^r is in the base field, so only compute that
+        // coefficient rather than the full product.
+
+        let Self(a) = *self;
+        let Self(b) = f;
+        let mut g = F::ZERO;
+        for i in 1..D {
+            g += a[i] * b[D - i];
+        }
+        g *= F::W;
+        g += a[0] * b[0];
+        debug_assert_eq!(Self::from(g), *self * f);
+
+        Some(f * g.inverse())
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Display for BinomialExtensionField<F, D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} + {}*a", self.0[0], self.0[1])
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Debug for BinomialExtensionField<F, D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Neg for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn neg(self) -> Self {
+        Self(
+            self.0
+                .iter()
+                .map(|x| x.neg())
+                .collect::<Vec<F>>()
+                .try_into()
+                .unwrap(),
+        )
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Add for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        let mut res = self.0;
+        for i in 0..D {
+            res[i] += rhs.0[i];
+        }
+        Self(res)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Add<F> for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: F) -> Self {
+        let mut res = self.0;
+        res[0] += rhs;
+        Self(res)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> AddAssign for BinomialExtensionField<F, D> {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> AddAssign<F> for BinomialExtensionField<F, D> {
+    fn add_assign(&mut self, rhs: F) {
+        *self = *self + rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Sum for BinomialExtensionField<F, D> {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ZERO, |acc, x| acc + x)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Sub for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        let mut res = self.0;
+        for i in 0..D {
+            res[i] -= rhs.0[i];
+        }
+        Self(res)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Sub<F> for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: F) -> Self {
+        let mut res = self.0;
+        res[0] += rhs;
+        Self(res)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> SubAssign for BinomialExtensionField<F, D> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> SubAssign<F> for BinomialExtensionField<F, D> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: F) {
+        *self = *self - rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Mul for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        let Self(a) = self;
+        let Self(b) = rhs;
+
+        let mut res = [F::ZERO; D];
+
+        for i in 0..D {
+            for j in 0..D {
+                if i + j >= D {
+                    res[i + j - D] += F::W * a[i] * b[j];
+                } else {
+                    res[i + j] += a[i] * b[j];
+                }
+            }
+        }
+
+        Self(res)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Mul<F> for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: F) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .map(|x| x * rhs)
+                .collect::<Vec<F>>()
+                .try_into()
+                .unwrap(),
+        )
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Product for BinomialExtensionField<F, D> {
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::ONE, |acc, x| acc * x)
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Div for BinomialExtensionField<F, D> {
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    fn div(self, rhs: Self) -> Self::Output {
+        self * rhs.inverse()
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> DivAssign for BinomialExtensionField<F, D> {
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> MulAssign for BinomialExtensionField<F, D> {
+    #[inline]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> MulAssign<F> for BinomialExtensionField<F, D> {
+    fn mul_assign(&mut self, rhs: F) {
+        *self = *self * rhs;
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> AbstractExtensionField<F>
+    for BinomialExtensionField<F, D>
+{
+    const D: usize = F::D;
+
+    fn from_base(b: F) -> Self {
+        Self(field_to_array::<F, D>(b))
+    }
+
+    fn from_base_slice(bs: &[F]) -> Self {
+        assert_eq!(bs.len(), D);
+        Self(bs.try_into().unwrap())
+    }
+
+    fn as_base_slice(&self) -> &[F] {
+        self.0.as_ref()
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
+    for Standard
+where
+    Standard: Distribution<F>,
+{
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
+        let mut res = [F::ZERO; D];
+        for i in 0..D {
+            res[i] = Standard.sample(rng);
+        }
+        BinomialExtensionField::<F, D>::from_base_slice(&res)
+    }
+}

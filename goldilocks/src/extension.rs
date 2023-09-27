@@ -23,5 +23,12 @@ mod test_quadratic_extension {
 
     use p3_field_testing::test_field;
 
-    test_field!(p3_field::extension::quadratic::QuadraticBef<crate::Goldilocks>);
+    // test_field!(p3_field::extension::quadratic::QuadraticBef<crate::Goldilocks>);
+
+    test_field!(
+        p3_field::extension::binomial_extension::BinomialExtensionField<
+            crate::Goldilocks,
+            2,
+        >
+    );
 }
