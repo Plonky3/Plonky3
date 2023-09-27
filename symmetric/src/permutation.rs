@@ -1,10 +1,11 @@
 /// A permutation in the mathematical sense.
 pub trait Permutation<T: Clone>: Clone {
-    fn permute(&self, input: T) -> T;
-
-    fn permute_mut(&self, input: &mut T) {
-        *input = self.permute(input.clone());
+    fn permute(&self, mut input: T) -> T {
+        self.permute_mut(&mut input);
+        input
     }
+
+    fn permute_mut(&self, input: &mut T);
 }
 
 /// A permutation thought to be cryptographically secure, in the sense that it is thought to be

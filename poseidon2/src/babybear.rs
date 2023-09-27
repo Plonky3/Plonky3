@@ -23,19 +23,17 @@ pub const MATRIX_DIAG_24_BABYBEAR: [u64; 24] = [
 pub struct DiffusionMatrixBabybear;
 
 impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
-    fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
-        let mut input = input;
-        matmul_internal::<BabyBear, 16>(&mut input, MATRIX_DIAG_16_BABYBEAR);
-        input
+    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
+        matmul_internal::<BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR);
     }
 }
+
 impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
 
 impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
-    fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
-        let mut input = input;
-        matmul_internal::<BabyBear, 24>(&mut input, MATRIX_DIAG_24_BABYBEAR);
-        input
+    fn permute_mut(&self, state: &mut [BabyBear; 24]) {
+        matmul_internal::<BabyBear, 24>(state, MATRIX_DIAG_24_BABYBEAR);
     }
 }
+
 impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}

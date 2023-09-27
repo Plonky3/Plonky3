@@ -87,12 +87,7 @@ where
         let mut constants = Vec::new();
         let rounds = rounds_f + rounds_p;
         for _ in 0..rounds {
-            let mut round_constant = [F::F::ZERO; WIDTH];
-            #[allow(clippy::needless_range_loop)]
-            for j in 0..WIDTH {
-                round_constant[j] = rng.sample(Standard);
-            }
-            constants.push(round_constant);
+            constants.push(rng.gen::<[F::F; WIDTH]>());
         }
 
         Self {
@@ -127,17 +122,17 @@ where
     Mds: MdsPermutation<F, WIDTH>,
     Diffusion: DiffusionPermutation<F, WIDTH>,
 {
-    fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {
+    fn permute_mut(&self, state: &mut [F; WIDTH]) {
         // The initial linear layer.
-        self.external_linear_layer.permute_mut(&mut state);
+        self.external_linear_layer.permute_mut(state);
 
         // The first half of the external rounds.
         let rounds = self.rounds_f + self.rounds_p;
         let rounds_f_beggining = self.rounds_f / 2;
         for r in 0..rounds_f_beggining {
-            self.add_rc(&mut state, &self.constants[r]);
-            self.sbox(&mut state);
-            self.external_linear_layer.permute_mut(&mut state);
+            self.add_rc(state, &self.constants[r]);
+            self.sbox(state);
+            self.external_linear_layer.permute_mut(state);
         }
 
         // The internal rounds.
@@ -145,17 +140,15 @@ where
         for r in self.rounds_f..p_end {
             state[0] += self.constants[r][0];
             state[0] = self.sbox_p(&state[0]);
-            self.internal_linear_layer.permute_mut(&mut state);
+            self.internal_linear_layer.permute_mut(state);
         }
 
         // The second half of the external rounds.
         for r in p_end..rounds {
-            self.add_rc(&mut state, &self.constants[r]);
-            self.sbox(&mut state);
-            self.external_linear_layer.permute_mut(&mut state);
+            self.add_rc(state, &self.constants[r]);
+            self.sbox(state);
+            self.external_linear_layer.permute_mut(state);
         }
-
-        state
     }
 }
 

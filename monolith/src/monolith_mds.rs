@@ -39,6 +39,10 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             apply_cauchy_mds_matrix(&mut shake_finalized, input)
         }
     }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; WIDTH]) {
+        *input = self.permute(*input);
+    }
 }
 
 impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
