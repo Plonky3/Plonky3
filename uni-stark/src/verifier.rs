@@ -20,7 +20,7 @@ where
 {
     let degree_bits = 6; // TODO
     let log_quotient_degree = 1; // TODO
-    let g_subgroup = SC::Domain::primitive_root_of_unity(degree_bits);
+    let g_subgroup = SC::Domain::two_adic_generator(degree_bits);
 
     let Proof {
         commitments,
@@ -68,7 +68,7 @@ where
         })
         .collect();
     // Then we reconstruct the larger quotient polynomial from its degree-n parts.
-    let g_quotient_parts = SC::Domain::primitive_root_of_unity(log_quotient_degree);
+    let g_quotient_parts = SC::Domain::two_adic_generator(log_quotient_degree);
     let quotient: SC::Challenge = g_quotient_parts
         .powers()
         .zip(quotient_parts)

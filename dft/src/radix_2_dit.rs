@@ -18,7 +18,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        let root = F::primitive_root_of_unity(log_h);
+        let root = F::two_adic_generator(log_h);
         let twiddles: Vec<F> = root.powers().take(h / 2).collect();
 
         // DIT butterfly

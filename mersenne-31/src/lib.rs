@@ -152,7 +152,7 @@ impl AbstractField for Mersenne31 {
     }
 
     // Sage: GF(2^31 - 1).multiplicative_generator()
-    fn multiplicative_group_generator() -> Self {
+    fn generator() -> Self {
         Self::new(7)
     }
 }

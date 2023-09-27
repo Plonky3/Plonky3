@@ -66,7 +66,7 @@ impl<F: BinomiallyExtendable<2>> AbstractField for QuadraticBef<F> {
         F::from_wrapped_u64(n).into()
     }
 
-    fn multiplicative_group_generator() -> Self {
+    fn generator() -> Self {
         Self(F::ext_multiplicative_group_generator())
     }
 

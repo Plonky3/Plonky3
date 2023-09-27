@@ -417,8 +417,8 @@ impl AbstractField for PackedBabyBearNeon {
     }
 
     #[inline]
-    fn multiplicative_group_generator() -> Self {
-        BabyBear::multiplicative_group_generator().into()
+    fn generator() -> Self {
+        BabyBear::generator().into()
     }
 }
 

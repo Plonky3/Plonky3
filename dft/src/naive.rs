@@ -15,7 +15,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
         let w = mat.width();
         let h = mat.height();
         let log_h = log2_strict_usize(h);
-        let g = F::primitive_root_of_unity(log_h);
+        let g = F::two_adic_generator(log_h);
 
         let mut res = RowMajorMatrix::new(vec![F::ZERO; w * h], w);
         for (res_r, point) in g.powers().take(h).enumerate() {

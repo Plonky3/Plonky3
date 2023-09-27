@@ -53,7 +53,8 @@ pub trait AbstractField:
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
 
-    fn multiplicative_group_generator() -> Self;
+    /// A generator of this field's entire multiplicative group.
+    fn generator() -> Self;
 
     #[must_use]
     fn double(&self) -> Self {
@@ -288,21 +289,15 @@ impl<F: AbstractField> AbstractExtensionField<F> for F {
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods
-/// for obtaining two-adic roots of unity.
+/// for obtaining two-adic generators.
 pub trait TwoAdicField: Field {
     /// The number of factors of two in this field's multiplicative group.
     const TWO_ADICITY: usize;
 
-    /// Generator of a multiplicative subgroup of order `2^TWO_ADICITY`.
-    fn power_of_two_generator() -> Self;
-
-    /// Returns a primitive root of order `2^bits`.
+    /// Returns a generator of the multiplicative group of order `2^bits`.
+    /// Assumes `bits < TWO_ADICITY`, otherwise the result is undefined.
     #[must_use]
-    fn primitive_root_of_unity(bits: usize) -> Self {
-        assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::power_of_two_generator();
-        base.exp_power_of_2(Self::TWO_ADICITY - bits)
-    }
+    fn two_adic_generator(bits: usize) -> Self;
 }
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.

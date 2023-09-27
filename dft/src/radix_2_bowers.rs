@@ -78,7 +78,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
-    let root = F::primitive_root_of_unity(log_h);
+    let root = F::two_adic_generator(log_h);
     let mut twiddles: Vec<F> = root.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
 
@@ -94,7 +94,7 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
-    let root_inv = F::primitive_root_of_unity(log_h).inverse();
+    let root_inv = F::two_adic_generator(log_h).inverse();
     let mut twiddles: Vec<F> = root_inv.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
 
