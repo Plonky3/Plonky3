@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{AbstractField, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::permutation::CryptographicPermutation;
 use rand::distributions::Standard;
@@ -17,18 +17,18 @@ use rand::Rng;
 #[derive(Clone)]
 pub struct Poseidon<F, Mds, const WIDTH: usize, const ALPHA: u64>
 where
-    F: Field,
+    F: AbstractField,
     Mds: MdsPermutation<F, WIDTH>,
 {
     half_num_full_rounds: usize,
     num_partial_rounds: usize,
-    constants: Vec<F>,
+    constants: Vec<F::F>,
     mds: Mds,
 }
 
 impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Poseidon<F, Mds, WIDTH, ALPHA>
 where
-    F: Field,
+    F: AbstractField,
     Mds: MdsPermutation<F, WIDTH>,
 {
     /// Create a new Poseidon configuration.
@@ -38,7 +38,7 @@ where
     pub fn new(
         half_num_full_rounds: usize,
         num_partial_rounds: usize,
-        constants: Vec<F>,
+        constants: Vec<F::F>,
         mds: Mds,
     ) -> Self {
         let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
@@ -58,7 +58,7 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<F>,
+        Standard: Distribution<F::F>,
     {
         let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
         let num_constants = WIDTH * num_rounds;
@@ -112,7 +112,8 @@ where
 impl<F, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[F; WIDTH]>
     for Poseidon<F, Mds, WIDTH, ALPHA>
 where
-    F: Field,
+    F: AbstractField,
+    F::F: PrimeField,
     Mds: MdsPermutation<F, WIDTH>,
 {
     fn permute(&self, mut state: [F; WIDTH]) -> [F; WIDTH] {

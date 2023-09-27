@@ -2,7 +2,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
-use p3_field::PrimeField64;
+use p3_field::{AbstractField, Field, PrimeField};
 use p3_goldilocks::Goldilocks;
 use p3_mds::babybear::MdsMatrixBabyBear;
 use p3_mds::coset_mds::CosetMds;
@@ -18,7 +18,8 @@ use rand::thread_rng;
 fn bench_poseidon(c: &mut Criterion) {
     poseidon::<BabyBear, MdsMatrixBabyBear, 16, 7>(c);
     poseidon::<BabyBear, MdsMatrixBabyBear, 24, 7>(c);
-    poseidon::<BabyBear, CosetMds<BabyBear, 32>, 32, 7>(c);
+    poseidon::<BabyBear, CosetMds<_, 32>, 32, 7>(c);
+    poseidon::<<BabyBear as Field>::Packing, CosetMds<_, 32>, 32, 7>(c);
 
     poseidon::<Goldilocks, MdsMatrixGoldilocks, 8, 7>(c);
     poseidon::<Goldilocks, MdsMatrixGoldilocks, 12, 7>(c);
@@ -30,8 +31,9 @@ fn bench_poseidon(c: &mut Criterion) {
 
 fn poseidon<F, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
-    F: PrimeField64,
-    Standard: Distribution<F>,
+    F: AbstractField,
+    F::F: PrimeField,
+    Standard: Distribution<F::F>,
     Mds: MdsPermutation<F, WIDTH> + Default,
 {
     let mut rng = thread_rng();
@@ -50,7 +52,9 @@ where
     let input = [F::ZERO; WIDTH];
     let name = format!("poseidon::<{}, {}>", type_name::<F>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
-    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
+    c.bench_with_input(id, &input, |b, input| {
+        b.iter(|| poseidon.permute(input.clone()))
+    });
 }
 
 criterion_group!(benches, bench_poseidon);
