@@ -19,7 +19,7 @@ impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        let root = Ext::primitive_root_of_unity(log_h);
+        let root = Ext::two_adic_generator(log_h);
         let twiddles: Vec<Ext> = root.powers().take(h / 2).collect();
 
         // DIT butterfly
