@@ -272,19 +272,19 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = 
 
 impl<F: Field> ExtensionField<F> for F {}
 
-impl<F: AbstractField> AbstractExtensionField<F> for F {
+impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     const D: usize = 1;
 
-    fn from_base(b: F) -> Self {
+    fn from_base(b: AF) -> Self {
         b
     }
 
-    fn from_base_slice(bs: &[F]) -> Self {
+    fn from_base_slice(bs: &[AF]) -> Self {
         assert_eq!(bs.len(), 1);
         bs[0].clone()
     }
 
-    fn as_base_slice(&self) -> &[F] {
+    fn as_base_slice(&self) -> &[AF] {
         slice::from_ref(self)
     }
 }
@@ -308,10 +308,10 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<F: AbstractField> Iterator for Powers<F> {
-    type Item = F;
+impl<AF: AbstractField> Iterator for Powers<AF> {
+    type Item = AF;
 
-    fn next(&mut self) -> Option<F> {
+    fn next(&mut self) -> Option<AF> {
         let result = self.current.clone();
         self.current *= self.base.clone();
         Some(result)

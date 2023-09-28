@@ -11,33 +11,33 @@ use crate::MdsPermutation;
 /// viewed as returning the parity elements of a systematic Reed-Solomon code. Since Reed-Solomon
 /// codes are MDS, this is an MDS permutation.
 #[derive(Clone, Debug)]
-pub struct CosetMds<F, const N: usize>
+pub struct CosetMds<AF, const N: usize>
 where
-    F: AbstractField,
-    F::F: TwoAdicField,
+    AF: AbstractField,
+    AF::F: TwoAdicField,
 {
-    fft_twiddles: Vec<F::F>,
-    ifft_twiddles: Vec<F::F>,
-    weights: [F::F; N],
+    fft_twiddles: Vec<AF::F>,
+    ifft_twiddles: Vec<AF::F>,
+    weights: [AF::F; N],
 }
 
-impl<F, const N: usize> Default for CosetMds<F, N>
+impl<AF, const N: usize> Default for CosetMds<AF, N>
 where
-    F: AbstractField,
-    F::F: TwoAdicField,
+    AF: AbstractField,
+    AF::F: TwoAdicField,
 {
     fn default() -> Self {
         let log_n = log2_strict_usize(N);
 
-        let root = F::F::two_adic_generator(log_n);
+        let root = AF::F::two_adic_generator(log_n);
         let root_inv = root.inverse();
-        let mut fft_twiddles: Vec<F::F> = root.powers().take(N / 2).collect();
-        let mut ifft_twiddles: Vec<F::F> = root_inv.powers().take(N / 2).collect();
+        let mut fft_twiddles: Vec<AF::F> = root.powers().take(N / 2).collect();
+        let mut ifft_twiddles: Vec<AF::F> = root_inv.powers().take(N / 2).collect();
         reverse_slice_index_bits(&mut fft_twiddles);
         reverse_slice_index_bits(&mut ifft_twiddles);
 
-        let shift = F::F::generator();
-        let mut weights: [F::F; N] = shift
+        let shift = AF::F::generator();
+        let mut weights: [AF::F; N] = shift
             .powers()
             .take(N)
             .collect::<Vec<_>>()
@@ -52,17 +52,17 @@ where
     }
 }
 
-impl<F, const N: usize> Permutation<[F; N]> for CosetMds<F, N>
+impl<AF, const N: usize> Permutation<[AF; N]> for CosetMds<AF, N>
 where
-    F: AbstractField,
-    F::F: TwoAdicField,
+    AF: AbstractField,
+    AF::F: TwoAdicField,
 {
-    fn permute(&self, mut input: [F; N]) -> [F; N] {
+    fn permute(&self, mut input: [AF; N]) -> [AF; N] {
         self.permute_mut(&mut input);
         input
     }
 
-    fn permute_mut(&self, values: &mut [F; N]) {
+    fn permute_mut(&self, values: &mut [AF; N]) {
         // Inverse DFT, except we skip bit reversal and rescaling by 1/N.
         bowers_g_t(values, &self.ifft_twiddles);
 
@@ -76,17 +76,17 @@ where
     }
 }
 
-impl<F, const N: usize> MdsPermutation<F, N> for CosetMds<F, N>
+impl<AF, const N: usize> MdsPermutation<AF, N> for CosetMds<AF, N>
 where
-    F: AbstractField,
-    F::F: TwoAdicField,
+    AF: AbstractField,
+    AF::F: TwoAdicField,
 {
 }
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
 #[inline]
-fn bowers_g<F: AbstractField, const N: usize>(values: &mut [F; N], twiddles: &[F::F]) {
+fn bowers_g<AF: AbstractField, const N: usize>(values: &mut [AF; N], twiddles: &[AF::F]) {
     let log_n = log2_strict_usize(N);
     for log_half_block_size in 0..log_n {
         bowers_g_layer(values, log_half_block_size, twiddles);
@@ -96,7 +96,7 @@ fn bowers_g<F: AbstractField, const N: usize>(values: &mut [F; N], twiddles: &[F
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// `1/N`, and the output is bit-reversed.
 #[inline]
-fn bowers_g_t<F: AbstractField, const N: usize>(values: &mut [F; N], twiddles: &[F::F]) {
+fn bowers_g_t<AF: AbstractField, const N: usize>(values: &mut [AF; N], twiddles: &[AF::F]) {
     let log_n = log2_strict_usize(N);
     for log_half_block_size in (0..log_n).rev() {
         bowers_g_t_layer(values, log_half_block_size, twiddles);
@@ -105,10 +105,10 @@ fn bowers_g_t<F: AbstractField, const N: usize>(values: &mut [F; N], twiddles: &
 
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
 #[inline]
-fn bowers_g_layer<F: AbstractField, const N: usize>(
-    values: &mut [F; N],
+fn bowers_g_layer<AF: AbstractField, const N: usize>(
+    values: &mut [AF; N],
     log_half_block_size: usize,
-    twiddles: &[F::F],
+    twiddles: &[AF::F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -131,10 +131,10 @@ fn bowers_g_layer<F: AbstractField, const N: usize>(
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
 #[inline]
-fn bowers_g_t_layer<F: AbstractField, const N: usize>(
-    values: &mut [F; N],
+fn bowers_g_t_layer<AF: AbstractField, const N: usize>(
+    values: &mut [AF; N],
     log_half_block_size: usize,
-    twiddles: &[F::F],
+    twiddles: &[AF::F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;

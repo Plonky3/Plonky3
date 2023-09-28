@@ -8,12 +8,12 @@ pub(crate) fn xor<F: PrimeField32, const N: usize>(xs: [F; N]) -> F {
 }
 
 /// Computes the arithmetic generalization of `xor(x, y)`, i.e. `x + y - 2 x y`.
-pub(crate) fn xor_gen<F: AbstractField>(x: F, y: F) -> F {
+pub(crate) fn xor_gen<AF: AbstractField>(x: AF, y: AF) -> AF {
     x.clone() + y.clone() - x * y.double()
 }
 
 /// Computes the arithmetic generalization of `xor3(x, y, z)`.
-pub(crate) fn xor3_gen<F: AbstractField>(x: F, y: F, z: F) -> F {
+pub(crate) fn xor3_gen<AF: AbstractField>(x: AF, y: AF, z: AF) -> AF {
     xor_gen(x, xor_gen(y, z))
 }
 
@@ -25,6 +25,6 @@ pub(crate) fn andn<F: PrimeField32>(x: F, y: F) -> F {
     F::from_canonical_u32(!x & y)
 }
 
-pub(crate) fn andn_gen<F: AbstractField>(x: F, y: F) -> F {
-    (F::ONE - x) * y
+pub(crate) fn andn_gen<AF: AbstractField>(x: AF, y: AF) -> AF {
+    (AF::ONE - x) * y
 }

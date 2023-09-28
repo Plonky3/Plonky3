@@ -29,12 +29,12 @@ fn bench_poseidon(c: &mut Criterion) {
     poseidon::<Mersenne31, MdsMatrixMersenne31, 32, 5>(c);
 }
 
-fn poseidon<F, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
+fn poseidon<AF, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
-    F: AbstractField,
-    F::F: PrimeField,
-    Standard: Distribution<F::F>,
-    Mds: MdsPermutation<F, WIDTH> + Default,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    Standard: Distribution<AF::F>,
+    Mds: MdsPermutation<AF, WIDTH> + Default,
 {
     let mut rng = thread_rng();
     let mds = Mds::default();
@@ -43,14 +43,14 @@ where
     let half_num_full_rounds = 4;
     let num_partial_rounds = 22;
 
-    let poseidon = Poseidon::<F, Mds, WIDTH, ALPHA>::new_from_rng(
+    let poseidon = Poseidon::<AF, Mds, WIDTH, ALPHA>::new_from_rng(
         half_num_full_rounds,
         num_partial_rounds,
         mds,
         &mut rng,
     );
-    let input = [F::ZERO; WIDTH];
-    let name = format!("poseidon::<{}, {}>", type_name::<F>(), ALPHA);
+    let input = [AF::ZERO; WIDTH];
+    let name = format!("poseidon::<{}, {}>", type_name::<AF>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| poseidon.permute(input.clone()))

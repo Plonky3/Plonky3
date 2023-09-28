@@ -27,11 +27,11 @@ const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
 /// The Poseidon2 permutation.
 #[derive(Clone)]
-pub struct Poseidon2<F, Mds, Diffusion, const WIDTH: usize, const D: u64>
+pub struct Poseidon2<AF, Mds, Diffusion, const WIDTH: usize, const D: u64>
 where
-    F: AbstractField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    AF: AbstractField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
     /// The number of external rounds.
     rounds_f: usize,
@@ -40,7 +40,7 @@ where
     rounds_p: usize,
 
     /// The round constants.
-    constants: Vec<[F::F; WIDTH]>,
+    constants: Vec<[AF::F; WIDTH]>,
 
     /// The linear layer used in external rounds.
     external_linear_layer: Mds,
@@ -49,17 +49,17 @@ where
     internal_linear_layer: Diffusion,
 }
 
-impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> Poseidon2<F, Mds, Diffusion, WIDTH, D>
+impl<AF, Mds, Diffusion, const WIDTH: usize, const D: u64> Poseidon2<AF, Mds, Diffusion, WIDTH, D>
 where
-    F: AbstractField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    AF: AbstractField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
     /// Create a new Poseidon2 configuration.
     pub fn new(
         rounds_f: usize,
         rounds_p: usize,
-        constants: Vec<[F::F; WIDTH]>,
+        constants: Vec<[AF::F; WIDTH]>,
         external_linear_layer: Mds,
         internal_linear_layer: Diffusion,
     ) -> Self {
@@ -82,12 +82,12 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<F::F>,
+        Standard: Distribution<AF::F>,
     {
         let mut constants = Vec::new();
         let rounds = rounds_f + rounds_p;
         for _ in 0..rounds {
-            constants.push(rng.gen::<[F::F; WIDTH]>());
+            constants.push(rng.gen::<[AF::F; WIDTH]>());
         }
 
         Self {
@@ -100,29 +100,29 @@ where
     }
 
     #[inline]
-    fn add_rc(&self, state: &mut [F; WIDTH], rc: &[F::F; WIDTH]) {
+    fn add_rc(&self, state: &mut [AF; WIDTH], rc: &[AF::F; WIDTH]) {
         state.iter_mut().zip(rc).for_each(|(a, b)| *a += *b);
     }
 
     #[inline]
-    fn sbox_p(&self, input: &F) -> F {
+    fn sbox_p(&self, input: &AF) -> AF {
         input.exp_const_u64::<D>()
     }
 
     #[inline]
-    fn sbox(&self, state: &mut [F; WIDTH]) {
+    fn sbox(&self, state: &mut [AF; WIDTH]) {
         state.iter_mut().for_each(|a| *a = self.sbox_p(a));
     }
 }
 
-impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> Permutation<[F; WIDTH]>
-    for Poseidon2<F, Mds, Diffusion, WIDTH, D>
+impl<AF, Mds, Diffusion, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]>
+    for Poseidon2<AF, Mds, Diffusion, WIDTH, D>
 where
-    F: AbstractField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    AF: AbstractField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [F; WIDTH]) {
+    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
         // The initial linear layer.
         self.external_linear_layer.permute_mut(state);
 
@@ -152,11 +152,11 @@ where
     }
 }
 
-impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[F; WIDTH]>
-    for Poseidon2<F, Mds, Diffusion, WIDTH, D>
+impl<AF, Mds, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[AF; WIDTH]>
+    for Poseidon2<AF, Mds, Diffusion, WIDTH, D>
 where
-    F: AbstractField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    AF: AbstractField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
 }

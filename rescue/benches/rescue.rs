@@ -29,13 +29,13 @@ fn bench_rescue(c: &mut Criterion) {
     rescue::<Mersenne31, MdsMatrixMersenne31, BasicSboxLayer<_>, 32, 5>(c);
 }
 
-fn rescue<F, Mds, Sbox, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
+fn rescue<AF, Mds, Sbox, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
-    F: AbstractField,
-    F::F: PrimeField64,
-    Standard: Distribution<F::F>,
-    Mds: MdsPermutation<F, WIDTH> + Default,
-    Sbox: SboxLayers<F, WIDTH> + Default,
+    AF: AbstractField,
+    AF::F: PrimeField64,
+    Standard: Distribution<AF::F>,
+    Mds: MdsPermutation<AF, WIDTH> + Default,
+    Sbox: SboxLayers<AF, WIDTH> + Default,
 {
     // 8 rounds seems to work for the configs we use in practice. For benchmarking purposes we will
     // assume it suffices; for real usage the Sage calculation in the paper should be used.
@@ -46,9 +46,9 @@ where
     let round_constants = rng.sample_iter(Standard).take(num_constants).collect();
     let mds = Mds::default();
     let isl = Sbox::default();
-    let rescue = Rescue::<F, Mds, Sbox, WIDTH>::new(NUM_ROUNDS, round_constants, mds, isl);
-    let input = [F::ZERO; WIDTH];
-    let name = format!("rescue::<{}, {}>", type_name::<F>(), ALPHA);
+    let rescue = Rescue::<AF, Mds, Sbox, WIDTH>::new(NUM_ROUNDS, round_constants, mds, isl);
+    let input = [AF::ZERO; WIDTH];
+    let name = format!("rescue::<{}, {}>", type_name::<AF>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| rescue.permute(input.clone()))
