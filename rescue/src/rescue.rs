@@ -9,7 +9,7 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
 
-use crate::inverse_sbox::SboxLayers;
+use crate::sbox::SboxLayers;
 use crate::util::shake256_hash;
 
 /// The Rescue-XLIX permutation.
@@ -173,8 +173,8 @@ mod tests {
     use p3_symmetric::permutation::Permutation;
     use p3_symmetric::sponge::PaddingFreeSponge;
 
-    use crate::inverse_sbox::BasicSboxLayer;
     use crate::rescue::Rescue;
+    use crate::sbox::BasicSboxLayer;
 
     const WIDTH: usize = 12;
     const ALPHA: u64 = 5;
