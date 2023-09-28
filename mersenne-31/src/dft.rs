@@ -186,48 +186,50 @@ impl Mersenne31Dft {
 
 #[cfg(test)]
 mod tests {
-    use p3_dft::Radix2Dit;
     use rand::distributions::{Distribution, Standard};
     use rand::{thread_rng, Rng};
 
     use super::*;
-    use crate::Mersenne31;
+    use crate::{Mersenne31, Mersenne31ComplexRadix2Dit};
+
+    type Base = Mersenne31;
+    type Dft = Mersenne31ComplexRadix2Dit;
 
     #[test]
     fn consistency()
     where
-        Standard: Distribution<Mersenne31>,
+        Standard: Distribution<Base>,
     {
         const N: usize = 1 << 12;
         let input = thread_rng()
             .sample_iter(Standard)
             .take(N)
-            .collect::<Vec<Mersenne31>>();
+            .collect::<Vec<Base>>();
         let input = RowMajorMatrix::new_col(input);
-        let fft_input = Mersenne31Dft::dft_batch::<Radix2Dit>(input.clone());
-        let output = Mersenne31Dft::idft_batch::<Radix2Dit>(fft_input);
+        let fft_input = Mersenne31Dft::dft_batch::<Dft>(input.clone());
+        let output = Mersenne31Dft::idft_batch::<Dft>(fft_input);
         assert_eq!(input, output);
     }
 
     #[test]
     fn convolution()
     where
-        Standard: Distribution<Mersenne31>,
+        Standard: Distribution<Base>,
     {
         const N: usize = 1 << 12;
         let a = thread_rng()
             .sample_iter(Standard)
             .take(N)
-            .collect::<Vec<Mersenne31>>();
+            .collect::<Vec<Base>>();
         let a = RowMajorMatrix::new_col(a);
         let b = thread_rng()
             .sample_iter(Standard)
             .take(N)
-            .collect::<Vec<Mersenne31>>();
+            .collect::<Vec<Base>>();
         let b = RowMajorMatrix::new_col(b);
 
-        let fft_a = Mersenne31Dft::dft_batch::<Radix2Dit>(a.clone());
-        let fft_b = Mersenne31Dft::dft_batch::<Radix2Dit>(b.clone());
+        let fft_a = Mersenne31Dft::dft_batch::<Dft>(a.clone());
+        let fft_b = Mersenne31Dft::dft_batch::<Dft>(b.clone());
 
         let fft_c = fft_a
             .values
@@ -237,11 +239,11 @@ mod tests {
             .collect();
         let fft_c = RowMajorMatrix::new_col(fft_c);
 
-        let c = Mersenne31Dft::idft_batch::<Radix2Dit>(fft_c);
+        let c = Mersenne31Dft::idft_batch::<Dft>(fft_c);
 
         let mut conv = Vec::with_capacity(N);
         for i in 0..N {
-            let mut t = Mersenne31::ZERO;
+            let mut t = Base::ZERO;
             for j in 0..N {
                 t += a.values[j] * b.values[(N + i - j) % N];
             }

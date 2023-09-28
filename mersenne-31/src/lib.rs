@@ -7,6 +7,7 @@ extern crate alloc;
 mod complex;
 mod dft;
 mod extension;
+mod radix_2_dit;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -21,6 +22,7 @@ use p3_field::{
     exp_1717986917, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
     PrimeField64,
 };
+pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -28,7 +30,7 @@ use rand::Rng;
 #[derive(Copy, Clone, Default)]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
-    value: u32,
+    pub(crate) value: u32,
 }
 
 impl Mersenne31 {
