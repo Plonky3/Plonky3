@@ -3,7 +3,7 @@
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
 
 use p3_baby_bear::BabyBear;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::Permutation;
 
 use crate::diffusion::matmul_internal;
 use crate::DiffusionPermutation;
@@ -22,22 +22,18 @@ pub const MATRIX_DIAG_24_BABYBEAR: [u64; 24] = [
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabybear;
 
-impl CryptographicPermutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
-    fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
-        let mut input = input;
-        matmul_internal::<BabyBear, 16>(&mut input, MATRIX_DIAG_16_BABYBEAR);
-        input
+impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
+    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
+        matmul_internal::<BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR);
     }
 }
-impl ArrayPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
+
 impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
 
-impl CryptographicPermutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
-    fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
-        let mut input = input;
-        matmul_internal::<BabyBear, 24>(&mut input, MATRIX_DIAG_24_BABYBEAR);
-        input
+impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
+    fn permute_mut(&self, state: &mut [BabyBear; 24]) {
+        matmul_internal::<BabyBear, 24>(state, MATRIX_DIAG_24_BABYBEAR);
     }
 }
-impl ArrayPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}
+
 impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}

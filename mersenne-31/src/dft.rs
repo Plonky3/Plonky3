@@ -65,7 +65,7 @@ fn dft_postprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
 
     // NB: The original real matrix had height 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2h-th root of unity
-    let omega = Ext::primitive_root_of_unity(log2_h + 1);
+    let omega = Ext::two_adic_generator(log2_h + 1);
     let mut omega_j = omega;
 
     let mut output = Vec::with_capacity((h + 1) * input.width());
@@ -110,7 +110,7 @@ fn idft_preprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
 
     // NB: The original real matrix had length 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2n-th root of unity
-    let omega = Ext::primitive_root_of_unity(log2_h + 1).inverse();
+    let omega = Ext::two_adic_generator(log2_h + 1).inverse();
     let mut omega_j = Ext::ONE;
 
     let mut output = Vec::with_capacity(h * input.width());

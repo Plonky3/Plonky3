@@ -62,7 +62,7 @@ where
     type Error = L::Error;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        let shift = Domain::multiplicative_group_generator();
+        let shift = Domain::generator();
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .into_iter()
@@ -105,7 +105,7 @@ where
                             .into_iter()
                             .map(|mat| {
                                 let low_coset = mat.vertically_strided(1 << self.added_bits, 0);
-                                let shift = Domain::multiplicative_group_generator();
+                                let shift = Domain::generator();
                                 interpolate_coset(&low_coset, shift, point)
                             })
                             .collect::<OpenedValuesForPoint<EF>>()
@@ -154,6 +154,7 @@ where
         _commits_and_points: &[(Self::Commitment, &[EF])],
         _values: OpenedValues<EF>,
         _proof: &Self::Proof,
+        _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         Ok(()) // TODO
     }
@@ -173,7 +174,7 @@ where
     Challenger: FieldChallenger<Val>,
 {
     fn coset_shift(&self) -> Domain {
-        Domain::multiplicative_group_generator()
+        Domain::generator()
     }
 
     fn get_ldes<'a, 'b>(

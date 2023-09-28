@@ -65,8 +65,8 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
         [F::from_wrapped_u64(n); N].into()
     }
 
-    fn multiplicative_group_generator() -> Self {
-        [F::multiplicative_group_generator(); N].into()
+    fn generator() -> Self {
+        [F::generator(); N].into()
     }
 }
 
@@ -79,10 +79,26 @@ impl<F: Field, const N: usize> Add for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> Add<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: F) -> Self::Output {
+        self.0.map(|x| x + rhs).into()
+    }
+}
+
 impl<F: Field, const N: usize> AddAssign for FieldArray<F, N> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         self.0.iter_mut().zip(rhs.0).for_each(|(x, y)| *x += y);
+    }
+}
+
+impl<F: Field, const N: usize> AddAssign<F> for FieldArray<F, N> {
+    #[inline]
+    fn add_assign(&mut self, rhs: F) {
+        self.0.iter_mut().for_each(|x| *x += rhs);
     }
 }
 
@@ -95,10 +111,26 @@ impl<F: Field, const N: usize> Sub for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> Sub<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: F) -> Self::Output {
+        self.0.map(|x| x - rhs).into()
+    }
+}
+
 impl<F: Field, const N: usize> SubAssign for FieldArray<F, N> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         self.0.iter_mut().zip(rhs.0).for_each(|(x, y)| *x -= y);
+    }
+}
+
+impl<F: Field, const N: usize> SubAssign<F> for FieldArray<F, N> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: F) {
+        self.0.iter_mut().for_each(|x| *x -= rhs);
     }
 }
 
@@ -120,10 +152,26 @@ impl<F: Field, const N: usize> Mul for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> Mul<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: F) -> Self::Output {
+        self.0.map(|x| x * rhs).into()
+    }
+}
+
 impl<F: Field, const N: usize> MulAssign for FieldArray<F, N> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         self.0.iter_mut().zip(rhs.0).for_each(|(x, y)| *x *= y);
+    }
+}
+
+impl<F: Field, const N: usize> MulAssign<F> for FieldArray<F, N> {
+    #[inline]
+    fn mul_assign(&mut self, rhs: F) {
+        self.0.iter_mut().for_each(|x| *x *= rhs);
     }
 }
 

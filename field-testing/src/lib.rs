@@ -69,7 +69,7 @@ where
 
 pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
     for log_n in 0..5 {
-        let g = F::primitive_root_of_unity(log_n);
+        let g = F::two_adic_generator(log_n);
         for x in cyclic_subgroup_known_order(g, 1 << log_n) {
             let zerofier_eval = two_adic_subgroup_zerofier(log_n, x);
             assert_eq!(zerofier_eval, F::ZERO);
@@ -79,8 +79,8 @@ pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
 
 pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
     for log_n in 0..5 {
-        let g = F::primitive_root_of_unity(log_n);
-        let shift = F::multiplicative_group_generator();
+        let g = F::two_adic_generator(log_n);
+        let shift = F::generator();
         for x in cyclic_subgroup_coset_known_order(g, shift, 1 << log_n) {
             let zerofier_eval = two_adic_coset_zerofier(log_n, shift, x);
             assert_eq!(zerofier_eval, F::ZERO);

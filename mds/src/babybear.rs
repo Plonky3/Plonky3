@@ -6,7 +6,7 @@
 
 use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Bowers;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::Permutation;
 
 use crate::util::{
     apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
@@ -19,20 +19,26 @@ pub struct MdsMatrixBabyBear;
 
 const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
-impl CryptographicPermutation<[BabyBear; 8]> for MdsMatrixBabyBear {
+impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
         apply_circulant_8_sml(input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 8]) {
+        *input = self.permute(*input);
+    }
 }
-impl ArrayPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 
-impl CryptographicPermutation<[BabyBear; 12]> for MdsMatrixBabyBear {
+impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
         apply_circulant_12_sml(input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 12]) {
+        *input = self.permute(*input);
+    }
 }
-impl ArrayPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -43,13 +49,16 @@ const MATRIX_CIRC_MDS_16_BABYBEAR: [u64; 16] = [
     0x2C6D7501, 0x1D110184, 0x0E1F608D, 0x2032F0C6,
 ];
 
-impl CryptographicPermutation<[BabyBear; 16]> for MdsMatrixBabyBear {
+impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
         const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 16]) {
+        *input = self.permute(*input);
+    }
 }
-impl ArrayPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -62,12 +71,15 @@ const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
     0x0A6E572C, 0x5C7790FA, 0x17E118F6, 0x0878A07F,
 ];
 
-impl CryptographicPermutation<[BabyBear; 24]> for MdsMatrixBabyBear {
+impl Permutation<[BabyBear; 24]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
         apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 24]) {
+        *input = self.permute(*input);
+    }
 }
-impl ArrayPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -82,13 +94,16 @@ const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
     0x73562137, 0x54596086, 0x487C560B, 0x68A4ACAB,
 ];
 
-impl CryptographicPermutation<[BabyBear; 32]> for MdsMatrixBabyBear {
+impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
         const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 32]) {
+        *input = self.permute(*input);
+    }
 }
-impl ArrayPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
@@ -111,20 +126,23 @@ const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
     0x52ECBE2E, 0x1D178A67, 0x58B3C04B, 0x6E95CB51,
 ];
 
-impl CryptographicPermutation<[BabyBear; 64]> for MdsMatrixBabyBear {
+impl Permutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
         const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR);
         apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
+
+    fn permute_mut(&self, input: &mut [BabyBear; 64]) {
+        *input = self.permute(*input);
+    }
 }
-impl ArrayPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
-    use p3_symmetric::permutation::CryptographicPermutation;
+    use p3_symmetric::permutation::Permutation;
 
     use super::MdsMatrixBabyBear;
 

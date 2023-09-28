@@ -1,8 +1,9 @@
 use p3_dft::reverse_slice_index_bits;
-use p3_field::{Field, Powers, TwoAdicField};
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_field::{AbstractField, Field, Powers, TwoAdicField};
+use p3_symmetric::permutation::Permutation;
 use p3_util::log2_strict_usize;
 
+use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;
 
 /// Like `CosetMds`, with a few differences:
@@ -11,22 +12,27 @@ use crate::MdsPermutation;
 /// - We don't weight by `1/N`, since this doesn't affect the MDS property
 /// - We integrate the coset shifts into the DIF's twiddle factors
 #[derive(Clone, Debug)]
-pub struct IntegratedCosetMds<F: TwoAdicField, const N: usize> {
-    ifft_twiddles: Vec<F>,
-    fft_twiddles: Vec<Vec<F>>,
+pub struct IntegratedCosetMds<AF: AbstractField, const N: usize> {
+    ifft_twiddles: Vec<AF::F>,
+    fft_twiddles: Vec<Vec<AF::F>>,
 }
 
-impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
+impl<AF: AbstractField, const N: usize> Default for IntegratedCosetMds<AF, N>
+where
+    AF::F: TwoAdicField,
+{
     fn default() -> Self {
         let log_n = log2_strict_usize(N);
-        let root_inv = F::primitive_root_of_unity(log_n).inverse();
-        let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
+        let root = AF::F::two_adic_generator(log_n);
+        let root_inv = root.inverse();
+        let coset_shift = AF::F::generator();
+
+        let mut ifft_twiddles: Vec<AF::F> = root_inv.powers().take(N / 2).collect();
         reverse_slice_index_bits(&mut ifft_twiddles);
 
-        let root = F::primitive_root_of_unity(log_n);
-        let fft_twiddles: Vec<Vec<F>> = (0..log_n)
+        let fft_twiddles: Vec<Vec<AF::F>> = (0..log_n)
             .map(|layer| {
-                let shift_power = F::TWO.exp_power_of_2(layer);
+                let shift_power = coset_shift.exp_power_of_2(layer);
                 let powers = Powers {
                     base: root.exp_power_of_2(layer),
                     current: shift_power,
@@ -44,17 +50,13 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
     }
 }
 
-impl<F: TwoAdicField, const N: usize> ArrayPermutation<F, N> for IntegratedCosetMds<F, N> {}
-
-impl<F: TwoAdicField, const N: usize> CryptographicPermutation<[F; N]>
-    for IntegratedCosetMds<F, N>
-{
-    fn permute(&self, mut input: [F; N]) -> [F; N] {
+impl<AF: AbstractField, const N: usize> Permutation<[AF; N]> for IntegratedCosetMds<AF, N> {
+    fn permute(&self, mut input: [AF; N]) -> [AF; N] {
         self.permute_mut(&mut input);
         input
     }
 
-    fn permute_mut(&self, values: &mut [F; N]) {
+    fn permute_mut(&self, values: &mut [AF; N]) {
         let log_n = log2_strict_usize(N);
 
         // Bit-reversed DIF, aka Bowers G
@@ -69,13 +71,13 @@ impl<F: TwoAdicField, const N: usize> CryptographicPermutation<[F; N]>
     }
 }
 
-impl<F: TwoAdicField, const N: usize> MdsPermutation<F, N> for IntegratedCosetMds<F, N> {}
+impl<AF: AbstractField, const N: usize> MdsPermutation<AF, N> for IntegratedCosetMds<AF, N> {}
 
 #[inline]
-fn bowers_g_layer<F: Field, const N: usize>(
-    values: &mut [F; N],
+fn bowers_g_layer<AF: AbstractField, const N: usize>(
+    values: &mut [AF; N],
     log_half_block_size: usize,
-    twiddles: &[F],
+    twiddles: &[AF::F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -97,10 +99,10 @@ fn bowers_g_layer<F: Field, const N: usize>(
 }
 
 #[inline]
-fn bowers_g_t_layer<F: TwoAdicField, const N: usize>(
-    values: &mut [F; N],
+fn bowers_g_t_layer<AF: AbstractField, const N: usize>(
+    values: &mut [AF; N],
     log_half_block_size: usize,
-    twiddles: &[F],
+    twiddles: &[AF::F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -115,53 +117,12 @@ fn bowers_g_t_layer<F: TwoAdicField, const N: usize>(
     }
 }
 
-/// DIT butterfly.
-#[inline]
-pub fn dit_butterfly<F: Field, const N: usize>(
-    values: &mut [F; N],
-    idx_1: usize,
-    idx_2: usize,
-    twiddle: F,
-) {
-    let val_1 = values[idx_1];
-    let val_2 = values[idx_2] * twiddle;
-    values[idx_1] = val_1 + val_2;
-    values[idx_2] = val_1 - val_2;
-}
-
-/// DIF butterfly.
-#[inline]
-pub fn dif_butterfly<F: Field, const N: usize>(
-    values: &mut [F; N],
-    idx_1: usize,
-    idx_2: usize,
-    twiddle: F,
-) {
-    let val_1 = values[idx_1];
-    let val_2 = values[idx_2];
-    values[idx_1] = val_1 + val_2;
-    values[idx_2] = (val_1 - val_2) * twiddle;
-}
-
-/// Butterfly with twiddle factor 1 (works in either DIT or DIF).
-#[inline]
-fn twiddle_free_butterfly<F: Field, const N: usize>(
-    values: &mut [F; N],
-    idx_1: usize,
-    idx_2: usize,
-) {
-    let val_1 = values[idx_1];
-    let val_2 = values[idx_2];
-    values[idx_1] = val_1 + val_2;
-    values[idx_2] = val_1 - val_2;
-}
-
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{reverse_slice_index_bits, NaiveDft, TwoAdicSubgroupDft};
     use p3_field::AbstractField;
-    use p3_symmetric::permutation::CryptographicPermutation;
+    use p3_symmetric::permutation::Permutation;
     use rand::{thread_rng, Rng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;
@@ -177,7 +138,7 @@ mod tests {
         let mut arr_rev = arr.to_vec();
         reverse_slice_index_bits(&mut arr_rev);
 
-        let shift = F::TWO;
+        let shift = F::generator();
         let mut coset_lde_naive = NaiveDft.coset_lde(arr_rev, 0, shift);
         reverse_slice_index_bits(&mut coset_lde_naive);
         coset_lde_naive

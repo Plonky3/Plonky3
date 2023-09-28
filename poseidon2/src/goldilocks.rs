@@ -3,7 +3,7 @@
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
 
 use p3_goldilocks::Goldilocks;
-use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation};
+use p3_symmetric::permutation::Permutation;
 
 use crate::diffusion::matmul_internal;
 use crate::DiffusionPermutation;
@@ -79,42 +79,34 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [u64; 20] = [
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixGoldilocks;
 
-impl CryptographicPermutation<[Goldilocks; 8]> for DiffusionMatrixGoldilocks {
-    fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
-        let mut input = input;
-        matmul_internal::<Goldilocks, 8>(&mut input, MATRIX_DIAG_8_GOLDILOCKS);
-        input
+impl Permutation<[Goldilocks; 8]> for DiffusionMatrixGoldilocks {
+    fn permute_mut(&self, state: &mut [Goldilocks; 8]) {
+        matmul_internal::<Goldilocks, 8>(state, MATRIX_DIAG_8_GOLDILOCKS);
     }
 }
-impl ArrayPermutation<Goldilocks, 8> for DiffusionMatrixGoldilocks {}
+
 impl DiffusionPermutation<Goldilocks, 8> for DiffusionMatrixGoldilocks {}
 
-impl CryptographicPermutation<[Goldilocks; 12]> for DiffusionMatrixGoldilocks {
-    fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {
-        let mut input = input;
-        matmul_internal::<Goldilocks, 12>(&mut input, MATRIX_DIAG_12_GOLDILOCKS);
-        input
+impl Permutation<[Goldilocks; 12]> for DiffusionMatrixGoldilocks {
+    fn permute_mut(&self, state: &mut [Goldilocks; 12]) {
+        matmul_internal::<Goldilocks, 12>(state, MATRIX_DIAG_12_GOLDILOCKS);
     }
 }
-impl ArrayPermutation<Goldilocks, 12> for DiffusionMatrixGoldilocks {}
+
 impl DiffusionPermutation<Goldilocks, 12> for DiffusionMatrixGoldilocks {}
 
-impl CryptographicPermutation<[Goldilocks; 16]> for DiffusionMatrixGoldilocks {
-    fn permute(&self, input: [Goldilocks; 16]) -> [Goldilocks; 16] {
-        let mut input = input;
-        matmul_internal::<Goldilocks, 16>(&mut input, MATRIX_DIAG_16_GOLDILOCKS);
-        input
+impl Permutation<[Goldilocks; 16]> for DiffusionMatrixGoldilocks {
+    fn permute_mut(&self, state: &mut [Goldilocks; 16]) {
+        matmul_internal::<Goldilocks, 16>(state, MATRIX_DIAG_16_GOLDILOCKS);
     }
 }
-impl ArrayPermutation<Goldilocks, 16> for DiffusionMatrixGoldilocks {}
+
 impl DiffusionPermutation<Goldilocks, 16> for DiffusionMatrixGoldilocks {}
 
-impl CryptographicPermutation<[Goldilocks; 20]> for DiffusionMatrixGoldilocks {
-    fn permute(&self, input: [Goldilocks; 20]) -> [Goldilocks; 20] {
-        let mut input = input;
-        matmul_internal::<Goldilocks, 20>(&mut input, MATRIX_DIAG_20_GOLDILOCKS);
-        input
+impl Permutation<[Goldilocks; 20]> for DiffusionMatrixGoldilocks {
+    fn permute_mut(&self, state: &mut [Goldilocks; 20]) {
+        matmul_internal::<Goldilocks, 20>(state, MATRIX_DIAG_20_GOLDILOCKS);
     }
 }
-impl ArrayPermutation<Goldilocks, 20> for DiffusionMatrixGoldilocks {}
+
 impl DiffusionPermutation<Goldilocks, 20> for DiffusionMatrixGoldilocks {}

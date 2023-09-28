@@ -6,6 +6,8 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{AbstractField, Field, PackedField};
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 use crate::BabyBear;
 
@@ -415,8 +417,8 @@ impl AbstractField for PackedBabyBearNeon {
     }
 
     #[inline]
-    fn multiplicative_group_generator() -> Self {
-        BabyBear::multiplicative_group_generator().into()
+    fn generator() -> Self {
+        BabyBear::generator().into()
     }
 }
 
@@ -515,6 +517,13 @@ impl Sub<PackedBabyBearNeon> for BabyBear {
     #[inline]
     fn sub(self, rhs: PackedBabyBearNeon) -> PackedBabyBearNeon {
         PackedBabyBearNeon::from(self) - rhs
+    }
+}
+
+impl Distribution<PackedBabyBearNeon> for Standard {
+    #[inline]
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedBabyBearNeon {
+        PackedBabyBearNeon(rng.gen())
     }
 }
 
