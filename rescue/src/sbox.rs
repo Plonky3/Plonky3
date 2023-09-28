@@ -4,25 +4,27 @@ use p3_field::{AbstractField, PrimeField, PrimeField64};
 
 use crate::util::get_inverse;
 
-pub trait SboxLayers<F: AbstractField, const WIDTH: usize>: Clone
+pub trait SboxLayers<AF, const WIDTH: usize>: Clone
 where
-    F::F: PrimeField,
+    AF: AbstractField,
+    AF::F: PrimeField,
 {
-    fn sbox_layer(&self, state: &mut [F; WIDTH]);
+    fn sbox_layer(&self, state: &mut [AF; WIDTH]);
 
-    fn inverse_sbox_layer(&self, state: &mut [F; WIDTH]);
+    fn inverse_sbox_layer(&self, state: &mut [AF; WIDTH]);
 }
 
 #[derive(Copy, Clone, Default)]
-pub struct BasicSboxLayer<F: AbstractField> {
+pub struct BasicSboxLayer<AF: AbstractField> {
     alpha: u64,
     alpha_inv: u64,
-    _phantom_f: PhantomData<F>,
+    _phantom_f: PhantomData<AF>,
 }
 
-impl<F: AbstractField> BasicSboxLayer<F>
+impl<AF> BasicSboxLayer<AF>
 where
-    F::F: PrimeField64,
+    AF: AbstractField,
+    AF::F: PrimeField,
 {
     pub fn new(alpha: u64, alpha_inv: u64) -> Self {
         Self {
@@ -32,22 +34,26 @@ where
         }
     }
 
-    pub fn for_alpha(alpha: u64) -> Self {
-        Self::new(alpha, get_inverse::<F::F>(alpha))
+    pub fn for_alpha(alpha: u64) -> Self
+    where
+        AF::F: PrimeField64,
+    {
+        Self::new(alpha, get_inverse::<AF::F>(alpha))
     }
 }
 
-impl<F: AbstractField, const WIDTH: usize> SboxLayers<F, WIDTH> for BasicSboxLayer<F>
+impl<AF, const WIDTH: usize> SboxLayers<AF, WIDTH> for BasicSboxLayer<AF>
 where
-    F::F: PrimeField64,
+    AF: AbstractField,
+    AF::F: PrimeField,
 {
-    fn sbox_layer(&self, state: &mut [F; WIDTH]) {
+    fn sbox_layer(&self, state: &mut [AF; WIDTH]) {
         for x in state.iter_mut() {
             *x = x.exp_u64(self.alpha);
         }
     }
 
-    fn inverse_sbox_layer(&self, state: &mut [F; WIDTH]) {
+    fn inverse_sbox_layer(&self, state: &mut [AF; WIDTH]) {
         for x in state.iter_mut() {
             *x = x.exp_u64(self.alpha_inv);
         }

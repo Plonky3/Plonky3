@@ -14,27 +14,27 @@ use crate::util::shake256_hash;
 
 /// The Rescue-XLIX permutation.
 #[derive(Clone)]
-pub struct Rescue<F, Mds, Sbox, const WIDTH: usize>
+pub struct Rescue<AF, Mds, Sbox, const WIDTH: usize>
 where
-    F: AbstractField,
-    F::F: PrimeField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Sbox: SboxLayers<F, WIDTH>,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Sbox: SboxLayers<AF, WIDTH>,
 {
     num_rounds: usize,
     mds: Mds,
     sbox: Sbox,
-    round_constants: Vec<F::F>,
+    round_constants: Vec<AF::F>,
 }
 
-impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
+impl<AF, Mds, Sbox, const WIDTH: usize> Rescue<AF, Mds, Sbox, WIDTH>
 where
-    F: AbstractField,
-    F::F: PrimeField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Sbox: SboxLayers<F, WIDTH>,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Sbox: SboxLayers<AF, WIDTH>,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<F::F>, mds: Mds, sbox: Sbox) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<AF::F>, mds: Mds, sbox: Sbox) -> Self {
         Self {
             num_rounds,
             mds,
@@ -62,37 +62,37 @@ where
     }
 
     // For a general field, we provide a generic constructor for the round constants.
-    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
+    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<AF>
     where
-        Standard: Distribution<F>,
+        Standard: Distribution<AF>,
     {
         let num_constants = 2 * WIDTH * num_rounds;
         rng.sample_iter(Standard).take(num_constants).collect()
     }
 }
 
-impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
+impl<AF, Mds, Sbox, const WIDTH: usize> Rescue<AF, Mds, Sbox, WIDTH>
 where
-    F: AbstractField,
-    F::F: PrimeField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Sbox: SboxLayers<F, WIDTH>,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Sbox: SboxLayers<AF, WIDTH>,
 {
     fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
         sec_level: usize,
-    ) -> Vec<F>
+    ) -> Vec<AF>
     where
-        F::F: PrimeField64,
+        AF::F: PrimeField64,
     {
         let num_constants = 2 * WIDTH * num_rounds;
-        let bytes_per_constant = ceil_div_usize(F::F::bits(), 8) + 1;
+        let bytes_per_constant = ceil_div_usize(AF::F::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
             "Rescue-XLIX({},{},{},{})",
-            F::F::ORDER_U64,
+            AF::F::ORDER_U64,
             WIDTH,
             capacity,
             sec_level,
@@ -109,20 +109,20 @@ where
                     .iter()
                     .rev()
                     .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
-                F::from_canonical_u64(integer % F::F::ORDER_U64)
+                AF::from_canonical_u64(integer % AF::F::ORDER_U64)
             })
             .collect()
     }
 }
 
-impl<F, Mds, Sbox, const WIDTH: usize> Permutation<[F; WIDTH]> for Rescue<F, Mds, Sbox, WIDTH>
+impl<AF, Mds, Sbox, const WIDTH: usize> Permutation<[AF; WIDTH]> for Rescue<AF, Mds, Sbox, WIDTH>
 where
-    F: AbstractField,
-    F::F: PrimeField,
-    Mds: MdsPermutation<F, WIDTH>,
-    Sbox: SboxLayers<F, WIDTH>,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Sbox: SboxLayers<AF, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [F; WIDTH]) {
+    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
         for round in 0..self.num_rounds {
             // S-box
             self.sbox.sbox_layer(state);
@@ -155,12 +155,13 @@ where
     }
 }
 
-impl<F, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[F; WIDTH]>
-    for Rescue<F, Mds, Sbox, WIDTH>
+impl<AF, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[AF; WIDTH]>
+    for Rescue<AF, Mds, Sbox, WIDTH>
 where
-    F: PrimeField64,
-    Mds: MdsPermutation<F, WIDTH>,
-    Sbox: SboxLayers<F, WIDTH>,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    Mds: MdsPermutation<AF, WIDTH>,
+    Sbox: SboxLayers<AF, WIDTH>,
 {
 }
 
