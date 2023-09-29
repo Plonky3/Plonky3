@@ -47,7 +47,7 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, log_chunks: usize) -> Vec<Vec<F>> {
     debug_assert!(n > 1);
     let log_n = log2_strict_usize(n);
     let half_n = poly.len() / 2;
-    let g_inv = F::primitive_root_of_unity(log_n).inverse();
+    let g_inv = F::two_adic_generator(log_n).inverse();
 
     let mut even = Vec::with_capacity(half_n);
     let mut odd = Vec::with_capacity(half_n);

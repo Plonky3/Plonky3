@@ -129,7 +129,7 @@ impl AbstractField for Goldilocks {
     }
 
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
-    fn multiplicative_group_generator() -> Self {
+    fn generator() -> Self {
         Self::new(7)
     }
 }
@@ -228,8 +228,11 @@ impl PrimeField64 for Goldilocks {
 impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
 
-    fn power_of_two_generator() -> Self {
-        Self::new(1_753_635_133_440_165_772)
+    fn two_adic_generator(bits: usize) -> Self {
+        // TODO: Consider a `match` which may speed this up.
+        assert!(bits <= Self::TWO_ADICITY);
+        let base = Self::new(1_753_635_133_440_165_772); // generates the whole 2^TWO_ADICITY group
+        base.exp_power_of_2(Self::TWO_ADICITY - bits)
     }
 }
 
@@ -434,10 +437,7 @@ mod tests {
         let f = F::from_canonical_u64(F::ORDER_U64);
         assert!(f.is_zero());
 
-        assert_eq!(
-            F::multiplicative_group_generator().as_canonical_u64(),
-            7_u64
-        );
+        assert_eq!(F::generator().as_canonical_u64(), 7_u64);
 
         let f_1 = F::new(1);
         let f_1_copy = F::new(1);
@@ -477,10 +477,7 @@ mod tests {
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(7);
-        assert_eq!(
-            F::multiplicative_group_generator(),
-            expected_multiplicative_group_generator
-        );
+        assert_eq!(F::generator(), expected_multiplicative_group_generator);
 
         // Check on `reduce_u128`
         let x = u128::MAX;

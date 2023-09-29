@@ -114,7 +114,7 @@ impl AbstractField for BabyBear {
     }
 
     #[inline]
-    fn multiplicative_group_generator() -> Self {
+    fn generator() -> Self {
         Self::from_canonical_u32(0x1f)
     }
 }
@@ -208,9 +208,11 @@ impl PrimeField32 for BabyBear {
 impl TwoAdicField for BabyBear {
     const TWO_ADICITY: usize = 27;
 
-    #[inline]
-    fn power_of_two_generator() -> Self {
-        Self::from_canonical_u32(0x1a427a41)
+    fn two_adic_generator(bits: usize) -> Self {
+        // TODO: Consider a `match` which may speed this up.
+        assert!(bits <= Self::TWO_ADICITY);
+        let base = Self::from_canonical_u32(0x1a427a41); // generates the whole 2^TWO_ADICITY group
+        base.exp_power_of_2(Self::TWO_ADICITY - bits)
     }
 }
 

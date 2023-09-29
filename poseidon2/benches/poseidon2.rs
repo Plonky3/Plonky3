@@ -10,7 +10,7 @@ use p3_mds::MdsPermutation;
 use p3_poseidon2::{
     DiffusionMatrixBabybear, DiffusionMatrixGoldilocks, DiffusionPermutation, Poseidon2,
 };
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::permutation::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 

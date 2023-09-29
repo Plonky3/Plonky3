@@ -50,7 +50,7 @@ where
 {
     fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Domain> {
         let bits = log2_strict_usize(polys.height());
-        let g = Domain::primitive_root_of_unity(bits);
+        let g = Domain::two_adic_generator(bits);
         let subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
@@ -72,7 +72,7 @@ where
 {
     fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Domain> {
         let bits = log2_strict_usize(polys.height());
-        let g = Domain::primitive_root_of_unity(bits);
+        let g = Domain::two_adic_generator(bits);
         let subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
@@ -101,7 +101,7 @@ where
     Domain: ExtensionField<Val> + TwoAdicField,
 {
     fn shift(&self, _lde_bits: usize) -> Domain {
-        Domain::multiplicative_group_generator()
+        Domain::generator()
     }
 }
 

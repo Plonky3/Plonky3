@@ -21,7 +21,7 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     }
 }
 
-pub(crate) fn reverse_matrix_index_bits<F>(mat: &mut RowMajorMatrix<F>) {
+pub fn reverse_matrix_index_bits<F>(mat: &mut RowMajorMatrix<F>) {
     let w = mat.width();
     let h = mat.height();
     let log_h = log2_strict_usize(h);

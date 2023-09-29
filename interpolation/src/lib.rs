@@ -38,7 +38,7 @@ where
     let width = coset_evals.width();
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
-    let g = F::primitive_root_of_unity(log_height);
+    let g = F::two_adic_generator(log_height);
 
     let diffs: Vec<EF> = cyclic_subgroup_coset_known_order(g, shift, height)
         .map(|subgroup_i| point - subgroup_i)
@@ -84,7 +84,7 @@ mod tests {
     fn test_interpolate_coset() {
         // x^2 + 2 x + 3
         type F = BabyBear;
-        let shift = F::multiplicative_group_generator();
+        let shift = F::generator();
         let evals = [
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
         ]

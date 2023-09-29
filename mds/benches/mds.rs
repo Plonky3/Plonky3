@@ -29,16 +29,16 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 32>(c);
 }
 
-fn bench_mds<F, Mds, const WIDTH: usize>(c: &mut Criterion)
+fn bench_mds<AF, Mds, const WIDTH: usize>(c: &mut Criterion)
 where
-    F: AbstractField,
-    Standard: Distribution<F>,
-    Mds: MdsPermutation<F, WIDTH> + Default,
+    AF: AbstractField,
+    Standard: Distribution<AF>,
+    Mds: MdsPermutation<AF, WIDTH> + Default,
 {
     let mds = Mds::default();
 
     let mut rng = thread_rng();
-    let input = rng.gen::<[F; WIDTH]>();
+    let input = rng.gen::<[AF; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
     c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));
 }

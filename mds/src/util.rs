@@ -14,18 +14,18 @@ const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1
 /// NB: This function is a naive implementation of the n²
 /// evaluation. It is a placeholder until we have FFT implementations
 /// for all combinations of field and size.
-pub fn apply_circulant<F: AbstractField, const N: usize>(
+pub fn apply_circulant<AF: AbstractField, const N: usize>(
     circ_matrix: &[u64; N],
-    input: [F; N],
-) -> [F; N] {
-    let mut matrix: [F; N] = circ_matrix.map(F::from_canonical_u64);
+    input: [AF; N],
+) -> [AF; N] {
+    let mut matrix: [AF; N] = circ_matrix.map(AF::from_canonical_u64);
 
-    let mut output = [F::ZERO; N];
+    let mut output = [AF::ZERO; N];
     for out_i in output.iter_mut().take(N - 1) {
-        *out_i = F::dot_product(&matrix, &input);
+        *out_i = AF::dot_product(&matrix, &input);
         matrix.rotate_right(1);
     }
-    output[N - 1] = F::dot_product(&matrix, &input);
+    output[N - 1] = AF::dot_product(&matrix, &input);
     output
 }
 

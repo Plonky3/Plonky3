@@ -16,7 +16,7 @@ use crate::Mersenne31;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractField<F = Mersenne31>> {
-    parts: [AF; 2],
+    pub(crate) parts: [AF; 2],
 }
 
 impl<AF: AbstractField<F = Mersenne31>> Mersenne31Complex<AF> {
@@ -223,7 +223,7 @@ where
     // sage: F2.<u> = F.extension(x^2 + 1)
     // sage: F2.multiplicative_generator()
     // u + 12
-    fn multiplicative_group_generator() -> Self {
+    fn generator() -> Self {
         Self::new(AF::from_canonical_u8(12), AF::ONE)
     }
 }
@@ -270,18 +270,22 @@ impl Field for Mersenne31Complex<Mersenne31> {
 impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     const TWO_ADICITY: usize = 32;
 
-    // sage: p = 2^31 - 1
-    // sage: F = GF(p)
-    // sage: R.<x> = F[]
-    // sage: F2.<u> = F.extension(x^2 + 1)
-    // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
-    // 1117296306*u + 1166849849
-    // sage: assert(g.multiplicative_order() == 2^32)
-    fn power_of_two_generator() -> Self {
-        Self::new(
+    fn two_adic_generator(bits: usize) -> Self {
+        // TODO: Consider a `match` which may speed this up.
+        assert!(bits <= Self::TWO_ADICITY);
+        // Generator of the whole 2^TWO_ADICITY group
+        // sage: p = 2^31 - 1
+        // sage: F = GF(p)
+        // sage: R.<x> = F[]
+        // sage: F2.<u> = F.extension(x^2 + 1)
+        // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
+        // 1117296306*u + 1166849849
+        // sage: assert(g.multiplicative_order() == 2^32)
+        let base = Self::new(
             Mersenne31::new(1_166_849_849),
             Mersenne31::new(1_117_296_306),
-        )
+        );
+        base.exp_power_of_2(Self::TWO_ADICITY - bits)
     }
 }
 
