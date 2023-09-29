@@ -13,7 +13,7 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, BitAndAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
 pub use dft::Mersenne31Dft;
@@ -247,14 +247,20 @@ impl Add for Mersenne31 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
-        let mut sum = self.value + rhs.value;
-        // If sum's most significant bit is set, we clear it and add 1, since 2^31 = 1 mod p.
-        // This addition of 1 cannot overflow 2^31, since sum has a max of
-        // 2 * (2^31 - 1) = 2^32 - 2.
-        let msb = sum & (1 << 31);
-        sum.bitxor_assign(msb);
-        sum += u32::from(msb != 0);
-        Self::new(sum)
+        // Working with i32 means we get a flag which informs us if overflow happened.
+        let (mut sum, over) = (self.value as i32).overflowing_add_unsigned(rhs.value);
+
+        // The base sum will never exceed 2**32 - 1 so as bits sum is exactly the same as self.value + rhs.value
+        // Hence if we didn't overflow we have the correct value.
+        // Otherwise we can simply remove the most significant bit and add 1.
+        // Removing the most significant bit does nothing if no overflow happened.
+        sum.bitand_assign(Self::ORDER_U32 as i32);
+
+        if over {
+            Self::new((sum + 1) as u32)
+        } else {
+            Self::new(sum as u32)
+        }
     }
 }
 
@@ -274,8 +280,19 @@ impl Sub for Mersenne31 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
-        // TODO: Very naive for now.
-        self + (-rhs)
+        let (mut sub, over) = self.value.overflowing_sub(rhs.value);
+
+        // If we didn't overflow we have the correct value.
+        // Otherwise we have added 2**32 = 2**31 + 1 mod 2**31 - 1.
+        // Hence we need to remove the most significant bit and subtract 1.
+        // Removing the most significant bit does nothing if no overflow happened.
+        sub.bitand_assign(Self::ORDER_U32);
+
+        if over {
+            Self::new(sub - 1)
+        } else {
+            Self::new(sub)
+        }
     }
 }
 

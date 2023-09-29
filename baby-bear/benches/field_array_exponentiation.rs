@@ -15,13 +15,18 @@ fn field_array_exp(c: &mut Criterion) {
                 let mut rng = rand::thread_rng();
                 // rng.gen::<F>()
                 let mut vec = Vec::new();
-                for _ in 0..2 {
+                for _ in 0..8 {
                     vec.push(rng.gen::<F>())
                 }
                 FieldArray::<BabyBear, 8>(vec.try_into().unwrap())
                 // vec
             },
-            |x| x.exp_const_u64::<7>(),
+            |mut x| {
+                for _ in 0..100 {
+                    x = x.exp_const_u64::<7>();
+                }
+                x
+            },
             // |x| {
             //     let mut acc = ZERO;
             //     for y in x {acc += y.exp_const_u64::<7>();}
