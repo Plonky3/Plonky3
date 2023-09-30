@@ -39,7 +39,13 @@ impl<L, D> MerkleTree<L, D> {
     {
         assert!(!leaves.is_empty(), "No matrices given?");
 
-        // TODO: Check the matching height condition.
+        // check height property
+        assert!(leaves.iter().map(|m| m.height()).sorted_by_key(|&h| Reverse(h))
+            .tuple_windows()
+            .all(|(curr, next)| curr == next || curr.next_power_of_two() != next.next_power_of_two()),
+            "matrix heights that round up to the same power of two must be equal"
+        );
+
 
         let mut leaves_largest_first = leaves
             .iter()
@@ -325,6 +331,38 @@ mod tests {
 
         // large_mat has 8 rows and 1 col; small_mat has 4 rows and 2 cols.
         let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let small_mat = RowMajorMatrix::new(vec![10, 11, 20, 21, 30, 31, 40, 41], 2);
+        let (_commit, prover_data) = mmcs.commit(vec![large_mat, small_mat]);
+
+        let (opened_values, _proof) = mmcs.open_batch(3, &prover_data);
+        assert_eq!(opened_values, vec![vec![4], vec![20, 21]]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn height_property() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic
+        let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let small_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7], 1);
+        let _ = mmcs.commit(vec![large_mat, small_mat]);
+    }
+
+    #[test]
+    fn verify() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // large_mat has 8 rows and 1 col; small_mat has 4 rows and 2 cols.
+        let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
         let large_mat_dims = large_mat.dimensions();
         let small_mat = RowMajorMatrix::new(vec![10, 11, 20, 21, 30, 31, 40, 41], 2);
         let small_mat_dims = small_mat.dimensions();
@@ -344,7 +382,47 @@ mod tests {
     }
 
     #[test]
-    fn open_size_gaps() {
+    fn verify_tampered_proof_fails() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // 4 8x1 matrixes, 4 8x2 matrixes
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 1)); 
+        let large_mat_dims = (0..4).map(|_| Dimensions {
+            height: 8,
+            width: 1,
+        });
+        let small_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 2));
+        let small_mat_dims = (0..4).map(|_| Dimensions {
+            height: 8,
+            width: 2,
+        });
+
+        let (commit, prover_data) = mmcs.commit(
+            large_mats
+                .chain(small_mats)
+                .collect_vec(),
+        );
+
+        // open the 3rd row of each matrix, mess with proof, and verify
+        let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
+        proof[0][0] ^= 1;
+        mmcs.verify_batch(
+            &commit,
+            &large_mat_dims
+                .chain(small_mat_dims)
+                .collect_vec(),
+            3,
+            &opened_values,
+            &proof,
+        ).expect_err("expected verification to fail");
+    }
+
+    #[test]
+    fn size_gaps() {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
@@ -395,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn open_different_widths() {
+    fn different_widths() {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
