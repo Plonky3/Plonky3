@@ -344,30 +344,30 @@ mod tests {
     }
 
     #[test]
-    fn open_with_size_gaps() {
+    fn open_size_gaps() {
         type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
-        // 5 mats with height 2^10, 8 columns
-        let large_mats = (0..5).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1 << 10, 8));
-        let large_mat_dims = (0..5).map(|_| Dimensions {
+        // 4 mats with 1024 rows, 8 columns
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1024, 8));
+        let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 1 << 10,
             width: 8,
         });
 
-        // 3 mats with height  2^6, 8 columns
-        let medium_mats = (0..3).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1 << 6, 8));
-        let medium_mat_dims = (0..3).map(|_| Dimensions {
+        // 5 mats with 64 rows, 8 columns
+        let medium_mats = (0..5).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 64, 8));
+        let medium_mat_dims = (0..5).map(|_| Dimensions {
             height: 1 << 6,
             width: 8,
         });
 
-        // 8 mats with height 2^3, 8 columns
-        let small_mats = (0..8).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1 << 3, 8));
-        let small_mat_dims = (0..8).map(|_| Dimensions {
+        // 6 mats with 8 rows, 8 columns
+        let small_mats = (0..6).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 8));
+        let small_mat_dims = (0..6).map(|_| Dimensions {
             height: 1 << 3,
             width: 8,
         });
@@ -392,5 +392,30 @@ mod tests {
             &proof,
         )
         .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn open_different_widths() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // 10 mats with 32 rows where the ith mat has i + 1 cols 
+        let mats = (0..10)
+            .map(|i| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 32, i + 1))
+            .collect_vec();
+        let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
+
+        let (commit, prover_data) = mmcs.commit(mats);
+        let (opened_values, proof) = mmcs.open_batch(17, &prover_data);
+        mmcs.verify_batch(
+            &commit,
+            &dims,
+            17,
+            &opened_values,
+            &proof,
+        ).expect("expected verification to succeed");
     }
 }
