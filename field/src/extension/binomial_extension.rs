@@ -6,7 +6,6 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use super::Frobenius;
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{field_to_array, AbstractExtensionField, AbstractField};
@@ -25,7 +24,40 @@ impl<F: BinomiallyExtendable<D>, const D: usize> From<F> for BinomialExtensionFi
         Self(field_to_array::<F, D>(x))
     }
 }
-impl<F: BinomiallyExtendable<D>, const D: usize> Frobenius<F, D> for BinomialExtensionField<F, D> {}
+impl<F: BinomiallyExtendable<D>, const D: usize> BinomialExtensionField<F, D> {
+    /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
+    fn frobenius(&self) -> Self {
+        self.repeated_frobenius(1)
+    }
+
+    /// Repeated Frobenius automorphisms: x -> x^(n^count).
+    ///
+    /// Follows precomputation suggestion in Section 11.3.3 of the
+    /// Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    fn repeated_frobenius(&self, count: usize) -> Self {
+        if count == 0 {
+            return *self;
+        } else if count >= D {
+            // x |-> x^(n^D) is the identity, so x^(n^count) ==
+            // x^(n^(count % D))
+            return self.repeated_frobenius(count % D);
+        }
+        let arr: &[F] = self.as_base_slice();
+
+        // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
+        let mut z0 = F::DTH_ROOT;
+        for _ in 1..count {
+            z0 *= F::DTH_ROOT;
+        }
+
+        let mut res = [F::ZERO; D];
+        for (i, z) in z0.powers().take(D).enumerate() {
+            res[i] = arr[i] * z;
+        }
+
+        Self::from_base_slice(&res)
+    }
+}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExtensionField<F, D> {
     type F = Self;
