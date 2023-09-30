@@ -1,4 +1,5 @@
 use crate::field::Field;
+use crate::ExtensionField;
 
 pub mod binomial_extension;
 pub mod cubic;
@@ -16,4 +17,9 @@ pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
     const DTH_ROOT: Self;
 
     fn ext_multiplicative_group_generator() -> [Self; D];
+}
+
+pub trait HasFrobenuis<F: Field>: ExtensionField<F> {
+    fn frobenius(&self) -> Self;
+    fn repeated_frobenius(&self, count: usize) -> Self;
 }
