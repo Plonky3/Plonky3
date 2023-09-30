@@ -397,10 +397,7 @@ where
         let width = self.width();
 
         let transposed_values: Vec<T> = (0..width * height).map(|_| T::default()).collect();
-
         let mut transposed = Self::new(transposed_values, height);
-
-        if height < block_size || width < block_size {}
 
         transposed
             .values
