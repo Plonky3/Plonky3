@@ -8,7 +8,7 @@ use rand::prelude::Distribution;
 
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{field_to_array, AbstractExtensionField, AbstractField};
+use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize>(pub [F; D]);
@@ -24,6 +24,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> From<F> for BinomialExtensionFi
         Self(field_to_array::<F, D>(x))
     }
 }
+
+impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
+    for BinomialExtensionField<F, D>
+{
+}
+
 impl<F: BinomiallyExtendable<D>, const D: usize> BinomialExtensionField<F, D> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     fn frobenius(&self) -> Self {
