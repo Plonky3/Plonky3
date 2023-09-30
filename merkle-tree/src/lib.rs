@@ -1,3 +1,4 @@
+#![no_std]
 extern crate alloc;
 
 use alloc::vec;
@@ -44,7 +45,7 @@ impl<L, D> MerkleTree<L, D> {
             leaves
                 .iter()
                 .map(|m| m.height())
-                .sorted_by_key(|&h| Reverse(h))
+                .sorted()
                 .tuple_windows()
                 .all(|(curr, next)| curr == next
                     || curr.next_power_of_two() != next.next_power_of_two()),
