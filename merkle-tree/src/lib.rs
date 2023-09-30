@@ -40,12 +40,16 @@ impl<L, D> MerkleTree<L, D> {
         assert!(!leaves.is_empty(), "No matrices given?");
 
         // check height property
-        assert!(leaves.iter().map(|m| m.height()).sorted_by_key(|&h| Reverse(h))
-            .tuple_windows()
-            .all(|(curr, next)| curr == next || curr.next_power_of_two() != next.next_power_of_two()),
+        assert!(
+            leaves
+                .iter()
+                .map(|m| m.height())
+                .sorted_by_key(|&h| Reverse(h))
+                .tuple_windows()
+                .all(|(curr, next)| curr == next
+                    || curr.next_power_of_two() != next.next_power_of_two()),
             "matrix heights that round up to the same power of two must be equal"
         );
-
 
         let mut leaves_largest_first = leaves
             .iter()
@@ -390,7 +394,7 @@ mod tests {
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
         // 4 8x1 matrixes, 4 8x2 matrixes
-        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 1)); 
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 1));
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 1,
@@ -401,24 +405,19 @@ mod tests {
             width: 2,
         });
 
-        let (commit, prover_data) = mmcs.commit(
-            large_mats
-                .chain(small_mats)
-                .collect_vec(),
-        );
+        let (commit, prover_data) = mmcs.commit(large_mats.chain(small_mats).collect_vec());
 
         // open the 3rd row of each matrix, mess with proof, and verify
         let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
         proof[0][0] ^= 1;
         mmcs.verify_batch(
             &commit,
-            &large_mat_dims
-                .chain(small_mat_dims)
-                .collect_vec(),
+            &large_mat_dims.chain(small_mat_dims).collect_vec(),
             3,
             &opened_values,
             &proof,
-        ).expect_err("expected verification to fail");
+        )
+        .expect_err("expected verification to fail");
     }
 
     #[test]
@@ -480,7 +479,7 @@ mod tests {
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
-        // 10 mats with 32 rows where the ith mat has i + 1 cols 
+        // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
             .map(|i| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 32, i + 1))
             .collect_vec();
@@ -488,12 +487,7 @@ mod tests {
 
         let (commit, prover_data) = mmcs.commit(mats);
         let (opened_values, proof) = mmcs.open_batch(17, &prover_data);
-        mmcs.verify_batch(
-            &commit,
-            &dims,
-            17,
-            &opened_values,
-            &proof,
-        ).expect("expected verification to succeed");
+        mmcs.verify_batch(&commit, &dims, 17, &opened_values, &proof)
+            .expect("expected verification to succeed");
     }
 }
