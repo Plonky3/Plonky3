@@ -7,7 +7,7 @@ use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterato
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows};
+use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -381,5 +381,35 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
+    }
+}
+
+impl<T: Clone> MatrixTranspose<T> for RowMajorMatrix<T> {
+    const BLOCK_SIZE: usize = 16;
+
+    fn transpose(self) -> Self {
+        let block_size = Self::BLOCK_SIZE;
+        let mut transposed_values = Vec::<T>::with_capacity(self.values.len());
+
+        let height = self.height();
+        let width = self.width();
+
+        for i in (0..self.width()).step_by(block_size) {
+            for j in (0..height).step_by(block_size) {
+                for x in i..i + block_size.min(width - 1) {
+                    for y in j..j + block_size.min(height - 1) {
+                        transposed_values.insert(
+                            x * self.width() + y,
+                            self.values[y * self.height() + x].clone(),
+                        );
+                    }
+                }
+            }
+        }
+
+        Self {
+            values: transposed_values,
+            width: height,
+        }
     }
 }
