@@ -7,6 +7,7 @@ extern crate alloc;
 mod complex;
 mod dft;
 mod extension;
+mod radix_2_dit;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -21,6 +22,7 @@ use p3_field::{
     exp_1717986917, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
     PrimeField64,
 };
+pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -28,7 +30,7 @@ use rand::Rng;
 #[derive(Copy, Clone, Default)]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
-    value: u32,
+    pub(crate) value: u32,
 }
 
 impl Mersenne31 {
@@ -137,18 +139,10 @@ impl AbstractField for Mersenne31 {
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
-        // TODO: Check whether Jacqui has a smarter way to do this...
-
-        let (lo, hi) = (n as u32 as u64, n >> 32);
-        // 2^32 = 2 (mod Mersenne31)
-        // t <= (2^32 - 1) + 2 * (2^32 - 1) = 3 * 2^32 - 3 = 6 * 2^31 - 3
-        let t = lo + 2 * hi;
-
-        const MASK: u64 = (1 << 31) - 1;
-        let (lo, hi) = ((t & MASK) as u32, (t >> 31) as u32);
-        // 2^31 = 1 (mod Mersenne31)
-        // lo < 2^31, hi < 6, so lo + hi < 2^32.
-        Self::from_wrapped_u32(lo + hi)
+        // NB: Experiments suggest that it's faster to just use the
+        // builtin remainder operator rather than split the input into
+        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
+        Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
     // Sage: GF(2^31 - 1).multiplicative_generator()

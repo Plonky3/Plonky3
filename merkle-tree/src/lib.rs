@@ -408,7 +408,7 @@ mod tests {
 
         let (commit, prover_data) = mmcs.commit(large_mats.chain(small_mats).collect_vec());
 
-        // open the 3rd row of each matrix, mess with proof, and verify
+        // open the 3rd row of each matrix, hit proof with a gamma ray, and verify
         let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
         proof[0][0] ^= 1;
         mmcs.verify_batch(
@@ -432,21 +432,21 @@ mod tests {
         // 4 mats with 1024 rows, 8 columns
         let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1024, 8));
         let large_mat_dims = (0..4).map(|_| Dimensions {
-            height: 1 << 10,
+            height: 1024,
             width: 8,
         });
 
         // 5 mats with 64 rows, 8 columns
         let medium_mats = (0..5).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 64, 8));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
-            height: 1 << 6,
+            height: 64,
             width: 8,
         });
 
         // 6 mats with 8 rows, 8 columns
         let small_mats = (0..6).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 8));
         let small_mat_dims = (0..6).map(|_| Dimensions {
-            height: 1 << 3,
+            height: 8,
             width: 8,
         });
 

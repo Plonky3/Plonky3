@@ -16,7 +16,7 @@ use crate::Mersenne31;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
 pub struct Mersenne31Complex<AF: AbstractField<F = Mersenne31>> {
-    parts: [AF; 2],
+    pub(crate) parts: [AF; 2],
 }
 
 impl<AF: AbstractField<F = Mersenne31>> Mersenne31Complex<AF> {
