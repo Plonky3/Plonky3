@@ -114,7 +114,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_quotient_values: Vec<Vec<EF>>,
+        opened_quotient_values: &[Vec<EF>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         // quotient = (original - opened_eval) / (x - opened_point)
@@ -150,10 +150,10 @@ where
                 let original_row = get_repeated(original_row_repeated.into_iter());
                 to_base::<F, EF>(original_row)
             })
-            .collect();
+            .collect_vec();
 
         self.inner
-            .verify_batch(commit, dimensions, index, opened_original_values, proof)
+            .verify_batch(commit, dimensions, index, &opened_original_values, proof)
     }
 }
 

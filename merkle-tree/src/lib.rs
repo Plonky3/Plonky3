@@ -1,5 +1,4 @@
 #![no_std]
-
 extern crate alloc;
 
 use alloc::vec;
@@ -14,7 +13,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use p3_symmetric::compression::PseudoCompressionFunction;
 use p3_symmetric::hasher::CryptographicHasher;
-use p3_util::log2_strict_usize;
+use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 /// A binary Merkle tree, with leaves of type `L` and digests of type `D`.
@@ -35,13 +34,23 @@ impl<L, D> MerkleTree<L, D> {
     pub fn new<H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<L>>) -> Self
     where
         L: Copy,
-        D: Copy + Default,
+        D: Copy + Default + PartialEq,
         H: CryptographicHasher<L, D>,
         C: PseudoCompressionFunction<D, 2>,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
 
-        // TODO: Check the matching height condition.
+        // check height property
+        assert!(
+            leaves
+                .iter()
+                .map(|m| m.height())
+                .sorted()
+                .tuple_windows()
+                .all(|(curr, next)| curr == next
+                    || curr.next_power_of_two() != next.next_power_of_two()),
+            "matrix heights that round up to the same power of two must be equal"
+        );
 
         let mut leaves_largest_first = leaves
             .iter()
@@ -103,7 +112,7 @@ fn compression_layer<L, D, H, C>(
 ) -> Vec<D>
 where
     L: Copy,
-    D: Copy + Default,
+    D: Copy + Default + PartialEq,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
@@ -169,7 +178,7 @@ impl<L, D, H, C> MerkleTreeMmcs<L, D, H, C> {
 impl<L, D, H, C> Mmcs<L> for MerkleTreeMmcs<L, D, H, C>
 where
     L: 'static + Clone,
-    D: Clone,
+    D: Copy + Default + PartialEq,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
@@ -181,20 +190,24 @@ where
 
     fn open_batch(&self, index: usize, prover_data: &MerkleTree<L, D>) -> (Vec<Vec<L>>, Vec<D>) {
         let max_height = self.get_max_height(prover_data);
-        let log_max_height = log2_strict_usize(max_height);
+        let log_max_height = log2_ceil_usize(max_height);
 
-        let leaf = prover_data
+        let openings = prover_data
             .leaves
             .iter()
             .map(|matrix| {
-                let log2_height = log2_strict_usize(matrix.height());
+                let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
                 matrix.row(reduced_index).collect()
             })
+            .collect_vec();
+
+        let proof = (0..log_max_height)
+            .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
-        let proof = vec![]; // TODO
-        (leaf, proof)
+
+        (openings, proof)
     }
 
     fn get_matrices<'a>(
@@ -206,20 +219,71 @@ where
 
     fn verify_batch(
         &self,
-        _commit: &D,
-        _dimensions: &[Dimensions],
-        _index: usize,
-        _opened_values: Vec<Vec<L>>,
-        _proof: &Vec<D>,
+        commit: &D,
+        dimensions: &[Dimensions],
+        mut index: usize,
+        opened_values: &[Vec<L>],
+        proof: &Vec<D>,
     ) -> Result<(), Self::Error> {
-        todo!()
+        let mut heights_tallest_first = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .peekable();
+
+        let mut curr_height_padded = heights_tallest_first
+            .peek()
+            .unwrap()
+            .1
+            .height
+            .next_power_of_two();
+
+        let mut root = self.hash.hash_iter_slices(
+            heights_tallest_first
+                .peeking_take_while(|(_, dims)| {
+                    dims.height.next_power_of_two() == curr_height_padded
+                })
+                .map(|(i, _)| opened_values[i].as_slice()),
+        );
+
+        for &sibling in proof.iter() {
+            let (left, right) = if index & 1 == 0 {
+                (root, sibling)
+            } else {
+                (sibling, root)
+            };
+
+            root = self.compress.compress([left, right]);
+            index >>= 1;
+            curr_height_padded >>= 1;
+
+            let next_height = heights_tallest_first
+                .peek()
+                .map(|(_, dims)| dims.height)
+                .filter(|h| h.next_power_of_two() == curr_height_padded);
+            if let Some(next_height) = next_height {
+                let next_height_openings_digest = self.hash.hash_iter_slices(
+                    heights_tallest_first
+                        .peeking_take_while(|(_, dims)| dims.height == next_height)
+                        .map(|(i, _)| opened_values[i].as_slice()),
+                );
+
+                root = self.compress.compress([root, next_height_openings_digest]);
+            }
+        }
+
+        if root == *commit {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
 impl<L, D, H, C> DirectMmcs<L> for MerkleTreeMmcs<L, D, H, C>
 where
     L: 'static + Copy,
-    D: Copy + Default,
+    D: Copy + Default + PartialEq,
     H: CryptographicHasher<L, D>,
     C: PseudoCompressionFunction<D, 2>,
 {
@@ -234,9 +298,11 @@ where
 mod tests {
     use alloc::vec;
 
+    use itertools::Itertools;
     use p3_commit::{DirectMmcs, Mmcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
 
@@ -276,5 +342,154 @@ mod tests {
 
         let (opened_values, _proof) = mmcs.open_batch(3, &prover_data);
         assert_eq!(opened_values, vec![vec![4], vec![20, 21]]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn height_property() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
+        let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let small_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7], 1);
+        let _ = mmcs.commit(vec![large_mat, small_mat]);
+    }
+
+    #[test]
+    fn verify() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // large_mat has 8 rows and 1 col; small_mat has 4 rows and 2 cols.
+        let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let large_mat_dims = large_mat.dimensions();
+        let small_mat = RowMajorMatrix::new(vec![10, 11, 20, 21, 30, 31, 40, 41], 2);
+        let small_mat_dims = small_mat.dimensions();
+        let (commit, prover_data) = mmcs.commit(vec![large_mat, small_mat]);
+
+        let (opened_values, proof) = mmcs.open_batch(3, &prover_data);
+        assert_eq!(opened_values, vec![vec![4], vec![20, 21]]);
+
+        mmcs.verify_batch(
+            &commit,
+            &[large_mat_dims, small_mat_dims],
+            3,
+            &opened_values,
+            &proof,
+        )
+        .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn verify_tampered_proof_fails() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // 4 8x1 matrixes, 4 8x2 matrixes
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 1));
+        let large_mat_dims = (0..4).map(|_| Dimensions {
+            height: 8,
+            width: 1,
+        });
+        let small_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 2));
+        let small_mat_dims = (0..4).map(|_| Dimensions {
+            height: 8,
+            width: 2,
+        });
+
+        let (commit, prover_data) = mmcs.commit(large_mats.chain(small_mats).collect_vec());
+
+        // open the 3rd row of each matrix, mess with proof, and verify
+        let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
+        proof[0][0] ^= 1;
+        mmcs.verify_batch(
+            &commit,
+            &large_mat_dims.chain(small_mat_dims).collect_vec(),
+            3,
+            &opened_values,
+            &proof,
+        )
+        .expect_err("expected verification to fail");
+    }
+
+    #[test]
+    fn size_gaps() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // 4 mats with 1000 rows, 8 columns
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1000, 8));
+        let large_mat_dims = (0..4).map(|_| Dimensions {
+            height: 1000,
+            width: 8,
+        });
+
+        // 5 mats with 70 rows, 8 columns
+        let medium_mats = (0..5).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 70, 8));
+        let medium_mat_dims = (0..5).map(|_| Dimensions {
+            height: 70,
+            width: 8,
+        });
+
+        // 6 mats with 8 rows, 8 columns
+        let small_mats = (0..6).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 8, 8));
+        let small_mat_dims = (0..6).map(|_| Dimensions {
+            height: 8,
+            width: 8,
+        });
+
+        let (commit, prover_data) = mmcs.commit(
+            large_mats
+                .chain(medium_mats)
+                .chain(small_mats)
+                .collect_vec(),
+        );
+
+        // open the 6th row of each matrix and verify
+        let (opened_values, proof) = mmcs.open_batch(6, &prover_data);
+        mmcs.verify_batch(
+            &commit,
+            &large_mat_dims
+                .chain(medium_mat_dims)
+                .chain(small_mat_dims)
+                .collect_vec(),
+            6,
+            &opened_values,
+            &proof,
+        )
+        .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn different_widths() {
+        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        let compress = C::new(KeccakF);
+
+        type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
+        let mmcs = Mmcs::new(Keccak256Hash, compress);
+
+        // 10 mats with 32 rows where the ith mat has i + 1 cols
+        let mats = (0..10)
+            .map(|i| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 32, i + 1))
+            .collect_vec();
+        let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
+
+        let (commit, prover_data) = mmcs.commit(mats);
+        let (opened_values, proof) = mmcs.open_batch(17, &prover_data);
+        mmcs.verify_batch(&commit, &dims, 17, &opened_values, &proof)
+            .expect("expected verification to succeed");
     }
 }
