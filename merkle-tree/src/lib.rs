@@ -408,7 +408,7 @@ mod tests {
 
         let (commit, prover_data) = mmcs.commit(large_mats.chain(small_mats).collect_vec());
 
-        // open the 3rd row of each matrix, hit proof with a gamma ray, and verify
+        // open the 3rd row of each matrix, mess with proof, and verify
         let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
         proof[0][0] ^= 1;
         mmcs.verify_batch(
@@ -429,17 +429,17 @@ mod tests {
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
-        // 4 mats with 1024 rows, 8 columns
-        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1024, 8));
+        // 4 mats with 1000 rows, 8 columns
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 1000, 8));
         let large_mat_dims = (0..4).map(|_| Dimensions {
-            height: 1024,
+            height: 1000,
             width: 8,
         });
 
-        // 5 mats with 64 rows, 8 columns
-        let medium_mats = (0..5).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 64, 8));
+        // 5 mats with 70 rows, 8 columns
+        let medium_mats = (0..5).map(|_| RowMajorMatrix::<u8>::rand(&mut thread_rng(), 70, 8));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
-            height: 64,
+            height: 70,
             width: 8,
         });
 
