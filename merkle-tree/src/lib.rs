@@ -300,7 +300,8 @@ mod tests {
     use itertools::Itertools;
     use p3_commit::{DirectMmcs, Mmcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
-    use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::compression::TruncatedPermutation;
     use rand::thread_rng;
 
