@@ -8,3 +8,11 @@ license = "MIT OR Apache-2.0"
 p3-field = { path = "../field" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 rand = "0.8.5"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "transpose_benchmark"
+path = "benches/transpose_benchmark.rs"
+harness = false
