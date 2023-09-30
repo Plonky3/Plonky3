@@ -205,7 +205,7 @@ where
             .collect();
 
         let proof = (0..log_max_height)
-            .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1].clone())
+            .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
 
         (openings, proof)
