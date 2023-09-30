@@ -416,9 +416,9 @@ where
                     .for_each(|(block_num, row_block)| {
                         let row_block_len = row_block.len();
                         (0..row_block_len).for_each(|col_ind| {
-                            let src_row = block_size * block_num + col_ind;
-                            let src_col = row_ind;
-                            let src_index = src_row * width + src_col;
+                            let src_row_ind = block_size * block_num + col_ind;
+                            let src_col_ind = row_ind;
+                            let src_index = src_row_ind * width + src_col_ind;
 
                             row_block[col_ind] = self.values[src_index].clone();
                         });
