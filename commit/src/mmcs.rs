@@ -25,6 +25,10 @@ pub trait Mmcs<T>: Clone {
     where
         Self: 'a;
 
+    /// Opens a batch of rows from committed matrices
+    /// returns (openings, proof)
+    /// where `openings` is a vector whose ith element is the jth row of the ith matrix's `M[i]`,
+    /// and `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`.
     fn open_batch(
         &self,
         index: usize,
@@ -50,12 +54,15 @@ pub trait Mmcs<T>: Clone {
     }
 
     /// Verify a batch opening.
+    /// `index` is the row index we're opening for each matrix, following the same
+    /// semantics as `open_batch`.
+    /// `dimensions` is the dimensions of each matrix.
     fn verify_batch(
         &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_values: Vec<Vec<T>>,
+        opened_values: &[Vec<T>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>;
 }

@@ -114,7 +114,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_quotient_values: Vec<Vec<EF>>,
+        opened_quotient_values: &[Vec<EF>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         // quotient = (original - opened_eval) / (x - opened_point)
@@ -126,34 +126,36 @@ where
             .max()
             .unwrap();
 
-        let opened_original_values = izip!(opened_quotient_values, &self.openings, dimensions)
-            .map(|(quotient_row, openings, dims)| {
-                let log_height = log2_strict_usize(dims.height);
-                let bits_reduced = log_max_height - log_height;
-                let reduced_index = index >> bits_reduced;
-                let x = F::two_adic_generator(log_height).exp_u64(reduced_index as u64);
+        let opened_original_values: Vec<Vec<F>> =
+            izip!(opened_quotient_values, &self.openings, dimensions)
+                .map(|(quotient_row, openings, dims)| {
+                    let log_height = log2_strict_usize(dims.height);
+                    let bits_reduced = log_max_height - log_height;
+                    let reduced_index = index >> bits_reduced;
+                    let x = F::two_adic_generator(log_height).exp_u64(reduced_index as u64);
 
-                let original_width = quotient_row.len() / openings.len();
-                let original_row_repeated: Vec<Vec<EF>> = quotient_row
-                    .chunks(original_width)
-                    .zip(openings)
-                    .map(|(quotient_row_chunk, opening)| {
-                        quotient_row_chunk
-                            .iter()
-                            .zip(&opening.values)
-                            .map(|(&quotient_value, &opened_value)| {
-                                quotient_value * (EF::from_base(x) - opening.point) + opened_value
-                            })
-                            .collect_vec()
-                    })
-                    .collect_vec();
-                let original_row = get_repeated(original_row_repeated.into_iter());
-                to_base::<F, EF>(original_row)
-            })
-            .collect();
+                    let original_width = quotient_row.len() / openings.len();
+                    let original_row_repeated: Vec<Vec<EF>> = quotient_row
+                        .chunks(original_width)
+                        .zip(openings)
+                        .map(|(quotient_row_chunk, opening)| {
+                            quotient_row_chunk
+                                .iter()
+                                .zip(&opening.values)
+                                .map(|(&quotient_value, &opened_value)| {
+                                    quotient_value * (EF::from_base(x) - opening.point)
+                                        + opened_value
+                                })
+                                .collect_vec()
+                        })
+                        .collect_vec();
+                    let original_row = get_repeated(original_row_repeated.into_iter());
+                    to_base::<F, EF>(original_row)
+                })
+                .collect();
 
         self.inner
-            .verify_batch(commit, dimensions, index, opened_original_values, proof)
+            .verify_batch(commit, dimensions, index, &opened_original_values, proof)
     }
 }
 
