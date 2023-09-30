@@ -455,7 +455,7 @@ mod tests {
         let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
         let matrix = RowMajorMatrix::new(matrix_values.clone(), WIDTH);
         let transposed = matrix.transpose();
-        let should_be_transposed = RowMajorMatrix::new(matrix_values.clone(), HEIGHT);
+        let should_be_transposed = RowMajorMatrix::new(matrix_values, HEIGHT);
         assert_eq!(transposed, should_be_transposed);
     }
 
