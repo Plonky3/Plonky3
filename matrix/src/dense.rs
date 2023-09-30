@@ -389,7 +389,12 @@ impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
 where
     T: Clone + Default + Send + Sync,
 {
-    const BLOCK_SIZE: usize = 16;
+    const BLOCK_SIZE: usize = match core::mem::size_of::<T>() {
+        4 => 64,
+        8 => 32,
+        16 => 16,
+        _ => 16,
+    };
 
     fn transpose(self) -> Self {
         let block_size = Self::BLOCK_SIZE;
