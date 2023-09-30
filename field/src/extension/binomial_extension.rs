@@ -101,7 +101,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExten
         F::from_wrapped_u64(n).into()
     }
 
-    fn multiplicative_group_generator() -> Self {
+    fn generator() -> Self {
         Self(F::ext_multiplicative_group_generator())
     }
 
