@@ -426,27 +426,6 @@ where
     }
 }
 
-// // Parallelize over blocks
-// (0..height)
-//     .step_by(block_size)
-//     .par_bridge()
-//     .for_each(|block_row_start| {
-//         (0..width).step_by(block_size).for_each(|block_col_start| {
-//             for i in 0..block_size {
-//                 for j in 0..block_size {
-//                     let src_row = block_row_start + i;
-//                     let src_col = block_col_start + j;
-
-//                     if src_row < height && src_col < width {
-//                         let src_index = src_row * width + src_col;
-//                         let dest_index = src_col * height + src_row;
-//                         transposed_values[dest_index] = self.values[src_index].clone();
-//                     }
-//                 }
-//             }
-//         });
-//     });
-
 #[cfg(test)]
 mod tests {
     use super::*;
