@@ -20,6 +20,7 @@ pub struct RowMajorMatrix<T> {
 impl<T> RowMajorMatrix<T> {
     #[must_use]
     pub fn new(values: Vec<T>, width: usize) -> Self {
+        debug_assert!(width >= 1);
         debug_assert_eq!(values.len() % width, 0);
         Self { values, width }
     }
@@ -384,32 +385,123 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
     }
 }
 
-impl<T: Clone> MatrixTranspose<T> for RowMajorMatrix<T> {
+impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
+where
+    T: Clone + Send + Sync,
+{
     const BLOCK_SIZE: usize = 16;
 
     fn transpose(self) -> Self {
         let block_size = Self::BLOCK_SIZE;
-        let mut transposed_values = Vec::<T>::with_capacity(self.values.len());
-
         let height = self.height();
         let width = self.width();
 
-        for i in (0..self.width()).step_by(block_size) {
-            for j in (0..height).step_by(block_size) {
-                for x in i..i + block_size.min(width - 1) {
-                    for y in j..j + block_size.min(height - 1) {
-                        transposed_values.insert(
-                            x * self.width() + y,
-                            self.values[y * self.height() + x].clone(),
-                        );
-                    }
-                }
+        let transposed_values = {
+            let mut v = Vec::with_capacity(width * height);
+            for _ in 0..(width * height) {
+                v.push(self.values[0].clone());
             }
-        }
+            v
+        };
 
-        Self {
-            values: transposed_values,
-            width: height,
+        let mut transposed = Self::new(transposed_values, height);
+
+        transposed
+            .values
+            .par_chunks_mut(height)
+            .enumerate()
+            .for_each(|(row_ind, row)| {
+                row.par_chunks_mut(block_size)
+                    .enumerate()
+                    .for_each(|(block_num, row_block)| {
+                        let row_block_len = row_block.len();
+                        (0..row_block_len).for_each(|col_ind| {
+                            let src_row = block_size * block_num + col_ind;
+                            let src_col = row_ind;
+                            let src_index = src_row * width + src_col;
+
+                            row_block[col_ind] = self.values[src_index].clone();
+                        });
+                    });
+            });
+
+        transposed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transpose_square_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 9;
+        const WIDTH: usize = 3;
+        const HEIGHT: usize = 3;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.transpose();
+        let should_be_transposed_values = [1, 4, 7, 2, 5, 8, 3, 6, 9].to_vec();
+        let should_be_transposed = RowMajorMatrix::new(should_be_transposed_values, HEIGHT);
+        assert_eq!(transposed, should_be_transposed);
+    }
+
+    #[test]
+    fn test_transpose_row_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 30;
+        const WIDTH: usize = 1;
+        const HEIGHT: usize = 30;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values.clone(), WIDTH);
+        let transposed = matrix.transpose();
+        let should_be_transposed = RowMajorMatrix::new(matrix_values.clone(), HEIGHT);
+        assert_eq!(transposed, should_be_transposed);
+    }
+
+    #[test]
+    fn test_transpose_rectangular_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 30;
+        const WIDTH: usize = 5;
+        const HEIGHT: usize = 6;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.transpose();
+        let should_be_transposed_values = [
+            1, 6, 11, 16, 21, 26, 2, 7, 12, 17, 22, 27, 3, 8, 13, 18, 23, 28, 4, 9, 14, 19, 24, 29,
+            5, 10, 15, 20, 25, 30,
+        ]
+        .to_vec();
+        let should_be_transposed = RowMajorMatrix::new(should_be_transposed_values, HEIGHT);
+        assert_eq!(transposed, should_be_transposed);
+    }
+
+    #[test]
+    fn test_transpose_larger_rectangular_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 131072; // 512 * 256
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 512;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.clone().transpose();
+
+        assert_eq!(transposed.width(), HEIGHT);
+        assert_eq!(transposed.height(), WIDTH);
+
+        for col_index in 0..WIDTH {
+            for row_index in 0..HEIGHT {
+                assert_eq!(
+                    matrix.values[row_index * WIDTH + col_index],
+                    transposed.values[col_index * HEIGHT + row_index]
+                );
+            }
         }
     }
 }
