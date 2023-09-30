@@ -191,9 +191,7 @@ where
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
-        // get the the `j`th row of each matrix `M[i]`,
-        // where `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`.
-        let openings: Vec<Vec<L>> = prover_data
+        let openings = prover_data
             .leaves
             .iter()
             .map(|matrix| {
@@ -202,7 +200,7 @@ where
                 let reduced_index = index >> bits_reduced;
                 matrix.row(reduced_index).collect()
             })
-            .collect();
+            .collect_vec();
 
         let proof = (0..log_max_height)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
@@ -238,6 +236,7 @@ where
             .1
             .height
             .next_power_of_two();
+
         let mut root = self.hash.hash_iter_slices(
             heights_tallest_first
                 .peeking_take_while(|(_, dims)| {
@@ -245,6 +244,7 @@ where
                 })
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
+
         for &sibling in proof.iter() {
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
@@ -352,7 +352,7 @@ mod tests {
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
         let mmcs = Mmcs::new(Keccak256Hash, compress);
 
-        // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic
+        // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
         let large_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 1);
         let small_mat = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7], 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
