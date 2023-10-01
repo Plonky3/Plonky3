@@ -4,6 +4,8 @@
 
 extern crate alloc;
 
+use core::fmt::{Display, Formatter};
+
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
 
@@ -30,6 +32,12 @@ pub trait Matrix<T> {
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,
+}
+
+impl Display for Dimensions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)
+    }
 }
 
 /// A `Matrix` that supports randomly accessing particular coefficients.

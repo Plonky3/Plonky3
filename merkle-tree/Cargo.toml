@@ -15,4 +15,12 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 p3-keccak = { path = "../keccak" }
+p3-baby-bear = { path = "../baby-bear" }
+p3-mds = { path = "../mds" }
+p3-poseidon2 = { path = "../poseidon2" }
+criterion = "0.5.1"
 rand = "0.8.5"
+
+[[bench]]
+name = "merkle_tree"
+harness = false
