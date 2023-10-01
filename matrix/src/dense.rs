@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::iter::Cloned;
 use core::slice;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedField};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -113,6 +113,16 @@ impl<T> RowMajorMatrix<T> {
         suffix.iter_mut().for_each(|x| *x *= scale);
     }
 
+    #[inline]
+    pub fn packed_row<P>(&self, r: usize) -> impl Iterator<Item = P> + '_
+    where
+        T: Field,
+        P: PackedField<Scalar = T>,
+    {
+        debug_assert!(r + P::WIDTH <= self.height());
+        (0..self.width).map(move |col| P::from_fn(|i| self.get(r + i, col)))
+    }
+
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         Standard: Distribution<T>,
@@ -152,6 +162,7 @@ impl<T> Matrix<T> for RowMajorMatrix<T> {
 }
 
 impl<T: Clone> MatrixGet<T> for RowMajorMatrix<T> {
+    #[inline]
     fn get(&self, r: usize, c: usize) -> T {
         self.values[r * self.width + c].clone()
     }
