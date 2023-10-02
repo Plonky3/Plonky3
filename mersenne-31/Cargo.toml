@@ -22,5 +22,9 @@ harness = false
 name = "root_5"
 harness = false
 
+[[bench]]
+name = "sub"
+harness = false
+
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }

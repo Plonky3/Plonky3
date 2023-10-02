@@ -256,11 +256,24 @@ impl Add for Mersenne31 {
         // Removing the most significant bit does nothing if no overflow happened.
         sum.bitand_assign(Self::ORDER_U32 as i32);
 
+        // Add 1 if overflow happened.
         if over {
             Self::new((sum + 1) as u32)
         } else {
             Self::new(sum as u32)
         }
+
+        // Self::new((sum as u32) + (over as u32))
+        
+
+        // let mut sum = self.value + rhs.value;
+        // // If sum's most significant bit is set, we clear it and add 1, since 2^31 = 1 mod p.
+        // // This addition of 1 cannot overflow 2^31, since sum has a max of
+        // // 2 * (2^31 - 1) = 2^32 - 2.
+        // let msb = sum & (1 << 31);
+        // sum.bitxor_assign(msb);
+        // sum += u32::from(msb != 0);
+        // Self::new(sum)
     }
 }
 
@@ -288,11 +301,9 @@ impl Sub for Mersenne31 {
         // Removing the most significant bit does nothing if no overflow happened.
         sub.bitand_assign(Self::ORDER_U32);
 
-        if over {
-            Self::new(sub - 1)
-        } else {
-            Self::new(sub)
-        }
+        // Subtract 1 if overflow happened.
+
+        Self::new(sub - (over as u32))
     }
 }
 
