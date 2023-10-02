@@ -1,3 +1,5 @@
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
@@ -12,7 +14,7 @@ use crate::field::Field;
 use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize>(pub [F; D]);
+pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize>([F; D]);
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Default for BinomialExtensionField<F, D> {
     fn default() -> Self {
@@ -154,7 +156,17 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Display for BinomialExtensionField<F, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{} + {}*a", self.0[0], self.0[1])
+        let mut result = String::new();
+        for (i, &x) in self.0.iter().enumerate() {
+            if i == 0 {
+                result.push_str(&(format!("{}", x)));
+            } else if i == 1 {
+                result.push_str(&format!("+{}x", x));
+            } else {
+                result.push_str(&format!("+{}x^{}", x, i));
+            }
+        }
+        write!(f, "{}", result)
     }
 }
 
@@ -169,14 +181,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Neg for BinomialExtensionField<
 
     #[inline]
     fn neg(self) -> Self {
-        Self(
-            self.0
-                .iter()
-                .map(|x| x.neg())
-                .collect::<Vec<F>>()
-                .try_into()
-                .unwrap(),
-        )
+        Self(self.0.map(F::neg))
     }
 }
 
@@ -186,7 +191,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Add for BinomialExtensionField<
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let mut res = self.0;
-        for (r, &rhs_val) in res.iter_mut().zip(&rhs.0) {
+        for (r, rhs_val) in res.iter_mut().zip(rhs.0) {
             *r += rhs_val;
         }
         Self(res)
@@ -228,7 +233,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Sub for BinomialExtensionField<
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let mut res = self.0;
-        for (r, &rhs_val) in res.iter_mut().zip(&rhs.0) {
+        for (r, rhs_val) in res.iter_mut().zip(rhs.0) {
             *r -= rhs_val;
         }
         Self(res)
@@ -289,14 +294,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Mul<F> for BinomialExtensionFie
 
     #[inline]
     fn mul(self, rhs: F) -> Self {
-        Self(
-            self.0
-                .into_iter()
-                .map(|x| x * rhs)
-                .collect::<Vec<F>>()
-                .try_into()
-                .unwrap(),
-        )
+        Self(self.0.map(|x| x * rhs))
     }
 }
 
@@ -344,12 +342,11 @@ impl<F: BinomiallyExtendable<D>, const D: usize> AbstractExtensionField<F>
     }
 
     fn from_base_slice(bs: &[F]) -> Self {
-        assert_eq!(bs.len(), D);
-        Self(bs.try_into().unwrap())
+        Self(bs.try_into().expect("slice has wrong length"))
     }
 
     fn as_base_slice(&self) -> &[F] {
-        self.0.as_ref()
+        &self.0
     }
 }
 
