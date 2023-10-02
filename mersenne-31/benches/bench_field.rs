@@ -1,7 +1,6 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use p3_field::{AbstractField, Field};
 use p3_mersenne_31::Mersenne31;
-
 use rand::Rng;
 
 type F = Mersenne31;
