@@ -1,5 +1,5 @@
 use p3_dft::reverse_slice_index_bits;
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{AbstractField, TwoAdicField};
 use p3_symmetric::permutation::Permutation;
 use p3_util::log2_strict_usize;
 
@@ -11,33 +11,28 @@ use crate::MdsPermutation;
 /// viewed as returning the parity elements of a systematic Reed-Solomon code. Since Reed-Solomon
 /// codes are MDS, this is an MDS permutation.
 #[derive(Clone, Debug)]
-pub struct CosetMds<AF, const N: usize>
-where
-    AF: AbstractField,
-    AF::F: TwoAdicField,
-{
-    fft_twiddles: Vec<AF::F>,
-    ifft_twiddles: Vec<AF::F>,
-    weights: [AF::F; N],
+pub struct CosetMds<F, const N: usize> {
+    fft_twiddles: Vec<F>,
+    ifft_twiddles: Vec<F>,
+    weights: [F; N],
 }
 
-impl<AF, const N: usize> Default for CosetMds<AF, N>
+impl<F, const N: usize> Default for CosetMds<F, N>
 where
-    AF: AbstractField,
-    AF::F: TwoAdicField,
+    F: TwoAdicField,
 {
     fn default() -> Self {
         let log_n = log2_strict_usize(N);
 
-        let root = AF::F::two_adic_generator(log_n);
+        let root = F::two_adic_generator(log_n);
         let root_inv = root.inverse();
-        let mut fft_twiddles: Vec<AF::F> = root.powers().take(N / 2).collect();
-        let mut ifft_twiddles: Vec<AF::F> = root_inv.powers().take(N / 2).collect();
+        let mut fft_twiddles: Vec<F> = root.powers().take(N / 2).collect();
+        let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
         reverse_slice_index_bits(&mut fft_twiddles);
         reverse_slice_index_bits(&mut ifft_twiddles);
 
-        let shift = AF::F::generator();
-        let mut weights: [AF::F; N] = shift
+        let shift = F::generator();
+        let mut weights: [F; N] = shift
             .powers()
             .take(N)
             .collect::<Vec<_>>()
@@ -52,7 +47,7 @@ where
     }
 }
 
-impl<AF, const N: usize> Permutation<[AF; N]> for CosetMds<AF, N>
+impl<AF, const N: usize> Permutation<[AF; N]> for CosetMds<AF::F, N>
 where
     AF: AbstractField,
     AF::F: TwoAdicField,
@@ -76,7 +71,7 @@ where
     }
 }
 
-impl<AF, const N: usize> MdsPermutation<AF, N> for CosetMds<AF, N>
+impl<AF, const N: usize> MdsPermutation<AF, N> for CosetMds<AF::F, N>
 where
     AF: AbstractField,
     AF::F: TwoAdicField,

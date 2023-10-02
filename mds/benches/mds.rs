@@ -16,8 +16,9 @@ use rand::{thread_rng, Rng};
 
 fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<BabyBear, IntegratedCosetMds<BabyBear, 16>, 16>(c);
+    bench_mds::<<BabyBear as Field>::Packing, IntegratedCosetMds<BabyBear, 16>, 16>(c);
     bench_mds::<BabyBear, CosetMds<BabyBear, 16>, 16>(c);
-    bench_mds::<<BabyBear as Field>::Packing, CosetMds<<BabyBear as Field>::Packing, 16>, 16>(c);
+    bench_mds::<<BabyBear as Field>::Packing, CosetMds<BabyBear, 16>, 16>(c);
     bench_mds::<BabyBear, MdsMatrixBabyBear, 12>(c);
     bench_mds::<BabyBear, MdsMatrixBabyBear, 24>(c);
 
