@@ -1,3 +1,5 @@
+use std::any::type_name;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
@@ -5,11 +7,8 @@ use p3_field::TwoAdicField;
 use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
-use rand::{
-    distributions::{Distribution, Standard},
-    thread_rng, Rng,
-};
-use std::any::type_name;
+use rand::distributions::{Distribution, Standard};
+use rand::{thread_rng, Rng};
 
 fn bench<F: TwoAdicField>(c: &mut Criterion, log_sizes: &[usize])
 where
