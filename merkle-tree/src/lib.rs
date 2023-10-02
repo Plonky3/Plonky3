@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn commit() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn open() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn height_property() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn verify() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn verify_tampered_proof_fails() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn size_gaps() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;
@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn different_widths() {
-        type C = TruncatedPermutation<u8, KeccakF, 2, 32, 200>;
+        type C = TruncatedPermutation<KeccakF, 2, 32, 200>;
         let compress = C::new(KeccakF);
 
         type Mmcs = MerkleTreeMmcs<u8, [u8; 32], Keccak256Hash, C>;

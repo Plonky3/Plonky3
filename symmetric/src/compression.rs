@@ -14,24 +14,20 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
 #[derive(Clone)]
-pub struct TruncatedPermutation<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize> {
+pub struct TruncatedPermutation<InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize> {
     inner_permutation: InnerP,
-    _phantom_t: PhantomData<T>,
 }
 
-impl<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
-    TruncatedPermutation<T, InnerP, N, CHUNK, WIDTH>
+impl<InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
+    TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
 {
     pub fn new(inner_permutation: InnerP) -> Self {
-        Self {
-            inner_permutation,
-            _phantom_t: PhantomData,
-        }
+        Self { inner_permutation }
     }
 }
 
 impl<T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
-    PseudoCompressionFunction<[T; CHUNK], N> for TruncatedPermutation<T, InnerP, N, CHUNK, WIDTH>
+    PseudoCompressionFunction<[T; CHUNK], N> for TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
 where
     T: Copy + Default,
     InnerP: CryptographicPermutation<[T; WIDTH]>,

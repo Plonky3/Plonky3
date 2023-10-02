@@ -29,10 +29,10 @@ fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type Perm = Poseidon2<BabyBear, Mds, DiffusionMatrixBabybear, 16, 5>;
     let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
 
-    type H = PaddingFreeSponge<BabyBear, Perm, 16, 8, 8>;
+    type H = PaddingFreeSponge<Perm, 16, 8, 8>;
     let h = H::new(perm.clone());
 
-    type C = TruncatedPermutation<L, Perm, 2, 8, 16>;
+    type C = TruncatedPermutation<Perm, 2, 8, 16>;
     let c = C::new(perm);
 
     bench_merkle_tree::<L, D, H, C>(criterion, h, c);
