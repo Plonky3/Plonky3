@@ -23,7 +23,6 @@ use tracing::instrument;
 pub struct MerkleTree<L, D> {
     leaves: Vec<RowMajorMatrix<L>>,
     digest_layers: Vec<Vec<D>>,
-    _phantom_l: PhantomData<L>,
 }
 
 impl<L, D> MerkleTree<L, D> {
@@ -89,7 +88,6 @@ impl<L, D> MerkleTree<L, D> {
         Self {
             leaves,
             digest_layers,
-            _phantom_l: PhantomData,
         }
     }
 
