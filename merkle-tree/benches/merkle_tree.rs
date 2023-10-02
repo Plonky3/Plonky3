@@ -7,7 +7,7 @@ use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::compression::{PseudoCompressionFunction, TruncatedPermutation};
 use p3_symmetric::hasher::CryptographicHasher;
@@ -20,10 +20,9 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
 }
 
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
-    type L = BabyBear;
-    type D = [BabyBear; 8];
+    type F = BabyBear;
 
-    type Mds = IntegratedCosetMds<L, 16>;
+    type Mds = IntegratedCosetMds<F, 16>;
     let mds = Mds::default();
 
     type Perm = Poseidon2<BabyBear, Mds, DiffusionMatrixBabybear, 16, 5>;
@@ -35,16 +34,19 @@ fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type C = TruncatedPermutation<Perm, 2, 8, 16>;
     let c = C::new(perm);
 
-    bench_merkle_tree::<L, D, H, C>(criterion, h, c);
+    bench_merkle_tree::<F, H, C, 8>(criterion, h, c);
 }
 
-fn bench_merkle_tree<L, D, H, C>(criterion: &mut Criterion, h: H, c: C)
+fn bench_merkle_tree<F, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Criterion, h: H, c: C)
 where
-    L: Field,
-    D: Copy + Default + PartialEq,
-    H: CryptographicHasher<L, D>,
-    C: PseudoCompressionFunction<D, 2>,
-    Standard: Distribution<L>,
+    F: Field,
+    H: CryptographicHasher<F, [F; DIGEST_ELEMS]>,
+    H: CryptographicHasher<F::Packing, [F::Packing; DIGEST_ELEMS]>,
+    H: Sync,
+    C: PseudoCompressionFunction<[F; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[F::Packing; DIGEST_ELEMS], 2>,
+    C: Sync,
+    Standard: Distribution<F>,
 {
     const ROWS: usize = 1 << 12;
     const COLS: usize = 25;
@@ -63,7 +65,7 @@ where
     let mut group = criterion.benchmark_group(name);
     group.sample_size(10);
 
-    let mmcs = MerkleTreeMmcs::new(h, c);
+    let mmcs = FieldMerkleTreeMmcs::new(h, c);
     group.bench_with_input(params, &leaves, |b, input| {
         b.iter(|| mmcs.commit(input.clone()))
     });
