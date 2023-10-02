@@ -248,7 +248,7 @@ impl Add for Mersenne31 {
 
     fn add(self, rhs: Self) -> Self {
         // Working with i32 means we get a flag which informs us if overflow happened.
-        let (mut sum, over) = (self.value as i32).overflowing_add_unsigned(rhs.value);
+        let (mut sum, over) = (self.value as i32).overflowing_add(rhs.value as i32);
 
         // The base sum will never exceed 2**32 - 1 so as bits sum is exactly the same as self.value + rhs.value
         // Hence if we didn't overflow we have the correct value.
@@ -264,7 +264,6 @@ impl Add for Mersenne31 {
         }
 
         // Self::new((sum as u32) + (over as u32))
-        
 
         // let mut sum = self.value + rhs.value;
         // // If sum's most significant bit is set, we clear it and add 1, since 2^31 = 1 mod p.
