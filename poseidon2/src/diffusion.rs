@@ -8,18 +8,18 @@
 //!
 //! This file implements a trait for linear layers that satisfy these three properties.
 
-use p3_field::Field;
+use p3_field::AbstractField;
 use p3_symmetric::permutation::Permutation;
 
 pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
 
-pub fn matmul_internal<F: Field, const WIDTH: usize>(
-    state: &mut [F; WIDTH],
+pub fn matmul_internal<AF: AbstractField, const WIDTH: usize>(
+    state: &mut [AF; WIDTH],
     mat_internal_diag_m_1: [u64; WIDTH],
 ) {
-    let sum = state.iter().copied().sum();
+    let sum: AF = state.iter().cloned().sum();
     for i in 0..WIDTH {
-        state[i] *= F::from_canonical_u64(mat_internal_diag_m_1[i]);
-        state[i] += sum;
+        state[i] *= AF::from_canonical_u64(mat_internal_diag_m_1[i]);
+        state[i] += sum.clone();
     }
 }

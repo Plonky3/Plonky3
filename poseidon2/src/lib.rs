@@ -47,9 +47,6 @@ pub struct Poseidon2<F, Mds, Diffusion, const WIDTH: usize, const D: u64> {
 impl<F, Mds, Diffusion, const WIDTH: usize, const D: u64> Poseidon2<F, Mds, Diffusion, WIDTH, D>
 where
     F: PrimeField,
-    // AF: AbstractField,
-    // Mds: MdsPermutation<AF, WIDTH>,
-    // Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
     /// Create a new Poseidon2 configuration.
     pub fn new(
