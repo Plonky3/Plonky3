@@ -1,6 +1,5 @@
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
