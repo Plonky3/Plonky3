@@ -46,7 +46,7 @@ where
     let round_constants = rng.sample_iter(Standard).take(num_constants).collect();
     let mds = Mds::default();
     let isl = Sbox::default();
-    let rescue = Rescue::<AF, Mds, Sbox, WIDTH>::new(NUM_ROUNDS, round_constants, mds, isl);
+    let rescue = Rescue::<AF::F, Mds, Sbox, WIDTH>::new(NUM_ROUNDS, round_constants, mds, isl);
     let input = [AF::ZERO; WIDTH];
     let name = format!("rescue::<{}, {}>", type_name::<AF>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);

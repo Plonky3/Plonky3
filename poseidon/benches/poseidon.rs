@@ -43,7 +43,7 @@ where
     let half_num_full_rounds = 4;
     let num_partial_rounds = 22;
 
-    let poseidon = Poseidon::<AF, Mds, WIDTH, ALPHA>::new_from_rng(
+    let poseidon = Poseidon::<AF::F, Mds, WIDTH, ALPHA>::new_from_rng(
         half_num_full_rounds,
         num_partial_rounds,
         mds,

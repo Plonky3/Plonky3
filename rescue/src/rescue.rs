@@ -14,27 +14,18 @@ use crate::util::shake256_hash;
 
 /// The Rescue-XLIX permutation.
 #[derive(Clone)]
-pub struct Rescue<AF, Mds, Sbox, const WIDTH: usize>
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
-{
+pub struct Rescue<F, Mds, Sbox, const WIDTH: usize> {
     num_rounds: usize,
     mds: Mds,
     sbox: Sbox,
-    round_constants: Vec<AF::F>,
+    round_constants: Vec<F>,
 }
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Rescue<AF, Mds, Sbox, WIDTH>
+impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
 where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
+    F: PrimeField,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<AF::F>, mds: Mds, sbox: Sbox) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds, sbox: Sbox) -> Self {
         Self {
             num_rounds,
             mds,
@@ -62,37 +53,29 @@ where
     }
 
     // For a general field, we provide a generic constructor for the round constants.
-    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<AF>
+    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
     where
-        Standard: Distribution<AF>,
+        Standard: Distribution<F>,
     {
         let num_constants = 2 * WIDTH * num_rounds;
         rng.sample_iter(Standard).take(num_constants).collect()
     }
-}
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Rescue<AF, Mds, Sbox, WIDTH>
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
-{
     fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
         sec_level: usize,
-    ) -> Vec<AF>
+    ) -> Vec<F>
     where
-        AF::F: PrimeField64,
+        F: PrimeField64,
     {
         let num_constants = 2 * WIDTH * num_rounds;
-        let bytes_per_constant = ceil_div_usize(AF::F::bits(), 8) + 1;
+        let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
             "Rescue-XLIX({},{},{},{})",
-            AF::F::ORDER_U64,
+            F::ORDER_U64,
             WIDTH,
             capacity,
             sec_level,
@@ -109,13 +92,13 @@ where
                     .iter()
                     .rev()
                     .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
-                AF::from_canonical_u64(integer % AF::F::ORDER_U64)
+                F::from_canonical_u64(integer % F::ORDER_U64)
             })
             .collect()
     }
 }
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Permutation<[AF; WIDTH]> for Rescue<AF, Mds, Sbox, WIDTH>
+impl<AF, Mds, Sbox, const WIDTH: usize> Permutation<[AF; WIDTH]> for Rescue<AF::F, Mds, Sbox, WIDTH>
 where
     AF: AbstractField,
     AF::F: PrimeField,
@@ -156,7 +139,7 @@ where
 }
 
 impl<AF, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[AF; WIDTH]>
-    for Rescue<AF, Mds, Sbox, WIDTH>
+    for Rescue<AF::F, Mds, Sbox, WIDTH>
 where
     AF: AbstractField,
     AF::F: PrimeField,
