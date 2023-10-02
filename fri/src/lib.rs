@@ -17,7 +17,7 @@ mod prover;
 mod verifier;
 
 pub use config::*;
-pub use fold_even_odd::fold_even_odd;
+pub use fold_even_odd::*;
 pub use proof::*;
 
 pub struct FriLdt<FC: FriConfig> {
