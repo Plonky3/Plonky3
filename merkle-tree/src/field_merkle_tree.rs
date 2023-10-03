@@ -128,6 +128,7 @@ where
 
     // If our packing width did not divide max_height, fall back to single-threaded scalar code
     // for the last bit.
+    #[allow(clippy::needless_range_loop)]
     for i in (max_height / width * width)..max_height {
         digests[i] = h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row_slice(i)));
     }
