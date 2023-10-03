@@ -421,10 +421,12 @@ where
 mod tests {
     use alloc::vec;
 
+    use itertools::Itertools;
     use p3_baby_bear::BabyBear;
-    use p3_commit::DirectMmcs;
+    use p3_commit::{DirectMmcs, Mmcs};
     use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::{Dimensions, Matrix};
     use p3_mds::coset_mds::CosetMds;
     use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
     use p3_symmetric::compression::{PseudoCompressionFunction, TruncatedPermutation};
@@ -548,7 +550,7 @@ mod tests {
         // ]
         let mat_2 = RowMajorMatrix::new(vec![F::ONE, F::TWO, F::ONE, F::ZERO, F::TWO, F::TWO], 3);
 
-        let (commit, _) = mmcs.commit(vec![mat_1, mat_2]);
+        let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
 
         let mat_1_leaf_hashes = [
             hash.hash_slice(&[F::ZERO, F::ONE]),
@@ -571,6 +573,12 @@ mod tests {
             ]),
         ]);
         assert_eq!(commit, expected_result);
+
+        let (opened_values, _proof) = mmcs.open_batch(2, &prover_data);
+        assert_eq!(
+            opened_values,
+            vec![vec![F::TWO, F::TWO], vec![F::ZERO, F::TWO, F::TWO]]
+        );
     }
 
     #[test]
@@ -588,5 +596,134 @@ mod tests {
         let (commit_1_2, _) = mmcs.commit(vec![input_1.clone(), input_2.clone()]);
         let (commit_2_1, _) = mmcs.commit(vec![input_2, input_1]);
         assert_eq!(commit_1_2, commit_2_1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn mismatched_heights() {
+        let mut rng = thread_rng();
+        let mds = MyMds::default();
+        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
+        let large_mat = RowMajorMatrix::new(
+            [1, 2, 3, 4, 5, 6, 7, 8].map(F::from_canonical_u8).to_vec(),
+            1,
+        );
+        let small_mat =
+            RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_canonical_u8).to_vec(), 1);
+        let _ = mmcs.commit(vec![large_mat, small_mat]);
+    }
+
+    #[test]
+    fn verify_tampered_proof_fails() {
+        let mut rng = thread_rng();
+        let mds = MyMds::default();
+        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // 4 8x1 matrixes, 4 8x2 matrixes
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 8, 1));
+        let large_mat_dims = (0..4).map(|_| Dimensions {
+            height: 8,
+            width: 1,
+        });
+        let small_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 8, 2));
+        let small_mat_dims = (0..4).map(|_| Dimensions {
+            height: 8,
+            width: 2,
+        });
+
+        let (commit, prover_data) = mmcs.commit(large_mats.chain(small_mats).collect_vec());
+
+        // open the 3rd row of each matrix, mess with proof, and verify
+        let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
+        proof[0][0] += F::ONE;
+        mmcs.verify_batch(
+            &commit,
+            &large_mat_dims.chain(small_mat_dims).collect_vec(),
+            3,
+            &opened_values,
+            &proof,
+        )
+        .expect_err("expected verification to fail");
+    }
+
+    #[test]
+    fn size_gaps() {
+        let mut rng = thread_rng();
+        let mds = MyMds::default();
+        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // 4 mats with 1000 rows, 8 columns
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 1000, 8));
+        let large_mat_dims = (0..4).map(|_| Dimensions {
+            height: 1000,
+            width: 8,
+        });
+
+        // 5 mats with 70 rows, 8 columns
+        let medium_mats = (0..5).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 70, 8));
+        let medium_mat_dims = (0..5).map(|_| Dimensions {
+            height: 70,
+            width: 8,
+        });
+
+        // 6 mats with 8 rows, 8 columns
+        let small_mats = (0..6).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 8, 8));
+        let small_mat_dims = (0..6).map(|_| Dimensions {
+            height: 8,
+            width: 8,
+        });
+
+        let (commit, prover_data) = mmcs.commit(
+            large_mats
+                .chain(medium_mats)
+                .chain(small_mats)
+                .collect_vec(),
+        );
+
+        // open the 6th row of each matrix and verify
+        let (opened_values, proof) = mmcs.open_batch(6, &prover_data);
+        mmcs.verify_batch(
+            &commit,
+            &large_mat_dims
+                .chain(medium_mat_dims)
+                .chain(small_mat_dims)
+                .collect_vec(),
+            6,
+            &opened_values,
+            &proof,
+        )
+        .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn different_widths() {
+        let mut rng = thread_rng();
+        let mds = MyMds::default();
+        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // 10 mats with 32 rows where the ith mat has i + 1 cols
+        let mats = (0..10)
+            .map(|i| RowMajorMatrix::<F>::rand(&mut thread_rng(), 32, i + 1))
+            .collect_vec();
+        let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
+
+        let (commit, prover_data) = mmcs.commit(mats);
+        let (opened_values, proof) = mmcs.open_batch(17, &prover_data);
+        mmcs.verify_batch(&commit, &dims, 17, &opened_values, &proof)
+            .expect("expected verification to succeed");
     }
 }
