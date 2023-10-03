@@ -13,7 +13,9 @@ use crate::field::Field;
 use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize>([F; D]);
+pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize> {
+    value: [F; D],
+}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Default for BinomialExtensionField<F, D> {
     fn default() -> Self {
@@ -23,7 +25,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Default for BinomialExtensionFi
 
 impl<F: BinomiallyExtendable<D>, const D: usize> From<F> for BinomialExtensionField<F, D> {
     fn from(x: F) -> Self {
-        Self(field_to_array::<F, D>(x))
+        Self {
+            value: field_to_array::<F, D>(x),
+        }
     }
 }
 
@@ -70,10 +74,18 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenuis<F> for BinomialExt
 impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExtensionField<F, D> {
     type F = Self;
 
-    const ZERO: Self = Self([F::ZERO; D]);
-    const ONE: Self = Self(field_to_array::<F, D>(F::ONE));
-    const TWO: Self = Self(field_to_array::<F, D>(F::TWO));
-    const NEG_ONE: Self = Self(field_to_array::<F, D>(F::NEG_ONE));
+    const ZERO: Self = Self {
+        value: [F::ZERO; D],
+    };
+    const ONE: Self = Self {
+        value: field_to_array::<F, D>(F::ONE),
+    };
+    const TWO: Self = Self {
+        value: field_to_array::<F, D>(F::TWO),
+    };
+    const NEG_ONE: Self = Self {
+        value: field_to_array::<F, D>(F::NEG_ONE),
+    };
 
     fn from_bool(b: bool) -> Self {
         F::from_bool(b).into()
@@ -110,7 +122,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExten
     }
 
     fn generator() -> Self {
-        Self(F::ext_multiplicative_group_generator())
+        Self {
+            value: F::ext_multiplicative_group_generator(),
+        }
     }
 
     #[inline(always)]
@@ -139,8 +153,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         // g = a^r is in the base field, so only compute that
         // coefficient rather than the full product.
 
-        let Self(a) = *self;
-        let Self(b) = f;
+        let a = self.value;
+        let b = f.value;
         let mut g = F::ZERO;
         for i in 1..D {
             g += a[i] * b[D - i];
@@ -155,8 +169,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Display for BinomialExtensionField<F, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let linear_part = format!("{} + {}*X", self.0[0], self.0[1]); // ok, since D >= 2
-        let nonlin_part: String = self.0[2..]
+        let linear_part = format!("{} + {}*X", self.value[0], self.value[1]); // ok, since D >= 2
+        let nonlin_part: String = self.value[2..]
             .iter()
             .zip(2..)
             .map(|(x, i)| format!(" + {x}*X^{i}"))
@@ -176,7 +190,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Neg for BinomialExtensionField<
 
     #[inline]
     fn neg(self) -> Self {
-        Self(self.0.map(F::neg))
+        Self {
+            value: self.value.map(F::neg),
+        }
     }
 }
 
@@ -185,11 +201,11 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Add for BinomialExtensionField<
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let mut res = self.0;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.0) {
+        let mut res = self.value;
+        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
             *r += rhs_val;
         }
-        Self(res)
+        Self { value: res }
     }
 }
 
@@ -198,9 +214,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Add<F> for BinomialExtensionFie
 
     #[inline]
     fn add(self, rhs: F) -> Self {
-        let mut res = self.0;
+        let mut res = self.value;
         res[0] += rhs;
-        Self(res)
+        Self { value: res }
     }
 }
 
@@ -227,11 +243,11 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Sub for BinomialExtensionField<
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let mut res = self.0;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.0) {
+        let mut res = self.value;
+        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
             *r -= rhs_val;
         }
-        Self(res)
+        Self { value: res }
     }
 }
 
@@ -240,9 +256,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Sub<F> for BinomialExtensionFie
 
     #[inline]
     fn sub(self, rhs: F) -> Self {
-        let mut res = self.0;
+        let mut res = self.value;
         res[0] -= rhs;
-        Self(res)
+        Self { value: res }
     }
 }
 
@@ -265,8 +281,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Mul for BinomialExtensionField<
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let Self(a) = self;
-        let Self(b) = rhs;
+        let a = self.value;
+        let b = rhs.value;
 
         let mut res = [F::ZERO; D];
 
@@ -280,7 +296,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Mul for BinomialExtensionField<
             }
         }
 
-        Self(res)
+        Self { value: res }
     }
 }
 
@@ -289,7 +305,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Mul<F> for BinomialExtensionFie
 
     #[inline]
     fn mul(self, rhs: F) -> Self {
-        Self(self.0.map(|x| x * rhs))
+        Self {
+            value: self.value.map(|x| x * rhs),
+        }
     }
 }
 
@@ -333,15 +351,17 @@ impl<F: BinomiallyExtendable<D>, const D: usize> AbstractExtensionField<F>
     const D: usize = F::D;
 
     fn from_base(b: F) -> Self {
-        Self(field_to_array::<F, D>(b))
+        Self::from(b)
     }
 
     fn from_base_slice(bs: &[F]) -> Self {
-        Self(bs.try_into().expect("slice has wrong length"))
+        Self {
+            value: bs.try_into().expect("slice has wrong length"),
+        }
     }
 
     fn as_base_slice(&self) -> &[F] {
-        &self.0
+        &self.value
     }
 }
 
