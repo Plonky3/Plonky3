@@ -83,7 +83,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     let compress = MyCompress::new(perm.clone());
 
-    type MyMmcs = FieldMerkleTreeMmcs<MyHash, MyCompress, 8>;
+    type MyMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
     let mmcs = MyMmcs::new(hash, compress);
 
     type Dft = Radix2DitParallel;

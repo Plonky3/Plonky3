@@ -14,18 +14,14 @@ where
     fn inverse_sbox_layer(&self, state: &mut [AF; WIDTH]);
 }
 
-#[derive(Copy, Clone, Default)]
-pub struct BasicSboxLayer<AF: AbstractField> {
+#[derive(Copy, Clone)]
+pub struct BasicSboxLayer<F: PrimeField> {
     alpha: u64,
     alpha_inv: u64,
-    _phantom_f: PhantomData<AF>,
+    _phantom_f: PhantomData<F>,
 }
 
-impl<AF> BasicSboxLayer<AF>
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
+impl<F: PrimeField> BasicSboxLayer<F> {
     pub fn new(alpha: u64, alpha_inv: u64) -> Self {
         Self {
             alpha,
@@ -36,13 +32,13 @@ where
 
     pub fn for_alpha(alpha: u64) -> Self
     where
-        AF::F: PrimeField64,
+        F: PrimeField64,
     {
-        Self::new(alpha, get_inverse::<AF::F>(alpha))
+        Self::new(alpha, get_inverse::<F>(alpha))
     }
 }
 
-impl<AF, const WIDTH: usize> SboxLayers<AF, WIDTH> for BasicSboxLayer<AF>
+impl<AF, const WIDTH: usize> SboxLayers<AF, WIDTH> for BasicSboxLayer<AF::F>
 where
     AF: AbstractField,
     AF::F: PrimeField,
