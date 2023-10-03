@@ -155,17 +155,13 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Display for BinomialExtensionField<F, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut result = String::new();
-        for (i, &x) in self.0.iter().enumerate() {
-            if i == 0 {
-                result.push_str(&(format!("{}", x)));
-            } else if i == 1 {
-                result.push_str(&format!("+{}x", x));
-            } else {
-                result.push_str(&format!("+{}x^{}", x, i));
-            }
-        }
-        write!(f, "{}", result)
+        let linear_part = format!("{} + {}*X", self.0[0], self.0[1]); // ok, since D >= 2
+        let nonlin_part: String = self.0[2..]
+            .iter()
+            .zip(2..)
+            .map(|(x, i)| format!(" + {x}*X^{i}"))
+            .collect();
+        write!(f, "{}", linear_part + &nonlin_part)
     }
 }
 
