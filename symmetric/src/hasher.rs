@@ -14,6 +14,14 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     {
         self.hash_iter(input.into_iter().flatten().cloned())
     }
+
+    fn hash_slice(&self, input: &[Item]) -> Out {
+        self.hash_iter_slices(core::iter::once(input))
+    }
+
+    fn hash_item(&self, input: Item) -> Out {
+        self.hash_slice(&[input])
+    }
 }
 
 /// Maps input field elements to their 4-byte little-endian encodings, and maps output of the form

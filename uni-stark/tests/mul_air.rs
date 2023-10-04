@@ -1,7 +1,6 @@
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
-use p3_blake3::Blake3;
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DitParallel;
 use p3_field::Field;
@@ -10,10 +9,10 @@ use p3_ldt::QuotientMmcs;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 use p3_mds::coset_mds::CosetMds;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon::Poseidon;
-use p3_symmetric::compression::CompressionFunctionFromHasher;
-use p3_symmetric::hasher::SerializingHasher32;
+use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
+use p3_symmetric::compression::TruncatedPermutation;
+use p3_symmetric::sponge::PaddingFreeSponge;
 use p3_uni_stark::{prove, verify, StarkConfigImpl, VerificationError};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
@@ -75,16 +74,16 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type MyMds = CosetMds<Val, 16>;
     let mds = MyMds::default();
 
-    type Perm = Poseidon<Val, MyMds, 16, 5>;
-    let perm = Perm::new_from_rng(4, 22, mds, &mut thread_rng()); // TODO: Use deterministic RNG
+    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 5>;
+    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
 
-    type MyHash = SerializingHasher32<Val, Blake3>;
-    let hash = MyHash::new(Blake3);
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    let hash = MyHash::new(perm.clone());
 
-    type MyCompress = CompressionFunctionFromHasher<Val, MyHash, 2, 8>;
-    let compress = MyCompress::new(hash);
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    let compress = MyCompress::new(perm.clone());
 
-    type MyMmcs = MerkleTreeMmcs<Val, [Val; 8], MyHash, MyCompress>;
+    type MyMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
     let mmcs = MyMmcs::new(hash, compress);
 
     type Dft = Radix2DitParallel;
