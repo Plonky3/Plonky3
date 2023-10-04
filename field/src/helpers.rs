@@ -31,6 +31,7 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     cyclic_subgroup_known_order(generator, order).map(move |x| x * shift)
 }
 
+#[must_use]
 pub fn add_vecs<F: Field>(v: Vec<F>, w: Vec<F>) -> Vec<F> {
     assert_eq!(v.len(), w.len());
     v.into_iter().zip(w).map(|(x, y)| x + y).collect()

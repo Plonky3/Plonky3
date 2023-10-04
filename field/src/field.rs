@@ -192,6 +192,8 @@ pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
     // TODO: Move to Field itself? Limiting it to `PrimeField64` seems unusual.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
     fn bits() -> usize {
         log2_ceil_u64(Self::ORDER_U64) as usize
     }
@@ -266,7 +268,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
 
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {
     fn is_in_basefield(&self) -> bool {
-        self.as_base_slice()[1..].iter().all(|x| x.is_zero())
+        self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
 }
 
