@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
-mod field_merkle_tree;
+mod merkle_tree;
+mod mmcs;
 
-pub use field_merkle_tree::*;
+pub use merkle_tree::*;
+pub use mmcs::*;
