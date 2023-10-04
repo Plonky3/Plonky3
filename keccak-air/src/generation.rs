@@ -10,13 +10,8 @@ use crate::constants::rc_value_limb;
 use crate::logic::{andn, xor};
 use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
-pub fn generate_trace_rows<F: PrimeField32>(
-    inputs: Vec<[u64; 25]>,
-    min_rows: usize,
-) -> RowMajorMatrix<F> {
-    let num_rows = (inputs.len() * NUM_ROUNDS)
-        .max(min_rows)
-        .next_power_of_two();
+pub fn generate_trace_rows<F: PrimeField32>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
+    let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
     let mut trace = RowMajorMatrix::new(vec![F::ZERO; num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
     assert!(prefix.is_empty(), "Data was not aligned");
