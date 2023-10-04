@@ -13,7 +13,7 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, BitAndAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
 pub use dft::Mersenne31Dft;
@@ -250,17 +250,13 @@ impl Add for Mersenne31 {
 
     fn add(self, rhs: Self) -> Self {
         // Working with i32 means we get a flag which informs us if overflow happened.
-        let (mut sum, over) = (self.value as i32).overflowing_add(rhs.value as i32);
+        let (sum_i32, over) = (self.value as i32).overflowing_add(rhs.value as i32);
+        let sum_u32 = sum_i32 as u32;
+        let sum_corr = sum_u32.wrapping_sub(Self::ORDER_U32);
 
-        // The base sum will never exceed 2**32 - 1 so as bits sum is exactly the same as self.value + rhs.value
-        // Hence if we didn't overflow we have the correct value.
-        // Otherwise we can simply remove the most significant bit and add 1.
-        // Removing the most significant bit does nothing if no overflow happened.
-        sum.bitand_assign(Self::ORDER_U32 as i32);
-
-        // Add 1 if overflow happened.
-
-        Self::new((sum as u32) + (over as u32))
+        // If self + rhs did not overflow, return it.
+        // If self + rhs overflowed, sum_corr = self + rhs - (2**31 - 1).
+        Self::new(if over { sum_corr } else { sum_u32 })
     }
 }
 
@@ -285,12 +281,8 @@ impl Sub for Mersenne31 {
         // If we didn't overflow we have the correct value.
         // Otherwise we have added 2**32 = 2**31 + 1 mod 2**31 - 1.
         // Hence we need to remove the most significant bit and subtract 1.
-        // Removing the most significant bit does nothing if no overflow happened.
-        sub.bitand_assign(Self::ORDER_U32);
-
-        // Subtract 1 if overflow happened.
-
-        Self::new(sub - (over as u32))
+        sub -= over as u32;
+        Self::new(sub & Self::ORDER_U32)
     }
 }
 
