@@ -243,6 +243,8 @@ impl PrimeField64 for Mersenne31 {
     }
 }
 
+/// Note there some other possible algorithms to compute the sum.
+/// See: https://github.com/Plonky3/Plonky3/blob/6049a30c3b1f5351c3eb0f7c994dc97e8f68d10d/mersenne-31/src/lib.rs#L249C38-L249C38
 impl Add for Mersenne31 {
     type Output = Self;
 
@@ -257,22 +259,8 @@ impl Add for Mersenne31 {
         sum.bitand_assign(Self::ORDER_U32 as i32);
 
         // Add 1 if overflow happened.
-        if over {
-            Self::new((sum + 1) as u32)
-        } else {
-            Self::new(sum as u32)
-        }
 
-        // Self::new((sum as u32) + (over as u32))
-
-        // let mut sum = self.value + rhs.value;
-        // // If sum's most significant bit is set, we clear it and add 1, since 2^31 = 1 mod p.
-        // // This addition of 1 cannot overflow 2^31, since sum has a max of
-        // // 2 * (2^31 - 1) = 2^32 - 2.
-        // let msb = sum & (1 << 31);
-        // sum.bitxor_assign(msb);
-        // sum += u32::from(msb != 0);
-        // Self::new(sum)
+        Self::new((sum as u32) + (over as u32))
     }
 }
 
