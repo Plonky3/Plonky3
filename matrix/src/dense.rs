@@ -205,7 +205,7 @@ pub struct RowMajorMatrixView<'a, T> {
 
 impl<'a, T> RowMajorMatrixView<'a, T> {
     #[must_use]
-    pub fn new(values: &'a mut [T], width: usize) -> Self {
+    pub fn new(values: &'a [T], width: usize) -> Self {
         debug_assert_eq!(values.len() % width, 0);
         Self { values, width }
     }
