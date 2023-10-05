@@ -13,7 +13,7 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, BitXorAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
 pub use dft::Mersenne31Dft;
@@ -247,14 +247,19 @@ impl Add for Mersenne31 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
-        let mut sum = self.value + rhs.value;
-        // If sum's most significant bit is set, we clear it and add 1, since 2^31 = 1 mod p.
-        // This addition of 1 cannot overflow 2^31, since sum has a max of
-        // 2 * (2^31 - 1) = 2^32 - 2.
-        let msb = sum & (1 << 31);
-        sum.bitxor_assign(msb);
-        sum += u32::from(msb != 0);
-        Self::new(sum)
+        // See the following for a way to compute the sum that avoids
+        // the conditional which may be preferable on some
+        // architectures.
+        // https://github.com/Plonky3/Plonky3/blob/6049a30c3b1f5351c3eb0f7c994dc97e8f68d10d/mersenne-31/src/lib.rs#L249
+
+        // Working with i32 means we get a flag which informs us if overflow happened.
+        let (sum_i32, over) = (self.value as i32).overflowing_add(rhs.value as i32);
+        let sum_u32 = sum_i32 as u32;
+        let sum_corr = sum_u32.wrapping_sub(Self::ORDER_U32);
+
+        // If self + rhs did not overflow, return it.
+        // If self + rhs overflowed, sum_corr = self + rhs - (2**31 - 1).
+        Self::new(if over { sum_corr } else { sum_u32 })
     }
 }
 
@@ -274,8 +279,13 @@ impl Sub for Mersenne31 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
-        // TODO: Very naive for now.
-        self + (-rhs)
+        let (mut sub, over) = self.value.overflowing_sub(rhs.value);
+
+        // If we didn't overflow we have the correct value.
+        // Otherwise we have added 2**32 = 2**31 + 1 mod 2**31 - 1.
+        // Hence we need to remove the most significant bit and subtract 1.
+        sub -= over as u32;
+        Self::new(sub & Self::ORDER_U32)
     }
 }
 

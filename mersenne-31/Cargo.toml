@@ -15,11 +15,7 @@ p3-util = { path = "../util" }
 rand = "0.8.5"
 
 [[bench]]
-name = "inverse"
-harness = false
-
-[[bench]]
-name = "root_5"
+name = "bench_field"
 harness = false
 
 [dev-dependencies]
