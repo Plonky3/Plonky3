@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Cloned;
 use core::slice;
@@ -8,6 +9,9 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
+
+/// A default constant for block size matrix transposition. The value was chosen with 32-byte type, in mind.
+const TRANSPOSE_BLOCK_SIZE: usize = 64;
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -389,19 +393,12 @@ impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
 where
     T: Clone + Default + Send + Sync,
 {
-    const BLOCK_SIZE: usize = match core::mem::size_of::<T>() {
-        4 => 64,
-        8 => 32,
-        16 => 16,
-        _ => 16,
-    };
-
     fn transpose(self) -> Self {
-        let block_size = Self::BLOCK_SIZE;
+        let block_size = TRANSPOSE_BLOCK_SIZE;
         let height = self.height();
         let width = self.width();
 
-        let transposed_values: Vec<T> = (0..width * height).map(|_| T::default()).collect();
+        let transposed_values: Vec<T> = vec![T::default(); width * height];
         let mut transposed = Self::new(transposed_values, height);
 
         transposed
@@ -442,7 +439,7 @@ mod tests {
         let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
         let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
         let transposed = matrix.transpose();
-        let should_be_transposed_values = [1, 4, 7, 2, 5, 8, 3, 6, 9].to_vec();
+        let should_be_transposed_values = vec![1, 4, 7, 2, 5, 8, 3, 6, 9];
         let should_be_transposed = RowMajorMatrix::new(should_be_transposed_values, HEIGHT);
         assert_eq!(transposed, should_be_transposed);
     }
@@ -471,11 +468,10 @@ mod tests {
         let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
         let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
         let transposed = matrix.transpose();
-        let should_be_transposed_values = [
+        let should_be_transposed_values = vec![
             1, 6, 11, 16, 21, 26, 2, 7, 12, 17, 22, 27, 3, 8, 13, 18, 23, 28, 4, 9, 14, 19, 24, 29,
             5, 10, 15, 20, 25, 30,
-        ]
-        .to_vec();
+        ];
         let should_be_transposed = RowMajorMatrix::new(should_be_transposed_values, HEIGHT);
         assert_eq!(transposed, should_be_transposed);
     }

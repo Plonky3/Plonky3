@@ -85,6 +85,5 @@ pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
 
 /// A `TransposeMatrix` which supports transpose logic for matrices
 pub trait MatrixTranspose<T>: MatrixRows<T> {
-    const BLOCK_SIZE: usize;
     fn transpose(self) -> Self;
 }
