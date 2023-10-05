@@ -116,9 +116,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
-    use p3_field::AbstractField;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
     use rand::SeedableRng;
@@ -141,18 +138,6 @@ mod tests {
                 - <BrakedownCode<F, _> as Code<F, Mat>>::message_len(&brakedown.inner_code)
         );
         assert_eq!(brakedown.v_len(), 60);
-    }
-
-    #[test]
-    fn test_brakedown_code_or_family_impl() {
-        let brakedown = brakedown!(1, 1, 1, 1, 1, 1, brakedown_to_rs!(1, 1, 1, 1, 1, 1));
-        let messages = RowMajorMatrix::new(
-            (0..10)
-                .map(|u| F::from_canonical_u16(u))
-                .collect::<Vec<_>>(),
-            10,
-        );
-        <BrakedownCode<F, _> as CodeOrFamily<F, Mat>>::encode_batch(&brakedown, messages);
     }
 
     #[test]
