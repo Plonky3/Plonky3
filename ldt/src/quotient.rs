@@ -181,6 +181,7 @@ impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRowSlices<F>> MatrixRows<EF>
 {
     type Row<'a> = QuotientMatrixRow<'a, F, EF> where Inner: 'a;
 
+    #[inline]
     fn row(&self, r: usize) -> Self::Row<'_> {
         let num_openings = self.openings.len();
         QuotientMatrixRow {
@@ -209,6 +210,7 @@ where
 {
     type Item = EF;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner_col_index == self.inner_row.len() {
             self.opening_index += 1;
