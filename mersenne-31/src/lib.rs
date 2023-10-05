@@ -243,12 +243,15 @@ impl PrimeField64 for Mersenne31 {
     }
 }
 
-/// Note there some other possible algorithms to compute the sum.
-/// See: https://github.com/Plonky3/Plonky3/blob/6049a30c3b1f5351c3eb0f7c994dc97e8f68d10d/mersenne-31/src/lib.rs#L249C38-L249C38
 impl Add for Mersenne31 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
+        // See the following for a way to compute the sum that avoids
+        // the conditional which may be preferable on some
+        // architectures.
+        // https://github.com/Plonky3/Plonky3/blob/6049a30c3b1f5351c3eb0f7c994dc97e8f68d10d/mersenne-31/src/lib.rs#L249
+
         // Working with i32 means we get a flag which informs us if overflow happened.
         let (sum_i32, over) = (self.value as i32).overflowing_add(rhs.value as i32);
         let sum_u32 = sum_i32 as u32;
