@@ -6,6 +6,7 @@ use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::{Matrix, MatrixRows};
+use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
@@ -138,9 +139,10 @@ fn reduce_matrices<F, Challenge, Mat>(
 where
     F: Field,
     Challenge: ExtensionField<F>,
-    Mat: MatrixRows<F>,
+    Mat: MatrixRows<F> + Sync,
 {
     (0..height)
+        .into_par_iter()
         .map(|r| {
             let mut reduced = init[r];
             for mat in matrices {

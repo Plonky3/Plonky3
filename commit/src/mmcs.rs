@@ -21,7 +21,7 @@ pub trait Mmcs<T>: Clone {
     type Commitment: Clone;
     type Proof;
     type Error;
-    type Mat<'a>: MatrixRows<T>
+    type Mat<'a>: MatrixRows<T> + Sync
     where
         Self: 'a;
 
