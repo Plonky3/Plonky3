@@ -55,3 +55,11 @@ where
     // TODO: Use PackedField
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
+
+/// Extend a field `F` element `x` to an arry of length `D`
+/// by filling zeros.
+pub const fn field_to_array<F: Field, const D: usize>(x: F) -> [F; D] {
+    let mut arr = [F::ZERO; D];
+    arr[0] = x;
+    arr
+}
