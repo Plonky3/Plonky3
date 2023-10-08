@@ -3,9 +3,12 @@ use alloc::vec::Vec;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
+use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
+use crate::butterflies::{
+    dif_butterfly, dit_butterfly_2, twiddle_free_butterfly, twiddle_free_butterfly_2,
+};
 use crate::util::{
     bit_reversed_zero_pad, divide_by_height, reverse_bits, reverse_matrix_index_bits,
     reverse_slice_index_bits,
@@ -137,25 +140,30 @@ fn bowers_g_t_layer<F: Field>(
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
-    let h = mat.height();
-    let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
-    let num_blocks = h >> log_block_size;
+    let width = mat.width();
 
     // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(mat, hi, lo);
-    }
+    let (hi_chunks, lo_chunks) = mat.values.split_at_mut(half_block_size * width);
+    hi_chunks
+        .par_chunks_exact_mut(width)
+        .zip(lo_chunks[..half_block_size * width].par_chunks_exact_mut(width))
+        .for_each(|(hi_chunk, lo_chunk)| {
+            twiddle_free_butterfly_2(hi_chunk, lo_chunk);
+        });
 
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for i in 0..half_block_size {
-            let hi = block_start + i;
-            let lo = hi + half_block_size;
-            dit_butterfly(mat, hi, lo, twiddle);
-        }
-    }
+    mat.values
+        .par_chunks_exact_mut(2 * half_block_size * width)
+        .enumerate()
+        .skip(1)
+        .for_each(|(block, chunks)| {
+            let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
+            let twiddle = twiddles[block];
+            hi_chunks
+                .par_chunks_exact_mut(width)
+                .zip(lo_chunks.par_chunks_exact_mut(width))
+                .for_each(|(hi_chunk, lo_chunk)| dit_butterfly_2(hi_chunk, lo_chunk, twiddle));
+        });
 }
 
 #[cfg(test)]
