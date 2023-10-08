@@ -38,14 +38,14 @@ fn bench_cubic_extension_speicalized(c: &mut Criterion) {
 }
 
 criterion_group!(
-    bench_goldilocks_ef2,
+    bench_mersennecomplex_ef2,
     bench_qudratic_extension,
     bench_qudratic_extension_speicalized
 );
 
 criterion_group!(
-    bench_goldilocks_ef3,
+    bench_mersennecomplex_ef3,
     bench_cubic_extension,
     bench_cubic_extension_speicalized
 );
-criterion_main!(bench_goldilocks_ef2, bench_goldilocks_ef3);
+criterion_main!(bench_mersennecomplex_ef2, bench_mersennecomplex_ef3);
