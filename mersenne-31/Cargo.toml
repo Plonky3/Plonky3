@@ -18,5 +18,9 @@ rand = "0.8.5"
 name = "bench_field"
 harness = false
 
+[[bench]]
+name = "extension"
+harness = false
+
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }

@@ -4,6 +4,9 @@
 
 extern crate alloc;
 
+pub mod bench_func;
+
+pub use bench_func::*;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
     two_adic_subgroup_zerofier, Field, TwoAdicField,
