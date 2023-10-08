@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
+use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dit_butterfly, twiddle_free_butterfly};
@@ -39,19 +40,25 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddle
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
 
-    for j in (0..h).step_by(block_size) {
-        // Unroll i=0 case
-        let butterfly_hi = j;
-        let butterfly_lo = butterfly_hi + half_block_size;
-        twiddle_free_butterfly(mat, butterfly_hi, butterfly_lo);
+    let width = mat.width();
 
-        for i in 1..half_block_size {
-            let butterfly_hi = j + i;
-            let butterfly_lo = butterfly_hi + half_block_size;
-            let twiddle = twiddles[i << layer_rev];
-            dit_butterfly(mat, butterfly_hi, butterfly_lo, twiddle);
-        }
-    }
+    mat.values
+        .par_chunks_exact_mut(block_size * width)
+        .for_each(|block_chunks| {
+            let (hi_chunks, lo_chunks) = block_chunks.split_at_mut(half_block_size * width);
+            hi_chunks
+                .par_chunks_exact_mut(width)
+                .zip(lo_chunks.par_chunks_exact_mut(width))
+                .enumerate()
+                .for_each(|(ind, (hi_chunk, lo_chunk))| {
+                    if ind == 0 {
+                        twiddle_free_butterfly(hi_chunk, lo_chunk)
+                    } else {
+                        let twiddle = twiddles[ind << layer_rev];
+                        dit_butterfly(hi_chunk, lo_chunk, twiddle)
+                    }
+                });
+        });
 }
 
 #[cfg(test)]
