@@ -116,8 +116,7 @@ fn bowers_g_layer<F: Field>(
     let half_block_size = 1 << log_half_block_size;
     let width = mat.width();
 
-    mat.values
-        .par_chunks_exact_mut(2 * half_block_size * width)
+    mat.row_chunks_exact_mut(2 * half_block_size)
         .enumerate()
         .for_each(|(block, chunks)| {
             let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
@@ -144,19 +143,8 @@ fn bowers_g_t_layer<F: Field>(
     let half_block_size = 1 << log_half_block_size;
     let width = mat.width();
 
-    // Unroll first iteration with a twiddle factor of 1.
-    let (hi_chunks, lo_chunks) = mat.values.split_at_mut(half_block_size * width);
-    hi_chunks
-        .par_chunks_exact_mut(width)
-        .zip(lo_chunks.par_chunks_exact_mut(width))
-        .for_each(|(hi_chunk, lo_chunk)| {
-            twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
-        });
-
-    mat.values
-        .par_chunks_exact_mut(2 * half_block_size * width)
+    mat.row_chunks_exact_mut(2 * half_block_size)
         .enumerate()
-        .skip(1)
         .for_each(|(block, chunks)| {
             let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
             let twiddle = twiddles[block];
@@ -164,7 +152,11 @@ fn bowers_g_t_layer<F: Field>(
                 .par_chunks_exact_mut(width)
                 .zip(lo_chunks.par_chunks_exact_mut(width))
                 .for_each(|(hi_chunk, lo_chunk)| {
-                    dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle)
+                    if block == 0 {
+                        twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
+                    } else {
+                        dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle);
+                    }
                 });
         });
 }

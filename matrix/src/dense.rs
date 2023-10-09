@@ -4,6 +4,7 @@ use core::iter::Cloned;
 use core::slice;
 
 use p3_field::{ExtensionField, Field, PackedField};
+use p3_maybe_rayon::rayon::slice::ChunksExactMut;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -293,11 +294,18 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         self.values.chunks_exact_mut(self.width)
     }
 
-    pub fn par_rows_mut(&mut self) -> p3_maybe_rayon::rayon::slice::ChunksExactMut<'_, T>
+    pub fn par_rows_mut(&mut self) -> impl ParallelIterator<Item = &mut [T]>
     where
         T: Send,
     {
         self.values.par_chunks_exact_mut(self.width)
+    }
+
+    pub fn row_chunks_exact_mut(&mut self, size: usize) -> ChunksExactMut<T>
+    where
+        T: Send,
+    {
+        self.values.par_chunks_exact_mut(size * self.width)
     }
 
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
