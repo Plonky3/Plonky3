@@ -121,22 +121,17 @@ fn bowers_g_layer<F: Field>(
         .enumerate()
         .for_each(|(block, chunks)| {
             let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
-            if block == 0 {
-                hi_chunks
-                    .par_chunks_exact_mut(width)
-                    .zip(lo_chunks.par_chunks_exact_mut(width))
-                    .for_each(|(hi_chunk, lo_chunk)| {
+            let twiddle = twiddles[block];
+            hi_chunks
+                .par_chunks_exact_mut(width)
+                .zip(lo_chunks.par_chunks_exact_mut(width))
+                .for_each(|(hi_chunk, lo_chunk)| {
+                    if block == 0 {
                         twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
-                    });
-            } else {
-                let twiddle = twiddles[block];
-                hi_chunks
-                    .par_chunks_exact_mut(width)
-                    .zip(lo_chunks.par_chunks_exact_mut(width))
-                    .for_each(|(hi_chunk, lo_chunk)| {
-                        dif_butterfly_on_rows(hi_chunk, lo_chunk, twiddle)
-                    });
-            }
+                    } else {
+                        dif_butterfly_on_rows(hi_chunk, lo_chunk, twiddle);
+                    }
+                });
         });
 }
 
