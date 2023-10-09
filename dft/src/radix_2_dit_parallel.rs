@@ -147,20 +147,19 @@ fn dit_layer<F: Field>(
 
     let width = submat.width();
 
-    submat
-        .values
-        .par_chunks_exact_mut(block_size * width)
-        .for_each(|block_chunks| {
-            let (hi_chunks, lo_chunks) = block_chunks.split_at_mut(half_block_size * width);
-            hi_chunks
-                .par_chunks_exact_mut(width)
-                .zip(lo_chunks.par_chunks_exact_mut(width))
-                .enumerate()
-                .for_each(|(ind, (hi_chunk, lo_chunk))| {
-                    let twiddle = twiddles[ind << layer_rev];
-                    dit_butterfly(hi_chunk, lo_chunk, twiddle)
-                });
-        });
+    for block_start in (0..submat.height()).step_by(block_size) {
+        let row_chunk = &mut submat.values[block_start..block_start + block_size];
+        let (hi_chunk, lo_chunk) = row_chunk.split_at_mut(half_block_size * width);
+
+        hi_chunk
+            .par_chunks_exact_mut(width)
+            .zip(lo_chunk.par_chunks_exact_mut(width))
+            .enumerate()
+            .for_each(|(ind, (hi_chunk, lo_chunk))| {
+                let twiddle = twiddles[ind << layer_rev];
+                dit_butterfly(hi_chunk, lo_chunk, twiddle)
+            });
+    }
 }
 
 /// Like `dit_layer`, except the matrix and twiddles are encoded in bit-reversed order.
@@ -179,18 +178,16 @@ fn dit_layer_rev<F: Field>(
 
     let width = submat.width();
 
-    submat
-        .values
-        .par_chunks_exact_mut(block_size * width)
-        .enumerate()
-        .for_each(|(block, block_chunks)| {
-            let (hi_chunks, lo_chunks) = block_chunks.split_at_mut(half_block_size * width);
-            let twiddle = twiddles_rev[block];
-            hi_chunks
-                .par_chunks_exact_mut(width)
-                .zip(lo_chunks.par_chunks_exact_mut(width))
-                .for_each(|(hi_chunk, lo_chunk)| dit_butterfly(hi_chunk, lo_chunk, twiddle));
-        });
+    for (block, block_start) in (0..submat.height()).step_by(block_size).enumerate() {
+        let row_chunk = &mut submat.values[block_start..block_start + block_size];
+        let (hi_chunk, lo_chunk) = row_chunk.split_at_mut(half_block_size * width);
+
+        let twiddle = twiddles_rev[block];
+        hi_chunk
+            .par_chunks_exact_mut(width)
+            .zip(lo_chunk.par_chunks_exact_mut(width))
+            .for_each(|(hi_chunk, lo_chunk)| dit_butterfly(hi_chunk, lo_chunk, twiddle));
+    }
 }
 
 #[cfg(test)]
