@@ -1,6 +1,6 @@
 use p3_field::Field;
 
-/// DIT butterfly
+/// DIT butterfly.
 #[inline]
 pub(crate) fn dit_butterfly<F: Field>(row_1: &mut [F], row_2: &mut [F], twiddle: F) {
     let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) = unsafe {
