@@ -6,7 +6,7 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-use crate::butterflies::{dit_butterfly, twiddle_free_butterfly};
+use crate::butterflies::{dit_butterfly_on_rows, twiddle_free_butterfly_on_rows};
 use crate::util::reverse_matrix_index_bits;
 use crate::TwoAdicSubgroupDft;
 
@@ -52,10 +52,10 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddle
                 .enumerate()
                 .for_each(|(ind, (hi_chunk, lo_chunk))| {
                     if ind == 0 {
-                        twiddle_free_butterfly(hi_chunk, lo_chunk)
+                        twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk)
                     } else {
                         let twiddle = twiddles[ind << layer_rev];
-                        dit_butterfly(hi_chunk, lo_chunk, twiddle)
+                        dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle)
                     }
                 });
         });

@@ -293,7 +293,7 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         self.values.chunks_exact_mut(self.width)
     }
 
-    pub fn par_rows_mut(&mut self) -> impl ParallelIterator<Item = &mut [T]>
+    pub fn par_rows_mut(&mut self) -> p3_maybe_rayon::rayon::slice::ChunksExactMut<'_, T>
     where
         T: Send,
     {
