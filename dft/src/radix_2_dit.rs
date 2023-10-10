@@ -42,22 +42,21 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddle
 
     let width = mat.width();
 
-    mat.row_chunks_exact_mut(block_size)
-        .for_each(|block_chunks| {
-            let (hi_chunks, lo_chunks) = block_chunks.split_at_mut(half_block_size * width);
-            hi_chunks
-                .par_chunks_exact_mut(width)
-                .zip(lo_chunks.par_chunks_exact_mut(width))
-                .enumerate()
-                .for_each(|(ind, (hi_chunk, lo_chunk))| {
-                    if ind == 0 {
-                        twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk)
-                    } else {
-                        let twiddle = twiddles[ind << layer_rev];
-                        dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle)
-                    }
-                });
-        });
+    mat.par_row_chunks_mut(block_size).for_each(|block_chunks| {
+        let (hi_chunks, lo_chunks) = block_chunks.split_at_mut(half_block_size * width);
+        hi_chunks
+            .par_chunks_exact_mut(width)
+            .zip(lo_chunks.par_chunks_exact_mut(width))
+            .enumerate()
+            .for_each(|(ind, (hi_chunk, lo_chunk))| {
+                if ind == 0 {
+                    twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk)
+                } else {
+                    let twiddle = twiddles[ind << layer_rev];
+                    dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle)
+                }
+            });
+    });
 }
 
 #[cfg(test)]

@@ -115,23 +115,7 @@ fn bowers_g_layer<F: Field>(
 ) {
     let half_block_size = 1 << log_half_block_size;
     let width = mat.width();
-
-    mat.row_chunks_exact_mut(2 * half_block_size)
-        .enumerate()
-        .for_each(|(block, chunks)| {
-            let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
-            let twiddle = twiddles[block];
-            hi_chunks
-                .par_chunks_exact_mut(width)
-                .zip(lo_chunks.par_chunks_exact_mut(width))
-                .for_each(|(hi_chunk, lo_chunk)| {
-                    if block == 0 {
-                        twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
-                    } else {
-                        dif_butterfly_on_rows(hi_chunk, lo_chunk, twiddle);
-                    }
-                });
-        });
+    par_chunks_bowers(mat, width, half_block_size, twiddles, dif_butterfly_on_rows)
 }
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
@@ -142,8 +126,19 @@ fn bowers_g_t_layer<F: Field>(
 ) {
     let half_block_size = 1 << log_half_block_size;
     let width = mat.width();
+    par_chunks_bowers(mat, width, half_block_size, twiddles, dit_butterfly_on_rows)
+}
 
-    mat.row_chunks_exact_mut(2 * half_block_size)
+fn par_chunks_bowers<F: Field, Fun>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    width: usize,
+    half_block_size: usize,
+    twiddles: &[F],
+    butterfly_fn: Fun,
+) where
+    Fun: Fn(&mut [F], &mut [F], F) + Sync,
+{
+    mat.par_row_chunks_mut(2 * half_block_size)
         .enumerate()
         .for_each(|(block, chunks)| {
             let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
@@ -155,7 +150,7 @@ fn bowers_g_t_layer<F: Field>(
                     if block == 0 {
                         twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
                     } else {
-                        dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle);
+                        butterfly_fn(hi_chunk, lo_chunk, twiddle);
                     }
                 });
         });
