@@ -121,6 +121,19 @@ pub trait AbstractField:
         }
     }
 
+    #[must_use]
+    fn packed_powers<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
+        let mut base = P::ZERO;
+        for (dst, pow) in base.as_slice_mut().iter_mut().zip(self.powers()) {
+            *dst = pow;
+        }
+
+        Powers {
+            base,
+            current: P::ONE
+        }
+    }
+
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
