@@ -53,7 +53,7 @@ impl<T> RowMajorMatrix<T> {
         self.values.chunks_exact_mut(self.width)
     }
 
-    pub fn row_chunks_mut(
+    pub fn par_row_chunks_mut(
         &mut self,
         chunk_rows: usize,
     ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
@@ -293,11 +293,21 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         self.values.chunks_exact_mut(self.width)
     }
 
-    pub fn par_rows_mut(&mut self) -> impl ParallelIterator<Item = &mut [T]>
+    pub fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [T]>
     where
         T: Send,
     {
         self.values.par_chunks_exact_mut(self.width)
+    }
+
+    pub fn par_row_chunks_mut(
+        &mut self,
+        size: usize,
+    ) -> impl IndexedParallelIterator<Item = &mut [T]>
+    where
+        T: Send,
+    {
+        self.values.par_chunks_exact_mut(size * self.width)
     }
 
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
