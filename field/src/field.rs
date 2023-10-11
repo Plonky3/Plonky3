@@ -121,16 +121,10 @@ pub trait AbstractField:
         }
     }
 
-    #[must_use]
-    fn packed_powers<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
-        let mut base = P::ZERO;
-        for (dst, pow) in base.as_slice_mut().iter_mut().zip(self.powers()) {
-            *dst = pow;
-        }
-
-        Powers {
-            base,
-            current: P::ONE
+    fn packed_powers<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
+        PackedPowers {
+            multiplier: P::from_fn(|_| self.exp_u64(P::WIDTH as u64)),
+            current: P::ONE,
         }
     }
 
@@ -329,6 +323,24 @@ impl<AF: AbstractField> Iterator for Powers<AF> {
     fn next(&mut self) -> Option<AF> {
         let result = self.current.clone();
         self.current *= self.base.clone();
+        Some(result)
+    }
+}
+
+/// like `Powers`, but packed into `PackedField` elements
+#[derive(Clone)]
+pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
+    // base ** P::WIDTH
+    pub multiplier: P,
+    pub current: P,
+}
+
+impl<AF: AbstractField, P: PackedField<Scalar = AF>> Iterator for PackedPowers<AF, P> {
+    type Item = P;
+
+    fn next(&mut self) -> Option<P> {
+        let result = self.current.clone();
+        self.current *= self.multiplier;
         Some(result)
     }
 }
