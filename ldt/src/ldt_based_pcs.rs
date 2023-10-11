@@ -94,25 +94,31 @@ where
         prover_data_and_points: &[(&Self::ProverData, &[EF])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof) {
-        let all_opened_values = prover_data_and_points
-            .iter()
-            .map(|(data, points)| {
-                points
+        // Use Barycentric interpolation to evaluate each matrix at a given point.
+        let eval_at_point = |matrices: &[M::Mat<'_>], point| {
+            matrices
+                .iter()
+                .map(|mat| {
+                    let low_coset = mat.vertically_strided(1 << self.added_bits, 0);
+                    let shift = Domain::generator();
+                    interpolate_coset(&low_coset, shift, point)
+                })
+                .collect::<OpenedValuesForPoint<EF>>()
+        };
+
+        let all_opened_values = info_span!("compute opened values with Lagrange interpolation")
+            .in_scope(|| {
+                prover_data_and_points
                     .iter()
-                    .map(|&point| {
-                        self.mmcs
-                            .get_matrices(data)
-                            .into_iter()
-                            .map(|mat| {
-                                let low_coset = mat.vertically_strided(1 << self.added_bits, 0);
-                                let shift = Domain::generator();
-                                interpolate_coset(&low_coset, shift, point)
-                            })
-                            .collect::<OpenedValuesForPoint<EF>>()
+                    .map(|(data, points)| {
+                        let matrices = self.mmcs.get_matrices(data);
+                        points
+                            .iter()
+                            .map(|&point| eval_at_point(&matrices, point))
+                            .collect::<OpenedValuesForRound<EF>>()
                     })
-                    .collect::<OpenedValuesForRound<EF>>()
-            })
-            .collect::<OpenedValues<EF>>();
+                    .collect::<OpenedValues<EF>>()
+            });
 
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
             prover_data_and_points.iter().copied().unzip();
