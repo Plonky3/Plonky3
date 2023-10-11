@@ -130,7 +130,7 @@ pub trait AbstractField:
 
         PackedPowers {
             multiplier: P::from_fn(|_| self.clone()).exp_u64(P::WIDTH as u64),
-            current
+            current,
         }
     }
 
@@ -345,7 +345,7 @@ impl<AF: AbstractField, P: PackedField<Scalar = AF>> Iterator for PackedPowers<A
     type Item = P;
 
     fn next(&mut self) -> Option<P> {
-        let result = self.current.clone();
+        let result = self.current;
         self.current *= self.multiplier;
         Some(result)
     }

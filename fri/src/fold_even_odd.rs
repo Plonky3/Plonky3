@@ -44,8 +44,13 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     let cutoff = (half_n / F::Packing::WIDTH) * F::Packing::WIDTH;
 
     let (first, second) = poly.split_at(n / 2);
-    let first_leftover =
-        F::Packing::from_fn(|i| if cutoff + i < first.len() { first[i] } else { F::ZERO });
+    let first_leftover = F::Packing::from_fn(|i| {
+        if cutoff + i < first.len() {
+            first[i]
+        } else {
+            F::ZERO
+        }
+    });
     let second_leftover = F::Packing::from_fn(|i| {
         if cutoff + i < second.len() {
             second[cutoff + i]
@@ -61,7 +66,8 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
         .chain(core::iter::once(&second_leftover));
 
     // allocate and pack result, rounding up to the nearest multiple of packing width
-    let nearest_mutliple_of_packing_width = F::Packing::WIDTH * ((half_n + F::Packing::WIDTH - 1) / F::Packing::WIDTH);
+    let nearest_mutliple_of_packing_width =
+        F::Packing::WIDTH * ((half_n + F::Packing::WIDTH - 1) / F::Packing::WIDTH);
     let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width];
     let res_packed = F::Packing::pack_slice_mut(&mut res);
 
@@ -76,7 +82,6 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     res.truncate(half_n);
     res
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -99,12 +104,19 @@ mod tests {
         let dft = Radix2Dit::default();
         let evals = dft.dft(coeffs.clone());
 
-        let (even_coeffs, odd_coeffs): (Vec<_>, Vec<_>) = coeffs.iter().cloned().step_by(2).zip(coeffs.iter().cloned().skip(1).step_by(2)).unzip();
+        let (even_coeffs, odd_coeffs): (Vec<_>, Vec<_>) = coeffs
+            .iter()
+            .cloned()
+            .step_by(2)
+            .zip(coeffs.iter().cloned().skip(1).step_by(2))
+            .unzip();
         let even_evals = dft.dft(even_coeffs);
         let odd_evals = dft.dft(odd_coeffs);
 
         let beta = rng.gen::<F>();
-        let expected = izip!(even_evals, odd_evals).map(|(even, odd)| even + beta * odd).collect::<Vec<_>>();
+        let expected = izip!(even_evals, odd_evals)
+            .map(|(even, odd)| even + beta * odd)
+            .collect::<Vec<_>>();
         let got = fold_even_odd(&evals, beta);
         assert_eq!(expected, got);
     }
