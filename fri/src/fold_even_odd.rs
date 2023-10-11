@@ -40,7 +40,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
         let nearest_mutliple_of_packing_width = (half_n + F::Packing::WIDTH - 1) / F::Packing::WIDTH;
         let cutoff = (half_n / F::Packing::WIDTH) * F::Packing::WIDTH;
 
-        let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width];
+        let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width * F::Packing::WIDTH];
         let res_packed = F::Packing::pack_slice_mut(&mut res);
 
         let (first, second) = poly.split_at(n / 2);
