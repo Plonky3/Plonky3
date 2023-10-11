@@ -6,8 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_symmetric::hasher::CryptographicHasher;
-use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
 use tiny_keccak::{keccakf, Hasher, Keccak};
 
 /// The Keccak-f permutation.

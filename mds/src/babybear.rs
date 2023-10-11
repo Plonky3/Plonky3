@@ -6,7 +6,7 @@
 
 use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Bowers;
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 
 use crate::util::{
     apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
@@ -142,7 +142,7 @@ impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
-    use p3_symmetric::permutation::Permutation;
+    use p3_symmetric::Permutation;
 
     use super::MdsMatrixBabyBear;
 

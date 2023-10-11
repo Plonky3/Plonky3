@@ -9,6 +9,7 @@ p3-air = { path = "../air" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
+tracing = "0.1.37"
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
@@ -16,6 +17,7 @@ p3-blake3 = { path = "../blake3" }
 p3-challenger = { path = "../challenger" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
+p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
 p3-ldt = { path = "../ldt" }
 p3-mds = { path = "../mds" }
@@ -28,4 +30,10 @@ tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
 tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 
 [[example]]
-name = "prove_keccak"
+name = "prove_keccak_baby_bear"
+
+[[example]]
+name = "prove_keccak_baby_bear_poseidon2"
+
+[[example]]
+name = "prove_keccak_goldilocks"

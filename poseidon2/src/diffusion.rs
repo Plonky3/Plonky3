@@ -9,7 +9,7 @@
 //! This file implements a trait for linear layers that satisfy these three properties.
 
 use p3_field::AbstractField;
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 
 pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
 

@@ -201,6 +201,7 @@ impl PrimeField for Goldilocks {}
 impl PrimeField64 for Goldilocks {
     const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
 
+    #[inline]
     fn as_canonical_u64(&self) -> u64 {
         let mut c = self.value;
         // We only need one condition subtraction, since 2 * ORDER would not fit in a u64.

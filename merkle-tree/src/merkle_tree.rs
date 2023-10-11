@@ -8,8 +8,7 @@ use p3_field::{AbstractField, Field, PackedField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
-use p3_symmetric::compression::PseudoCompressionFunction;
-use p3_symmetric::hasher::CryptographicHasher;
+use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use tracing::instrument;
 
 /// A binary Merkle tree for field data. It has leaves of type `F` and digests of type

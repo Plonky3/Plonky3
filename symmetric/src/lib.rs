@@ -4,7 +4,14 @@
 
 extern crate alloc;
 
-pub mod compression;
-pub mod hasher;
-pub mod permutation;
-pub mod sponge;
+mod compression;
+mod hasher;
+mod permutation;
+mod serializing_hasher;
+mod sponge;
+
+pub use compression::*;
+pub use hasher::*;
+pub use permutation::*;
+pub use serializing_hasher::*;
+pub use sponge::*;

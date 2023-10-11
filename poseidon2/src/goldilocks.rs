@@ -4,7 +4,7 @@
 
 use p3_field::AbstractField;
 use p3_goldilocks::Goldilocks;
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 
 use crate::diffusion::matmul_internal;
 use crate::DiffusionPermutation;

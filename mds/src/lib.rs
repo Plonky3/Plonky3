@@ -1,4 +1,4 @@
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 
 pub mod babybear;
 mod butterflies;

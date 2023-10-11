@@ -11,7 +11,7 @@ use p3_mds::mersenne31::MdsMatrixMersenne31;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use p3_rescue::{BasicSboxLayer, Rescue};
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
