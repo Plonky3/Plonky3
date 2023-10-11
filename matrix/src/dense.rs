@@ -100,6 +100,20 @@ impl<T> RowMajorMatrix<T> {
         }
     }
 
+    /// Flatten a matrix of extension field elements into a matrix of base field elements.
+    pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
+    where
+        T: ExtensionField<F>,
+    {
+        let width = self.width * T::D;
+        let values = self
+            .values
+            .iter()
+            .flat_map(|x| x.as_base_slice().iter().copied())
+            .collect();
+        RowMajorMatrix { values, width }
+    }
+
     pub fn to_ext<EF: ExtensionField<T>>(&self) -> RowMajorMatrix<EF>
     where
         T: Field,
