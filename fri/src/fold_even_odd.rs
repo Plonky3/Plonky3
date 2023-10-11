@@ -76,3 +76,36 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     res.truncate(half_n);
     res
 }
+
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+    use rand::{thread_rng, Rng};
+
+    use super::*;
+
+    #[test]
+    fn test_fold_even_odd() {
+        type F = BabyBear;
+
+        let mut rng = thread_rng();
+
+        let log_n = 10;
+        let n = 1 << log_n;
+        let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
+
+        let dft = Radix2Dit::default();
+        let evals = dft.dft(coeffs.clone());
+
+        let (even_coeffs, odd_coeffs): (Vec<_>, Vec<_>) = coeffs.iter().cloned().step_by(2).zip(coeffs.iter().cloned().skip(1).step_by(2)).unzip();
+        let even_evals = dft.dft(even_coeffs);
+        let odd_evals = dft.dft(odd_coeffs);
+
+        let beta = rng.gen::<F>();
+        let expected = izip!(even_evals, odd_evals).map(|(even, odd)| even + beta * odd).collect::<Vec<_>>();
+        let got = fold_even_odd(&evals, beta);
+        assert_eq!(expected, got);
+    }
+}
