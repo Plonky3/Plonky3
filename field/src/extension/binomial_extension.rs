@@ -170,20 +170,24 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Display for BinomialExtensionField<F, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let str = self
-            .value
-            .iter()
-            .enumerate()
-            .filter(|(_, x)| !x.is_zero())
-            .map(|(i, x)| match (i, x.is_one()) {
-                (0, _) => format!("{x}"),
-                (1, true) => "X".to_string(),
-                (1, false) => format!("{x} X"),
-                (_, true) => format!("X^{i}"),
-                (_, false) => format!("{x} X^{i}"),
-            })
-            .join(" + ");
-        write!(f, "{}", str)
+        if self.is_zero() {
+            write!(f, "0")
+        } else {
+            let str = self
+                .value
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| !x.is_zero())
+                .map(|(i, x)| match (i, x.is_one()) {
+                    (0, _) => format!("{x}"),
+                    (1, true) => "X".to_string(),
+                    (1, false) => format!("{x} X"),
+                    (_, true) => format!("X^{i}"),
+                    (_, false) => format!("{x} X^{i}"),
+                })
+                .join(" + ");
+            write!(f, "{}", str)
+        }
     }
 }
 

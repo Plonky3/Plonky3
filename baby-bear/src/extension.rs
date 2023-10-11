@@ -43,13 +43,20 @@ mod test_quartic_extension {
 
     #[test]
     fn display() {
-        let x = BinomialExtensionField::<BabyBear, 4>::from_base_slice(&[
-            BabyBear::TWO,
-            BabyBear::ONE,
-            BabyBear::ZERO,
-            BabyBear::TWO,
-        ]);
-        assert_eq!(format!("{}", x), "2 + X + 2 X^3");
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+
+        assert_eq!(format!("{}", EF::ZERO), "0");
+        assert_eq!(format!("{}", EF::ONE), "1");
+        assert_eq!(format!("{}", EF::TWO), "2");
+
+        assert_eq!(
+            format!(
+                "{}",
+                EF::from_base_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO])
+            ),
+            "2 + X + 2 X^3"
+        );
     }
 }
 
