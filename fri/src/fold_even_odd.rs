@@ -85,6 +85,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
     use rand::{thread_rng, Rng};
@@ -104,13 +105,10 @@ mod tests {
         let dft = Radix2Dit::default();
         let evals = dft.dft(coeffs.clone());
 
-        let (even_coeffs, odd_coeffs): (Vec<_>, Vec<_>) = coeffs
-            .iter()
-            .cloned()
-            .step_by(2)
-            .zip(coeffs.iter().cloned().skip(1).step_by(2))
-            .unzip();
+        let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
         let even_evals = dft.dft(even_coeffs);
+
+        let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
         let odd_evals = dft.dft(odd_coeffs);
 
         let beta = rng.gen::<F>();
