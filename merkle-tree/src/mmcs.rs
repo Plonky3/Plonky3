@@ -7,8 +7,7 @@ use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::PackedField;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
-use p3_symmetric::compression::PseudoCompressionFunction;
-use p3_symmetric::hasher::CryptographicHasher;
+use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
 
 use crate::FieldMerkleTree;
@@ -182,9 +181,9 @@ mod tests {
     use p3_matrix::{Dimensions, Matrix};
     use p3_mds::coset_mds::CosetMds;
     use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
-    use p3_symmetric::compression::{PseudoCompressionFunction, TruncatedPermutation};
-    use p3_symmetric::hasher::CryptographicHasher;
-    use p3_symmetric::sponge::PaddingFreeSponge;
+    use p3_symmetric::{
+        CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
+    };
     use rand::thread_rng;
 
     use crate::FieldMerkleTreeMmcs;

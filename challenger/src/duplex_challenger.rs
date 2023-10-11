@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::PrimeField64;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::CryptographicPermutation;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -126,7 +126,7 @@ where
 mod tests {
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+    use p3_symmetric::{CryptographicPermutation, Permutation};
 
     use super::*;
 

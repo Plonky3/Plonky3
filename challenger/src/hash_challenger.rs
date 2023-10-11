@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::Field;
-use p3_symmetric::hasher::CryptographicHasher;
+use p3_symmetric::CryptographicHasher;
 
 use crate::{CanObserve, CanSample};
 

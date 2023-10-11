@@ -3,7 +3,7 @@ use num::{BigUint, One};
 use num_integer::binomial;
 use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+use p3_symmetric::{CryptographicPermutation, Permutation};
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -153,9 +153,7 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mds::mersenne31::MdsMatrixMersenne31;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::hasher::CryptographicHasher;
-    use p3_symmetric::permutation::Permutation;
-    use p3_symmetric::sponge::PaddingFreeSponge;
+    use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 
     use crate::rescue::Rescue;
     use crate::sbox::BasicSboxLayer;

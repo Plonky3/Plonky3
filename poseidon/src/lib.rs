@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use p3_field::{AbstractField, PrimeField};
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;

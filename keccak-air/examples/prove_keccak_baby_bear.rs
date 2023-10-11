@@ -8,8 +8,7 @@ use p3_ldt::QuotientMmcs;
 use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
-use p3_symmetric::compression::CompressionFunctionFromHasher;
-use p3_symmetric::hasher::SerializingHasher32;
+use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfigImpl, VerificationError};
 use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
@@ -17,6 +16,8 @@ use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+
+const NUM_HASHES: usize = 680;
 
 fn main() -> Result<(), VerificationError> {
     let env_filter = EnvFilter::builder()
@@ -65,8 +66,7 @@ fn main() -> Result<(), VerificationError> {
     type Pcs = FriBasedPcs<MyFriConfig, MyMmcs, Dft, Challenger>;
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>;
 
-    let num_hashes = 340;
-    let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
     let pcs = Pcs::new(dft, 1, mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft {});

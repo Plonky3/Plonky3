@@ -7,9 +7,9 @@
 // use p3_matrix::Matrix;
 // use p3_merkle_tree::MerkleTreeMMCS;
 // use p3_poseidon::Poseidon;
-// use p3_symmetric::compression::TruncatedPermutation;
-// use p3_symmetric::permutation::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
-// use p3_symmetric::sponge::PaddingFreeSponge;
+// use p3_symmetric::TruncatedPermutation;
+// use p3_symmetric::{ArrayPermutation, CryptographicPermutation, MDSPermutation};
+// use p3_symmetric::PaddingFreeSponge;
 // use rand::thread_rng;
 // use p3_mersenne_31::Mersenne31;
 // use p3_tensor_pcs::TensorPcs;
