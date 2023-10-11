@@ -102,7 +102,7 @@ mod tests {
         let n = 1 << log_n;
         let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
 
-        let dft = Radix2Dit::default();
+        let dft = Radix2Dit;
         let evals = dft.dft(coeffs.clone());
 
         let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
