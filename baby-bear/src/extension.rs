@@ -30,15 +30,31 @@ impl BinomiallyExtendable<5> for BabyBear {
 }
 
 #[cfg(test)]
-mod test_quatric_extension {
+mod test_quartic_extension {
+    use alloc::format;
 
+    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field::{AbstractExtensionField, AbstractField};
     use p3_field_testing::test_field;
 
+    use crate::BabyBear;
+
     test_field!(p3_field::extension::binomial_extension::BinomialExtensionField<crate::BabyBear,4>);
+
+    #[test]
+    fn display() {
+        let x = BinomialExtensionField::<BabyBear, 4>::from_base_slice(&[
+            BabyBear::TWO,
+            BabyBear::ONE,
+            BabyBear::ZERO,
+            BabyBear::TWO,
+        ]);
+        assert_eq!(format!("{}", x), "2 + X + 2 X^3");
+    }
 }
+
 #[cfg(test)]
 mod test_quintic_extension {
-
     use p3_field_testing::test_field;
 
     test_field!(p3_field::extension::binomial_extension::BinomialExtensionField<crate::BabyBear,5>);
