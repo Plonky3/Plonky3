@@ -1,9 +1,10 @@
 use alloc::format;
-use alloc::string::String;
+use alloc::string::ToString;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use itertools::Itertools;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
@@ -169,13 +170,24 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Display for BinomialExtensionField<F, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let linear_part = format!("{} + {}*X", self.value[0], self.value[1]); // ok, since D >= 2
-        let nonlin_part: String = self.value[2..]
-            .iter()
-            .zip(2..)
-            .map(|(x, i)| format!(" + {x}*X^{i}"))
-            .collect();
-        write!(f, "{}", linear_part + &nonlin_part)
+        if self.is_zero() {
+            write!(f, "0")
+        } else {
+            let str = self
+                .value
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| !x.is_zero())
+                .map(|(i, x)| match (i, x.is_one()) {
+                    (0, _) => format!("{x}"),
+                    (1, true) => "X".to_string(),
+                    (1, false) => format!("{x} X"),
+                    (_, true) => format!("X^{i}"),
+                    (_, false) => format!("{x} X^{i}"),
+                })
+                .join(" + ");
+            write!(f, "{}", str)
+        }
     }
 }
 
