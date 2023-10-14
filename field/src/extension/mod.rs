@@ -20,4 +20,5 @@ pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
 pub trait HasFrobenuis<F: Field>: ExtensionField<F> {
     fn frobenius(&self) -> Self;
     fn repeated_frobenius(&self, count: usize) -> Self;
+    fn frobenius_inv(&self) -> Self;
 }
