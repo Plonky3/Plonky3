@@ -19,6 +19,12 @@ pub trait FriConfig {
 
     fn num_queries(&self) -> usize;
 
+    fn log_blowup(&self) -> usize;
+
+    fn blowup(&self) -> usize {
+        1 << self.log_blowup()
+    }
+
     // TODO: grinding bits
 }
 
@@ -63,5 +69,9 @@ where
 
     fn num_queries(&self) -> usize {
         self.num_queries
+    }
+
+    fn log_blowup(&self) -> usize {
+        1 // TODO: 2x blowup for now, but should make it configurable
     }
 }

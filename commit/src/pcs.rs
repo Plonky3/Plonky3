@@ -74,6 +74,8 @@ where
 {
     fn coset_shift(&self) -> Domain;
 
+    fn log_blowup(&self) -> usize;
+
     fn get_ldes<'a, 'b>(
         &'a self,
         _prover_data: &'b Self::ProverData,

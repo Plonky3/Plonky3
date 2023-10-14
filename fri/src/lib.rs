@@ -28,22 +28,27 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> f
     type Proof = FriProof<FC>;
     type Error = ();
 
+    fn log_blowup(&self) -> usize {
+        self.config.log_blowup()
+    }
+
     fn prove(
         &self,
-        mmcs: &[FC::InputMmcs],
-        inputs: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
+        input_mmcs: &[FC::InputMmcs],
+        input_data: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
         challenger: &mut FC::Challenger,
     ) -> Self::Proof {
-        prove::<FC>(&self.config, mmcs, inputs, challenger)
+        prove::<FC>(&self.config, input_mmcs, input_data, challenger)
     }
 
     fn verify(
         &self,
+        input_mmcs: &[FC::InputMmcs],
         _input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
-        verify::<FC>(proof, challenger)
+        verify::<FC>(&self.config, input_mmcs, proof, challenger)
     }
 }
 

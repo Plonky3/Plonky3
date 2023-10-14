@@ -67,7 +67,7 @@ fn main() -> Result<(), VerificationError> {
     type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
     type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>;
 
-    let pcs = Pcs::new(dft, 1, val_mmcs, ldt);
+    let pcs = Pcs::new(dft, val_mmcs, ldt);
     let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
 
