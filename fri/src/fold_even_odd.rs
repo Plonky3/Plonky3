@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 use p3_field::{PackedField, TwoAdicField};
-use p3_util::{log2_strict_usize, ceil_div_usize};
+use p3_util::{ceil_div_usize, log2_strict_usize};
 use tracing::instrument;
 
 /// Fold a polynomial
