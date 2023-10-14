@@ -71,9 +71,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenuis<F> for BinomialExt
         Self::from_base_slice(&res)
     }
 
+    /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     fn frobenius_inv(&self) -> Self {
-        // Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
-
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
         let mut f = Self::ONE;
@@ -413,12 +412,14 @@ where
     }
 }
 
+///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn qudratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
     let scalar = (a[0].square() - w * a[1].square()).inverse();
     [a[0] * scalar, -a[1] * scalar]
 }
 
+/// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
     let a0_square = a[0].square();
@@ -439,6 +440,7 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
     ]
 }
 
+/// karatsuba multiplication for cubic extension field
 #[inline]
 fn cubic_mul<F: Field>(a: &[F], b: &[F], w: F) -> [F; 3] {
     let a0_b0 = a[0] * b[0];
@@ -452,6 +454,7 @@ fn cubic_mul<F: Field>(a: &[F], b: &[F], w: F) -> [F; 3] {
     [c0, c1, c2]
 }
 
+/// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn cubic_square<F: Field>(a: &[F], w: F) -> [F; 3] {
     let w_a2 = w * a[2];
