@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 use p3_field::{PackedField, TwoAdicField};
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, ceil_div_usize};
 use tracing::instrument;
 
 /// Fold a polynomial
@@ -67,7 +67,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
 
     // allocate and pack result, rounding up to the nearest multiple of packing width
     let nearest_mutliple_of_packing_width =
-        F::Packing::WIDTH * ((half_n + F::Packing::WIDTH - 1) / F::Packing::WIDTH);
+        F::Packing::WIDTH * ceil_div_usize(half_n, F::Packing::WIDTH);
     let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width];
     let res_packed = F::Packing::pack_slice_mut(&mut res);
 
