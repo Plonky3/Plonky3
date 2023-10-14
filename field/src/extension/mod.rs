@@ -2,8 +2,6 @@ use crate::field::Field;
 use crate::ExtensionField;
 
 pub mod binomial_extension;
-pub mod cubic;
-pub mod quadratic;
 
 /// Binomial extension field trait.
 /// A extension field with a irreducible polynomial X^d-W

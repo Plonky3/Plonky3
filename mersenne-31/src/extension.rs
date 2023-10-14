@@ -68,8 +68,6 @@ mod test_cubic_extension {
 
     use p3_field_testing::test_field;
 
-    // test_field!(p3_field::extension::cubic::CubicBef<crate::Mersenne31Complex<crate::Mersenne31>>);
-
     test_field!(
         p3_field::extension::binomial_extension::BinomialExtensionField<
             crate::Mersenne31Complex<crate::Mersenne31>,
@@ -82,10 +80,6 @@ mod test_cubic_extension {
 mod test_quadratic_extension {
 
     use p3_field_testing::test_field;
-
-    // test_field!(
-    //     p3_field::extension::quadratic::QuadraticBef<crate::Mersenne31Complex<crate::Mersenne31>>
-    // );
 
     test_field!(
         p3_field::extension::binomial_extension::BinomialExtensionField<
