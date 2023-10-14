@@ -122,7 +122,7 @@ pub trait AbstractField:
     }
 
     fn packed_powers<P: PackedField<Scalar = Self>>(&self, start: Self) -> PackedPowers<Self, P> {
-        let mut current = P::from(start.clone());
+        let mut current = P::from(start);
         let slice = current.as_slice_mut();
         for i in 1..P::WIDTH {
             slice[i] = slice[i - 1].clone() * self.clone();
