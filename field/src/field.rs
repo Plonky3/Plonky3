@@ -115,7 +115,7 @@ pub trait AbstractField:
 
     #[must_use]
     fn powers(&self) -> Powers<Self> {
-        Self::shifted_powers(&self, Self::ONE)
+        self.shifted_powers(Self::ONE)
     }
 
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
