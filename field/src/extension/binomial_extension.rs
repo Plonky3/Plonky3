@@ -8,10 +8,10 @@ use itertools::Itertools;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use super::HasFrobenuis;
+use super::{HasFrobenuis, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField};
+use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct BinomialExtensionField<F: BinomiallyExtendable<D>, const D: usize> {
@@ -409,6 +409,18 @@ where
             *r = Standard.sample(rng);
         }
         BinomialExtensionField::<F, D>::from_base_slice(&res)
+    }
+}
+
+impl<F: HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
+    for BinomialExtensionField<F, D>
+{
+    const TWO_ADICITY: usize = F::EXT_TWO_ADICITY;
+
+    fn two_adic_generator(bits: usize) -> Self {
+        Self {
+            value: F::ext_two_adic_generator(bits),
+        }
     }
 }
 

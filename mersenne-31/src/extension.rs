@@ -1,5 +1,5 @@
-use p3_field::extension::BinomiallyExtendable;
-use p3_field::AbstractField;
+use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
+use p3_field::{field_to_array, AbstractField, TwoAdicField};
 
 use crate::{Mersenne31, Mersenne31Complex};
 
@@ -29,6 +29,22 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
 
     // DTH_ROOT = W^((p^2 - 1)/2).
     const DTH_ROOT: Self = Self::new_real(Mersenne31::new(2147483646));
+}
+
+impl HasTwoAdicBionmialExtension<2> for Mersenne31Complex<Mersenne31> {
+    const EXT_TWO_ADICITY: usize = 33;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; 2] {
+        assert!(bits <= 33);
+        if bits == 33 {
+            [
+                Self::ZERO,
+                Self::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
+            ]
+        } else {
+            [Self::two_adic_generator(bits), Self::ZERO]
+        }
+    }
 }
 
 impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
@@ -63,28 +79,41 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     }
 }
 
+impl HasTwoAdicBionmialExtension<3> for Mersenne31Complex<Mersenne31> {
+    const EXT_TWO_ADICITY: usize = 32;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; 3] {
+        field_to_array::<Self, 3>(Self::two_adic_generator(bits))
+    }
+}
+
 #[cfg(test)]
 mod test_cubic_extension {
 
-    use p3_field_testing::test_field;
+    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field_testing::{test_field, test_two_adic_extension_field};
 
-    test_field!(
-        p3_field::extension::binomial_extension::BinomialExtensionField<
-            crate::Mersenne31Complex<crate::Mersenne31>,
-            3,
-        >
-    );
+    use crate::{Mersenne31, Mersenne31Complex};
+    type F = Mersenne31Complex<Mersenne31>;
+    type EF = BinomialExtensionField<F, 3>;
+
+    test_field!(super::EF);
+
+    test_two_adic_extension_field!(super::F, super::EF);
 }
 
 #[cfg(test)]
 mod test_quadratic_extension {
 
-    use p3_field_testing::test_field;
+    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field_testing::{test_field, test_two_adic_extension_field};
 
-    test_field!(
-        p3_field::extension::binomial_extension::BinomialExtensionField<
-            crate::Mersenne31Complex<crate::Mersenne31>,
-            2,
-        >
-    );
+    use crate::{Mersenne31, Mersenne31Complex};
+
+    type F = Mersenne31Complex<Mersenne31>;
+    type EF = BinomialExtensionField<F, 2>;
+
+    test_field!(super::EF);
+
+    test_two_adic_extension_field!(super::F, super::EF);
 }
