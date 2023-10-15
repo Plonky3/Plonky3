@@ -37,27 +37,15 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     let half_beta = beta * one_half;
 
     // beta/2 times successive powers of g_inv
-    let powers = g_inv.packed_powers::<F::Packing>(half_beta);
+    let powers = g_inv.shifted_powers_packed::<F::Packing>(half_beta);
 
     // pack first / second polys, rounding up to the nearest multiple of packing width
     let half_n = n / 2;
     let cutoff = (half_n / F::Packing::WIDTH) * F::Packing::WIDTH;
 
     let (first, second) = poly.split_at(n / 2);
-    let first_leftover = F::Packing::from_fn(|i| {
-        if cutoff + i < first.len() {
-            first[i]
-        } else {
-            F::ZERO
-        }
-    });
-    let second_leftover = F::Packing::from_fn(|i| {
-        if cutoff + i < second.len() {
-            second[cutoff + i]
-        } else {
-            F::ZERO
-        }
-    });
+    let first_leftover = first.get(cutoff + i).copied().unwrap_or_default();
+    let second_leftover = second.get(cutoff + i).copied().unwrap_or_default();
     let first = F::Packing::pack_slice(&first[..cutoff])
         .iter()
         .chain(core::iter::once(&first_leftover));
