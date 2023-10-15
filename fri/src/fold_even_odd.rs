@@ -44,8 +44,10 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     let cutoff = (half_n / F::Packing::WIDTH) * F::Packing::WIDTH;
 
     let (first, second) = poly.split_at(n / 2);
-    let first_leftover = first.get(cutoff + i).copied().unwrap_or_default();
-    let second_leftover = second.get(cutoff + i).copied().unwrap_or_default();
+    let first_leftover =
+        F::Packing::from_fn(|i| first.get(cutoff + i).copied().unwrap_or_default());
+    let second_leftover =
+        F::Packing::from_fn(|i| second.get(cutoff + i).copied().unwrap_or_default());
     let first = F::Packing::pack_slice(&first[..cutoff])
         .iter()
         .chain(core::iter::once(&first_leftover));
@@ -56,14 +58,13 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     // allocate and pack result, rounding up to the nearest multiple of packing width
     let nearest_mutliple_of_packing_width =
         F::Packing::WIDTH * ceil_div_usize(half_n, F::Packing::WIDTH);
-    let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width];
-    let res_packed = F::Packing::pack_slice_mut(&mut res);
 
     let one_half = F::Packing::from_fn(|_| one_half);
-    for (src, dst) in izip!(powers, first, second)
-        .map(|(power, &a, &b)| (one_half + power) * a + (one_half - power) * b)
-        .zip(res_packed.iter_mut())
-    {
+    let packed_results = izip!(powers, first, second)
+        .map(|(power, &a, &b)| (one_half + power) * a + (one_half - power) * b);
+
+    let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width];
+    for (src, dst) in packed_results.zip(F::Packing::pack_slice_mut(&mut res)) {
         *dst = src;
     }
 

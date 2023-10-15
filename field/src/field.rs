@@ -115,10 +115,7 @@ pub trait AbstractField:
 
     #[must_use]
     fn powers(&self) -> Powers<Self> {
-        Powers {
-            base: self.clone(),
-            current: Self::ONE,
-        }
+        Self::shifted_powers(&self, Self::ONE)
     }
 
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
@@ -129,16 +126,7 @@ pub trait AbstractField:
     }
 
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
-        let mut current = P::ONE;
-        let slice = current.as_slice_mut();
-        for i in 1..P::WIDTH {
-            slice[i] = slice[i - 1].clone() * self.clone();
-        }
-
-        PackedPowers {
-            multiplier: P::from(self.clone()).exp_u64(P::WIDTH as u64),
-            current,
-        }
+        self.shifted_powers_packed(Self::ONE)
     }
 
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
