@@ -19,6 +19,7 @@ tracing = "0.1.37"
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+p3-dft = { path = "../dft" }
 criterion = "0.5.1"
 rand = "0.8.5"
 
