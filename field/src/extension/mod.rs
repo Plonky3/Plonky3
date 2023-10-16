@@ -2,8 +2,6 @@ use crate::field::Field;
 use crate::ExtensionField;
 
 pub mod binomial_extension;
-pub mod cubic;
-pub mod quadratic;
 
 /// Binomial extension field trait.
 /// A extension field with a irreducible polynomial X^d-W
@@ -22,4 +20,5 @@ pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
 pub trait HasFrobenuis<F: Field>: ExtensionField<F> {
     fn frobenius(&self) -> Self;
     fn repeated_frobenius(&self, count: usize) -> Self;
+    fn frobenius_inv(&self) -> Self;
 }

@@ -70,6 +70,30 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenuis<F> for BinomialExt
 
         Self::from_base_slice(&res)
     }
+
+    /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    fn frobenius_inv(&self) -> Self {
+        // Writing 'a' for self, we need to compute a^(r-1):
+        // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
+        let mut f = Self::ONE;
+        for _ in 1..D {
+            f = (f * *self).frobenius();
+        }
+
+        // g = a^r is in the base field, so only compute that
+        // coefficient rather than the full product.
+        let a = self.value;
+        let b = f.value;
+        let mut g = F::ZERO;
+        for i in 1..D {
+            g += a[i] * b[D - i];
+        }
+        g *= F::W;
+        g += a[0] * b[0];
+        debug_assert_eq!(Self::from(g), *self * f);
+
+        f * g.inverse()
+    }
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExtensionField<F, D> {
@@ -130,41 +154,30 @@ impl<F: BinomiallyExtendable<D>, const D: usize> AbstractField for BinomialExten
 
     #[inline(always)]
     fn square(&self) -> Self {
-        // Specialising mul reduces the computation of c1 from 2 muls
-        // and one add to one mul and a shift
-        *self * *self
+        match D {
+            2 => {
+                let a = self.value;
+                Self::from_base_slice(&[a[0].square() + F::W * a[1].square(), a[0] * a[1].double()])
+            }
+            3 => Self::from_base_slice(&cubic_square(&self.value, F::W)),
+            _ => *self * *self,
+        }
     }
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
-    // Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
         }
 
-        // Writing 'a' for self, we need to compute a^(r-1):
-        // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = Self::ONE;
-        for _ in 1..D {
-            f = (f * *self).frobenius();
+        match D {
+            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::W))),
+            3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::W))),
+            _ => Some(self.frobenius_inv()),
         }
-
-        // g = a^r is in the base field, so only compute that
-        // coefficient rather than the full product.
-
-        let a = self.value;
-        let b = f.value;
-        let mut g = F::ZERO;
-        for i in 1..D {
-            g += a[i] * b[D - i];
-        }
-        g *= F::W;
-        g += a[0] * b[0];
-        debug_assert_eq!(Self::from(g), *self * f);
-
-        Some(f * g.inverse())
     }
 }
 
@@ -296,19 +309,27 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Mul for BinomialExtensionField<
         let a = self.value;
         let b = rhs.value;
 
-        let mut res = [F::ZERO; D];
+        match D {
+            2 => Self::from_base_slice(&[
+                a[0] * b[0] + F::W * a[1] * b[1],
+                a[0] * b[1] + a[1] * b[0],
+            ]),
+            3 => Self::from_base_slice(&cubic_mul(&a, &b, F::W)),
+            _ => {
+                let mut res = [F::ZERO; D];
 
-        for i in 0..D {
-            for j in 0..D {
-                if i + j >= D {
-                    res[i + j - D] += F::W * a[i] * b[j];
-                } else {
-                    res[i + j] += a[i] * b[j];
+                for i in 0..D {
+                    for j in 0..D {
+                        if i + j >= D {
+                            res[i + j - D] += F::W * a[i] * b[j];
+                        } else {
+                            res[i + j] += a[i] * b[j];
+                        }
+                    }
                 }
+                Self::from_base_slice(&res)
             }
         }
-
-        Self { value: res }
     }
 }
 
@@ -389,4 +410,58 @@ where
         }
         BinomialExtensionField::<F, D>::from_base_slice(&res)
     }
+}
+
+///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+#[inline]
+fn qudratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
+    let scalar = (a[0].square() - w * a[1].square()).inverse();
+    [a[0] * scalar, -a[1] * scalar]
+}
+
+/// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+#[inline]
+fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
+    let a0_square = a[0].square();
+    let a1_square = a[1].square();
+    let a2_w = w * a[2];
+    let a0_a1 = a[0] * a[1];
+
+    // scalar = (a0^3+wa1^3+w^2a2^3-3wa0a1a2)^-1
+    let scalar = (a0_square * a[0] + w * a[1] * a1_square + a2_w.square() * a[2]
+        - (F::ONE + F::TWO) * a2_w * a0_a1)
+        .inverse();
+
+    //scalar*[a0^2-wa1a2, wa2^2-a0a1, a1^2-a0a2]
+    [
+        scalar * (a0_square - a[1] * a2_w),
+        scalar * (a2_w * a[2] - a0_a1),
+        scalar * (a1_square - a[0] * a[2]),
+    ]
+}
+
+/// karatsuba multiplication for cubic extension field
+#[inline]
+fn cubic_mul<F: Field>(a: &[F], b: &[F], w: F) -> [F; 3] {
+    let a0_b0 = a[0] * b[0];
+    let a1_b1 = a[1] * b[1];
+    let a2_b2 = a[2] * b[2];
+
+    let c0 = a0_b0 + ((a[1] + a[2]) * (b[1] + b[2]) - a1_b1 - a2_b2) * w;
+    let c1 = (a[0] + a[1]) * (b[0] + b[1]) - a0_b0 - a1_b1 + a2_b2 * w;
+    let c2 = (a[0] + a[2]) * (b[0] + b[2]) - a0_b0 - a2_b2 + a1_b1;
+
+    [c0, c1, c2]
+}
+
+/// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+#[inline]
+fn cubic_square<F: Field>(a: &[F], w: F) -> [F; 3] {
+    let w_a2 = w * a[2];
+
+    let c0 = a[0].square() + (a[1] * w_a2).double();
+    let c1 = w_a2 * a[2] + (a[0] * a[1]).double();
+    let c2 = a[1].square() + (a[0] * a[2]).double();
+
+    [c0, c1, c2]
 }
