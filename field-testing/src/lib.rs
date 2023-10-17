@@ -94,8 +94,8 @@ pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
 pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
     let log_n = F::TWO_ADICITY;
     let g = F::two_adic_generator(log_n);
-    for i in 0..log_n {
-        assert_eq!(g.exp_power_of_2(i), F::two_adic_generator(log_n - i));
+    for bits in 0..=log_n {
+        assert_eq!(g.exp_power_of_2(bits), F::two_adic_generator(log_n - bits));
     }
 }
 
@@ -103,13 +103,10 @@ pub fn test_ef_two_adic_generator_consistency<
     F: TwoAdicField,
     EF: TwoAdicField + ExtensionField<F>,
 >() {
-    let log_n = F::TWO_ADICITY;
-    for bits in 1..log_n {
-        assert_eq!(
-            EF::from_base(F::two_adic_generator(bits)),
-            EF::two_adic_generator(bits)
-        );
-    }
+    assert_eq!(
+        EF::from_base(F::two_adic_generator(F::TWO_ADICITY)),
+        EF::two_adic_generator(F::TWO_ADICITY)
+    );
 }
 
 #[macro_export]
@@ -156,6 +153,8 @@ macro_rules! test_two_adic_field {
 macro_rules! test_two_adic_extension_field {
     ($field:ty, $ef:ty) => {
         use $crate::test_two_adic_field;
+
+        test_two_adic_field!($ef);
 
         mod two_adic_extension_field_tests {
 
