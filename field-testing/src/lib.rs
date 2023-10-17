@@ -9,7 +9,7 @@ pub mod bench_func;
 pub use bench_func::*;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, Field, TwoAdicField,
+    two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -91,6 +91,24 @@ pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
     }
 }
 
+pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
+    let log_n = F::TWO_ADICITY;
+    let g = F::two_adic_generator(log_n);
+    for bits in 0..=log_n {
+        assert_eq!(g.exp_power_of_2(bits), F::two_adic_generator(log_n - bits));
+    }
+}
+
+pub fn test_ef_two_adic_generator_consistency<
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+>() {
+    assert_eq!(
+        EF::from_base(F::two_adic_generator(F::TWO_ADICITY)),
+        EF::two_adic_generator(F::TWO_ADICITY)
+    );
+}
+
 #[macro_export]
 macro_rules! test_field {
     ($field:ty) => {
@@ -122,6 +140,27 @@ macro_rules! test_two_adic_field {
             #[test]
             fn test_two_adic_coset_zerofier() {
                 $crate::test_two_adic_coset_zerofier::<$field>();
+            }
+            #[test]
+            fn test_two_adic_consisitency() {
+                $crate::test_two_adic_generator_consistency::<$field>();
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_two_adic_extension_field {
+    ($field:ty, $ef:ty) => {
+        use $crate::test_two_adic_field;
+
+        test_two_adic_field!($ef);
+
+        mod two_adic_extension_field_tests {
+
+            #[test]
+            fn test_ef_two_adic_generator_consistency() {
+                $crate::test_ef_two_adic_generator_consistency::<$field, $ef>();
             }
         }
     };

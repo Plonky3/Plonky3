@@ -22,3 +22,10 @@ pub trait HasFrobenuis<F: Field>: ExtensionField<F> {
     fn repeated_frobenius(&self, count: usize) -> Self;
     fn frobenius_inv(&self) -> Self;
 }
+
+/// Optional trait for implementing Two Adic Binomial Extension Field.
+pub trait HasTwoAdicBionmialExtension<const D: usize>: BinomiallyExtendable<D> {
+    const EXT_TWO_ADICITY: usize;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; D];
+}
