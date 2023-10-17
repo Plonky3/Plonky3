@@ -1,10 +1,12 @@
 use alloc::vec::Vec;
 
+use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractField, Field, PackedField, TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
+    TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
@@ -150,7 +152,7 @@ where
                 })
                 .collect();
 
-            let accumulator = SC::PackedChallenge::ZERO;
+            let accumulator = SC::PackedChallenge::zero();
             let mut folder = ProverConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
@@ -168,7 +170,14 @@ where
             let zerofier_inv: SC::PackedDomain =
                 zerofier_on_coset.eval_inverse_packed(i_local_start);
             let quotient = folder.accumulator * zerofier_inv;
-            quotient.as_slice().to_vec()
+
+            // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
+            (0..SC::PackedDomain::WIDTH).map(move |idx_in_packing| {
+                let quotient_value = (0..<SC::Challenge as AbstractExtensionField<SC::Domain>>::D)
+                    .map(|coeff_idx| quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing])
+                    .collect_vec();
+                SC::Challenge::from_base_slice(&quotient_value)
+            })
         })
         .collect()
 }

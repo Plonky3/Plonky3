@@ -16,8 +16,7 @@ pub trait StarkConfig {
 
     /// The field from which most random challenges are drawn.
     type Challenge: ExtensionField<Self::Val> + ExtensionField<Self::Domain> + TwoAdicField;
-    type PackedChallenge: PackedField<Scalar = Self::Challenge>
-        + AbstractExtensionField<Self::PackedDomain>;
+    type PackedChallenge: AbstractExtensionField<Self::PackedDomain, F = Self::Challenge>;
 
     /// The PCS used to commit to trace polynomials.
     type Pcs: UnivariatePcsWithLde<
@@ -38,17 +37,17 @@ pub trait StarkConfig {
     fn dft(&self) -> &Self::Dft;
 }
 
-pub struct StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger> {
+pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> {
     pcs: Pcs,
     dft: Dft,
     _phantom_val: PhantomData<Val>,
     _phantom_domain: PhantomData<Domain>,
-    _phantom_challenge: PhantomData<Challenge>,
+    _phantom_challenge: PhantomData<(Challenge, PackedChallenge)>,
     _phantom_chal: PhantomData<Challenger>,
 }
 
-impl<Val, Domain, Challenge, Pcs, Dft, Challenger>
-    StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>
+impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
+    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
 {
     pub fn new(pcs: Pcs, dft: Dft) -> Self {
         Self {
@@ -62,13 +61,13 @@ impl<Val, Domain, Challenge, Pcs, Dft, Challenger>
     }
 }
 
-impl<Val, Domain, Challenge, Pcs, Dft, Challenger> StarkConfig
-    for StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>
+impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> StarkConfig
+    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
-    Challenge::Packing: AbstractExtensionField<Domain::Packing>,
+    PackedChallenge: AbstractExtensionField<Domain::Packing, F = Challenge>,
     Pcs: UnivariatePcsWithLde<Val, Domain, Challenge, RowMajorMatrix<Val>, Challenger>,
     Dft: TwoAdicSubgroupDft<Domain> + TwoAdicSubgroupDft<Challenge>,
     Challenger: FieldChallenger<Val>
@@ -78,7 +77,7 @@ where
     type Domain = Domain;
     type PackedDomain = Domain::Packing;
     type Challenge = Challenge;
-    type PackedChallenge = Challenge::Packing;
+    type PackedChallenge = PackedChallenge;
     type Pcs = Pcs;
     type Dft = Dft;
     type Challenger = Challenger;

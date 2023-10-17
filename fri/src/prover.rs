@@ -17,7 +17,7 @@ use crate::{FriConfig, FriProof, QueryProof};
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
-    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
     let max_height = input_mmcs
@@ -59,7 +59,7 @@ pub(crate) fn prove<FC: FriConfig>(
 fn answer_query<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
-    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
@@ -83,7 +83,7 @@ fn answer_query<FC: FriConfig>(
 fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
-    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
+    input_commits: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
     log_max_height: usize,
     challenger: &mut FC::Challenger,
 ) -> Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData> {
@@ -98,7 +98,7 @@ fn commit_phase<FC: FriConfig>(
     };
 
     let largest_matrices = matrices_with_log_height(log_max_height);
-    let zero_vec = vec![FC::Challenge::ZERO; max_height];
+    let zero_vec = vec![FC::Challenge::zero(); max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
 

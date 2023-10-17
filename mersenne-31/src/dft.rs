@@ -111,7 +111,7 @@ fn idft_preprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
     // NB: The original real matrix had length 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2n-th root of unity
     let omega = Ext::two_adic_generator(log2_h + 1).inverse();
-    let mut omega_j = Ext::ONE;
+    let mut omega_j = Ext::one();
 
     let mut output = Vec::with_capacity(h * input.width());
     // TODO: Specialise j = 0 and j = n (which we know must be real)?
@@ -243,7 +243,7 @@ mod tests {
 
         let mut conv = Vec::with_capacity(N);
         for i in 0..N {
-            let mut t = Base::ZERO;
+            let mut t = Base::zero();
             for j in 0..N {
                 t += a.values[j] * b.values[(N + i - j) % N];
             }

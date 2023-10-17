@@ -206,14 +206,14 @@ mod tests {
 
         // v = [2, 1, 2, 2, 0, 0, 1, 0]
         let v = vec![
-            F::TWO,
-            F::ONE,
-            F::TWO,
-            F::TWO,
-            F::ZERO,
-            F::ZERO,
-            F::ONE,
-            F::ZERO,
+            F::two(),
+            F::one(),
+            F::two(),
+            F::two(),
+            F::zero(),
+            F::zero(),
+            F::one(),
+            F::zero(),
         ];
         let (commit, _) = mmcs.commit_vec(v.clone());
 
@@ -242,13 +242,13 @@ mod tests {
         //   0 1
         //   2 1
         // ]
-        let mat = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE], 2);
+        let mat = RowMajorMatrix::new(vec![F::zero(), F::one(), F::two(), F::one()], 2);
 
         let (commit, _) = mmcs.commit(vec![mat]);
 
         let expected_result = compress.compress([
-            hash.hash_slice(&[F::ZERO, F::ONE]),
-            hash.hash_slice(&[F::TWO, F::ONE]),
+            hash.hash_slice(&[F::zero(), F::one()]),
+            hash.hash_slice(&[F::two(), F::one()]),
         ]);
         assert_eq!(commit, expected_result);
     }
@@ -260,23 +260,26 @@ mod tests {
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
-        let default_digest = [F::ZERO; 8];
+        let default_digest = [F::zero(); 8];
 
         // mat = [
         //   0 1
         //   2 1
         //   2 2
         // ]
-        let mat = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO], 2);
+        let mat = RowMajorMatrix::new(
+            vec![F::zero(), F::one(), F::two(), F::one(), F::two(), F::two()],
+            2,
+        );
 
         let (commit, _) = mmcs.commit(vec![mat]);
 
         let expected_result = compress.compress([
             compress.compress([
-                hash.hash_slice(&[F::ZERO, F::ONE]),
-                hash.hash_slice(&[F::TWO, F::ONE]),
+                hash.hash_slice(&[F::zero(), F::one()]),
+                hash.hash_slice(&[F::two(), F::one()]),
             ]),
-            compress.compress([hash.hash_slice(&[F::TWO, F::TWO]), default_digest]),
+            compress.compress([hash.hash_slice(&[F::two(), F::two()]), default_digest]),
         ]);
         assert_eq!(commit, expected_result);
     }
@@ -288,30 +291,36 @@ mod tests {
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
-        let default_digest = [F::ZERO; 8];
+        let default_digest = [F::zero(); 8];
 
         // mat_1 = [
         //   0 1
         //   2 1
         //   2 2
         // ]
-        let mat_1 = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO], 2);
+        let mat_1 = RowMajorMatrix::new(
+            vec![F::zero(), F::one(), F::two(), F::one(), F::two(), F::two()],
+            2,
+        );
         // mat_2 = [
         //   1 2 1
         //   0 2 2
         // ]
-        let mat_2 = RowMajorMatrix::new(vec![F::ONE, F::TWO, F::ONE, F::ZERO, F::TWO, F::TWO], 3);
+        let mat_2 = RowMajorMatrix::new(
+            vec![F::one(), F::two(), F::one(), F::zero(), F::two(), F::two()],
+            3,
+        );
 
         let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
 
         let mat_1_leaf_hashes = [
-            hash.hash_slice(&[F::ZERO, F::ONE]),
-            hash.hash_slice(&[F::TWO, F::ONE]),
-            hash.hash_slice(&[F::TWO, F::TWO]),
+            hash.hash_slice(&[F::zero(), F::one()]),
+            hash.hash_slice(&[F::two(), F::one()]),
+            hash.hash_slice(&[F::two(), F::two()]),
         ];
         let mat_2_leaf_hashes = [
-            hash.hash_slice(&[F::ONE, F::TWO, F::ONE]),
-            hash.hash_slice(&[F::ZERO, F::TWO, F::TWO]),
+            hash.hash_slice(&[F::one(), F::two(), F::one()]),
+            hash.hash_slice(&[F::zero(), F::two(), F::two()]),
         ];
 
         let expected_result = compress.compress([
@@ -329,7 +338,10 @@ mod tests {
         let (opened_values, _proof) = mmcs.open_batch(2, &prover_data);
         assert_eq!(
             opened_values,
-            vec![vec![F::TWO, F::TWO], vec![F::ZERO, F::TWO, F::TWO]]
+            vec![
+                vec![F::two(), F::two()],
+                vec![F::zero(), F::two(), F::two()]
+            ]
         );
     }
 
@@ -395,7 +407,7 @@ mod tests {
 
         // open the 3rd row of each matrix, mess with proof, and verify
         let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
-        proof[0][0] += F::ONE;
+        proof[0][0] += F::one();
         mmcs.verify_batch(
             &commit,
             &large_mat_dims.chain(small_mat_dims).collect_vec(),

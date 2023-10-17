@@ -97,7 +97,10 @@ where
     where
         AF: AbstractField<F = F>,
     {
-        state.iter_mut().zip(rc).for_each(|(a, b)| *a += *b);
+        state
+            .iter_mut()
+            .zip(rc)
+            .for_each(|(a, b)| *a += AF::from_f(*b));
     }
 
     #[inline]
@@ -141,7 +144,7 @@ where
         // The internal rounds.
         let p_end = rounds_f_beggining + self.rounds_p;
         for r in self.rounds_f..p_end {
-            state[0] += self.constants[r][0];
+            state[0] += AF::from_f(self.constants[r][0]);
             state[0] = self.sbox_p(&state[0]);
             self.internal_linear_layer.permute_mut(state);
         }

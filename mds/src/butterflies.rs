@@ -9,7 +9,7 @@ pub(crate) fn dit_butterfly<AF: AbstractField, const N: usize>(
     twiddle: AF::F,
 ) {
     let val_1 = values[idx_1].clone();
-    let val_2 = values[idx_2].clone() * twiddle;
+    let val_2 = values[idx_2].clone() * AF::from_f(twiddle);
     values[idx_1] = val_1.clone() + val_2.clone();
     values[idx_2] = val_1 - val_2;
 }
@@ -25,7 +25,7 @@ pub(crate) fn dif_butterfly<AF: AbstractField, const N: usize>(
     let val_1 = values[idx_1].clone();
     let val_2 = values[idx_2].clone();
     values[idx_1] = val_1.clone() + val_2.clone();
-    values[idx_2] = (val_1 - val_2) * twiddle;
+    values[idx_2] = (val_1 - val_2) * AF::from_f(twiddle);
 }
 
 /// Butterfly with twiddle factor 1 (works in either DIT or DIF).

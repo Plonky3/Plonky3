@@ -118,7 +118,7 @@ where
                 .iter_mut()
                 .zip(&self.round_constants[round * WIDTH * 2..])
             {
-                *state_item += round_constant;
+                *state_item += AF::from_f(round_constant);
             }
 
             // Inverse S-box
@@ -132,7 +132,7 @@ where
                 .iter_mut()
                 .zip(&self.round_constants[round * WIDTH * 2 + WIDTH..])
             {
-                *state_item += round_constant;
+                *state_item += AF::from_f(round_constant);
             }
         }
     }

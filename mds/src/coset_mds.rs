@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractField, TwoAdicField};
 use p3_symmetric::Permutation;
@@ -63,7 +65,7 @@ where
 
         // Multiply by powers of the coset shift (see default coset LDE impl for an explanation)
         for (value, weight) in values.iter_mut().zip(self.weights) {
-            *value = value.clone() * weight;
+            *value = value.clone() * AF::from_f(weight);
         }
 
         // DFT, assuming bit-reversed input.

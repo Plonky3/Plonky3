@@ -2,7 +2,7 @@ use crate::AbstractField;
 
 pub fn exp_u64_by_squaring<AF: AbstractField>(val: AF, power: u64) -> AF {
     let mut current = val;
-    let mut product = AF::ONE;
+    let mut product = AF::one();
 
     for j in 0..bits_u64(power) {
         if (power >> j & 1) != 0 {

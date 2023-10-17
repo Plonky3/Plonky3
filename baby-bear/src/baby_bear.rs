@@ -71,10 +71,23 @@ impl Distribution<BabyBear> for Standard {
 impl AbstractField for BabyBear {
     type F = Self;
 
-    const ZERO: Self = Self { value: 0 };
-    const ONE: Self = Self { value: 0x7ffffff };
-    const TWO: Self = Self { value: 0xffffffe };
-    const NEG_ONE: Self = Self { value: 0x70000002 };
+    fn zero() -> Self {
+        Self { value: 0 }
+    }
+    fn one() -> Self {
+        Self { value: 0x7ffffff }
+    }
+    fn two() -> Self {
+        Self { value: 0xffffffe }
+    }
+    fn neg_one() -> Self {
+        Self { value: 0x70000002 }
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f
+    }
 
     #[inline]
     fn from_bool(b: bool) -> Self {
@@ -248,7 +261,7 @@ impl AddAssign for BabyBear {
 impl Sum for BabyBear {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
@@ -276,7 +289,7 @@ impl Neg for BabyBear {
 
     #[inline]
     fn neg(self) -> Self::Output {
-        Self::ZERO - self
+        Self::zero() - self
     }
 }
 
@@ -302,7 +315,7 @@ impl MulAssign for BabyBear {
 impl Product for BabyBear {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
@@ -367,13 +380,13 @@ mod tests {
         let f = F::from_wrapped_u32(F::ORDER_U32);
         assert!(f.is_zero());
 
-        let f_1 = F::ONE;
+        let f_1 = F::one();
         let f_1_copy = F::from_canonical_u32(1);
 
-        let expected_result = F::ZERO;
+        let expected_result = F::zero();
         assert_eq!(f_1 - f_1_copy, expected_result);
 
-        let expected_result = F::TWO;
+        let expected_result = F::two();
         assert_eq!(f_1 + f_1_copy, expected_result);
 
         let f_2 = F::from_canonical_u32(2);
@@ -384,7 +397,7 @@ mod tests {
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
         let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
-        let expected_result = F::ZERO;
+        let expected_result = F::zero();
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
         let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);

@@ -9,11 +9,10 @@ pub trait FriConfig {
     type Domain: ExtensionField<Self::Val> + TwoAdicField;
     type Challenge: ExtensionField<Self::Val> + ExtensionField<Self::Domain> + TwoAdicField;
 
-    type InputMmcs: Mmcs<Self::Domain>;
+    type InputMmcs: Mmcs<Self::Challenge>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<Self::InputMmcs as Mmcs<Self::Domain>>::Commitment>
         + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
@@ -55,11 +54,9 @@ where
     Val: PrimeField64,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
-    InputMmcs: Mmcs<Domain>,
+    InputMmcs: Mmcs<Challenge>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val>
-        + CanObserve<<InputMmcs as Mmcs<Domain>>::Commitment>
-        + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
     type Domain = Domain;

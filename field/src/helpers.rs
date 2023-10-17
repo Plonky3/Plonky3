@@ -1,11 +1,12 @@
 use alloc::vec::Vec;
+use core::array;
 
 use crate::field::Field;
-use crate::TwoAdicField;
+use crate::{AbstractField, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
-    x.exp_power_of_2(log_n) - F::ONE
+    x.exp_power_of_2(log_n) - F::one()
 }
 
 /// Computes `Z_{sH}(x)`, where `Z_{sH}` is the zerofier of the given coset of a multiplicative
@@ -56,10 +57,10 @@ where
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
 
-/// Extend a field `F` element `x` to an arry of length `D`
+/// Extend a field `AF` element `x` to an arry of length `D`
 /// by filling zeros.
-pub const fn field_to_array<F: Field, const D: usize>(x: F) -> [F; D] {
-    let mut arr = [F::ZERO; D];
+pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
+    let mut arr = array::from_fn(|_| AF::zero());
     arr[0] = x;
     arr
 }

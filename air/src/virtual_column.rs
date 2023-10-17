@@ -55,7 +55,7 @@ impl<F: Field> VirtualPairCol<F> {
 
     #[must_use]
     pub fn one() -> Self {
-        Self::constant(F::ONE)
+        Self::constant(F::one())
     }
 
     #[must_use]
@@ -69,8 +69,8 @@ impl<F: Field> VirtualPairCol<F> {
     #[must_use]
     pub fn single(column: PairCol) -> Self {
         Self {
-            column_weights: vec![(column, F::ONE)],
-            constant: F::ZERO,
+            column_weights: vec![(column, F::one())],
+            constant: F::zero(),
         }
     }
 
@@ -86,26 +86,26 @@ impl<F: Field> VirtualPairCol<F> {
 
     #[must_use]
     pub fn sum_main(columns: Vec<usize>) -> Self {
-        let column_weights = columns.into_iter().map(|col| (col, F::ONE)).collect();
-        Self::new_main(column_weights, F::ZERO)
+        let column_weights = columns.into_iter().map(|col| (col, F::one())).collect();
+        Self::new_main(column_weights, F::zero())
     }
 
     #[must_use]
     pub fn sum_preprocessed(columns: Vec<usize>) -> Self {
-        let column_weights = columns.into_iter().map(|col| (col, F::ONE)).collect();
-        Self::new_preprocessed(column_weights, F::ZERO)
+        let column_weights = columns.into_iter().map(|col| (col, F::one())).collect();
+        Self::new_preprocessed(column_weights, F::zero())
     }
 
     /// `a - b`, where `a` and `b` are columns in the preprocessed trace.
     #[must_use]
     pub fn diff_preprocessed(a_col: usize, b_col: usize) -> Self {
-        Self::new_preprocessed(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
+        Self::new_preprocessed(vec![(a_col, F::one()), (b_col, F::neg_one())], F::zero())
     }
 
     /// `a - b`, where `a` and `b` are columns in the main trace.
     #[must_use]
     pub fn diff_main(a_col: usize, b_col: usize) -> Self {
-        Self::new_main(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
+        Self::new_main(vec![(a_col, F::one()), (b_col, F::neg_one())], F::zero())
     }
 
     pub fn apply<Expr, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Expr

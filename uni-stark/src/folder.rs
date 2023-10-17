@@ -1,5 +1,5 @@
 use p3_air::{AirBuilder, TwoRowMatrixView};
-use p3_field::Field;
+use p3_field::{AbstractField, Field};
 
 use crate::StarkConfig;
 
@@ -49,7 +49,7 @@ impl<'a, SC: StarkConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: SC::PackedDomain = x.into();
-        self.accumulator *= self.alpha;
+        self.accumulator *= SC::PackedChallenge::from_f(self.alpha);
         self.accumulator += x;
     }
 }

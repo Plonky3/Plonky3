@@ -22,7 +22,7 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Mat: MatrixRows<F>,
 {
-    interpolate_coset(subgroup_evals, F::ONE, point)
+    interpolate_coset(subgroup_evals, F::one(), point)
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two
@@ -45,7 +45,7 @@ where
         .collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
-    let mut sum = vec![EF::ZERO; width];
+    let mut sum = vec![EF::zero(); width];
     for (i, (subgroup_i, diff_inv)) in g.powers().zip(diff_invs).enumerate() {
         let row = coset_evals.row(i).into_iter().map(EF::from_base);
         add_scaled_slice_in_place(&mut sum, row, diff_inv * subgroup_i);

@@ -14,7 +14,9 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // f2 = y^2 - i - 2
     // assert f2.is_irreducible()
     // ```
-    const W: Self = Self::new(Mersenne31::TWO, Mersenne31::ONE);
+    fn w() -> Self {
+        Self::new(Mersenne31::new(2), Mersenne31::one())
+    }
 
     // Verifiable in Sage with
     // ```sage
@@ -24,11 +26,13 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     //   assert g^((p^4-1) // f) != 1
     // ```
     fn ext_multiplicative_group_generator() -> [Self; 2] {
-        [Self::new_real(Mersenne31::new(6)), Self::ONE]
+        [Self::new_real(Mersenne31::new(6)), Self::one()]
     }
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    const DTH_ROOT: Self = Self::new_real(Mersenne31::new(2147483646));
+    fn dth_root() -> Self {
+        Self::new_real(Mersenne31::new(2147483646))
+    }
 }
 
 impl HasTwoAdicBionmialExtension<2> for Mersenne31Complex<Mersenne31> {
@@ -38,11 +42,11 @@ impl HasTwoAdicBionmialExtension<2> for Mersenne31Complex<Mersenne31> {
         assert!(bits <= 33);
         if bits == 33 {
             [
-                Self::ZERO,
+                Self::zero(),
                 Self::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
             ]
         } else {
-            [Self::two_adic_generator(bits), Self::ZERO]
+            [Self::two_adic_generator(bits), Self::zero()]
         }
     }
 }
@@ -58,10 +62,14 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // f2 = y^3 - 5*i
     // assert f2.is_irreducible()
     // ```
-    const W: Self = Self::new_imag(Mersenne31::new(5));
+    fn w() -> Self {
+        Self::new_imag(Mersenne31::new(5))
+    }
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    const DTH_ROOT: Self = Self::new_real(Mersenne31::new(634005911));
+    fn dth_root() -> Self {
+        Self::new_real(Mersenne31::new(634005911))
+    }
 
     // Verifiable in Sage with
     // ```sage
@@ -73,8 +81,8 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     fn ext_multiplicative_group_generator() -> [Self; 3] {
         [
             Self::new_real(Mersenne31::new(5)),
-            Self::new_real(Mersenne31::ONE),
-            Self::ZERO,
+            Self::new_real(Mersenne31::one()),
+            Self::zero(),
         ]
     }
 }
@@ -89,11 +97,11 @@ impl HasTwoAdicBionmialExtension<3> for Mersenne31Complex<Mersenne31> {
 
 #[cfg(test)]
 mod test_cubic_extension {
-
     use p3_field::extension::binomial_extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::{Mersenne31, Mersenne31Complex};
+
     type F = Mersenne31Complex<Mersenne31>;
     type EF = BinomialExtensionField<F, 3>;
 

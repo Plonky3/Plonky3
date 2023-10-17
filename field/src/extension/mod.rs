@@ -6,13 +6,13 @@ pub mod binomial_extension;
 /// Binomial extension field trait.
 /// A extension field with a irreducible polynomial X^d-W
 /// such that the extension is `F[X]/(X^d-W)`.
-pub trait BinomiallyExtendable<const D: usize>: Field + Sized {
-    const W: Self;
+pub trait BinomiallyExtendable<const D: usize>: Field {
+    fn w() -> Self;
 
     // DTH_ROOT = W^((n - 1)/D).
     // n is the order of base field.
     // Only works when exists k such that n = kD + 1.
-    const DTH_ROOT: Self;
+    fn dth_root() -> Self;
 
     fn ext_multiplicative_group_generator() -> [Self; D];
 }
