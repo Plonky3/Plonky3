@@ -169,7 +169,7 @@ where
 
     fn generator() -> Self {
         Self {
-            value: AF::F::ext_multiplicative_group_generator().map(AF::from_f),
+            value: AF::F::ext_generator().map(AF::from_f),
         }
     }
 

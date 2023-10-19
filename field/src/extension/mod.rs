@@ -16,7 +16,7 @@ pub trait BinomiallyExtendable<const D: usize>: Field {
     // Only works when exists k such that n = kD + 1.
     fn dth_root() -> Self;
 
-    fn ext_multiplicative_group_generator() -> [Self; D];
+    fn ext_generator() -> [Self; D];
 }
 
 pub trait HasFrobenuis<F: Field>: ExtensionField<F> {
