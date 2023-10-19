@@ -97,7 +97,7 @@ impl HasTwoAdicBionmialExtension<3> for Mersenne31Complex<Mersenne31> {
 
 #[cfg(test)]
 mod test_cubic_extension {
-    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::{Mersenne31, Mersenne31Complex};
@@ -113,7 +113,7 @@ mod test_cubic_extension {
 #[cfg(test)]
 mod test_quadratic_extension {
 
-    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::{Mersenne31, Mersenne31Complex};

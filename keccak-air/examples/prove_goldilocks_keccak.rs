@@ -1,7 +1,7 @@
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
-use p3_field::extension::binomial_extension::BinomialExtensionField;
+use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
 use p3_goldilocks::Goldilocks;
