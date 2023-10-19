@@ -109,7 +109,7 @@ where
     fn instantiate_round_constants() -> [[Mersenne31; WIDTH]; NUM_FULL_ROUNDS] {
         let mut shake = Self::init_shake();
 
-        [[Mersenne31::ZERO; WIDTH]; NUM_FULL_ROUNDS]
+        [[Mersenne31::zero(); WIDTH]; NUM_FULL_ROUNDS]
             .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
     }
 
@@ -185,7 +185,7 @@ mod tests {
         let mds = MonolithMdsMatrixMersenne31::<6>;
         let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
 
-        let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
+        let mut input: [Mersenne31; 16] = [Mersenne31::zero(); 16];
         for (i, inp) in input.iter_mut().enumerate() {
             *inp = Mersenne31::from_canonical_usize(i);
         }

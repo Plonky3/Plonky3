@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
@@ -49,7 +50,7 @@ where
         mds,
         &mut rng,
     );
-    let input = [AF::ZERO; WIDTH];
+    let input: [AF; WIDTH] = array::from_fn(|_| AF::zero());
     let name = format!("poseidon::<{}, {}>", type_name::<AF>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {

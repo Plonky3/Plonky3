@@ -45,7 +45,7 @@ where
         internal_mds,
         &mut rng,
     );
-    let input = [F::ZERO; WIDTH];
+    let input = [F::zero(); WIDTH];
     let name = format!("poseidon2::<{}, {}>", type_name::<F>(), D);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));

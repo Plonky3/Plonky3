@@ -2,7 +2,9 @@ use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
+use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
+use p3_field::extension::binomial_extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
 use p3_ldt::QuotientMmcs;
@@ -68,7 +70,8 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
 
     type Val = BabyBear;
     type Domain = Val;
-    type Challenge = Val; // TODO
+    type Challenge = BinomialExtensionField<Val, 5>;
+    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 5>;
 
     type MyMds = CosetMds<Val, 16>;
     let mds = MyMds::default();
@@ -82,26 +85,29 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     let compress = MyCompress::new(perm.clone());
 
-    type MyMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
-    let mmcs = MyMmcs::new(hash, compress);
+    type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
+    let val_mmcs = ValMmcs::new(hash, compress);
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    type Quotient = QuotientMmcs<Domain, Challenge, MyMmcs>;
-    type MyFriConfig = FriConfigImpl<Val, Domain, Challenge, Quotient, MyMmcs, Challenger>;
-    let fri_config = MyFriConfig::new(40, mmcs.clone());
+    type Quotient = QuotientMmcs<Domain, Challenge, ValMmcs>;
+    type MyFriConfig = FriConfigImpl<Val, Domain, Challenge, Quotient, ChallengeMmcs, Challenger>;
+    let fri_config = MyFriConfig::new(40, challenge_mmcs);
     let ldt = FriLdt { config: fri_config };
 
-    type Pcs = FriBasedPcs<MyFriConfig, MyMmcs, Dft, Challenger>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, Pcs, Dft, Challenger>;
+    type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
+    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>;
 
-    let trace = random_valid_trace::<Val>(HEIGHT);
-    let pcs = Pcs::new(dft, 1, mmcs, ldt);
+    let pcs = Pcs::new(dft, 1, val_mmcs, ldt);
     let config = StarkConfigImpl::new(pcs, Dft {});
     let mut challenger = Challenger::new(perm.clone());
+    let trace = random_valid_trace::<Val>(HEIGHT);
     let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
 
     let mut challenger = Challenger::new(perm);

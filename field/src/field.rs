@@ -16,33 +16,27 @@ use crate::packed::PackedField;
 /// - a vector of field elements
 pub trait AbstractField:
     Sized
-    + From<Self::F>
     + Default
     + Clone
     + Add<Output = Self>
-    + Add<Self::F, Output = Self>
     + AddAssign
-    + AddAssign<Self::F>
     + Sub<Output = Self>
-    + Sub<Self::F, Output = Self>
     + SubAssign
-    + SubAssign<Self::F>
     + Neg<Output = Self>
     + Mul<Output = Self>
-    + Mul<Self::F, Output = Self>
     + MulAssign
-    + MulAssign<Self::F>
     + Sum
     + Product
     + Debug
 {
     type F: Field;
 
-    const ZERO: Self;
-    const ONE: Self;
-    const TWO: Self;
-    const NEG_ONE: Self;
+    fn zero() -> Self;
+    fn one() -> Self;
+    fn two() -> Self;
+    fn neg_one() -> Self;
 
+    fn from_f(f: Self::F) -> Self;
     fn from_bool(b: bool) -> Self;
     fn from_canonical_u8(n: u8) -> Self;
     fn from_canonical_u16(n: u16) -> Self;
@@ -87,7 +81,7 @@ pub trait AbstractField:
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         match POWER {
-            0 => Self::ONE,
+            0 => Self::one(),
             1 => self.clone(),
             2 => self.square(),
             3 => self.cube(),
@@ -115,7 +109,7 @@ pub trait AbstractField:
 
     #[must_use]
     fn powers(&self) -> Powers<Self> {
-        self.shifted_powers(Self::ONE)
+        self.shifted_powers(Self::one())
     }
 
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
@@ -126,21 +120,21 @@ pub trait AbstractField:
     }
 
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
-        self.shifted_powers_packed(Self::ONE)
+        self.shifted_powers_packed(Self::one())
     }
 
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
         &self,
         start: Self,
     ) -> PackedPowers<Self, P> {
-        let mut current = P::from(start);
+        let mut current = P::from_f(start);
         let slice = current.as_slice_mut();
         for i in 1..P::WIDTH {
             slice[i] = slice[i - 1].clone() * self.clone();
         }
 
         PackedPowers {
-            multiplier: P::from(self.clone()).exp_u64(P::WIDTH as u64),
+            multiplier: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
             current,
         }
     }
@@ -165,25 +159,25 @@ pub trait Field:
     type Packing: PackedField<Scalar = Self>;
 
     fn is_zero(&self) -> bool {
-        *self == Self::ZERO
+        *self == Self::zero()
     }
 
     fn is_one(&self) -> bool {
-        *self == Self::ONE
+        *self == Self::one()
     }
 
     /// self * 2^exp
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::TWO.exp_u64(exp)
+        *self * Self::two().exp_u64(exp)
     }
 
     /// self / 2^exp
     #[must_use]
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::TWO.exp_u64(exp)
+        *self / Self::two().exp_u64(exp)
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
@@ -284,8 +278,8 @@ pub trait AbstractExtensionField<Base: AbstractField>:
 
     /// Returns the monomial `X^exponent`.
     fn monomial(exponent: usize) -> Self {
-        let mut vec = vec![Base::ZERO; Self::D];
-        vec[exponent] = Base::ONE;
+        let mut vec = vec![Base::zero(); Self::D];
+        vec[exponent] = Base::one();
         Self::from_base_slice(&vec)
     }
 }

@@ -33,7 +33,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     let log_n = log2_strict_usize(n);
 
     let g_inv = F::two_adic_generator(log_n).inverse();
-    let one_half = F::TWO.inverse();
+    let one_half = F::two().inverse();
     let half_beta = beta * one_half;
 
     // beta/2 times successive powers of g_inv
@@ -63,7 +63,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     let packed_results = izip!(powers, first, second)
         .map(|(power, &a, &b)| (one_half + power) * a + (one_half - power) * b);
 
-    let mut res = vec![F::ZERO; nearest_mutliple_of_packing_width];
+    let mut res = vec![F::zero(); nearest_mutliple_of_packing_width];
     for (src, dst) in packed_results.zip(F::Packing::pack_slice_mut(&mut res)) {
         *dst = src;
     }

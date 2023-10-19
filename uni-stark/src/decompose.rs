@@ -58,7 +58,7 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, log_chunks: usize) -> Vec<Vec<F>> {
 
     //     p_e(g^(2i)) = (a + b) / 2
     //     p_o(g^(2i)) = (a - b) / (2 g^i)
-    let one_half = F::TWO.inverse();
+    let one_half = F::two().inverse();
     let (first, second) = poly.split_at(half_n);
     for (g_inv_power, &a, &b) in izip!(g_inv.powers(), first, second) {
         let sum = a + b;

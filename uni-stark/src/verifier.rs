@@ -75,8 +75,8 @@ where
         .map(|(weight, part)| part * weight)
         .sum();
 
-    let z_h = zeta.exp_power_of_2(degree_bits) - SC::Challenge::ONE;
-    let is_first_row = z_h / (zeta - SC::Val::ONE);
+    let z_h = zeta.exp_power_of_2(degree_bits) - SC::Challenge::one();
+    let is_first_row = z_h / (zeta - SC::Val::one());
     let is_last_row = z_h / (zeta - g_subgroup.inverse());
     let is_transition = zeta - g_subgroup.inverse();
     let mut folder = VerifierConstraintFolder {
@@ -88,7 +88,7 @@ where
         is_last_row,
         is_transition,
         alpha,
-        accumulator: SC::Challenge::ZERO,
+        accumulator: SC::Challenge::zero(),
     };
     air.eval(&mut folder);
     let folded_constraints = folder.accumulator;

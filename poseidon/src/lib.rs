@@ -116,7 +116,7 @@ where
         AF: AbstractField<F = F>,
     {
         for (i, x) in state.iter_mut().enumerate() {
-            *x += self.constants[round * WIDTH + i];
+            *x += AF::from_f(self.constants[round * WIDTH + i]);
         }
     }
 }

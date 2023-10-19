@@ -14,7 +14,8 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 #[instrument(name = "generate Keccak trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
     let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
-    let mut trace = RowMajorMatrix::new(vec![F::ZERO; num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
+    let mut trace =
+        RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
     assert!(prefix.is_empty(), "Data was not aligned");
     assert!(suffix.is_empty(), "Data was not aligned");
@@ -70,7 +71,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
 }
 
 fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round: usize) {
-    row.step_flags[round] = F::ONE;
+    row.step_flags[round] = F::one();
 
     // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).
     for x in 0..5 {
@@ -119,7 +120,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
             for limb in 0..U64_LIMBS {
                 row.a_prime_prime[y][x][limb] = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                     .rev()
-                    .fold(F::ZERO, |acc, z| {
+                    .fold(F::zero(), |acc, z| {
                         let bit = xor([
                             row.b(x, y, z),
                             andn(row.b((x + 1) % 5, y, z), row.b((x + 2) % 5, y, z)),

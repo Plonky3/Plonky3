@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractField, Powers, TwoAdicField};
 use p3_symmetric::Permutation;

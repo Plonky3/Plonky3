@@ -17,7 +17,7 @@ pub enum SymbolicField<F: Field, Var> {
 
 impl<F: Field, Var> Default for SymbolicField<F, Var> {
     fn default() -> Self {
-        Self::Constant(F::ZERO)
+        Self::Constant(F::zero())
     }
 }
 
@@ -30,10 +30,23 @@ impl<F: Field, Var> From<F> for SymbolicField<F, Var> {
 impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
     type F = F;
 
-    const ZERO: Self = Self::Constant(F::ZERO);
-    const ONE: Self = Self::Constant(F::ONE);
-    const TWO: Self = Self::Constant(F::TWO);
-    const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
+    fn zero() -> Self {
+        Self::Constant(F::zero())
+    }
+    fn one() -> Self {
+        Self::Constant(F::one())
+    }
+    fn two() -> Self {
+        Self::Constant(F::two())
+    }
+    fn neg_one() -> Self {
+        Self::Constant(F::neg_one())
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f.into()
+    }
 
     fn from_bool(b: bool) -> Self {
         Self::Constant(F::from_bool(b))
@@ -102,7 +115,7 @@ impl<F: Field, Var: Clone + Debug> AddAssign<F> for SymbolicField<F, Var> {
 
 impl<F: Field, Var: Clone + Debug> Sum for SymbolicField<F, Var> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
@@ -178,7 +191,7 @@ impl<F: Field, Var: Clone + Debug> MulAssign<F> for SymbolicField<F, Var> {
 
 impl<F: Field, Var: Clone + Debug> Product for SymbolicField<F, Var> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 

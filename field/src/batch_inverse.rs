@@ -92,7 +92,7 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
 
     for (&bi, &xi) in buf.iter().zip(x) {
         // Sanity check only.
-        debug_assert_eq!(bi * xi, F::ONE);
+        debug_assert_eq!(bi * xi, F::one());
     }
 
     buf

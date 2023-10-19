@@ -97,10 +97,23 @@ impl Distribution<Mersenne31> for Standard {
 impl AbstractField for Mersenne31 {
     type F = Self;
 
-    const ZERO: Self = Self::new(0);
-    const ONE: Self = Self::new(1);
-    const TWO: Self = Self::new(2);
-    const NEG_ONE: Self = Self::new(Self::ORDER_U32 - 1);
+    fn zero() -> Self {
+        Self::new(0)
+    }
+    fn one() -> Self {
+        Self::new(1)
+    }
+    fn two() -> Self {
+        Self::new(2)
+    }
+    fn neg_one() -> Self {
+        Self::new(Self::ORDER_U32 - 1)
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f
+    }
 
     #[inline]
     fn from_bool(b: bool) -> Self {
@@ -293,7 +306,7 @@ impl AddAssign for Mersenne31 {
 impl Sum for Mersenne31 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
@@ -352,7 +365,7 @@ impl MulAssign for Mersenne31 {
 impl Product for Mersenne31 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
@@ -377,27 +390,27 @@ mod tests {
 
     #[test]
     fn add() {
-        assert_eq!(F::ONE + F::ONE, F::TWO);
-        assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
-        assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
-        assert_eq!(F::NEG_ONE + F::NEG_ONE, F::new(F::ORDER_U32 - 2));
+        assert_eq!(F::one() + F::one(), F::two());
+        assert_eq!(F::neg_one() + F::one(), F::zero());
+        assert_eq!(F::neg_one() + F::two(), F::one());
+        assert_eq!(F::neg_one() + F::neg_one(), F::new(F::ORDER_U32 - 2));
     }
 
     #[test]
     fn sub() {
-        assert_eq!(F::ONE - F::ONE, F::ZERO);
-        assert_eq!(F::TWO - F::TWO, F::ZERO);
-        assert_eq!(F::NEG_ONE - F::NEG_ONE, F::ZERO);
-        assert_eq!(F::TWO - F::ONE, F::ONE);
-        assert_eq!(F::NEG_ONE - F::ZERO, F::NEG_ONE);
+        assert_eq!(F::one() - F::one(), F::zero());
+        assert_eq!(F::two() - F::two(), F::zero());
+        assert_eq!(F::neg_one() - F::neg_one(), F::zero());
+        assert_eq!(F::two() - F::one(), F::one());
+        assert_eq!(F::neg_one() - F::zero(), F::neg_one());
     }
 
     #[test]
     fn mul_2exp_u64() {
         // 1 * 2^0 = 1.
-        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
+        assert_eq!(F::one().mul_2exp_u64(0), F::one());
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
+        assert_eq!(F::two().mul_2exp_u64(30), F::one());
         // 5 * 2^2 = 20.
         assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
     }
@@ -405,9 +418,9 @@ mod tests {
     #[test]
     fn div_2exp_u64() {
         // 1 / 2^0 = 1.
-        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
+        assert_eq!(F::one().div_2exp_u64(0), F::one());
         // 2 / 2^0 = 2.
-        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
+        assert_eq!(F::two().div_2exp_u64(0), F::two());
         // 32 / 2^5 = 1.
         assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
     }
@@ -421,7 +434,7 @@ mod tests {
 
         assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
         assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
+        assert_eq!(F::two().exp_u64(1717986917).exp_const_u64::<5>(), F::two());
     }
 
     test_field!(crate::Mersenne31);

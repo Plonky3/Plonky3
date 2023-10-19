@@ -6,10 +6,14 @@ use crate::Goldilocks;
 impl BinomiallyExtendable<2> for Goldilocks {
     // Verifiable in Sage with
     // `R.<x> = GF(p)[]; assert (x^2 - 7).is_irreducible()`.
-    const W: Self = Self::new(7);
+    fn w() -> Self {
+        Self::new(7)
+    }
 
     // DTH_ROOT = W^((p - 1)/2).
-    const DTH_ROOT: Self = Self::new(18446744069414584320);
+    fn dth_root() -> Self {
+        Self::new(18446744069414584320)
+    }
 
     fn ext_multiplicative_group_generator() -> [Self; 2] {
         [
@@ -26,9 +30,9 @@ impl HasTwoAdicBionmialExtension<2> for Goldilocks {
         assert!(bits <= 33);
 
         if bits == 33 {
-            [Self::ZERO, Self::new(15659105665374529263)]
+            [Self::zero(), Self::new(15659105665374529263)]
         } else {
-            [Self::two_adic_generator(bits), Self::ZERO]
+            [Self::two_adic_generator(bits), Self::zero()]
         }
     }
 }

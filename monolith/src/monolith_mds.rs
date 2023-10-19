@@ -54,7 +54,7 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     shake: &mut Shake128Reader,
     to_multiply: [F; WIDTH],
 ) -> [F; WIDTH] {
-    let mut output: [F; WIDTH] = [F::ZERO; WIDTH];
+    let mut output: [F; WIDTH] = [F::zero(); WIDTH];
 
     let bits = F::bits();
     let x_mask = (1 << (bits - 9)) - 1;
