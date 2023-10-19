@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use p3_field::extension::binomial_extension::BinomialExtensionField;
+use p3_field::extension::BinomialExtensionField;
 use p3_field_testing::bench_func::{benchmark_inv, benchmark_mul, benchmark_square};
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 

@@ -84,7 +84,7 @@ impl HasTwoAdicBionmialExtension<5> for BabyBear {
 mod test_quartic_extension {
     use alloc::format;
 
-    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field::{AbstractExtensionField, AbstractField};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
@@ -114,7 +114,7 @@ mod test_quartic_extension {
 
 #[cfg(test)]
 mod test_quintic_extension {
-    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::BabyBear;

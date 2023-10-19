@@ -40,7 +40,7 @@ impl HasTwoAdicBionmialExtension<2> for Goldilocks {
 #[cfg(test)]
 mod test_quadratic_extension {
 
-    use p3_field::extension::binomial_extension::BinomialExtensionField;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::Goldilocks;
