@@ -26,6 +26,7 @@ pub trait StarkConfig {
         Self::Challenger,
     >;
 
+    /// The challenger (Fiat-Shamir) implementation used.
     type Challenger: FieldChallenger<Self::Val>
         + CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
 
