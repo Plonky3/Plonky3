@@ -25,7 +25,7 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // for f in factor(p^4 - 1):
     //   assert g^((p^4-1) // f) != 1
     // ```
-    fn ext_multiplicative_group_generator() -> [Self; 2] {
+    fn ext_generator() -> [Self; 2] {
         [Self::new_real(Mersenne31::new(6)), Self::one()]
     }
 
@@ -78,7 +78,7 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // for f in factor(p^6 - 1):
     //   assert g^((p^6-1) // f) != 1
     // ```
-    fn ext_multiplicative_group_generator() -> [Self; 3] {
+    fn ext_generator() -> [Self; 3] {
         [
             Self::new_real(Mersenne31::new(5)),
             Self::new_real(Mersenne31::one()),

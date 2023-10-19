@@ -15,7 +15,7 @@ impl BinomiallyExtendable<2> for Goldilocks {
         Self::new(18446744069414584320)
     }
 
-    fn ext_multiplicative_group_generator() -> [Self; 2] {
+    fn ext_generator() -> [Self; 2] {
         [
             Self::new(18081566051660590251),
             Self::new(16121475356294670766),

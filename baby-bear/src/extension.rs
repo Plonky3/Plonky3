@@ -15,7 +15,7 @@ impl BinomiallyExtendable<4> for BabyBear {
         Self::new(1728404513)
     }
 
-    fn ext_multiplicative_group_generator() -> [Self; 4] {
+    fn ext_generator() -> [Self; 4] {
         [Self::new(8), Self::one(), Self::zero(), Self::zero()]
     }
 }
@@ -61,7 +61,7 @@ impl BinomiallyExtendable<5> for BabyBear {
         Self::new(815036133)
     }
 
-    fn ext_multiplicative_group_generator() -> [Self; 5] {
+    fn ext_generator() -> [Self; 5] {
         [
             Self::new(8),
             Self::one(),
