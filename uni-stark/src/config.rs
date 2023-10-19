@@ -2,7 +2,6 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcsWithLde};
-use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -27,43 +26,36 @@ pub trait StarkConfig {
         Self::Challenger,
     >;
 
-    type Dft: TwoAdicSubgroupDft<Self::Domain> + TwoAdicSubgroupDft<Self::Challenge>;
-
     type Challenger: FieldChallenger<Self::Val>
         + CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
 
     fn pcs(&self) -> &Self::Pcs;
-
-    fn dft(&self) -> &Self::Dft;
 }
 
-pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> {
+pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger> {
     pcs: Pcs,
-    dft: Dft,
     _phantom: PhantomData<(Val, Domain, Challenge, PackedChallenge, Challenger)>,
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
-    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
+impl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>
+    StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>
 {
-    pub fn new(pcs: Pcs, dft: Dft) -> Self {
+    pub fn new(pcs: Pcs) -> Self {
         Self {
             pcs,
-            dft,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> StarkConfig
-    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
+impl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger> StarkConfig
+    for StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     PackedChallenge: AbstractExtensionField<Domain::Packing, F = Challenge>,
     Pcs: UnivariatePcsWithLde<Val, Domain, Challenge, RowMajorMatrix<Val>, Challenger>,
-    Dft: TwoAdicSubgroupDft<Domain> + TwoAdicSubgroupDft<Challenge>,
     Challenger: FieldChallenger<Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
 {
@@ -73,14 +65,9 @@ where
     type Challenge = Challenge;
     type PackedChallenge = PackedChallenge;
     type Pcs = Pcs;
-    type Dft = Dft;
     type Challenger = Challenger;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
-    }
-
-    fn dft(&self) -> &Self::Dft {
-        &self.dft
     }
 }

@@ -66,10 +66,10 @@ fn main() -> Result<(), VerificationError> {
     let ldt = FriLdt { config: fri_config };
 
     type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>;
+    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>;
 
     let pcs = Pcs::new(dft, 1, val_mmcs, ldt);
-    let config = StarkConfigImpl::new(pcs, Dft {});
+    let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();

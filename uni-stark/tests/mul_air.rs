@@ -102,10 +102,10 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     let ldt = FriLdt { config: fri_config };
 
     type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>;
+    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>;
 
     let pcs = Pcs::new(dft, 1, val_mmcs, ldt);
-    let config = StarkConfigImpl::new(pcs, Dft {});
+    let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
     let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
