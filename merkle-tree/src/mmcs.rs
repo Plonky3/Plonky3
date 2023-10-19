@@ -22,7 +22,7 @@ use crate::FieldMerkleTree;
 pub struct FieldMerkleTreeMmcs<P, H, C, const DIGEST_ELEMS: usize> {
     hash: H,
     compress: C,
-    _phantom_p: PhantomData<P>,
+    _phantom: PhantomData<P>,
 }
 
 impl<P, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, H, C, DIGEST_ELEMS> {
@@ -30,7 +30,7 @@ impl<P, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, H, C, DIGEST_ELE
         Self {
             hash,
             compress,
-            _phantom_p: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

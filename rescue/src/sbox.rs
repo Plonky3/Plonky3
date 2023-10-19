@@ -18,7 +18,7 @@ where
 pub struct BasicSboxLayer<F: PrimeField> {
     alpha: u64,
     alpha_inv: u64,
-    _phantom_f: PhantomData<F>,
+    _phantom: PhantomData<F>,
 }
 
 impl<F: PrimeField> BasicSboxLayer<F> {
@@ -26,7 +26,7 @@ impl<F: PrimeField> BasicSboxLayer<F> {
         Self {
             alpha,
             alpha_inv,
-            _phantom_f: PhantomData,
+            _phantom: PhantomData,
         }
     }
 

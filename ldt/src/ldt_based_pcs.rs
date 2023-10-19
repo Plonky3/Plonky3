@@ -22,10 +22,7 @@ pub struct LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger> {
     added_bits: usize,
     mmcs: M,
     ldt: L,
-    _phantom_val: PhantomData<Val>,
-    _phantom_dom: PhantomData<Domain>,
-    _phantom_ef: PhantomData<EF>,
-    _phantom_challenger: PhantomData<Challenger>,
+    _phantom: PhantomData<(Val, Domain, EF, Challenger)>,
 }
 
 impl<Val, Domain, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger> {
@@ -35,10 +32,7 @@ impl<Val, Domain, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, Domain, EF, Dft, M
             added_bits,
             mmcs,
             ldt,
-            _phantom_val: PhantomData,
-            _phantom_dom: PhantomData,
-            _phantom_ef: PhantomData,
-            _phantom_challenger: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -146,7 +140,7 @@ where
                 QuotientMmcs::<Domain, EF, _> {
                     inner: self.mmcs.clone(),
                     openings,
-                    _phantom_f: PhantomData,
+                    _phantom: PhantomData,
                 }
             })
             .collect_vec();

@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_field::PrimeField64;
 use p3_symmetric::CryptographicPermutation;
@@ -17,7 +16,6 @@ where
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     permutation: P,
-    _phantom_f: PhantomData<F>,
 }
 
 impl<F, P, const WIDTH: usize> DuplexChallenger<F, P, WIDTH>
@@ -34,7 +32,6 @@ where
             input_buffer: vec![],
             output_buffer: vec![],
             permutation,
-            _phantom_f: PhantomData,
         }
     }
 

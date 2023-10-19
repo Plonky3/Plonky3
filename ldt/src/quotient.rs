@@ -21,7 +21,7 @@ pub struct QuotientMmcs<F, EF, Inner: Mmcs<F>> {
     /// polynomials at.
     pub(crate) openings: Vec<Vec<Opening<EF>>>,
 
-    pub(crate) _phantom_f: PhantomData<F>,
+    pub(crate) _phantom: PhantomData<F>,
 }
 
 /// A claimed opening.
@@ -103,7 +103,7 @@ where
                     inner,
                     openings,
                     inv_denominators,
-                    _phantom_f: PhantomData,
+                    _phantom: PhantomData,
                 }
             })
             .collect()
@@ -163,7 +163,7 @@ pub struct QuotientMatrix<F, EF, Inner: MatrixRowSlices<F>> {
     /// For each row (associated with a subgroup element `x`), for each opening point,
     /// this holds `1 / (x - opened_point)`.
     inv_denominators: Vec<EF>,
-    _phantom_f: PhantomData<F>,
+    _phantom: PhantomData<F>,
 }
 
 impl<F, EF, Inner: MatrixRowSlices<F>> Matrix<EF> for QuotientMatrix<F, EF, Inner> {

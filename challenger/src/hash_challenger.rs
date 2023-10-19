@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_field::Field;
 use p3_symmetric::CryptographicHasher;
@@ -16,8 +15,6 @@ where
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     hasher: H,
-    _phantom_f: PhantomData<F>,
-    _phantom_h: PhantomData<H>,
 }
 
 impl<F, H, const OUT_LEN: usize> HashChallenger<F, H, OUT_LEN>
@@ -30,8 +27,6 @@ where
             input_buffer: initial_state,
             output_buffer: vec![],
             hasher,
-            _phantom_f: PhantomData,
-            _phantom_h: PhantomData,
         }
     }
 

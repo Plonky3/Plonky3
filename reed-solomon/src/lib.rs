@@ -19,9 +19,7 @@ where
     lde: L,
     n: usize,
     k: usize,
-    _phantom_f: PhantomData<F>,
-    _phantom_l: PhantomData<L>,
-    _phantom_in: PhantomData<In>,
+    _phantom: PhantomData<(F, L, In)>,
 }
 
 impl<F, L, In> UndefinedReedSolomonCode<F, L, In>
@@ -35,9 +33,7 @@ where
             lde,
             n,
             k,
-            _phantom_f: PhantomData,
-            _phantom_l: PhantomData,
-            _phantom_in: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

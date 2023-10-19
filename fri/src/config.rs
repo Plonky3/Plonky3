@@ -25,11 +25,7 @@ pub trait FriConfig {
 pub struct FriConfigImpl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
     num_queries: usize,
     commit_phase_mmcs: CommitPhaseMmcs,
-    _phantom_val: PhantomData<Val>,
-    _phantom_dom: PhantomData<Domain>,
-    _phantom_challenge: PhantomData<Challenge>,
-    _phantom_input_mmcs: PhantomData<InputMmcs>,
-    _phantom_challenger: PhantomData<Challenger>,
+    _phantom: PhantomData<(Val, Domain, Challenge, InputMmcs, Challenger)>,
 }
 
 impl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
@@ -39,11 +35,7 @@ impl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
         Self {
             num_queries,
             commit_phase_mmcs,
-            _phantom_val: PhantomData,
-            _phantom_dom: PhantomData,
-            _phantom_challenge: PhantomData,
-            _phantom_input_mmcs: PhantomData,
-            _phantom_challenger: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

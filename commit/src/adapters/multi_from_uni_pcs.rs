@@ -16,11 +16,7 @@ where
     Challenger: FieldChallenger<Val>,
 {
     _uni: U,
-    _phantom_val: PhantomData<Val>,
-    _phantom_dom: PhantomData<Domain>,
-    _phantom_ef: PhantomData<EF>,
-    _phantom_in: PhantomData<In>,
-    _phantom_chal: PhantomData<Challenger>,
+    _phantom: PhantomData<(Val, Domain, EF, In, Challenger)>,
 }
 
 // TODO: Impl PCS, MultivariatePcs

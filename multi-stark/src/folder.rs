@@ -1,5 +1,3 @@
-use core::marker::PhantomData;
-
 use p3_air::{AirBuilder, TwoRowMatrixView};
 use p3_field::{AbstractExtensionField, ExtensionField, Field, PackedField};
 
@@ -13,7 +11,6 @@ where
     pub(crate) is_transition: F::Packing,
     pub(crate) alpha: Challenge,
     pub(crate) accumulator: PackedChallenge,
-    pub(crate) _phantom_f: PhantomData<F>,
 }
 
 impl<'a, F, Challenge, PackedChallenge> AirBuilder
