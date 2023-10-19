@@ -147,7 +147,8 @@ where
             let mut reduced = init[r];
             for mat in matrices {
                 for col in mat.row(r) {
-                    reduced = reduced * alpha + col;
+                    reduced *= alpha;
+                    reduced += col;
                 }
             }
             reduced

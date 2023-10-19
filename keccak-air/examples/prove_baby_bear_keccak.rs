@@ -34,8 +34,8 @@ fn main() -> Result<(), VerificationError> {
 
     type Val = BabyBear;
     type Domain = Val;
-    type Challenge = BinomialExtensionField<Val, 5>;
-    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 5>;
+    type Challenge = BinomialExtensionField<Val, 4>;
+    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
     type MyMds = CosetMds<Val, 16>;
     let mds = MyMds::default();
