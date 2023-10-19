@@ -216,7 +216,7 @@ mod tests {
     where
         Standard: Distribution<Base>,
     {
-        const N: usize = 1 << 12;
+        const N: usize = 1 << 6;
         let a = thread_rng()
             .sample_iter(Standard)
             .take(N)

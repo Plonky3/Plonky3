@@ -49,8 +49,8 @@ where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
 {
-    _phantom_t: PhantomData<T>,
     hasher: H,
+    _phantom: PhantomData<T>,
 }
 
 impl<T, H, const N: usize, const CHUNK: usize> CompressionFunctionFromHasher<T, H, N, CHUNK>
@@ -61,7 +61,7 @@ where
     pub fn new(hasher: H) -> Self {
         Self {
             hasher,
-            _phantom_t: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

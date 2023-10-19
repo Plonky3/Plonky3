@@ -7,7 +7,7 @@ use p3_field::{Field, SymbolicField};
 pub struct BasicSymVar<F: Field> {
     pub row_offset: usize,
     pub column: usize,
-    _phantom_f: PhantomData<F>,
+    _phantom: PhantomData<F>,
 }
 
 impl<F: Field> From<BasicSymVar<F>> for SymbolicField<F, BasicSymVar<F>> {

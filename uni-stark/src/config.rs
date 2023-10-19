@@ -40,10 +40,7 @@ pub trait StarkConfig {
 pub struct StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger> {
     pcs: Pcs,
     dft: Dft,
-    _phantom_val: PhantomData<Val>,
-    _phantom_domain: PhantomData<Domain>,
-    _phantom_challenge: PhantomData<(Challenge, PackedChallenge)>,
-    _phantom_chal: PhantomData<Challenger>,
+    _phantom: PhantomData<(Val, Domain, Challenge, PackedChallenge, Challenger)>,
 }
 
 impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
@@ -53,10 +50,7 @@ impl<Val, Domain, Challenge, PackedChallenge, Pcs, Dft, Challenger>
         Self {
             pcs,
             dft,
-            _phantom_val: PhantomData,
-            _phantom_domain: PhantomData,
-            _phantom_challenge: PhantomData,
-            _phantom_chal: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

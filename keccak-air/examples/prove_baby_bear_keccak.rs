@@ -43,7 +43,7 @@ fn main() -> Result<(), VerificationError> {
     type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 5>;
     let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
 
-    type MyHash = SerializingHasher32<Val, Keccak256Hash>;
+    type MyHash = SerializingHasher32<Keccak256Hash>;
     let hash = MyHash::new(Keccak256Hash {});
 
     type MyCompress = CompressionFunctionFromHasher<Val, MyHash, 2, 8>;

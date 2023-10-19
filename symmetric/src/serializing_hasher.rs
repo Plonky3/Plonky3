@@ -1,5 +1,3 @@
-use core::marker::PhantomData;
-
 use p3_field::{PrimeField32, PrimeField64};
 
 use crate::CryptographicHasher;
@@ -7,38 +5,30 @@ use crate::CryptographicHasher;
 /// Maps input field elements to their 4-byte little-endian encodings, and maps output of the form
 /// `[u8; 32]` to `[F; 8]`.
 #[derive(Copy, Clone)]
-pub struct SerializingHasher32<F, Inner> {
+pub struct SerializingHasher32<Inner> {
     inner: Inner,
-    _phantom_f: PhantomData<F>,
 }
 
 /// Maps input field elements to their 8-byte little-endian encodings, and maps output of the form
 /// `[u8; 32]` to `[F; 4]`.
 #[derive(Copy, Clone)]
-pub struct SerializingHasher64<F, Inner> {
+pub struct SerializingHasher64<Inner> {
     inner: Inner,
-    _phantom_f: PhantomData<F>,
 }
 
-impl<F, Inner> SerializingHasher32<F, Inner> {
+impl<Inner> SerializingHasher32<Inner> {
     pub fn new(inner: Inner) -> Self {
-        Self {
-            inner,
-            _phantom_f: PhantomData,
-        }
+        Self { inner }
     }
 }
 
-impl<F, Inner> SerializingHasher64<F, Inner> {
+impl<Inner> SerializingHasher64<Inner> {
     pub fn new(inner: Inner) -> Self {
-        Self {
-            inner,
-            _phantom_f: PhantomData,
-        }
+        Self { inner }
     }
 }
 
-impl<F, Inner> CryptographicHasher<F, [F; 8]> for SerializingHasher32<F, Inner>
+impl<F, Inner> CryptographicHasher<F, [F; 8]> for SerializingHasher32<Inner>
 where
     F: PrimeField32,
     Inner: CryptographicHasher<u8, [u8; 32]>,
@@ -60,7 +50,7 @@ where
     }
 }
 
-impl<F, Inner> CryptographicHasher<F, [F; 4]> for SerializingHasher64<F, Inner>
+impl<F, Inner> CryptographicHasher<F, [F; 4]> for SerializingHasher64<Inner>
 where
     F: PrimeField64,
     Inner: CryptographicHasher<u8, [u8; 32]>,
