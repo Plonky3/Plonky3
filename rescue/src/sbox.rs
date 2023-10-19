@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 use p3_field::{AbstractField, PrimeField, PrimeField64};
 

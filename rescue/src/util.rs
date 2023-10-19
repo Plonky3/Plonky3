@@ -1,3 +1,6 @@
+use alloc::vec;
+use alloc::vec::Vec;
+
 use gcd::Gcd;
 use modinverse::modinverse;
 use p3_field::PrimeField64;
