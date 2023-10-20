@@ -4,9 +4,19 @@ use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 // NB: These four are MDS for M31, BabyBear and Goldilocks
 //const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
 const MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
+// Much smaller: [1, 1, -1, 2, 3, 8, 2, -3] but not sure how to deal with the -ve's
 
-//const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
-const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
+// const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
+// const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
+const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
+// Trying to maximise the # of 1's in the vector.
+// Not clear exatcly what we should be optimising here but that seems reasonable.
+const MATRIX_CIRC_MDS_16_SML: [u64; 16] =
+    [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
+
+// 1, 1, 51, 52, 11, 63, 1, 2, 1, 2, 15, 67, 2, 22, 13, 3
+// [1, 1, 2, 1, 8, 32, 2, 65, 77, 8, 91, 31, 3, 65, 32, 7];
 
 /// Given the first row `circ_matrix` of an NxN circulant matrix, say
 /// C, return the product `C*input`.
@@ -108,6 +118,49 @@ pub(crate) fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12]
     output[10] = F::linear_combination_u64(MAT_10, &input);
     const MAT_11: [u64; N] = rotate_right(MATRIX_CIRC_MDS_12_SML, 11);
     output[11] = F::linear_combination_u64(MAT_11, &input);
+
+    output
+}
+
+/// As for `apply_circulant()` above, but with `circ_matrix` set to a
+/// fixed 16x16 MDS matrix with small entries that satisfy the condition
+/// on `PrimeField64::z_linear_combination_sml()`.
+pub fn apply_circulant_16_sml<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
+    const N: usize = 16;
+    let mut output = [F::ZERO; N];
+
+    const MAT_0: [u64; N] = MATRIX_CIRC_MDS_16_SML;
+    output[0] = F::linear_combination_u64(MAT_0, &input);
+    const MAT_1: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 1);
+    output[1] = F::linear_combination_u64(MAT_1, &input);
+    const MAT_2: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 2);
+    output[2] = F::linear_combination_u64(MAT_2, &input);
+    const MAT_3: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 3);
+    output[3] = F::linear_combination_u64(MAT_3, &input);
+    const MAT_4: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 4);
+    output[4] = F::linear_combination_u64(MAT_4, &input);
+    const MAT_5: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 5);
+    output[5] = F::linear_combination_u64(MAT_5, &input);
+    const MAT_6: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 6);
+    output[6] = F::linear_combination_u64(MAT_6, &input);
+    const MAT_7: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 7);
+    output[7] = F::linear_combination_u64(MAT_7, &input);
+    const MAT_8: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 8);
+    output[8] = F::linear_combination_u64(MAT_8, &input);
+    const MAT_9: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 9);
+    output[9] = F::linear_combination_u64(MAT_9, &input);
+    const MAT_10: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 10);
+    output[10] = F::linear_combination_u64(MAT_10, &input);
+    const MAT_11: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 11);
+    output[11] = F::linear_combination_u64(MAT_11, &input);
+    const MAT_12: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 12);
+    output[12] = F::linear_combination_u64(MAT_12, &input);
+    const MAT_13: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 13);
+    output[13] = F::linear_combination_u64(MAT_13, &input);
+    const MAT_14: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 14);
+    output[14] = F::linear_combination_u64(MAT_14, &input);
+    const MAT_15: [u64; N] = rotate_right(MATRIX_CIRC_MDS_16_SML, 15);
+    output[15] = F::linear_combination_u64(MAT_15, &input);
 
     output
 }

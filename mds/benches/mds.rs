@@ -25,8 +25,10 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 12>(c);
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 16>(c);
 
+    // bench_mds::<Mersenne31, MdsMatrixMersenne31, 8>(c);
+    // bench_mds::<Mersenne31, MdsMatrixMersenne31, 12>(c);
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 16>(c);
-    bench_mds::<Mersenne31, MdsMatrixMersenne31, 32>(c);
+    // bench_mds::<Mersenne31, MdsMatrixMersenne31, 32>(c);
 }
 
 fn bench_mds<AF, Mds, const WIDTH: usize>(c: &mut Criterion)
