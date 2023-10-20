@@ -21,7 +21,7 @@ pub struct QuotientMmcs<F, EF, Inner: Mmcs<F>> {
     /// polynomials at.
     pub(crate) openings: Vec<Vec<Opening<EF>>>,
 
-    pub(crate) _phantom_f: PhantomData<F>,
+    pub(crate) _phantom: PhantomData<F>,
 }
 
 /// A claimed opening.
@@ -103,7 +103,7 @@ where
                     inner,
                     openings,
                     inv_denominators,
-                    _phantom_f: PhantomData,
+                    _phantom: PhantomData,
                 }
             })
             .collect()
@@ -114,7 +114,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_quotient_values: Vec<Vec<EF>>,
+        opened_quotient_values: &[Vec<EF>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         // quotient = (original - opened_eval) / (x - opened_point)
@@ -150,10 +150,10 @@ where
                 let original_row = get_repeated(original_row_repeated.into_iter());
                 to_base::<F, EF>(original_row)
             })
-            .collect();
+            .collect_vec();
 
         self.inner
-            .verify_batch(commit, dimensions, index, opened_original_values, proof)
+            .verify_batch(commit, dimensions, index, &opened_original_values, proof)
     }
 }
 
@@ -163,7 +163,7 @@ pub struct QuotientMatrix<F, EF, Inner: MatrixRowSlices<F>> {
     /// For each row (associated with a subgroup element `x`), for each opening point,
     /// this holds `1 / (x - opened_point)`.
     inv_denominators: Vec<EF>,
-    _phantom_f: PhantomData<F>,
+    _phantom: PhantomData<F>,
 }
 
 impl<F, EF, Inner: MatrixRowSlices<F>> Matrix<EF> for QuotientMatrix<F, EF, Inner> {
@@ -181,6 +181,7 @@ impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRowSlices<F>> MatrixRows<EF>
 {
     type Row<'a> = QuotientMatrixRow<'a, F, EF> where Inner: 'a;
 
+    #[inline]
     fn row(&self, r: usize) -> Self::Row<'_> {
         let num_openings = self.openings.len();
         QuotientMatrixRow {
@@ -209,6 +210,7 @@ where
 {
     type Item = EF;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner_col_index == self.inner_row.len() {
             self.opening_index += 1;

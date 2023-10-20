@@ -3,9 +3,12 @@ use alloc::vec::Vec;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
+use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use p3_util::log2_strict_usize;
 
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
+use crate::butterflies::{
+    dif_butterfly_on_rows, dit_butterfly_on_rows, twiddle_free_butterfly_on_rows,
+};
 use crate::util::{
     bit_reversed_zero_pad, divide_by_height, reverse_bits, reverse_matrix_index_bits,
     reverse_slice_index_bits,
@@ -110,25 +113,9 @@ fn bowers_g_layer<F: Field>(
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
-    let h = mat.height();
-    let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
-    let num_blocks = h >> log_block_size;
-
-    // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(mat, hi, lo);
-    }
-
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for i in 0..half_block_size {
-            let hi = block_start + i;
-            let lo = hi + half_block_size;
-            dif_butterfly(mat, hi, lo, twiddle);
-        }
-    }
+    let width = mat.width();
+    par_chunks_bowers(mat, width, half_block_size, twiddles, dif_butterfly_on_rows)
 }
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
@@ -137,25 +124,36 @@ fn bowers_g_t_layer<F: Field>(
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
-    let h = mat.height();
-    let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
-    let num_blocks = h >> log_block_size;
+    let width = mat.width();
+    par_chunks_bowers(mat, width, half_block_size, twiddles, dit_butterfly_on_rows)
+}
 
-    // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(mat, hi, lo);
-    }
-
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for i in 0..half_block_size {
-            let hi = block_start + i;
-            let lo = hi + half_block_size;
-            dit_butterfly(mat, hi, lo, twiddle);
-        }
-    }
+fn par_chunks_bowers<F: Field, Fun>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    width: usize,
+    half_block_size: usize,
+    twiddles: &[F],
+    butterfly_fn: Fun,
+) where
+    Fun: Fn(&mut [F], &mut [F], F) + Sync,
+{
+    mat.par_row_chunks_mut(2 * half_block_size)
+        .enumerate()
+        .for_each(|(block, chunks)| {
+            let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
+            let twiddle = twiddles[block];
+            hi_chunks
+                .par_chunks_exact_mut(width)
+                .zip(lo_chunks.par_chunks_exact_mut(width))
+                .for_each(|(hi_chunk, lo_chunk)| {
+                    if block == 0 {
+                        twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
+                    } else {
+                        butterfly_fn(hi_chunk, lo_chunk, twiddle);
+                    }
+                });
+        });
 }
 
 #[cfg(test)]

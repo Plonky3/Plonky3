@@ -1,13 +1,17 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Cloned;
 use core::slice;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedField};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows};
+use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
+
+/// A default constant for block size matrix transposition. The value was chosen with 32-byte type, in mind.
+const TRANSPOSE_BLOCK_SIZE: usize = 64;
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +24,7 @@ pub struct RowMajorMatrix<T> {
 impl<T> RowMajorMatrix<T> {
     #[must_use]
     pub fn new(values: Vec<T>, width: usize) -> Self {
+        debug_assert!(width >= 1);
         debug_assert_eq!(values.len() % width, 0);
         Self { values, width }
     }
@@ -48,7 +53,7 @@ impl<T> RowMajorMatrix<T> {
         self.values.chunks_exact_mut(self.width)
     }
 
-    pub fn row_chunks_mut(
+    pub fn par_row_chunks_mut(
         &mut self,
         chunk_rows: usize,
     ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
@@ -95,6 +100,20 @@ impl<T> RowMajorMatrix<T> {
         }
     }
 
+    /// Flatten a matrix of extension field elements into a matrix of base field elements.
+    pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
+    where
+        T: ExtensionField<F>,
+    {
+        let width = self.width * T::D;
+        let values = self
+            .values
+            .iter()
+            .flat_map(|x| x.as_base_slice().iter().copied())
+            .collect();
+        RowMajorMatrix { values, width }
+    }
+
     pub fn to_ext<EF: ExtensionField<T>>(&self) -> RowMajorMatrix<EF>
     where
         T: Field,
@@ -111,6 +130,16 @@ impl<T> RowMajorMatrix<T> {
         prefix.iter_mut().for_each(|x| *x *= scale);
         shorts.iter_mut().for_each(|x| *x *= scale);
         suffix.iter_mut().for_each(|x| *x *= scale);
+    }
+
+    #[inline]
+    pub fn packed_row<P>(&self, r: usize) -> impl Iterator<Item = P> + '_
+    where
+        T: Field,
+        P: PackedField<Scalar = T>,
+    {
+        debug_assert!(r + P::WIDTH <= self.height());
+        (0..self.width).map(move |col| P::from_fn(|i| self.get(r + i, col)))
     }
 
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
@@ -152,6 +181,7 @@ impl<T> Matrix<T> for RowMajorMatrix<T> {
 }
 
 impl<T: Clone> MatrixGet<T> for RowMajorMatrix<T> {
+    #[inline]
     fn get(&self, r: usize, c: usize) -> T {
         self.values[r * self.width + c].clone()
     }
@@ -194,7 +224,7 @@ pub struct RowMajorMatrixView<'a, T> {
 
 impl<'a, T> RowMajorMatrixView<'a, T> {
     #[must_use]
-    pub fn new(values: &'a mut [T], width: usize) -> Self {
+    pub fn new(values: &'a [T], width: usize) -> Self {
         debug_assert_eq!(values.len() % width, 0);
         Self { values, width }
     }
@@ -277,11 +307,21 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         self.values.chunks_exact_mut(self.width)
     }
 
-    pub fn par_rows_mut(&mut self) -> impl ParallelIterator<Item = &mut [T]>
+    pub fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [T]>
     where
         T: Send,
     {
         self.values.par_chunks_exact_mut(self.width)
+    }
+
+    pub fn par_row_chunks_mut(
+        &mut self,
+        size: usize,
+    ) -> impl IndexedParallelIterator<Item = &mut [T]>
+    where
+        T: Send,
+    {
+        self.values.par_chunks_exact_mut(size * self.width)
     }
 
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
@@ -381,5 +421,141 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
+    }
+}
+
+impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
+where
+    T: Clone + Default + Send + Sync,
+{
+    fn transpose(self) -> Self {
+        let block_size = TRANSPOSE_BLOCK_SIZE;
+        let height = self.height();
+        let width = self.width();
+
+        let transposed_values: Vec<T> = vec![T::default(); width * height];
+        let mut transposed = Self::new(transposed_values, height);
+
+        transposed
+            .values
+            .par_chunks_mut(height)
+            .enumerate()
+            .for_each(|(row_ind, row)| {
+                row.par_chunks_mut(block_size)
+                    .enumerate()
+                    .for_each(|(block_num, row_block)| {
+                        let row_block_len = row_block.len();
+                        (0..row_block_len).for_each(|col_ind| {
+                            let original_mat_row_ind = block_size * block_num + col_ind;
+                            let original_mat_col_ind = row_ind;
+                            let original_values_index =
+                                original_mat_row_ind * width + original_mat_col_ind;
+
+                            row_block[col_ind] = self.values[original_values_index].clone();
+                        });
+                    });
+            });
+
+        transposed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transpose_square_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 9;
+        const WIDTH: usize = 3;
+        const HEIGHT: usize = 3;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.transpose();
+        let should_be_transposed_values = vec![1, 4, 7, 2, 5, 8, 3, 6, 9];
+        let should_be_transposed = RowMajorMatrix::new(should_be_transposed_values, HEIGHT);
+        assert_eq!(transposed, should_be_transposed);
+    }
+
+    #[test]
+    fn test_transpose_row_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 30;
+        const WIDTH: usize = 1;
+        const HEIGHT: usize = 30;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values.clone(), WIDTH);
+        let transposed = matrix.transpose();
+        let should_be_transposed = RowMajorMatrix::new(matrix_values, HEIGHT);
+        assert_eq!(transposed, should_be_transposed);
+    }
+
+    #[test]
+    fn test_transpose_rectangular_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 30;
+        const WIDTH: usize = 5;
+        const HEIGHT: usize = 6;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.transpose();
+        let should_be_transposed_values = vec![
+            1, 6, 11, 16, 21, 26, 2, 7, 12, 17, 22, 27, 3, 8, 13, 18, 23, 28, 4, 9, 14, 19, 24, 29,
+            5, 10, 15, 20, 25, 30,
+        ];
+        let should_be_transposed = RowMajorMatrix::new(should_be_transposed_values, HEIGHT);
+        assert_eq!(transposed, should_be_transposed);
+    }
+
+    #[test]
+    fn test_transpose_larger_rectangular_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 131072; // 512 * 256
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 512;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.clone().transpose();
+
+        assert_eq!(transposed.width(), HEIGHT);
+        assert_eq!(transposed.height(), WIDTH);
+
+        for col_index in 0..WIDTH {
+            for row_index in 0..HEIGHT {
+                assert_eq!(
+                    matrix.values[row_index * WIDTH + col_index],
+                    transposed.values[col_index * HEIGHT + row_index]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_transpose_very_large_rectangular_matrix() {
+        const START_INDEX: usize = 1;
+        const VALUE_LEN: usize = 1048576; // 512 * 256
+        const WIDTH: usize = 1024;
+        const HEIGHT: usize = 1024;
+
+        let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
+        let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
+        let transposed = matrix.clone().transpose();
+
+        assert_eq!(transposed.width(), HEIGHT);
+        assert_eq!(transposed.height(), WIDTH);
+
+        for col_index in 0..WIDTH {
+            for row_index in 0..HEIGHT {
+                assert_eq!(
+                    matrix.values[row_index * WIDTH + col_index],
+                    transposed.values[col_index * HEIGHT + row_index]
+                );
+            }
+        }
     }
 }

@@ -1,3 +1,6 @@
+use alloc::vec::Vec;
+use core::array;
+
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 
@@ -30,7 +33,7 @@ pub fn apply_circulant<AF: AbstractField, const N: usize>(
 ) -> [AF; N] {
     let mut matrix: [AF; N] = circ_matrix.map(AF::from_canonical_u64);
 
-    let mut output = [AF::ZERO; N];
+    let mut output = array::from_fn(|_| AF::zero());
     for out_i in output.iter_mut().take(N - 1) {
         *out_i = AF::dot_product(&matrix, &input);
         matrix.rotate_right(1);
@@ -65,7 +68,7 @@ pub(crate) const fn rotate_right<const N: usize>(input: [u64; N], offset: usize)
 /// on `PrimeField64::z_linear_combination_sml()`.
 pub(crate) fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     const N: usize = 8;
-    let mut output = [F::ZERO; N];
+    let mut output = [F::zero(); N];
 
     const MAT_0: [u64; N] = MATRIX_CIRC_MDS_8_SML;
     output[0] = F::linear_combination_u64(MAT_0, &input);
@@ -92,7 +95,7 @@ pub(crate) fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
 /// on `PrimeField64::z_linear_combination_sml()`.
 pub(crate) fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
     const N: usize = 12;
-    let mut output = [F::ZERO; N];
+    let mut output = [F::zero(); N];
 
     const MAT_0: [u64; N] = MATRIX_CIRC_MDS_12_SML;
     output[0] = F::linear_combination_u64(MAT_0, &input);

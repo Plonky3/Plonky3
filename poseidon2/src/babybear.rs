@@ -3,7 +3,8 @@
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
 
 use p3_baby_bear::BabyBear;
-use p3_symmetric::permutation::Permutation;
+use p3_field::AbstractField;
+use p3_symmetric::Permutation;
 
 use crate::diffusion::matmul_internal;
 use crate::DiffusionPermutation;
@@ -22,17 +23,17 @@ pub const MATRIX_DIAG_24_BABYBEAR: [u64; 24] = [
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabybear;
 
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
-    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        matmul_internal::<BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR);
+impl<AF: AbstractField<F = BabyBear>> Permutation<[AF; 16]> for DiffusionMatrixBabybear {
+    fn permute_mut(&self, state: &mut [AF; 16]) {
+        matmul_internal::<AF, 16>(state, MATRIX_DIAG_16_BABYBEAR);
     }
 }
 
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
+impl<AF: AbstractField<F = BabyBear>> DiffusionPermutation<AF, 16> for DiffusionMatrixBabybear {}
 
-impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
-    fn permute_mut(&self, state: &mut [BabyBear; 24]) {
-        matmul_internal::<BabyBear, 24>(state, MATRIX_DIAG_24_BABYBEAR);
+impl<AF: AbstractField<F = BabyBear>> Permutation<[AF; 24]> for DiffusionMatrixBabybear {
+    fn permute_mut(&self, state: &mut [AF; 24]) {
+        matmul_internal::<AF, 24>(state, MATRIX_DIAG_24_BABYBEAR);
     }
 }
 

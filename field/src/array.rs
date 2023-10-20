@@ -9,7 +9,7 @@ pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
 
 impl<F: Field, const N: usize> Default for FieldArray<F, N> {
     fn default() -> Self {
-        Self::ZERO
+        Self::zero()
     }
 }
 
@@ -28,10 +28,23 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
     type F = F;
 
-    const ZERO: Self = FieldArray([F::ZERO; N]);
-    const ONE: Self = FieldArray([F::ONE; N]);
-    const TWO: Self = FieldArray([F::TWO; N]);
-    const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
+    fn zero() -> Self {
+        FieldArray([F::zero(); N])
+    }
+    fn one() -> Self {
+        FieldArray([F::one(); N])
+    }
+    fn two() -> Self {
+        FieldArray([F::two(); N])
+    }
+    fn neg_one() -> Self {
+        FieldArray([F::neg_one(); N])
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f.into()
+    }
 
     fn from_bool(b: bool) -> Self {
         [F::from_bool(b); N].into()
@@ -178,13 +191,13 @@ impl<F: Field, const N: usize> MulAssign<F> for FieldArray<F, N> {
 impl<F: Field, const N: usize> Sum for FieldArray<F, N> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
     }
 }
 
 impl<F: Field, const N: usize> Product for FieldArray<F, N> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
     }
 }

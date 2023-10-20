@@ -1,9 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_field::PrimeField64;
-use p3_symmetric::permutation::CryptographicPermutation;
+use p3_symmetric::CryptographicPermutation;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -17,7 +16,6 @@ where
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     permutation: P,
-    _phantom_f: PhantomData<F>,
 }
 
 impl<F, P, const WIDTH: usize> DuplexChallenger<F, P, WIDTH>
@@ -34,7 +32,6 @@ where
             input_buffer: vec![],
             output_buffer: vec![],
             permutation,
-            _phantom_f: PhantomData,
         }
     }
 
@@ -126,7 +123,7 @@ where
 mod tests {
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+    use p3_symmetric::{CryptographicPermutation, Permutation};
 
     use super::*;
 
@@ -167,7 +164,7 @@ mod tests {
                     .collect::<Vec<_>>()
             );
             assert_eq!(duplex_challenger.output_buffer, vec![]);
-            assert_eq!(duplex_challenger.sponge_state, [F::ZERO; WIDTH]);
+            assert_eq!(duplex_challenger.sponge_state, [F::zero(); WIDTH]);
         });
 
         // Test functionality when we observe WIDTH elements
@@ -209,7 +206,7 @@ mod tests {
             .for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
 
         let should_be_sponge_state: [F; WIDTH] = [
-            vec![F::ZERO; WIDTH / 2],
+            vec![F::zero(); WIDTH / 2],
             (0..WIDTH / 2)
                 .rev()
                 .map(F::from_canonical_usize)
@@ -236,7 +233,7 @@ mod tests {
             assert_eq!(duplex_challenger.input_buffer, vec![]);
             assert_eq!(
                 duplex_challenger.output_buffer,
-                vec![F::ZERO; WIDTH / 2 - i - 1]
+                vec![F::zero(); WIDTH / 2 - i - 1]
             );
             assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state)
         })

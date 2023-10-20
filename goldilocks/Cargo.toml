@@ -20,3 +20,7 @@ harness = false
 [[bench]]
 name = "root_7"
 harness = false
+
+[[bench]]
+name = "extension"
+harness = false

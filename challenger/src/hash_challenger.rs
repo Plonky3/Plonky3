@@ -1,9 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_field::Field;
-use p3_symmetric::hasher::CryptographicHasher;
+use p3_symmetric::CryptographicHasher;
 
 use crate::{CanObserve, CanSample};
 
@@ -16,8 +15,6 @@ where
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
     hasher: H,
-    _phantom_f: PhantomData<F>,
-    _phantom_h: PhantomData<H>,
 }
 
 impl<F, H, const OUT_LEN: usize> HashChallenger<F, H, OUT_LEN>
@@ -30,8 +27,6 @@ where
             input_buffer: initial_state,
             output_buffer: vec![],
             hasher,
-            _phantom_f: PhantomData,
-            _phantom_h: PhantomData,
         }
     }
 
@@ -109,7 +104,7 @@ mod tests {
         {
             let (sum, len) = input
                 .into_iter()
-                .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), f| {
+                .fold((F::zero(), 0_usize), |(acc_sum, acc_len), f| {
                     (acc_sum + f, acc_len + 1)
                 });
             [sum, F::from_canonical_usize(len)]
@@ -122,14 +117,15 @@ mod tests {
             I: IntoIterator<Item = &'a [F]>,
             F: 'a,
         {
-            let (sum, len) = input
-                .into_iter()
-                .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), n| {
-                    (
-                        acc_sum + n.iter().fold(F::ZERO, |acc, f| acc + *f),
-                        acc_len + n.len(),
-                    )
-                });
+            let (sum, len) =
+                input
+                    .into_iter()
+                    .fold((F::zero(), 0_usize), |(acc_sum, acc_len), n| {
+                        (
+                            acc_sum + n.iter().fold(F::zero(), |acc, f| acc + *f),
+                            acc_len + n.len(),
+                        )
+                    });
             [sum, F::from_canonical_usize(len)]
         }
     }

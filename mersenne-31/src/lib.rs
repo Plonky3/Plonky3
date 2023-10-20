@@ -34,6 +34,7 @@ pub struct Mersenne31 {
 }
 
 impl Mersenne31 {
+    #[inline]
     const fn new(value: u32) -> Self {
         debug_assert!((value >> 31) == 0);
         Self { value }
@@ -41,6 +42,7 @@ impl Mersenne31 {
 }
 
 impl PartialEq for Mersenne31 {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.as_canonical_u32() == other.as_canonical_u32()
     }
@@ -55,12 +57,14 @@ impl Hash for Mersenne31 {
 }
 
 impl Ord for Mersenne31 {
+    #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_canonical_u32().cmp(&other.as_canonical_u32())
     }
 }
 
 impl PartialOrd for Mersenne31 {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -93,29 +97,47 @@ impl Distribution<Mersenne31> for Standard {
 impl AbstractField for Mersenne31 {
     type F = Self;
 
-    const ZERO: Self = Self::new(0);
-    const ONE: Self = Self::new(1);
-    const TWO: Self = Self::new(2);
-    const NEG_ONE: Self = Self::new(Self::ORDER_U32 - 1);
+    fn zero() -> Self {
+        Self::new(0)
+    }
+    fn one() -> Self {
+        Self::new(1)
+    }
+    fn two() -> Self {
+        Self::new(2)
+    }
+    fn neg_one() -> Self {
+        Self::new(Self::ORDER_U32 - 1)
+    }
 
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f
+    }
+
+    #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b as u32)
     }
 
+    #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         Self::new(u32::from(n))
     }
 
+    #[inline]
     fn from_canonical_u16(n: u16) -> Self {
         Self::new(u32::from(n))
     }
 
+    #[inline]
     fn from_canonical_u32(n: u32) -> Self {
         debug_assert!(n < Self::ORDER_U32);
         Self::new(n)
     }
 
     /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
     fn from_canonical_u64(n: u64) -> Self {
         Self::from_canonical_u32(
             n.try_into()
@@ -124,6 +146,7 @@ impl AbstractField for Mersenne31 {
     }
 
     /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
     fn from_canonical_usize(n: usize) -> Self {
         Self::from_canonical_u32(
             n.try_into()
@@ -131,6 +154,7 @@ impl AbstractField for Mersenne31 {
         )
     }
 
+    #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
         // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
         let msb = n & (1 << 31);
@@ -138,6 +162,7 @@ impl AbstractField for Mersenne31 {
         Self::new(n ^ msb) + Self::new(msb_reduced)
     }
 
+    #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         // NB: Experiments suggest that it's faster to just use the
         // builtin remainder operator rather than split the input into
@@ -146,6 +171,7 @@ impl AbstractField for Mersenne31 {
     }
 
     // Sage: GF(2^31 - 1).multiplicative_generator()
+    #[inline]
     fn generator() -> Self {
         Self::new(7)
     }
@@ -155,10 +181,12 @@ impl Field for Mersenne31 {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
 
+    #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32
     }
 
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
         let exp = exp % 31;
@@ -168,6 +196,7 @@ impl Field for Mersenne31 {
         Self::new(rotated)
     }
 
+    #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         // In a Mersenne field, division by 2^k is just a right rotation by k bits.
         let exp = (exp % 31) as u8;
@@ -213,6 +242,7 @@ impl PrimeField for Mersenne31 {}
 impl PrimeField32 for Mersenne31 {
     const ORDER_U32: u32 = (1 << 31) - 1;
 
+    #[inline]
     fn as_canonical_u32(&self) -> u32 {
         // Since our invariant guarantees that `value` fits in 31 bits, there is only one possible
         // `value` that is not canonical, namely 2^31 - 1 = p = 0.
@@ -227,10 +257,12 @@ impl PrimeField32 for Mersenne31 {
 impl PrimeField64 for Mersenne31 {
     const ORDER_U64: u64 = <Self as PrimeField32>::ORDER_U32 as u64;
 
+    #[inline]
     fn as_canonical_u64(&self) -> u64 {
         u64::from(self.as_canonical_u32())
     }
 
+    #[inline]
     fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
         // In order not to overflow a u64, we must have sum(u) <= 2^32.
         debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
@@ -243,12 +275,16 @@ impl PrimeField64 for Mersenne31 {
     }
 }
 
-/// Note there some other possible algorithms to compute the sum.
-/// See: https://github.com/Plonky3/Plonky3/blob/6049a30c3b1f5351c3eb0f7c994dc97e8f68d10d/mersenne-31/src/lib.rs#L249C38-L249C38
 impl Add for Mersenne31 {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self {
+        // See the following for a way to compute the sum that avoids
+        // the conditional which may be preferable on some
+        // architectures.
+        // https://github.com/Plonky3/Plonky3/blob/6049a30c3b1f5351c3eb0f7c994dc97e8f68d10d/mersenne-31/src/lib.rs#L249
+
         // Working with i32 means we get a flag which informs us if overflow happened.
         let (sum_i32, over) = (self.value as i32).overflowing_add(rhs.value as i32);
         let sum_u32 = sum_i32 as u32;
@@ -261,20 +297,23 @@ impl Add for Mersenne31 {
 }
 
 impl AddAssign for Mersenne31 {
+    #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
 impl Sum for Mersenne31 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
 impl Sub for Mersenne31 {
     type Output = Self;
 
+    #[inline]
     fn sub(self, rhs: Self) -> Self {
         let (mut sub, over) = self.value.overflowing_sub(rhs.value);
 
@@ -287,6 +326,7 @@ impl Sub for Mersenne31 {
 }
 
 impl SubAssign for Mersenne31 {
+    #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -295,6 +335,7 @@ impl SubAssign for Mersenne31 {
 impl Neg for Mersenne31 {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         // Can't underflow, since self.value is 31-bits and thus can't exceed ORDER.
         Self::new(Self::ORDER_U32 - self.value)
@@ -304,6 +345,7 @@ impl Neg for Mersenne31 {
 impl Mul for Mersenne31 {
     type Output = Self;
 
+    #[inline]
     #[allow(clippy::cast_possible_truncation)]
     fn mul(self, rhs: Self) -> Self {
         let prod = u64::from(self.value) * u64::from(rhs.value);
@@ -314,20 +356,23 @@ impl Mul for Mersenne31 {
 }
 
 impl MulAssign for Mersenne31 {
+    #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
 impl Product for Mersenne31 {
+    #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
 impl Div for Mersenne31 {
     type Output = Self;
 
+    #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
@@ -345,27 +390,27 @@ mod tests {
 
     #[test]
     fn add() {
-        assert_eq!(F::ONE + F::ONE, F::TWO);
-        assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
-        assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
-        assert_eq!(F::NEG_ONE + F::NEG_ONE, F::new(F::ORDER_U32 - 2));
+        assert_eq!(F::one() + F::one(), F::two());
+        assert_eq!(F::neg_one() + F::one(), F::zero());
+        assert_eq!(F::neg_one() + F::two(), F::one());
+        assert_eq!(F::neg_one() + F::neg_one(), F::new(F::ORDER_U32 - 2));
     }
 
     #[test]
     fn sub() {
-        assert_eq!(F::ONE - F::ONE, F::ZERO);
-        assert_eq!(F::TWO - F::TWO, F::ZERO);
-        assert_eq!(F::NEG_ONE - F::NEG_ONE, F::ZERO);
-        assert_eq!(F::TWO - F::ONE, F::ONE);
-        assert_eq!(F::NEG_ONE - F::ZERO, F::NEG_ONE);
+        assert_eq!(F::one() - F::one(), F::zero());
+        assert_eq!(F::two() - F::two(), F::zero());
+        assert_eq!(F::neg_one() - F::neg_one(), F::zero());
+        assert_eq!(F::two() - F::one(), F::one());
+        assert_eq!(F::neg_one() - F::zero(), F::neg_one());
     }
 
     #[test]
     fn mul_2exp_u64() {
         // 1 * 2^0 = 1.
-        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
+        assert_eq!(F::one().mul_2exp_u64(0), F::one());
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
+        assert_eq!(F::two().mul_2exp_u64(30), F::one());
         // 5 * 2^2 = 20.
         assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
     }
@@ -373,9 +418,9 @@ mod tests {
     #[test]
     fn div_2exp_u64() {
         // 1 / 2^0 = 1.
-        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
+        assert_eq!(F::one().div_2exp_u64(0), F::one());
         // 2 / 2^0 = 2.
-        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
+        assert_eq!(F::two().div_2exp_u64(0), F::two());
         // 32 / 2^5 = 1.
         assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
     }
@@ -389,7 +434,7 @@ mod tests {
 
         assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
         assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
+        assert_eq!(F::two().exp_u64(1717986917).exp_const_u64::<5>(), F::two());
     }
 
     test_field!(crate::Mersenne31);

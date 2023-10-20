@@ -110,7 +110,7 @@ fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[
     let log_h = log2_strict_usize(mat.height());
 
     // max block size: 2^mid
-    mat.row_chunks_mut(1 << mid).for_each(|mut submat| {
+    mat.par_row_chunks_mut(1 << mid).for_each(|mut submat| {
         for layer in 0..mid {
             dit_layer(&mut submat, log_h, layer, twiddles);
         }
@@ -122,7 +122,7 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
     let log_h = log2_strict_usize(mat.height());
 
     // max block size: 2^(log_h - mid)
-    mat.row_chunks_mut(1 << (log_h - mid))
+    mat.par_row_chunks_mut(1 << (log_h - mid))
         .enumerate()
         .for_each(|(thread, mut submat)| {
             for layer in mid..log_h {

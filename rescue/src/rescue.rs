@@ -1,9 +1,12 @@
+use alloc::format;
+use alloc::vec::Vec;
+
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
 use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+use p3_symmetric::{CryptographicPermutation, Permutation};
 use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -14,27 +17,18 @@ use crate::util::shake256_hash;
 
 /// The Rescue-XLIX permutation.
 #[derive(Clone)]
-pub struct Rescue<AF, Mds, Sbox, const WIDTH: usize>
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
-{
+pub struct Rescue<F, Mds, Sbox, const WIDTH: usize> {
     num_rounds: usize,
     mds: Mds,
     sbox: Sbox,
-    round_constants: Vec<AF::F>,
+    round_constants: Vec<F>,
 }
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Rescue<AF, Mds, Sbox, WIDTH>
+impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
 where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
+    F: PrimeField,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<AF::F>, mds: Mds, sbox: Sbox) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds, sbox: Sbox) -> Self {
         Self {
             num_rounds,
             mds,
@@ -62,37 +56,29 @@ where
     }
 
     // For a general field, we provide a generic constructor for the round constants.
-    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<AF>
+    pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
     where
-        Standard: Distribution<AF>,
+        Standard: Distribution<F>,
     {
         let num_constants = 2 * WIDTH * num_rounds;
         rng.sample_iter(Standard).take(num_constants).collect()
     }
-}
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Rescue<AF, Mds, Sbox, WIDTH>
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
-{
     fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
         sec_level: usize,
-    ) -> Vec<AF>
+    ) -> Vec<F>
     where
-        AF::F: PrimeField64,
+        F: PrimeField64,
     {
         let num_constants = 2 * WIDTH * num_rounds;
-        let bytes_per_constant = ceil_div_usize(AF::F::bits(), 8) + 1;
+        let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
             "Rescue-XLIX({},{},{},{})",
-            AF::F::ORDER_U64,
+            F::ORDER_U64,
             WIDTH,
             capacity,
             sec_level,
@@ -109,13 +95,13 @@ where
                     .iter()
                     .rev()
                     .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
-                AF::from_canonical_u64(integer % AF::F::ORDER_U64)
+                F::from_canonical_u64(integer % F::ORDER_U64)
             })
             .collect()
     }
 }
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Permutation<[AF; WIDTH]> for Rescue<AF, Mds, Sbox, WIDTH>
+impl<AF, Mds, Sbox, const WIDTH: usize> Permutation<[AF; WIDTH]> for Rescue<AF::F, Mds, Sbox, WIDTH>
 where
     AF: AbstractField,
     AF::F: PrimeField,
@@ -135,7 +121,7 @@ where
                 .iter_mut()
                 .zip(&self.round_constants[round * WIDTH * 2..])
             {
-                *state_item += round_constant;
+                *state_item += AF::from_f(round_constant);
             }
 
             // Inverse S-box
@@ -149,14 +135,14 @@ where
                 .iter_mut()
                 .zip(&self.round_constants[round * WIDTH * 2 + WIDTH..])
             {
-                *state_item += round_constant;
+                *state_item += AF::from_f(round_constant);
             }
         }
     }
 }
 
 impl<AF, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[AF; WIDTH]>
-    for Rescue<AF, Mds, Sbox, WIDTH>
+    for Rescue<AF::F, Mds, Sbox, WIDTH>
 where
     AF: AbstractField,
     AF::F: PrimeField,
@@ -170,9 +156,7 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mds::mersenne31::MdsMatrixMersenne31;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::hasher::CryptographicHasher;
-    use p3_symmetric::permutation::Permutation;
-    use p3_symmetric::sponge::PaddingFreeSponge;
+    use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 
     use crate::rescue::Rescue;
     use crate::sbox::BasicSboxLayer;
@@ -242,7 +226,7 @@ mod tests {
     #[test]
     fn test_rescue_sponge() {
         let rescue_prime = new_rescue_prime_m31_default();
-        let rescue_sponge = PaddingFreeSponge::<_, _, WIDTH, 8, 6>::new(rescue_prime);
+        let rescue_sponge = PaddingFreeSponge::<_, WIDTH, 8, 6>::new(rescue_prime);
 
         let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(Mersenne31::from_canonical_u64);
 

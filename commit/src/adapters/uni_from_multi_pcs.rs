@@ -16,11 +16,7 @@ where
     Challenger: FieldChallenger<Val>,
 {
     _multi: M,
-    _phantom_val: PhantomData<Val>,
-    _phantom_domain: PhantomData<Domain>,
-    _phantom_ef: PhantomData<EF>,
-    _phantom_in: PhantomData<In>,
-    _phantom_chal: PhantomData<Challenger>,
+    _phantom: PhantomData<(Val, Domain, EF, In, Challenger)>,
 }
 
 // impl<F: Field, M: MultivariatePcs<F>> UnivariatePcs<F> for UniFromMultiPcs<F> {}

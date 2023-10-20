@@ -8,28 +8,23 @@ use alloc::vec::Vec;
 
 use p3_field::{AbstractField, PrimeField};
 use p3_mds::MdsPermutation;
-use p3_symmetric::permutation::{CryptographicPermutation, Permutation};
+use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
 
 /// The Poseidon permutation.
 #[derive(Clone)]
-pub struct Poseidon<AF, Mds, const WIDTH: usize, const ALPHA: u64>
-where
-    AF: AbstractField,
-    Mds: MdsPermutation<AF, WIDTH>,
-{
+pub struct Poseidon<F, Mds, const WIDTH: usize, const ALPHA: u64> {
     half_num_full_rounds: usize,
     num_partial_rounds: usize,
-    constants: Vec<AF::F>,
+    constants: Vec<F>,
     mds: Mds,
 }
 
-impl<AF, Mds, const WIDTH: usize, const ALPHA: u64> Poseidon<AF, Mds, WIDTH, ALPHA>
+impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Poseidon<F, Mds, WIDTH, ALPHA>
 where
-    AF: AbstractField,
-    Mds: MdsPermutation<AF, WIDTH>,
+    F: PrimeField,
 {
     /// Create a new Poseidon configuration.
     ///
@@ -38,7 +33,7 @@ where
     pub fn new(
         half_num_full_rounds: usize,
         num_partial_rounds: usize,
-        constants: Vec<AF::F>,
+        constants: Vec<F>,
         mds: Mds,
     ) -> Self {
         let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
@@ -58,7 +53,7 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<AF::F>,
+        Standard: Distribution<F>,
     {
         let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
         let num_constants = WIDTH * num_rounds;
@@ -74,7 +69,11 @@ where
         }
     }
 
-    fn half_full_rounds(&self, state: &mut [AF; WIDTH], round_ctr: &mut usize) {
+    fn half_full_rounds<AF>(&self, state: &mut [AF; WIDTH], round_ctr: &mut usize)
+    where
+        AF: AbstractField<F = F>,
+        Mds: MdsPermutation<AF, WIDTH>,
+    {
         for _ in 0..self.half_num_full_rounds {
             self.constant_layer(state, *round_ctr);
             Self::full_sbox_layer(state);
@@ -83,7 +82,11 @@ where
         }
     }
 
-    fn partial_rounds(&self, state: &mut [AF; WIDTH], round_ctr: &mut usize) {
+    fn partial_rounds<AF>(&self, state: &mut [AF; WIDTH], round_ctr: &mut usize)
+    where
+        AF: AbstractField<F = F>,
+        Mds: MdsPermutation<AF, WIDTH>,
+    {
         for _ in 0..self.num_partial_rounds {
             self.constant_layer(state, *round_ctr);
             Self::partial_sbox_layer(state);
@@ -92,25 +95,34 @@ where
         }
     }
 
-    fn full_sbox_layer(state: &mut [AF; WIDTH]) {
+    fn full_sbox_layer<AF>(state: &mut [AF; WIDTH])
+    where
+        AF: AbstractField<F = F>,
+    {
         for x in state.iter_mut() {
             *x = x.exp_const_u64::<ALPHA>();
         }
     }
 
-    fn partial_sbox_layer(state: &mut [AF; WIDTH]) {
+    fn partial_sbox_layer<AF>(state: &mut [AF; WIDTH])
+    where
+        AF: AbstractField<F = F>,
+    {
         state[0] = state[0].exp_const_u64::<ALPHA>();
     }
 
-    fn constant_layer(&self, state: &mut [AF; WIDTH], round: usize) {
+    fn constant_layer<AF>(&self, state: &mut [AF; WIDTH], round: usize)
+    where
+        AF: AbstractField<F = F>,
+    {
         for (i, x) in state.iter_mut().enumerate() {
-            *x += self.constants[round * WIDTH + i];
+            *x += AF::from_f(self.constants[round * WIDTH + i]);
         }
     }
 }
 
 impl<AF, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[AF; WIDTH]>
-    for Poseidon<AF, Mds, WIDTH, ALPHA>
+    for Poseidon<AF::F, Mds, WIDTH, ALPHA>
 where
     AF: AbstractField,
     AF::F: PrimeField,
@@ -125,7 +137,7 @@ where
 }
 
 impl<AF, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[AF; WIDTH]>
-    for Poseidon<AF, Mds, WIDTH, ALPHA>
+    for Poseidon<AF::F, Mds, WIDTH, ALPHA>
 where
     AF: AbstractField,
     AF::F: PrimeField,

@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_symmetric::hasher::CryptographicHasher;
+use p3_symmetric::CryptographicHasher;
 
 /// The blake3 hash function.
 #[derive(Copy, Clone)]

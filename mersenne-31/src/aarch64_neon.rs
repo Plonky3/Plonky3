@@ -297,7 +297,7 @@ impl Sum for PackedMersenne31Neon {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
     }
 }
 
@@ -308,15 +308,15 @@ impl Product for PackedMersenne31Neon {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
     }
 }
 
 impl AbstractField for PackedMersenne31Neon {
-    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-    const ONE: Self = Self::broadcast(Mersenne31::ONE);
-    const TWO: Self = Self::broadcast(Mersenne31::TWO);
-    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
+    fn zero() -> Self { Self::broadcast(Mersenne31::zero())}
+    fn one() -> Self { Self::broadcast(Mersenne31::one())}
+    fn two() -> Self { Self::broadcast(Mersenne31::two())}
+    fn neg_one() -> Self { Self::broadcast(Mersenne31::neg_one())}
 
     #[inline]
     #[must_use]
@@ -651,14 +651,14 @@ mod tests {
     #[test]
     fn test_additive_identity_right() {
         let vec = packed_from_canonical([0x37585a7d, 0x6f1de589, 0x41e1be7e, 0x712071b8]);
-        let res = vec + P::ZERO;
+        let res = vec + P::zero();
         assert_eq!(res, vec);
     }
 
     #[test]
     fn test_additive_identity_left() {
         let vec = packed_from_canonical([0x2456f91e, 0x0783a205, 0x58826627, 0x1a5e3f16]);
-        let res = P::ZERO + vec;
+        let res = P::zero() + vec;
         assert_eq!(res, vec);
     }
 
@@ -667,14 +667,14 @@ mod tests {
         let vec = packed_from_canonical([0x28267ebf, 0x0b83d23e, 0x67a59e3d, 0x0ba2fb25]);
         let neg_vec = -vec;
         let res = vec + neg_vec;
-        assert_eq!(res, P::ZERO);
+        assert_eq!(res, P::zero());
     }
 
     #[test]
     fn test_additive_inverse_sub() {
         let vec = packed_from_canonical([0x2f0a7c0e, 0x50163480, 0x12eac826, 0x2e52b121]);
         let res = vec - vec;
-        assert_eq!(res, P::ZERO);
+        assert_eq!(res, P::zero());
     }
 
     #[test]
@@ -691,14 +691,14 @@ mod tests {
     #[test]
     fn test_sub_zero() {
         let vec = packed_from_canonical([0x10df1248, 0x65050015, 0x73151d8d, 0x443341a8]);
-        let res = vec - P::ZERO;
+        let res = vec - P::zero();
         assert_eq!(res, vec);
     }
 
     #[test]
     fn test_zero_sub() {
         let vec = packed_from_canonical([0x1af0d41c, 0x3c1795f4, 0x54da13f5, 0x43cd3f94]);
-        let res0 = P::ZERO - vec;
+        let res0 = P::zero() - vec;
         let res1 = -vec;
         assert_eq!(res0, res1);
     }
@@ -745,14 +745,14 @@ mod tests {
     #[test]
     fn test_multiplicative_identity_right() {
         let vec = packed_from_canonical([0x64628378, 0x345e3dc8, 0x766770eb, 0x21e5ad7c]);
-        let res = vec * P::ONE;
+        let res = vec * P::one();
         assert_eq!(res, vec);
     }
 
     #[test]
     fn test_multiplicative_identity_left() {
         let vec = packed_from_canonical([0x48910ae4, 0x4dd95ad3, 0x334eaf5e, 0x44e5d03b]);
-        let res = P::ONE * vec;
+        let res = P::one() * vec;
         assert_eq!(res, vec);
     }
 
@@ -761,27 +761,27 @@ mod tests {
         let vec = packed_from_canonical([0x1b288c21, 0x600c50af, 0x3ea44d7a, 0x62209fc9]);
         let inverses = packed_from_canonical([0x3a133939, 0x4736cf9a, 0x1e94daf7, 0x40eb93f3]);
         let res = vec * inverses;
-        assert_eq!(res, P::ONE);
+        assert_eq!(res, P::one());
     }
 
     #[test]
     fn test_mul_zero() {
         let vec = packed_from_canonical([0x675f87cd, 0x2bb57f1b, 0x1b636b90, 0x25fd5dbc]);
-        let res = vec * P::ZERO;
-        assert_eq!(res, P::ZERO);
+        let res = vec * P::zero();
+        assert_eq!(res, P::zero());
     }
 
     #[test]
     fn test_zero_mul() {
         let vec = packed_from_canonical([0x76d898cd, 0x12fed26d, 0x385dd0ea, 0x0a6cfb68]);
-        let res = P::ZERO * vec;
-        assert_eq!(res, P::ZERO);
+        let res = P::zero() * vec;
+        assert_eq!(res, P::zero());
     }
 
     #[test]
     fn test_mul_negone() {
         let vec = packed_from_canonical([0x3ac44c8d, 0x2690778c, 0x64c25465, 0x60c62b6d]);
-        let res0 = vec * P::NEG_ONE;
+        let res0 = vec * P::neg_one();
         let res1 = -vec;
         assert_eq!(res0, res1);
     }
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn test_negone_mul() {
         let vec = packed_from_canonical([0x45fdb5d9, 0x3e2571d7, 0x1438d182, 0x6addc720]);
-        let res0 = P::NEG_ONE * vec;
+        let res0 = P::neg_one() * vec;
         let res1 = -vec;
         assert_eq!(res0, res1);
     }
@@ -866,18 +866,18 @@ mod tests {
 
     #[test]
     fn test_one_plus_one() {
-        assert_eq!(P::ONE + P::ONE, P::TWO);
+        assert_eq!(P::one() + P::one(), P::two());
     }
 
     #[test]
     fn test_negone_plus_two() {
-        assert_eq!(P::NEG_ONE + P::TWO, P::ONE);
+        assert_eq!(P::neg_one() + P::two(), P::one());
     }
 
     #[test]
     fn test_double() {
         let vec = packed_from_canonical([0x6fc7aefd, 0x5166e726, 0x21e648d2, 0x1dd0790f]);
-        let res0 = P::TWO * vec;
+        let res0 = P::two() * vec;
         let res1 = vec + vec;
         assert_eq!(res0, res1);
     }
@@ -898,7 +898,7 @@ mod tests {
 
     #[test]
     fn test_add_vs_scalar_special_vals_left() {
-        let arr0 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr0 = [F::zero(), F::one(), F::two(), F::neg_one()];
         let arr1 = array_from_canonical([0x4205a2f6, 0x6f4715f1, 0x29ed7f70, 0x70915992]);
 
         let vec0 = PackedMersenne31Neon(arr0);
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn test_add_vs_scalar_special_vals_right() {
         let arr0 = array_from_canonical([0x5f8329a7, 0x0f1166bb, 0x657bcb14, 0x0185c34a]);
-        let arr1 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr1 = [F::zero(), F::one(), F::two(), F::neg_one()];
 
         let vec0 = PackedMersenne31Neon(arr0);
         let vec1 = PackedMersenne31Neon(arr1);
@@ -940,7 +940,7 @@ mod tests {
 
     #[test]
     fn test_sub_vs_scalar_special_vals_left() {
-        let arr0 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr0 = [F::zero(), F::one(), F::two(), F::neg_one()];
         let arr1 = array_from_canonical([0x4205a2f6, 0x6f4715f1, 0x29ed7f70, 0x70915992]);
 
         let vec0 = PackedMersenne31Neon(arr0);
@@ -955,7 +955,7 @@ mod tests {
     #[test]
     fn test_sub_vs_scalar_special_vals_right() {
         let arr0 = array_from_canonical([0x5f8329a7, 0x0f1166bb, 0x657bcb14, 0x0185c34a]);
-        let arr1 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr1 = [F::zero(), F::one(), F::two(), F::neg_one()];
 
         let vec0 = PackedMersenne31Neon(arr0);
         let vec1 = PackedMersenne31Neon(arr1);
@@ -982,7 +982,7 @@ mod tests {
 
     #[test]
     fn test_mul_vs_scalar_special_vals_left() {
-        let arr0 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr0 = [F::zero(), F::one(), F::two(), F::neg_one()];
         let arr1 = array_from_canonical([0x4205a2f6, 0x6f4715f1, 0x29ed7f70, 0x70915992]);
 
         let vec0 = PackedMersenne31Neon(arr0);
@@ -997,7 +997,7 @@ mod tests {
     #[test]
     fn test_mul_vs_scalar_special_vals_right() {
         let arr0 = array_from_canonical([0x5f8329a7, 0x0f1166bb, 0x657bcb14, 0x0185c34a]);
-        let arr1 = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr1 = [F::zero(), F::one(), F::two(), F::neg_one()];
 
         let vec0 = PackedMersenne31Neon(arr0);
         let vec1 = PackedMersenne31Neon(arr1);
@@ -1022,7 +1022,7 @@ mod tests {
 
     #[test]
     fn test_neg_vs_scalar_special_vals() {
-        let arr = [F::ZERO, F::ONE, F::TWO, F::NEG_ONE];
+        let arr = [F::zero(), F::one(), F::two(), F::neg_one()];
 
         let vec = PackedMersenne31Neon(arr);
         let vec_res = -vec;

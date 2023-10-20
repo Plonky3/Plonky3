@@ -1,6 +1,10 @@
 #![no_std]
 
+extern crate alloc;
+
 mod baby_bear;
+mod extension;
+
 pub use baby_bear::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]

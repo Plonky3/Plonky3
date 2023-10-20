@@ -70,7 +70,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         let mut coeffs = self.idft_batch(mat);
         coeffs
             .values
-            .resize(coeffs.values.len() << added_bits, F::ZERO);
+            .resize(coeffs.values.len() << added_bits, F::zero());
         self.dft_batch(coeffs)
     }
 
@@ -90,7 +90,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         let mut coeffs = self.idft_batch(mat);
         coeffs
             .values
-            .resize(coeffs.values.len() << added_bits, F::ZERO);
+            .resize(coeffs.values.len() << added_bits, F::zero());
         self.coset_dft_batch(coeffs, shift)
     }
 }

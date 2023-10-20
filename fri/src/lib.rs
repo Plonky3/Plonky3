@@ -17,20 +17,21 @@ mod prover;
 mod verifier;
 
 pub use config::*;
+pub use fold_even_odd::*;
 pub use proof::*;
 
 pub struct FriLdt<FC: FriConfig> {
     pub config: FC,
 }
 
-impl<FC: FriConfig> Ldt<FC::Val, FC::Domain, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
+impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
     fn prove(
         &self,
         mmcs: &[FC::InputMmcs],
-        inputs: &[&<FC::InputMmcs as Mmcs<FC::Domain>>::ProverData],
+        inputs: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
         challenger: &mut FC::Challenger,
     ) -> Self::Proof {
         prove::<FC>(&self.config, mmcs, inputs, challenger)
@@ -38,7 +39,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Domain, FC::InputMmcs, FC::Challenger> for 
 
     fn verify(
         &self,
-        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Domain>>::Commitment],
+        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {

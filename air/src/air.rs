@@ -22,8 +22,11 @@ pub trait AirBuilder: Sized {
     type Expr: AbstractField<F = Self::F>
         + From<Self::F>
         + Add<Self::Var, Output = Self::Expr>
+        + Add<Self::F, Output = Self::Expr>
         + Sub<Self::Var, Output = Self::Expr>
-        + Mul<Self::Var, Output = Self::Expr>;
+        + Sub<Self::F, Output = Self::Expr>
+        + Mul<Self::Var, Output = Self::Expr>
+        + Mul<Self::F, Output = Self::Expr>;
 
     type Var: Into<Self::Expr>
         + Copy
@@ -88,7 +91,7 @@ pub trait AirBuilder: Sized {
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
     fn assert_one<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.assert_zero(x.into() - Self::Expr::ONE);
+        self.assert_zero(x.into() - Self::Expr::one());
     }
 
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
@@ -98,7 +101,7 @@ pub trait AirBuilder: Sized {
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::Expr::ONE));
+        self.assert_zero(x.clone() * (x - Self::Expr::one()));
     }
 
     fn assert_zero_ext<ExprExt, I>(&mut self, x: I)
@@ -144,10 +147,10 @@ pub trait PermutationAirBuilder: AirBuilder {
     type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>
         + From<Self::EF>
         + Add<Self::EF, Output = Self::ExprEF>
-        + Sub<Self::EF, Output = Self::ExprEF>
-        + Mul<Self::EF, Output = Self::ExprEF>
         + Add<Self::VarEF, Output = Self::ExprEF>
+        + Sub<Self::EF, Output = Self::ExprEF>
         + Sub<Self::VarEF, Output = Self::ExprEF>
+        + Mul<Self::EF, Output = Self::ExprEF>
         + Mul<Self::VarEF, Output = Self::ExprEF>;
 
     type VarEF: Into<Self::ExprEF>

@@ -87,10 +87,23 @@ impl Distribution<Goldilocks> for Standard {
 impl AbstractField for Goldilocks {
     type F = Self;
 
-    const ZERO: Self = Self::new(0);
-    const ONE: Self = Self::new(1);
-    const TWO: Self = Self::new(2);
-    const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
+    fn zero() -> Self {
+        Self::new(0)
+    }
+    fn one() -> Self {
+        Self::new(1)
+    }
+    fn two() -> Self {
+        Self::new(2)
+    }
+    fn neg_one() -> Self {
+        Self::new(Self::ORDER_U64 - 1)
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f
+    }
 
     fn from_bool(b: bool) -> Self {
         Self::new(u64::from(b))
@@ -201,6 +214,7 @@ impl PrimeField for Goldilocks {}
 impl PrimeField64 for Goldilocks {
     const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
 
+    #[inline]
     fn as_canonical_u64(&self) -> u64 {
         let mut c = self.value;
         // We only need one condition subtraction, since 2 * ORDER would not fit in a u64.
@@ -266,7 +280,7 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
@@ -322,7 +336,7 @@ impl MulAssign for Goldilocks {
 
 impl Product for Goldilocks {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
@@ -442,7 +456,7 @@ mod tests {
         let f_1 = F::new(1);
         let f_1_copy = F::new(1);
 
-        let expected_result = F::ZERO;
+        let expected_result = F::zero();
         assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::new(2);
@@ -456,7 +470,7 @@ mod tests {
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
         let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
-        let expected_result = F::ZERO;
+        let expected_result = F::zero();
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
         let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);

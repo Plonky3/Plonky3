@@ -11,7 +11,7 @@ use p3_matrix::{Dimensions, Matrix, MatrixRows};
 /// When a particular row index is opened, it is interpreted directly as a row index for matrices
 /// with the largest height. For matrices with smaller heights, some bits of the row index are
 /// removed (from the least-significant side) to get the effective row index. These semantics are
-/// useful in the FRI protocol.
+/// useful in the FRI protocol. See the documentation for `open_batch` for more details.
 ///
 /// The `DirectMmcs` sub-trait represents an MMS which can be directly constructed from a set of
 /// matrices. Other MMCSs may be virtual combinations of child MMCSs, or may be constructed in a
@@ -21,10 +21,14 @@ pub trait Mmcs<T>: Clone {
     type Commitment: Clone;
     type Proof;
     type Error;
-    type Mat<'a>: MatrixRows<T>
+    type Mat<'a>: MatrixRows<T> + Sync
     where
         Self: 'a;
 
+    /// Opens a batch of rows from committed matrices
+    /// returns (openings, proof)
+    /// where `openings` is a vector whose ith element is the jth row of the ith matrix `M[i]`,
+    /// and `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`.
     fn open_batch(
         &self,
         index: usize,
@@ -50,12 +54,16 @@ pub trait Mmcs<T>: Clone {
     }
 
     /// Verify a batch opening.
+    /// `index` is the row index we're opening for each matrix, following the same
+    /// semantics as `open_batch`.
+    /// `dimensions` is a slice whose ith element is the dimensions of the the matrix being opened
+    /// in the ith opening
     fn verify_batch(
         &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_values: Vec<Vec<T>>,
+        opened_values: &[Vec<T>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error>;
 }

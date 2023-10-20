@@ -17,7 +17,7 @@ fn bench_m31(c: &mut Criterion) {
                 }
                 vec
             },
-            |x| x.iter().fold(F::ZERO, |x, y| x + *y),
+            |x| x.iter().fold(F::zero(), |x, y| x + *y),
             BatchSize::SmallInput,
         )
     });
@@ -71,7 +71,7 @@ fn bench_m31(c: &mut Criterion) {
                 }
                 vec
             },
-            |x| x.iter().fold(F::ZERO, |x, y| x - *y),
+            |x| x.iter().fold(F::zero(), |x, y| x - *y),
             BatchSize::SmallInput,
         )
     });

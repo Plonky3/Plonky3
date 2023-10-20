@@ -16,8 +16,9 @@ pub fn log2_ceil_usize(n: usize) -> usize {
     (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
 }
 
+#[must_use]
 pub fn log2_ceil_u64(n: u64) -> u64 {
-    (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
+    (u64::BITS - n.saturating_sub(1).leading_zeros()).into()
 }
 
 /// Computes `log_2(n)`
@@ -33,6 +34,7 @@ pub fn log2_strict_usize(n: usize) -> usize {
 }
 
 /// Returns `[0, ..., N - 1]`.
+#[must_use]
 pub const fn indices_arr<const N: usize>() -> [usize; N] {
     let mut indices_arr = [0; N];
     let mut i = 0;

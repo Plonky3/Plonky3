@@ -1,6 +1,8 @@
+use alloc::vec::Vec;
+
 use p3_dft::reverse_slice_index_bits;
-use p3_field::{AbstractField, Field, TwoAdicField};
-use p3_symmetric::permutation::Permutation;
+use p3_field::{AbstractField, TwoAdicField};
+use p3_symmetric::Permutation;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
@@ -11,33 +13,28 @@ use crate::MdsPermutation;
 /// viewed as returning the parity elements of a systematic Reed-Solomon code. Since Reed-Solomon
 /// codes are MDS, this is an MDS permutation.
 #[derive(Clone, Debug)]
-pub struct CosetMds<AF, const N: usize>
-where
-    AF: AbstractField,
-    AF::F: TwoAdicField,
-{
-    fft_twiddles: Vec<AF::F>,
-    ifft_twiddles: Vec<AF::F>,
-    weights: [AF::F; N],
+pub struct CosetMds<F, const N: usize> {
+    fft_twiddles: Vec<F>,
+    ifft_twiddles: Vec<F>,
+    weights: [F; N],
 }
 
-impl<AF, const N: usize> Default for CosetMds<AF, N>
+impl<F, const N: usize> Default for CosetMds<F, N>
 where
-    AF: AbstractField,
-    AF::F: TwoAdicField,
+    F: TwoAdicField,
 {
     fn default() -> Self {
         let log_n = log2_strict_usize(N);
 
-        let root = AF::F::two_adic_generator(log_n);
+        let root = F::two_adic_generator(log_n);
         let root_inv = root.inverse();
-        let mut fft_twiddles: Vec<AF::F> = root.powers().take(N / 2).collect();
-        let mut ifft_twiddles: Vec<AF::F> = root_inv.powers().take(N / 2).collect();
+        let mut fft_twiddles: Vec<F> = root.powers().take(N / 2).collect();
+        let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
         reverse_slice_index_bits(&mut fft_twiddles);
         reverse_slice_index_bits(&mut ifft_twiddles);
 
-        let shift = AF::F::generator();
-        let mut weights: [AF::F; N] = shift
+        let shift = F::generator();
+        let mut weights: [F; N] = shift
             .powers()
             .take(N)
             .collect::<Vec<_>>()
@@ -52,7 +49,7 @@ where
     }
 }
 
-impl<AF, const N: usize> Permutation<[AF; N]> for CosetMds<AF, N>
+impl<AF, const N: usize> Permutation<[AF; N]> for CosetMds<AF::F, N>
 where
     AF: AbstractField,
     AF::F: TwoAdicField,
@@ -68,7 +65,7 @@ where
 
         // Multiply by powers of the coset shift (see default coset LDE impl for an explanation)
         for (value, weight) in values.iter_mut().zip(self.weights) {
-            *value = value.clone() * weight;
+            *value = value.clone() * AF::from_f(weight);
         }
 
         // DFT, assuming bit-reversed input.
@@ -76,7 +73,7 @@ where
     }
 }
 
-impl<AF, const N: usize> MdsPermutation<AF, N> for CosetMds<AF, N>
+impl<AF, const N: usize> MdsPermutation<AF, N> for CosetMds<AF::F, N>
 where
     AF: AbstractField,
     AF::F: TwoAdicField,
@@ -160,7 +157,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_field::AbstractField;
-    use p3_symmetric::permutation::Permutation;
+    use p3_symmetric::Permutation;
     use rand::{thread_rng, Rng};
 
     use crate::coset_mds::CosetMds;

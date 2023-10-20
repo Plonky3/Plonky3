@@ -10,7 +10,7 @@ use p3_mds::MdsPermutation;
 use p3_poseidon2::{
     DiffusionMatrixBabybear, DiffusionMatrixGoldilocks, DiffusionPermutation, Poseidon2,
 };
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
@@ -45,7 +45,7 @@ where
         internal_mds,
         &mut rng,
     );
-    let input = [F::ZERO; WIDTH];
+    let input = [F::zero(); WIDTH];
     let name = format!("poseidon2::<{}, {}>", type_name::<F>(), D);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));

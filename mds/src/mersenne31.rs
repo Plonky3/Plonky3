@@ -5,7 +5,7 @@
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::permutation::Permutation;
+use p3_symmetric::Permutation;
 
 use crate::util::{apply_circulant, apply_circulant_8_sml, apply_circulant_12_sml};
 // apply_circulant_8_sml, apply_circulant_12_sml, apply_circulant_16_sml, apply_circulant_8_karat, apply_circulant_12_karat, apply_circulant_16_karat
@@ -111,7 +111,7 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::permutation::Permutation;
+    use p3_symmetric::Permutation;
 
     use super::MdsMatrixMersenne31;
 

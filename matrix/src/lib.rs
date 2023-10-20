@@ -4,6 +4,8 @@
 
 extern crate alloc;
 
+use core::fmt::{Debug, Display, Formatter};
+
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
 
@@ -26,10 +28,22 @@ pub trait Matrix<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,
+}
+
+impl Debug for Dimensions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)
+    }
+}
+
+impl Display for Dimensions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)
+    }
 }
 
 /// A `Matrix` that supports randomly accessing particular coefficients.
@@ -81,4 +95,9 @@ pub trait MatrixRowSlices<T>: MatrixRows<T> {
 /// A `Matrix` which supports access its rows as mutable slices.
 pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T];
+}
+
+/// A `TransposeMatrix` which supports transpose logic for matrices
+pub trait MatrixTranspose<T>: MatrixRows<T> {
+    fn transpose(self) -> Self;
 }

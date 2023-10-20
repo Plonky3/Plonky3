@@ -9,11 +9,10 @@ pub trait FriConfig {
     type Domain: ExtensionField<Self::Val> + TwoAdicField;
     type Challenge: ExtensionField<Self::Val> + ExtensionField<Self::Domain> + TwoAdicField;
 
-    type InputMmcs: Mmcs<Self::Domain>;
+    type InputMmcs: Mmcs<Self::Challenge>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<Self::InputMmcs as Mmcs<Self::Domain>>::Commitment>
         + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
@@ -26,11 +25,7 @@ pub trait FriConfig {
 pub struct FriConfigImpl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
     num_queries: usize,
     commit_phase_mmcs: CommitPhaseMmcs,
-    _phantom_val: PhantomData<Val>,
-    _phantom_dom: PhantomData<Domain>,
-    _phantom_challenge: PhantomData<Challenge>,
-    _phantom_input_mmcs: PhantomData<InputMmcs>,
-    _phantom_challenger: PhantomData<Challenger>,
+    _phantom: PhantomData<(Val, Domain, Challenge, InputMmcs, Challenger)>,
 }
 
 impl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
@@ -40,11 +35,7 @@ impl<Val, Domain, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
         Self {
             num_queries,
             commit_phase_mmcs,
-            _phantom_val: PhantomData,
-            _phantom_dom: PhantomData,
-            _phantom_challenge: PhantomData,
-            _phantom_input_mmcs: PhantomData,
-            _phantom_challenger: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -55,11 +46,9 @@ where
     Val: PrimeField64,
     Domain: ExtensionField<Val> + TwoAdicField,
     Challenge: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
-    InputMmcs: Mmcs<Domain>,
+    InputMmcs: Mmcs<Challenge>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val>
-        + CanObserve<<InputMmcs as Mmcs<Domain>>::Commitment>
-        + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
     type Domain = Domain;

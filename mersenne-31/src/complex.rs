@@ -26,12 +26,12 @@ impl<AF: AbstractField<F = Mersenne31>> Mersenne31Complex<AF> {
         }
     }
 
-    pub const fn new_real(real: AF) -> Self {
-        Self::new(real, AF::ZERO)
+    pub fn new_real(real: AF) -> Self {
+        Self::new(real, AF::zero())
     }
 
-    pub const fn new_imag(imag: AF) -> Self {
-        Self::new(AF::ZERO, imag)
+    pub fn new_imag(imag: AF) -> Self {
+        Self::new(AF::zero(), imag)
     }
 
     pub fn real(&self) -> AF {
@@ -83,7 +83,7 @@ impl<AF: AbstractField<F = Mersenne31>> AddAssign<AF> for Mersenne31Complex<AF> 
 impl<AF: AbstractField<F = Mersenne31>> Sum for Mersenne31Complex<AF> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x + y)
-            .unwrap_or(Self::new_real(AF::ZERO))
+            .unwrap_or(Self::new_real(AF::zero()))
     }
 }
 
@@ -164,26 +164,31 @@ impl<AF: AbstractField<F = Mersenne31>> MulAssign<AF> for Mersenne31Complex<AF> 
 
 impl<AF: AbstractField<F = Mersenne31>> Product for Mersenne31Complex<AF> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::new_real(AF::ONE))
+        iter.reduce(|x, y| x * y)
+            .unwrap_or(Self::new_real(AF::one()))
     }
 }
 
-impl<AF: AbstractField<F = Mersenne31>> AbstractField for Mersenne31Complex<AF>
-where
-    Self: From<Mersenne31Complex<Mersenne31>>,
-    Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
-    Self: AddAssign<Mersenne31Complex<Mersenne31>>,
-    Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
-    Self: SubAssign<Mersenne31Complex<Mersenne31>>,
-    Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
-    Self: MulAssign<Mersenne31Complex<Mersenne31>>,
-{
+impl<AF: AbstractField<F = Mersenne31>> AbstractField for Mersenne31Complex<AF> {
     type F = Mersenne31Complex<Mersenne31>;
 
-    const ZERO: Self = Self::new_real(AF::ZERO);
-    const ONE: Self = Self::new_real(AF::ONE);
-    const TWO: Self = Self::new_real(AF::TWO);
-    const NEG_ONE: Self = Self::new_real(AF::NEG_ONE);
+    fn zero() -> Self {
+        Self::new_real(AF::zero())
+    }
+    fn one() -> Self {
+        Self::new_real(AF::one())
+    }
+    fn two() -> Self {
+        Self::new_real(AF::two())
+    }
+    fn neg_one() -> Self {
+        Self::new_real(AF::neg_one())
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        Self::new(AF::from_f(f.real()), AF::from_f(f.imag()))
+    }
 
     fn from_bool(b: bool) -> Self {
         Self::new_real(AF::from_bool(b))
@@ -224,7 +229,7 @@ where
     // sage: F2.multiplicative_generator()
     // u + 12
     fn generator() -> Self {
-        Self::new(AF::from_canonical_u8(12), AF::ONE)
+        Self::new(AF::from_canonical_u8(12), AF::one())
     }
 }
 
@@ -289,16 +294,7 @@ impl TwoAdicField for Mersenne31Complex<Mersenne31> {
     }
 }
 
-impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne31Complex<AF>
-where
-    Self: From<Mersenne31Complex<Mersenne31>>,
-    Self: Add<Mersenne31Complex<Mersenne31>, Output = Self>,
-    Self: AddAssign<Mersenne31Complex<Mersenne31>>,
-    Self: Sub<Mersenne31Complex<Mersenne31>, Output = Self>,
-    Self: SubAssign<Mersenne31Complex<Mersenne31>>,
-    Self: Mul<Mersenne31Complex<Mersenne31>, Output = Self>,
-    Self: MulAssign<Mersenne31Complex<Mersenne31>>,
-{
+impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne31Complex<AF> {
     const D: usize = 2;
 
     fn from_base(b: AF) -> Self {
@@ -334,75 +330,78 @@ mod tests {
     #[test]
     fn add() {
         // real part
-        assert_eq!(Fi::ONE + Fi::ONE, Fi::TWO);
-        assert_eq!(Fi::NEG_ONE + Fi::ONE, Fi::ZERO);
-        assert_eq!(Fi::NEG_ONE + Fi::TWO, Fi::ONE);
-        assert_eq!((Fi::NEG_ONE + Fi::NEG_ONE).real(), F::new(F::ORDER_U32 - 2));
+        assert_eq!(Fi::one() + Fi::one(), Fi::two());
+        assert_eq!(Fi::neg_one() + Fi::one(), Fi::zero());
+        assert_eq!(Fi::neg_one() + Fi::two(), Fi::one());
+        assert_eq!(
+            (Fi::neg_one() + Fi::neg_one()).real(),
+            F::new(F::ORDER_U32 - 2)
+        );
 
         // complex part
         assert_eq!(
-            Fi::new_imag(F::ONE) + Fi::new_imag(F::ONE),
-            Fi::new_imag(F::TWO)
+            Fi::new_imag(F::one()) + Fi::new_imag(F::one()),
+            Fi::new_imag(F::two())
         );
         assert_eq!(
-            Fi::new_imag(F::NEG_ONE) + Fi::new_imag(F::ONE),
-            Fi::new_imag(F::ZERO)
+            Fi::new_imag(F::neg_one()) + Fi::new_imag(F::one()),
+            Fi::new_imag(F::zero())
         );
         assert_eq!(
-            Fi::new_imag(F::NEG_ONE) + Fi::new_imag(F::TWO),
-            Fi::new_imag(F::ONE)
+            Fi::new_imag(F::neg_one()) + Fi::new_imag(F::two()),
+            Fi::new_imag(F::one())
         );
         assert_eq!(
-            (Fi::new_imag(F::NEG_ONE) + Fi::new_imag(F::NEG_ONE)).imag(),
+            (Fi::new_imag(F::neg_one()) + Fi::new_imag(F::neg_one())).imag(),
             F::new(F::ORDER_U32 - 2)
         );
 
         // further tests
         assert_eq!(
-            Fi::new(F::ONE, F::TWO) + Fi::new(F::ONE, F::ONE),
-            Fi::new(F::TWO, F::new(3))
+            Fi::new(F::one(), F::two()) + Fi::new(F::one(), F::one()),
+            Fi::new(F::two(), F::new(3))
         );
         assert_eq!(
-            Fi::new(F::NEG_ONE, F::NEG_ONE) + Fi::new(F::ONE, F::ONE),
-            Fi::ZERO
+            Fi::new(F::neg_one(), F::neg_one()) + Fi::new(F::one(), F::one()),
+            Fi::zero()
         );
         assert_eq!(
-            Fi::new(F::NEG_ONE, F::ONE) + Fi::new(F::TWO, F::new(F::ORDER_U32 - 2)),
-            Fi::new(F::ONE, F::NEG_ONE)
+            Fi::new(F::neg_one(), F::one()) + Fi::new(F::two(), F::new(F::ORDER_U32 - 2)),
+            Fi::new(F::one(), F::neg_one())
         );
     }
 
     #[test]
     fn sub() {
         // real part
-        assert_eq!(Fi::ONE - Fi::ONE, Fi::ZERO);
-        assert_eq!(Fi::TWO - Fi::TWO, Fi::ZERO);
-        assert_eq!(Fi::NEG_ONE - Fi::NEG_ONE, Fi::ZERO);
-        assert_eq!(Fi::TWO - Fi::ONE, Fi::ONE);
-        assert_eq!(Fi::NEG_ONE - Fi::ZERO, Fi::NEG_ONE);
+        assert_eq!(Fi::one() - Fi::one(), Fi::zero());
+        assert_eq!(Fi::two() - Fi::two(), Fi::zero());
+        assert_eq!(Fi::neg_one() - Fi::neg_one(), Fi::zero());
+        assert_eq!(Fi::two() - Fi::one(), Fi::one());
+        assert_eq!(Fi::neg_one() - Fi::zero(), Fi::neg_one());
 
         // complex part
-        assert_eq!(Fi::new_imag(F::ONE) - Fi::new_imag(F::ONE), Fi::ZERO);
-        assert_eq!(Fi::new_imag(F::TWO) - Fi::new_imag(F::TWO), Fi::ZERO);
+        assert_eq!(Fi::new_imag(F::one()) - Fi::new_imag(F::one()), Fi::zero());
+        assert_eq!(Fi::new_imag(F::two()) - Fi::new_imag(F::two()), Fi::zero());
         assert_eq!(
-            Fi::new_imag(F::NEG_ONE) - Fi::new_imag(F::NEG_ONE),
-            Fi::ZERO
+            Fi::new_imag(F::neg_one()) - Fi::new_imag(F::neg_one()),
+            Fi::zero()
         );
         assert_eq!(
-            Fi::new_imag(F::TWO) - Fi::new_imag(F::ONE),
-            Fi::new_imag(F::ONE)
+            Fi::new_imag(F::two()) - Fi::new_imag(F::one()),
+            Fi::new_imag(F::one())
         );
         assert_eq!(
-            Fi::new_imag(F::NEG_ONE) - Fi::ZERO,
-            Fi::new_imag(F::NEG_ONE)
+            Fi::new_imag(F::neg_one()) - Fi::zero(),
+            Fi::new_imag(F::neg_one())
         );
     }
 
     #[test]
     fn mul() {
         assert_eq!(
-            Fi::new(F::TWO, F::TWO) * Fi::new(F::new(4), F::new(5)),
-            Fi::new(-F::TWO, F::new(18))
+            Fi::new(F::two(), F::two()) * Fi::new(F::new(4), F::new(5)),
+            Fi::new(-F::two(), F::new(18))
         );
     }
 
@@ -410,9 +409,9 @@ mod tests {
     fn mul_2exp_u64() {
         // real part
         // 1 * 2^0 = 1.
-        assert_eq!(Fi::ONE.mul_2exp_u64(0), Fi::ONE);
+        assert_eq!(Fi::one().mul_2exp_u64(0), Fi::one());
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(Fi::TWO.mul_2exp_u64(30), Fi::ONE);
+        assert_eq!(Fi::two().mul_2exp_u64(30), Fi::one());
         // 5 * 2^2 = 20.
         assert_eq!(
             Fi::new_real(F::new(5)).mul_2exp_u64(2),
@@ -421,9 +420,15 @@ mod tests {
 
         // complex part
         // i * 2^0 = i.
-        assert_eq!(Fi::new_imag(F::ONE).mul_2exp_u64(0), Fi::new_imag(F::ONE));
+        assert_eq!(
+            Fi::new_imag(F::one()).mul_2exp_u64(0),
+            Fi::new_imag(F::one())
+        );
         // (2i) * 2^30 = (2^31) * i = i.
-        assert_eq!(Fi::new_imag(F::TWO).mul_2exp_u64(30), Fi::new_imag(F::ONE));
+        assert_eq!(
+            Fi::new_imag(F::two()).mul_2exp_u64(30),
+            Fi::new_imag(F::one())
+        );
         // 5i * 2^2 = 20i.
         assert_eq!(
             Fi::new_imag(F::new(5)).mul_2exp_u64(2),
