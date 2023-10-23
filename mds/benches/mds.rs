@@ -26,10 +26,10 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 12>(c);
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 16>(c);
 
-    // bench_mds::<Mersenne31, MdsMatrixMersenne31, 8>(c);
-    // bench_mds::<Mersenne31, MdsMatrixMersenne31, 12>(c);
+    bench_mds::<Mersenne31, MdsMatrixMersenne31, 8>(c);
+    bench_mds::<Mersenne31, MdsMatrixMersenne31, 12>(c);
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 16>(c);
-    // bench_mds::<Mersenne31, MdsMatrixMersenne31, 32>(c);
+    bench_mds::<Mersenne31, MdsMatrixMersenne31, 32>(c);
 }
 
 fn bench_mds<AF, Mds, const WIDTH: usize>(c: &mut Criterion)
@@ -43,7 +43,14 @@ where
     let mut rng = thread_rng();
     let input = rng.gen::<[AF; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
-    c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));
+    c.bench_with_input(id, &input, |b, input| {
+        b.iter(|| {
+            let mut perm_input = input.clone();
+            for _ in 0..100 {
+                perm_input = mds.permute(perm_input)
+            }
+        })
+    });
 }
 
 criterion_group!(benches, bench_all_mds);

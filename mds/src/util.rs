@@ -130,7 +130,7 @@ pub(crate) fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12]
 /// on `PrimeField64::z_linear_combination_sml()`.
 pub fn apply_circulant_16_sml<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
     const N: usize = 16;
-    let mut output = [F::ZERO; N];
+    let mut output = [F::zero(); N];
 
     const MAT_0: [u64; N] = MATRIX_CIRC_MDS_16_SML;
     output[0] = F::linear_combination_u64(MAT_0, &input);

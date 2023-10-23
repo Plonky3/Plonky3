@@ -7,19 +7,23 @@
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 
-use crate::util::{apply_circulant, apply_circulant_8_sml, apply_circulant_12_sml};
+use crate::util::{apply_circulant, apply_circulant_8_sml, apply_circulant_12_sml, apply_circulant_16_sml};
 // apply_circulant_8_sml, apply_circulant_12_sml, apply_circulant_16_sml, apply_circulant_8_karat, apply_circulant_12_karat, apply_circulant_16_karat
-use crate::karatsuba_convolution::{apply_circulant_16_karat};
+// use crate::karatsuba_convolution::{apply_circulant_8_karat, apply_circulant_16_karat};
 use crate::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
+
+const _MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         apply_circulant_8_sml(input)
         // apply_circulant_8_karat(input)
         // apply_circulant_8_karat_even_odd(input)
+        // apply_circulant_karat_even_odd_field(MATRIX_CIRC_MDS_8_SML, input)
+        // apply_circulant_karat_left_right_field(MATRIX_CIRC_MDS_8_SML, input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
@@ -40,11 +44,16 @@ impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
 }
 impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
 
+const _MATRIX_CIRC_MDS_16_SML: [u64; 16] =
+    [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
+
 impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
-        // apply_circulant_16_sml(input)
-        apply_circulant_16_karat(input)
+        apply_circulant_16_sml(input)
+        // apply_circulant_16_karat(input)
         // apply_circulant_16_karat_even_odd(input)
+        // apply_circulant_karat_even_odd_field(MATRIX_CIRC_MDS_16_SML, input)
+        // apply_circulant_karat_left_right_field(MATRIX_CIRC_MDS_16_SML, input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 16]) {
