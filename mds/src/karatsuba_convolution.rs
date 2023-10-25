@@ -562,10 +562,13 @@ pub fn apply_circulant_32_karat<F: PrimeField64>(input: [F; 32]) -> [F; 32] {
     ];
     let input_i128 = input.into_iter().map(|x| x.as_canonical_u64() as i128).collect::<Vec<_>>().try_into().unwrap();
 
-    // Despite working with i128's our output will all be positive.
+    
     let output = conv32_i128(&MATRIX_CIRC_MDS_32_I128, &input_i128);
 
-    output.into_iter().map(|x| F::from_canonical_u32((((x as u128) % (F::ORDER_U64 as u128)) as u32).try_into().unwrap())).collect::<Vec<_>>().try_into().unwrap()
+    // As MATRIX_CIRC_MDS_32_I128 and input_i128 are both positive, output is also positive.
+    // Thus despite working with i128's, we can safley cast in u128's.
+    // If we decide to include negative entries in MATRIX_CIRC_MDS_32_I128 we need to change this code.
+    output.into_iter().map(|x| F::from_wrapped_u128(x as u128)).collect::<Vec<_>>().try_into().unwrap()
 }
 
 // Given an input v computes the convolution of v with the constant vector MATRIX_CIRC_MDS_8_SML.
@@ -751,6 +754,7 @@ fn conv4_i64<T: Add<Output = T> + Sub<Output = T> + SubAssign + AddAssign + Copy
     sub_mut(&mut output[HALF..], &product_m);
 
     for i in 0..N {
+        // Note output[i] is garunteed to be even so this simply divides by 2.
         output[i] >>= 1
     }
 
@@ -793,6 +797,7 @@ fn conv8_i64<T: Add<Output = T> + Sub<Output = T> + SubAssign + AddAssign + Copy
     sub_mut(&mut output[HALF..], &prod_m);
 
     for i in 0..N {
+        // Note output[i] is garunteed to be even so this simply divides by 2.
         output[i] >>= 1
     }
 
@@ -851,6 +856,7 @@ fn conv16_i64<T: Add<Output = T> + Sub<Output = T> + SubAssign + AddAssign + Cop
     sub_mut(&mut output[HALF..], &prod_m);
 
     for i in 0..N {
+        // Note output[i] is garunteed to be even so this simply divides by 2.
         output[i] >>= 1
     }
 
@@ -909,6 +915,7 @@ fn conv32_i128(lhs: &[i128; 32], rhs: &[i128; 32]) -> [i128; 32] {
     sub_mut(&mut output[HALF..], &prod_m);
 
     for i in 0..N {
+        // Note output[i] is garunteed to be even so this simply divides by 2.
         output[i] >>= 1
     }
 

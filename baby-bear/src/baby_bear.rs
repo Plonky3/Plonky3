@@ -135,6 +135,14 @@ impl AbstractField for BabyBear {
     }
 
     #[inline]
+    fn from_wrapped_u128(n: u128) -> Self {
+        Self {
+            // Currently to_monty_128 is implemented rather naively.
+            value: to_monty_128(n),
+        }
+    }
+
+    #[inline]
     fn generator() -> Self {
         Self::from_canonical_u32(0x1f)
     }
@@ -339,6 +347,13 @@ const fn to_monty(x: u32) -> u32 {
 #[must_use]
 fn to_monty_64(x: u64) -> u32 {
     (((x as u128) << 31) % P as u128) as u32
+}
+
+#[inline]
+#[must_use]
+// This is almost certainly not the fastest implementation and should be improved to not use % twice.
+fn to_monty_128(x: u128) -> u32 {
+    (((x % (P as u128)) << 31) % P as u128) as u32
 }
 
 #[inline]

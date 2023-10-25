@@ -141,6 +141,11 @@ impl AbstractField for Goldilocks {
         Self::new(n)
     }
 
+    fn from_wrapped_u128(n: u128) -> Self {
+        // Currently unoptimised. Might be a better way to do this.
+        Self::new((n % (Self::ORDER_U64 as u128)) as u64)
+    }
+
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     fn generator() -> Self {
         Self::new(7)

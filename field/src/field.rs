@@ -46,6 +46,7 @@ pub trait AbstractField:
 
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
+    fn from_wrapped_u128(n: u128) -> Self;
 
     /// A generator of this field's entire multiplicative group.
     fn generator() -> Self;

@@ -78,6 +78,10 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
         [F::from_wrapped_u64(n); N].into()
     }
 
+    fn from_wrapped_u128(n: u128) -> Self {
+        [F::from_wrapped_u128(n); N].into()
+    }
+
     fn generator() -> Self {
         [F::generator(); N].into()
     }
