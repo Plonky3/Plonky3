@@ -7,9 +7,9 @@
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 
-use crate::util::{apply_circulant, apply_circulant_8_sml, apply_circulant_12_sml};
+use crate::util::{apply_circulant, apply_circulant_12_sml};
 // apply_circulant_8_sml, apply_circulant_12_sml, apply_circulant_16_sml, apply_circulant_8_karat, apply_circulant_12_karat, apply_circulant_16_karat
-use crate::karatsuba_convolution::{apply_circulant_16_karat, apply_circulant_32_karat};
+use crate::karatsuba_convolution::{apply_circulant_8_karat, apply_circulant_16_karat, apply_circulant_32_karat};
 use crate::MdsPermutation;
 
 #[derive(Clone, Default)]
@@ -19,8 +19,8 @@ const _MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
-        apply_circulant_8_sml(input)
-        // apply_circulant_8_karat(input)
+        // apply_circulant_8_sml(input)
+        apply_circulant_8_karat(input)
         // apply_circulant_8_karat_even_odd(input)
         // apply_circulant_karat_even_odd_field(MATRIX_CIRC_MDS_8_SML, input)
         // apply_circulant_karat_left_right_field(MATRIX_CIRC_MDS_8_SML, input)
