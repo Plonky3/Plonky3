@@ -26,8 +26,8 @@ pub trait Mmcs<T>: Clone {
         Self: 'a;
 
     /// Opens a batch of rows from committed matrices
-    /// returns (openings, proof)
-    /// where `openings` is a vector whose ith element is the jth row of the ith matrix `M[i]`,
+    /// returns `(openings, proof)`
+    /// where `openings` is a vector whose `i`th element is the `j`th row of the ith matrix `M[i]`,
     /// and `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`.
     fn open_batch(
         &self,

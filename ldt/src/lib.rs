@@ -24,16 +24,23 @@ where
     type Proof;
     type Error;
 
+    fn log_blowup(&self) -> usize;
+
+    fn blowup(&self) -> usize {
+        1 << self.log_blowup()
+    }
+
     /// Prove that each column of each matrix in `codewords` is a codeword.
     fn prove(
         &self,
-        mmcs: &[M],
-        inputs: &[&M::ProverData],
+        input_mmcs: &[M],
+        input_data: &[&M::ProverData],
         challenger: &mut Challenger,
     ) -> Self::Proof;
 
     fn verify(
         &self,
+        input_mmcs: &[M],
         input_commits: &[M::Commitment],
         proof: &Self::Proof,
         challenger: &mut Challenger,

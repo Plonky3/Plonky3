@@ -19,17 +19,15 @@ use crate::{Ldt, Opening};
 
 pub struct LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger> {
     dft: Dft,
-    added_bits: usize,
     mmcs: M,
     ldt: L,
     _phantom: PhantomData<(Val, Domain, EF, Challenger)>,
 }
 
 impl<Val, Domain, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger> {
-    pub fn new(dft: Dft, added_bits: usize, mmcs: M, ldt: L) -> Self {
+    pub fn new(dft: Dft, mmcs: M, ldt: L) -> Self {
         Self {
             dft,
-            added_bits,
             mmcs,
             ldt,
             _phantom: PhantomData,
@@ -62,7 +60,8 @@ where
                 .into_iter()
                 .map(|poly| {
                     let input = poly.to_row_major_matrix().to_ext::<Domain>();
-                    self.dft.coset_lde_batch(input, self.added_bits, shift)
+                    self.dft
+                        .coset_lde_batch(input, self.ldt.log_blowup(), shift)
                 })
                 .collect()
         });
@@ -93,7 +92,7 @@ where
             matrices
                 .iter()
                 .map(|mat| {
-                    let low_coset = mat.vertically_strided(1 << self.added_bits, 0);
+                    let low_coset = mat.vertically_strided(self.ldt.blowup(), 0);
                     let shift = Domain::generator();
                     interpolate_coset(&low_coset, shift, point)
                 })
@@ -175,6 +174,10 @@ where
 {
     fn coset_shift(&self) -> Domain {
         Domain::generator()
+    }
+
+    fn log_blowup(&self) -> usize {
+        self.ldt.log_blowup()
     }
 
     fn get_ldes<'a, 'b>(
