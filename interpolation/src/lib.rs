@@ -8,8 +8,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{
-    add_scaled_slice_in_place, batch_multiplicative_inverse, cyclic_subgroup_coset_known_order,
-    scale_vec, two_adic_coset_zerofier, ExtensionField, TwoAdicField,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, scale_vec,
+    two_adic_coset_zerofier, ExtensionField, Field, TwoAdicField,
 };
 use p3_matrix::MatrixRows;
 use p3_util::log2_strict_usize;
@@ -47,13 +47,24 @@ where
 
     let mut sum = vec![EF::zero(); width];
     for (i, (subgroup_i, diff_inv)) in g.powers().zip(diff_invs).enumerate() {
-        let row = coset_evals.row(i).into_iter().map(EF::from_base);
-        add_scaled_slice_in_place(&mut sum, row, diff_inv * subgroup_i);
+        let row = coset_evals.row(i).into_iter();
+        add_scaled_base_slice_in_place(&mut sum, row, diff_inv * subgroup_i);
     }
 
     let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
     let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);
     scale_vec(zerofier * denominator.inverse(), sum)
+}
+
+/// `x += y * s`, where `s` is a scalar.
+pub fn add_scaled_base_slice_in_place<F, EF, Y>(x: &mut [EF], y: Y, s: EF)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Y: Iterator<Item = F>,
+{
+    // TODO: Use PackedField
+    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += s * y_i);
 }
 
 #[cfg(test)]
