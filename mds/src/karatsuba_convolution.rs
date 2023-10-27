@@ -700,13 +700,13 @@ fn signed_conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
 
     // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
     // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
-    let mut lhs_even = [lhs[0], lhs[2], lhs[4], lhs[6]];    // v_e
-    let lhs_odd = [lhs[1], lhs[3], lhs[5], lhs[7]];         // v_o
-    let mut rhs_even = [rhs[0], rhs[2], rhs[4], rhs[6]];    // u_e
-    let rhs_odd = [rhs[1], rhs[3], rhs[5], rhs[7]];         // u_o
+    let mut lhs_even = [lhs[0], lhs[2], lhs[4], lhs[6]]; // v_e
+    let lhs_odd = [lhs[1], lhs[3], lhs[5], lhs[7]]; // v_o
+    let mut rhs_even = [rhs[0], rhs[2], rhs[4], rhs[6]]; // u_e
+    let rhs_odd = [rhs[1], rhs[3], rhs[5], rhs[7]]; // u_o
 
-    let mut prod_even = signed_conv4(&lhs_even, &rhs_even);     // v_e(x)u_e(x) mod x^4 + 1
-    let prod_odd = signed_conv4(&lhs_odd, &rhs_odd);            // v_o(x)u_o(x) mod x^4 + 1
+    let mut prod_even = signed_conv4(&lhs_even, &rhs_even); // v_e(x)u_e(x) mod x^4 + 1
+    let prod_odd = signed_conv4(&lhs_odd, &rhs_odd); // v_o(x)u_o(x) mod x^4 + 1
 
     // Add the two halves together, storing the result in lhs_even/rhs_even.
     add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
@@ -716,8 +716,8 @@ fn signed_conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
     sub_mut(&mut prod_mix, &prod_even);
     sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
 
-    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]); 
-    prod_even[0] -= prod_odd[HALF - 1];                         // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^4 + 1
+    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
+    prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^4 + 1
 
     [
         prod_even[0],
@@ -728,7 +728,7 @@ fn signed_conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
         prod_mix[2],
         prod_even[3],
         prod_mix[3],
-    ]                   // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+    ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
 }
 
 /// Compute the convolution of 2 vectors of length 8.
@@ -806,20 +806,20 @@ fn signed_conv16<T: SimpleInteger>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
     // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
     // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
     let mut lhs_even = [
-        lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14],      // v_e
+        lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14], // v_e
     ];
     let lhs_odd = [
-        lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15],      // v_o
+        lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15], // v_o
     ];
     let mut rhs_even = [
-        rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14],      // u_e
+        rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14], // u_e
     ];
     let rhs_odd = [
-        rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15],      // u_o
+        rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15], // u_o
     ];
 
-    let mut prod_even = signed_conv8(&lhs_even, &rhs_even);     // v_e(x)u_e(x) mod x^8 + 1
-    let prod_odd = signed_conv8(&lhs_odd, &rhs_odd);            // v_o(x)u_o(x) mod x^8 + 1
+    let mut prod_even = signed_conv8(&lhs_even, &rhs_even); // v_e(x)u_e(x) mod x^8 + 1
+    let prod_odd = signed_conv8(&lhs_odd, &rhs_odd); // v_o(x)u_o(x) mod x^8 + 1
 
     // Add the two halves together, storing the result in lhs_even/rhs_even.
     add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
@@ -829,8 +829,8 @@ fn signed_conv16<T: SimpleInteger>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
     sub_mut(&mut prod_mix, &prod_even);
     sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
 
-    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]); 
-    prod_even[0] -= prod_odd[HALF - 1];                         // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^8 + 1
+    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
+    prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^8 + 1
 
     [
         prod_even[0],
@@ -849,7 +849,7 @@ fn signed_conv16<T: SimpleInteger>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
         prod_mix[6],
         prod_even[7],
         prod_mix[7],
-    ]                       // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+    ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
 }
 
 /// Compute the convolution of 2 vectors of length 32.
@@ -898,24 +898,28 @@ fn signed_conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
     // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
     // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
     let mut lhs_even = [
-        lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14], lhs[16], lhs[18],        // v_e
-        lhs[20], lhs[22], lhs[24], lhs[26], lhs[28], lhs[30],                           
+        lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14], lhs[16],
+        lhs[18], // v_e
+        lhs[20], lhs[22], lhs[24], lhs[26], lhs[28], lhs[30],
     ];
     let lhs_odd = [
-        lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15], lhs[17], lhs[19],        // v_o
+        lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15], lhs[17],
+        lhs[19], // v_o
         lhs[21], lhs[23], lhs[25], lhs[27], lhs[29], lhs[31],
     ];
     let mut rhs_even = [
-        rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14], rhs[16], rhs[18],        // u_e
+        rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14], rhs[16],
+        rhs[18], // u_e
         rhs[20], rhs[22], rhs[24], rhs[26], rhs[28], rhs[30],
     ];
     let rhs_odd = [
-        rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15], rhs[17], rhs[19],        // u_o
+        rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15], rhs[17],
+        rhs[19], // u_o
         rhs[21], rhs[23], rhs[25], rhs[27], rhs[29], rhs[31],
     ];
 
-    let mut prod_even = signed_conv16(&lhs_even, &rhs_even);     // v_e(x)u_e(x) mod x^16 + 1
-    let prod_odd = signed_conv16(&lhs_odd, &rhs_odd);            // v_o(x)u_o(x) mod x^16 + 1
+    let mut prod_even = signed_conv16(&lhs_even, &rhs_even); // v_e(x)u_e(x) mod x^16 + 1
+    let prod_odd = signed_conv16(&lhs_odd, &rhs_odd); // v_o(x)u_o(x) mod x^16 + 1
 
     // Add the two halves together, storing the result in lhs_even/rhs_even.
     add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
@@ -925,8 +929,8 @@ fn signed_conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
     sub_mut(&mut prod_mix, &prod_even);
     sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
 
-    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]); 
-    prod_even[0] -= prod_odd[HALF - 1];                         // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^16 + 1
+    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
+    prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^16 + 1
 
     [
         prod_even[0],
@@ -961,7 +965,7 @@ fn signed_conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
         prod_mix[14],
         prod_even[15],
         prod_mix[15],
-    ]                       // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+    ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
 }
 
 /// Compute the convolution of 2 vectors of length 64.
