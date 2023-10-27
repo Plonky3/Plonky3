@@ -1,13 +1,18 @@
-use core::ops::{Add, Sub, AddAssign, SubAssign, Mul, MulAssign, Shr, Shl, ShrAssign, ShlAssign};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::{Add, AddAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
 use itertools::Either;
 use itertools::Itertools;
 use p3_field::PrimeField64;
 
 const MATRIX_CIRC_MDS_8_SML: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
+const MATRIX_CIRC_MDS_12_SML: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
 const MATRIX_CIRC_MDS_16_SML: [i64; 16] =
+    [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
+
+const MATRIX_CIRC_MDS_16_SML_U64: [u64; 16] =
     [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
 #[rustfmt::skip]
@@ -20,6 +25,17 @@ const MATRIX_CIRC_MDS_32_MERSENNE31: [i128; 32] = [
     0x7EC3DB1A, 0x6A146994, 0x588F9145, 0x09B79455,
     0x7FDA05EC, 0x19FE71A8, 0x6988947A, 0x624F1D31,
     0x500BB628, 0x0B1428CE, 0x3A62E1D6, 0x77692387
+];
+
+const MATRIX_CIRC_MDS_64_MERSENNE31: [i128; 64] = [
+    0x570227A5, 0x3702983F, 0x4B7B3B0A, 0x74F13DE3, 0x485314B0, 0x0157E2EC, 0x1AD2E5DE, 0x721515E3,
+    0x5452ADA3, 0x0C74B6C1, 0x67DA9450, 0x33A48369, 0x3BDBEE06, 0x7C678D5E, 0x160F16D3, 0x54888B8C,
+    0x666C7AA6, 0x113B89E2, 0x2A403CE2, 0x18F9DF42, 0x2A685E84, 0x49EEFDE5, 0x5D044806, 0x560A41F8,
+    0x69EF1BD0, 0x2CD15786, 0x62E07766, 0x22A231E2, 0x3CFCF40C, 0x4E8F63D8, 0x69657A15, 0x466B4B2D,
+    0x4194B4D2, 0x1E9A85EA, 0x39709C27, 0x4B030BF3, 0x655DCE1D, 0x251F8899, 0x5B2EA879, 0x1E10E42F,
+    0x31F5BE07, 0x2AFBB7F9, 0x3E11021A, 0x5D97A17B, 0x6F0620BD, 0x5DBFC31D, 0x76C4761D, 0x21938559,
+    0x33777473, 0x71F0E92C, 0x0B9872A1, 0x4C2411F9, 0x545B7C96, 0x20256BAF, 0x7B8B493E, 0x33AD525C,
+    0x15EAEA1C, 0x6D2D1A21, 0x06A81D14, 0x3FACEB4F, 0x130EC21C, 0x3C84C4F5, 0x50FD67C0, 0x30FDD85A,
 ];
 
 // It will be handy for functions to be able to handle entries which are a combination of simple integer types
@@ -38,22 +54,25 @@ trait SimpleInteger:
     + Shr<usize, Output = Self>
     + ShlAssign<usize>
     + Shl<usize, Output = Self>
-    {}
+{
+}
 
-impl<T> SimpleInteger for T where T: Sized
-    + Default
-    + Copy
-    + Add<Output = Self>
-    + AddAssign
-    + Sub<Output = Self>
-    + SubAssign
-    + Mul<Output = Self>
-    + MulAssign
-    + ShrAssign<usize>
-    + Shr<usize, Output = Self>
-    + ShlAssign<usize>
-    + Shl<usize, Output = Self>
-    {}
+impl<T> SimpleInteger for T where
+    T: Sized
+        + Default
+        + Copy
+        + Add<Output = Self>
+        + AddAssign
+        + Sub<Output = Self>
+        + SubAssign
+        + Mul<Output = Self>
+        + MulAssign
+        + ShrAssign<usize>
+        + Shr<usize, Output = Self>
+        + ShlAssign<usize>
+        + Shl<usize, Output = Self>
+{
+}
 
 // Let M be a circulant matrix with first column vec_col and first row vec_row. Then M.u is the convolution of vec_col and u.
 // The vectors given here are the first rows of the respective circulant matrices NOT the first colums.
@@ -74,31 +93,59 @@ const fn row_to_col<T: SimpleInteger, const N: usize>(row: [T; N]) -> [T; N] {
     col
 }
 
-// Given a vector v, split it into its odd and even parts.
+/// Given a vector v, split it into its odd and even parts.
+/// vec = [v_e[0], v_o[0], v_e[1], ...]
+/// inverse of interleave
 #[inline]
-const fn split_half_eo<const N: usize, const HALF_N: usize>(
-    vec: [i64; N],
-) -> ([u64; HALF_N], [u64; HALF_N]) {
-    let mut even = [0; HALF_N];
-    let mut odd = [0; HALF_N];
+const fn split_half_eo<const N: usize, const HALF_N: usize, T: SimpleInteger>(
+    vec: &[T; N],
+) -> ([T; HALF_N], [T; HALF_N]) {
+    let mut even = [vec[0]; HALF_N];
+    let mut odd = [vec[1]; HALF_N];
 
-    let mut i = 0;
+    let mut i = 1;
     loop {
+        even[i] = vec[2 * i];
+        odd[i] = vec[2 * i + 1];
+
+        i += 1;
         if i == HALF_N {
             break;
         }
-        even[i] = vec[2*i] as u64;
-        odd[i] = vec[2*i + 1] as u64;
-        i += 1
     }
     (even, odd)
+}
+
+/// Given two arrays v_e and v_o interleave them into an array twice the size
+/// vec = [v_e[0], v_o[0], v_e[1], ...]
+/// inverse of split_half_eo.
+/// For some reason this is much slower than manually writing out the new array as the interleaving of the old array.
+#[inline]
+const fn _interleave<const N: usize, const HALF_N: usize, T: SimpleInteger>(
+    even: [T; HALF_N],
+    odd: [T; HALF_N],
+) -> [T; N] {
+    let mut vec = [even[0]; N];
+    vec[1] = odd[0];
+
+    let mut i = 1;
+    loop {
+        vec[2 * i] = even[i];
+        vec[2 * i + 1] = odd[i];
+
+        i += 1;
+        if i == HALF_N {
+            break;
+        }
+    }
+    vec
 }
 
 // Several functions here to encode some simple vector addition and similar.
 
 // Performs vector addition on slices saving the result in the first slice
 #[inline]
-fn add_mut<T: SimpleInteger>(lhs: &mut [T], rhs: &[T]) -> () {
+fn add_mut<T: SimpleInteger>(lhs: &mut [T], rhs: &[T]) {
     let n = rhs.len();
     for i in 0..n {
         lhs[i] += rhs[i]
@@ -110,13 +157,13 @@ fn add_mut<T: SimpleInteger>(lhs: &mut [T], rhs: &[T]) -> () {
 // Need to say that Add and Default are constant. (I have a workaround for Default but not Add)
 #[inline]
 fn add_vec<T: SimpleInteger, const N: usize>(lhs: &[T], rhs: &[T]) -> [T; N] {
-    let mut output:[T; N] = [T::default(); N];
+    let mut output: [T; N] = [T::default(); N];
     let mut i = 0;
     loop {
         output[i] = lhs[i] + rhs[i];
         i += 1;
         if i == N {
-            break
+            break;
         }
     }
     output
@@ -124,7 +171,7 @@ fn add_vec<T: SimpleInteger, const N: usize>(lhs: &[T], rhs: &[T]) -> [T; N] {
 
 // Performs vector subtraction on slices saving the result in the first slice
 #[inline]
-fn sub_mut<T: SimpleInteger>(lhs: &mut [T], sub: &[T]) -> () {
+fn sub_mut<T: SimpleInteger>(lhs: &mut [T], sub: &[T]) {
     let n = sub.len();
     for i in 0..n {
         lhs[i] -= sub[i]
@@ -136,13 +183,13 @@ fn sub_mut<T: SimpleInteger>(lhs: &mut [T], sub: &[T]) -> () {
 // Need to say that Sub and Default are constant. (I have a workaround for Default but not Sub)
 #[inline]
 fn sub_vec<T: SimpleInteger, const N: usize>(lhs: &[T], sub: &[T]) -> [T; N] {
-    let mut output:[T; N] = [T::default(); N];
+    let mut output: [T; N] = [T::default(); N];
     let mut i = 0;
     loop {
         output[i] = lhs[i] - sub[i];
         i += 1;
         if i == N {
-            break
+            break;
         }
     }
     output
@@ -161,9 +208,9 @@ fn add_mul_mut<T: SimpleInteger>(lhs: &mut [T], rhs: &[T], val: T) {
 #[inline]
 fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
     let n = lhs.len();
-    let mut sum = lhs[0]*rhs[0];
+    let mut sum = lhs[0] * rhs[0];
     for i in 1..n {
-        sum += lhs[i]*rhs[i];
+        sum += lhs[i] * rhs[i];
     }
     sum
 }
@@ -185,7 +232,7 @@ fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
 //                  u_1(x) = v(x) mod x^{N/2} + 1
 
 // Now w_0 is the convolution of v_0 and u_0 so this can be applied recursively.
-// For w_1 we compute the signed convolution v_1(x)u_1(x) mod x^{N/2} + 1 using Karatsuba.              
+// For w_1 we compute the signed convolution v_1(x)u_1(x) mod x^{N/2} + 1 using Karatsuba.
 
 // There are 2 possible approaches to this karatsuba which mirror the DIT vs DIF approaches to FFT's.
 
@@ -202,10 +249,46 @@ fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
 // Then v(x)u(x) = (v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2)) + x ((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2)) - (v_e(x^2)u_e(x^2) + v_o(x^2)u_o(x^2))
 // This reduces the problem to 3 signed convolutions of size N/2 and we can do this recursively.
 
-// These algorithms do look a little different so it's not immediately obvious which is the right one to compute.
-// Thus for now we will implement both.
+// Option 2: seems to involve less total operations and so should be faster hence it is the once we have implmented for now.
+// The main issue is that we are currently doing quite a bit of data manipulation. (Needing to split vectors into odd and even parts and recombining afterwards)
+// Would be good to try and find a way to cut down on this.
 
-// Once we get down to size 4/8 we use the O(n^2) approach.
+// Once we get down to small sizes we use the O(n^2) approach.
+
+/// Compute the product of two polynomials of degree 2.
+/// output(x) = lhs(x)rhs(x)
+#[inline]
+fn _prod3<T: SimpleInteger>(lhs: &[T; 3], rhs: &[T; 3]) -> [T; 5] {
+    let mut output = [T::default(); 5];
+    add_mul_mut(&mut output[..3], lhs, rhs[0]);
+    add_mul_mut(&mut output[1..4], lhs, rhs[1]);
+    add_mul_mut(&mut output[2..], lhs, rhs[2]);
+    output
+}
+
+/// Compute the convolution of two vectors of length 3.
+/// output(x) = lhs(x)rhs(x) mod x^3 - 1
+#[inline]
+fn conv3<T: SimpleInteger>(lhs: &[T; 3], rhs: &[T; 3]) -> [T; 3] {
+    // This is small enough we just explicitely write down the answer.
+    [
+        lhs[0] * rhs[0] + lhs[1] * rhs[2] + lhs[2] * rhs[1],
+        lhs[0] * rhs[1] + lhs[1] * rhs[0] + lhs[2] * rhs[2],
+        lhs[0] * rhs[2] + lhs[1] * rhs[1] + lhs[2] * rhs[0],
+    ]
+}
+
+/// Compute the signed convolution of two vectors of length 3.
+/// output(x) = lhs(x)rhs(x) mod x^3 + 1
+#[inline]
+fn sign_conv3<T: SimpleInteger>(lhs: &[T; 3], rhs: &[T; 3]) -> [T; 3] {
+    // This is small enough we just explicitely write down the answer.
+    [
+        lhs[0] * rhs[0] - lhs[1] * rhs[2] - lhs[2] * rhs[1],
+        lhs[0] * rhs[1] + lhs[1] * rhs[0] - lhs[2] * rhs[2],
+        lhs[0] * rhs[2] + lhs[1] * rhs[1] + lhs[2] * rhs[0],
+    ]
+}
 
 /// Compute the product of two polynomials of degree 3.
 /// output(x) = lhs(x)rhs(x)
@@ -219,7 +302,24 @@ fn prod4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 7] {
     output
 }
 
-/// Compute the convolution product of two vectors of length 4.
+/// Compute the product of two polynomials of degree 5.
+/// output(x) = lhs(x)rhs(x)
+#[inline]
+fn _prod6<T: SimpleInteger>(lhs: &[T; 6], rhs: &[T; 6]) -> [T; 11] {
+    // Should we be using Karatsuba here?
+    // Something to check.
+
+    let mut output = [T::default(); 11];
+    add_mul_mut(&mut output[..6], lhs, rhs[0]);
+    add_mul_mut(&mut output[1..7], lhs, rhs[1]);
+    add_mul_mut(&mut output[2..8], lhs, rhs[2]);
+    add_mul_mut(&mut output[3..9], lhs, rhs[3]);
+    add_mul_mut(&mut output[4..10], lhs, rhs[4]);
+    add_mul_mut(&mut output[5..], lhs, rhs[5]);
+    output
+}
+
+/// Compute the convolution of two vectors of length 4.
 /// output(x) = lhs(x)rhs(x) mod x^4 - 1
 #[inline]
 fn conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
@@ -227,28 +327,31 @@ fn conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
     // In particular testing the code produced for conv8.
 
     const N: usize = 4;
-    const HALF: usize = N/2;
+    const HALF: usize = N / 2;
     let mut output = [T::default(); N];
 
-    let lhs_p: [T; HALF] = add_vec(&lhs[..HALF], &lhs[HALF..]);     // v_0(x)
-    let lhs_m: [T; HALF] = sub_vec(&lhs[..HALF], &lhs[HALF..]);     // v_1(x)
+    let lhs_p: [T; HALF] = add_vec(&lhs[..HALF], &lhs[HALF..]); // v_0(x)
+    let lhs_m: [T; HALF] = sub_vec(&lhs[..HALF], &lhs[HALF..]); // v_1(x)
 
     // In most cases, rhs will actually be a constant but I'm unsure how to take advantage of this.
-    let rhs_p: [T; HALF] = add_vec(&rhs[..HALF], &rhs[HALF..]);     // u_0(x)
-    let rhs_m: [T; HALF] = sub_vec(&rhs[..HALF], &rhs[HALF..]);     // u_1(x)
+    let rhs_p: [T; HALF] = add_vec(&rhs[..HALF], &rhs[HALF..]); // u_0(x)
+    let rhs_m: [T; HALF] = sub_vec(&rhs[..HALF], &rhs[HALF..]); // u_1(x)
 
-    output[0] = lhs_p[0]*rhs_p[0] + lhs_p[1]*rhs_p[1];              
-    output[1] = lhs_p[0]*rhs_p[1] + lhs_p[1]*rhs_p[0];              // output = v_0(x)u_0(x) mod x^2 - 1
+    output[0] = lhs_p[0] * rhs_p[0] + lhs_p[1] * rhs_p[1];
+    output[1] = lhs_p[0] * rhs_p[1] + lhs_p[1] * rhs_p[0]; // output = v_0(x)u_0(x) mod x^2 - 1
     output[2] = output[0];
-    output[3] = output[1];                                          // output = (1 + x^2)(v_0(x)u_0(x) mod x^2 - 1)
+    output[3] = output[1]; // output = (1 + x^2)(v_0(x)u_0(x) mod x^2 - 1)
 
-    let product_m = [lhs_m[0]*rhs_m[0] - lhs_m[1]*rhs_m[1], lhs_m[0]*rhs_m[1] + lhs_m[1]*rhs_m[0]];
+    let product_m = [
+        lhs_m[0] * rhs_m[0] - lhs_m[1] * rhs_m[1],
+        lhs_m[0] * rhs_m[1] + lhs_m[1] * rhs_m[0],
+    ];
 
     add_mut(&mut output[..HALF], &product_m);
-    sub_mut(&mut output[HALF..], &product_m);                       // output = 2 (lhs * rhs)
+    sub_mut(&mut output[HALF..], &product_m); // output = 2 (lhs * rhs)
 
     // Can maybe do this in place?
-    output.map(|x| x >> 1)          // output = lhs * rhs
+    output.map(|x| x >> 1) // output = lhs * rhs
 
     // I leave the old N^2 code here for now as, with improvments
     // it may still end up as the better option.
@@ -263,25 +366,33 @@ fn conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
     // let rhs_rev_3 = [rhs[3], rhs[2], rhs[1], rhs[0]];
     // output[3] = dot(lhs, &rhs_rev_3);
     // output
-
 }
 
 /// Compute the signed convolution of two vectors of length 4.
-/// => output(x) = lhs(x)rhs(x) mod x^4 + 1
+/// output(x) = lhs(x)rhs(x) mod x^4 + 1
 #[inline]
-fn sign_conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
+fn signed_conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
     let mut output = [T::default(); 4];
+
+    // This might not be the best way to compute this.
+    // Another approach is to define
+    // [rhs[0], -rhs[3], -rhs[2], -rhs[1]]
+    // [rhs[1], rhs[0], -rhs[3], -rhs[2]]
+    // [rhs[2], rhs[1], rhs[0], -rhs[3]]
+    // [rhs[3], rhs[2], rhs[1], rhs[0]]
+    // And then take dot products.
+    // Might also be other methods.
 
     let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
-    output[0] = lhs[0]*rhs[0] - dot(&lhs[1..], &rhs_rev[..3]);
+    output[0] = lhs[0] * rhs[0] - dot(&lhs[1..], &rhs_rev[..3]);
     output[1] = dot(&lhs[..2], &rhs_rev[2..]) - dot(&lhs[2..], &rhs_rev[..2]);
-    output[2] = dot(&lhs[..3], &rhs_rev[1..]) - lhs[3]*rhs[3];
+    output[2] = dot(&lhs[..3], &rhs_rev[1..]) - lhs[3] * rhs[3];
     output[3] = dot(lhs, &rhs_rev);
     output
 
     // It may be possible to choose the MDS vector such that rhs = [1, 1, 1, 1] or some constant version of this.
-    // In such cases, we can use faster code for sign_conv4. Just saving this here for now
+    // In such cases, we can use faster code for signed_conv4. Just saving this here for now
     // let output1 = lhs[0] + lhs[1] - lhs[2] - lhs[3];
     // let output2 = output1 + (lhs[2] << 1);
     // [
@@ -292,6 +403,56 @@ fn sign_conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
     // ]
 }
 
+/// Compute the convolution of two vectors of length 6.
+/// output(x) = lhs(x)rhs(x) mod x^6 - 1
+#[inline]
+fn conv6<T: SimpleInteger>(lhs: &[T; 6], rhs: &[T; 6]) -> [T; 6] {
+    // Even at this small size, doing the FFT decomposition seems to produce shorter compiled code using godbolt.
+    // In particular testing the code produced for conv12 as that's what we really care about.
+
+    const N: usize = 6;
+    const HALF: usize = N / 2;
+    let mut output = [T::default(); N];
+
+    let lhs_p: [T; HALF] = add_vec(&lhs[..HALF], &lhs[HALF..]); // v_0(x)
+    let lhs_m: [T; HALF] = sub_vec(&lhs[..HALF], &lhs[HALF..]); // v_1(x)
+
+    // In most cases, rhs will actually be a constant but I'm unsure how to take advantage of this.
+    let rhs_p: [T; HALF] = add_vec(&rhs[..HALF], &rhs[HALF..]); // u_0(x)
+    let rhs_m: [T; HALF] = sub_vec(&rhs[..HALF], &rhs[HALF..]); // u_1(x)
+
+    let prod_p = conv3(&lhs_p, &rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^4 - 1
+    let prod_m = sign_conv3(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^4 + 1
+
+    output[..HALF].clone_from_slice(&prod_p);
+    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
+
+    add_mut(&mut output[..HALF], &prod_m);
+    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
+
+    // Can maybe do this in place?
+    output.map(|x| x >> 1) // output = lhs * rhs
+}
+
+/// Compute the signed convolution of two vectors of length 6.
+/// output(x) = lhs(x)rhs(x) mod x^6 + 1
+#[inline]
+fn sign_conv6<T: SimpleInteger>(lhs: &[T; 6], rhs: &[T; 6]) -> [T; 6] {
+    let mut output = [T::default(); 6];
+
+    // This might not be the best way to compute this.
+
+    let rhs_rev = [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]];
+
+    output[0] = lhs[0] * rhs[0] - dot(&lhs[1..], &rhs_rev[..5]);
+    output[1] = dot(&lhs[..2], &rhs_rev[4..]) - dot(&lhs[2..], &rhs_rev[..4]);
+    output[2] = dot(&lhs[..3], &rhs_rev[3..]) - dot(&lhs[3..], &rhs_rev[..3]);
+    output[3] = dot(&lhs[..4], &rhs_rev[2..]) - dot(&lhs[4..], &rhs_rev[..2]);
+    output[4] = dot(&lhs[..5], &rhs_rev[1..]) - lhs[5] * rhs[5];
+    output[5] = dot(lhs, &rhs_rev);
+    output
+}
+
 /// Assume that lhs is a vector of u64's and rhs is a vector of field elements.
 /// Compute M(lhs).rhs where M is the circulant matrix with first row equal to lhs.
 /// This uses the left/right decomposition.
@@ -300,7 +461,6 @@ pub fn apply_circulant_karat_left_right_field<F: PrimeField64, const N: usize>(
     lhs: [u64; N],
     rhs: [F; N],
 ) -> [F; N] {
-
     // We need the vector which is the first column of lhs not the first row.
     let lhs_u64 = {
         let mut lhs_u64 = lhs.into_iter().rev().collect::<Vec<_>>();
@@ -333,7 +493,6 @@ pub fn apply_circulant_karat_even_odd_field<F: PrimeField64, const N: usize>(
     lhs: [u64; N],
     rhs: [F; N],
 ) -> [F; N] {
-
     // We need the vector which is the first column of lhs not the first row.
     let lhs_u64 = {
         let mut lhs_u64 = lhs.into_iter().rev().collect::<Vec<_>>();
@@ -356,7 +515,6 @@ pub fn apply_circulant_karat_even_odd_field<F: PrimeField64, const N: usize>(
 /// Input must be an array of field elements of length 8.
 /// Only works with Mersenne31 and Babybear31
 pub fn apply_circulant_8_karat<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
-
     // Flip MATRIX_CIRC_MDS_8_SML to get the first column of the circulant matrix.
     const MATRIX_CIRC_MDS_8_SML_I64: [i64; 8] = row_to_col(MATRIX_CIRC_MDS_8_SML);
 
@@ -375,11 +533,29 @@ pub fn apply_circulant_8_karat<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     output.map(|x| F::from_wrapped_u64(x as u64))
 }
 
+pub fn apply_circulant_12_karat<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
+    // Flip MATRIX_CIRC_MDS_12_SML to get the first column of the circulant matrix.
+    const MATRIX_CIRC_MDS_12_SML_I64: [i64; 12] = row_to_col(MATRIX_CIRC_MDS_12_SML);
+
+    // The numbers we will encounter through our algorithm are bounded by
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML) <= (12 * 2**31) * 33 < 2**40 << 2**63
+    // Hence we can work with i64's with garuntees of no overflow occuring.
+    let input_i64 = input.map(|x| x.as_canonical_u64() as i64);
+
+    // Compute the convolution.
+    // Currently not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
+    // TODO: FIX this.
+    let output = conv12(&input_i64, &MATRIX_CIRC_MDS_12_SML_I64);
+
+    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
+    // The output will always be positive so we can safley cast as u64's.
+    output.map(|x| F::from_wrapped_u64(x as u64))
+}
+
 /// Computes the convolution of input and MATRIX_CIRC_MDS_16_SML.
 /// Input must be an array of field elements of length 16.
 /// Only works with Mersenne31 and Babybear31
 pub fn apply_circulant_16_karat<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
-
     // Flip MATRIX_CIRC_MDS_16_SML to get the first column of the circulant matrix.
     const MATRIX_CIRC_MDS_16_SML_I64: [i64; 16] = row_to_col(MATRIX_CIRC_MDS_16_SML);
 
@@ -408,7 +584,7 @@ pub fn apply_circulant_32_karat<F: PrimeField64>(input: [F; 32]) -> [F; 32] {
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_32_MERSENNE31) <= (32 * 2**31)**2 < 2**72 << 2**127
     // Hence we can work with i128's with garuntees of no overflow occuring.
     let input_i128 = input.map(|x| x.as_canonical_u64() as i128);
-    
+
     // Compute the convolution.
     // Currently not taking full advantage of MATRIX_CIRC_MDS_16_SML_I64 being constant.
     // TODO: FIX this.
@@ -419,13 +595,33 @@ pub fn apply_circulant_32_karat<F: PrimeField64>(input: [F; 32]) -> [F; 32] {
     output.map(|x| F::from_wrapped_u128(x as u128))
 }
 
+/// Computes the convolution of input and MATRIX_CIRC_MDS_64_MERSENNE31.
+/// Input must be an array of Mersenne31 field elements of length 64.
+pub fn apply_circulant_64_karat<F: PrimeField64>(input: [F; 64]) -> [F; 64] {
+    // Flip MATRIX_CIRC_MDS_64_MERSENNE31 to get the first column of the circulant matrix.
+    const MATRIX_CIRC_MDS_64_M31_I128: [i128; 64] = row_to_col(MATRIX_CIRC_MDS_64_MERSENNE31);
+
+    // The numbers we will encounter through our algorithm are bounded by
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_64_MERSENNE31) < (64 * 2**31)**2 < 2**74 << 2**127
+    // Hence we can work with i128's with garuntees of no overflow occuring.
+    let input_i128 = input.map(|x| x.as_canonical_u64() as i128);
+
+    // Compute the convolution.
+    // Currently not taking full advantage of MATRIX_CIRC_MDS_16_SML_I64 being constant.
+    // TODO: FIX this.
+    let output = conv64(&MATRIX_CIRC_MDS_64_M31_I128, &input_i128);
+
+    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
+    // The output will always be positive so we can safley cast as u64's.
+    output.map(|x| F::from_wrapped_u128(x as u128))
+}
 
 /// Compute the product of two polynomials of degree 7.
 /// output(x) = lhs(x)rhs(x)
 /// We use Karatsuba as it should save a small number of operations (103 vs 113).
 /// This should be checked agaisnt the standard approach.
 #[inline]
-fn prod8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 15] {
+fn _prod8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 15] {
     let mut output = [T::default(); 15];
 
     // The algorithm is simple:
@@ -433,14 +629,13 @@ fn prod8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 15] {
     //          = v_l(x)u_l(x) + x^4((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x)) + x^8v_h(x)u_h(x)
 
     // Split the inputs into the low and high parts.
-    let mut lhs_low = [lhs[0], lhs[1], lhs[2], lhs[3]];     // v_l
-    let lhs_high = [lhs[4], lhs[5], lhs[6], lhs[7]];        // v_h
-    let mut rhs_low = [rhs[0], rhs[1], rhs[2], rhs[3]];     // v_l
-    let rhs_high = [rhs[4], rhs[5], rhs[6], rhs[7]];        // v_h
+    let mut lhs_low = [lhs[0], lhs[1], lhs[2], lhs[3]]; // v_l
+    let lhs_high = [lhs[4], lhs[5], lhs[6], lhs[7]]; // v_h
+    let mut rhs_low = [rhs[0], rhs[1], rhs[2], rhs[3]]; // v_l
+    let rhs_high = [rhs[4], rhs[5], rhs[6], rhs[7]]; // v_h
 
-
-    let prod_low = prod4(&lhs_low, &rhs_low);       // v_l(x)u_l(x)
-    let prod_high = prod4(&lhs_high, &rhs_high);    // v_h(x)u_h(x)
+    let prod_low = prod4(&lhs_low, &rhs_low); // v_l(x)u_l(x)
+    let prod_high = prod4(&lhs_high, &rhs_high); // v_h(x)u_h(x)
 
     // Copy results into the output.
     output[..7].copy_from_slice(&prod_low);
@@ -453,9 +648,9 @@ fn prod8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 15] {
     let prod_mix = prod4(&lhs_low, &rhs_low); // (v_l(x) + v_h(x))(u_l(x) + u_h(x))
 
     // Add the result to the output.
-    add_mut(&mut output[4..11], &prod_mix);     // + x^4 (v_l(x) + v_h(x))(u_l(x) + u_h(x))
-    sub_mut(&mut output[4..11], &prod_low);     // + x^4 ((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x))
-    sub_mut(&mut output[4..11], &prod_high);    // + x^4 ((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
+    add_mut(&mut output[4..11], &prod_mix); // + x^4 (v_l(x) + v_h(x))(u_l(x) + u_h(x))
+    sub_mut(&mut output[4..11], &prod_low); // + x^4 ((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x))
+    sub_mut(&mut output[4..11], &prod_high); // + x^4 ((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
 
     output
 }
@@ -466,24 +661,24 @@ fn prod8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 15] {
 #[inline]
 fn conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
     const N: usize = 8;
-    const HALF: usize = N/2;
+    const HALF: usize = N / 2;
     let mut output = [T::default(); N];
 
     let lhs_p = add_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^4 - 1
     let lhs_m = sub_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^4 + 1
 
     // rhs will always be constant. Not sure how to tell the compiler this though.
-    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^4 - 1   
+    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^4 - 1
     let rhs_m = sub_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^4 + 1
 
-    let prod_p = conv4(&lhs_p, &rhs_p);         // prod_p(x) = lhs(x)rhs(x) mod x^4 - 1
-    let prod_m = sign_conv4(&lhs_m, &rhs_m);    // prod_m(x) = lhs(x)rhs(x) mod x^4 + 1
+    let prod_p = conv4(&lhs_p, &rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^4 - 1
+    let prod_m = signed_conv4(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^4 + 1
 
-    output[..HALF].clone_from_slice(&prod_p);   
-    output[HALF..].clone_from_slice(&prod_p);   // output = [prod_p, prod_p]
+    output[..HALF].clone_from_slice(&prod_p);
+    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
 
     add_mut(&mut output[..HALF], &prod_m);
-    sub_mut(&mut output[HALF..], &prod_m);      // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
+    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
 
     // Could also do this in place?
     output.map(|x| x >> 1) // output = (lhs * rhs)
@@ -494,36 +689,75 @@ fn conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
 /// Use the Karatsuba Method to split into 3 degree 3 polynomial multiplications.
 #[inline]
 fn signed_conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
-    let mut output = [T::default(); 8];
+    const N: usize = 8;
+    const HALF: usize = N / 2;
 
-    // The algorithm is simple:
-    // v(x)u(x) mod x^8 + 1 = (v_l(x) + x^4v_h(x))(u_l(x) + x^4u_h(x)) mod x^8 + 1 
-    //          = v_l(x)u_l(x) - v_h(x)u_h(x) + x^4((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
+    // The algorithm is relatively simple:
+    // v(x)u(x) mod x^8 + 1 = (v_e(x^2) + xv_o(x^2))(u_e(x^2) + xu_o(x^2)) mod x^8 + 1
+    //          = v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2) + x((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2)) - v_e(x^2)u_e(x^2) - v_o(x^2)u_o(x^2))
 
-    // There must be a better way to split [T; 8] into 2 [T; 4]'s...
-    let mut lhs_low = [lhs[0], lhs[1], lhs[2], lhs[3]];     // v_l
-    let lhs_high = [lhs[4], lhs[5], lhs[6], lhs[7]];        // v_h
-    let mut rhs_low = [rhs[0], rhs[1], rhs[2], rhs[3]];     // u_l
-    let rhs_high = [rhs[4], rhs[5], rhs[6], rhs[7]];        // u_h
+    // Now computing v_e(x^2)u_e(x^2) mod x^8 + 1 is equivalent to computing v_e(x)u_e(x) mod x^4 + 1 and similarly for the other products.
 
-    let prod_low = prod4(&lhs_low, &rhs_low);           // v_l(x)u_l(x)
-    let prod_high = prod4(&lhs_high, &rhs_high);        // v_h(x)u_h(x)
+    // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
+    // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
+    let mut lhs_even = [lhs[0], lhs[2], lhs[4], lhs[6]];    // v_e
+    let lhs_odd = [lhs[1], lhs[3], lhs[5], lhs[7]];         // v_o
+    let mut rhs_even = [rhs[0], rhs[2], rhs[4], rhs[6]];    // u_e
+    let rhs_odd = [rhs[1], rhs[3], rhs[5], rhs[7]];         // u_o
 
-    // Add the two halves together, storing the result in lhs_low/rhs_low.
-    add_mut(&mut lhs_low, &lhs_high);   // v_l + v_h    
-    add_mut(&mut rhs_low, &rhs_high);   // u_l + u_h 
+    let mut prod_even = signed_conv4(&lhs_even, &rhs_even);     // v_e(x)u_e(x) mod x^4 + 1
+    let prod_odd = signed_conv4(&lhs_odd, &rhs_odd);            // v_o(x)u_o(x) mod x^4 + 1
 
-    let mut prod_mix = prod4(&lhs_low, &rhs_low);   // (v_l(x) + v_h(x))(u_l(x) + u_h(x))
-    sub_mut(&mut prod_mix, &prod_low);
-    sub_mut(&mut prod_mix, &prod_high);             // (v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
+    // Add the two halves together, storing the result in lhs_even/rhs_even.
+    add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
+    add_mut(&mut rhs_even, &rhs_odd); // u_e + u_o
 
+    let mut prod_mix = signed_conv4(&lhs_even, &rhs_even); // (v_e(x) + v_o(x))(u_e(x) + u_o(x))
+    sub_mut(&mut prod_mix, &prod_even);
+    sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
 
-    output[..7].copy_from_slice(&prod_low);         // output = v_l(x)u_l(x)
-    sub_mut(&mut output[..7], &prod_high);          // output = v_l(x)u_l(x) - v_h(x)u_h(x)
-    add_mut(&mut output[4..], &prod_mix[..4]);
-    sub_mut(&mut output[..3], &prod_mix[4..]);      // Add prod_mix in 2 parts as x^4prod_mix(x) has monomials >= x^8.
+    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]); 
+    prod_even[0] -= prod_odd[HALF - 1];                         // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^4 + 1
 
-    output
+    [
+        prod_even[0],
+        prod_mix[0],
+        prod_even[1],
+        prod_mix[1],
+        prod_even[2],
+        prod_mix[2],
+        prod_even[3],
+        prod_mix[3],
+    ]                   // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+}
+
+/// Compute the convolution of 2 vectors of length 8.
+/// output(x) = lhs(x)rhs(x) mod x^12 - 1  <=>  output = lhs * rhs
+/// Use the FFT Trick to split into a convolution of length 6 and a signed convolution of length 6.
+#[inline]
+fn conv12<T: SimpleInteger>(lhs: &[T; 12], rhs: &[T; 12]) -> [T; 12] {
+    const N: usize = 12;
+    const HALF: usize = N / 2;
+    let mut output = [T::default(); N];
+
+    let lhs_p = add_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^6 - 1
+    let lhs_m = sub_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^6 + 1
+
+    // rhs will always be constant. Not sure how to tell the compiler this though.
+    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^6 - 1
+    let rhs_m = sub_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^6 + 1
+
+    let prod_p = conv6(&lhs_p, &rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^6 - 1
+    let prod_m = sign_conv6(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^6 + 1
+
+    output[..HALF].clone_from_slice(&prod_p);
+    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
+
+    add_mut(&mut output[..HALF], &prod_m);
+    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
+
+    // Could also do this in place?
+    output.map(|x| x >> 1) // output = (lhs * rhs)
 }
 
 /// Compute the convolution of 2 vectors of length 8.
@@ -532,64 +766,90 @@ fn signed_conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
 #[inline]
 fn conv16<T: SimpleInteger>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
     const N: usize = 16;
-    const HALF: usize = N/2;
+    const HALF: usize = N / 2;
     let mut output = [T::default(); N];
 
     let lhs_p = add_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^8 - 1
     let lhs_m = sub_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^8 + 1
 
     // RHS will always be constant. Not sure how to tell the compiler this though.
-    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^8 - 1   
+    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^8 - 1
     let rhs_m = sub_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^8 + 1
 
-    let prod_p = conv8(&lhs_p, &rhs_p);           // prod_p(x) = lhs(x)rhs(x) mod x^8 - 1
-    let prod_m = signed_conv8(&lhs_m, &rhs_m);    // prod_m(x) = lhs(x)rhs(x) mod x^8 + 1
+    let prod_p = conv8(&lhs_p, &rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^8 - 1
+    let prod_m = signed_conv8(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^8 + 1
 
-    output[..HALF].clone_from_slice(&prod_p);   
-    output[HALF..].clone_from_slice(&prod_p);   // output = [prod_p, prod_p]
+    output[..HALF].clone_from_slice(&prod_p);
+    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
 
     add_mut(&mut output[..HALF], &prod_m);
-    sub_mut(&mut output[HALF..], &prod_m);      // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
+    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
 
     // Could also do this in place?
     output.map(|x| x >> 1) // output = (lhs * rhs)
 }
-
 
 /// Compute the signed convolution of 2 vectors of length 16.
 /// output(x) = lhs(x)rhs(x) mod x^16 + 1
 /// Use the Karatsuba Method to split into 3 degree 3 polynomial multiplications.
 #[inline]
 fn signed_conv16<T: SimpleInteger>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
-    let mut output = [T::default(); 16];
+    const N: usize = 16;
+    const HALF: usize = N / 2;
 
-    // The algorithm is simple:
-    // v(x)u(x) mod x^8 + 1 = (v_l(x) + x^4v_h(x))(u_l(x) + x^4u_h(x)) mod x^8 + 1 
-    //          = v_l(x)u_l(x) - v_h(x)u_h(x) + x^4((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
+    // The algorithm is relatively simple:
+    // v(x)u(x) mod x^16 + 1 = (v_e(x^2) + xv_o(x^2))(u_e(x^2) + xu_o(x^2)) mod x^16 + 1
+    //          = v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2) + x((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2)) - v_e(x^2)u_e(x^2) - v_o(x^2)u_o(x^2))
 
-    // There must be a better way to split [T; 16] into 2 [T; 8]'s...
-    let mut lhs_low = [lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6], lhs[7]];     // v_l
-    let lhs_high = [lhs[8], lhs[9], lhs[10], lhs[11], lhs[12], lhs[13], lhs[14], lhs[15]];  // v_h
-    let mut rhs_low = [rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6], rhs[7]];     // u_l
-    let rhs_high = [rhs[8], rhs[9], rhs[10], rhs[11], rhs[12], rhs[13], rhs[14], rhs[15]];  // u_h
+    // Now computing v_e(x^2)u_e(x^2) mod x^16 + 1 is equivalent to computing v_e(x)u_e(x) mod x^8 + 1 and similarly for the other products.
 
-    let prod_low = prod8(&lhs_low, &rhs_low);       // v_l(x)u_l(x)
-    let prod_high = prod8(&lhs_high, &rhs_high);    // v_h(x)u_h(x)
+    // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
+    // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
+    let mut lhs_even = [
+        lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14],      // v_e
+    ];
+    let lhs_odd = [
+        lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15],      // v_o
+    ];
+    let mut rhs_even = [
+        rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14],      // u_e
+    ];
+    let rhs_odd = [
+        rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15],      // u_o
+    ];
 
-    // Add the two halves together, storing the result in lhs_low.
-    add_mut(&mut lhs_low, &lhs_high);   // v_l + v_h
-    add_mut(&mut rhs_low, &rhs_high);   // u_l + u_h
+    let mut prod_even = signed_conv8(&lhs_even, &rhs_even);     // v_e(x)u_e(x) mod x^8 + 1
+    let prod_odd = signed_conv8(&lhs_odd, &rhs_odd);            // v_o(x)u_o(x) mod x^8 + 1
 
-    let mut prod_mix = prod8(&lhs_low, &rhs_low);   // (v_l(x) + v_h(x))(u_l(x) + u_h(x))
-    sub_mut(&mut prod_mix, &prod_low);
-    sub_mut(&mut prod_mix, &prod_high);             // (v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
+    // Add the two halves together, storing the result in lhs_even/rhs_even.
+    add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
+    add_mut(&mut rhs_even, &rhs_odd); // u_e + u_o
 
-    output[..15].copy_from_slice(&prod_low);        // output = v_l(x)u_l(x)     
-    sub_mut(&mut output[..15], &prod_high);         // output = v_l(x)u_l(x) - v_h(x)u_h(x)
-    add_mut(&mut output[8..], &prod_mix[..8]);
-    sub_mut(&mut output[..7], &prod_mix[8..]);      // Add prod_mix in 2 parts as x^8prod_mix(x) has monomials >= x^16.
+    let mut prod_mix = signed_conv8(&lhs_even, &rhs_even); // (v_e(x) + v_o(x))(u_e(x) + u_o(x))
+    sub_mut(&mut prod_mix, &prod_even);
+    sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
 
-    output
+    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]); 
+    prod_even[0] -= prod_odd[HALF - 1];                         // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^8 + 1
+
+    [
+        prod_even[0],
+        prod_mix[0],
+        prod_even[1],
+        prod_mix[1],
+        prod_even[2],
+        prod_mix[2],
+        prod_even[3],
+        prod_mix[3],
+        prod_even[4],
+        prod_mix[4],
+        prod_even[5],
+        prod_mix[5],
+        prod_even[6],
+        prod_mix[6],
+        prod_even[7],
+        prod_mix[7],
+    ]                       // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
 }
 
 /// Compute the convolution of 2 vectors of length 32.
@@ -598,24 +858,136 @@ fn signed_conv16<T: SimpleInteger>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
 #[inline]
 fn conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
     const N: usize = 32;
-    const HALF: usize = N/2;
+    const HALF: usize = N / 2;
     let mut output = [T::default(); N];
 
-    let lhs_p = add_vec(&lhs[..HALF], &lhs[HALF..]);  // lhs(x) mod x^16 - 1
-    let lhs_m = sub_vec(&lhs[..HALF], &lhs[HALF..]);  // lhs(x) mod x^16 + 1
+    let lhs_p = add_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^16 - 1
+    let lhs_m = sub_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^16 + 1
 
     // RHS will always be constant. Not sure how to tell the compiler this though.
-    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]);  // rhs(x) mod x^4 - 1  
-    let rhs_m = sub_vec(&rhs[..HALF], &rhs[HALF..]);  // rhs(x) mod x^4 + 1
+    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^4 - 1
+    let rhs_m = sub_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^4 + 1
 
-    let prod_p = conv16(&lhs_p, &rhs_p);            // prod_p(x) = lhs(x)rhs(x) mod x^16 - 1
-    let prod_m = signed_conv16(&lhs_m, &rhs_m);     // prod_m(x) = lhs(x)rhs(x) mod x^16 + 1
+    let prod_p = conv16(&lhs_p, &rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^16 - 1
+    let prod_m = signed_conv16(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^16 + 1
 
     output[..HALF].clone_from_slice(&prod_p);
-    output[HALF..].clone_from_slice(&prod_p);       // output = [prod_p, prod_p]
+    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
 
     add_mut(&mut output[..HALF], &prod_m);
-    sub_mut(&mut output[HALF..], &prod_m);          // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
+    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
+
+    // Could also do this in place?
+    output.map(|x| x >> 1) // output = (lhs * rhs)
+}
+
+/// Compute the signed convolution of 2 vectors of length 16.
+/// output(x) = lhs(x)rhs(x) mod x^16 + 1
+/// Use the Karatsuba Method to split into 3 degree 3 polynomial multiplications.
+#[inline]
+fn signed_conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
+    const N: usize = 32;
+    const HALF: usize = N / 2;
+
+    // The algorithm is simple:
+    // v(x)u(x) mod x^32 + 1 = (v_l(x) + x^4v_h(x))(u_l(x) + x^4u_h(x)) mod x^32 + 1
+    //          = v_l(x)u_l(x) - v_h(x)u_h(x) + x^4((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
+
+    // Now computing v_e(x^2)u_e(x^2) mod x^32 + 1 is equivalent to computing v_e(x)u_e(x) mod x^16 + 1 and similarly for the other products.
+
+    // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
+    // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
+    let mut lhs_even = [
+        lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14], lhs[16], lhs[18],        // v_e
+        lhs[20], lhs[22], lhs[24], lhs[26], lhs[28], lhs[30],                           
+    ];
+    let lhs_odd = [
+        lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15], lhs[17], lhs[19],        // v_o
+        lhs[21], lhs[23], lhs[25], lhs[27], lhs[29], lhs[31],
+    ];
+    let mut rhs_even = [
+        rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14], rhs[16], rhs[18],        // u_e
+        rhs[20], rhs[22], rhs[24], rhs[26], rhs[28], rhs[30],
+    ];
+    let rhs_odd = [
+        rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15], rhs[17], rhs[19],        // u_o
+        rhs[21], rhs[23], rhs[25], rhs[27], rhs[29], rhs[31],
+    ];
+
+    let mut prod_even = signed_conv16(&lhs_even, &rhs_even);     // v_e(x)u_e(x) mod x^16 + 1
+    let prod_odd = signed_conv16(&lhs_odd, &rhs_odd);            // v_o(x)u_o(x) mod x^16 + 1
+
+    // Add the two halves together, storing the result in lhs_even/rhs_even.
+    add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
+    add_mut(&mut rhs_even, &rhs_odd); // u_e + u_o
+
+    let mut prod_mix = signed_conv16(&lhs_even, &rhs_even); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) mod x^16 + 1
+    sub_mut(&mut prod_mix, &prod_even);
+    sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
+
+    add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]); 
+    prod_even[0] -= prod_odd[HALF - 1];                         // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^16 + 1
+
+    [
+        prod_even[0],
+        prod_mix[0],
+        prod_even[1],
+        prod_mix[1],
+        prod_even[2],
+        prod_mix[2],
+        prod_even[3],
+        prod_mix[3],
+        prod_even[4],
+        prod_mix[4],
+        prod_even[5],
+        prod_mix[5],
+        prod_even[6],
+        prod_mix[6],
+        prod_even[7],
+        prod_mix[7],
+        prod_even[8],
+        prod_mix[8],
+        prod_even[9],
+        prod_mix[9],
+        prod_even[10],
+        prod_mix[10],
+        prod_even[11],
+        prod_mix[11],
+        prod_even[12],
+        prod_mix[12],
+        prod_even[13],
+        prod_mix[13],
+        prod_even[14],
+        prod_mix[14],
+        prod_even[15],
+        prod_mix[15],
+    ]                       // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+}
+
+/// Compute the convolution of 2 vectors of length 64.
+/// output(x) = lhs(x)rhs(x) mod x^64 - 1  <=>  output = lhs * rhs
+/// Use the FFT Trick to split into a convolution of length 32 and a signed convolution of length 32.
+#[inline]
+fn conv64<T: SimpleInteger>(lhs: &[T; 64], rhs: &[T; 64]) -> [T; 64] {
+    const N: usize = 64;
+    const HALF: usize = N / 2;
+    let mut output = [T::default(); N];
+
+    let lhs_p = add_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^32 - 1
+    let lhs_m = sub_vec(&lhs[..HALF], &lhs[HALF..]); // lhs(x) mod x^32 + 1
+
+    // RHS will always be constant. Not sure how to tell the compiler this though.
+    let rhs_p = add_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^32 - 1
+    let rhs_m = sub_vec(&rhs[..HALF], &rhs[HALF..]); // rhs(x) mod x^32 + 1
+
+    let prod_p = conv32(&lhs_p, &rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^32 - 1
+    let prod_m = signed_conv32(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^32 + 1
+
+    output[..HALF].clone_from_slice(&prod_p);
+    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
+
+    add_mut(&mut output[..HALF], &prod_m);
+    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
 
     // Could also do this in place?
     output.map(|x| x >> 1) // output = (lhs * rhs)
@@ -626,7 +998,6 @@ fn conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
 // Ignore functions below this point. They will be removed or massively changed soon.
 
 ///////////////////////
-
 
 // TODO: UPDATE TO USE THE FFT TRICK
 // TODO: MAKE ITERATIVE NOT RECURSIVE
@@ -817,11 +1188,14 @@ pub fn apply_circulant_16_karat_even_odd<F: PrimeField64>(input: [F; 16]) -> [F;
         input[15].as_canonical_u64(),
     ];
 
-    const MATRIX_CIRC_MDS_16_SML_EVEN_ODD: ([u64; 8], [u64; 8]) = split_half_eo(row_to_col(MATRIX_CIRC_MDS_16_SML));
+    const MATRIX_CIRC_MDS_16_SML_EVEN_ODD: ([u64; 8], [u64; 8]) =
+        split_half_eo(&row_to_col(MATRIX_CIRC_MDS_16_SML_U64));
 
     // This is clearly a constant but add_vec is currently not a const function.
-    let matrix_circ_mds_16_sml_eomix: [u64; 8] =
-        add_vec(&MATRIX_CIRC_MDS_16_SML_EVEN_ODD.0, &MATRIX_CIRC_MDS_16_SML_EVEN_ODD.1);
+    let matrix_circ_mds_16_sml_eomix: [u64; 8] = add_vec(
+        &MATRIX_CIRC_MDS_16_SML_EVEN_ODD.0,
+        &MATRIX_CIRC_MDS_16_SML_EVEN_ODD.1,
+    );
 
     let mut conv_even = conv8_eo(&lhs_even, &MATRIX_CIRC_MDS_16_SML_EVEN_ODD.0);
     let conv_odd = conv8_eo(&lhs_odd, &MATRIX_CIRC_MDS_16_SML_EVEN_ODD.1);

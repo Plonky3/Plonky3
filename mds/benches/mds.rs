@@ -30,6 +30,7 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 12>(c);
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 16>(c);
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 32>(c);
+    bench_mds::<Mersenne31, MdsMatrixMersenne31, 64>(c);
 }
 
 fn bench_mds<AF, Mds, const WIDTH: usize>(c: &mut Criterion)

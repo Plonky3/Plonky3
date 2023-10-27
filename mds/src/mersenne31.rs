@@ -7,9 +7,12 @@
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 
-use crate::util::{apply_circulant, apply_circulant_12_sml};
+// use crate::util::{apply_circulant};
 // apply_circulant_8_sml, apply_circulant_12_sml, apply_circulant_16_sml, apply_circulant_8_karat, apply_circulant_12_karat, apply_circulant_16_karat
-use crate::karatsuba_convolution::{apply_circulant_8_karat, apply_circulant_16_karat, apply_circulant_32_karat};
+use crate::karatsuba_convolution::{
+    apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
+    apply_circulant_64_karat, apply_circulant_8_karat,
+};
 use crate::MdsPermutation;
 
 #[derive(Clone, Default)]
@@ -34,8 +37,8 @@ impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
 impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
-        apply_circulant_12_sml(input)
-        // apply_circulant_12_karat(input)
+        // apply_circulant_12_sml(input)
+        apply_circulant_12_karat(input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 12]) {
@@ -87,7 +90,7 @@ impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
 impl MdsPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
+const _MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
     0x570227A5, 0x3702983F, 0x4B7B3B0A, 0x74F13DE3,
     0x485314B0, 0x0157E2EC, 0x1AD2E5DE, 0x721515E3,
     0x5452ADA3, 0x0C74B6C1, 0x67DA9450, 0x33A48369,
@@ -108,7 +111,8 @@ const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
 
 impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
-        apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
+        // apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
+        apply_circulant_64_karat(input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 64]) {
