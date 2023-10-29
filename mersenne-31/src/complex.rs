@@ -8,7 +8,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
+use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -315,6 +315,8 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne3
         &self.parts
     }
 }
+
+impl ExtensionField<Mersenne31> for Mersenne31Complex<Mersenne31> {}
 
 impl Distribution<Mersenne31Complex<Mersenne31>> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31Complex<Mersenne31> {

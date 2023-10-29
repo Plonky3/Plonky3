@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 criterion = "0.5"
 itertools = "0.12.0"
 p3-dft = { path = "../dft" }
+p3-lde = { path = "../lde" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
