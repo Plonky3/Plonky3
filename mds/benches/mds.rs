@@ -44,11 +44,7 @@ where
     let mut rng = thread_rng();
     let input = rng.gen::<[AF; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
-    c.bench_with_input(id, &input, |b, input| {
-        b.iter(|| {
-            mds.permute(input.clone())
-        })
-    });
+    c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));
 }
 
 criterion_group!(benches, bench_all_mds);

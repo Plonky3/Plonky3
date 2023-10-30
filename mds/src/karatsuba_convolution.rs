@@ -74,7 +74,6 @@ impl<T> SimpleInteger for T where
 {
 }
 
-
 /// Computes the convolution of input and MATRIX_CIRC_MDS_8_SML.
 /// Input must be an array of field elements of length 8.
 /// Only works with Mersenne31 and Babybear31
@@ -365,10 +364,8 @@ fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
 
 // Once we get down to small sizes we use the O(n^2) approach.
 
-
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // Length 3
-
 
 /// Compute the convolution of two vectors of length 3.
 /// output(x) = lhs(x)rhs(x) mod x^3 - 1
@@ -400,7 +397,7 @@ fn sign_conv3<T: SimpleInteger>(lhs: &[T; 3], rhs: &[T; 3]) -> [T; 3] {
 /// Compute the convolution of two vectors of length 4.
 /// output(x) = lhs(x)rhs(x) mod x^4 - 1
 #[inline]
-fn conv4_mut<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4], output: &mut[T]) {
+fn conv4_mut<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]) {
     // Even at this small size, doing the FFT decomposition seems to produce shorter compiled code using godbolt.
     // In particular testing the code produced for conv8.
 
@@ -411,13 +408,12 @@ fn conv4_mut<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4], output: &mut[T]) {
     let rhs_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]]; // u_0(x)
     let rhs_m = [rhs[0] - rhs[2], rhs[1] - rhs[3]]; // u_1(x)
 
-
     // Might be worth trying to keep everything as a i64 up until this multiplication and
     // only here making things u128's. (Possible that the compiler has already worked this out though.)
     output[0] = lhs_m[0] * rhs_m[0] - lhs_m[1] * rhs_m[1];
-    output[1] = lhs_m[0] * rhs_m[1] + lhs_m[1] * rhs_m[0];  // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
+    output[1] = lhs_m[0] * rhs_m[1] + lhs_m[1] * rhs_m[0]; // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
     output[2] = lhs_p[0] * rhs_p[0] + lhs_p[1] * rhs_p[1];
-    output[3] = lhs_p[0] * rhs_p[1] + lhs_p[1] * rhs_p[0];  // output[2, 3] = w_0 = v_0(x)u_0(x) mod x^2 - 1
+    output[3] = lhs_p[0] * rhs_p[1] + lhs_p[1] * rhs_p[0]; // output[2, 3] = w_0 = v_0(x)u_0(x) mod x^2 - 1
 
     output[0] += output[2];
     output[1] += output[3]; // output[0, 1] = w_1 + w_0
@@ -483,7 +479,6 @@ fn signed_conv4<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
 /// Same as above but in place.
 #[inline]
 fn signed_conv4_mut<T: SimpleInteger>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]) {
-
     let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
     output[0] = lhs[0] * rhs[0] - dot(&lhs[1..], &rhs_rev[..3]); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
@@ -626,10 +621,8 @@ fn signed_conv8<T: SimpleInteger>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
     ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
 }
 
-
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // Length 12
-
 
 /// Compute the convolution of 2 vectors of length 8.
 /// output(x) = lhs(x)rhs(x) mod x^12 - 1  <=>  output = lhs * rhs
@@ -881,7 +874,7 @@ fn signed_conv32<T: SimpleInteger>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
 /// output(x) = lhs(x)rhs(x) mod x^64 - 1  <=>  output = lhs * rhs
 /// Use the FFT Trick to split into a convolution of length 32 and a signed convolution of length 32.
 #[inline]
-fn conv64_mut<T: SimpleInteger>(lhs: &[T; 64], rhs: &[T; 64], output: &mut[T]) {
+fn conv64_mut<T: SimpleInteger>(lhs: &[T; 64], rhs: &[T; 64], output: &mut [T]) {
     const N: usize = 64;
     const HALF: usize = N / 2;
 
