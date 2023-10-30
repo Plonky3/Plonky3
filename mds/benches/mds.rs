@@ -46,10 +46,7 @@ where
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| {
-            let mut perm_input = input.clone();
-            for _ in 0..100 {
-                perm_input = mds.permute(perm_input)
-            }
+            mds.permute(input.clone())
         })
     });
 }
