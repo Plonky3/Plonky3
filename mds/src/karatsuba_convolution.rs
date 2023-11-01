@@ -11,6 +11,8 @@ const MATRIX_CIRC_MDS_12_SML: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10]
 const MATRIX_CIRC_MDS_16_SML: [i64; 16] =
     [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
+const P: i64 = (1 << 31) - 1;
+
 #[rustfmt::skip]
 const MATRIX_CIRC_MDS_32_MERSENNE31: [i64; 32] = [
     0x1896DC78, 0x559D1E29, 0x04EBD732, 0x3FF449D7,
@@ -77,21 +79,21 @@ pub fn apply_circulant_8_karat<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     // Flip MATRIX_CIRC_MDS_8_SML to get the first column of the circulant matrix.
     const MATRIX_CIRC_MDS_8_SML_I64: [i64; 8] = row_to_col(MATRIX_CIRC_MDS_8_SML);
 
-    // The numbers we will encounter through our algorithm are bounded by
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML) <= (8 * 2**31) * 33 < 2**40 << 2**63
+    // The numbers we will encounter through our algorithm are (roughly) bounded by
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
+    // <= (8 * 2**31) * 33 < 2**40 << 2**63
     // Hence we can work with i64's with garuntees of no overflow occuring.
     let input_i64 = input.map(|x| x.as_canonical_u64() as i64);
 
     // Compute the convolution.
-    // Currently not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    // TODO: FIX this.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
     let mut output: [i64; 8] = [0; 8];
     conv8_mut(input_i64, MATRIX_CIRC_MDS_8_SML_I64, &mut output);
 
     // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
-    // The output will always be positive so we can safley cast as u64's.
-    // output.map(|x| F::from_canonical_u32(((x as u64) % (1 << 30)) as u32))
-    output.map(|x| F::from_wrapped_u64(x as u64))
+    // The output will always be positive and is bounded by 2**40.
+    // output.map(|x| F::from_wrapped_u64(x as u64))
+    output.map(red_u50)
 }
 
 pub fn apply_circulant_12_karat<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
@@ -104,14 +106,13 @@ pub fn apply_circulant_12_karat<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
     let input_i64 = input.map(|x| x.as_canonical_u64() as i64);
 
     // Compute the convolution.
-    // Currently not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    // TODO: FIX this.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
     let output = conv12(input_i64, MATRIX_CIRC_MDS_12_SML_I64);
 
     // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
-    // The output will always be positive so we can safley cast as u64's.
-    // output.map(|x| F::from_canonical_u32(((x as u64) % (1 << 30)) as u32))
-    output.map(|x| F::from_wrapped_u64(x as u64))
+    // The output will always be positive and is bounded by 2**40.
+    // output.map(|x| F::from_wrapped_u64(x as u64))
+    output.map(red_u50)
 }
 
 /// Computes the convolution of input and MATRIX_CIRC_MDS_16_SML.
@@ -127,15 +128,14 @@ pub fn apply_circulant_16_karat<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
     let input_i64 = input.map(|x| x.as_canonical_u64() as i64);
 
     // Compute the convolution.
-    // Currently not taking full advantage of MATRIX_CIRC_MDS_16_SML_I64 being constant.
-    // TODO: FIX this.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
     let mut output: [i64; 16] = [0; 16];
     conv16_mut(input_i64, MATRIX_CIRC_MDS_16_SML_I64, &mut output);
 
     // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
-    // The output will always be positive so we can safley cast as u64's.
-    // output.map(|x| F::from_canonical_u32(((x as u64) % (1 << 30)) as u32))
-    output.map(|x| F::from_wrapped_u64(x as u64))
+    // The output will always be positive and is bounded by 2**44.
+    // output.map(|x| F::from_wrapped_u64(x as u64))
+    output.map(red_u50)
 }
 
 /// Computes the convolution of input and MATRIX_CIRC_MDS_32_MERSENNE31.
@@ -144,22 +144,19 @@ pub fn apply_circulant_32_karat<F: PrimeField64>(input: [F; 32]) -> [F; 32] {
     // Flip MATRIX_CIRC_MDS_32_MERSENNE31 to get the first column of the circulant matrix.
     const MATRIX_CIRC_MDS_32_M31_I128: [i64; 32] = row_to_col(MATRIX_CIRC_MDS_32_MERSENNE31);
 
-    // The numbers we will encounter through our algorithm are bounded by
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_32_MERSENNE31) <= (32 * 2**31)**2 < 2**72 << 2**127
-    // Hence we can work with i128's with garuntees of no overflow occuring.
+    // The numbers we will encounter through our algorithm are > 2**64 as
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_32_MERSENNE31) <= (32 * 2**31)**2 < 2**72.
+    // Hence we need to do some intermediate reductions.
     let input_i128 = input.map(|x| x.as_canonical_u64() as i64);
 
     // Compute the convolution.
-    // Currently not taking full advantage of MATRIX_CIRC_MDS_16_SML_I64 being constant.
-    // TODO: FIX this.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
     let mut output: [i64; 32] = [0; 32];
     conv32_mut_large_entries(input_i128, MATRIX_CIRC_MDS_32_M31_I128, &mut output);
 
-    
-    // output.map(|x| F::from_canonical_u32(((x as u128) % (1 << 30)) as u32))
-    // output.map(|x| F::from_wrapped_u64(x as u64))
-
-    output.map(|x| if x > 0 {F::from_wrapped_u64(x as u64)} else {-F::from_wrapped_u64((-x) as u64)})
+    // x is an i49 => (P << 20) + x is positive.
+    output.map(red_i50)
+    // output.map(|x| { F::from_wrapped_u64(x as u64)})
 }
 
 /// Computes the convolution of input and MATRIX_CIRC_MDS_64_MERSENNE31.
@@ -168,21 +165,19 @@ pub fn apply_circulant_64_karat<F: PrimeField64>(input: [F; 64]) -> [F; 64] {
     // Flip MATRIX_CIRC_MDS_64_MERSENNE31 to get the first column of the circulant matrix.
     const MATRIX_CIRC_MDS_64_M31_I128: [i64; 64] = row_to_col(MATRIX_CIRC_MDS_64_MERSENNE31);
 
-    // The numbers we will encounter through our algorithm are bounded by
+    // The numbers we will encounter through our algorithm are > 2**64 as
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_64_MERSENNE31) < (64 * 2**31)**2 < 2**74 << 2**127
-    // Hence we can work with i128's with garuntees of no overflow occuring.
+    // Hence we need to do some intermediate reductions.
     let input_i128 = input.map(|x| x.as_canonical_u64() as i64);
 
     // Compute the convolution.
-    // Currently not taking full advantage of MATRIX_CIRC_MDS_16_SML_I64 being constant.
-    // TODO: FIX this.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
     let mut output: [i64; 64] = [0; 64];
     conv64_mut_large_entries(input_i128, MATRIX_CIRC_MDS_64_M31_I128, &mut output);
 
-    
-    // output.map(|x| F::from_canonical_u32(((x as u128) % (1 << 30)) as u32))
-    // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(|x| if x > 0 {F::from_wrapped_u64(x as u64)} else {-F::from_wrapped_u64((-x) as u64)})
+    // x is an i49 => (P << 20) + x is positive.
+    output.map(red_i50)
+    // output.map(|x| { F::from_wrapped_u64(x as u64)})
 }
 
 // Let M be a circulant matrix with first column vec_col and first row vec_row. Then M.u is the convolution of vec_col and u.
@@ -201,6 +196,50 @@ const fn row_to_col<T: SimpleInteger, const N: usize>(row: [T; N]) -> [T; N] {
         i += 1
     }
     col
+}
+
+/// Take a i64 which is garunteed to be 0 < input < 2**50.
+/// Produce a canonical representative mod P = 2**31 - 1.
+#[inline]
+fn red_u50<F: PrimeField64>(input: i64) -> F {
+    let low_bits = (input & P) as i32; // Get the low bits
+    let high_bits = ((input & (!P)) >> 31) as i32; // Get the low bits and shift them down.
+
+    let (sum_i32, over) = (low_bits).overflowing_add(high_bits);
+    let sum_u32 = sum_i32 as u32;
+    let sum_corr = sum_u32.wrapping_sub(P as u32);
+
+    // If self + rhs did not overflow, return it.
+    // If self + rhs overflowed, sum_corr = self + rhs - (2**31 - 1).
+    F::from_canonical_u32(if over { sum_corr } else { sum_u32 })
+}
+
+// Take a i64 which is garunteed to be |.| < 2**50.
+// Produce a canonical representative mod P = 2**31 - 1.
+#[inline]
+fn red_i50<F: PrimeField64>(input: i64) -> F {
+    let low_bits = (input & P) as i32; // Get the low bits
+    let high_bits = ((input & (!P)) >> 31) as i32; // Get the high bits and shift them down.
+
+    // low_bits  < 2**31
+    // |high_bits| < 2**19
+
+    let (sum_i32, over) = (low_bits).overflowing_add(high_bits);
+    let sum_u32 = sum_i32 as u32; // If 0 <= sum_i32 < 2**31 this is correct.
+    let sum_corr = sum_u32.wrapping_sub(P as u32); // If low_bits + high_bits overflows this is correct.
+    let sum_pos = sum_u32.wrapping_add(P as u32); // If 2**31 < sum_i32 < 0 this is correct.
+
+    // If overflow occurred then sum_i32 + P is correct.
+    // If sum_i32 < 0 then we want sum_i32 + P.
+    // Otherwise sum is correct.
+
+    F::from_canonical_u32(if over {
+        sum_corr
+    } else if sum_i32 < 0 {
+        sum_pos
+    } else {
+        sum_u32
+    })
 }
 
 // Several functions here to encode some simple vector addition and similar.
@@ -270,7 +309,9 @@ fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
 
 /// Split an array of length N into two subarrays of length N/2.
 /// Return the sum and difference of the arrays.
-fn split_add_sub<T: SimpleInteger, const N: usize, const HALF: usize>(input: [T; N]) -> ([T; HALF], [T; HALF]) {
+fn split_add_sub<T: SimpleInteger, const N: usize, const HALF: usize>(
+    input: [T; N],
+) -> ([T; HALF], [T; HALF]) {
     // N = 2*HALF
 
     let (input_left, input_right) = input.split_at(HALF);
@@ -280,8 +321,6 @@ fn split_add_sub<T: SimpleInteger, const N: usize, const HALF: usize>(input: [T;
 
     (input_p, input_m)
 }
-
-    
 
 // Given a vector v \in F^N, let v(x) \in F[X] denote the polynomial v_0 + v_1 x + ... + v_{N - 1} x^{N - 1}.
 // Then w is equal to the convolution v * u if and only if w(x) = v(x)u(x) mod x^N - 1.
@@ -717,7 +756,6 @@ fn _conv32_mut<T: SimpleInteger>(lhs: [T; 32], rhs: [T; 32], output: &mut [T]) {
     // Compute rhs(x) mod x^16 - 1, rhs(x) mod x^16 + 1
     let (rhs_p, rhs_m) = split_add_sub(rhs);
 
-
     let (left, right) = output.split_at_mut(HALF);
     left.clone_from_slice(&_signed_conv16(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^16 + 1
     conv16_mut(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^16 - 1
@@ -884,10 +922,10 @@ fn conv_karat_generic<T: SimpleInteger>(lhs: &[T], rhs: &[T], output: &mut [T]) 
         2 => {
             output[0] = lhs[0] * rhs[0] + lhs[1] * rhs[1];
             output[1] = lhs[1] * rhs[0] + lhs[0] * rhs[1];
-        },
+        }
         4 => conv4_slice(lhs, rhs, output),
         _ => {
-            let half = n/2;
+            let half = n / 2;
 
             let (lhs_left, lhs_right) = lhs.split_at(half);
 
@@ -972,13 +1010,13 @@ fn signed_conv_karat_generic<T: SimpleInteger>(lhs: &[T], rhs: &[T], output: &mu
         2 => {
             output[0] = lhs[0] * rhs[0] - lhs[1] * rhs[1];
             output[1] = lhs[1] * rhs[0] + lhs[0] * rhs[1];
-        },
+        }
         4 => signed_conv4_slice(lhs, rhs, output),
         _ => {
-            let half = n/2;
+            let half = n / 2;
             let (lhs_even, lhs_odd, lhs_mix) = split_eom(lhs);
             let (rhs_even, rhs_odd, rhs_mix) = split_eom(rhs);
-        
+
             {
                 let (evens, odds) = output.split_at_mut(half);
                 let mut extra = vec![T::default(); half];
@@ -987,7 +1025,7 @@ fn signed_conv_karat_generic<T: SimpleInteger>(lhs: &[T], rhs: &[T], output: &mu
                 signed_conv_karat_generic(&lhs_odd, &rhs_odd, &mut extra); // v_o(x)u_o(x) mod x^{n/2} + 1
                 signed_conv_karat_generic(&lhs_mix, &rhs_mix, odds); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) mod x^{n/2} + 1
 
-                sub_mut(odds, &evens);
+                sub_mut(odds, evens);
                 sub_mut(odds, &extra); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
 
                 add_mut(&mut evens[1..], &extra[..(half - 1)]);
@@ -1003,17 +1041,15 @@ fn signed_conv_karat_generic<T: SimpleInteger>(lhs: &[T], rhs: &[T], output: &mu
 /// If vec = [v_0, v_1, v_2, ...] then
 /// output = ([v_0, v_2, ...], [v_1, v_3, ...], [v_0 + v_1, v_2 + v_3, ...])
 #[inline]
-fn split_eom<T: SimpleInteger>(
-    vec: &[T]
-) -> (Vec<T>, Vec<T>, Vec<T>) {
-    let half = vec.len()/2;
+fn split_eom<T: SimpleInteger>(vec: &[T]) -> (Vec<T>, Vec<T>, Vec<T>) {
+    let half = vec.len() / 2;
     let mut output_even = vec![T::default(); half];
     let mut output_odd = vec![T::default(); half];
     let mut output_mix = vec![T::default(); half];
     for i in 0..half {
         output_even[i] = vec[2 * i];
-        output_odd[i]  = vec[2 * i + 1];
-        output_mix[i]  = vec[2 * i] + vec[2 * i + 1];
+        output_odd[i] = vec[2 * i + 1];
+        output_mix[i] = vec[2 * i] + vec[2 * i + 1];
     }
     (output_even, output_odd, output_mix)
 }
@@ -1022,18 +1058,15 @@ fn split_eom<T: SimpleInteger>(
 /// if initially vec = [v_0, v_1, ..., v_N, v_{N + 1}, ..., V_{2N - 1}]
 /// afterwards vec = [v_0, v_N, v_1, v_{N + 1}, ..., v_{N - 1}, v_{2N - 1}]
 #[inline]
-fn rearrange<T: SimpleInteger>(
-    vec: &mut [T]
-) {
+fn rearrange<T: SimpleInteger>(vec: &mut [T]) {
     let n = vec.len();
-    let half = n/2;
+    let half = n / 2;
     let stored_evens = vec[..half].to_vec().clone();
     for i in 0..half {
-        vec[2*i] = stored_evens[i];
-        vec[2*i + 1] = vec[i + half];
+        vec[2 * i] = stored_evens[i];
+        vec[2 * i + 1] = vec[i + half];
     }
 }
-
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1042,32 +1075,32 @@ fn rearrange<T: SimpleInteger>(
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // The 32 and 64 cases are slightly different as currently we need to use i128's for them.
-// But we dont come close to using the whole of the 128 bits. Let's analyse the 64 case more carefully.
+// But we dont come close to using the whole of the 128 bits and so can use partial reduction to mostly stay with i64's.
+// Let's analyse the 64 case more carefully. (This is pretty rough)
 // Entries start as field elements, so i32's.
 // In each reduction step we add or subtract some entries so by the time we have gotten to size 4 convs the entries are i36's.
 // The size 4 convs involve products and adding together 4 things so our entries become i74's.
-// Now in each karatsuba step we have to compute a difference of 3 elements. We have 3 karatsuba steps making the entries size i79's.
-// Convolution steps don't increase the size due to the division by 2 so the maximum size will be i79.
+// In each karatsuba step we have to compute a difference of 3 elements. We have 3 karatsuba steps making the entries size i79's.
+// CRT steps don't increase the size due to the division by 2 so the maximum size will be i79.
 
 // If we can reduce this to below 64 we can use only i64's for the majority of the work.
 // We are able to reduce as in the merseene field, 2**31 = 1.
-// Note though that, we need to ensure we can still easily divide by 2 in our conv steps we will need to additionally make the output divisible by a large power of 2.
-// If |lhs*rhs| < 2**80 then this output will satisfy |.| < 2**50
+// There is one important caveat though. In order for the algorithm to work, we need to be able to divide by 2 later.
+// Hence we leave the bottom 10 bits unchanged.
+// This reduces our middle entries from i74's to i44's which means our final result is an i49.
 
+/// Assume that input < 2**n (n > 73). Then output will be < 2**(n - 30) and satisfy
+/// input = output mod (2**31 - 1)      (So equal in our field).
+/// input = output mod 2**11.           (Lets us divide by 2 later).
 #[inline]
 fn red_i64_mersenne31(input: i128) -> i64 {
-    const LOWMASK: i128 = (1 << 6) - 1; // Gets the bottom 6 bits.
-    const MIDMASK: i128 = (1 << 42) - LOWMASK - 1; // Gets the bits from 42 <-> 6 
-    const HIGHMASK: i128 = !(MIDMASK + LOWMASK); // Gets all bits higher than 42.
+    const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
+    const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
 
-    let low_bits = ((input & LOWMASK) as i64) << 31; // Get the bottom 6 bits.     < 2**37
-    let mid_bits = (input & MIDMASK) as i64; // Get the middle bits.               < 2**42
-    let high_bits = ((input & HIGHMASK) >> 31) as i64; // Get the high bits.       < 2**45
+    let low_bits = (input & LOWMASK) as i64; // Get the low bits. low_bits < 2**42
+    let high_bits = ((input & HIGHMASK) >> 31) as i64; // Get the high bits and shift them down. |high_bits| < 2**(n - 31)
 
-    // If mul_i128 > 0, high_bits < 2**37
-    // If mul_i128 < 0, mul_i128 & HIGHMASK < mul_i128
-
-    low_bits + mid_bits + high_bits // Produce an answer equal to the product but as a i64 and divisible by 2**10.
+    low_bits + high_bits // < 2**(n - 30)
 }
 
 // Takes the dot product of two vectors with large entries.
@@ -1100,10 +1133,18 @@ fn conv4_mut_large_entries(lhs: [i64; 4], rhs: [i64; 4], output: &mut [i64]) {
 
     // Might be worth trying to keep everything as a i64 up until this multiplication and
     // only here making things u128's. (Possible that the compiler has already worked this out though.)
-    output[0] = red_i64_mersenne31((lhs_m[0] as i128)*(rhs_m[0] as i128) - (lhs_m[1] as i128)*(rhs_m[1] as i128));
-    output[1] = red_i64_mersenne31((lhs_m[0] as i128)*(rhs_m[1] as i128) + (lhs_m[1] as i128)*(rhs_m[0] as i128)); // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
-    output[2] = red_i64_mersenne31((lhs_p[0] as i128)*(rhs_p[0] as i128) + (lhs_p[1] as i128)*(rhs_p[1] as i128));
-    output[3] = red_i64_mersenne31((lhs_p[0] as i128)*(rhs_p[1] as i128) + (lhs_p[1] as i128)*(rhs_p[0] as i128)); // output[2, 3] = w_0 = v_0(x)u_0(x) mod x^2 - 1
+    output[0] = red_i64_mersenne31(
+        (lhs_m[0] as i128) * (rhs_m[0] as i128) - (lhs_m[1] as i128) * (rhs_m[1] as i128),
+    );
+    output[1] = red_i64_mersenne31(
+        (lhs_m[0] as i128) * (rhs_m[1] as i128) + (lhs_m[1] as i128) * (rhs_m[0] as i128),
+    ); // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
+    output[2] = red_i64_mersenne31(
+        (lhs_p[0] as i128) * (rhs_p[0] as i128) + (lhs_p[1] as i128) * (rhs_p[1] as i128),
+    );
+    output[3] = red_i64_mersenne31(
+        (lhs_p[0] as i128) * (rhs_p[1] as i128) + (lhs_p[1] as i128) * (rhs_p[0] as i128),
+    ); // output[2, 3] = w_0 = v_0(x)u_0(x) mod x^2 - 1
 
     output[0] += output[2];
     output[1] += output[3]; // output[0, 1] = w_1 + w_0
@@ -1135,9 +1176,15 @@ fn signed_conv4_large_entries(lhs: &[i64; 4], rhs: &[i64; 4]) -> [i64; 4] {
 
     let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
-    output[0] = red_i64_mersenne31((lhs[0] as i128)*(rhs[0] as i128) - dot_large_entries(&lhs[1..], &rhs_rev[..3])); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
-    output[1] = red_i64_mersenne31(dot_large_entries(&lhs[..2], &rhs_rev[2..]) - dot_large_entries(&lhs[2..], &rhs_rev[..2])); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
-    output[2] = red_i64_mersenne31(dot_large_entries(&lhs[..3], &rhs_rev[1..]) - (lhs[3] as i128)*(rhs[3] as i128)); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
+    output[0] = red_i64_mersenne31(
+        (lhs[0] as i128) * (rhs[0] as i128) - dot_large_entries(&lhs[1..], &rhs_rev[..3]),
+    ); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
+    output[1] = red_i64_mersenne31(
+        dot_large_entries(&lhs[..2], &rhs_rev[2..]) - dot_large_entries(&lhs[2..], &rhs_rev[..2]),
+    ); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
+    output[2] = red_i64_mersenne31(
+        dot_large_entries(&lhs[..3], &rhs_rev[1..]) - (lhs[3] as i128) * (rhs[3] as i128),
+    ); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
     output[3] = red_i64_mersenne31(dot_large_entries(lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
     output
 }
@@ -1149,9 +1196,15 @@ fn signed_conv4_large_entries(lhs: &[i64; 4], rhs: &[i64; 4]) -> [i64; 4] {
 fn signed_conv4_mut_large_entries(lhs: &[i64; 4], rhs: &[i64; 4], output: &mut [i64]) {
     let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
-    output[0] = red_i64_mersenne31((lhs[0] as i128)*(rhs[0] as i128) - dot_large_entries(&lhs[1..], &rhs_rev[..3])); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
-    output[1] = red_i64_mersenne31(dot_large_entries(&lhs[..2], &rhs_rev[2..]) - dot_large_entries(&lhs[2..], &rhs_rev[..2])); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
-    output[2] = red_i64_mersenne31(dot_large_entries(&lhs[..3], &rhs_rev[1..]) - (lhs[3] as i128)*(rhs[3] as i128)); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
+    output[0] = red_i64_mersenne31(
+        (lhs[0] as i128) * (rhs[0] as i128) - dot_large_entries(&lhs[1..], &rhs_rev[..3]),
+    ); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
+    output[1] = red_i64_mersenne31(
+        dot_large_entries(&lhs[..2], &rhs_rev[2..]) - dot_large_entries(&lhs[2..], &rhs_rev[..2]),
+    ); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
+    output[2] = red_i64_mersenne31(
+        dot_large_entries(&lhs[..3], &rhs_rev[1..]) - (lhs[3] as i128) * (rhs[3] as i128),
+    ); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
     output[3] = red_i64_mersenne31(dot_large_entries(lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
 }
 
@@ -1340,7 +1393,6 @@ fn conv32_mut_large_entries(lhs: [i64; 32], rhs: [i64; 32], output: &mut [i64]) 
     // rhs will always be constant. Not sure how to tell the compiler this though.
     // Compute rhs(x) mod x^16 - 1, rhs(x) mod x^16 + 1
     let (rhs_p, rhs_m) = split_add_sub(rhs);
-
 
     let (left, right) = output.split_at_mut(HALF);
     left.clone_from_slice(&signed_conv16_large_entries(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^16 + 1

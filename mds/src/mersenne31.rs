@@ -10,8 +10,8 @@ use p3_symmetric::Permutation;
 // use crate::util::{apply_circulant};
 // apply_circulant_8_sml, apply_circulant_8_karat, apply_circulant_karat_generic_i64
 use crate::karatsuba_convolution::{
-    apply_circulant_8_karat, apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
-    apply_circulant_64_karat,
+    apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
+    apply_circulant_64_karat, apply_circulant_8_karat,
 };
 use crate::MdsPermutation;
 
@@ -53,7 +53,7 @@ impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         // apply_circulant_16_sml(input)
         apply_circulant_16_karat(input)
-        // apply_circulant_karat_generic_i64(input, MATRIX_CIRC_MDS_16_SML)        
+        // apply_circulant_karat_generic_i64(input, MATRIX_CIRC_MDS_16_SML)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 16]) {
