@@ -55,7 +55,8 @@ where
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
-        let lde_subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << lde_bits);
+        let g_lde = Domain::two_adic_generator(lde_bits);
+        let lde_subgroup = cyclic_subgroup_known_order::<Domain>(g_lde, 1 << lde_bits);
 
         let polys_fe = polys.map(|x| Domain::from_base(x));
         let values = lde_subgroup
@@ -77,8 +78,9 @@ where
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
+        let g_lde = Domain::two_adic_generator(lde_bits);
         let lde_subgroup =
-            cyclic_subgroup_coset_known_order(g, self.shift(lde_bits), 1 << lde_bits);
+            cyclic_subgroup_coset_known_order(g_lde, self.shift(lde_bits), 1 << lde_bits);
 
         let polys_fe = polys.map(|x| Domain::from_base(x));
         let values = lde_subgroup

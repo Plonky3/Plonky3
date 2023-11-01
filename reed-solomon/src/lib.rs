@@ -1,5 +1,7 @@
 //! Reed-Solomon codes.
 
+#![allow(deprecated)] // TODO: Remove when UndefinedLDE is gone.
+
 use std::marker::PhantomData;
 
 use p3_code::{
