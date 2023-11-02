@@ -159,20 +159,26 @@ where
     Dft: TwoAdicSubgroupDft<Mersenne31Complex<Mersenne31>>,
     Standard: Distribution<Mersenne31>,
 {
-    for n_log in [14, 16, 18] {
-        let input = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
-        let compressed = Mersenne31Dft::lde_batch_compress::<Dft>(input.clone(), 1);
-        c.bench_function(&format!("lde_compression_{n}_1"), |b| {
-            b.iter(|| {
-                black_box(Mersenne31ComplexLDE::lde_batch_compress(
-                    black_box(input.clone()),
-                    m,
-                ))
-            });
-        });
+    let mut group = c.benchmark_group(&format!(
+        "m31_lde::<{}, {}>",
+        type_name::<Dft>(),
+        BATCH_SIZE
+    ));
 
-        c.bench_function(&format!("lde_decompression_{n}_1"), |b| {
-            b.iter(|| black_box(compressed.decompress()));
+    group.sample_size(10);
+
+    let mut rng = thread_rng();
+    for n_log in [14, 16, 18] {
+        let n = 1 << n_log;
+        let input = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
+
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| {
+                black_box(
+                    Mersenne31Dft::lde_batch_compress::<Dft>(black_box(input.clone()), 1)
+                        .decompress(),
+                );
+            });
         });
     }
 }
