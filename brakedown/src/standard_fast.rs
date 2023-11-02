@@ -12,6 +12,7 @@ use rand_chacha::ChaCha20Rng;
 use crate::macros::{brakedown, brakedown_to_rs};
 use crate::BrakedownCode;
 
+#[allow(deprecated)] // TODO: Remove when UndefinedLDE is gone.
 pub fn fast_registry<F, In>() -> impl LinearCodeFamily<F, In>
 where
     F: Field,

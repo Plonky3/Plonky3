@@ -1,6 +1,7 @@
 //! This crate contains a framework for low-degree tests (LDTs).
 
 #![no_std]
+#![deprecated]
 
 mod naive;
 
