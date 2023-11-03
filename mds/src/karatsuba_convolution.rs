@@ -93,7 +93,7 @@ pub fn apply_circulant_8_karat<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
     // The output will always be positive and is bounded by 2**40.
     // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(red_u50)
+    output.map(red_u62)
 }
 
 pub fn apply_circulant_12_karat<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
@@ -112,7 +112,7 @@ pub fn apply_circulant_12_karat<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
     // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
     // The output will always be positive and is bounded by 2**40.
     // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(red_u50)
+    output.map(red_u62)
 }
 
 /// Computes the convolution of input and MATRIX_CIRC_MDS_16_SML.
@@ -135,7 +135,7 @@ pub fn apply_circulant_16_karat<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
     // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
     // The output will always be positive and is bounded by 2**44.
     // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(red_u50)
+    output.map(red_u62)
 }
 
 /// Computes the convolution of input and MATRIX_CIRC_MDS_32_MERSENNE31.
@@ -155,7 +155,7 @@ pub fn apply_circulant_32_karat<F: PrimeField64>(input: [F; 32]) -> [F; 32] {
     conv32_mut_large_entries(input_i128, MATRIX_CIRC_MDS_32_M31_I128, &mut output);
 
     // x is an i49 => (P << 20) + x is positive.
-    output.map(red_i50)
+    output.map(red_i62)
     // output.map(|x| { F::from_wrapped_u64(x as u64)})
 }
 
@@ -176,7 +176,7 @@ pub fn apply_circulant_64_karat<F: PrimeField64>(input: [F; 64]) -> [F; 64] {
     conv64_mut_large_entries(input_i128, MATRIX_CIRC_MDS_64_M31_I128, &mut output);
 
     // x is an i49 => (P << 20) + x is positive.
-    output.map(red_i50)
+    output.map(red_i62)
     // output.map(|x| { F::from_wrapped_u64(x as u64)})
 }
 
@@ -198,48 +198,50 @@ const fn row_to_col<T: SimpleInteger, const N: usize>(row: [T; N]) -> [T; N] {
     col
 }
 
-/// Take a i64 which is garunteed to be 0 < input < 2**50.
-/// Produce a canonical representative mod P = 2**31 - 1.
+/// Reduces an i64 in the range 0 <= x < 2^62 to its (almost) canonical representative mod 2^31 - 1.
+/// Not technically canonical as we allow P as an output.
 #[inline]
-fn red_u50<F: PrimeField64>(input: i64) -> F {
-    let low_bits = (input & P) as i32; // Get the low bits
-    let high_bits = ((input & (!P)) >> 31) as i32; // Get the low bits and shift them down.
+fn red_u62<F: PrimeField64>(input: i64) -> F {
+    // Morally, our value is a u62 not a i64 as the top 2 bits are garunteed to be 0.
+    debug_assert!((0..(1 << 62)).contains(&input));
 
-    let (sum_i32, over) = (low_bits).overflowing_add(high_bits);
-    let sum_u32 = sum_i32 as u32;
-    let sum_corr = sum_u32.wrapping_sub(P as u32);
+    let low_bits = F::from_canonical_u32((input & P) as u32); // Get the bottom 31 bits, 0 <= low_bits <= P
+    let high_bits = F::from_canonical_u32((input >> 31) as u32); // Get the top 31 bits, 0 <= high_bits <= P.
 
-    // If self + rhs did not overflow, return it.
-    // If self + rhs overflowed, sum_corr = self + rhs - (2**31 - 1).
-    F::from_canonical_u32(if over { sum_corr } else { sum_u32 })
+    low_bits + high_bits
 }
 
-// Take a i64 which is garunteed to be |.| < 2**50.
-// Produce a canonical representative mod P = 2**31 - 1.
+/// Reduces an i64 in the range 0 <= x < 2^93 to its (almost) canonical representative mod 2^31 - 1.
+/// Not technically canonical as we allow P as an output.
 #[inline]
-fn red_i50<F: PrimeField64>(input: i64) -> F {
-    let low_bits = (input & P) as i32; // Get the low bits
-    let high_bits = ((input & (!P)) >> 31) as i32; // Get the high bits and shift them down.
+fn _red_u93<F: PrimeField64>(input: i128) -> F {
+    // Not used currently. Useful if we full embrace i128's in the larger convolutions.
+    // Morally, our value is a u93 not a i128 as the top bits are garunteed to be 0.
+    debug_assert!((0..(1 << 93)).contains(&input));
 
-    // low_bits  < 2**31
-    // |high_bits| < 2**19
+    let low_bits = F::from_canonical_u32((input & (P as i128)) as u32); // Get the bottom 31 bits, 0 <= low_bits <= P
+    let mid_bits = F::from_canonical_u32(((input >> 31) & (P as i128)) as u32); // Get the mid 31 bits, 0 <= high_bits <= P.
+    let high_bits = F::from_canonical_u32((input >> 62) as u32); // Get the top 31 bits, 0 <= high_bits <= P.
 
-    let (sum_i32, over) = (low_bits).overflowing_add(high_bits);
-    let sum_u32 = sum_i32 as u32; // If 0 <= sum_i32 < 2**31 this is correct.
-    let sum_corr = sum_u32.wrapping_sub(P as u32); // If low_bits + high_bits overflows this is correct.
-    let sum_pos = sum_u32.wrapping_add(P as u32); // If 2**31 < sum_i32 < 0 this is correct.
+    low_bits + mid_bits + high_bits
+}
 
-    // If overflow occurred then sum_i32 + P is correct.
-    // If sum_i32 < 0 then we want sum_i32 + P.
-    // Otherwise sum is correct.
+/// Reduces an i64 in the range -2^61 <= x < 2^61 to its (almost) canonical representative mod 2^31 - 1.
+/// Not technically canonical as we allow P as an output.
+#[inline]
+fn red_i62<F: PrimeField64>(input: i64) -> F {
+    debug_assert!((-(1 << 61)..(1 << 61)).contains(&input));
 
-    F::from_canonical_u32(if over {
-        sum_corr
-    } else if sum_i32 < 0 {
-        sum_pos
-    } else {
-        sum_u32
-    })
+    // Morally, our value is a i62 not a i64 as the top 3 bits are garunteed to be equal.
+    let low_bits = F::from_canonical_u32((input & P) as u32); // Get the bottom 31 bits, 0 <= low_bits < 2**31.
+    let high_bits = ((input >> 31) & P) as i32; // Get the top 31 bits. 0 <= low_bits < 2**31.
+    let sign_bits = (input >> 62) as i32; // sign_bits = 0 or -1
+
+    // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
+
+    let high = F::from_canonical_u32((high_bits + sign_bits) as u32); // 0 <= high <= P so we can do our usual algorithm from here.
+
+    low_bits + high
 }
 
 // Several functions here to encode some simple vector addition and similar.
@@ -1092,6 +1094,7 @@ fn rearrange<T: SimpleInteger>(vec: &mut [T]) {
 /// Assume that input < 2**n (n > 73). Then output will be < 2**(n - 30) and satisfy
 /// input = output mod (2**31 - 1)      (So equal in our field).
 /// input = output mod 2**11.           (Lets us divide by 2 later).
+
 #[inline]
 fn red_i64_mersenne31(input: i128) -> i64 {
     const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
