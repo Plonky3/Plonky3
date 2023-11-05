@@ -4,6 +4,7 @@ use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
+use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
@@ -53,6 +54,13 @@ where
         log_quotient_degree,
         trace_lde,
         alpha,
+    );
+
+    // TODO: don't do this.
+    let quotient_poly = NaiveDft.idft(quotient_values);
+    let quotient_values = NaiveDft.coset_dft(
+        quotient_poly,
+        SC::Challenge::from_base(config.pcs().coset_shift()).inverse(),
     );
 
     let quotient_chunks_flattened = info_span!("decompose quotient polynomial")

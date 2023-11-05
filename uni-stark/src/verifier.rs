@@ -68,8 +68,7 @@ where
         })
         .collect();
     // Then we reconstruct the larger quotient polynomial from its degree-n parts.
-    let g_quotient_parts = SC::Domain::two_adic_generator(log_quotient_degree);
-    let quotient: SC::Challenge = g_quotient_parts
+    let quotient: SC::Challenge = zeta
         .powers()
         .zip(quotient_parts)
         .map(|(weight, part)| part * weight)
@@ -96,8 +95,7 @@ where
     // Finally, check that
     //     folded_constraints(zeta) = Z_H(zeta) * quotient(zeta)
     if folded_constraints != z_h * quotient {
-        // TODO: Re-enable when it's passing.
-        // return Err(VerificationError::OodEvaluationMismatch);
+        return Err(VerificationError::OodEvaluationMismatch);
     }
 
     Ok(())
