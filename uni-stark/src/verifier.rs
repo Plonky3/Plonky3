@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::UnivariatePcs;
+use p3_commit::{UnivariatePcs, UnivariatePcsWithLde};
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
@@ -21,6 +21,7 @@ where
     let degree_bits = 6; // TODO
     let log_quotient_degree = 1; // TODO
     let g_subgroup = SC::Domain::two_adic_generator(degree_bits);
+    let shift_inv = config.pcs().coset_shift().inverse();
 
     let Proof {
         commitments,
@@ -38,7 +39,7 @@ where
         (commitments.trace.clone(), local_and_next.as_slice()),
         (
             commitments.quotient_chunks.clone(),
-            &[zeta.exp_power_of_2(log_quotient_degree)],
+            &[(zeta * shift_inv).exp_power_of_2(log_quotient_degree)],
         ),
     ];
     let values = vec![
@@ -68,7 +69,7 @@ where
         })
         .collect();
     // Then we reconstruct the larger quotient polynomial from its degree-n parts.
-    let quotient: SC::Challenge = zeta
+    let quotient: SC::Challenge = (zeta * shift_inv)
         .powers()
         .zip(quotient_parts)
         .map(|(weight, part)| part * weight)

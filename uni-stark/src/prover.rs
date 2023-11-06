@@ -4,7 +4,6 @@ use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
-use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
@@ -36,6 +35,7 @@ where
     let log_quotient_degree = 1; // TODO
 
     let g_subgroup = SC::Domain::two_adic_generator(log_degree);
+    let shift_inv = config.pcs().coset_shift().inverse();
 
     let pcs = config.pcs();
     let (trace_commit, trace_data) =
@@ -56,13 +56,6 @@ where
         alpha,
     );
 
-    // TODO: don't do this.
-    let quotient_poly = NaiveDft.idft(quotient_values);
-    let quotient_values = NaiveDft.coset_dft(
-        quotient_poly,
-        SC::Challenge::from_base(config.pcs().coset_shift()).inverse(),
-    );
-
     let quotient_chunks_flattened = info_span!("decompose quotient polynomial")
         .in_scope(|| decompose_and_flatten::<SC>(quotient_values, log_quotient_degree));
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
@@ -78,7 +71,12 @@ where
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
             (&trace_data, &[zeta, zeta * g_subgroup]),
-            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
+            (
+                &quotient_data,
+                // Since the quotient is computed from the shifted trace LDE,
+                // we need to correct for the extra shift.
+                &[(zeta * shift_inv).exp_power_of_2(log_quotient_degree)],
+            ),
         ],
         challenger,
     );
