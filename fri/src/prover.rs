@@ -155,9 +155,9 @@ fn commit_phase<FC: FriConfig>(
     assert_eq!(current.len(), config.blowup());
     let final_poly = current[0];
     // TODO: Re-enable after fixing the interleaving TODO above.
-    // for x in current {
-    //     assert_eq!(x, final_poly);
-    // }
+    for x in current {
+        assert_eq!(x, final_poly);
+    }
 
     CommitPhaseResult {
         commits,

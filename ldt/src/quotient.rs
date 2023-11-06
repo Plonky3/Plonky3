@@ -4,7 +4,10 @@ use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_commit::Mmcs;
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
+    TwoAdicField,
+};
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
@@ -21,7 +24,8 @@ pub struct QuotientMmcs<F, EF, Inner: Mmcs<F>> {
     /// polynomials at.
     pub(crate) openings: Vec<Vec<Opening<EF>>>,
 
-    pub(crate) _phantom: PhantomData<F>,
+    // The coset shift for the inner MMCS's evals, to correct `x` in the denominator.
+    pub(crate) coset_shift: F,
 }
 
 /// A claimed opening.
@@ -87,11 +91,10 @@ where
                 let height = inner.height();
                 let log2_height = log2_strict_usize(height);
                 let g = F::two_adic_generator(log2_height);
-                let subgroup = g.powers().take(height).collect_vec();
+                let subgroup = cyclic_subgroup_coset_known_order(g, self.coset_shift, height);
 
                 let denominators: Vec<EF> = subgroup
-                    .iter()
-                    .flat_map(|&x| {
+                    .flat_map(|x| {
                         openings
                             .iter()
                             .map(move |opening| EF::from_base(x) - opening.point)

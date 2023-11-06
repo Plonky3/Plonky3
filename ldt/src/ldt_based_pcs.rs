@@ -116,6 +116,9 @@ where
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
             prover_data_and_points.iter().copied().unzip();
 
+        let coset_shift: Domain =
+            <Self as UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>>::coset_shift(self);
+
         let quotient_mmcs = all_points
             .into_iter()
             .zip(&all_opened_values)
@@ -139,7 +142,7 @@ where
                 QuotientMmcs::<Domain, EF, _> {
                     inner: self.mmcs.clone(),
                     openings,
-                    _phantom: PhantomData,
+                    coset_shift,
                 }
             })
             .collect_vec();
