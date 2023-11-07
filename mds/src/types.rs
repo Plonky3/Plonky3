@@ -78,100 +78,133 @@ impl SignedBabyBearLarge {
    /// |x'| < 2^50
    /// x' = x mod p
    /// x' = x mod 2^10
+   /// See Thm 1 (Below function) for a proof that this function is correct.
    #[inline]
    pub fn barret_red(self) -> SignedBabyBearNonCanonical {
-      const N: usize = 40; // beta = 2^N
-      const I: i64 = (((1 as i128) << (2*N))/(P as i128)) as i64; // 2^80 / P, I < 2**50
-      const MASK: i64 = !((1 << 10) - 1);
+      const N: usize = 40; // beta = 2^N, fixing N = 40 here
+      const I: i64 = (((1 as i128) << (2*N))/(P as i128)) as i64; // I = 2^80 / P => I < 2**50
+      const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 
       // input = input_low + beta*input_high
 
-      let input_high = self.value >> N as i64; // input_high < 2**N
+      let input_high = (self.value >> N) as i64; // input_high < input / beta < 2**{80 - N}
 
-      // I*input_high < 2**90
-      let quot = (((input_high as i128)*(I as i128)) >> N) as i64; // quot < 2**N
+      // I, input_high are i64's so this can't overflow.
+      // quot = I*input_high / beta < 2**{130 - 2N}.
 
+      let quot = (((input_high as i128)*(I as i128)) >> N) as i64;
+
+      // quot - 2^{10} < quot_2adic < quot.
+      // Importantly, 2^10 divides quot_2adic.
       let quot_2adic = quot & MASK;
 
+      // quot_2adic, P are i64's so this can't overflow.
+      // sub is by construction divisible by both P and 2^10.
       let sub = (quot_2adic as i128)*(P as i128);
 
       SignedBabyBearNonCanonical::new((self.value - sub) as i64)
    }
 
-   // Proof that the above function computes what we claim:
-   // By construction 2**10 | quot_2adic and so P*2**10 | sub = P*quot_2adic.
-   // Hence we immediately see that
+   // Theorem 1:
+   // Given |x| < 2^80, barret_red(x) computes an x' such that:
+   //       x' = x mod p
+   //       x' = x mod 2^10
+   //       |x'| < 2^50.
+   ///////////////////////////////////////////////////////////////////////////////////////
+   // PROOF:
+   // By construction P, 2**10 | sub and so we immediately see that
    // x' = x mod p
    // x' = x mod 2^10.
-
+   //
    // It remains to prove that |x'| < 2^50.
-
-   // Note that for all x, (x << N) <= x / 2**N <= 1 + (x << N)
-
-   // First assume that input > 0.
-   // sub = Q*P = ((input >> N) * (2**N * 2**N // P) >> N) * P <= input
-   // So input - sub > 0.
-
-   // On the other hand, if input < 0 then, due to the negative,
-   // (input >> N) * (2**N * 2**N // P)   >= (input >> N) * 2**(2N) / P 
-   //                                     >= (1 + input / 2**N) * 2**(2N) / P
-   //                                     >= (2**N + input) * 2**N / P
-
-   // Thus:
-   // Q = ((input >> N) * (2**N * 2**N // P)) >> N >= ((2**N + input) * 2**N / P) >> N
-   //                                              >= 1 + ((2**N + input) / P)
-
-   // And so sub = Q*P >= P + 2**N + input.
-   // Hence input - sub > 0.
-
-   // Note that, regardless of if  or x < 0, we always have
-   // 2**N * (x << N) < x
-
-   // Hence as sub = Q*P = ((input >> N) * (2**N * 2**N // P) >> N) * P
-
-
-   // 2**N * input_high <= input.
-   // Now if x > 0 then 
-   // Hence: sub = Q*P <= ((input / 2**N) * (2**N * 2**N / P) / 2**N) * P < input so input - sub > 0.
-
-   // If input < 0, then input_high < input / (2**N) so:
-
-   // Definitionally we have input = input_high*beta + input_low => input_high*beta = input - input_low
-
-   // First observe that:
-   // I = beta^2 // B 
-   //    => I + 1 > beta^2 / B
-   //    => B*I + B > beta^2
-
-   // To bound Q we need to first deal with signs. If x is positive then (I*x_high)//beta = (I*x_high) >> N and:
-   // Q = ((I*x_high)//beta) & !(2^10 - 1)
-   //    => Q + (2^10 - 1) >= (I*x_high)//beta
-   //    => Q + 2^10 > (I*x_high)/beta
-   //    => Q*beta + 2^10*beta > I*x_high
-
-   // On the other hand, if x is negative, (_ >> N) rounds the opposite way to (_ // beta) (Away from not towards 0).
-   // Thus for x < 0, (x >> N) <= x/beta <= x//beta.
-   // But we can simply shift by 1 to get (x >> N) + 1 >= x/beta.
-   // Additionally, even for negative x we have (x & !(2^10 - 1)) >= x - (2^10 - 1).
-
-   // Thus our bound is idential!
-   // Q = ((I*x_high)//beta) & !(2^10 - 1)
-   //    => Q + (2^10 - 1) >= (I*x_high)//beta
-   //    => Q + 2^10 > (I*x_high)/beta
-   //    => Q*beta + 2^10*beta > I*x_high
-
    // 
-   // Q*beta*B + 2^10*beta*B > x_high*I*B
-   //                        > x_high(beta^2 - B) 
-   //                        = beta*beta*x_high - B x_high
-   //                        > beta*(x - x_low) - beta x_high
-   // Now we can divide by beta to get
-
-   // Q*B + 2^10*B > x - x_low - x_high
-
-   // Which rearranges to
-
-   // x' = x - Q*B < 2^10*B + x_low + x_high
-   // The terms on the left hand side are bounded by 2^41, beta and x//beta respectively which for  beta = 2^31 or 2^40 gives us exactly the bounds we want.
-
+   // We start by introducing some simple inequalities and relations bewteen our variables:
+   //
+   // First consider the relationship between bitshift and division.
+   // It's easy to check that for all x:
+   // 1: (x >> N) <= x / 2**N <= 1 + (x >> N)
+   //
+   // Similarly, as our mask just 0's the last 10 bits,
+   // 2: x + 1 - 2^10 <= x & mask <= x
+   //
+   // Now if x, y are positive integers then
+   // (x / y) - 1 <= x // y <= x / y
+   // Where // denotes integer division.
+   //
+   // From this last inequality we immediately derive:
+   // 3: (2**{2N} / P) - 1 <= I <= (2**{2N} / P)
+   // 3a: 2**{2N} - P <= PI
+   //
+   // Finally, note that by definition:
+   // input = input_high*(2**N) + input_low
+   // Hence a simple rearrangment gets us
+   // 4: input_high*(2**N) = input - input_low
+   //
+   //
+   // We now need to split into cases depending on the sign of input.
+   // Note that if x = 0 then x' = 0 so that case is trivial.
+   ///////////////////////////////////////////////////////////////////////////
+   // CASE 1: input > 0
+   // 
+   // If input > 0 then:
+   // sub = Q*P = ((((input >> N) * I) >> N) & mask) * P <= P * (input / 2**{N}) * (2**{2N} / P) / 2**{N} = input
+   // So input - sub >= 0.
+   //
+   // We need to improve our bound on Q. Observe that:
+   // Q = (((input_high * I) >> N) & mask)
+   // --(2)   => Q + (2^10 - 1) >= (input_high * I) >> N)
+   // --(1)   => Q + 2^10 >= (I*x_high)/(2**N)
+   //         => (2**N)*Q + 2^10*(2**N) >= I*x_high
+   //
+   // Hence we find that:
+   // (2**N)*Q*P + 2^10*(2**N)*P >= input_high*I*P
+   // --(3a)                     >= input_high*2**{2N} - P*input_high
+   // --(4)                      >= (2**N)*input - (2**N)*input_low - (2**N)*input_high   (Assuming P < 2**N)
+   //
+   // Dividing by 2**N we get
+   // Q*P + 2^{10}*P >= input - input_low - input_high
+   // which rearranges to
+   // x' = input - Q*P <= 2^{10}*P + input_low + input_high
+   //
+   // Picking N = 40 we see that 2^{10}*P, input_low, input_high are all bounded by 2**40
+   // Hence x' < 2**42 < 2**50 as desired.
+   //
+   //
+   //
+   ///////////////////////////////////////////////////////////////////////////
+   // CASE 2: input < 0
+   //
+   // This case will be similar but all our inequalities will change slightly as negatives complicate things.
+   // First observe that:
+   // (input >> N) * I   >= (input >> N) * 2**(2N) / P 
+   //                    >= (1 + (input / 2**N)) * 2**(2N) / P
+   //                    >= (2**N + input) * 2**N / P
+   //
+   // Thus:
+   // Q = ((input >> N) * I) >> N >= ((2**N + input) * 2**N / P) >> N
+   //                             >= ((2**N + input) / P) - 1
+   //
+   // And so sub = Q*P >= 2**N - P + input.
+   // Hence input - sub < 2**N - P.
+   //
+   // Thus if input - sub > 0 then |input - sub| < 2**50.
+   // Thus we are left with bounding -(input - sub) = (sub - input).
+   // Again we will proceed by improving our bound on Q.
+   // 
+   // Q = (((input_high * I) >> N) & mask)
+   // --(2)   => Q <= (input_high * I) >> N) <= (I*x_high)/(2**N)
+   // --(1)   => Q <= (I*x_high)/(2**N)
+   //         => (2**N)*Q <= I*x_high
+   //
+   // Hence we find that:
+   // (2**N)*Q*P <= input_high*I*P
+   // --(3a)     <= input_high*2**{2N} - P*input_high
+   // --(4)      <= (2**N)*input - (2**N)*input_low - (2**N)*input_high   (Assuming P < 2**N)
+   //
+   // Dividing by 2**N we get
+   // Q*P <= input - input_low - input_high
+   // which rearranges to
+   // -x' = -input + Q*P <= -input_high - input_low < 2**50
+   //
+   // This completes the proof.
 }
