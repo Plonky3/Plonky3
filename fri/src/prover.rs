@@ -127,6 +127,7 @@ fn commit_phase<FC: FriConfig>(
     let zero_vec = vec![FC::Challenge::zero(); max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
+    let mut shift_inv = FC::Challenge::generator().inverse();
 
     let mut commits = vec![];
     let mut data = vec![];
@@ -143,7 +144,8 @@ fn commit_phase<FC: FriConfig>(
 
         let folded_height = 1 << log_folded_height;
         let beta: FC::Challenge = challenger.sample_ext_element();
-        current = fold_even_odd(&current, beta);
+        current = fold_even_odd(&current, shift_inv, beta);
+        shift_inv = shift_inv.square();
 
         let matrices = matrices_with_log_height(log_folded_height);
         if !matrices.is_empty() {
