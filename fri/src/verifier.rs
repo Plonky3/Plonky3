@@ -1,12 +1,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::Mmcs;
 use p3_field::{AbstractField, TwoAdicField};
 use p3_matrix::Dimensions;
 
-use crate::{query_index::query_index_sibling, FriConfig, FriProof, QueryProof};
+use crate::query_index::query_index_sibling;
+use crate::{FriConfig, FriProof, QueryProof};
 
 pub enum VerificationError<FC: FriConfig> {
     InvalidProofShape,
