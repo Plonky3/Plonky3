@@ -8,7 +8,7 @@ use p3_field::{AbstractField, TwoAdicField};
 use p3_matrix::Dimensions;
 
 use crate::query_index::query_index_sibling;
-use crate::{FriConfig, FriProof, QueryProof};
+use crate::{FriConfig, FriProof, InputOpening, QueryProof};
 
 pub enum VerificationError<FC: FriConfig> {
     InvalidProofShape,
@@ -43,67 +43,91 @@ pub(crate) fn verify<FC: FriConfig>(
 
     for query_proof in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height);
-        verify_query(
-            config,
+
+        // TODO: this assumes all matrices are max height, should have this passed in
+        let input_dims = query_proof
+            .input_openings
+            .iter()
+            .map(|opening| {
+                opening
+                    .opened_values
+                    .iter()
+                    .map(|vals| Dimensions {
+                        width: vals.len(),
+                        height: 1 << log_max_height,
+                    })
+                    .collect_vec()
+            })
+            .collect_vec();
+
+        let initial_eval = verify_input(
             input_mmcs,
             input_commits,
+            &input_dims,
+            &query_proof.input_openings,
+            index,
+            alpha,
+        )?;
+
+        verify_query(
+            config,
+            &proof.commit_phase_commits,
             index,
             query_proof,
-            &proof.commit_phase_commits,
-            log_max_height,
-            alpha,
             &betas,
+            initial_eval,
+            log_max_height,
         )?;
     }
 
     Ok(())
 }
 
-fn verify_query<FC: FriConfig>(
-    config: &FC,
+fn verify_input<FC: FriConfig>(
     input_mmcs: &[FC::InputMmcs],
     input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
+    input_dims: &[Vec<Dimensions>],
+    input_openings: &[InputOpening<FC>],
     index: usize,
-    proof: &QueryProof<FC>,
-    commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment],
-    log_max_height: usize,
     alpha: FC::Challenge,
-    betas: &[FC::Challenge],
-) -> Result<(), VerificationError<FC>> {
-    let mut old_eval = FC::Challenge::zero();
+) -> Result<FC::Challenge, VerificationError<FC>> {
+    let mut reduced = FC::Challenge::zero();
 
-    // Verify input commitment
-    for (mmcs, commit, input_opening) in izip!(input_mmcs, input_commits, &proof.input_openings) {
-        // TODO: this assumes all matrices are max height
-        let dims = input_opening
-            .opened_values
-            .iter()
-            .map(|vals| Dimensions {
-                width: vals.len(),
-                height: 1 << log_max_height,
-            })
-            .collect_vec();
+    for (mmcs, commit, dims, opening) in
+        izip!(input_mmcs, input_commits, input_dims, input_openings)
+    {
         mmcs.verify_batch(
             commit,
-            &dims,
+            dims,
             index,
-            &input_opening.opened_values,
-            &input_opening.opening_proof,
+            &opening.opened_values,
+            &opening.opening_proof,
         )
         .map_err(|e| VerificationError::InputMmcsError(e))?;
 
-        for vals in &input_opening.opened_values {
+        for vals in &opening.opened_values {
             for v in vals {
-                old_eval *= alpha;
-                old_eval += *v;
+                reduced *= alpha;
+                reduced += *v;
             }
         }
     }
 
+    Ok(reduced)
+}
+
+fn verify_query<FC: FriConfig>(
+    config: &FC,
+    commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment],
+    index: usize,
+    proof: &QueryProof<FC>,
+    betas: &[FC::Challenge],
+    mut folded_eval: FC::Challenge,
+    log_max_height: usize,
+) -> Result<(), VerificationError<FC>> {
     let mut x = FC::Challenge::generator()
         * FC::Challenge::two_adic_generator(log_max_height).exp_u64(index as u64);
 
-    // Verify commit phase commitments
     for (i, (commit, step, &beta)) in
         izip!(commit_phase_commits, &proof.commit_phase_openings, betas).enumerate()
     {
@@ -115,7 +139,7 @@ fn verify_query<FC: FriConfig>(
             width: 2,
             height: (1 << (log_height - 1)),
         }];
-        let mut evals = vec![old_eval; 2];
+        let mut evals = vec![folded_eval; 2];
         evals[index_sibling % 2] = step.sibling_value;
 
         config
@@ -132,7 +156,7 @@ fn verify_query<FC: FriConfig>(
         let mut xs = [x; 2];
         xs[index_sibling % 2] *= FC::Challenge::two_adic_generator(1);
         // interpolate and evaluate at beta
-        old_eval = evals[0] + (beta - xs[0]) * (evals[1] - evals[0]) / (xs[1] - xs[0]);
+        folded_eval = evals[0] + (beta - xs[0]) * (evals[1] - evals[0]) / (xs[1] - xs[0]);
 
         x = x.square();
     }
