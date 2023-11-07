@@ -98,7 +98,7 @@ mod tests {
         let chunks = 1 << log_chunks;
         let shift = F::generator();
 
-        let mut coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
+        let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
 
         let coset_evals = dft.coset_dft(coeffs.clone(), shift);
         let mut decomp = decompose(coset_evals, shift, log_chunks);
