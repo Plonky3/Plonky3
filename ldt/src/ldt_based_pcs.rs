@@ -35,26 +35,43 @@ impl<Val, Domain, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, Domain, EF, Dft, M
     }
 }
 
-impl<Val, Domain, EF, In, Dft, M, L, Challenger> Pcs<Val, In>
+impl<Val, Domain, EF, In, Dft, M, L, Challenger>
+    UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>
     for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
 where
     Val: Field,
     Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Val> + ExtensionField<Domain>,
+    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Domain>,
-    M: DirectMmcs<Domain>,
-    for<'a> M::Mat<'a>: MatrixRowSlices<Domain>,
+    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
     L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
-    type Commitment = M::Commitment;
-    type ProverData = M::ProverData;
-    type Proof = L::Proof;
-    type Error = L::Error;
+    fn coset_shift(&self) -> Domain {
+        Domain::generator()
+    }
 
-    fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        let shift = Domain::generator();
+    fn log_blowup(&self) -> usize {
+        self.ldt.log_blowup()
+    }
+
+    fn get_ldes<'a, 'b>(
+        &'a self,
+        prover_data: &'b Self::ProverData,
+    ) -> Vec<RowMajorMatrixView<'b, Domain>>
+    where
+        'a: 'b,
+    {
+        self.mmcs.get_matrices(prover_data)
+    }
+
+    fn commit_shifted_batches(
+        &self,
+        polynomials: Vec<In>,
+        coset_shift: Domain,
+    ) -> (Self::Commitment, Self::ProverData) {
+        let shift = Domain::generator() / coset_shift;
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .into_iter()
@@ -66,6 +83,29 @@ where
                 .collect()
         });
         self.mmcs.commit(ldes)
+    }
+}
+
+impl<Val, Domain, EF, In, Dft, M, L, Challenger> Pcs<Val, In>
+    for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
+where
+    Val: Field,
+    Domain: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
+    In: MatrixRows<Val>,
+    Dft: TwoAdicSubgroupDft<Domain>,
+    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
+    for<'a> M::Mat<'a>: MatrixRowSlices<Domain>,
+    L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
+    Challenger: FieldChallenger<Val>,
+{
+    type Commitment = M::Commitment;
+    type ProverData = M::ProverData;
+    type Proof = L::Proof;
+    type Error = L::Error;
+
+    fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
+        self.commit_shifted_batches(polynomials, Domain::one())
     }
 }
 
@@ -159,38 +199,6 @@ where
         _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         Ok(()) // TODO
-    }
-}
-
-impl<Val, Domain, EF, In, Dft, M, L, Challenger>
-    UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>
-    for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
-where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
-    In: MatrixRows<Val>,
-    Dft: TwoAdicSubgroupDft<Domain>,
-    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
-    L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
-    Challenger: FieldChallenger<Val>,
-{
-    fn coset_shift(&self) -> Domain {
-        Domain::generator()
-    }
-
-    fn log_blowup(&self) -> usize {
-        self.ldt.log_blowup()
-    }
-
-    fn get_ldes<'a, 'b>(
-        &'a self,
-        prover_data: &'b Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'b, Domain>>
-    where
-        'a: 'b,
-    {
-        self.mmcs.get_matrices(prover_data)
     }
 }
 

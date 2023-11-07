@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{UnivariatePcs, UnivariatePcsWithLde};
+use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
@@ -21,7 +22,6 @@ where
     let degree_bits = 6; // TODO
     let log_quotient_degree = 1; // TODO
     let g_subgroup = SC::Domain::two_adic_generator(degree_bits);
-    let shift_inv = config.pcs().coset_shift().inverse();
 
     let Proof {
         commitments,
@@ -39,7 +39,7 @@ where
         (commitments.trace.clone(), local_and_next.as_slice()),
         (
             commitments.quotient_chunks.clone(),
-            &[(zeta * shift_inv).exp_power_of_2(log_quotient_degree)],
+            &[zeta.exp_power_of_2(log_quotient_degree)],
         ),
     ];
     let values = vec![
@@ -57,7 +57,7 @@ where
     // Derive the opening of the quotient polynomial, which was split into degree n chunks, then
     // flattened into D base field polynomials. We first undo the flattening.
     let challenge_ext_degree = <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
-    let quotient_parts: Vec<SC::Challenge> = opened_values
+    let mut quotient_parts: Vec<SC::Challenge> = opened_values
         .quotient_chunks
         .chunks(challenge_ext_degree)
         .map(|chunk| {
@@ -69,7 +69,8 @@ where
         })
         .collect();
     // Then we reconstruct the larger quotient polynomial from its degree-n parts.
-    let quotient: SC::Challenge = (zeta * shift_inv)
+    reverse_slice_index_bits(&mut quotient_parts);
+    let quotient: SC::Challenge = zeta
         .powers()
         .zip(quotient_parts)
         .map(|(weight, part)| part * weight)

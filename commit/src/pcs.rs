@@ -82,6 +82,21 @@ where
     ) -> Vec<RowMajorMatrixView<'b, Domain>>
     where
         'a: 'b;
+
+    // Commit to polys that are already defined over a coset.
+    fn commit_shifted_batches(
+        &self,
+        polynomials: Vec<In>,
+        coset_shift: Domain,
+    ) -> (Self::Commitment, Self::ProverData);
+
+    fn commit_shifted_batch(
+        &self,
+        polynomials: In,
+        coset_shift: Domain,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit_shifted_batches(vec![polynomials], coset_shift)
+    }
 }
 
 pub trait MultivariatePcs<Val, Domain, EF, In, Challenger>: Pcs<Val, In>
