@@ -55,10 +55,20 @@ where
         alpha,
     );
 
-    let quotient_chunks_flattened = info_span!("decompose quotient polynomial")
-        .in_scope(|| decompose_and_flatten::<SC>(quotient_values, log_quotient_degree));
-    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
-        .in_scope(|| pcs.commit_batch(quotient_chunks_flattened));
+    let quotient_chunks_flattened = info_span!("decompose quotient polynomial").in_scope(|| {
+        decompose_and_flatten::<SC>(
+            quotient_values,
+            SC::Challenge::from_base(pcs.coset_shift()),
+            log_quotient_degree,
+        )
+    });
+    let (quotient_commit, quotient_data) =
+        info_span!("commit to quotient poly chunks").in_scope(|| {
+            pcs.commit_shifted_batch(
+                quotient_chunks_flattened,
+                pcs.coset_shift().exp_power_of_2(log_quotient_degree),
+            )
+        });
     challenger.observe(quotient_commit.clone());
 
     let commitments = Commitments {
