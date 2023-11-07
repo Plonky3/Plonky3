@@ -6,12 +6,13 @@ use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{AbstractField, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::{Matrix, MatrixRows, MatrixTranspose};
 use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
+use crate::query_index::query_index_sibling;
 use crate::{CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
@@ -77,20 +78,20 @@ fn answer_query<FC: FriConfig>(
         })
         .collect();
 
+    let log_max_height = commit_phase_commits.len() + config.log_blowup();
     let commit_phase_openings = commit_phase_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            let index_i = index >> i;
-            let index_i_sibling = index_i ^ 1;
-            let index_pair = index_i >> 1;
+            let index_sibling = query_index_sibling(index, log_max_height - i);
+            let index_pair = index_sibling >> 1;
 
             let (mut opened_rows, opening_proof) =
                 config.commit_phase_mmcs().open_batch(index_pair, commit);
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
-            let sibling_value = opened_row[index_i_sibling % 2];
+            let sibling_value = opened_row[index_sibling % 2];
 
             CommitPhaseProofStep {
                 sibling_value,
@@ -133,16 +134,14 @@ fn commit_phase<FC: FriConfig>(
     let mut data = vec![];
 
     for log_folded_height in (config.log_blowup()..log_max_height).rev() {
-        // TODO: Can we avoid cloning?
-        let (commit, prover_data) = config
-            .commit_phase_mmcs()
-            // TODO: Need to interleave the other way, unless we change things so the input comes bit-reversed.
-            .commit_matrix(RowMajorMatrix::new(current.clone(), 2));
+        let folded_height = 1 << log_folded_height;
+        // TODO: replace with a tranposed matrix view
+        let leaves = RowMajorMatrix::new(current.clone(), folded_height).transpose();
+        let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 
-        let folded_height = 1 << log_folded_height;
         let beta: FC::Challenge = challenger.sample_ext_element();
         current = fold_even_odd(&current, shift_inv, beta);
         shift_inv = shift_inv.square();

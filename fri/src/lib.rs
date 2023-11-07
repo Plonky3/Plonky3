@@ -6,6 +6,7 @@ extern crate alloc;
 
 use p3_commit::Mmcs;
 use p3_ldt::{Ldt, LdtBasedPcs};
+use verifier::VerificationError;
 
 use crate::prover::prove;
 use crate::verifier::verify;
@@ -14,6 +15,7 @@ mod config;
 mod fold_even_odd;
 mod proof;
 mod prover;
+mod query_index;
 mod verifier;
 
 pub use config::*;
@@ -26,7 +28,7 @@ pub struct FriLdt<FC: FriConfig> {
 
 impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
-    type Error = ();
+    type Error = VerificationError<FC>;
 
     fn log_blowup(&self) -> usize {
         self.config.log_blowup()
@@ -44,11 +46,11 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> f
     fn verify(
         &self,
         input_mmcs: &[FC::InputMmcs],
-        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
+        input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
-        verify::<FC>(&self.config, input_mmcs, proof, challenger)
+        verify::<FC>(&self.config, input_mmcs, input_commits, proof, challenger)
     }
 }
 
