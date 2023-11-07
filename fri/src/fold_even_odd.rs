@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{Field, PackedField, TwoAdicField};
+use p3_field::{PackedField, TwoAdicField};
 use p3_util::{ceil_div_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -77,7 +77,7 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use p3_field::AbstractField;
+    use p3_field::{AbstractField, Field};
     use rand::{thread_rng, Rng};
 
     use super::*;
