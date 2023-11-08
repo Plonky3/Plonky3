@@ -1,6 +1,6 @@
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use alloc::vec::Vec;
 use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::Permutation;
 
@@ -63,7 +63,13 @@ where
             apply_m_4(&mut state[4 * i..4 * i + 4]);
         }
 
-        let sums: Vec<AF> = (0..4).map(|k| (0..state.len() / 4).map(|j| state[4 * j + k].clone()).sum::<AF>()).collect();
+        let sums: Vec<AF> = (0..4)
+            .map(|k| {
+                (0..state.len() / 4)
+                    .map(|j| state[4 * j + k].clone())
+                    .sum::<AF>()
+            })
+            .collect();
 
         for i in 0..state.len() {
             state[i] += sums[i % 4].clone();
