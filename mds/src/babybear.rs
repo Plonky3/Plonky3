@@ -5,23 +5,26 @@
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
 use p3_baby_bear::BabyBear;
-use p3_dft::Radix2Bowers;
+// use p3_dft::Radix2Bowers;
 use p3_symmetric::Permutation;
 
-use crate::util::{
-    apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
-    first_row_to_first_col,
-};
+use crate::karatsuba_convolution::{apply_circulant_64_karat, apply_circulant_32_karat, apply_circulant_16_karat, apply_circulant_12_karat, apply_circulant_8_karat};
+use crate::types::BabyBearNonCanonical;
+use crate::util::{apply_circulant, first_row_to_first_col};
 use crate::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
-const FFT_ALGO: Radix2Bowers = Radix2Bowers;
+// const FFT_ALGO: Radix2Bowers = Radix2Bowers;
+
+const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
-        apply_circulant_8_sml(input)
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] = first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+
+        apply_circulant_8_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_8_SML_COL)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 8]) {
@@ -30,9 +33,12 @@ impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
 }
 impl MdsPermutation<BabyBear, 8> for MdsMatrixBabyBear {}
 
+const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
 impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
-        apply_circulant_12_sml(input)
+        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] = first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        apply_circulant_12_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_12_SML_COL)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 12]) {
@@ -42,17 +48,16 @@ impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
 impl MdsPermutation<BabyBear, 12> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_16_BABYBEAR: [u64; 16] = [
-    0x07801000, 0x4ACAAC32, 0x6A709B76, 0x20413E94,
-    0x00928499, 0x31C34CA3, 0x03BBC192, 0x3F20868B,
-    0x257FFAAB, 0x5F05F559, 0x55B43EA9, 0x2BC659ED,
-    0x2C6D7501, 0x1D110184, 0x0E1F608D, 0x2032F0C6,
+const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] = [
+    1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3
 ];
 
 impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
-        const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
-        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+        // const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
+        // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        apply_circulant_16_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_16_SML_COL)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 16]) {
@@ -83,7 +88,7 @@ impl Permutation<[BabyBear; 24]> for MdsMatrixBabyBear {
 impl MdsPermutation<BabyBear, 24> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
+const MATRIX_CIRC_MDS_32_BABYBEAR_ROW: [i64; 32] = [
     0x0BC00000, 0x2BED8F81, 0x337E0652, 0x4C4535D1,
     0x4AF2DC32, 0x2DB4050F, 0x676A7CE3, 0x3A06B68E,
     0x5E95C1B1, 0x2C5F54A0, 0x2332F13D, 0x58E757F1,
@@ -96,8 +101,9 @@ const MATRIX_CIRC_MDS_32_BABYBEAR: [u64; 32] = [
 
 impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
-        const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR);
-        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        const MATRIX_CIRC_MDS_32_BABYBEAR_COL: [i64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR_ROW);
+        apply_circulant_32_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_32_BABYBEAR_COL)
+        // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 32]) {
@@ -107,7 +113,7 @@ impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
 impl MdsPermutation<BabyBear, 32> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
+const MATRIX_CIRC_MDS_64_BABYBEAR_ROW: [i64; 64] = [
     0x39577778, 0x0072F4E1, 0x0B1B8404, 0x041E9C88,
     0x32D22F9F, 0x4E4BF946, 0x20C7B6D7, 0x0587C267,
     0x55877229, 0x4D186EC4, 0x4A19FD23, 0x1A64A20F,
@@ -128,8 +134,9 @@ const MATRIX_CIRC_MDS_64_BABYBEAR: [u64; 64] = [
 
 impl Permutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
-        const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR);
-        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        const MATRIX_CIRC_MDS_64_BABYBEAR_COL: [i64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR_ROW);
+        apply_circulant_64_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_64_BABYBEAR_COL)
+        // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 64]) {
@@ -196,9 +203,9 @@ mod tests {
         let output = MdsMatrixBabyBear.permute(input);
 
         let expected: [BabyBear; 16] = [
-            556401834, 683220320, 1810464928, 1169932617, 638040805, 1006828793, 1808829293,
-            1614898838, 23062004, 622101715, 967448737, 519782760, 579530259, 157817176,
-            1439772057, 54268721,
+            1497569692, 1038070871, 669165859, 456905446, 1116763366, 1267622262, 1985953057,
+            1060497461, 704264985, 306103349, 1271339089, 1551541970, 1796459417, 889229849,
+            1731972538, 439594789,
         ]
         .map(BabyBear::from_canonical_u64);
 

@@ -180,9 +180,9 @@ pub fn apply_circulant_16_sml<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
 /// NB: The algorithm is inefficient but simple enough that this
 /// function can be declared `const`, and that is the intended context
 /// for use.
-pub(crate) const fn first_row_to_first_col<const N: usize>(v: &[u64; N]) -> [u64; N] {
-    let mut output = [0u64; N];
-    output[0] = v[0];
+pub(crate) const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; N] {
+    // Can do this to get a simple Default value. Might be better ways?
+    let mut output = [v[0]; N];
     let mut i = 1;
     loop {
         if i >= N {

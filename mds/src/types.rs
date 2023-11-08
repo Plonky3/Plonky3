@@ -1,10 +1,10 @@
-use core::ops::{Add, AddAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign, Mul};
+use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+use p3_baby_bear::{from_monty_u32, to_non_canonical_u32, BabyBear};
+use p3_field::{AbstractField, PrimeField32};
 use p3_mersenne_31::Mersenne31;
-use p3_baby_bear::{BabyBear, from_monty_u32, to_non_canonical_u32};
-use p3_field::{PrimeField32, AbstractField};
 
 // A collection of methods able to be appied to simple integers.
-pub trait IntegerLike: 
+pub(crate) trait IntegerLike:
     Sized
     + Default
     + Copy
@@ -24,15 +24,14 @@ pub trait IntegerLike:
 /// Potentially should come with an "unsafe" label as improper use will lead to wraparound and cause errors.
 /// Ensuring algorithms are correct is entirely left to the programmer.
 /// Should only be used with small fields.
-pub trait NonCanonicalPrimeField32:
-    IntegerLike
-    + Mul<Output = i128> // Multiplication of 2 field elements will yeild an i128.
+pub(crate) trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128>
+// Multiplication of 2 field elements will yeild an i128.
 {
     /// The order of the field.
     const ORDER_U32: u32;
 
     /// Return the internal field element value
-    fn value(self) -> i64;
+    fn to_i64(self) -> i64;
 
     /// Produce a new non canonical field element
     fn from_i64(input: i64) -> Self;
@@ -64,7 +63,7 @@ pub trait NonCanonicalPrimeField32:
     /// If we are sure a product will not overflow we don't need to pass to i128s.
     #[inline]
     fn mul_small(lhs: Self, rhs: Self) -> Self {
-        Self::from_i64(Self::value(lhs) * Self::value(rhs))
+        Self::from_i64(Self::to_i64(lhs) * Self::to_i64(rhs))
     }
 
     /// If we want to immediately reduce a multiplication this is a simple shorthand.
@@ -76,20 +75,20 @@ pub trait NonCanonicalPrimeField32:
 
 /// This lets us pass from our non Canonical representatives back to canonical field elements.
 /// We implement a couple of different methods to be used in different situtations.
-pub trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 {
-   /// Given a generic non canonical field element, produce a canonical one.
-   fn to_canonical(self) -> Base;
+pub(crate) trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 {
+    /// Given a generic non canonical field element, produce a canonical one.
+    fn to_canonical(self) -> Base;
 
-   /// Given an element in the field, produce a non canonical one
-   fn from_canonical(val: Base) -> Self;
+    /// Given an element in the field, produce a non canonical one
+    fn from_canonical(val: Base) -> Self;
 
-   /// Given a non canonical field element garunteed to be < n < 64 bits, produce a canonical one.
-   /// The precise value of n will depend on the field. Should be faster than to_canonical for some fields.
-   fn to_canonical_i_small(self) -> Base;
+    /// Given a non canonical field element garunteed to be < n < 64 bits, produce a canonical one.
+    /// The precise value of n will depend on the field. Should be faster than to_canonical for some fields.
+    fn to_canonical_i_small(self) -> Base;
 
-   /// Given a non canonical field element garunteed to be positive and < n < 64 bits, produce a canonical one.
-   /// The precise value of n will depend on the field. Should be faster than to_canonical for some fields.
-   fn to_canonical_u_small(self) -> Base;
+    /// Given a non canonical field element garunteed to be positive and < n < 64 bits, produce a canonical one.
+    /// The precise value of n will depend on the field. Should be faster than to_canonical for some fields.
+    fn to_canonical_u_small(self) -> Base;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -99,94 +98,102 @@ pub trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Implementation of BabyBearNonCanonical 
+// Implementation of BabyBearNonCanonical
 
 /// Roughly a wrapper for i64's but treated as non canonical representatives of elements in the Babybear field.
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, Eq, Hash, PartialEq)]
 pub struct BabyBearNonCanonical {
-   value: i64,
+    value: i64,
 }
 
 impl BabyBearNonCanonical {
     /// create a new `BabyBearNonCanonical` from an `i64`.
-   #[inline]
-   pub(crate) const fn new(n: i64) -> Self {
-     Self { value: n }
-   }
+    #[inline]
+    pub(crate) const fn new(n: i64) -> Self {
+        Self { value: n }
+    }
 }
 
 impl Add for BabyBearNonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn add(self, rhs: Self) -> Self {
-     Self { value: self.value + rhs.value}
-   }
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            value: self.value + rhs.value,
+        }
+    }
 }
 
 impl AddAssign for BabyBearNonCanonical {
-   #[inline]
-   fn add_assign(&mut self, rhs: Self) {
-     *self = *self + rhs;
-   }
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
 }
 
 impl Sub for BabyBearNonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn sub(self, rhs: Self) -> Self {
-     Self { value: self.value - rhs.value}
-   }
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            value: self.value - rhs.value,
+        }
+    }
 }
 
 impl SubAssign for BabyBearNonCanonical {
-   #[inline]
+    #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
 impl Shl<usize> for BabyBearNonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn shl(self, rhs: usize) -> Self {
-     Self { value: self.value << rhs }
-   }
+    #[inline]
+    fn shl(self, rhs: usize) -> Self {
+        Self {
+            value: self.value << rhs,
+        }
+    }
 }
 
 impl ShlAssign<usize> for BabyBearNonCanonical {
-   #[inline]
-   fn shl_assign(&mut self, rhs: usize) {
-     *self = *self << rhs;
-   }
+    #[inline]
+    fn shl_assign(&mut self, rhs: usize) {
+        *self = *self << rhs;
+    }
 }
 
 impl Shr<usize> for BabyBearNonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn shr(self, rhs: usize) -> Self {
-     Self { value: self.value >> rhs }
-   }
+    #[inline]
+    fn shr(self, rhs: usize) -> Self {
+        Self {
+            value: self.value >> rhs,
+        }
+    }
 }
 
 impl ShrAssign<usize> for BabyBearNonCanonical {
-   #[inline]
-   fn shr_assign(&mut self, rhs: usize) {
-     *self = *self >> rhs;
-   }
+    #[inline]
+    fn shr_assign(&mut self, rhs: usize) {
+        *self = *self >> rhs;
+    }
 }
 
 // Multiplying 2 generic elements of this field will result in an i128.
 impl Mul for BabyBearNonCanonical {
-   type Output = i128;
+    type Output = i128;
 
-   #[inline]
-   fn mul(self, rhs: Self) -> i128 {
-     (self.value as i128) * (rhs.value as i128)
-   }
+    #[inline]
+    fn mul(self, rhs: Self) -> i128 {
+        (self.value as i128) * (rhs.value as i128)
+    }
 }
 
 // We add 2 specialised multiplication functions.
@@ -194,7 +201,6 @@ impl Mul for BabyBearNonCanonical {
 impl IntegerLike for BabyBearNonCanonical {}
 
 impl NonCanonicalPrimeField32 for BabyBearNonCanonical {
-
     const ORDER_U32: u32 = (1 << 31) - (1 << 27) + 1; // BabyBear Prime
 
     #[inline]
@@ -203,7 +209,7 @@ impl NonCanonicalPrimeField32 for BabyBearNonCanonical {
     }
 
     #[inline]
-    fn value(self) -> i64 {
+    fn to_i64(self) -> i64 {
         self.value
     }
 
@@ -218,13 +224,15 @@ impl NonCanonicalPrimeField32 for BabyBearNonCanonical {
 }
 
 impl Canonicalize<BabyBear> for BabyBearNonCanonical {
-   
     // Naive Implementation for now
     // As self.value >= -2**63 and P > 2**30, self.value + 2**33 P > 0 so the % returns a positive number.
     // This should clearly be improved at some point.
     #[inline]
     fn to_canonical(self) -> BabyBear {
-        from_monty_u32((((self.value as i128) + ((Self::ORDER_U32 as i128) << 33)) % (Self::ORDER_U32 as i128)) as u32)
+        from_monty_u32(
+            (((self.value as i128) + ((Self::ORDER_U32 as i128) << 33)) % (Self::ORDER_U32 as i128))
+                as u32,
+        )
     }
 
     #[inline]
@@ -246,7 +254,6 @@ impl Canonicalize<BabyBear> for BabyBearNonCanonical {
     }
 }
 
-
 /// Given |x| < 2^80 compute x' such that:
 /// |x'| < 2**50
 /// x' = x mod p
@@ -254,27 +261,27 @@ impl Canonicalize<BabyBear> for BabyBearNonCanonical {
 /// See Thm 1 (Below function) for a proof that this function is correct.
 #[inline]
 fn barret_red_babybear(input: i128) -> i64 {
-   const N: usize = 40; // beta = 2^N, fixing N = 40 here
-   const P: u32 = (1 << 31) - (1 << 27) + 1; // Babybear Prime
-   const I: i64 = (((1 as i128) << (2*N))/(P as i128)) as i64; // I = 2^80 / P => I < 2**50
-   // I: i64 = 0x22222221d950c
-   const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
+    const N: usize = 40; // beta = 2^N, fixing N = 40 here
+    const P: u32 = (1 << 31) - (1 << 27) + 1; // Babybear Prime
+    const I: i64 = (((1_i128) << (2 * N)) / (P as i128)) as i64; // I = 2^80 / P => I < 2**50
+                                                                 // I: i64 = 0x22222221d950c
+    const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 
-   // input = input_low + beta*input_high
-   // So input_high < 2**63 and fits in an i64.
-   let input_high = (input >> N) as i64; // input_high < input / beta < 2**{80 - N}
+    // input = input_low + beta*input_high
+    // So input_high < 2**63 and fits in an i64.
+    let input_high = (input >> N) as i64; // input_high < input / beta < 2**{80 - N}
 
-   // I, input_high are i64's so this mulitiplication can't overflow.
-   let quot = (((input_high as i128)*(I as i128)) >> N) as i64;
+    // I, input_high are i64's so this mulitiplication can't overflow.
+    let quot = (((input_high as i128) * (I as i128)) >> N) as i64;
 
-   // Replace quot by a close value which is divisibly by 2^10.
-   let quot_2adic = quot & MASK;
+    // Replace quot by a close value which is divisibly by 2^10.
+    let quot_2adic = quot & MASK;
 
-   // quot_2adic, P are i64's so this can't overflow.
-   // sub is by construction divisible by both P and 2^10.
-   let sub = (quot_2adic as i128)*(P as i128);
+    // quot_2adic, P are i64's so this can't overflow.
+    // sub is by construction divisible by both P and 2^10.
+    let sub = (quot_2adic as i128) * (P as i128);
 
-   (input - sub) as i64
+    (input - sub) as i64
 }
 
 // Theorem 1:
@@ -289,7 +296,7 @@ fn barret_red_babybear(input: i128) -> i64 {
 // x' = x mod 2^10.
 //
 // It remains to prove that |x'| < 2**50.
-// 
+//
 // We start by introducing some simple inequalities and relations bewteen our variables:
 //
 // First consider the relationship between bitshift and division.
@@ -317,7 +324,7 @@ fn barret_red_babybear(input: i128) -> i64 {
 // Note that if x = 0 then x' = 0 so that case is trivial.
 ///////////////////////////////////////////////////////////////////////////
 // CASE 1: input > 0
-// 
+//
 // If input > 0 then:
 // sub = Q*P = ((((input >> N) * I) >> N) & mask) * P <= P * (input / 2**{N}) * (2**{2N} / P) / 2**{N} = input
 // So input - sub >= 0.
@@ -348,7 +355,7 @@ fn barret_red_babybear(input: i128) -> i64 {
 //
 // This case will be similar but all our inequalities will change slightly as negatives complicate things.
 // First observe that:
-// (input >> N) * I   >= (input >> N) * 2**(2N) / P 
+// (input >> N) * I   >= (input >> N) * 2**(2N) / P
 //                    >= (1 + (input / 2**N)) * 2**(2N) / P
 //                    >= (2**N + input) * 2**N / P
 //
@@ -362,7 +369,7 @@ fn barret_red_babybear(input: i128) -> i64 {
 // Thus if input - sub > 0 then |input - sub| < 2**50.
 // Thus we are left with bounding -(input - sub) = (sub - input).
 // Again we will proceed by improving our bound on Q.
-// 
+//
 // Q = (((input_high * I) >> N) & mask)
 // --(2)   => Q <= (input_high * I) >> N) <= (I*x_high)/(2**N)
 // --(1)   => Q <= (I*x_high)/(2**N)
@@ -380,111 +387,116 @@ fn barret_red_babybear(input: i128) -> i64 {
 //
 // This completes the proof.
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 /// Roughly a wrapper for i64's but treated as non canonical representatives of elements in the Mersenne31 field.
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, Eq, Hash, PartialEq)]
 pub struct Mersenne31NonCanonical {
-   value: i64,
+    value: i64,
 }
 
 impl Mersenne31NonCanonical {
     /// create a new `Mersenne31NonCanonical` from an `i64`.
-   #[inline]
-   pub(crate) const fn new(n: i64) -> Self {
-     Self { value: n }
-   }
+    #[inline]
+    pub(crate) const fn new(n: i64) -> Self {
+        Self { value: n }
+    }
 }
 
 impl Add for Mersenne31NonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn add(self, rhs: Self) -> Self {
-     Self { value: self.value + rhs.value}
-   }
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            value: self.value + rhs.value,
+        }
+    }
 }
 
 impl AddAssign for Mersenne31NonCanonical {
-   #[inline]
-   fn add_assign(&mut self, rhs: Self) {
-     *self = *self + rhs;
-   }
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
 }
 
 impl Sub for Mersenne31NonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn sub(self, rhs: Self) -> Self {
-     Self { value: self.value - rhs.value}
-   }
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            value: self.value - rhs.value,
+        }
+    }
 }
 
 impl SubAssign for Mersenne31NonCanonical {
-   #[inline]
+    #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
 impl Shl<usize> for Mersenne31NonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn shl(self, rhs: usize) -> Self {
-     Self { value: self.value << rhs }
-   }
+    #[inline]
+    fn shl(self, rhs: usize) -> Self {
+        Self {
+            value: self.value << rhs,
+        }
+    }
 }
 
 impl ShlAssign<usize> for Mersenne31NonCanonical {
-   #[inline]
-   fn shl_assign(&mut self, rhs: usize) {
-     *self = *self << rhs;
-   }
+    #[inline]
+    fn shl_assign(&mut self, rhs: usize) {
+        *self = *self << rhs;
+    }
 }
 
 impl Shr<usize> for Mersenne31NonCanonical {
-   type Output = Self;
+    type Output = Self;
 
-   #[inline]
-   fn shr(self, rhs: usize) -> Self {
-     Self { value: self.value >> rhs }
-   }
+    #[inline]
+    fn shr(self, rhs: usize) -> Self {
+        Self {
+            value: self.value >> rhs,
+        }
+    }
 }
 
 impl ShrAssign<usize> for Mersenne31NonCanonical {
-   #[inline]
-   fn shr_assign(&mut self, rhs: usize) {
-     *self = *self >> rhs;
-   }
+    #[inline]
+    fn shr_assign(&mut self, rhs: usize) {
+        *self = *self >> rhs;
+    }
 }
 
 // Multiplying 2 generic elements of this field will result in an i128.
 impl Mul for Mersenne31NonCanonical {
-   type Output = i128;
+    type Output = i128;
 
-   #[inline]
-   fn mul(self, rhs: Self) -> i128 {
-     (self.value as i128) * (rhs.value as i128)
-   }
+    #[inline]
+    fn mul(self, rhs: Self) -> i128 {
+        (self.value as i128) * (rhs.value as i128)
+    }
 }
 
 impl IntegerLike for Mersenne31NonCanonical {}
 
 impl NonCanonicalPrimeField32 for Mersenne31NonCanonical {
-
-   const ORDER_U32: u32 = (1 << 31) - 1; // Mersenne31 Prime
+    const ORDER_U32: u32 = (1 << 31) - 1; // Mersenne31 Prime
 
     #[inline]
-    fn value(self) -> i64 {
+    fn to_i64(self) -> i64 {
         self.value
     }
 
@@ -516,7 +528,6 @@ impl NonCanonicalPrimeField32 for Mersenne31NonCanonical {
 }
 
 impl Canonicalize<Mersenne31> for Mersenne31NonCanonical {
-
     #[inline]
     fn to_canonical(self) -> Mersenne31 {
         todo!()

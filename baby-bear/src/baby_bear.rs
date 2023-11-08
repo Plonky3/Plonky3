@@ -376,11 +376,13 @@ fn monty_reduce(x: u64) -> u32 {
 }
 
 /// Create a BabyBear element from something already in Monty Form.
+#[inline]
 pub fn from_monty_u32(input: u32) -> BabyBear {
-    BabyBear { value: input}
+    BabyBear { value: input }
 }
 
 /// Produce the raw form of the BabyBear element.
+#[inline]
 pub fn to_non_canonical_u32(input: BabyBear) -> u32 {
     input.value
 }

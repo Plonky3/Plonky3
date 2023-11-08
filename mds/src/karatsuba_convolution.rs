@@ -2,40 +2,119 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
 
-use p3_field::{PrimeField64, PrimeField32};
-use crate::types::{NonCanonicalPrimeField32, IntegerLike, Canonicalize};
+use crate::types::{Canonicalize, IntegerLike, NonCanonicalPrimeField32};
+use p3_field::{PrimeField32, PrimeField64};
 
-const MATRIX_CIRC_MDS_8_SML: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
+/// Computes the convolution of input and MATRIX_CIRC_MDS_8_SML.
+/// Input must be an array of field elements of length 8.
+/// Only works with Mersenne31 and Babybear31
+pub(crate) fn apply_circulant_8_karat<Base: PrimeField32, F: Canonicalize<Base>>(
+    input: [Base; 8], mds_const: [i64; 8]
+) -> [Base; 8] {
+    // The numbers we will encounter through our algorithm are (roughly) bounded by
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
+    // <= (8 * 2**31) * 33 < 2**40 << 2**63
+    // Hence we can work with i64's with garuntees of no overflow occuring.
+    let input_non_canonical = input.map(F::from_canonical);
+    let mds_non_canonical = mds_const.map(F::from_i64);
 
-const MATRIX_CIRC_MDS_12_SML: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+    // Compute the convolution.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
+    let mut output: [F; 8] = [F::zero(); 8];
+    SmallConvolution::conv8(input_non_canonical, mds_non_canonical, &mut output);
 
-const MATRIX_CIRC_MDS_16_SML: [i64; 16] =
-    [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
+    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
+    // The output will always be positive and is bounded by 2**40.
+    output.map(F::to_canonical_u_small)
+}
 
-const P: i64 = (1 << 31) - 1;
+pub(crate) fn apply_circulant_12_karat<Base: PrimeField32, F: Canonicalize<Base>>(
+    input: [Base; 12], mds_const: [i64; 12]
+) -> [Base; 12] {
+    // The numbers we will encounter through our algorithm are bounded by
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML) <= (12 * 2**31) * 33 < 2**40 << 2**63
+    // Hence we can work with i64's with garuntees of no overflow occuring.
+    let input_non_canonical = input.map(F::from_canonical);
+    let mds_non_canonical = mds_const.map(F::from_i64);
 
-#[rustfmt::skip]
-const MATRIX_CIRC_MDS_32_MERSENNE31: [i64; 32] = [
-    0x1896DC78, 0x559D1E29, 0x04EBD732, 0x3FF449D7,
-    0x2DB0E2CE, 0x26776B85, 0x76018E57, 0x1025FA13,
-    0x06486BAB, 0x37706EBA, 0x25EB966B, 0x113C24E5,
-    0x2AE20EC4, 0x5A27507C, 0x0CD38CF1, 0x761C10E5,
-    0x19E3EF1A, 0x032C730F, 0x35D8AF83, 0x651DF13B,
-    0x7EC3DB1A, 0x6A146994, 0x588F9145, 0x09B79455,
-    0x7FDA05EC, 0x19FE71A8, 0x6988947A, 0x624F1D31,
-    0x500BB628, 0x0B1428CE, 0x3A62E1D6, 0x77692387
-];
+    // Compute the convolution.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_12_SML_I64 being constant.
+    let mut output: [F; 12] = [F::zero(); 12];
+    SmallConvolution::conv12(input_non_canonical, mds_non_canonical, &mut output);
+    // let output = conv12(input_non_canonical.map(F::to_i64), matrix_circ_mds_12_sml_i64.map(F::to_i64)).map(F::from_i64);
 
-const MATRIX_CIRC_MDS_64_MERSENNE31: [i64; 64] = [
-    0x570227A5, 0x3702983F, 0x4B7B3B0A, 0x74F13DE3, 0x485314B0, 0x0157E2EC, 0x1AD2E5DE, 0x721515E3,
-    0x5452ADA3, 0x0C74B6C1, 0x67DA9450, 0x33A48369, 0x3BDBEE06, 0x7C678D5E, 0x160F16D3, 0x54888B8C,
-    0x666C7AA6, 0x113B89E2, 0x2A403CE2, 0x18F9DF42, 0x2A685E84, 0x49EEFDE5, 0x5D044806, 0x560A41F8,
-    0x69EF1BD0, 0x2CD15786, 0x62E07766, 0x22A231E2, 0x3CFCF40C, 0x4E8F63D8, 0x69657A15, 0x466B4B2D,
-    0x4194B4D2, 0x1E9A85EA, 0x39709C27, 0x4B030BF3, 0x655DCE1D, 0x251F8899, 0x5B2EA879, 0x1E10E42F,
-    0x31F5BE07, 0x2AFBB7F9, 0x3E11021A, 0x5D97A17B, 0x6F0620BD, 0x5DBFC31D, 0x76C4761D, 0x21938559,
-    0x33777473, 0x71F0E92C, 0x0B9872A1, 0x4C2411F9, 0x545B7C96, 0x20256BAF, 0x7B8B493E, 0x33AD525C,
-    0x15EAEA1C, 0x6D2D1A21, 0x06A81D14, 0x3FACEB4F, 0x130EC21C, 0x3C84C4F5, 0x50FD67C0, 0x30FDD85A,
-];
+    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
+    // The output will always be positive and is bounded by 2**40.
+    output.map(F::to_canonical_u_small)
+}
+
+/// Computes the convolution of input and MATRIX_CIRC_MDS_16_SML.
+/// Input must be an array of field elements of length 16.
+/// Only works with Mersenne31 and Babybear31
+pub(crate) fn apply_circulant_16_karat<Base: PrimeField32, F: Canonicalize<Base>>(
+    input: [Base; 16], mds_const: [i64; 16]
+) -> [Base; 16] {
+    // The numbers we will encounter through our algorithm are (roughly) bounded by
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
+    // <= (8 * 2**31) * 33 < 2**40 << 2**63
+    // Hence we can work with i64's with garuntees of no overflow occuring.
+    let input_non_canonical = input.map(F::from_canonical);
+    let mds_non_canonical = mds_const.map(F::from_i64);
+
+    // Compute the convolution.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
+    let mut output: [F; 16] = [F::zero(); 16];
+    SmallConvolution::conv16(input_non_canonical, mds_non_canonical, &mut output);
+
+    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
+    // The output will always be positive and is bounded by 2**40.
+    // output.map(|x| F::from_wrapped_u64(x as u64))
+    output.map(F::to_canonical_u_small)
+}
+
+/// Computes the convolution of input and MATRIX_CIRC_MDS_32_MERSENNE31.
+/// Input must be an array of Mersenne31 field elements of length 32.
+pub(crate) fn apply_circulant_32_karat<Base: PrimeField32, F: Canonicalize<Base>>(
+    input: [Base; 32], mds_const: [i64; 32]
+) -> [Base; 32] {
+    // The numbers we will encounter through our algorithm are > 2**64 as
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_32_MERSENNE31) <= (32 * 2**31)**2 < 2**72.
+    // Hence we need to do some intermediate reductions.
+    let input_non_canonical = input.map(F::from_canonical);
+    let mds_non_canonical = mds_const.map(F::from_i64);
+
+    // Compute the convolution.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
+    let mut output: [F; 32] = [F::zero(); 32];
+    LargeConvolution::conv32(
+        input_non_canonical,
+        mds_non_canonical,
+        &mut output,
+    );
+
+    // x is an i49 => (P << 20) + x is positive.
+    output.map(F::to_canonical_i_small)
+}
+
+/// Computes the convolution of input and MATRIX_CIRC_MDS_64_MERSENNE31.
+/// Input must be an array of Mersenne31 field elements of length 64.
+pub(crate) fn apply_circulant_64_karat<Base: PrimeField32, F: Canonicalize<Base>>(
+    input: [Base; 64], mds_const: [i64; 64]
+) -> [Base; 64] {
+    // The numbers we will encounter through our algorithm are > 2**64 as
+    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_64_MERSENNE31) < (64 * 2**31)**2 < 2**74 << 2**127
+    // Hence we need to do some intermediate reductions.
+    let input_non_canonical = input.map(F::from_canonical);
+    let mds_non_canonical = mds_const.map(F::from_i64);
+
+    // Compute the convolution.
+    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
+    let mut output: [F; 64] = [F::zero(); 64];
+    LargeConvolution::conv64(input_non_canonical, mds_non_canonical, &mut output);
+
+    // x is an i49 => (P << 20) + x is positive.
+    output.map(F::to_canonical_i_small)
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -95,7 +174,7 @@ fn sub_vec<T: IntegerLike, const N: usize>(lhs: &[T], sub: &[T]) -> [T; N] {
     output
 }
 
-/// Takes the dot product of two vectors whose products would overflow an i64. 
+/// Takes the dot product of two vectors whose products would overflow an i64.
 /// Computes the result as i128's and returns that.
 #[inline]
 fn dot_i128<T: NonCanonicalPrimeField32>(lhs: &[T], rhs: &[T]) -> i128 {
@@ -107,7 +186,7 @@ fn dot_i128<T: NonCanonicalPrimeField32>(lhs: &[T], rhs: &[T]) -> i128 {
     sum
 }
 
-/// Takes the dot product of two vectors which we are sure will not overflow an i64. 
+/// Takes the dot product of two vectors which we are sure will not overflow an i64.
 #[inline]
 fn dot_i64<T: NonCanonicalPrimeField32>(lhs: &[T], rhs: &[T]) -> T {
     let n = lhs.len();
@@ -136,17 +215,67 @@ fn split_add_sub<T: IntegerLike, const N: usize, const HALF: usize>(
 /// This will package all our basic convolution functions but allow for us to slightly modify implementations
 /// to suit our purposes.
 trait Convolution {
+    // For the smallest sizes we implement two different algorithms depending on whether it's possible to overflow and i64.
+
+    /// Compute the convolution of two vectors of length 3.
+    /// output(x) = lhs(x)rhs(x) mod x^3 - 1
+    fn conv3<T: NonCanonicalPrimeField32>(lhs: [T; 3], rhs: [T; 3], output: &mut [T]);
+
+    /// Compute the signed convolution of two vectors of length 3.
+    /// output(x) = lhs(x)rhs(x) mod x^3 - 1
+    fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: &[T; 3], rhs: &[T; 3], output: &mut [T]);
+
     /// Compute the convolution of two vectors of length 4.
     /// output(x) = lhs(x)rhs(x) mod x^4 - 1
     fn conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]);
 
     /// Compute the signed convolution of two vectors of length 4.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
+    /// Eventually we will remove this and only have the mutable version.
     fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4];
 
     /// Compute the signed convolution of two vectors of length 4 and save in output.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
     fn signed_conv4_mut<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]);
+
+    /// Compute the signed convolution of two vectors of length 6.
+    /// output(x) = lhs(x)rhs(x) mod x^6 - 1
+    /// This should likely be replaced by a mutable version.
+    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: &[T; 6], rhs: &[T; 6], output: &mut [T]);
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////
+    // We will have 2 different implementations of the above functions depending on whether our types can overflow.
+    // In all otehr cases we can ignore overflow as we only deal with addition and subtractions.
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Length 6
+
+    /// Compute the convolution of 2 vectors of length 6.
+    /// output(x) = lhs(x)rhs(x) mod x^6 - 1  <=>  output = lhs * rhs
+    /// Use the FFT Trick to split into a convolution of length 4 and a signed convolution of length 4.
+    #[inline]
+    fn conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6], output: &mut [T]) {
+        const N: usize = 6;
+        const HALF: usize = N / 2;
+
+        // Compute lhs(x) mod x^3 - 1, lhs(x) mod x^3 + 1
+        let (lhs_p, lhs_m) = split_add_sub(lhs);
+
+        // rhs will always be constant. Not sure how to tell the compiler this though.
+        // Compute rhs(x) mod x^3 - 1, rhs(x) mod x^3 + 1
+        let (rhs_p, rhs_m) = split_add_sub(rhs);
+
+        let (left, right) = output.split_at_mut(HALF);
+
+        Self::signed_conv3(&lhs_m, &rhs_m, left); // left = w_1 = lhs*rhs mod x^3 + 1
+        Self::conv3(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^3 - 1
+
+        for i in 0..HALF {
+            left[i] += right[i]; // w_0 + w_1
+            left[i] >>= 1; // (w_0 + w_1)/2
+            right[i] -= left[i]; // (w_0 - w_1)/2
+        }
+    }
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     // Length 8
@@ -226,26 +355,55 @@ trait Convolution {
     }
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Length 12
+
+    /// Compute the convolution of 2 vectors of length 12.
+    /// output(x) = lhs(x)rhs(x) mod x^12 - 1  <=>  output = lhs * rhs
+    /// Use the FFT Trick to split into a convolution of length 6 and a signed convolution of length 6.
+    #[inline]
+    fn conv12<T: NonCanonicalPrimeField32>(lhs: [T; 12], rhs: [T; 12], output: &mut [T]) {
+        const N: usize = 12;
+        const HALF: usize = N / 2;
+
+        // Compute lhs(x) mod x^6 - 1, lhs(x) mod x^6 + 1
+        let (lhs_p, lhs_m) = split_add_sub(lhs);
+
+        // rhs will always be constant. Not sure how to tell the compiler this though.
+        // Compute rhs(x) mod x^6 - 1, rhs(x) mod x^6 + 1
+        let (rhs_p, rhs_m) = split_add_sub(rhs);
+
+        let (left, right) = output.split_at_mut(HALF);
+        Self::signed_conv6(&lhs_m, &rhs_m, left); // left = w_1 = lhs*rhs mod x^12 + 1
+        Self::conv6(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^12 - 1
+
+        for i in 0..HALF {
+            left[i] += right[i]; // w_0 + w_1
+            left[i] >>= 1; // (w_0 + w_1)/2
+            right[i] -= left[i]; // (w_0 - w_1)/2
+        }
+    }
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////
     // Length 16
 
-    /// Compute the convolution of 2 vectors of length 8.
-    /// output(x) = lhs(x)rhs(x) mod x^8 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 4 and a signed convolution of length 4.
+    /// Compute the convolution of 2 vectors of length 16.
+    /// output(x) = lhs(x)rhs(x) mod x^16 - 1  <=>  output = lhs * rhs
+    /// Use the FFT Trick to split into a convolution of length 8 and a signed convolution of length 8.
     #[inline]
     fn conv16<T: NonCanonicalPrimeField32>(lhs: [T; 16], rhs: [T; 16], output: &mut [T]) {
         const N: usize = 16;
         const HALF: usize = N / 2;
 
-        // Compute lhs(x) mod x^8 - 1, lhs(x) mod x^8 + 1
+        // Compute lhs(x) mod x^16 - 1, lhs(x) mod x^16 + 1
         let (lhs_p, lhs_m) = split_add_sub(lhs);
 
         // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^8 - 1, rhs(x) mod x^8 + 1
+        // Compute rhs(x) mod x^16 - 1, rhs(x) mod x^16 + 1
         let (rhs_p, rhs_m) = split_add_sub(rhs);
 
         let (left, right) = output.split_at_mut(HALF);
-        left.clone_from_slice(&Self::signed_conv8(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^8 + 1
-        Self::conv8(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^8 - 1
+        left.clone_from_slice(&Self::signed_conv8(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^16 + 1
+        Self::conv8(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^16 - 1
         for i in 0..HALF {
             left[i] += right[i]; // w_0 + w_1
             left[i] >>= 1; // (w_0 + w_1)/2
@@ -482,9 +640,17 @@ struct LargeConvolution;
 // CRT steps don't increase the size due to the division by 2 so our entries will remain i55's which will not overflow.
 
 impl Convolution for LargeConvolution {
-   /// Compute the convolution of two vectors of length 4.
-   /// output(x) = lhs(x)rhs(x) mod x^4 - 1 in Fp[X]
-   /// Coefficients will be non canonical representatives.
+    // We will need to implement this if we want to handle convolutions of size 24/48 but for now we ignore this.
+    fn conv3<T: NonCanonicalPrimeField32>(_: [T; 3], _: [T; 3], _: &mut [T]) {
+        todo!()
+    }
+    fn signed_conv3<T: NonCanonicalPrimeField32>(_: &[T; 3], _: &[T; 3], _: &mut [T]) {
+        todo!()
+    }
+
+    /// Compute the convolution of two vectors of length 4.
+    /// output(x) = lhs(x)rhs(x) mod x^4 - 1 in Fp[X]
+    /// Coefficients will be non canonical representatives.
     fn conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]) {
         // Even at this small size, doing the FFT decomposition seems to produce shorter compiled code using godbolt.
         // In particular testing the code produced for conv8.
@@ -513,15 +679,11 @@ impl Convolution for LargeConvolution {
     fn signed_conv4_mut<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]) {
         let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
-        output[0] = T::from_small_i128(
-            (lhs[0] * rhs_rev[3]) - dot_i128(&lhs[1..], &rhs_rev[..3]),
-        ); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
+        output[0] = T::from_small_i128((lhs[0] * rhs_rev[3]) - dot_i128(&lhs[1..], &rhs_rev[..3])); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
         output[1] = T::from_small_i128(
             dot_i128(&lhs[..2], &rhs_rev[2..]) - dot_i128(&lhs[2..], &rhs_rev[..2]),
         ); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
-        output[2] = T::from_small_i128(
-            dot_i128(&lhs[..3], &rhs_rev[1..]) - (lhs[3] * rhs_rev[0]),
-        ); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
+        output[2] = T::from_small_i128(dot_i128(&lhs[..3], &rhs_rev[1..]) - (lhs[3] * rhs_rev[0])); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
         output[3] = T::from_small_i128(dot_i128(lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
 
         // This might not be the best way to compute this.
@@ -541,6 +703,14 @@ impl Convolution for LargeConvolution {
 
         output
     }
+
+    // We will need to implement this if we want to handle convolutions of size 24/48 but for now we ignore this.
+    fn conv6<T: NonCanonicalPrimeField32>(_: [T; 6], _: [T; 6], _: &mut [T]) {
+        todo!()
+    }
+    fn signed_conv6<T: NonCanonicalPrimeField32>(_: &[T; 6], _: &[T; 6], _: &mut [T]) {
+        todo!()
+    }
 }
 
 // If we can add the assumption that Sum(lhs) < 2**20 then
@@ -548,6 +718,37 @@ impl Convolution for LargeConvolution {
 struct SmallConvolution;
 
 impl Convolution for SmallConvolution {
+    /// Compute the convolution of two vectors of length 3.
+    /// output(x) = lhs(x)rhs(x) mod x^3 - 1
+    #[inline]
+    fn conv3<T: NonCanonicalPrimeField32>(lhs: [T; 3], rhs: [T; 3], output: &mut [T]) {
+        // This is small enough we just explicitely write down the answer.
+        output[0] = T::mul_small(lhs[0], rhs[0])
+            + T::mul_small(lhs[1], rhs[2])
+            + T::mul_small(lhs[2], rhs[1]);
+        output[1] = T::mul_small(lhs[0], rhs[1])
+            + T::mul_small(lhs[1], rhs[0])
+            + T::mul_small(lhs[2], rhs[2]);
+        output[2] = T::mul_small(lhs[0], rhs[2])
+            + T::mul_small(lhs[1], rhs[1])
+            + T::mul_small(lhs[2], rhs[0]);
+    }
+
+    /// Compute the signed convolution of two vectors of length 3.
+    /// output(x) = lhs(x)rhs(x) mod x^3 + 1
+    #[inline]
+    fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: &[T; 3], rhs: &[T; 3], output: &mut [T]) {
+        // This is small enough we just explicitely write down the answer.
+        output[0] = T::mul_small(lhs[0], rhs[0])
+            - T::mul_small(lhs[1], rhs[2])
+            - T::mul_small(lhs[2], rhs[1]);
+        output[1] = T::mul_small(lhs[0], rhs[1]) + T::mul_small(lhs[1], rhs[0])
+            - T::mul_small(lhs[2], rhs[2]);
+        output[2] = T::mul_small(lhs[0], rhs[2])
+            + T::mul_small(lhs[1], rhs[1])
+            + T::mul_small(lhs[2], rhs[0]);
+    }
+
     /// Compute the convolution of two vectors of length 4. We assume we can ignore overflow so
     /// output(x) = lhs(x)rhs(x) mod x^4 - 1 in Z[X]
     #[inline]
@@ -579,7 +780,6 @@ impl Convolution for SmallConvolution {
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
     #[inline]
     fn signed_conv4_mut<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]) {
-
         let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
         output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..3]); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
@@ -607,10 +807,21 @@ impl Convolution for SmallConvolution {
 
         output
     }
+
+    /// Compute the signed convolution of two vectors of length 6.
+    /// output(x) = lhs(x)rhs(x) mod x^6 + 1
+    #[inline]
+    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: &[T; 6], rhs: &[T; 6], output: &mut [T]) {
+        let rhs_rev = [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]];
+
+        output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..5]);
+        output[1] = dot_i64(&lhs[..2], &rhs_rev[4..]) - dot_i64(&lhs[2..], &rhs_rev[..4]);
+        output[2] = dot_i64(&lhs[..3], &rhs_rev[3..]) - dot_i64(&lhs[3..], &rhs_rev[..3]);
+        output[3] = dot_i64(&lhs[..4], &rhs_rev[2..]) - dot_i64(&lhs[4..], &rhs_rev[..2]);
+        output[4] = dot_i64(&lhs[..5], &rhs_rev[1..]) - T::mul_small(lhs[5], rhs[5]);
+        output[5] = dot_i64(lhs, &rhs_rev);
+    }
 }
-
-
-
 
 // It will be handy for functions to be able to handle entries which are a combination of simple integer types
 // In particular u64's, i64's, u128's and i128's so we make a general trait type here.
@@ -650,117 +861,6 @@ impl<T> SimpleInteger for T where
 
 impl<T> IntegerLike for T where T: SimpleInteger {}
 
-/// Computes the convolution of input and MATRIX_CIRC_MDS_8_SML.
-/// Input must be an array of field elements of length 8.
-/// Only works with Mersenne31 and Babybear31
-pub fn apply_circulant_8_karat<Base: PrimeField32, F: Canonicalize<Base>>(input: [Base; 8]) -> [Base; 8] {
-    // Flip MATRIX_CIRC_MDS_8_SML to get the first column of the circulant matrix.
-    // This is constant of course but unclear how to tell the compiler that right now.
-    // Hopefully it works it out.
-    let matrix_circ_mds_8_sml_i64: [F; 8] = row_to_col(MATRIX_CIRC_MDS_8_SML).map(F::from_i64);
-
-    // The numbers we will encounter through our algorithm are (roughly) bounded by
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
-    // <= (8 * 2**31) * 33 < 2**40 << 2**63
-    // Hence we can work with i64's with garuntees of no overflow occuring.
-    let input_non_canonical = input.map(F::from_canonical);
-
-    // Compute the convolution.
-    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    let mut output: [F; 8] = [F::zero(); 8];
-    SmallConvolution::conv8(input_non_canonical, matrix_circ_mds_8_sml_i64, &mut output);
-
-    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
-    // The output will always be positive and is bounded by 2**40.
-    // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(F::to_canonical_u_small)
-}
-
-pub fn apply_circulant_12_karat<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
-    // Flip MATRIX_CIRC_MDS_12_SML to get the first column of the circulant matrix.
-    const MATRIX_CIRC_MDS_12_SML_I64: [i64; 12] = row_to_col(MATRIX_CIRC_MDS_12_SML);
-
-    // The numbers we will encounter through our algorithm are bounded by
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML) <= (12 * 2**31) * 33 < 2**40 << 2**63
-    // Hence we can work with i64's with garuntees of no overflow occuring.
-    let input_i64 = input.map(|x| x.as_canonical_u64() as i64);
-
-    // Compute the convolution.
-    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    let output = conv12(input_i64, MATRIX_CIRC_MDS_12_SML_I64);
-
-    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
-    // The output will always be positive and is bounded by 2**40.
-    // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(red_u62_m31)
-}
-
-/// Computes the convolution of input and MATRIX_CIRC_MDS_16_SML.
-/// Input must be an array of field elements of length 16.
-/// Only works with Mersenne31 and Babybear31
-pub fn apply_circulant_16_karat<Base: PrimeField32, F: Canonicalize<Base>>(input: [Base; 16]) -> [Base; 16] {
-    // Flip MATRIX_CIRC_MDS_16_SML_I64 to get the first column of the circulant matrix.
-    // This is constant of course but unclear how to tell the compiler that right now.
-    // Hopefully it works it out.
-    let matrix_circ_mds_16_sml_i64: [F; 16] = row_to_col(MATRIX_CIRC_MDS_16_SML).map(F::from_i64);
-
-    // The numbers we will encounter through our algorithm are (roughly) bounded by
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
-    // <= (8 * 2**31) * 33 < 2**40 << 2**63
-    // Hence we can work with i64's with garuntees of no overflow occuring.
-    let input_non_canonical = input.map(F::from_canonical);
-
-    // Compute the convolution.
-    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    let mut output: [F; 16] = [F::zero(); 16];
-    SmallConvolution::conv16(input_non_canonical, matrix_circ_mds_16_sml_i64, &mut output);
-
-    // Whilst some intermediate steps may be negative, as we started with 2 positive vectors
-    // The output will always be positive and is bounded by 2**40.
-    // output.map(|x| F::from_wrapped_u64(x as u64))
-    output.map(F::to_canonical_u_small)
-}
-
-/// Computes the convolution of input and MATRIX_CIRC_MDS_32_MERSENNE31.
-/// Input must be an array of Mersenne31 field elements of length 32.
-pub fn apply_circulant_32_karat<Base: PrimeField32, F: Canonicalize<Base>>(input: [Base; 32]) -> [Base; 32] {
-    // Flip MATRIX_CIRC_MDS_32_MERSENNE31 to get the first column of the circulant matrix.
-    let matrix_circ_mds_32_m31_i128: [F; 32] = row_to_col(MATRIX_CIRC_MDS_32_MERSENNE31).map(F::from_i64);
-
-    // The numbers we will encounter through our algorithm are > 2**64 as
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_32_MERSENNE31) <= (32 * 2**31)**2 < 2**72.
-    // Hence we need to do some intermediate reductions.
-    let input_non_canonical = input.map(F::from_canonical);
-
-    // Compute the convolution.
-    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    let mut output: [F; 32] = [F::zero(); 32];
-    LargeConvolution::conv32(input_non_canonical, matrix_circ_mds_32_m31_i128, &mut output);
-
-    // x is an i49 => (P << 20) + x is positive.
-    output.map(F::to_canonical_i_small)
-}
-
-/// Computes the convolution of input and MATRIX_CIRC_MDS_64_MERSENNE31.
-/// Input must be an array of Mersenne31 field elements of length 64.
-pub fn apply_circulant_64_karat<Base: PrimeField32, F: Canonicalize<Base>>(input: [Base; 64]) -> [Base; 64] {
-    // Flip MATRIX_CIRC_MDS_64_MERSENNE31 to get the first column of the circulant matrix.
-    let matrix_circ_mds_64_m31_i128: [F; 64] = row_to_col(MATRIX_CIRC_MDS_64_MERSENNE31).map(F::from_i64);
-
-    // The numbers we will encounter through our algorithm are > 2**64 as
-    // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_64_MERSENNE31) < (64 * 2**31)**2 < 2**74 << 2**127
-    // Hence we need to do some intermediate reductions.
-    let input_i128 = input.map(F::from_canonical);
-
-    // Compute the convolution.
-    // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
-    let mut output: [F; 64] = [F::zero(); 64];
-    LargeConvolution::conv64(input_i128, matrix_circ_mds_64_m31_i128, &mut output);
-
-    // x is an i49 => (P << 20) + x is positive.
-    output.map(F::to_canonical_i_small)
-}
-
 // Let M be a circulant matrix with first column vec_col and first row vec_row. Then M.u is the convolution of vec_col and u.
 // The vectors given here are the first rows of the respective circulant matrices NOT the first colums.
 // Hence in order to do convolutions we need to compute the first column which is given by
@@ -777,34 +877,6 @@ const fn row_to_col<T: SimpleInteger, const N: usize>(row: [T; N]) -> [T; N] {
         i += 1
     }
     col
-}
-
-/// Reduces an i64 in the range 0 <= x < 2^62 to its (almost) canonical representative mod 2^31 - 1.
-/// Not technically canonical as we allow P as an output.
-#[inline]
-fn red_u62_m31<F: PrimeField64>(input: i64) -> F {
-    // Morally, our value is a u62 not a i64 as the top 2 bits are garunteed to be 0.
-    debug_assert!((0..(1 << 62)).contains(&input));
-
-    let low_bits = F::from_canonical_u32((input & P) as u32); // Get the bottom 31 bits, 0 <= low_bits <= P
-    let high_bits = F::from_canonical_u32((input >> 31) as u32); // Get the top 31 bits, 0 <= high_bits <= P.
-
-    low_bits + high_bits
-}
-
-/// Reduces an i64 in the range 0 <= x < 2^93 to its (almost) canonical representative mod 2^31 - 1.
-/// Not technically canonical as we allow P as an output.
-#[inline]
-fn _red_u93_m31<F: PrimeField64>(input: i128) -> F {
-    // Not used currently. Useful if we full embrace i128's in the larger convolutions.
-    // Morally, our value is a u93 not a i128 as the top bits are garunteed to be 0.
-    debug_assert!((0..(1 << 93)).contains(&input));
-
-    let low_bits = F::from_canonical_u32((input & (P as i128)) as u32); // Get the bottom 31 bits, 0 <= low_bits <= P
-    let mid_bits = F::from_canonical_u32(((input >> 31) & (P as i128)) as u32); // Get the mid 31 bits, 0 <= high_bits <= P.
-    let high_bits = F::from_canonical_u32((input >> 62) as u32); // Get the top 31 bits, 0 <= high_bits <= P.
-
-    low_bits + mid_bits + high_bits
 }
 
 // Takes the dot product of two vectors.
@@ -857,118 +929,6 @@ fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
 // Would be good to try and find a way to cut down on this.
 
 // Once we get down to small sizes we use the O(n^2) approach.
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////
-// Length 3
-
-/// Compute the convolution of two vectors of length 3.
-/// output(x) = lhs(x)rhs(x) mod x^3 - 1
-#[inline]
-fn conv3<T: SimpleInteger>(lhs: [T; 3], rhs: [T; 3]) -> [T; 3] {
-    // This is small enough we just explicitely write down the answer.
-    [
-        lhs[0] * rhs[0] + lhs[1] * rhs[2] + lhs[2] * rhs[1],
-        lhs[0] * rhs[1] + lhs[1] * rhs[0] + lhs[2] * rhs[2],
-        lhs[0] * rhs[2] + lhs[1] * rhs[1] + lhs[2] * rhs[0],
-    ]
-}
-
-/// Compute the signed convolution of two vectors of length 3.
-/// output(x) = lhs(x)rhs(x) mod x^3 + 1
-#[inline]
-fn sign_conv3<T: SimpleInteger>(lhs: &[T; 3], rhs: &[T; 3]) -> [T; 3] {
-    // This is small enough we just explicitely write down the answer.
-    [
-        lhs[0] * rhs[0] - lhs[1] * rhs[2] - lhs[2] * rhs[1],
-        lhs[0] * rhs[1] + lhs[1] * rhs[0] - lhs[2] * rhs[2],
-        lhs[0] * rhs[2] + lhs[1] * rhs[1] + lhs[2] * rhs[0],
-    ]
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////
-// Length 6
-
-/// Compute the convolution of two vectors of length 6.
-/// output(x) = lhs(x)rhs(x) mod x^6 - 1
-#[inline]
-fn conv6<T: SimpleInteger>(lhs: [T; 6], rhs: [T; 6]) -> [T; 6] {
-    // Even at this small size, doing the FFT decomposition seems to produce shorter compiled code using godbolt.
-    // In particular testing the code produced for conv12 as that's what we really care about.
-
-    const N: usize = 6;
-    const HALF: usize = N / 2;
-    let mut output = [T::default(); N];
-
-    // Compute lhs(x) mod x^3 - 1, lhs(x) mod x^3 + 1
-    let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-    // rhs will always be constant. Not sure how to tell the compiler this though.
-    // Compute rhs(x) mod x^3 - 1, rhs(x) mod x^3 + 1
-    let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-    let prod_p = conv3(lhs_p, rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^4 - 1
-    let prod_m = sign_conv3(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^4 + 1
-
-    output[..HALF].clone_from_slice(&prod_p);
-    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
-
-    add_mut(&mut output[..HALF], &prod_m);
-    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
-
-    // Can maybe do this in place?
-    output.map(|x| x >> 1) // output = lhs * rhs
-}
-
-/// Compute the signed convolution of two vectors of length 6.
-/// output(x) = lhs(x)rhs(x) mod x^6 + 1
-#[inline]
-fn sign_conv6<T: SimpleInteger>(lhs: &[T; 6], rhs: &[T; 6]) -> [T; 6] {
-    let mut output = [T::default(); 6];
-
-    // This might not be the best way to compute this.
-
-    let rhs_rev = [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]];
-
-    output[0] = lhs[0] * rhs[0] - dot(&lhs[1..], &rhs_rev[..5]);
-    output[1] = dot(&lhs[..2], &rhs_rev[4..]) - dot(&lhs[2..], &rhs_rev[..4]);
-    output[2] = dot(&lhs[..3], &rhs_rev[3..]) - dot(&lhs[3..], &rhs_rev[..3]);
-    output[3] = dot(&lhs[..4], &rhs_rev[2..]) - dot(&lhs[4..], &rhs_rev[..2]);
-    output[4] = dot(&lhs[..5], &rhs_rev[1..]) - lhs[5] * rhs[5];
-    output[5] = dot(lhs, &rhs_rev);
-    output
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////
-// Length 12
-
-/// Compute the convolution of 2 vectors of length 8.
-/// output(x) = lhs(x)rhs(x) mod x^12 - 1  <=>  output = lhs * rhs
-/// Use the FFT Trick to split into a convolution of length 6 and a signed convolution of length 6.
-#[inline]
-fn conv12<T: SimpleInteger>(lhs: [T; 12], rhs: [T; 12]) -> [T; 12] {
-    const N: usize = 12;
-    const HALF: usize = N / 2;
-    let mut output = [T::default(); N];
-
-    // Compute lhs(x) mod x^6 - 1, lhs(x) mod x^6 + 1
-    let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-    // rhs will always be constant. Not sure how to tell the compiler this though.
-    // Compute rhs(x) mod x^6 - 1, rhs(x) mod x^6 + 1
-    let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-    let prod_p = conv6(lhs_p, rhs_p); // prod_p(x) = lhs(x)rhs(x) mod x^6 - 1
-    let prod_m = sign_conv6(&lhs_m, &rhs_m); // prod_m(x) = lhs(x)rhs(x) mod x^6 + 1
-
-    output[..HALF].clone_from_slice(&prod_p);
-    output[HALF..].clone_from_slice(&prod_p); // output = [prod_p, prod_p]
-
-    add_mut(&mut output[..HALF], &prod_m);
-    sub_mut(&mut output[HALF..], &prod_m); // output = [prod_p + prod_m, prod_p - prod_m] = 2 (lhs * rhs)
-
-    // Could also do this in place?
-    output.map(|x| x >> 1) // output = (lhs * rhs)
-}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
