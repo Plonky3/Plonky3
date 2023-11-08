@@ -15,7 +15,7 @@ use tracing::instrument;
 /// p_even(x) + beta p_odd(x)
 /// ```
 #[instrument(skip_all, level = "debug")]
-pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], shift_inv: F, beta: F) -> Vec<F> {
+pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     // We use the fact that
     //     p_e(x^2) = (p(x) + p(-x)) / 2
     //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
@@ -37,7 +37,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], shift_inv: F, beta: F) -> Vec<
     let half_beta = beta * one_half;
 
     // beta/2 times successive powers of g_inv
-    let powers = g_inv.shifted_powers_packed::<F::Packing>(half_beta * shift_inv);
+    let powers = g_inv.shifted_powers_packed::<F::Packing>(half_beta);
 
     // pack first / second polys, rounding up to the nearest multiple of packing width
     let half_n = n / 2;
@@ -105,36 +105,8 @@ mod tests {
         let expected = izip!(even_evals, odd_evals)
             .map(|(even, odd)| even + beta * odd)
             .collect::<Vec<_>>();
-        let got = fold_even_odd(&evals, F::one(), beta);
+        let got = fold_even_odd(&evals, beta);
         assert_eq!(expected, got);
     }
 
-    // If we fold_even_odd evals over a coset s, we get the result over s^2.
-    #[test]
-    fn test_fold_even_odd_coset() {
-        type F = BabyBear;
-
-        let mut rng = thread_rng();
-
-        let log_n = 5;
-        let n = 1 << log_n;
-        let shift = F::generator();
-        let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
-
-        let dft = Radix2Dit;
-        let evals = dft.coset_dft(coeffs.clone(), shift);
-
-        let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
-        let even_evals = dft.coset_dft(even_coeffs, shift.square());
-
-        let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
-        let odd_evals = dft.coset_dft(odd_coeffs, shift.square());
-
-        let beta = rng.gen::<F>();
-        let expected = izip!(even_evals, odd_evals)
-            .map(|(even, odd)| even + beta * odd)
-            .collect::<Vec<_>>();
-        let got = fold_even_odd(&evals, shift.inverse(), beta);
-        assert_eq!(expected, got);
-    }
 }

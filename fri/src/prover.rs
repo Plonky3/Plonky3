@@ -125,10 +125,9 @@ fn commit_phase<FC: FriConfig>(
     };
 
     let largest_matrices = matrices_with_log_height(log_max_height);
-    let zero_vec = vec![FC::Challenge::zero(); max_height];
+    let mut current = vec![FC::Challenge::zero(); max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
-    let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
-    let mut shift_inv = FC::Challenge::generator().inverse();
+    reduce_matrices(max_height, &mut current, &largest_matrices, alpha);
 
     let mut commits = vec![];
     let mut data = vec![];
@@ -137,18 +136,21 @@ fn commit_phase<FC: FriConfig>(
         let folded_height = 1 << log_folded_height;
         // TODO: replace with a tranposed matrix view
         let leaves = RowMajorMatrix::new(current.clone(), folded_height).transpose();
+        for (i, r) in leaves.rows().enumerate() {
+            println!("leaves[{i}] = [{}, {}]", r[0], r[1]);
+        }
         let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 
         let beta: FC::Challenge = challenger.sample_ext_element();
-        current = fold_even_odd(&current, shift_inv, beta);
-        shift_inv = shift_inv.square();
+        current = fold_even_odd(&current, beta);
 
         let matrices = matrices_with_log_height(log_folded_height);
         if !matrices.is_empty() {
-            current = reduce_matrices(folded_height, &current, &matrices, alpha);
+            println!("folding intermediate");
+            reduce_matrices(folded_height, &mut current, &matrices, alpha);
         }
     }
 
@@ -179,26 +181,22 @@ struct CommitPhaseResult<FC: FriConfig> {
 )]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
-    init: &[Challenge],
+    init: &mut [Challenge],
     matrices: &[Mat],
     alpha: Challenge,
-) -> Vec<Challenge>
-where
+) where
     F: Field,
     Challenge: ExtensionField<F>,
     Mat: MatrixRows<F> + Sync,
 {
-    (0..height)
-        .into_par_iter()
-        .map(|r| {
-            let mut reduced = init[r];
-            for mat in matrices {
-                for col in mat.row(r) {
-                    reduced *= alpha;
-                    reduced += col;
-                }
+    let index_bits = log2_strict_usize(height);
+    for r in 0..height {
+        let ro = &mut init[r];
+        for mat in matrices {
+            for col in mat.row(r) {
+                *ro *= alpha;
+                *ro += col;
             }
-            reduced
-        })
-        .collect()
+        }
+    }
 }

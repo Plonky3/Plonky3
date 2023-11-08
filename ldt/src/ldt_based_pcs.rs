@@ -11,7 +11,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::{MatrixRowSlices, MatrixRows};
+use p3_matrix::{Dimensions, MatrixRowSlices, MatrixRows};
 use tracing::{info_span, instrument};
 
 use crate::quotient::QuotientMmcs;
@@ -194,6 +194,7 @@ where
     fn verify_multi_batches(
         &self,
         commits_and_points: &[(Self::Commitment, &[EF])],
+        dims: &[Vec<Dimensions>],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
         challenger: &mut Challenger,
@@ -202,11 +203,15 @@ where
             commits_and_points.iter().cloned().unzip();
         let coset_shift: Domain =
             <Self as UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>>::coset_shift(self);
-        let quotient_mmcs = points
+        let (dims, quotient_mmcs): (Vec<_>, Vec<_>) = points
             .into_iter()
             .zip_eq(values)
+            .zip_eq(dims)
             .map(
-                |(points, opened_values_for_round_by_point): (&[EF], OpenedValuesForRound<EF>)| {
+                |((points, opened_values_for_round_by_point), dims): (
+                    (&[EF], OpenedValuesForRound<EF>),
+                    &Vec<Dimensions>,
+                )| {
                     let opened_values_for_round_by_matrix =
                         transpose(opened_values_for_round_by_point.to_vec());
                     let openings = opened_values_for_round_by_matrix
@@ -222,15 +227,24 @@ where
                                 .collect()
                         })
                         .collect_vec();
-                    QuotientMmcs::<Domain, EF, _> {
-                        inner: self.mmcs.clone(),
-                        openings,
-                        coset_shift,
-                    }
+                    (
+                        dims.into_iter()
+                            .map(|d| Dimensions {
+                                width: d.width * openings.len(),
+                                height: d.height << self.ldt.log_blowup(),
+                            })
+                            .collect_vec(),
+                        QuotientMmcs::<Domain, EF, _> {
+                            inner: self.mmcs.clone(),
+                            openings,
+                            coset_shift,
+                        },
+                    )
                 },
             )
-            .collect_vec();
-        self.ldt.verify(&quotient_mmcs, &commits, proof, challenger)
+            .unzip();
+        self.ldt
+            .verify(&quotient_mmcs, &dims, &commits, proof, challenger)
     }
 }
 

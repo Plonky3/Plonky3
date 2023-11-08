@@ -1,3 +1,5 @@
+use core::fmt::Debug;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -20,7 +22,7 @@ pub trait Mmcs<T>: Clone {
     type ProverData;
     type Commitment: Clone;
     type Proof;
-    type Error;
+    type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where
         Self: 'a;

@@ -1,12 +1,14 @@
 //! An implementation of the FRI low-degree test (LDT).
 
-#![no_std]
+// #![no_std]
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use p3_commit::Mmcs;
 use p3_ldt::{Ldt, LdtBasedPcs};
-use verifier::VerificationError;
+use p3_matrix::Dimensions;
+use verifier::VerificationErrorForFriConfig;
 
 use crate::prover::prove;
 use crate::verifier::verify;
@@ -28,7 +30,7 @@ pub struct FriLdt<FC: FriConfig> {
 
 impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
-    type Error = VerificationError<FC>;
+    type Error = VerificationErrorForFriConfig<FC>;
 
     fn log_blowup(&self) -> usize {
         self.config.log_blowup()
@@ -46,11 +48,19 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> f
     fn verify(
         &self,
         input_mmcs: &[FC::InputMmcs],
+        input_dims: &[Vec<Dimensions>],
         input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
-        verify::<FC>(&self.config, input_mmcs, input_commits, proof, challenger)
+        verify::<FC>(
+            &self.config,
+            input_mmcs,
+            input_dims,
+            input_commits,
+            proof,
+            challenger,
+        )
     }
 }
 
