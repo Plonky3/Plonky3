@@ -1,11 +1,11 @@
-use core::ops::{Add, AddAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign, Mul};
 use p3_mersenne_31::Mersenne31;
-use p3_baby_bear::{BabyBear, from_monty_u32};
+use p3_baby_bear::{BabyBear, from_monty_u32, to_non_canonical_u32};
 use p3_field::{PrimeField32, AbstractField};
 
 // A collection of methods able to be appied to simple integers.
-pub(crate) trait IntegerLike: 
-   Sized
+pub trait IntegerLike: 
+    Sized
     + Default
     + Copy
     + Add<Output = Self>
@@ -24,33 +24,64 @@ pub(crate) trait IntegerLike:
 /// Potentially should come with an "unsafe" label as improper use will lead to wraparound and cause errors.
 /// Ensuring algorithms are correct is entirely left to the programmer.
 /// Should only be used with small fields.
-pub(crate) trait NonCanonicalPrimeField32: IntegerLike
+pub trait NonCanonicalPrimeField32:
+    IntegerLike
+    + Mul<Output = i128> // Multiplication of 2 field elements will yeild an i128.
 {
-   /// The order of the field.
-   const ORDER_U32: u32;
+    /// The order of the field.
+    const ORDER_U32: u32;
 
-   /// Return the zero of the Field
-   fn zero() -> Self;
+    /// Return the internal field element value
+    fn value(self) -> i64;
 
-   /// Return the internal field element value
-   fn value(self) -> i64;
+    /// Produce a new non canonical field element
+    fn from_i64(input: i64) -> Self;
 
-   /// Produce a new non canonical field element
-   fn from_i64(n: i64) -> Self;
+    /// Produce a new non canonical field element from some other types
+    #[inline]
+    fn from_i32(input: i32) -> Self {
+        Self::from_i64(input as i64)
+    }
 
-   /// Given x, an i128 representing a field element with |x| < 80 computes x' satisfying:
-   /// |x'| < 2^50
-   /// x' = x mod p
-   /// x' = x mod 2^10
-   /// This is important for large convolutions.
-   fn from_small_i128(input: i128) -> Self;
+    #[inline]
+    fn from_u32(input: u32) -> Self {
+        Self::from_i64(input as i64)
+    }
+
+    /// Return the zero of the Field
+    #[inline]
+    fn zero() -> Self {
+        Self::from_i64(0)
+    }
+
+    /// Given x, an i128 representing a field element with |x| < 2**80 computes x' satisfying:
+    /// |x'| < 2**50
+    /// x' = x mod p
+    /// x' = x mod 2^10
+    /// This is important for large convolutions.
+    fn from_small_i128(input: i128) -> Self;
+
+    /// If we are sure a product will not overflow we don't need to pass to i128s.
+    #[inline]
+    fn mul_small(lhs: Self, rhs: Self) -> Self {
+        Self::from_i64(Self::value(lhs) * Self::value(rhs))
+    }
+
+    /// If we want to immediately reduce a multiplication this is a simple shorthand.
+    #[inline]
+    fn mul_large(lhs: Self, rhs: Self) -> Self {
+        Self::from_small_i128(lhs * rhs)
+    }
 }
 
 /// This lets us pass from our non Canonical representatives back to canonical field elements.
 /// We implement a couple of different methods to be used in different situtations.
-pub(crate) trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 {
+pub trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 {
    /// Given a generic non canonical field element, produce a canonical one.
    fn to_canonical(self) -> Base;
+
+   /// Given an element in the field, produce a non canonical one
+   fn from_canonical(val: Base) -> Self;
 
    /// Given a non canonical field element garunteed to be < n < 64 bits, produce a canonical one.
    /// The precise value of n will depend on the field. Should be faster than to_canonical for some fields.
@@ -148,58 +179,76 @@ impl ShrAssign<usize> for BabyBearNonCanonical {
    }
 }
 
+// Multiplying 2 generic elements of this field will result in an i128.
+impl Mul for BabyBearNonCanonical {
+   type Output = i128;
+
+   #[inline]
+   fn mul(self, rhs: Self) -> i128 {
+     (self.value as i128) * (rhs.value as i128)
+   }
+}
+
+// We add 2 specialised multiplication functions.
+
 impl IntegerLike for BabyBearNonCanonical {}
 
 impl NonCanonicalPrimeField32 for BabyBearNonCanonical {
 
-   const ORDER_U32: u32 = (1 << 31) - (1 << 27) + 1; // BabyBear Prime
+    const ORDER_U32: u32 = (1 << 31) - (1 << 27) + 1; // BabyBear Prime
 
-   fn zero() -> Self {
-      Self::new(0)
-   }
+    #[inline]
+    fn from_i64(input: i64) -> Self {
+        Self::new(input)
+    }
 
-   fn from_i64(input: i64) -> Self {
-      Self::new(input)
-   }
+    #[inline]
+    fn value(self) -> i64 {
+        self.value
+    }
 
-   fn value(self) -> i64 {
-      self.value
-   }
-
-   /// Given x, an i128 representing a field element with |x| < 80 computes x' satisfying:
-   /// |x'| < 2^50
-   /// x' = x mod p
-   /// x' = x mod 2^10
-   fn from_small_i128(input: i128) -> Self {
-      Self::new(barret_red_babybear(input))
-   }
-   
+    /// Given x, an i128 representing a field element with |x| < 2**80 computes x' satisfying:
+    /// |x'| < 2**50
+    /// x' = x mod p
+    /// x' = x mod 2^10
+    #[inline]
+    fn from_small_i128(input: i128) -> Self {
+        Self::new(barret_red_babybear(input))
+    }
 }
 
 impl Canonicalize<BabyBear> for BabyBearNonCanonical {
    
-   // Naive Implementation for now
-   // As self.value >= -2**63 and P > 2**30, self.value + 2**33 P > 0 so the % returns a positive number.
-   // This should clearly be improved at some point.
-   fn to_canonical(self) -> BabyBear {
-      from_monty_u32((((self.value as i128) + ((Self::ORDER_U32 as i128) << 33)) % (Self::ORDER_U32 as i128)) as u32)
-   }
+    // Naive Implementation for now
+    // As self.value >= -2**63 and P > 2**30, self.value + 2**33 P > 0 so the % returns a positive number.
+    // This should clearly be improved at some point.
+    #[inline]
+    fn to_canonical(self) -> BabyBear {
+        from_monty_u32((((self.value as i128) + ((Self::ORDER_U32 as i128) << 33)) % (Self::ORDER_U32 as i128)) as u32)
+    }
 
-   // Naive Implementation for now
-   fn to_canonical_i_small(self) -> BabyBear {
-      self.to_canonical()
-   }
+    #[inline]
+    fn from_canonical(input: BabyBear) -> Self {
+        Self::from_u32(to_non_canonical_u32(input))
+    }
 
-   // Naive Implementation for now but will work for any positive value.
-   // Should improve this at some point.
-   fn to_canonical_u_small(self) -> BabyBear {
-      from_monty_u32((self.value % Self::ORDER_U32 as i64) as u32)
-   }
+    // Naive Implementation for now
+    #[inline]
+    fn to_canonical_i_small(self) -> BabyBear {
+        self.to_canonical()
+    }
+
+    // Naive Implementation for now but will work for any positive value.
+    // Should improve this at some point.
+    #[inline]
+    fn to_canonical_u_small(self) -> BabyBear {
+        from_monty_u32((self.value % Self::ORDER_U32 as i64) as u32)
+    }
 }
 
 
 /// Given |x| < 2^80 compute x' such that:
-/// |x'| < 2^50
+/// |x'| < 2**50
 /// x' = x mod p
 /// x' = x mod 2^10
 /// See Thm 1 (Below function) for a proof that this function is correct.
@@ -232,14 +281,14 @@ fn barret_red_babybear(input: i128) -> i64 {
 // Given |x| < 2^80, barret_red(x) computes an x' such that:
 //       x' = x mod p
 //       x' = x mod 2^10
-//       |x'| < 2^50.
+//       |x'| < 2**50.
 ///////////////////////////////////////////////////////////////////////////////////////
 // PROOF:
 // By construction P, 2**10 | sub and so we immediately see that
 // x' = x mod p
 // x' = x mod 2^10.
 //
-// It remains to prove that |x'| < 2^50.
+// It remains to prove that |x'| < 2**50.
 // 
 // We start by introducing some simple inequalities and relations bewteen our variables:
 //
@@ -418,80 +467,97 @@ impl ShrAssign<usize> for Mersenne31NonCanonical {
    }
 }
 
+// Multiplying 2 generic elements of this field will result in an i128.
+impl Mul for Mersenne31NonCanonical {
+   type Output = i128;
+
+   #[inline]
+   fn mul(self, rhs: Self) -> i128 {
+     (self.value as i128) * (rhs.value as i128)
+   }
+}
+
 impl IntegerLike for Mersenne31NonCanonical {}
 
 impl NonCanonicalPrimeField32 for Mersenne31NonCanonical {
 
    const ORDER_U32: u32 = (1 << 31) - 1; // Mersenne31 Prime
 
-   fn zero() -> Self {
-      Self::new(0)
-   }
+    #[inline]
+    fn value(self) -> i64 {
+        self.value
+    }
 
-   fn value(self) -> i64 {
-      self.value
-   }
+    #[inline]
+    fn from_i64(input: i64) -> Self {
+        Self::new(input)
+    }
 
-   fn from_i64(input: i64) -> Self {
-      Self::new(input)
-   }
+    /// Given x, an i128 representing a field element with |x| < 2**80 computes x' satisfying:
+    /// |x'| < 2**50
+    /// x' = x mod p
+    /// x' = x mod 2^10
+    #[inline]
+    fn from_small_i128(input: i128) -> Self {
+        const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
+        const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
 
-   /// Given x, an i128 representing a field element with |x| < 80 computes x' satisfying:
-   /// |x'| < 2^50
-   /// x' = x mod p
-   /// x' = x mod 2^10
-   fn from_small_i128(input: i128) -> Self {
-      const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
-      const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
+        let low_bits = (input & LOWMASK) as i64; // low_bits < 2**42
+        let high_bits = ((input & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
 
-      let low_bits = (input & LOWMASK) as i64; // low_bits < 2**42
-      let high_bits = ((input & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
+        // We quickly prove that low_bits + high_bits is what we want.
 
-      // We quickly prove that low_bits + high_bits is what we want.
+        // The individual bounds clearly show that low_bits + high_bits < 2**(n - 30).
+        // Next observe that low_bits + high_bits = input - (2**31 - 1)(high_bits) = input mod P.
+        // Finally note that 2**11 divides high_bits and so low_bits + high_bits = low_bits mod 2**11 = input mod 2**11.
 
-      // The individual bounds clearly show that low_bits + high_bits < 2**(n - 30).
-      // Next observe that low_bits + high_bits = input - (2**31 - 1)(high_bits) = input mod P.
-      // Finally note that 2**11 divides high_bits and so low_bits + high_bits = low_bits mod 2**11 = input mod 2**11.
-
-      Self::new(low_bits + high_bits)
-   }
-   
+        Self::new(low_bits + high_bits)
+    }
 }
 
 impl Canonicalize<Mersenne31> for Mersenne31NonCanonical {
-   fn to_canonical(self) -> Mersenne31 {
-      todo!()
-   }
 
-   /// Reduces an i64 in the range -2^61 <= x < 2^61 to its (almost) canonical representative mod 2^31 - 1.
-   /// Not technically canonical as we allow P as an output.
-   fn to_canonical_i_small(self) -> Mersenne31 {
-      debug_assert!((-(1 << 61)..(1 << 61)).contains(&self.value));
+    #[inline]
+    fn to_canonical(self) -> Mersenne31 {
+        todo!()
+    }
 
-      const MASK: i64 = (1 << 31) - 1;
+    #[inline]
+    fn from_canonical(input: Mersenne31) -> Self {
+        Self::from_u32(input.as_canonical_u32())
+    }
 
-      // Morally, our value is a i62 not a i64 as the top 3 bits are garunteed to be equal.
-      let low_bits = Mersenne31::from_canonical_u32((self.value & MASK) as u32); // Get the bottom 31 bits, 0 <= low_bits < 2**31.
-      let high_bits = ((self.value >> 31) & MASK) as i32; // Get the top 31 bits. 0 <= high_bits < 2**31.
-      let sign_bits = (self.value >> 62) as i32; // sign_bits = 0 or -1
+    /// Reduces an i64 in the range -2^61 <= x < 2^61 to its (almost) canonical representative mod 2^31 - 1.
+    /// Not technically canonical as we allow P as an output.
+    #[inline]
+    fn to_canonical_i_small(self) -> Mersenne31 {
+        debug_assert!((-(1 << 61)..(1 << 61)).contains(&self.value));
 
-      // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
+        const MASK: i64 = (1 << 31) - 1;
 
-      let high = Mersenne31::from_canonical_u32((high_bits + sign_bits) as u32); // 0 <= high <= P so we can do our usual algorithm from here.
+        // Morally, our value is a i62 not a i64 as the top 3 bits are garunteed to be equal.
+        let low_bits = Mersenne31::from_canonical_u32((self.value & MASK) as u32); // Get the bottom 31 bits, 0 <= low_bits < 2**31.
+        let high_bits = ((self.value >> 31) & MASK) as i32; // Get the top 31 bits. 0 <= high_bits < 2**31.
+        let sign_bits = (self.value >> 62) as i32; // sign_bits = 0 or -1
 
-      low_bits + high
-   }
+        // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
 
-   /// Reduces an i64 in the range 0 <= x < 2^62 to its (almost) canonical representative mod 2^31 - 1.
-   /// Not technically canonical as we allow P as an output.
-   fn to_canonical_u_small(self) -> Mersenne31 {
-      debug_assert!((0..(1 << 62)).contains(&self.value));
+        let high = Mersenne31::from_canonical_u32((high_bits + sign_bits) as u32); // 0 <= high <= P so we can do our usual algorithm from here.
 
-      const MASK: i64 = (1 << 31) - 1;
+        low_bits + high
+    }
 
-      let low_bits = Mersenne31::from_canonical_u32((self.value & MASK) as u32); // Get the bottom 31 bits, 0 <= low_bits <= P
-      let high_bits = Mersenne31::from_canonical_u32((self.value >> 31) as u32); // Get the top 31 bits, 0 <= high_bits <= P.
+    /// Reduces an i64 in the range 0 <= x < 2^62 to its (almost) canonical representative mod 2^31 - 1.
+    /// Not technically canonical as we allow P as an output.
+    #[inline]
+    fn to_canonical_u_small(self) -> Mersenne31 {
+        debug_assert!((0..(1 << 62)).contains(&self.value));
 
-      low_bits + high_bits
-   }
+        const MASK: i64 = (1 << 31) - 1;
+
+        let low_bits = Mersenne31::from_canonical_u32((self.value & MASK) as u32); // Get the bottom 31 bits, 0 <= low_bits <= P
+        let high_bits = Mersenne31::from_canonical_u32((self.value >> 31) as u32); // Get the top 31 bits, 0 <= high_bits <= P.
+
+        low_bits + high_bits
+    }
 }

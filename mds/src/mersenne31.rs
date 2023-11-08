@@ -14,6 +14,7 @@ use crate::karatsuba_convolution::{
     apply_circulant_64_karat, apply_circulant_8_karat,
 };
 use crate::MdsPermutation;
+use crate::types::Mersenne31NonCanonical;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
@@ -23,7 +24,7 @@ const _MATRIX_CIRC_MDS_8_SML: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         // apply_circulant_8_sml(input)
-        apply_circulant_8_karat(input)
+        apply_circulant_8_karat::<Mersenne31, Mersenne31NonCanonical>(input)
         // apply_circulant_8_karat_even_odd(input)
         // apply_circulant_karat_generic_i64(input, MATRIX_CIRC_MDS_8_SML)
     }
@@ -52,7 +53,7 @@ const _MATRIX_CIRC_MDS_16_SML: [i64; 16] =
 impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         // apply_circulant_16_sml(input)
-        apply_circulant_16_karat(input)
+        apply_circulant_16_karat::<Mersenne31, Mersenne31NonCanonical>(input)
         // apply_circulant_karat_generic_i64(input, MATRIX_CIRC_MDS_16_SML)
     }
 
@@ -77,7 +78,7 @@ const _MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
 impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
         // apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
-        apply_circulant_32_karat(input)
+        apply_circulant_32_karat::<Mersenne31, Mersenne31NonCanonical>(input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 32]) {
@@ -109,7 +110,7 @@ const _MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
 impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
         // apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
-        apply_circulant_64_karat(input)
+        apply_circulant_64_karat::<Mersenne31, Mersenne31NonCanonical>(input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 64]) {
