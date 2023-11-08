@@ -29,11 +29,8 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type F = BabyBear;
 
-    type Mds = IntegratedCosetMds<F, 16>;
-    let mds = Mds::default();
-
-    type Perm = Poseidon2<BabyBear, Mds, DiffusionMatrixBabybear, 16, 7>;
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+    type Perm = Poseidon2<BabyBear, DiffusionMatrixBabybear, 16, 7>;
+    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
     let h = H::new(perm.clone());
