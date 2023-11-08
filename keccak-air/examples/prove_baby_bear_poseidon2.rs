@@ -7,7 +7,6 @@ use p3_field::Field;
 use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_ldt::QuotientMmcs;
-use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -36,11 +35,8 @@ fn main() -> Result<(), VerificationError> {
     type Challenge = BinomialExtensionField<Val, 4>;
     type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
-    type MyMds = CosetMds<Val, 16>;
-    let mds = MyMds::default();
-
-    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 5>;
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+    type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 5>;
+    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
