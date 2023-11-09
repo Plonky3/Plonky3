@@ -58,14 +58,8 @@ fn test_fri_ldt() {
     let proof = ldt.prove(&[challenge_mmcs.clone()], &[&data], &mut challenger);
 
     let mut challenger = Challenger::new(perm);
-    ldt.verify(
-        &[challenge_mmcs],
-        &[dims],
-        &[comm],
-        &proof,
-        &mut challenger,
-    )
-    .unwrap();
+    ldt.verify(&[challenge_mmcs], &[dims], &[comm], &proof, &mut challenger)
+        .unwrap();
 }
 
 #[test]
@@ -87,12 +81,6 @@ fn test_fri_ldt_multiple_degrees() {
     let proof = ldt.prove(&[challenge_mmcs.clone()], &[&data], &mut challenger);
 
     let mut challenger = Challenger::new(perm);
-    ldt.verify(
-        &[challenge_mmcs],
-        &[dims],
-        &[comm],
-        &proof,
-        &mut challenger,
-    )
-    .unwrap();
+    ldt.verify(&[challenge_mmcs], &[dims], &[comm], &proof, &mut challenger)
+        .unwrap();
 }
