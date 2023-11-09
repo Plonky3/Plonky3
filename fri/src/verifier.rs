@@ -62,8 +62,6 @@ pub(crate) fn verify<FC: FriConfig>(
             log_max_height,
         )?;
 
-        dbg!(&smaller_openings);
-
         verify_query(
             config,
             &proof.commit_phase_commits,
@@ -142,10 +140,6 @@ fn verify_query<FC: FriConfig>(
 
         let mut evals = vec![folded_eval; 2];
         evals[index_sibling % 2] = step.sibling_value;
-        println!(
-            "idx: {index_pair} evals: [{}, {}] (sib={})",
-            evals[0], evals[1], step.sibling_value
-        );
 
         let dims = &[Dimensions {
             width: 2,
@@ -161,7 +155,6 @@ fn verify_query<FC: FriConfig>(
                 &step.opening_proof,
             )
             .map_err(|e| VerificationError::CommitPhaseMmcsError(e))?;
-        println!("ok");
 
         let mut xs = [x; 2];
         xs[index_sibling % 2] *= FC::Challenge::two_adic_generator(1);

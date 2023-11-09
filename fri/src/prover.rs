@@ -134,11 +134,8 @@ fn commit_phase<FC: FriConfig>(
 
     for log_folded_height in (config.log_blowup()..log_max_height).rev() {
         let folded_height = 1 << log_folded_height;
-        // TODO: replace with a tranposed matrix view
+        // TODO: replace with a transposed matrix view
         let leaves = RowMajorMatrix::new(current.clone(), folded_height).transpose();
-        for (i, r) in leaves.rows().enumerate() {
-            println!("leaves[{i}] = [{}, {}]", r[0], r[1]);
-        }
         let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
@@ -149,7 +146,6 @@ fn commit_phase<FC: FriConfig>(
 
         let matrices = matrices_with_log_height(log_folded_height);
         if !matrices.is_empty() {
-            println!("folding intermediate");
             reduce_matrices(folded_height, &mut current, &matrices, alpha);
         }
     }
