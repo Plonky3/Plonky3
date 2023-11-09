@@ -185,7 +185,7 @@ fn reduce_matrices<F, Challenge, Mat>(
 where
     F: Field,
     Challenge: ExtensionField<F>,
-    Mat: MatrixRows<F> + Sync,
+    Mat: MatrixRows<Challenge> + Sync,
 {
     (0..height)
         .into_par_iter()

@@ -21,7 +21,7 @@ where
 {
     let degree_bits = 6; // TODO
     let log_quotient_degree = 1; // TODO
-    let g_subgroup = SC::Domain::two_adic_generator(degree_bits);
+    let g_subgroup = SC::Val::two_adic_generator(degree_bits);
 
     let Proof {
         commitments,

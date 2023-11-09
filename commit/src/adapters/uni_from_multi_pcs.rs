@@ -1,22 +1,21 @@
 use core::marker::PhantomData;
 
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::MatrixRows;
 
 use crate::pcs::MultivariatePcs;
 
-pub struct UniFromMultiPcs<Val, Domain, EF, In, M, Challenger>
+pub struct UniFromMultiPcs<Val, EF, In, M, Challenger>
 where
     Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Domain>,
+    EF: ExtensionField<Val>,
     In: MatrixRows<Val>,
-    M: MultivariatePcs<Val, Domain, EF, In, Challenger>,
+    M: MultivariatePcs<Val, EF, In, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     _multi: M,
-    _phantom: PhantomData<(Val, Domain, EF, In, Challenger)>,
+    _phantom: PhantomData<(Val, EF, In, Challenger)>,
 }
 
 // impl<F: Field, M: MultivariatePcs<F>> UnivariatePcs<F> for UniFromMultiPcs<F> {}

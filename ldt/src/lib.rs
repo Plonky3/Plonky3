@@ -14,11 +14,11 @@ pub use quotient::*;
 extern crate alloc;
 
 /// A batch low-degree test (LDT).
-pub trait Ldt<Val, Domain, M, Challenger>
+pub trait Ldt<Val, Challenge, M, Challenger>
 where
     Val: Field,
-    Domain: ExtensionField<Val>,
-    M: Mmcs<Domain>,
+    Challenge: ExtensionField<Val>,
+    M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val>,
 {
     type Proof;

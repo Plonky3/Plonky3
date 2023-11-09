@@ -8,7 +8,7 @@ use p3_commit::{
     UnivariatePcsWithLde,
 };
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::{MatrixRowSlices, MatrixRows};
@@ -17,14 +17,14 @@ use tracing::{info_span, instrument};
 use crate::quotient::QuotientMmcs;
 use crate::{Ldt, Opening};
 
-pub struct LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger> {
+pub struct LdtBasedPcs<Val, EF, Dft, M, L, Challenger> {
     dft: Dft,
     mmcs: M,
     ldt: L,
-    _phantom: PhantomData<(Val, Domain, EF, Challenger)>,
+    _phantom: PhantomData<(Val, EF, Challenger)>,
 }
 
-impl<Val, Domain, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger> {
+impl<Val, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, EF, Dft, M, L, Challenger> {
     pub fn new(dft: Dft, mmcs: M, ldt: L) -> Self {
         Self {
             dft,
@@ -35,21 +35,19 @@ impl<Val, Domain, EF, Dft, M, L, Challenger> LdtBasedPcs<Val, Domain, EF, Dft, M
     }
 }
 
-impl<Val, Domain, EF, In, Dft, M, L, Challenger>
-    UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>
-    for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
+impl<Val, EF, In, Dft, M, L, Challenger> UnivariatePcsWithLde<Val, EF, In, Challenger>
+    for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
+    Val: TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
-    Dft: TwoAdicSubgroupDft<Domain>,
-    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
-    L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
+    Dft: TwoAdicSubgroupDft<Val>,
+    M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
+    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
-    fn coset_shift(&self) -> Domain {
-        Domain::generator()
+    fn coset_shift(&self) -> Val {
+        Val::generator()
     }
 
     fn log_blowup(&self) -> usize {
@@ -59,7 +57,7 @@ where
     fn get_ldes<'a, 'b>(
         &'a self,
         prover_data: &'b Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'b, Domain>>
+    ) -> Vec<RowMajorMatrixView<'b, Val>>
     where
         'a: 'b,
     {
@@ -69,14 +67,14 @@ where
     fn commit_shifted_batches(
         &self,
         polynomials: Vec<In>,
-        coset_shift: Domain,
+        coset_shift: Val,
     ) -> (Self::Commitment, Self::ProverData) {
-        let shift = Domain::generator() / coset_shift;
+        let shift = Val::generator() / coset_shift;
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .into_iter()
                 .map(|poly| {
-                    let input = poly.to_row_major_matrix().to_ext::<Domain>();
+                    let input = poly.to_row_major_matrix();
                     self.dft
                         .coset_lde_batch(input, self.ldt.log_blowup(), shift)
                 })
@@ -86,17 +84,16 @@ where
     }
 }
 
-impl<Val, Domain, EF, In, Dft, M, L, Challenger> Pcs<Val, In>
-    for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
+impl<Val, EF, In, Dft, M, L, Challenger> Pcs<Val, In>
+    for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
+    Val: TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
-    Dft: TwoAdicSubgroupDft<Domain>,
-    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
-    for<'a> M::Mat<'a>: MatrixRowSlices<Domain>,
-    L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
+    Dft: TwoAdicSubgroupDft<Val>,
+    M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
+    for<'a> M::Mat<'a>: MatrixRowSlices<Val>,
+    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     type Commitment = M::Commitment;
@@ -105,20 +102,19 @@ where
     type Error = L::Error;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(polynomials, Domain::one())
+        self.commit_shifted_batches(polynomials, Val::one())
     }
 }
 
-impl<Val, Domain, EF, In, Dft, M, L, Challenger> UnivariatePcs<Val, Domain, EF, In, Challenger>
-    for LdtBasedPcs<Val, Domain, EF, Dft, M, L, Challenger>
+impl<Val, EF, In, Dft, M, L, Challenger> UnivariatePcs<Val, EF, In, Challenger>
+    for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Val> + ExtensionField<Domain> + TwoAdicField,
+    Val: TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField,
     In: MatrixRows<Val>,
-    Dft: TwoAdicSubgroupDft<Domain>,
-    M: 'static + for<'a> DirectMmcs<Domain, Mat<'a> = RowMajorMatrixView<'a, Domain>>,
-    L: Ldt<Val, EF, QuotientMmcs<Domain, EF, M>, Challenger>,
+    Dft: TwoAdicSubgroupDft<Val>,
+    M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
+    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     #[instrument(name = "prove batch opening", skip_all)]
@@ -133,7 +129,7 @@ where
                 .iter()
                 .map(|mat| {
                     let low_coset = mat.vertically_strided(self.ldt.blowup(), 0);
-                    let shift = Domain::generator();
+                    let shift = Val::generator();
                     interpolate_coset(&low_coset, shift, point)
                 })
                 .collect::<OpenedValuesForPoint<EF>>()
@@ -156,8 +152,8 @@ where
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
             prover_data_and_points.iter().copied().unzip();
 
-        let coset_shift: Domain =
-            <Self as UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>>::coset_shift(self);
+        let coset_shift: Val =
+            <Self as UnivariatePcsWithLde<Val, EF, In, Challenger>>::coset_shift(self);
 
         let quotient_mmcs = all_points
             .into_iter()
@@ -179,7 +175,7 @@ where
                             .collect()
                     })
                     .collect();
-                QuotientMmcs::<Domain, EF, _> {
+                QuotientMmcs::<Val, EF, _> {
                     inner: self.mmcs.clone(),
                     openings,
                     coset_shift,
