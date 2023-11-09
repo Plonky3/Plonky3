@@ -34,7 +34,7 @@ fn get_ldt_for_testing() -> (Perm, ChallengeMmcs, FriLdt<MyFriConfig>) {
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
     let fri_config = MyFriConfig::new(1, challenge_mmcs.clone());
 
     (perm, challenge_mmcs, FriLdt { config: fri_config })
@@ -57,9 +57,9 @@ fn test_fri_ldt() {
     let mut challenger = Challenger::new(perm.clone());
     let proof = ldt.prove(&[challenge_mmcs.clone()], &[&data], &mut challenger);
 
-    let mut challenger = Challenger::new(perm.clone());
+    let mut challenger = Challenger::new(perm);
     ldt.verify(
-        &[challenge_mmcs.clone()],
+        &[challenge_mmcs],
         &[dims],
         &[comm],
         &proof,
@@ -86,9 +86,9 @@ fn test_fri_ldt_multiple_degrees() {
     let mut challenger = Challenger::new(perm.clone());
     let proof = ldt.prove(&[challenge_mmcs.clone()], &[&data], &mut challenger);
 
-    let mut challenger = Challenger::new(perm.clone());
+    let mut challenger = Challenger::new(perm);
     ldt.verify(
-        &[challenge_mmcs.clone()],
+        &[challenge_mmcs],
         &[dims],
         &[comm],
         &proof,
