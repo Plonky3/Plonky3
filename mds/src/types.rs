@@ -24,8 +24,7 @@ pub(crate) trait IntegerLike:
 /// Potentially should come with an "unsafe" label as improper use will lead to wraparound and cause errors.
 /// Ensuring algorithms are correct is entirely left to the programmer.
 /// Should only be used with small fields.
-pub(crate) trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128>
-// Multiplication of 2 field elements will yeild an i128.
+pub(crate) trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128> // Multiplication of 2 field elements will yeild an i128.
 {
     /// The order of the field.
     const ORDER_U32: u32;
@@ -71,6 +70,30 @@ pub(crate) trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128>
     fn mul_large(lhs: Self, rhs: Self) -> Self {
         Self::from_small_i128(lhs * rhs)
     }
+
+    /// If we are sure a dot product will not overflow we don't need to pass to i128s.
+    #[inline]
+    fn dot_small<const N: usize>(lhs: [Self; N], rhs: [Self; N]) -> Self {
+        let mut output = Self::mul_small(lhs[0], rhs[0]);
+
+        for i in 1..N {
+            output += Self::mul_small(lhs[i], rhs[i]);
+        }
+
+        output
+    }
+
+    /// Compute a dot product, passing to i128's to prevent overflow.
+    #[inline]
+    fn dot_large<const N: usize>(lhs: [Self; N], rhs: [Self; N]) -> i128 {
+        let mut output = lhs[0]*rhs[0];
+
+        for i in 1..N {
+            output += lhs[i]*rhs[i];
+        }
+
+        output
+    }
 }
 
 /// This lets us pass from our non Canonical representatives back to canonical field elements.
@@ -79,8 +102,12 @@ pub(crate) trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 {
     /// Given a generic non canonical field element, produce a canonical one.
     fn to_canonical(self) -> Base;
 
-    /// Given an element in the field, produce a non canonical one
+    /// Canonical elements embed into the field in the obvious way.
     fn from_canonical(val: Base) -> Self;
+
+    /// Given an element x in a 31 bit field, return the unique element x' = x mod P with |x'| < 2**30.
+    /// This can be handy to prevent overflow.
+    fn from_canonical_to_i31(val: Base) -> Self;
 
     /// Given a non canonical field element garunteed to be < n < 64 bits, produce a canonical one.
     /// The precise value of n will depend on the field. Should be faster than to_canonical for some fields.
@@ -235,9 +262,23 @@ impl Canonicalize<BabyBear> for BabyBearNonCanonical {
         )
     }
 
+
+    /// Currently we take the "Monty" form.
+    /// Need to be careful of this.
     #[inline]
     fn from_canonical(input: BabyBear) -> Self {
         Self::from_u32(to_non_canonical_u32(input))
+    }
+
+
+    #[inline]
+    fn from_canonical_to_i31(input: BabyBear) -> Self {
+        let val = to_non_canonical_u32(input);
+        if val & (1 << 30) != 0 {
+            Self::from_u32(val)
+        } else {
+            Self::from_i32((val as i32) - (BabyBear::ORDER_U32 as i32))
+        }
     }
 
     // Naive Implementation for now
@@ -536,6 +577,16 @@ impl Canonicalize<Mersenne31> for Mersenne31NonCanonical {
     #[inline]
     fn from_canonical(input: Mersenne31) -> Self {
         Self::from_u32(input.as_canonical_u32())
+    }
+
+    #[inline]
+    fn from_canonical_to_i31(input: Mersenne31) -> Self {
+        let val = input.as_canonical_u32();
+        if val & (1 << 30) != 0 {
+            Self::from_u32(val)
+        } else {
+            Self::from_i32((val as i32) - (Mersenne31::ORDER_U32 as i32))
+        }
     }
 
     /// Reduces an i64 in the range -2^61 <= x < 2^61 to its (almost) canonical representative mod 2^31 - 1.
