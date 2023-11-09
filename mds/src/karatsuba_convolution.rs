@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+// use core::mem::transmute;
 
 use crate::types::{Canonicalize, IntegerLike, NonCanonicalPrimeField32};
 use p3_field::{PrimeField32, PrimeField64};
@@ -9,7 +10,8 @@ use p3_field::{PrimeField32, PrimeField64};
 /// Input must be an array of field elements of length 8.
 /// Only works with Mersenne31 and Babybear31
 pub(crate) fn apply_circulant_8_karat<Base: PrimeField32, F: Canonicalize<Base>>(
-    input: [Base; 8], mds_const: [i64; 8]
+    input: [Base; 8],
+    mds_const: [i64; 8],
 ) -> [Base; 8] {
     // The numbers we will encounter through our algorithm are (roughly) bounded by
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
@@ -29,7 +31,8 @@ pub(crate) fn apply_circulant_8_karat<Base: PrimeField32, F: Canonicalize<Base>>
 }
 
 pub(crate) fn apply_circulant_12_karat<Base: PrimeField32, F: Canonicalize<Base>>(
-    input: [Base; 12], mds_const: [i64; 12]
+    input: [Base; 12],
+    mds_const: [i64; 12],
 ) -> [Base; 12] {
     // The numbers we will encounter through our algorithm are bounded by
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML) <= (12 * 2**31) * 33 < 2**40 << 2**63
@@ -52,7 +55,8 @@ pub(crate) fn apply_circulant_12_karat<Base: PrimeField32, F: Canonicalize<Base>
 /// Input must be an array of field elements of length 16.
 /// Only works with Mersenne31 and Babybear31
 pub(crate) fn apply_circulant_16_karat<Base: PrimeField32, F: Canonicalize<Base>>(
-    input: [Base; 16], mds_const: [i64; 16]
+    input: [Base; 16],
+    mds_const: [i64; 16],
 ) -> [Base; 16] {
     // The numbers we will encounter through our algorithm are (roughly) bounded by
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
@@ -75,7 +79,8 @@ pub(crate) fn apply_circulant_16_karat<Base: PrimeField32, F: Canonicalize<Base>
 /// Computes the convolution of input and MATRIX_CIRC_MDS_32_MERSENNE31.
 /// Input must be an array of Mersenne31 field elements of length 32.
 pub(crate) fn apply_circulant_32_karat<Base: PrimeField32, F: Canonicalize<Base>>(
-    input: [Base; 32], mds_const: [i64; 32]
+    input: [Base; 32],
+    mds_const: [i64; 32],
 ) -> [Base; 32] {
     // The numbers we will encounter through our algorithm are > 2**64 as
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_32_MERSENNE31) <= (32 * 2**31)**2 < 2**72.
@@ -86,11 +91,7 @@ pub(crate) fn apply_circulant_32_karat<Base: PrimeField32, F: Canonicalize<Base>
     // Compute the convolution.
     // Currently might? not taking full advantage of MATRIX_CIRC_MDS_8_SML_I64 being constant.
     let mut output: [F; 32] = [F::zero(); 32];
-    LargeConvolution::conv32(
-        input_non_canonical,
-        mds_non_canonical,
-        &mut output,
-    );
+    LargeConvolution::conv32(input_non_canonical, mds_non_canonical, &mut output);
 
     // x is an i49 => (P << 20) + x is positive.
     output.map(F::to_canonical_i_small)
@@ -99,7 +100,8 @@ pub(crate) fn apply_circulant_32_karat<Base: PrimeField32, F: Canonicalize<Base>
 /// Computes the convolution of input and MATRIX_CIRC_MDS_64_MERSENNE31.
 /// Input must be an array of Mersenne31 field elements of length 64.
 pub(crate) fn apply_circulant_64_karat<Base: PrimeField32, F: Canonicalize<Base>>(
-    input: [Base; 64], mds_const: [i64; 64]
+    input: [Base; 64],
+    mds_const: [i64; 64],
 ) -> [Base; 64] {
     // The numbers we will encounter through our algorithm are > 2**64 as
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_64_MERSENNE31) < (64 * 2**31)**2 < 2**74 << 2**127
@@ -204,10 +206,16 @@ fn split_add_sub<T: IntegerLike, const N: usize, const HALF: usize>(
 ) -> ([T; HALF], [T; HALF]) {
     // N = 2*HALF
 
+    // Could make this whole thing mutable so we use less space?
+    // Should be easy, just need to use a for loop.
+
+    // Really want something like the following to work:
+    // let [input_left, input_right] = unsafe{ core::mem::transmute::<[T;N], [[T; HALF]; 2]>(input)};
+
     let (input_left, input_right) = input.split_at(HALF);
 
-    let input_p = add_vec(input_left, input_right); // input(x) mod x^16 - 1
-    let input_m = sub_vec(input_left, input_right); // input(x) mod x^16 + 1
+    let input_p = add_vec(input_left, input_right);
+    let input_m = sub_vec(input_left, input_right);
 
     (input_p, input_m)
 }
@@ -342,6 +350,8 @@ trait Convolution {
         add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
         prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^4 + 1
 
+        // An annoying amount of data fiddiling. It's possible to get around this by choosing the "right" initial ordering
+        // But implementing the relation between prod_even and prod_odd will become complicated in that case.
         [
             prod_even[0],
             prod_mix[0],
@@ -600,16 +610,12 @@ trait Convolution {
         const N: usize = 64;
         const HALF: usize = N / 2;
 
-        let (lhs_left, lhs_right) = lhs.split_at(HALF);
-
-        let lhs_p = add_vec(lhs_left, lhs_right); // lhs(x) mod x^32 - 1
-        let lhs_m = sub_vec(lhs_left, lhs_right); // lhs(x) mod x^32 + 1
+        // Compute lhs(x) mod x^32 - 1, lhs(x) mod x^32 + 1
+        let (lhs_p, lhs_m) = split_add_sub(lhs);
 
         // rhs will always be constant. Not sure how to tell the compiler this though.
-        let (rhs_left, rhs_right) = rhs.split_at(HALF);
-
-        let rhs_p = add_vec(rhs_left, rhs_right); // rhs(x) mod x^32 - 1
-        let rhs_m = sub_vec(rhs_left, rhs_right); // rhs(x) mod x^32 + 1
+        // Compute rhs(x) mod x^32 - 1, rhs(x) mod x^32 + 1
+        let (rhs_p, rhs_m) = split_add_sub(rhs);
 
         let (left, right) = output.split_at_mut(HALF);
         left.clone_from_slice(&Self::signed_conv32(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^32 + 1
@@ -823,73 +829,6 @@ impl Convolution for SmallConvolution {
     }
 }
 
-// It will be handy for functions to be able to handle entries which are a combination of simple integer types
-// In particular u64's, i64's, u128's and i128's so we make a general trait type here.
-trait SimpleInteger:
-    Sized
-    + Default
-    + Copy
-    + Add<Output = Self>
-    + AddAssign
-    + Sub<Output = Self>
-    + SubAssign
-    + Mul<Output = Self>
-    + MulAssign
-    + ShrAssign<usize>
-    + Shr<usize, Output = Self>
-    + ShlAssign<usize>
-    + Shl<usize, Output = Self>
-{
-}
-
-impl<T> SimpleInteger for T where
-    T: Sized
-        + Default
-        + Copy
-        + Add<Output = Self>
-        + AddAssign
-        + Sub<Output = Self>
-        + SubAssign
-        + Mul<Output = Self>
-        + MulAssign
-        + ShrAssign<usize>
-        + Shr<usize, Output = Self>
-        + ShlAssign<usize>
-        + Shl<usize, Output = Self>
-{
-}
-
-impl<T> IntegerLike for T where T: SimpleInteger {}
-
-// Let M be a circulant matrix with first column vec_col and first row vec_row. Then M.u is the convolution of vec_col and u.
-// The vectors given here are the first rows of the respective circulant matrices NOT the first colums.
-// Hence in order to do convolutions we need to compute the first column which is given by
-// vec_col = [vec_row[0], vec_row[n - 1], vec_row[n - 2], ..., vec_row[1]]
-#[inline]
-const fn row_to_col<T: SimpleInteger, const N: usize>(row: [T; N]) -> [T; N] {
-    let mut col = [row[0]; N];
-    let mut i = 1;
-    loop {
-        if i == N {
-            break;
-        }
-        col[i] = row[N - i];
-        i += 1
-    }
-    col
-}
-
-// Takes the dot product of two vectors.
-#[inline]
-fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
-    let n = lhs.len();
-    let mut sum = lhs[0] * rhs[0];
-    for i in 1..n {
-        sum += lhs[i] * rhs[i];
-    }
-    sum
-}
-
 // Given a vector v \in F^N, let v(x) \in F[X] denote the polynomial v_0 + v_1 x + ... + v_{N - 1} x^{N - 1}.
 // Then w is equal to the convolution v * u if and only if w(x) = v(x)u(x) mod x^N - 1.
 // Additionally, define the signed convolution by w(x) = v(x)u(x) mod x^N + 1.
@@ -955,6 +894,73 @@ pub fn apply_circulant_karat_generic_i64<F: PrimeField64, const N: usize>(
     conv_karat_generic(&lhs_i64, &rhs_i64, &mut output);
 
     output.map(|x| F::from_wrapped_u64(x as u64))
+}
+
+// It will be handy for functions to be able to handle entries which are a combination of simple integer types
+// In particular u64's, i64's, u128's and i128's so we make a general trait type here.
+trait SimpleInteger:
+    Sized
+    + Default
+    + Copy
+    + Add<Output = Self>
+    + AddAssign
+    + Sub<Output = Self>
+    + SubAssign
+    + Mul<Output = Self>
+    + MulAssign
+    + ShrAssign<usize>
+    + Shr<usize, Output = Self>
+    + ShlAssign<usize>
+    + Shl<usize, Output = Self>
+{
+}
+
+impl<T> SimpleInteger for T where
+    T: Sized
+        + Default
+        + Copy
+        + Add<Output = Self>
+        + AddAssign
+        + Sub<Output = Self>
+        + SubAssign
+        + Mul<Output = Self>
+        + MulAssign
+        + ShrAssign<usize>
+        + Shr<usize, Output = Self>
+        + ShlAssign<usize>
+        + Shl<usize, Output = Self>
+{
+}
+
+impl<T> IntegerLike for T where T: SimpleInteger {}
+
+// Let M be a circulant matrix with first column vec_col and first row vec_row. Then M.u is the convolution of vec_col and u.
+// The vectors given here are the first rows of the respective circulant matrices NOT the first colums.
+// Hence in order to do convolutions we need to compute the first column which is given by
+// vec_col = [vec_row[0], vec_row[n - 1], vec_row[n - 2], ..., vec_row[1]]
+#[inline]
+const fn row_to_col<T: SimpleInteger, const N: usize>(row: [T; N]) -> [T; N] {
+    let mut col = [row[0]; N];
+    let mut i = 1;
+    loop {
+        if i == N {
+            break;
+        }
+        col[i] = row[N - i];
+        i += 1
+    }
+    col
+}
+
+// Takes the dot product of two vectors.
+#[inline]
+fn dot<T: SimpleInteger>(lhs: &[T], rhs: &[T]) -> T {
+    let n = lhs.len();
+    let mut sum = lhs[0] * rhs[0];
+    for i in 1..n {
+        sum += lhs[i] * rhs[i];
+    }
+    sum
 }
 
 // We produce a generic implementations. It will likely be faster long term to specialise these.

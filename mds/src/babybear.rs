@@ -8,7 +8,10 @@ use p3_baby_bear::BabyBear;
 // use p3_dft::Radix2Bowers;
 use p3_symmetric::Permutation;
 
-use crate::karatsuba_convolution::{apply_circulant_64_karat, apply_circulant_32_karat, apply_circulant_16_karat, apply_circulant_12_karat, apply_circulant_8_karat};
+use crate::karatsuba_convolution::{
+    apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
+    apply_circulant_64_karat, apply_circulant_8_karat,
+};
 use crate::types::BabyBearNonCanonical;
 use crate::util::{apply_circulant, first_row_to_first_col};
 use crate::MdsPermutation;
@@ -22,7 +25,8 @@ const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
-        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] = first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
 
         apply_circulant_8_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_8_SML_COL)
     }
@@ -37,8 +41,12 @@ const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4,
 
 impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
-        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] = first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
-        apply_circulant_12_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_12_SML_COL)
+        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        apply_circulant_12_karat::<BabyBear, BabyBearNonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_12_SML_COL,
+        )
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 12]) {
@@ -54,10 +62,14 @@ const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] = [
 
 impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
-        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
         // const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
         // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
-        apply_circulant_16_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_16_SML_COL)
+        apply_circulant_16_karat::<BabyBear, BabyBearNonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_16_SML_COL,
+        )
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 16]) {
@@ -101,8 +113,12 @@ const MATRIX_CIRC_MDS_32_BABYBEAR_ROW: [i64; 32] = [
 
 impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
-        const MATRIX_CIRC_MDS_32_BABYBEAR_COL: [i64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR_ROW);
-        apply_circulant_32_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_32_BABYBEAR_COL)
+        const MATRIX_CIRC_MDS_32_BABYBEAR_COL: [i64; 32] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR_ROW);
+        apply_circulant_32_karat::<BabyBear, BabyBearNonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_32_BABYBEAR_COL,
+        )
         // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 
@@ -134,8 +150,12 @@ const MATRIX_CIRC_MDS_64_BABYBEAR_ROW: [i64; 64] = [
 
 impl Permutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
-        const MATRIX_CIRC_MDS_64_BABYBEAR_COL: [i64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR_ROW);
-        apply_circulant_64_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_64_BABYBEAR_COL)
+        const MATRIX_CIRC_MDS_64_BABYBEAR_COL: [i64; 64] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR_ROW);
+        apply_circulant_64_karat::<BabyBear, BabyBearNonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_64_BABYBEAR_COL,
+        )
         // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 

@@ -7,7 +7,7 @@
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 
-use crate::util::{first_row_to_first_col};
+use crate::util::first_row_to_first_col;
 // apply_circulant_8_sml, apply_circulant_8_karat, apply_circulant_karat_generic_i64
 use crate::karatsuba_convolution::{
     apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
@@ -23,9 +23,13 @@ const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
-        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] = first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
         // apply_circulant_8_sml(input)
-        apply_circulant_8_karat::<Mersenne31, Mersenne31NonCanonical>(input, MATRIX_CIRC_MDS_8_SML_COL)
+        apply_circulant_8_karat::<Mersenne31, Mersenne31NonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_8_SML_COL,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
@@ -38,9 +42,13 @@ const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4,
 
 impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
-        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] = first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
         // apply_circulant_12_sml(input)
-        apply_circulant_12_karat::<Mersenne31, Mersenne31NonCanonical>(input, MATRIX_CIRC_MDS_12_SML_COL)
+        apply_circulant_12_karat::<Mersenne31, Mersenne31NonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_12_SML_COL,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 12]) {
@@ -54,9 +62,13 @@ const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
 
 impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
-        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
         // apply_circulant_16_sml(input)
-        apply_circulant_16_karat::<Mersenne31, Mersenne31NonCanonical>(input, MATRIX_CIRC_MDS_16_SML_COL)
+        apply_circulant_16_karat::<Mersenne31, Mersenne31NonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_16_SML_COL,
+        )
         // apply_circulant_karat_generic_i64(input, MATRIX_CIRC_MDS_16_SML)
     }
 
@@ -80,9 +92,13 @@ const MATRIX_CIRC_MDS_32_MERSENNE31_ROW: [i64; 32] = [
 
 impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
-        const MATRIX_CIRC_MDS_32_MERSENNE31_COL: [i64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_MERSENNE31_ROW);
+        const MATRIX_CIRC_MDS_32_MERSENNE31_COL: [i64; 32] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_32_MERSENNE31_ROW);
         // apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
-        apply_circulant_32_karat::<Mersenne31, Mersenne31NonCanonical>(input, MATRIX_CIRC_MDS_32_MERSENNE31_COL)
+        apply_circulant_32_karat::<Mersenne31, Mersenne31NonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_32_MERSENNE31_COL,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 32]) {
@@ -113,9 +129,13 @@ const MATRIX_CIRC_MDS_64_MERSENNE31_ROW: [i64; 64] = [
 
 impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
-        const MATRIX_CIRC_MDS_64_MERSENNE31_COL: [i64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_MERSENNE31_ROW);
+        const MATRIX_CIRC_MDS_64_MERSENNE31_COL: [i64; 64] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_64_MERSENNE31_ROW);
         // apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
-        apply_circulant_64_karat::<Mersenne31, Mersenne31NonCanonical>(input, MATRIX_CIRC_MDS_64_MERSENNE31_COL)
+        apply_circulant_64_karat::<Mersenne31, Mersenne31NonCanonical>(
+            input,
+            MATRIX_CIRC_MDS_64_MERSENNE31_COL,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 64]) {
