@@ -33,6 +33,8 @@ where
     }
 }
 
+// Multiply a 4-element vector x by M_4, in place.
+// This uses the formula from the start of Appendix B, with multiplications unrolled into additions.
 fn apply_m_4<AF>(x: &mut [AF])
 where
     AF: AbstractField,
@@ -59,10 +61,15 @@ where
     AF::F: PrimeField,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
+        // First, we apply M_4 to each consecutive four elements of the state.
+        // In Appendix B's terminology, this replaces each x_i with x_i'.
         for i in 0..WIDTH / 4 {
             apply_m_4(&mut state[4 * i..4 * i + 4]);
         }
 
+        // Now, we apply the outer circulant matrix (to compute the y_i values).
+
+        // We first precompute the four sums of every four elements.
         let sums: Vec<AF> = (0..4)
             .map(|k| {
                 (0..state.len() / 4)
@@ -71,6 +78,8 @@ where
             })
             .collect();
 
+        // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
+        // In other words, we can add a single copy of x_i' to the appropriate one of our precomputed sums
         for i in 0..state.len() {
             state[i] += sums[i % 4].clone();
         }
