@@ -228,7 +228,7 @@ where
                         })
                         .collect_vec();
                     (
-                        dims.into_iter()
+                        dims.iter()
                             .map(|d| Dimensions {
                                 width: d.width * openings.len(),
                                 height: d.height << self.ldt.log_blowup(),

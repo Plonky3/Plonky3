@@ -1,12 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
+use itertools::izip;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::Mmcs;
 use p3_field::{AbstractField, TwoAdicField};
 use p3_matrix::Dimensions;
-use p3_util::log2_strict_usize;
 
 use crate::query_index::query_index_sibling;
 use crate::{FriConfig, FriProof, InputOpening, QueryProof};
@@ -22,6 +21,8 @@ pub type VerificationErrorForFriConfig<FC> = VerificationError<
     <<FC as FriConfig>::InputMmcs as Mmcs<<FC as FriConfig>::Challenge>>::Error,
     <<FC as FriConfig>::CommitPhaseMmcs as Mmcs<<FC as FriConfig>::Challenge>>::Error,
 >;
+
+type VerificationResult<T, FC> = Result<T, VerificationErrorForFriConfig<FC>>;
 
 pub(crate) fn verify<FC: FriConfig>(
     config: &FC,
@@ -52,14 +53,13 @@ pub(crate) fn verify<FC: FriConfig>(
     for query_proof in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height);
 
-        let (initial_reduced_opening, smaller_openings) = verify_input(
+        let reduced_opening = verify_input(
             input_mmcs,
             input_commits,
-            &input_dims,
+            input_dims,
             &query_proof.input_openings,
             index,
             alpha,
-            log_max_height,
         )?;
 
         verify_query(
@@ -67,10 +67,8 @@ pub(crate) fn verify<FC: FriConfig>(
             &proof.commit_phase_commits,
             index,
             query_proof,
-            alpha,
             &betas,
-            initial_reduced_opening,
-            &smaller_openings,
+            reduced_opening,
             log_max_height,
         )?;
     }
@@ -85,10 +83,8 @@ fn verify_input<FC: FriConfig>(
     input_openings: &[InputOpening<FC>],
     index: usize,
     alpha: FC::Challenge,
-    log_max_height: usize,
-) -> Result<(FC::Challenge, Vec<Vec<FC::Challenge>>), VerificationErrorForFriConfig<FC>> {
-    let mut initial_reduced_opening = FC::Challenge::zero();
-    let mut smaller_openings = vec![vec![]; log_max_height];
+) -> VerificationResult<FC::Challenge, FC> {
+    let mut reduced_opening = FC::Challenge::zero();
 
     for (mmcs, commit, dims, opening) in
         izip!(input_mmcs, input_commits, input_dims, input_openings)
@@ -100,22 +96,17 @@ fn verify_input<FC: FriConfig>(
             &opening.opened_values,
             &opening.opening_proof,
         )
-        .map_err(|e| VerificationError::InputMmcsError(e))?;
+        .map_err(VerificationError::InputMmcsError)?;
 
-        for (vals, dims) in opening.opened_values.iter().zip(dims) {
-            let log_height = log2_strict_usize(dims.height);
-            if log_height == log_max_height {
-                for v in vals {
-                    initial_reduced_opening *= alpha;
-                    initial_reduced_opening += *v;
-                }
-            } else {
-                smaller_openings[log_height].extend(vals.into_iter().copied());
+        for vals in opening.opened_values.iter() {
+            for v in vals {
+                reduced_opening *= alpha;
+                reduced_opening += *v;
             }
         }
     }
 
-    Ok((initial_reduced_opening, smaller_openings))
+    Ok(reduced_opening)
 }
 
 fn verify_query<FC: FriConfig>(
@@ -123,10 +114,8 @@ fn verify_query<FC: FriConfig>(
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment],
     index: usize,
     proof: &QueryProof<FC>,
-    alpha: FC::Challenge,
     betas: &[FC::Challenge],
     mut folded_eval: FC::Challenge,
-    smaller_openings: &[Vec<FC::Challenge>],
     log_max_height: usize,
 ) -> Result<(), VerificationErrorForFriConfig<FC>> {
     let mut x = FC::Challenge::two_adic_generator(log_max_height).exp_u64(index as u64);
@@ -154,17 +143,12 @@ fn verify_query<FC: FriConfig>(
                 &[evals.clone()],
                 &step.opening_proof,
             )
-            .map_err(|e| VerificationError::CommitPhaseMmcsError(e))?;
+            .map_err(VerificationError::CommitPhaseMmcsError)?;
 
         let mut xs = [x; 2];
         xs[index_sibling % 2] *= FC::Challenge::two_adic_generator(1);
         // interpolate and evaluate at beta
         folded_eval = evals[0] + (beta - xs[0]) * (evals[1] - evals[0]) / (xs[1] - xs[0]);
-
-        for o in &smaller_openings[log_height - 1] {
-            folded_eval *= alpha;
-            folded_eval += *o;
-        }
 
         x = x.square();
     }

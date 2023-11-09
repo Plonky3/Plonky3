@@ -77,7 +77,6 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use p3_field::{AbstractField, Field};
     use rand::{thread_rng, Rng};
 
     use super::*;
@@ -108,5 +107,4 @@ mod tests {
         let got = fold_even_odd(&evals, beta);
         assert_eq!(expected, got);
     }
-
 }

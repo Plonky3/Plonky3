@@ -6,6 +6,7 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::UnivariatePcs;
 use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
+use p3_matrix::Dimensions;
 
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
 
@@ -49,9 +50,20 @@ where
         ]],
         vec![vec![opened_values.quotient_chunks.clone()]],
     ];
+    // TODO
+    let dims = &[
+        vec![Dimensions {
+            width: opened_values.trace_local.len(),
+            height: 1 << degree_bits,
+        }],
+        vec![Dimensions {
+            width: opened_values.quotient_chunks.len(),
+            height: 1 << degree_bits,
+        }],
+    ];
     config
         .pcs()
-        .verify_multi_batches(commits_and_points, values, opening_proof, challenger)
+        .verify_multi_batches(commits_and_points, dims, values, opening_proof, challenger)
         .map_err(|_| VerificationError::InvalidOpeningArgument)?;
 
     // Derive the opening of the quotient polynomial, which was split into degree n chunks, then

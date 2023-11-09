@@ -125,9 +125,9 @@ fn commit_phase<FC: FriConfig>(
     };
 
     let largest_matrices = matrices_with_log_height(log_max_height);
-    let mut current = vec![FC::Challenge::zero(); max_height];
+    let zero_vec = vec![FC::Challenge::zero(); max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
-    reduce_matrices(max_height, &mut current, &largest_matrices, alpha);
+    let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
 
     let mut commits = vec![];
     let mut data = vec![];
@@ -146,7 +146,7 @@ fn commit_phase<FC: FriConfig>(
 
         let matrices = matrices_with_log_height(log_folded_height);
         if !matrices.is_empty() {
-            reduce_matrices(folded_height, &mut current, &matrices, alpha);
+            current = reduce_matrices(folded_height, &current, &matrices, alpha);
         }
     }
 
@@ -177,22 +177,26 @@ struct CommitPhaseResult<FC: FriConfig> {
 )]
 fn reduce_matrices<F, Challenge, Mat>(
     height: usize,
-    init: &mut [Challenge],
+    init: &[Challenge],
     matrices: &[Mat],
     alpha: Challenge,
-) where
+) -> Vec<Challenge>
+where
     F: Field,
     Challenge: ExtensionField<F>,
     Mat: MatrixRows<F> + Sync,
 {
-    let index_bits = log2_strict_usize(height);
-    for r in 0..height {
-        let ro = &mut init[r];
-        for mat in matrices {
-            for col in mat.row(r) {
-                *ro *= alpha;
-                *ro += col;
+    (0..height)
+        .into_par_iter()
+        .map(|r| {
+            let mut reduced = init[r];
+            for mat in matrices {
+                for col in mat.row(r) {
+                    reduced *= alpha;
+                    reduced += col;
+                }
             }
-        }
-    }
+            reduced
+        })
+        .collect()
 }
