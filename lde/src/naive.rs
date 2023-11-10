@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
-    scale_vec, sum_vecs, ExtensionField, Field, TwoAdicField,
+    scale_vec, sum_vecs, Field, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::VerticalPair;
@@ -20,7 +20,7 @@ pub struct NaiveSubgroupLde;
 /// A naive quadratic-time implementation of `TwoAdicCosetLde`, intended for testing.
 pub struct NaiveCosetLde;
 
-impl<F, In> UndefinedLde<F, F, In> for NaiveUndefinedLde
+impl<F, In> UndefinedLde<F, In> for NaiveUndefinedLde
 where
     F: Field,
     In: MatrixRows<F>,
@@ -43,67 +43,57 @@ where
     }
 }
 
-impl<Val, Domain> TwoAdicLde<Val, Domain> for NaiveSubgroupLde
+impl<Val> TwoAdicLde<Val> for NaiveSubgroupLde
 where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
 {
-    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Domain> {
+    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Val> {
         let bits = log2_strict_usize(polys.height());
-        let g = Domain::two_adic_generator(bits);
-        let subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << bits).collect::<Vec<_>>();
+        let g = Val::two_adic_generator(bits);
+        let subgroup = cyclic_subgroup_known_order::<Val>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
-        let g_lde = Domain::two_adic_generator(lde_bits);
-        let lde_subgroup = cyclic_subgroup_known_order::<Domain>(g_lde, 1 << lde_bits);
+        let g_lde = Val::two_adic_generator(lde_bits);
+        let lde_subgroup = cyclic_subgroup_known_order::<Val>(g_lde, 1 << lde_bits);
 
-        let polys_fe = polys.map(|x| Domain::from_base(x));
         let values = lde_subgroup
-            .flat_map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
+            .flat_map(|x| interpolate(&subgroup, &polys, x, &weights))
             .collect();
         RowMajorMatrix::new(values, polys.width())
     }
 }
 
-impl<Val, Domain> TwoAdicLde<Val, Domain> for NaiveCosetLde
+impl<Val> TwoAdicLde<Val> for NaiveCosetLde
 where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
 {
-    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Domain> {
+    fn lde_batch(&self, polys: RowMajorMatrix<Val>, added_bits: usize) -> RowMajorMatrix<Val> {
         let bits = log2_strict_usize(polys.height());
-        let g = Domain::two_adic_generator(bits);
-        let subgroup = cyclic_subgroup_known_order::<Domain>(g, 1 << bits).collect::<Vec<_>>();
+        let g = Val::two_adic_generator(bits);
+        let subgroup = cyclic_subgroup_known_order::<Val>(g, 1 << bits).collect::<Vec<_>>();
         let weights = barycentric_weights(&subgroup);
 
         let lde_bits = bits + added_bits;
-        let g_lde = Domain::two_adic_generator(lde_bits);
+        let g_lde = Val::two_adic_generator(lde_bits);
         let lde_subgroup =
             cyclic_subgroup_coset_known_order(g_lde, self.shift(lde_bits), 1 << lde_bits);
 
-        let polys_fe = polys.map(|x| Domain::from_base(x));
         let values = lde_subgroup
-            .flat_map(|x| interpolate(&subgroup, &polys_fe, x, &weights))
+            .flat_map(|x| interpolate(&subgroup, &polys, x, &weights))
             .collect();
         RowMajorMatrix::new(values, polys.width())
     }
 }
 
-impl<Val, Domain> TwoAdicSubgroupLde<Val, Domain> for NaiveSubgroupLde
-where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-{
-}
+impl<Val> TwoAdicSubgroupLde<Val> for NaiveSubgroupLde where Val: TwoAdicField {}
 
-impl<Val, Domain> TwoAdicCosetLde<Val, Domain> for NaiveCosetLde
+impl<Val> TwoAdicCosetLde<Val> for NaiveCosetLde
 where
-    Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
 {
-    fn shift(&self, _lde_bits: usize) -> Domain {
-        Domain::generator()
+    fn shift(&self, _lde_bits: usize) -> Val {
+        Val::generator()
     }
 }
 
