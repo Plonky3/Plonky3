@@ -4,7 +4,7 @@
 //! Supported sizes: 8, 12, 16, 32, 64.
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{Mersenne31, Mersenne31NonCanonical};
 use p3_symmetric::Permutation;
 
 use crate::util::first_row_to_first_col;
@@ -13,7 +13,6 @@ use crate::karatsuba_convolution::{
     apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
     apply_circulant_64_karat, apply_circulant_8_karat,
 };
-use crate::types::Mersenne31NonCanonical;
 use crate::MdsPermutation;
 
 #[derive(Clone, Default)]

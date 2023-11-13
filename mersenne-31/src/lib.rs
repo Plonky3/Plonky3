@@ -8,6 +8,7 @@ mod complex;
 mod dft;
 mod extension;
 mod radix_2_dit;
+mod non_canonical;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -23,6 +24,8 @@ use p3_field::{
     PrimeField64,
 };
 pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
+pub use non_canonical::*;
+
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 

@@ -9,9 +9,9 @@ p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
+p3-baby-bear = { path = "../baby-bear" }
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 criterion = "0.5.1"

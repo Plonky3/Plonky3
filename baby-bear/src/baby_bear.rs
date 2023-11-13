@@ -18,7 +18,7 @@ const MONTY_MU: u32 = 0x8000001;
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // `PackedBabyBearNeon` relies on this!
 pub struct BabyBear {
-    value: u32,
+    pub(crate) value: u32,
 }
 
 impl BabyBear {

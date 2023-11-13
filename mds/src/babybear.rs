@@ -4,7 +4,7 @@
 //! Supported sizes: 8, 12, 16, 24, 32, 64.
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{BabyBear, BabyBearNonCanonical};
 // use p3_dft::Radix2Bowers;
 use p3_symmetric::Permutation;
 
@@ -12,7 +12,6 @@ use crate::karatsuba_convolution::{
     apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
     apply_circulant_64_karat, apply_circulant_8_karat,
 };
-use crate::types::BabyBearNonCanonical;
 use crate::util::{apply_circulant, first_row_to_first_col};
 use crate::MdsPermutation;
 
