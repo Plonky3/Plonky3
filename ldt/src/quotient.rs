@@ -73,10 +73,7 @@ impl<F: Field> Opening<F> {
             }
             rs.push(
                 r.into_iter()
-                    .map(|c| {
-                        debug_assert!(c.is_in_basefield());
-                        c.as_base_slice()[0]
-                    })
+                    .map(|c| c.as_base().expect("Extension is not algebraic?"))
                     .collect(),
             );
         }
@@ -286,7 +283,6 @@ impl<'a, F: Field> Iterator for QuotientMatrixRow<'a, F> {
         let numerator = eval - eval_poly(&opening.remainder_polys[self.inner_col_index], self.x);
         let denominator = self.inv_denominator[self.opening_index];
         let result = numerator * denominator;
-        // dbg!(eval, numerator, denominator, result);
         self.inner_col_index += 1;
         Some(result)
     }
@@ -299,18 +295,6 @@ fn get_repeated<T: Eq + Debug, I: Iterator<Item = T>>(mut iter: I) -> T {
         debug_assert_eq!(x, first, "{:?} != {:?}", x, first);
     }
     first
-}
-
-fn to_base<F: Field, EF: ExtensionField<F>>(vec: Vec<EF>) -> Vec<F> {
-    vec.into_iter()
-        .map(|x| {
-            let base = x.as_base_slice();
-            for b in &base[1..] {
-                assert!(b.is_zero());
-            }
-            base[0]
-        })
-        .collect()
 }
 
 #[cfg(test)]

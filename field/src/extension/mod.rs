@@ -34,10 +34,9 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
             m = naive_poly_mul(&m, &[-self, Self::one()]);
             self = self.frobenius();
         }
-        let mut m_iter = m.into_iter().map(|c| {
-            debug_assert!(c.is_in_basefield());
-            c.as_base_slice()[0]
-        });
+        let mut m_iter = m
+            .into_iter()
+            .map(|c| c.as_base().expect("Extension is not algebraic?"));
         let m: Vec<F> = m_iter.by_ref().take(Self::D + 1).collect();
         debug_assert_eq!(m.len(), Self::D + 1);
         debug_assert_eq!(m.last(), Some(&F::one()));
