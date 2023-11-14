@@ -1,6 +1,6 @@
 // use core::mem::transmute;
 
-use p3_field::{PrimeField32, Canonicalize, IntegerLike, NonCanonicalPrimeField32};
+use p3_field::{Canonicalize, NonCanonicalPrimeField32, PrimeField32};
 
 /// Computes the convolution of input and MATRIX_CIRC_MDS_8_SML.
 /// Input must be an array of field elements of length 8.
@@ -114,64 +114,6 @@ pub(crate) fn apply_circulant_64_karat<Base: PrimeField32, F: Canonicalize<Base>
     output.map(F::to_canonical_i_small)
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// Several functions here to encode some simple vector addition and similar.
-
-/// Performs vector addition on slices saving the result in the first slice
-#[inline]
-fn add_mut<T: IntegerLike>(lhs: &mut [T], rhs: &[T]) {
-    let n = rhs.len();
-    for i in 0..n {
-        lhs[i] += rhs[i]
-    }
-}
-
-// Performs vector addition on slices returning a new array.
-// This should be a const function but I can't work out how to do it.
-// Need to say that Add and Default are constant. (I have a workaround for Default but not Add)
-#[inline]
-fn add_vec<T: IntegerLike, const N: usize>(lhs: &[T], rhs: &[T]) -> [T; N] {
-    let mut output: [T; N] = [T::default(); N];
-    let mut i = 0;
-    loop {
-        output[i] = lhs[i] + rhs[i];
-        i += 1;
-        if i == N {
-            break;
-        }
-    }
-    output
-}
-
-/// Performs vector subtraction on slices saving the result in the first slice
-#[inline]
-fn sub_mut<T: IntegerLike>(lhs: &mut [T], sub: &[T]) {
-    let n = sub.len();
-    for i in 0..n {
-        lhs[i] -= sub[i]
-    }
-}
-
-// Performs vector addition on slices returning a new array.
-// This should be a const function but I can't work out how to do it.
-// Need to say that Sub and Default are constant. (I have a workaround for Default but not Sub)
-#[inline]
-fn sub_vec<T: IntegerLike, const N: usize>(lhs: &[T], sub: &[T]) -> [T; N] {
-    let mut output: [T; N] = [T::default(); N];
-    let mut i = 0;
-    loop {
-        output[i] = lhs[i] - sub[i];
-        i += 1;
-        if i == N {
-            break;
-        }
-    }
-    output
-}
-
 /// Takes the dot product of two vectors whose products would overflow an i64.
 /// Computes the result as i128's and returns that.
 #[inline]
@@ -195,27 +137,6 @@ fn dot_i64<T: NonCanonicalPrimeField32>(lhs: &[T], rhs: &[T]) -> T {
     sum
 }
 
-/// Split an array of length N into two subarrays of length N/2.
-/// Return the sum and difference of the arrays.
-fn split_add_sub<T: IntegerLike, const N: usize, const HALF: usize>(
-    input: [T; N],
-) -> ([T; HALF], [T; HALF]) {
-    // N = 2*HALF
-
-    // Could make this whole thing mutable so we use less space?
-    // Should be easy, just need to use a for loop.
-
-    // Really want something like the following to work:
-    // let [input_left, input_right] = unsafe{ core::mem::transmute::<[T;N], [[T; HALF]; 2]>(input)};
-
-    let (input_left, input_right) = input.split_at(HALF);
-
-    let input_p = add_vec(input_left, input_right);
-    let input_m = sub_vec(input_left, input_right);
-
-    (input_p, input_m)
-}
-
 /// This will package all our basic convolution functions but allow for us to slightly modify implementations
 /// to suit our purposes.
 trait Convolution {
@@ -227,39 +148,40 @@ trait Convolution {
 
     /// Compute the signed convolution of two vectors of length 3.
     /// output(x) = lhs(x)rhs(x) mod x^3 - 1
-    fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: &[T; 3], rhs: &[T; 3], output: &mut [T]);
+    fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: [T; 3], rhs: [T; 3], output: &mut [T]);
 
     /// Compute the convolution of two vectors of length 4.
     /// output(x) = lhs(x)rhs(x) mod x^4 - 1
     fn conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]);
 
-    /// Compute the signed convolution of two vectors of length 4.
-    /// output(x) = lhs(x)rhs(x) mod x^4 + 1
-    /// Eventually we will remove this and only have the mutable version.
-    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4]) -> [T; 4];
-
     /// Compute the signed convolution of two vectors of length 4 and save in output.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
-    fn signed_conv4_mut<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]);
+    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]);
 
     /// Compute the signed convolution of two vectors of length 6.
     /// output(x) = lhs(x)rhs(x) mod x^6 - 1
     /// This should likely be replaced by a mutable version.
-    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6]) -> [T; 6];
+    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6], output: &mut [T]);
 
+    /// Compute the convolution of two vectors of length N.
+    /// output(x) = lhs(x)rhs(x) mod x^N - 1
+    /// We split this into a convolution and signed convolution of size N/2
     #[inline(always)]
     fn conv_n<T: NonCanonicalPrimeField32, const N: usize, const HALF_N: usize>(
         lhs: [T; N],
         rhs: [T; N],
         output: &mut [T],
         inner_conv: fn([T; HALF_N], [T; HALF_N], &mut [T]),
-        inner_signed_conv: fn([T; HALF_N], [T; HALF_N]) -> [T; HALF_N],
+        inner_signed_conv: fn([T; HALF_N], [T; HALF_N], &mut [T]),
     ) {
+        debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
-        let mut lhs_pos = [T::zero(); HALF_N];
-        let mut lhs_neg = [T::zero(); HALF_N];
-        let mut rhs_pos = [T::zero(); HALF_N];
-        let mut rhs_neg = [T::zero(); HALF_N];
+        let mut lhs_pos = [T::zero(); HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
+        let mut lhs_neg = [T::zero(); HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
+        let mut rhs_pos = [T::zero(); HALF_N]; // rhs_pos = lhs(x) mod x^{N/2} - 1
+        let mut rhs_neg = [T::zero(); HALF_N]; // rhs_nos = lhs(x) mod x^{N/2} - 1
+
+        // Could test out making lhs/rhs mutable?
 
         for i in 0..HALF_N {
             let s = lhs[i];
@@ -275,25 +197,28 @@ trait Convolution {
             rhs_neg[i] = s - t;
         }
 
-
         let (left, right) = output.split_at_mut(HALF_N);
 
-        left.clone_from_slice(&inner_signed_conv(lhs_neg, rhs_neg));
-        inner_conv(lhs_pos, rhs_pos, right);
+        inner_signed_conv(lhs_neg, rhs_neg, left); // left = lhs(x)rhs(x) mod x^{N/2} + 1
+        inner_conv(lhs_pos, rhs_pos, right); // right = lhs(x)rhs(x) mod x^{N/2} - 1
 
         for i in 0..HALF_N {
-            left[i] += right[i];    // w_0 + w_1
-            left[i] >>= 1;          // (w_0 + w_1)/2
-            right[i] -= left[i];    // (w_0 - w_1)/2
+            left[i] += right[i]; // w_0 + w_1
+            left[i] >>= 1; // (w_0 + w_1)/2
+            right[i] -= left[i]; // (w_0 - w_1)/2
         }
     }
 
+    /// Compute the signed convolution of two vectors of length N.
+    /// output(x) = lhs(x)rhs(x) mod x^N + 1
     #[inline(always)]
     fn signed_conv_n<T: NonCanonicalPrimeField32, const N: usize, const HALF_N: usize>(
         lhs: [T; N],
         rhs: [T; N],
-        inner_signed_conv: fn([T; HALF_N], [T; HALF_N]) -> [T; HALF_N],
-    ) -> [T; N] {
+        output: &mut [T],
+        inner_signed_conv: fn([T; HALF_N], [T; HALF_N], &mut [T]),
+    ) {
+        debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
         let mut lhs_even = [T::zero(); HALF_N];
         let mut lhs_odd = [T::zero(); HALF_N];
@@ -303,65 +228,49 @@ trait Convolution {
         let mut rhs_sum = [T::zero(); HALF_N];
 
         for i in 0..HALF_N {
-            lhs_even[i] = lhs[2*i];
-            lhs_odd[i] = lhs[2*i + 1];
+            lhs_even[i] = lhs[2 * i];
+            lhs_odd[i] = lhs[2 * i + 1];
             lhs_sum[i] = lhs_even[i] + lhs_odd[i];
 
-            rhs_even[i] = rhs[2*i];
-            rhs_odd[i] = rhs[2*i + 1];
+            rhs_even[i] = rhs[2 * i];
+            rhs_odd[i] = rhs[2 * i + 1];
             rhs_sum[i] = rhs_even[i] + rhs_odd[i];
         }
 
-        let s_conv_even = inner_signed_conv(lhs_even, rhs_even);
-        let s_conv_odd = inner_signed_conv(lhs_odd, rhs_odd);
-        let s_conv_sum = inner_signed_conv(lhs_sum, rhs_sum);
+        // Could make some scratch space to draw from here?
 
-        // NB: The compiler is smart enough not to initialise these arrays.
-        let mut output = [T::zero(); N];
+        let mut even_s_conv = [T::zero(); HALF_N];
 
-        output[0] = s_conv_even[0] - s_conv_odd[HALF_N - 1];
-        output[1] = s_conv_sum[0] - s_conv_even[0] - s_conv_odd[0];
+        {
+            let (left, right) = output.split_at_mut(HALF_N);
 
-        for i in 1..HALF_N {
-            output[2*i] = s_conv_even[i] + s_conv_odd[i - 1];
-            output[2*i + 1] = s_conv_sum[i] - s_conv_even[i] - s_conv_odd[i];
+            inner_signed_conv(lhs_even, rhs_even, &mut even_s_conv);
+            inner_signed_conv(lhs_odd, rhs_odd, left);
+            inner_signed_conv(lhs_sum, rhs_sum, right);
+
+            // First we get the correct values.
+            right[0] -= even_s_conv[0] + left[0];
+            even_s_conv[0] -= left[HALF_N - 1];
+
+            for i in 1..HALF_N {
+                right[i] -= even_s_conv[i] + left[i];
+                even_s_conv[i] += left[i - 1];
+            }
         }
 
-        output
+        for i in 0..HALF_N {
+            output[2 * i] = even_s_conv[i];
+            output[2 * i + 1] = output[i + HALF_N];
+        }
     }
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     // We will have 2 different implementations of the above functions depending on whether our types can overflow.
     // In all otehr cases we can ignore overflow as we only deal with addition and subtractions.
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Length 6
-
-    /// Compute the convolution of 2 vectors of length 6.
-    /// output(x) = lhs(x)rhs(x) mod x^6 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 4 and a signed convolution of length 4.
-    #[inline]
+    #[inline(always)]
     fn conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6], output: &mut [T]) {
-        const N: usize = 6;
-        const HALF: usize = N / 2;
-
-        // Compute lhs(x) mod x^3 - 1, lhs(x) mod x^3 + 1
-        let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-        // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^3 - 1, rhs(x) mod x^3 + 1
-        let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-        let (left, right) = output.split_at_mut(HALF);
-
-        Self::signed_conv3(&lhs_m, &rhs_m, left); // left = w_1 = lhs*rhs mod x^3 + 1
-        Self::conv3(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^3 - 1
-
-        for i in 0..HALF {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
+        Self::conv_n::<T, 6, 3>(lhs, rhs, output, Self::conv3, Self::signed_conv3)
     }
 
     #[inline(always)]
@@ -370,8 +279,8 @@ trait Convolution {
     }
 
     #[inline(always)]
-    fn signed_conv8<T: NonCanonicalPrimeField32>(lhs: [T; 8], rhs: [T; 8]) -> [T; 8] {
-        Self::signed_conv_n::<T, 8, 4>(lhs, rhs, Self::signed_conv4)
+    fn signed_conv8<T: NonCanonicalPrimeField32>(lhs: [T; 8], rhs: [T; 8], output: &mut [T]) {
+        Self::signed_conv_n::<T, 8, 4>(lhs, rhs, output, Self::signed_conv4)
     }
 
     #[inline(always)]
@@ -385,8 +294,8 @@ trait Convolution {
     }
 
     #[inline(always)]
-    fn signed_conv16<T: NonCanonicalPrimeField32>(lhs: [T; 16], rhs: [T; 16]) -> [T; 16] {
-        Self::signed_conv_n::<T, 16, 8>(lhs, rhs, Self::signed_conv8)
+    fn signed_conv16<T: NonCanonicalPrimeField32>(lhs: [T; 16], rhs: [T; 16], output: &mut [T]) {
+        Self::signed_conv_n::<T, 16, 8>(lhs, rhs, output, Self::signed_conv8)
     }
 
     #[inline(always)]
@@ -395,8 +304,8 @@ trait Convolution {
     }
 
     #[inline(always)]
-    fn signed_conv32<T: NonCanonicalPrimeField32>(lhs: [T; 32], rhs: [T; 32]) -> [T; 32] {
-        Self::signed_conv_n::<T, 32, 16>(lhs, rhs, Self::signed_conv16)
+    fn signed_conv32<T: NonCanonicalPrimeField32>(lhs: [T; 32], rhs: [T; 32], output: &mut [T]) {
+        Self::signed_conv_n::<T, 32, 16>(lhs, rhs, output, Self::signed_conv16)
     }
 
     #[inline(always)]
@@ -427,7 +336,7 @@ impl Convolution for LargeConvolution {
     fn conv3<T: NonCanonicalPrimeField32>(_: [T; 3], _: [T; 3], _: &mut [T]) {
         todo!()
     }
-    fn signed_conv3<T: NonCanonicalPrimeField32>(_: &[T; 3], _: &[T; 3], _: &mut [T]) {
+    fn signed_conv3<T: NonCanonicalPrimeField32>(_: [T; 3], _: [T; 3], _: &mut [T]) {
         todo!()
     }
 
@@ -459,7 +368,7 @@ impl Convolution for LargeConvolution {
         output[3] -= output[1]; // output[2, 3] = w_0 - (w_1 + w_0)/2) = (w_0 - w_1)/2
     }
 
-    fn signed_conv4_mut<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]) {
+    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]) {
         let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
         output[0] = T::from_small_i128((lhs[0] * rhs_rev[3]) - dot_i128(&lhs[1..], &rhs_rev[..3])); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
@@ -467,7 +376,7 @@ impl Convolution for LargeConvolution {
             dot_i128(&lhs[..2], &rhs_rev[2..]) - dot_i128(&lhs[2..], &rhs_rev[..2]),
         ); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
         output[2] = T::from_small_i128(dot_i128(&lhs[..3], &rhs_rev[1..]) - (lhs[3] * rhs_rev[0])); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
-        output[3] = T::from_small_i128(dot_i128(lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
+        output[3] = T::from_small_i128(dot_i128(&lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
 
         // This might not be the best way to compute this.
         // Another approach is to define
@@ -479,19 +388,14 @@ impl Convolution for LargeConvolution {
         // Might also be other methods in particular we might be able to pick MDS matrices to make this simpler.
     }
 
-    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4]) -> [T; 4] {
-        let mut output = [T::zero(); 4];
-
-        Self::signed_conv4_mut(&lhs, &rhs, &mut output);
-
-        output
-    }
-
     // We will need to implement this if we want to handle convolutions of size 24/48 but for now we ignore this.
     fn conv6<T: NonCanonicalPrimeField32>(_: [T; 6], _: [T; 6], _: &mut [T]) {
         todo!()
     }
-    fn signed_conv6<T: NonCanonicalPrimeField32>(_: [T; 6], _: [T; 6]) -> [T; 6] {
+    fn signed_conv6<T>(_: [T; 6], _: [T; 6], _: &mut [T])
+    where
+        T: NonCanonicalPrimeField32,
+    {
         todo!()
     }
 }
@@ -520,7 +424,7 @@ impl Convolution for SmallConvolution {
     /// Compute the signed convolution of two vectors of length 3.
     /// output(x) = lhs(x)rhs(x) mod x^3 + 1
     #[inline]
-    fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: &[T; 3], rhs: &[T; 3], output: &mut [T]) {
+    fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: [T; 3], rhs: [T; 3], output: &mut [T]) {
         // This is small enough we just explicitely write down the answer.
         output[0] = T::mul_small(lhs[0], rhs[0])
             - T::mul_small(lhs[1], rhs[2])
@@ -562,13 +466,13 @@ impl Convolution for SmallConvolution {
     /// Compute the signed convolution of two vectors of length 4.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
     #[inline]
-    fn signed_conv4_mut<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4], output: &mut [T]) {
+    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]) {
         let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
         output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..3]); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
         output[1] = dot_i64(&lhs[..2], &rhs_rev[2..]) - dot_i64(&lhs[2..], &rhs_rev[..2]); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
         output[2] = dot_i64(&lhs[..3], &rhs_rev[1..]) - T::mul_small(lhs[3], rhs[3]); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
-        output[3] = dot_i64(lhs, &rhs_rev); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
+        output[3] = dot_i64(&lhs, &rhs_rev); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
 
         // This might not be the best way to compute this.
         // Another approach is to define
@@ -580,24 +484,11 @@ impl Convolution for SmallConvolution {
         // Might also be other methods in particular we might be able to pick MDS matrices to make this simpler.
     }
 
-    /// Compute the signed convolution of two vectors of length 4.
-    /// output(x) = lhs(x)rhs(x) mod x^4 + 1
-    #[inline]
-    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4]) -> [T; 4] {
-        let mut output = [T::zero(); 4];
-
-        Self::signed_conv4_mut(&lhs, &rhs, &mut output);
-
-        output
-    }
-
     /// Compute the signed convolution of two vectors of length 6.
     /// output(x) = lhs(x)rhs(x) mod x^6 + 1
     #[inline]
-    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6]) -> [T; 6] {
+    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6], output: &mut [T]) {
         let rhs_rev = [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]];
-
-        let mut output = [T::zero(); 6];
 
         output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..5]);
         output[1] = dot_i64(&lhs[..2], &rhs_rev[4..]) - dot_i64(&lhs[2..], &rhs_rev[..4]);
@@ -605,8 +496,6 @@ impl Convolution for SmallConvolution {
         output[3] = dot_i64(&lhs[..4], &rhs_rev[2..]) - dot_i64(&lhs[4..], &rhs_rev[..2]);
         output[4] = dot_i64(&lhs[..5], &rhs_rev[1..]) - T::mul_small(lhs[5], rhs[5]);
         output[5] = dot_i64(&lhs, &rhs_rev);
-
-        output
     }
 }
 
