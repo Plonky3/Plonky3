@@ -37,7 +37,9 @@ pub struct QuotientMmcs<F, Inner: Mmcs<F>> {
 /// A claimed opening.
 #[derive(Clone, Debug)]
 pub(crate) struct Opening<F> {
+    // point.minimal_poly()
     pub(crate) minpoly: Vec<F>,
+    // for each column, the remainder poly r(X) = p(X) mod m(X)
     pub(crate) remainder_polys: Vec<Vec<F>>,
 }
 
@@ -52,6 +54,7 @@ impl<F: Field> Opening<F> {
     fn compute_remainder_polys<EF: HasFrobenius<F>>(point: EF, values: &[EF]) -> Vec<Vec<F>> {
         // compute lagrange basis for [point, Frob point, Frob^2 point, ..]
         let xs = point.galois_group();
+        debug_assert_eq!(xs.len(), EF::D);
         let w = xs[1..]
             .iter()
             .map(|&xi| xs[0] - xi)
@@ -159,7 +162,7 @@ where
                 dbg!(inner.dimensions());
                 dbg!(subgroup.len());
                 dbg!(inv_denominators.dimensions());
-                dbg!(&openings);
+                // dbg!(&openings);
 
                 QuotientMatrix {
                     inner,
@@ -259,7 +262,7 @@ impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, In
 pub struct QuotientMatrixRow<'a, F> {
     x: F,
     openings: &'a [Opening<F>],
-    /// `1 / (x - opened_point)`
+    /// `1 / m(X)`
     inv_denominator: &'a [F],
     inner_row: &'a [F],
     opening_index: usize,
@@ -280,8 +283,10 @@ impl<'a, F: Field> Iterator for QuotientMatrixRow<'a, F> {
         }
         let eval = self.inner_row[self.inner_col_index];
         let opening = &self.openings[self.opening_index];
-        let numerator = eval - eval_poly(&opening.remainder_polys[self.opening_index], self.x);
-        let result = numerator * self.inv_denominator[self.opening_index];
+        let numerator = eval - eval_poly(&opening.remainder_polys[self.inner_col_index], self.x);
+        let denominator = self.inv_denominator[self.opening_index];
+        let result = numerator * denominator;
+        // dbg!(eval, numerator, denominator, result);
         self.inner_col_index += 1;
         Some(result)
     }
@@ -306,4 +311,71 @@ fn to_base<F: Field, EF: ExtensionField<F>>(vec: Vec<EF>) -> Vec<F> {
             base[0]
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_blake3::Blake3;
+    use p3_commit::DirectMmcs;
+    use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+    use p3_field::{extension::BinomialExtensionField, AbstractExtensionField, AbstractField};
+    use p3_interpolation::interpolate_subgroup;
+    use p3_merkle_tree::FieldMerkleTreeMmcs;
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+    use rand::{thread_rng, Rng};
+
+    use super::*;
+
+    #[test]
+    fn test_remainder_polys() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        let trace: RowMajorMatrix<F> = RowMajorMatrix::rand(&mut thread_rng(), 32, 5);
+        let point: EF = thread_rng().gen();
+        let values = interpolate_subgroup(&trace, point);
+        let rs = Opening::compute_remainder_polys(point, &values);
+        for (r, y) in rs.into_iter().zip(values) {
+            // r(alpha) = p(alpha)
+            assert_eq!(
+                eval_poly(
+                    &r.into_iter().map(|x| EF::from_base(x)).collect_vec(),
+                    point
+                ),
+                y
+            );
+        }
+    }
+
+    #[test]
+    fn test_quotient_mmcs() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type MyHash = SerializingHasher32<Blake3>;
+        type MyCompress = CompressionFunctionFromHasher<F, MyHash, 2, 8>;
+        type ValMmcs = FieldMerkleTreeMmcs<F, MyHash, MyCompress, 8>;
+
+        let hash = MyHash::new(Blake3 {});
+        let compress = MyCompress::new(hash);
+        let inner = ValMmcs::new(hash, compress);
+
+        let trace = RowMajorMatrix::<F>::rand_nonzero(&mut thread_rng(), 8, 2);
+        let lde = Radix2Dit.coset_lde_batch(trace.clone(), 1, F::generator());
+
+        let alpha: EF = thread_rng().gen();
+        let values = interpolate_subgroup(&trace, alpha);
+
+        let (comm, data) = inner.commit_matrix(lde);
+        let mmcs = QuotientMmcs {
+            inner,
+            openings: vec![vec![Opening::new(alpha, values)]],
+            coset_shift: F::generator(),
+        };
+
+        let mut mats = mmcs.get_matrices(&data);
+        assert_eq!(mats.len(), 1);
+        let mat = mats.remove(0).to_row_major_matrix();
+        let poly = Radix2Dit.idft_batch(mat);
+        dbg!(poly);
+    }
 }

@@ -60,7 +60,7 @@ where
                     dbg!(mat.dimensions());
                     // dbg!(&mat.values);
                     let poly = Radix2Dit.idft_batch(mat.to_row_major_matrix());
-                    dbg!(&poly.values);
+                    // dbg!(&poly.values);
                     if poly.last_row().into_iter().any(|x| !x.is_zero()) {
                         panic!("TrivialLdt tried to commit to a high-degree matrix");
                     }
