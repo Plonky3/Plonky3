@@ -236,7 +236,7 @@ trait Convolution {
     /// Compute the signed convolution of two vectors of length 4.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
     /// Eventually we will remove this and only have the mutable version.
-    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4];
+    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4]) -> [T; 4];
 
     /// Compute the signed convolution of two vectors of length 4 and save in output.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
@@ -245,7 +245,90 @@ trait Convolution {
     /// Compute the signed convolution of two vectors of length 6.
     /// output(x) = lhs(x)rhs(x) mod x^6 - 1
     /// This should likely be replaced by a mutable version.
-    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: &[T; 6], rhs: &[T; 6], output: &mut [T]);
+    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6]) -> [T; 6];
+
+    #[inline(always)]
+    fn conv_n<T: NonCanonicalPrimeField32, const N: usize, const HALF_N: usize>(
+        lhs: [T; N],
+        rhs: [T; N],
+        output: &mut [T],
+        inner_conv: fn([T; HALF_N], [T; HALF_N], &mut [T]),
+        inner_signed_conv: fn([T; HALF_N], [T; HALF_N]) -> [T; HALF_N],
+    ) {
+        // NB: The compiler is smart enough not to initialise these arrays.
+        let mut lhs_pos = [T::zero(); HALF_N];
+        let mut lhs_neg = [T::zero(); HALF_N];
+        let mut rhs_pos = [T::zero(); HALF_N];
+        let mut rhs_neg = [T::zero(); HALF_N];
+
+        for i in 0..HALF_N {
+            let s = lhs[i];
+            let t = lhs[i + HALF_N];
+
+            lhs_pos[i] = s + t;
+            lhs_neg[i] = s - t;
+
+            let s = rhs[i];
+            let t = rhs[i + HALF_N];
+
+            rhs_pos[i] = s + t;
+            rhs_neg[i] = s - t;
+        }
+
+
+        let (left, right) = output.split_at_mut(HALF_N);
+
+        left.clone_from_slice(&inner_signed_conv(lhs_neg, rhs_neg));
+        inner_conv(lhs_pos, rhs_pos, right);
+
+        for i in 0..HALF_N {
+            left[i] += right[i];    // w_0 + w_1
+            left[i] >>= 1;          // (w_0 + w_1)/2
+            right[i] -= left[i];    // (w_0 - w_1)/2
+        }
+    }
+
+    #[inline(always)]
+    fn signed_conv_n<T: NonCanonicalPrimeField32, const N: usize, const HALF_N: usize>(
+        lhs: [T; N],
+        rhs: [T; N],
+        inner_signed_conv: fn([T; HALF_N], [T; HALF_N]) -> [T; HALF_N],
+    ) -> [T; N] {
+        // NB: The compiler is smart enough not to initialise these arrays.
+        let mut lhs_even = [T::zero(); HALF_N];
+        let mut lhs_odd = [T::zero(); HALF_N];
+        let mut lhs_sum = [T::zero(); HALF_N];
+        let mut rhs_even = [T::zero(); HALF_N];
+        let mut rhs_odd = [T::zero(); HALF_N];
+        let mut rhs_sum = [T::zero(); HALF_N];
+
+        for i in 0..HALF_N {
+            lhs_even[i] = lhs[2*i];
+            lhs_odd[i] = lhs[2*i + 1];
+            lhs_sum[i] = lhs_even[i] + lhs_odd[i];
+
+            rhs_even[i] = rhs[2*i];
+            rhs_odd[i] = rhs[2*i + 1];
+            rhs_sum[i] = rhs_even[i] + rhs_odd[i];
+        }
+
+        let s_conv_even = inner_signed_conv(lhs_even, rhs_even);
+        let s_conv_odd = inner_signed_conv(lhs_odd, rhs_odd);
+        let s_conv_sum = inner_signed_conv(lhs_sum, rhs_sum);
+
+        // NB: The compiler is smart enough not to initialise these arrays.
+        let mut output = [T::zero(); N];
+
+        output[0] = s_conv_even[0] - s_conv_odd[HALF_N - 1];
+        output[1] = s_conv_sum[0] - s_conv_even[0] - s_conv_odd[0];
+
+        for i in 1..HALF_N {
+            output[2*i] = s_conv_even[i] + s_conv_odd[i - 1];
+            output[2*i + 1] = s_conv_sum[i] - s_conv_even[i] - s_conv_odd[i];
+        }
+
+        output
+    }
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     // We will have 2 different implementations of the above functions depending on whether our types can overflow.
@@ -281,346 +364,44 @@ trait Convolution {
         }
     }
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Length 8
-
-    /// Compute the convolution of 2 vectors of length 8.
-    /// output(x) = lhs(x)rhs(x) mod x^8 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 4 and a signed convolution of length 4.
-    #[inline]
+    #[inline(always)]
     fn conv8<T: NonCanonicalPrimeField32>(lhs: [T; 8], rhs: [T; 8], output: &mut [T]) {
-        const N: usize = 8;
-        const HALF: usize = N / 2;
-
-        // Compute lhs(x) mod x^4 - 1, lhs(x) mod x^4 + 1
-        let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-        // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^4 - 1, rhs(x) mod x^4 + 1
-        let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-        let (left, right) = output.split_at_mut(HALF);
-
-        Self::signed_conv4_mut(&lhs_m, &rhs_m, left); // left = w_1 = lhs*rhs mod x^4 + 1
-        Self::conv4(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^4 - 1
-
-        for i in 0..HALF {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
+        Self::conv_n::<T, 8, 4>(lhs, rhs, output, Self::conv4, Self::signed_conv4)
     }
 
-    /// Compute the signed convolution of 2 vectors of length 8.
-    /// output(x) = lhs(x)rhs(x) mod x^8 + 1
-    /// Use the Karatsuba Method to split into 3 degree 3 polynomial multiplications.
-    #[inline]
-    fn signed_conv8<T: NonCanonicalPrimeField32>(lhs: &[T; 8], rhs: &[T; 8]) -> [T; 8] {
-        const N: usize = 8;
-        const HALF: usize = N / 2;
-
-        // The algorithm is relatively simple:
-        // v(x)u(x) mod x^8 + 1 = (v_e(x^2) + xv_o(x^2))(u_e(x^2) + xu_o(x^2)) mod x^8 + 1
-        //          = v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2) + x((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2)) - v_e(x^2)u_e(x^2) - v_o(x^2)u_o(x^2))
-
-        // Now computing v_e(x^2)u_e(x^2) mod x^8 + 1 is equivalent to computing v_e(x)u_e(x) mod x^4 + 1 and similarly for the other products.
-
-        // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
-        // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
-        let mut lhs_even = [lhs[0], lhs[2], lhs[4], lhs[6]]; // v_e
-        let lhs_odd = [lhs[1], lhs[3], lhs[5], lhs[7]]; // v_o
-        let mut rhs_even = [rhs[0], rhs[2], rhs[4], rhs[6]]; // u_e
-        let rhs_odd = [rhs[1], rhs[3], rhs[5], rhs[7]]; // u_o
-
-        let mut prod_even = Self::signed_conv4(&lhs_even, &rhs_even); // v_e(x)u_e(x) mod x^4 + 1
-        let prod_odd = Self::signed_conv4(&lhs_odd, &rhs_odd); // v_o(x)u_o(x) mod x^4 + 1
-
-        // Add the two halves together, storing the result in lhs_even/rhs_even.
-        add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
-        add_mut(&mut rhs_even, &rhs_odd); // u_e + u_o
-
-        let mut prod_mix = Self::signed_conv4(&lhs_even, &rhs_even); // (v_e(x) + v_o(x))(u_e(x) + u_o(x))
-        sub_mut(&mut prod_mix, &prod_even);
-        sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
-
-        add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
-        prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^4 + 1
-
-        // An annoying amount of data fiddiling. It's possible to get around this by choosing the "right" initial ordering
-        // But implementing the relation between prod_even and prod_odd will become complicated in that case.
-        [
-            prod_even[0],
-            prod_mix[0],
-            prod_even[1],
-            prod_mix[1],
-            prod_even[2],
-            prod_mix[2],
-            prod_even[3],
-            prod_mix[3],
-        ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+    #[inline(always)]
+    fn signed_conv8<T: NonCanonicalPrimeField32>(lhs: [T; 8], rhs: [T; 8]) -> [T; 8] {
+        Self::signed_conv_n::<T, 8, 4>(lhs, rhs, Self::signed_conv4)
     }
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Length 12
-
-    /// Compute the convolution of 2 vectors of length 12.
-    /// output(x) = lhs(x)rhs(x) mod x^12 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 6 and a signed convolution of length 6.
-    #[inline]
+    #[inline(always)]
     fn conv12<T: NonCanonicalPrimeField32>(lhs: [T; 12], rhs: [T; 12], output: &mut [T]) {
-        const N: usize = 12;
-        const HALF: usize = N / 2;
-
-        // Compute lhs(x) mod x^6 - 1, lhs(x) mod x^6 + 1
-        let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-        // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^6 - 1, rhs(x) mod x^6 + 1
-        let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-        let (left, right) = output.split_at_mut(HALF);
-        Self::signed_conv6(&lhs_m, &rhs_m, left); // left = w_1 = lhs*rhs mod x^12 + 1
-        Self::conv6(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^12 - 1
-
-        for i in 0..HALF {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
+        Self::conv_n::<T, 12, 6>(lhs, rhs, output, Self::conv6, Self::signed_conv6)
     }
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Length 16
-
-    /// Compute the convolution of 2 vectors of length 16.
-    /// output(x) = lhs(x)rhs(x) mod x^16 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 8 and a signed convolution of length 8.
-    #[inline]
+    #[inline(always)]
     fn conv16<T: NonCanonicalPrimeField32>(lhs: [T; 16], rhs: [T; 16], output: &mut [T]) {
-        const N: usize = 16;
-        const HALF: usize = N / 2;
-
-        // Compute lhs(x) mod x^16 - 1, lhs(x) mod x^16 + 1
-        let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-        // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^16 - 1, rhs(x) mod x^16 + 1
-        let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-        let (left, right) = output.split_at_mut(HALF);
-        left.clone_from_slice(&Self::signed_conv8(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^16 + 1
-        Self::conv8(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^16 - 1
-        for i in 0..HALF {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
+        Self::conv_n::<T, 16, 8>(lhs, rhs, output, Self::conv8, Self::signed_conv8)
     }
 
-    /// Compute the signed convolution of 2 vectors of length 16.
-    /// output(x) = lhs(x)rhs(x) mod x^16 + 1
-    /// Use the Karatsuba Method to split into 3 degree 3 polynomial multiplications.
-    #[inline]
-    fn signed_conv16<T: NonCanonicalPrimeField32>(lhs: &[T; 16], rhs: &[T; 16]) -> [T; 16] {
-        const N: usize = 16;
-        const HALF: usize = N / 2;
-
-        // The algorithm is relatively simple:
-        // v(x)u(x) mod x^16 + 1 = (v_e(x^2) + xv_o(x^2))(u_e(x^2) + xu_o(x^2)) mod x^16 + 1
-        //          = v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2) + x((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2)) - v_e(x^2)u_e(x^2) - v_o(x^2)u_o(x^2))
-
-        // Now computing v_e(x^2)u_e(x^2) mod x^16 + 1 is equivalent to computing v_e(x)u_e(x) mod x^8 + 1 and similarly for the other products.
-
-        // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
-        // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
-        let mut lhs_even = [
-            lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14], // v_e
-        ];
-        let lhs_odd = [
-            lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15], // v_o
-        ];
-        let mut rhs_even = [
-            rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14], // u_e
-        ];
-        let rhs_odd = [
-            rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15], // u_o
-        ];
-
-        let mut prod_even = Self::signed_conv8(&lhs_even, &rhs_even); // v_e(x)u_e(x) mod x^8 + 1
-        let prod_odd = Self::signed_conv8(&lhs_odd, &rhs_odd); // v_o(x)u_o(x) mod x^8 + 1
-
-        // Add the two halves together, storing the result in lhs_even/rhs_even.
-        add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
-        add_mut(&mut rhs_even, &rhs_odd); // u_e + u_o
-
-        let mut prod_mix = Self::signed_conv8(&lhs_even, &rhs_even); // (v_e(x) + v_o(x))(u_e(x) + u_o(x))
-        sub_mut(&mut prod_mix, &prod_even);
-        sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
-
-        add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
-        prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^8 + 1
-
-        [
-            prod_even[0],
-            prod_mix[0],
-            prod_even[1],
-            prod_mix[1],
-            prod_even[2],
-            prod_mix[2],
-            prod_even[3],
-            prod_mix[3],
-            prod_even[4],
-            prod_mix[4],
-            prod_even[5],
-            prod_mix[5],
-            prod_even[6],
-            prod_mix[6],
-            prod_even[7],
-            prod_mix[7],
-        ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+    #[inline(always)]
+    fn signed_conv16<T: NonCanonicalPrimeField32>(lhs: [T; 16], rhs: [T; 16]) -> [T; 16] {
+        Self::signed_conv_n::<T, 16, 8>(lhs, rhs, Self::signed_conv8)
     }
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Length 32
-
-    /// Compute the convolution of 2 vectors of length 32.
-    /// output(x) = lhs(x)rhs(x) mod x^32 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 16 and a signed convolution of length 16.
-    #[inline]
+    #[inline(always)]
     fn conv32<T: NonCanonicalPrimeField32>(lhs: [T; 32], rhs: [T; 32], output: &mut [T]) {
-        const N: usize = 32;
-        const HALF: usize = N / 2;
-
-        // Compute lhs(x) mod x^16 - 1, lhs(x) mod x^16 + 1
-        let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-        // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^16 - 1, rhs(x) mod x^16 + 1
-        let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-        let (left, right) = output.split_at_mut(HALF);
-        left.clone_from_slice(&Self::signed_conv16(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^16 + 1
-        Self::conv16(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^16 - 1
-        for i in 0..HALF {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
+        Self::conv_n::<T, 32, 16>(lhs, rhs, output, Self::conv16, Self::signed_conv16)
     }
 
-    /// Compute the signed convolution of 2 vectors of length 16.
-    /// output(x) = lhs(x)rhs(x) mod x^16 + 1
-    /// Use the Karatsuba Method to split into 3 degree 3 polynomial multiplications.
-    #[inline]
-    fn signed_conv32<T: NonCanonicalPrimeField32>(lhs: &[T; 32], rhs: &[T; 32]) -> [T; 32] {
-        const N: usize = 32;
-        const HALF: usize = N / 2;
-
-        // The algorithm is simple:
-        // v(x)u(x) mod x^32 + 1 = (v_l(x) + x^4v_h(x))(u_l(x) + x^4u_h(x)) mod x^32 + 1
-        //          = v_l(x)u_l(x) - v_h(x)u_h(x) + x^4((v_l(x) + v_h(x))(u_l(x) + u_h(x)) - v_l(x)u_l(x) - v_h(x)u_h(x))
-
-        // Now computing v_e(x^2)u_e(x^2) mod x^32 + 1 is equivalent to computing v_e(x)u_e(x) mod x^16 + 1 and similarly for the other products.
-
-        // Clearly there should be a cleaner way to get this decomposition but everything I've tried has been slower.
-        // Also seems like we are doing quite a bit of data fiddiling. Would be nice to avoid this.
-        let mut lhs_even = [
-            lhs[0], lhs[2], lhs[4], lhs[6], lhs[8], lhs[10], lhs[12], lhs[14], lhs[16],
-            lhs[18], // v_e
-            lhs[20], lhs[22], lhs[24], lhs[26], lhs[28], lhs[30],
-        ];
-        let lhs_odd = [
-            lhs[1], lhs[3], lhs[5], lhs[7], lhs[9], lhs[11], lhs[13], lhs[15], lhs[17],
-            lhs[19], // v_o
-            lhs[21], lhs[23], lhs[25], lhs[27], lhs[29], lhs[31],
-        ];
-        let mut rhs_even = [
-            rhs[0], rhs[2], rhs[4], rhs[6], rhs[8], rhs[10], rhs[12], rhs[14], rhs[16],
-            rhs[18], // u_e
-            rhs[20], rhs[22], rhs[24], rhs[26], rhs[28], rhs[30],
-        ];
-        let rhs_odd = [
-            rhs[1], rhs[3], rhs[5], rhs[7], rhs[9], rhs[11], rhs[13], rhs[15], rhs[17],
-            rhs[19], // u_o
-            rhs[21], rhs[23], rhs[25], rhs[27], rhs[29], rhs[31],
-        ];
-
-        let mut prod_even = Self::signed_conv16(&lhs_even, &rhs_even); // v_e(x)u_e(x) mod x^16 + 1
-        let prod_odd = Self::signed_conv16(&lhs_odd, &rhs_odd); // v_o(x)u_o(x) mod x^16 + 1
-
-        // Add the two halves together, storing the result in lhs_even/rhs_even.
-        add_mut(&mut lhs_even, &lhs_odd); // v_e + v_o
-        add_mut(&mut rhs_even, &rhs_odd); // u_e + u_o
-
-        let mut prod_mix = Self::signed_conv16(&lhs_even, &rhs_even); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) mod x^16 + 1
-        sub_mut(&mut prod_mix, &prod_even);
-        sub_mut(&mut prod_mix, &prod_odd); // (v_e(x) + v_o(x))(u_e(x) + u_o(x)) - v_e(x)u_e(x) - v_o(x)u_o(x)
-
-        add_mut(&mut prod_even[1..], &prod_odd[..(HALF - 1)]);
-        prod_even[0] -= prod_odd[HALF - 1]; // v_e(x)u_e(x) + xv_o(x)u_o(x) mod x^16 + 1
-
-        [
-            prod_even[0],
-            prod_mix[0],
-            prod_even[1],
-            prod_mix[1],
-            prod_even[2],
-            prod_mix[2],
-            prod_even[3],
-            prod_mix[3],
-            prod_even[4],
-            prod_mix[4],
-            prod_even[5],
-            prod_mix[5],
-            prod_even[6],
-            prod_mix[6],
-            prod_even[7],
-            prod_mix[7],
-            prod_even[8],
-            prod_mix[8],
-            prod_even[9],
-            prod_mix[9],
-            prod_even[10],
-            prod_mix[10],
-            prod_even[11],
-            prod_mix[11],
-            prod_even[12],
-            prod_mix[12],
-            prod_even[13],
-            prod_mix[13],
-            prod_even[14],
-            prod_mix[14],
-            prod_even[15],
-            prod_mix[15],
-        ] // Intertwining the result. Again this is some annoying data fiddiling. Must be a way to avoid some of this.
+    #[inline(always)]
+    fn signed_conv32<T: NonCanonicalPrimeField32>(lhs: [T; 32], rhs: [T; 32]) -> [T; 32] {
+        Self::signed_conv_n::<T, 32, 16>(lhs, rhs, Self::signed_conv16)
     }
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Length 64
-
-    /// Compute the convolution of 2 vectors of length 64.
-    /// output(x) = lhs(x)rhs(x) mod x^64 - 1  <=>  output = lhs * rhs
-    /// Use the FFT Trick to split into a convolution of length 32 and a signed convolution of length 32.
-    #[inline]
+    #[inline(always)]
     fn conv64<T: NonCanonicalPrimeField32>(lhs: [T; 64], rhs: [T; 64], output: &mut [T]) {
-        const N: usize = 64;
-        const HALF: usize = N / 2;
-
-        // Compute lhs(x) mod x^32 - 1, lhs(x) mod x^32 + 1
-        let (lhs_p, lhs_m) = split_add_sub(lhs);
-
-        // rhs will always be constant. Not sure how to tell the compiler this though.
-        // Compute rhs(x) mod x^32 - 1, rhs(x) mod x^32 + 1
-        let (rhs_p, rhs_m) = split_add_sub(rhs);
-
-        let (left, right) = output.split_at_mut(HALF);
-        left.clone_from_slice(&Self::signed_conv32(&lhs_m, &rhs_m)); // left = w_1 = lhs*rhs mod x^32 + 1
-        Self::conv32(lhs_p, rhs_p, right); // right = w_0 = lhs*rhs mod x^32 - 1
-        for i in 0..HALF {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
+        Self::conv_n::<T, 64, 32>(lhs, rhs, output, Self::conv32, Self::signed_conv32)
     }
 }
 
@@ -698,10 +479,10 @@ impl Convolution for LargeConvolution {
         // Might also be other methods in particular we might be able to pick MDS matrices to make this simpler.
     }
 
-    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
+    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4]) -> [T; 4] {
         let mut output = [T::zero(); 4];
 
-        Self::signed_conv4_mut(lhs, rhs, &mut output);
+        Self::signed_conv4_mut(&lhs, &rhs, &mut output);
 
         output
     }
@@ -710,7 +491,7 @@ impl Convolution for LargeConvolution {
     fn conv6<T: NonCanonicalPrimeField32>(_: [T; 6], _: [T; 6], _: &mut [T]) {
         todo!()
     }
-    fn signed_conv6<T: NonCanonicalPrimeField32>(_: &[T; 6], _: &[T; 6], _: &mut [T]) {
+    fn signed_conv6<T: NonCanonicalPrimeField32>(_: [T; 6], _: [T; 6]) -> [T; 6] {
         todo!()
     }
 }
@@ -802,10 +583,10 @@ impl Convolution for SmallConvolution {
     /// Compute the signed convolution of two vectors of length 4.
     /// output(x) = lhs(x)rhs(x) mod x^4 + 1
     #[inline]
-    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: &[T; 4], rhs: &[T; 4]) -> [T; 4] {
+    fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4]) -> [T; 4] {
         let mut output = [T::zero(); 4];
 
-        Self::signed_conv4_mut(lhs, rhs, &mut output);
+        Self::signed_conv4_mut(&lhs, &rhs, &mut output);
 
         output
     }
@@ -813,15 +594,19 @@ impl Convolution for SmallConvolution {
     /// Compute the signed convolution of two vectors of length 6.
     /// output(x) = lhs(x)rhs(x) mod x^6 + 1
     #[inline]
-    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: &[T; 6], rhs: &[T; 6], output: &mut [T]) {
+    fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6]) -> [T; 6] {
         let rhs_rev = [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]];
+
+        let mut output = [T::zero(); 6];
 
         output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..5]);
         output[1] = dot_i64(&lhs[..2], &rhs_rev[4..]) - dot_i64(&lhs[2..], &rhs_rev[..4]);
         output[2] = dot_i64(&lhs[..3], &rhs_rev[3..]) - dot_i64(&lhs[3..], &rhs_rev[..3]);
         output[3] = dot_i64(&lhs[..4], &rhs_rev[2..]) - dot_i64(&lhs[4..], &rhs_rev[..2]);
         output[4] = dot_i64(&lhs[..5], &rhs_rev[1..]) - T::mul_small(lhs[5], rhs[5]);
-        output[5] = dot_i64(lhs, &rhs_rev);
+        output[5] = dot_i64(&lhs, &rhs_rev);
+
+        output
     }
 }
 
