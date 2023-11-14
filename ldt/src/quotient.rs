@@ -81,6 +81,12 @@ impl<F: Field> Opening<F> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum QuotientError<InnerMmcsError> {
+    InnerMmcs(InnerMmcsError),
+    OriginalValueMismatch,
+}
+
 impl<F, Inner> Mmcs<F> for QuotientMmcs<F, Inner>
 where
     F: TwoAdicField,
@@ -90,7 +96,7 @@ where
     type ProverData = Inner::ProverData;
     type Commitment = Inner::Commitment;
     type Proof = Inner::Proof;
-    type Error = Inner::Error;
+    type Error = QuotientError<Inner::Error>;
     type Mat<'a> = QuotientMatrix<F, Inner::Mat<'a>> where Self: 'a;
 
     fn open_batch(
@@ -212,14 +218,17 @@ where
                     })
                     .collect_vec();
                 get_repeated(original_row_repeated.into_iter())
+                    .ok_or(QuotientError::OriginalValueMismatch)
             })
-            .collect_vec();
+            .collect::<Result<Vec<_>, Self::Error>>()?;
 
         self.inner
             .verify_batch(commit, dimensions, index, &opened_original_values, proof)
+            .map_err(|e| QuotientError::InnerMmcs(e))
     }
 }
 
+#[derive(Clone)]
 pub struct QuotientMatrix<F, Inner: MatrixRowSlices<F>> {
     inner: Inner,
     subgroup: Vec<F>,
@@ -289,12 +298,14 @@ impl<'a, F: Field> Iterator for QuotientMatrixRow<'a, F> {
 }
 
 /// Checks that the given iterator contains repetitions of a single item, and return that item.
-fn get_repeated<T: Eq + Debug, I: Iterator<Item = T>>(mut iter: I) -> T {
+fn get_repeated<T: Eq + Debug, I: Iterator<Item = T>>(mut iter: I) -> Option<T> {
     let first = iter.next().expect("get_repeated on empty iterator");
     for x in iter {
-        debug_assert_eq!(x, first, "{:?} != {:?}", x, first);
+        if x != first {
+            return None;
+        }
     }
-    first
+    Some(first)
 }
 
 #[cfg(test)]
@@ -311,10 +322,14 @@ mod tests {
 
     use super::*;
 
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type MyHash = SerializingHasher32<Blake3>;
+    type MyCompress = CompressionFunctionFromHasher<F, MyHash, 2, 8>;
+    type ValMmcs = FieldMerkleTreeMmcs<F, MyHash, MyCompress, 8>;
+
     #[test]
     fn test_remainder_polys() {
-        type F = BabyBear;
-        type EF = BinomialExtensionField<F, 4>;
         let trace: RowMajorMatrix<F> = RowMajorMatrix::rand(&mut thread_rng(), 32, 5);
         let point: EF = thread_rng().gen();
         let values = interpolate_subgroup(&trace, point);
@@ -331,35 +346,78 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_quotient_mmcs() {
-        type F = BabyBear;
-        type EF = BinomialExtensionField<F, 4>;
-        type MyHash = SerializingHasher32<Blake3>;
-        type MyCompress = CompressionFunctionFromHasher<F, MyHash, 2, 8>;
-        type ValMmcs = FieldMerkleTreeMmcs<F, MyHash, MyCompress, 8>;
-
+    fn test_quotient_mmcs_with_sizes(num_openings: usize, trace_sizes: &[(usize, usize)]) {
         let hash = MyHash::new(Blake3 {});
         let compress = MyCompress::new(hash);
         let inner = ValMmcs::new(hash, compress);
 
-        let trace = RowMajorMatrix::<F>::rand_nonzero(&mut thread_rng(), 8, 2);
-        let lde = Radix2Dit.coset_lde_batch(trace.clone(), 1, F::generator());
+        let alphas: Vec<EF> = (0..num_openings).map(|_| thread_rng().gen()).collect_vec();
 
-        let alpha: EF = thread_rng().gen();
-        let values = interpolate_subgroup(&trace, alpha);
+        let max_height = trace_sizes.iter().map(|&(h, _)| h).max().unwrap();
+        let max_height_bits = log2_strict_usize(max_height);
 
-        let (comm, data) = inner.commit_matrix(lde);
+        let (traces, ldes, dims, openings): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = trace_sizes
+            .iter()
+            .map(|&(height, width)| {
+                let trace = RowMajorMatrix::<F>::rand_nonzero(&mut thread_rng(), height, width);
+                let lde = Radix2Dit.coset_lde_batch(trace.clone(), 1, F::generator());
+                let dims = lde.dimensions();
+                let openings = alphas
+                    .iter()
+                    .map(|&alpha| Opening::new(alpha, interpolate_subgroup(&trace, alpha)))
+                    .collect_vec();
+                (trace, lde, dims, openings)
+            })
+            .multiunzip();
+
+        let (comm, data) = inner.commit(ldes);
         let mmcs = QuotientMmcs {
             inner,
-            openings: vec![vec![Opening::new(alpha, values)]],
+            openings,
             coset_shift: F::generator(),
         };
 
-        let mut mats = mmcs.get_matrices(&data);
-        assert_eq!(mats.len(), 1);
-        let mat = mats.remove(0).to_row_major_matrix();
-        let poly = Radix2Dit.idft_batch(mat);
-        dbg!(poly);
+        let index = thread_rng().gen_range(0..max_height);
+        let (opened_values, proof) = mmcs.open_batch(index, &data);
+        assert_eq!(
+            mmcs.verify_batch(&comm, &dims, index, &opened_values, &proof),
+            Ok(())
+        );
+        let mut bad_opened_values = opened_values.clone();
+        bad_opened_values[0][0] += thread_rng().gen();
+        assert!(mmcs
+            .verify_batch(&comm, &dims, index, &bad_opened_values, &proof)
+            .is_err());
+
+        let mats = mmcs.get_matrices(&data);
+        for (trace, mat, opened_values_for_mat) in izip!(traces, mats, opened_values) {
+            let mat = mat.clone().to_row_major_matrix();
+
+            let height_bits = log2_strict_usize(trace.height());
+            let reduced_index = index >> (max_height_bits - height_bits);
+
+            // check that open_batch and get_matrices are consistent
+            assert_eq!(mat.row_slice(reduced_index), &opened_values_for_mat);
+
+            // check low degree
+            let poly = Radix2Dit.idft_batch(mat);
+            let expected_degree = trace.height() - <EF as AbstractExtensionField<F>>::D;
+            assert!((expected_degree..poly.height()).all(|r| poly.row(r).all(|x| x.is_zero())));
+        }
+    }
+
+    #[test]
+    fn test_quotient_mmcs() {
+        // single matrix
+        test_quotient_mmcs_with_sizes(1, &[(16, 1)]);
+        test_quotient_mmcs_with_sizes(3, &[(16, 1)]);
+        test_quotient_mmcs_with_sizes(1, &[(16, 10)]);
+        test_quotient_mmcs_with_sizes(3, &[(16, 10)]);
+        // multi matrix, same size
+        test_quotient_mmcs_with_sizes(1, &[(16, 5), (16, 10)]);
+        test_quotient_mmcs_with_sizes(3, &[(16, 10), (16, 5)]);
+        // multi matrix, different size
+        test_quotient_mmcs_with_sizes(3, &[(16, 10), (32, 5)]);
+        test_quotient_mmcs_with_sizes(5, &[(32, 4), (8, 2)]);
     }
 }

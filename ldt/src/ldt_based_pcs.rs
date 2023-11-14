@@ -175,7 +175,6 @@ where
                             .collect()
                     })
                     .collect();
-                // dbg!(&openings);
                 QuotientMmcs::<Val, _> {
                     inner: self.mmcs.clone(),
                     openings,
