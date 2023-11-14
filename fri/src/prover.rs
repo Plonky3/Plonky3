@@ -18,7 +18,7 @@ use crate::{CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof}
 pub(crate) fn prove<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
-    input_data: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
+    input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     challenger: &mut FC::Challenger,
 ) -> FriProof<FC> {
     let max_height = input_mmcs
@@ -61,7 +61,7 @@ pub(crate) fn prove<FC: FriConfig>(
 fn answer_query<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
-    input_data: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
+    input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
@@ -109,7 +109,7 @@ fn answer_query<FC: FriConfig>(
 fn commit_phase<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
-    input_data: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
+    input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
     log_max_height: usize,
     challenger: &mut FC::Challenger,
 ) -> CommitPhaseResult<FC> {
@@ -185,7 +185,7 @@ fn reduce_matrices<F, Challenge, Mat>(
 where
     F: Field,
     Challenge: ExtensionField<F>,
-    Mat: MatrixRows<Challenge> + Sync,
+    Mat: MatrixRows<F> + Sync,
 {
     (0..height)
         .into_par_iter()

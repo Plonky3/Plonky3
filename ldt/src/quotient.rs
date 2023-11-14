@@ -162,11 +162,6 @@ where
                     openings.len(),
                 );
 
-                dbg!(inner.dimensions());
-                dbg!(subgroup.len());
-                dbg!(inv_denominators.dimensions());
-                // dbg!(&openings);
-
                 QuotientMatrix {
                     inner,
                     subgroup,

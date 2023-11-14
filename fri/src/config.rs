@@ -8,7 +8,7 @@ pub trait FriConfig {
     type Val: PrimeField64;
     type Challenge: ExtensionField<Self::Val> + TwoAdicField;
 
-    type InputMmcs: Mmcs<Self::Challenge>;
+    type InputMmcs: Mmcs<Self::Val>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
@@ -50,7 +50,7 @@ impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> FriConfig
 where
     Val: PrimeField64,
     Challenge: ExtensionField<Val> + TwoAdicField,
-    InputMmcs: Mmcs<Challenge>,
+    InputMmcs: Mmcs<Val>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {

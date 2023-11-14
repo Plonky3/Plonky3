@@ -29,9 +29,9 @@ pub struct QueryProof<FC: FriConfig> {
 #[allow(dead_code)] // TODO: fields should be used soon
 pub struct InputOpening<FC: FriConfig> {
     /// The opening of each input codeword at the queried location.
-    pub(crate) opened_values: Vec<Vec<FC::Challenge>>,
+    pub(crate) opened_values: Vec<Vec<FC::Val>>,
 
-    pub(crate) opening_proof: <FC::InputMmcs as Mmcs<FC::Challenge>>::Proof,
+    pub(crate) opening_proof: <FC::InputMmcs as Mmcs<FC::Val>>::Proof,
 }
 
 #[allow(dead_code)] // TODO: fields should be used soon
