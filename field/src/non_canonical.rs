@@ -55,26 +55,27 @@ pub trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128> // Multipli
     /// x' = x mod p
     /// x' = x mod 2^10
     /// This is important for large convolutions.
-    fn from_small_i128(input: i128) -> Self;
+    /// UNSAFE as if |x| > 2**80 there are no garuntees regarding the answer.
+    unsafe fn from_small_i128(input: i128) -> Self;
 
     /// If we are sure a product will not overflow we don't need to pass to i128s.
+    /// UNSAFE as there are no garuntees on correctness if overflow occurs.
     #[inline]
-    fn mul_small(lhs: Self, rhs: Self) -> Self {
+    unsafe fn mul_small(lhs: Self, rhs: Self) -> Self {
         Self::from_i64(Self::to_i64(lhs) * Self::to_i64(rhs))
     }
 
-    /// If we want to immediately reduce a multiplication this is a simple shorthand.
-    #[inline]
-    fn mul_large(lhs: Self, rhs: Self) -> Self {
-        Self::from_small_i128(lhs * rhs)
-    }
-
     /// If we are sure a dot product will not overflow we don't need to pass to i128s.
+    /// UNSAFE as there are no garuntees on correctness if overflow occurs.
     #[inline]
-    fn dot_small<const N: usize>(lhs: [Self; N], rhs: [Self; N]) -> Self {
+    unsafe fn dot_small(lhs: &[Self], rhs: &[Self]) -> Self {
+        debug_assert_eq!(lhs.len(), rhs.len());
+
+        let n = lhs.len();
+
         let mut output = Self::mul_small(lhs[0], rhs[0]);
 
-        for i in 1..N {
+        for i in 1..n {
             output += Self::mul_small(lhs[i], rhs[i]);
         }
 
@@ -82,11 +83,16 @@ pub trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128> // Multipli
     }
 
     /// Compute a dot product, passing to i128's to prevent overflow.
+    /// UNSAFE as there are no garuntees on correctness if overflow of i128s occurs.
     #[inline]
-    fn dot_large<const N: usize>(lhs: [Self; N], rhs: [Self; N]) -> i128 {
+    unsafe fn dot_large(lhs: &[Self], rhs: &[Self]) -> i128 {
+        debug_assert_eq!(lhs.len(), rhs.len());
+
+        let n = lhs.len();
+
         let mut output = lhs[0]*rhs[0];
 
-        for i in 1..N {
+        for i in 1..n {
             output += lhs[i]*rhs[i];
         }
 

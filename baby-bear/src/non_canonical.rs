@@ -115,14 +115,14 @@ impl Mul<BabyBear> for BabyBearNonCanonical {
 
         // This is currently a placeholder for the actual algorithm. DO NOT USE IN PRODUCTION IT IS CLEARLY WRONG. JUST HERE FOR SOME TESTING PURPOSES.
 
-        let prod = (self.value as i128) * (rhs.value as i128); // This is an i96 at worst.
+        let prod = self.value.wrapping_mul(rhs.value as i64); // This is an i96 at worst.
         // let t = prod.wrapping_mul(MONTY_MU as i128) & (MONTY_MASK as i128);
         // let u = (t as u64) * (P as u64);
 
         // let x_sub_u = prod - (u as i128);
         // let x_sub_u_hi = (x_sub_u >> 31) as i64;
 
-        Self::from_i64((prod >> 40) as i64)
+        Self::from_i64(prod)
     }
 }
 
@@ -148,7 +148,7 @@ impl NonCanonicalPrimeField32 for BabyBearNonCanonical {
     /// x' = x mod p
     /// x' = x mod 2^10
     #[inline]
-    fn from_small_i128(input: i128) -> Self {
+    unsafe fn from_small_i128(input: i128) -> Self {
         Self::new(barret_red_babybear(input))
     }
 }

@@ -9,7 +9,9 @@ pub(crate) fn apply_circulant_8_karat<Base: PrimeField32, F: Canonicalize<Base>>
     input: [Base; 8],
     mds_const: [i64; 8],
 ) -> [Base; 8] {
-    // The numbers we will encounter through our algorithm are (roughly) bounded by
+    debug_assert!(mds_const.iter().sum::<i64>().abs() < (1 << 20));
+
+    // The numbers we will encounter through our algorithm are bounded by
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
     // <= (8 * 2**31) * 33 < 2**40 << 2**63
     // Hence we can work with i64's with garuntees of no overflow occuring.
@@ -30,6 +32,8 @@ pub(crate) fn apply_circulant_12_karat<Base: PrimeField32, F: Canonicalize<Base>
     input: [Base; 12],
     mds_const: [i64; 12],
 ) -> [Base; 12] {
+    debug_assert!(mds_const.iter().sum::<i64>().abs() < (1 << 20));
+
     // The numbers we will encounter through our algorithm are bounded by
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML) <= (12 * 2**31) * 33 < 2**40 << 2**63
     // Hence we can work with i64's with garuntees of no overflow occuring.
@@ -54,6 +58,8 @@ pub(crate) fn apply_circulant_16_karat<Base: PrimeField32, F: Canonicalize<Base>
     input: [Base; 16],
     mds_const: [i64; 16],
 ) -> [Base; 16] {
+    debug_assert!(mds_const.iter().sum::<i64>().abs() < (1 << 20));
+
     // The numbers we will encounter through our algorithm are (roughly) bounded by
     // SUM(input.as_canonical_u64()) * SUM(MATRIX_CIRC_MDS_8_SML)
     // <= (8 * 2**31) * 33 < 2**40 << 2**63
@@ -114,33 +120,10 @@ pub(crate) fn apply_circulant_64_karat<Base: PrimeField32, F: Canonicalize<Base>
     output.map(F::to_canonical_i_small)
 }
 
-/// Takes the dot product of two vectors whose products would overflow an i64.
-/// Computes the result as i128's and returns that.
-#[inline]
-fn dot_i128<T: NonCanonicalPrimeField32>(lhs: &[T], rhs: &[T]) -> i128 {
-    let n = lhs.len();
-    let mut sum = lhs[0] * rhs[0];
-    for i in 1..n {
-        sum += lhs[i] * rhs[i];
-    }
-    sum
-}
-
-/// Takes the dot product of two vectors which we are sure will not overflow an i64.
-#[inline]
-fn dot_i64<T: NonCanonicalPrimeField32>(lhs: &[T], rhs: &[T]) -> T {
-    let n = lhs.len();
-    let mut sum = T::mul_small(lhs[0], rhs[0]);
-    for i in 1..n {
-        sum += T::mul_small(lhs[i], rhs[i]);
-    }
-    sum
-}
-
 /// This will package all our basic convolution functions but allow for us to slightly modify implementations
 /// to suit our purposes.
 trait Convolution {
-    // For the smallest sizes we implement two different algorithms depending on whether it's possible to overflow and i64.
+    // For the smallest sizes we implement two different algorithms depending on whether overflow can occur.
 
     /// Compute the convolution of two vectors of length 3.
     /// output(x) = lhs(x)rhs(x) mod x^3 - 1
@@ -163,6 +146,8 @@ trait Convolution {
     /// This should likely be replaced by a mutable version.
     fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6], output: &mut [T]);
 
+    // For larger sizes we can do things recursively in terms of the smaller sizes.
+
     /// Compute the convolution of two vectors of length N.
     /// output(x) = lhs(x)rhs(x) mod x^N - 1
     /// We split this into a convolution and signed convolution of size N/2
@@ -181,7 +166,7 @@ trait Convolution {
         let mut rhs_pos = [T::zero(); HALF_N]; // rhs_pos = lhs(x) mod x^{N/2} - 1
         let mut rhs_neg = [T::zero(); HALF_N]; // rhs_nos = lhs(x) mod x^{N/2} - 1
 
-        // Could test out making lhs/rhs mutable?
+        // Could mutably change the inputs?
 
         for i in 0..HALF_N {
             let s = lhs[i];
@@ -220,12 +205,13 @@ trait Convolution {
     ) {
         debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
-        let mut lhs_even = [T::zero(); HALF_N];
-        let mut lhs_odd = [T::zero(); HALF_N];
-        let mut lhs_sum = [T::zero(); HALF_N];
-        let mut rhs_even = [T::zero(); HALF_N];
-        let mut rhs_odd = [T::zero(); HALF_N];
-        let mut rhs_sum = [T::zero(); HALF_N];
+        let mut lhs_even = [T::zero(); HALF_N]; // Even part of lhs
+        let mut lhs_odd = [T::zero(); HALF_N]; // Odd part of lhs
+        let mut lhs_sum = [T::zero(); HALF_N]; // lhs_even + lhs_odd
+        let mut rhs_even = [T::zero(); HALF_N]; // Even part of rhs
+        let mut rhs_odd = [T::zero(); HALF_N]; // Odd part of rhs
+        let mut rhs_sum = [T::zero(); HALF_N]; // rhs_even + rhs_odd
+
 
         for i in 0..HALF_N {
             lhs_even[i] = lhs[2 * i];
@@ -244,11 +230,11 @@ trait Convolution {
         {
             let (left, right) = output.split_at_mut(HALF_N);
 
-            inner_signed_conv(lhs_even, rhs_even, &mut even_s_conv);
-            inner_signed_conv(lhs_odd, rhs_odd, left);
-            inner_signed_conv(lhs_sum, rhs_sum, right);
+            inner_signed_conv(lhs_even, rhs_even, &mut even_s_conv);  // Store the even convolution in even_s_conv
+            inner_signed_conv(lhs_odd, rhs_odd, left); // Store the odd convolution in left
+            inner_signed_conv(lhs_sum, rhs_sum, right); // Store the sum convolution in right
 
-            // First we get the correct values.
+            // First we get the correct values in right and even_s_conv respectively.
             right[0] -= even_s_conv[0] + left[0];
             even_s_conv[0] -= left[HALF_N - 1];
 
@@ -258,6 +244,7 @@ trait Convolution {
             }
         }
 
+        // We need to interleave even_s_conv and right in the output.
         for i in 0..HALF_N {
             output[2 * i] = even_s_conv[i];
             output[2 * i + 1] = output[i + HALF_N];
@@ -353,11 +340,13 @@ impl Convolution for LargeConvolution {
         let rhs_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]]; // u_0(x)
         let rhs_m = [rhs[0] - rhs[2], rhs[1] - rhs[3]]; // u_1(x)
 
-        output[0] = T::from_small_i128(lhs_m[0] * rhs_m[0] - lhs_m[1] * rhs_m[1]);
-        output[1] = T::from_small_i128(lhs_m[0] * rhs_m[1] + lhs_m[1] * rhs_m[0]); // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
-        output[2] = T::from_small_i128(lhs_p[0] * rhs_p[0] + lhs_p[1] * rhs_p[1]);
-        output[3] = T::from_small_i128(lhs_p[0] * rhs_p[1] + lhs_p[1] * rhs_p[0]); // output[2, 3] = w_0 = v_0(x)u_0(x) mod x^2 - 1
-
+        unsafe {
+            output[0] = T::from_small_i128(lhs_m[0] * rhs_m[0] - lhs_m[1] * rhs_m[1]);
+            output[1] = T::from_small_i128(lhs_m[0] * rhs_m[1] + lhs_m[1] * rhs_m[0]); // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
+            output[2] = T::from_small_i128(lhs_p[0] * rhs_p[0] + lhs_p[1] * rhs_p[1]);
+            output[3] = T::from_small_i128(lhs_p[0] * rhs_p[1] + lhs_p[1] * rhs_p[0]); // output[2, 3] = w_0 = v_0(x)u_0(x) mod x^2 - 1
+        }
+        
         output[0] += output[2];
         output[1] += output[3]; // output[0, 1] = w_1 + w_0
 
@@ -371,12 +360,16 @@ impl Convolution for LargeConvolution {
     fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]) {
         let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
-        output[0] = T::from_small_i128((lhs[0] * rhs_rev[3]) - dot_i128(&lhs[1..], &rhs_rev[..3])); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
-        output[1] = T::from_small_i128(
-            dot_i128(&lhs[..2], &rhs_rev[2..]) - dot_i128(&lhs[2..], &rhs_rev[..2]),
-        ); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
-        output[2] = T::from_small_i128(dot_i128(&lhs[..3], &rhs_rev[1..]) - (lhs[3] * rhs_rev[0])); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
-        output[3] = T::from_small_i128(dot_i128(&lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
+        unsafe {
+            output[0] = T::from_small_i128((lhs[0] * rhs_rev[3]) - T::dot_large(&lhs[1..], &rhs_rev[..3])); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
+            output[1] = T::from_small_i128(
+                T::dot_large(&lhs[..2], &rhs_rev[2..]) - T::dot_large(&lhs[2..], &rhs_rev[..2]),
+            ); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
+            output[2] = T::from_small_i128(T::dot_large(&lhs[..3], &rhs_rev[1..]) - (lhs[3] * rhs_rev[0])); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
+            output[3] = T::from_small_i128(T::dot_large(&lhs, &rhs_rev)); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
+        }
+
+        
 
         // This might not be the best way to compute this.
         // Another approach is to define
@@ -402,6 +395,7 @@ impl Convolution for LargeConvolution {
 
 // If we can add the assumption that Sum(lhs) < 2**20 then
 // Sum(lhs)*Sum(rhs) < N * 2**{51} and so, for small N we can work with i64's and ignore overflow.
+// This assumption is not checked inside the code so it is up to the programmer to ensure it is satisfied.
 struct SmallConvolution;
 
 impl Convolution for SmallConvolution {
@@ -410,15 +404,20 @@ impl Convolution for SmallConvolution {
     #[inline]
     fn conv3<T: NonCanonicalPrimeField32>(lhs: [T; 3], rhs: [T; 3], output: &mut [T]) {
         // This is small enough we just explicitely write down the answer.
-        output[0] = T::mul_small(lhs[0], rhs[0])
-            + T::mul_small(lhs[1], rhs[2])
-            + T::mul_small(lhs[2], rhs[1]);
-        output[1] = T::mul_small(lhs[0], rhs[1])
-            + T::mul_small(lhs[1], rhs[0])
-            + T::mul_small(lhs[2], rhs[2]);
-        output[2] = T::mul_small(lhs[0], rhs[2])
-            + T::mul_small(lhs[1], rhs[1])
-            + T::mul_small(lhs[2], rhs[0]);
+
+        // No garuntees on correctness if overflow occurs.
+        unsafe {
+            output[0] = T::mul_small(lhs[0], rhs[0])
+                + T::mul_small(lhs[1], rhs[2])
+                + T::mul_small(lhs[2], rhs[1]);
+            output[1] = T::mul_small(lhs[0], rhs[1])
+                + T::mul_small(lhs[1], rhs[0])
+                + T::mul_small(lhs[2], rhs[2]);
+            output[2] = T::mul_small(lhs[0], rhs[2])
+                + T::mul_small(lhs[1], rhs[1])
+                + T::mul_small(lhs[2], rhs[0]);
+        }
+        
     }
 
     /// Compute the signed convolution of two vectors of length 3.
@@ -426,14 +425,19 @@ impl Convolution for SmallConvolution {
     #[inline]
     fn signed_conv3<T: NonCanonicalPrimeField32>(lhs: [T; 3], rhs: [T; 3], output: &mut [T]) {
         // This is small enough we just explicitely write down the answer.
-        output[0] = T::mul_small(lhs[0], rhs[0])
-            - T::mul_small(lhs[1], rhs[2])
-            - T::mul_small(lhs[2], rhs[1]);
-        output[1] = T::mul_small(lhs[0], rhs[1]) + T::mul_small(lhs[1], rhs[0])
-            - T::mul_small(lhs[2], rhs[2]);
-        output[2] = T::mul_small(lhs[0], rhs[2])
-            + T::mul_small(lhs[1], rhs[1])
-            + T::mul_small(lhs[2], rhs[0]);
+
+        // No garuntees on correctness if overflow occurs.
+        unsafe {
+            output[0] = T::mul_small(lhs[0], rhs[0])
+                - T::mul_small(lhs[1], rhs[2])
+                - T::mul_small(lhs[2], rhs[1]);
+            output[1] = T::mul_small(lhs[0], rhs[1]) + T::mul_small(lhs[1], rhs[0])
+                - T::mul_small(lhs[2], rhs[2]);
+            output[2] = T::mul_small(lhs[0], rhs[2])
+                + T::mul_small(lhs[1], rhs[1])
+                + T::mul_small(lhs[2], rhs[0]);
+        }
+        
     }
 
     /// Compute the convolution of two vectors of length 4. We assume we can ignore overflow so
@@ -448,10 +452,13 @@ impl Convolution for SmallConvolution {
         let rhs_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]]; // u_0(x)
         let rhs_m = [rhs[0] - rhs[2], rhs[1] - rhs[3]]; // u_1(x)
 
-        output[0] = T::mul_small(lhs_m[0], rhs_m[0]) - T::mul_small(lhs_m[1], rhs_m[1]);
-        output[1] = T::mul_small(lhs_m[0], rhs_m[1]) + T::mul_small(lhs_m[1], rhs_m[0]); // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
-        output[2] = T::mul_small(lhs_p[0], rhs_p[0]) + T::mul_small(lhs_p[1], rhs_p[1]);
-        output[3] = T::mul_small(lhs_p[0], rhs_p[1]) + T::mul_small(lhs_p[1], rhs_p[0]);
+        // No garuntees on correctness if overflow occurs.
+        unsafe {
+            output[0] = T::mul_small(lhs_m[0], rhs_m[0]) - T::mul_small(lhs_m[1], rhs_m[1]);
+            output[1] = T::mul_small(lhs_m[0], rhs_m[1]) + T::mul_small(lhs_m[1], rhs_m[0]); // output[0, 1] = w_1 = v_1(x)u_1(x) mod x^2 + 1
+            output[2] = T::mul_small(lhs_p[0], rhs_p[0]) + T::mul_small(lhs_p[1], rhs_p[1]);
+            output[3] = T::mul_small(lhs_p[0], rhs_p[1]) + T::mul_small(lhs_p[1], rhs_p[0]);
+        }
 
         output[0] += output[2];
         output[1] += output[3]; // output[0, 1] = w_1 + w_0
@@ -469,10 +476,13 @@ impl Convolution for SmallConvolution {
     fn signed_conv4<T: NonCanonicalPrimeField32>(lhs: [T; 4], rhs: [T; 4], output: &mut [T]) {
         let rhs_rev = [rhs[3], rhs[2], rhs[1], rhs[0]];
 
-        output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..3]); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
-        output[1] = dot_i64(&lhs[..2], &rhs_rev[2..]) - dot_i64(&lhs[2..], &rhs_rev[..2]); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
-        output[2] = dot_i64(&lhs[..3], &rhs_rev[1..]) - T::mul_small(lhs[3], rhs[3]); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
-        output[3] = dot_i64(&lhs, &rhs_rev); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
+        // No garuntees on correctness if overflow occurs.
+        unsafe {
+            output[0] = T::mul_small(lhs[0], rhs[0]) - T::dot_small(&lhs[1..], &rhs_rev[..3]); // v_0u_0 - (v_1u_3 + v_2u_2 + v_3u_1)
+            output[1] = T::dot_small(&lhs[..2], &rhs_rev[2..]) - T::dot_small(&lhs[2..], &rhs_rev[..2]); // v_0u_1 + v_1u_0 - (v_2u_3 + v_2u_3)
+            output[2] = T::dot_small(&lhs[..3], &rhs_rev[1..]) - T::mul_small(lhs[3], rhs[3]); // v_0u_2 + v_1u_1 + v_2u_0 - v_3u_3
+            output[3] = T::dot_small(&lhs, &rhs_rev); // v_0u_3 + v_1u_2 + v_2u_1 + v_3u_0
+        }
 
         // This might not be the best way to compute this.
         // Another approach is to define
@@ -490,12 +500,15 @@ impl Convolution for SmallConvolution {
     fn signed_conv6<T: NonCanonicalPrimeField32>(lhs: [T; 6], rhs: [T; 6], output: &mut [T]) {
         let rhs_rev = [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]];
 
-        output[0] = T::mul_small(lhs[0], rhs[0]) - dot_i64(&lhs[1..], &rhs_rev[..5]);
-        output[1] = dot_i64(&lhs[..2], &rhs_rev[4..]) - dot_i64(&lhs[2..], &rhs_rev[..4]);
-        output[2] = dot_i64(&lhs[..3], &rhs_rev[3..]) - dot_i64(&lhs[3..], &rhs_rev[..3]);
-        output[3] = dot_i64(&lhs[..4], &rhs_rev[2..]) - dot_i64(&lhs[4..], &rhs_rev[..2]);
-        output[4] = dot_i64(&lhs[..5], &rhs_rev[1..]) - T::mul_small(lhs[5], rhs[5]);
-        output[5] = dot_i64(&lhs, &rhs_rev);
+        // No garuntees on correctness if overflow occurs.
+        unsafe {
+            output[0] = T::mul_small(lhs[0], rhs[0]) - T::dot_small(&lhs[1..], &rhs_rev[..5]);
+            output[1] = T::dot_small(&lhs[..2], &rhs_rev[4..]) - T::dot_small(&lhs[2..], &rhs_rev[..4]);
+            output[2] = T::dot_small(&lhs[..3], &rhs_rev[3..]) - T::dot_small(&lhs[3..], &rhs_rev[..3]);
+            output[3] = T::dot_small(&lhs[..4], &rhs_rev[2..]) - T::dot_small(&lhs[4..], &rhs_rev[..2]);
+            output[4] = T::dot_small(&lhs[..5], &rhs_rev[1..]) - T::mul_small(lhs[5], rhs[5]);
+            output[5] = T::dot_small(&lhs, &rhs_rev);
+        }
     }
 }
 

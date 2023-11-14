@@ -135,7 +135,7 @@ impl NonCanonicalPrimeField32 for Mersenne31NonCanonical {
     /// x' = x mod p
     /// x' = x mod 2^10
     #[inline]
-    fn from_small_i128(input: i128) -> Self {
+    unsafe fn from_small_i128(input: i128) -> Self {
         const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
         const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
 
