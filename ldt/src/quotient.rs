@@ -109,28 +109,21 @@ where
         let max_height = *matrix_heights.iter().max().unwrap();
         let log_max_height = log2_strict_usize(max_height);
 
-        let quotients = izip!(inner_values, self.openings.clone(), matrix_heights)
+        let quotients = izip!(inner_values, &self.openings, matrix_heights)
             .map(|(inner_row, openings_for_mat, height)| {
                 let log2_height = log2_strict_usize(height);
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
                 let x = self.coset_shift
                     * F::two_adic_generator(log2_height).exp_u64(reduced_index as u64);
-                openings_for_mat
-                    .iter()
-                    .flat_map(
-                        |Opening {
-                             minpoly,
-                             remainder_polys,
-                         }| {
-                            inner_row.iter().zip_eq(remainder_polys).map(
-                                move |(&inner_value, r)| {
-                                    (inner_value - eval_poly(r, x)) / eval_poly(&minpoly, x)
-                                },
-                            )
-                        },
-                    )
-                    .collect()
+
+                let m_invs = batch_multiplicative_inverse(
+                    &openings_for_mat
+                        .iter()
+                        .map(|opening| eval_poly(&opening.minpoly, x))
+                        .collect_vec(),
+                );
+                compute_quotient_matrix_row(x, &openings_for_mat, &m_invs, &inner_row)
             })
             .collect();
 
@@ -244,51 +237,37 @@ impl<F, Inner: MatrixRowSlices<F>> Matrix<F> for QuotientMatrix<F, Inner> {
     }
 }
 
+// todo: pack this
+fn compute_quotient_matrix_row<F: Field>(
+    x: F,
+    openings: &[Opening<F>],
+    m_invs: &[F],
+    inner_row: &[F],
+) -> Vec<F> {
+    openings
+        .iter()
+        .zip(m_invs)
+        .flat_map(|(opening, m_inv)| {
+            inner_row
+                .iter()
+                .zip(&opening.remainder_polys)
+                .map(|(&eval, r)| (eval - eval_poly(r, x)) * *m_inv)
+        })
+        .collect()
+}
+
 impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, Inner> {
-    type Row<'a> = QuotientMatrixRow<'a, F> where Inner: 'a;
+    type Row<'a> = Vec<F> where Inner: 'a;
 
     #[inline]
     fn row(&self, r: usize) -> Self::Row<'_> {
-        QuotientMatrixRow {
-            x: self.subgroup[r],
-            openings: &self.openings,
-            inv_denominator: self.inv_denominators.row_slice(r),
-            inner_row: self.inner.row_slice(r),
-            opening_index: 0,
-            inner_col_index: 0,
-        }
-    }
-}
-
-pub struct QuotientMatrixRow<'a, F> {
-    x: F,
-    openings: &'a [Opening<F>],
-    /// `1 / m(X)`
-    inv_denominator: &'a [F],
-    inner_row: &'a [F],
-    opening_index: usize,
-    inner_col_index: usize,
-}
-
-impl<'a, F: Field> Iterator for QuotientMatrixRow<'a, F> {
-    type Item = F;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.inner_col_index == self.inner_row.len() {
-            self.opening_index += 1;
-            self.inner_col_index = 0;
-        }
-        if self.opening_index == self.openings.len() {
-            return None;
-        }
-        let eval = self.inner_row[self.inner_col_index];
-        let opening = &self.openings[self.opening_index];
-        let numerator = eval - eval_poly(&opening.remainder_polys[self.inner_col_index], self.x);
-        let denominator = self.inv_denominator[self.opening_index];
-        let result = numerator * denominator;
-        self.inner_col_index += 1;
-        Some(result)
+        let r = compute_quotient_matrix_row(
+            self.subgroup[r],
+            &self.openings,
+            self.inv_denominators.row_slice(r),
+            self.inner.row_slice(r),
+        );
+        r
     }
 }
 
