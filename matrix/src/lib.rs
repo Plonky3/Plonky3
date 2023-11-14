@@ -72,7 +72,10 @@ pub trait MatrixRows<T>: Matrix<T> {
         Self: Sized,
         T: Clone,
     {
-        todo!()
+        RowMajorMatrix::new(
+            (0..self.height()).flat_map(|r| self.row(r)).collect(),
+            self.width(),
+        )
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>

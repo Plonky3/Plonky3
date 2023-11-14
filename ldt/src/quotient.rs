@@ -1,12 +1,16 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
+use core::{debug_assert, debug_assert_eq};
+use p3_field::eval_poly;
+use p3_matrix::dense::RowMajorMatrix;
 
 use itertools::{izip, Itertools};
 use p3_commit::Mmcs;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
-    TwoAdicField,
+    add_vecs, batch_multiplicative_inverse, binomial_expand, cyclic_subgroup_coset_known_order,
+    extension::HasFrobenius, scale_vec, ExtensionField, Field, TwoAdicField,
 };
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
@@ -14,31 +18,72 @@ use p3_util::log2_strict_usize;
 /// A wrapper around an Inner MMCS, which transforms each inner value to
 /// `(inner - opened_point) / (x - opened_eval)`.
 ///
+/// `(inner - r(X))/m(X)`
+///
 /// Since there can be multiple opening points, for each matrix, this transforms an inner opened row
 /// into a concatenation of rows, transformed as above, for each point.
 #[derive(Clone)]
-pub struct QuotientMmcs<F, EF, Inner: Mmcs<F>> {
+pub struct QuotientMmcs<F, Inner: Mmcs<F>> {
     pub(crate) inner: Inner,
 
     /// For each matrix, a list of claimed openings, one for each point that we open that batch of
     /// polynomials at.
-    pub(crate) openings: Vec<Vec<Opening<EF>>>,
+    pub(crate) openings: Vec<Vec<Opening<F>>>,
 
     // The coset shift for the inner MMCS's evals, to correct `x` in the denominator.
     pub(crate) coset_shift: F,
 }
 
 /// A claimed opening.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Opening<F> {
-    pub(crate) point: F,
-    pub(crate) values: Vec<F>,
+    pub(crate) minpoly: Vec<F>,
+    pub(crate) remainder_polys: Vec<Vec<F>>,
 }
 
-impl<F, EF, Inner> Mmcs<EF> for QuotientMmcs<F, EF, Inner>
+impl<F: Field> Opening<F> {
+    pub(crate) fn new<EF: HasFrobenius<F>>(point: EF, values: Vec<EF>) -> Self {
+        let remainder_polys = Self::compute_remainder_polys(point, &values);
+        Self {
+            minpoly: point.minimal_poly(),
+            remainder_polys,
+        }
+    }
+    fn compute_remainder_polys<EF: HasFrobenius<F>>(point: EF, values: &[EF]) -> Vec<Vec<F>> {
+        // compute lagrange basis for [point, Frob point, Frob^2 point, ..]
+        let xs = point.galois_group();
+        let w = xs[1..]
+            .iter()
+            .map(|&xi| xs[0] - xi)
+            .product::<EF>()
+            .inverse();
+        let l_point = scale_vec(w, binomial_expand(&xs[1..]));
+        debug_assert_eq!(l_point.len(), EF::D);
+        // interpolate at [(pt,value),(Frob pt, Frob alpha),..]
+        let mut rs = vec![];
+        for &v in values {
+            let mut l_point_frob = scale_vec(v, l_point.clone());
+            let mut r = l_point_frob.clone();
+            for _ in 1..EF::D {
+                l_point_frob.iter_mut().for_each(|c| *c = c.frobenius());
+                r = add_vecs(r, l_point_frob.clone());
+            }
+            rs.push(
+                r.into_iter()
+                    .map(|c| {
+                        debug_assert!(c.is_in_basefield());
+                        c.as_base_slice()[0]
+                    })
+                    .collect(),
+            );
+        }
+        rs
+    }
+}
+
+impl<F, Inner> Mmcs<F> for QuotientMmcs<F, Inner>
 where
     F: TwoAdicField,
-    EF: ExtensionField<F>,
     Inner: Mmcs<F>,
     for<'a> Inner::Mat<'a>: MatrixRowSlices<F>,
 {
@@ -46,13 +91,13 @@ where
     type Commitment = Inner::Commitment;
     type Proof = Inner::Proof;
     type Error = Inner::Error;
-    type Mat<'a> = QuotientMatrix<F, EF, Inner::Mat<'a>> where Self: 'a;
+    type Mat<'a> = QuotientMatrix<F, Inner::Mat<'a>> where Self: 'a;
 
     fn open_batch(
         &self,
         index: usize,
         prover_data: &Self::ProverData,
-    ) -> (Vec<Vec<EF>>, Self::Proof) {
+    ) -> (Vec<Vec<F>>, Self::Proof) {
         let (inner_values, proof) = self.inner.open_batch(index, prover_data);
         let matrix_heights = self.inner.get_matrix_heights(prover_data);
         let max_height = *matrix_heights.iter().max().unwrap();
@@ -67,15 +112,18 @@ where
                     * F::two_adic_generator(log2_height).exp_u64(reduced_index as u64);
                 openings_for_mat
                     .iter()
-                    .flat_map(|Opening { point, values }| {
-                        inner_row
-                            .iter()
-                            .zip(values)
-                            .map(|(&inner_value, &opened_value)| {
-                                (EF::from_base(inner_value) - opened_value)
-                                    / (EF::from_base(x) - *point)
-                            })
-                    })
+                    .flat_map(
+                        |Opening {
+                             minpoly,
+                             remainder_polys,
+                         }| {
+                            inner_row.iter().zip_eq(remainder_polys).map(
+                                move |(&inner_value, r)| {
+                                    (inner_value - eval_poly(r, x)) / eval_poly(&minpoly, x)
+                                },
+                            )
+                        },
+                    )
                     .collect()
             })
             .collect();
@@ -92,19 +140,30 @@ where
                 let height = inner.height();
                 let log2_height = log2_strict_usize(height);
                 let g = F::two_adic_generator(log2_height);
-                let subgroup = cyclic_subgroup_coset_known_order(g, self.coset_shift, height);
+                let subgroup =
+                    cyclic_subgroup_coset_known_order(g, self.coset_shift, height).collect_vec();
 
-                let denominators: Vec<EF> = subgroup
-                    .flat_map(|x| {
+                let denominators: Vec<F> = subgroup
+                    .iter()
+                    .flat_map(|&x| {
                         openings
                             .iter()
-                            .map(move |opening| EF::from_base(x) - opening.point)
+                            .map(move |opening| eval_poly(&opening.minpoly, x))
                     })
                     .collect();
-                let inv_denominators = batch_multiplicative_inverse(&denominators);
+                let inv_denominators = RowMajorMatrix::new(
+                    batch_multiplicative_inverse(&denominators),
+                    openings.len(),
+                );
+
+                dbg!(inner.dimensions());
+                dbg!(subgroup.len());
+                dbg!(inv_denominators.dimensions());
+                dbg!(&openings);
 
                 QuotientMatrix {
                     inner,
+                    subgroup,
                     openings,
                     inv_denominators,
                     _phantom: PhantomData,
@@ -118,11 +177,11 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_quotient_values: &[Vec<EF>],
+        opened_quotient_values: &[Vec<F>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
-        // quotient = (original - opened_eval) / (x - opened_point)
-        // original = quotient * (x - opened_point) + opened_eval
+        // quotient = (original - r(X))/m(X)
+        // original = quotient * m(X) + r(X)
 
         let log_max_height = dimensions
             .iter()
@@ -139,21 +198,20 @@ where
                     * F::two_adic_generator(log_height).exp_u64(reduced_index as u64);
 
                 let original_width = quotient_row.len() / openings.len();
-                let original_row_repeated: Vec<Vec<EF>> = quotient_row
+                let original_row_repeated: Vec<Vec<F>> = quotient_row
                     .chunks(original_width)
                     .zip(openings)
                     .map(|(quotient_row_chunk, opening)| {
                         quotient_row_chunk
                             .iter()
-                            .zip(&opening.values)
-                            .map(|(&quotient_value, &opened_value)| {
-                                quotient_value * (EF::from_base(x) - opening.point) + opened_value
+                            .zip(&opening.remainder_polys)
+                            .map(|(&quotient_value, r)| {
+                                quotient_value * eval_poly(&opening.minpoly, x) + eval_poly(&r, x)
                             })
                             .collect_vec()
                     })
                     .collect_vec();
-                let original_row = get_repeated(original_row_repeated.into_iter());
-                to_base::<F, EF>(original_row)
+                get_repeated(original_row_repeated.into_iter())
             })
             .collect_vec();
 
@@ -162,16 +220,17 @@ where
     }
 }
 
-pub struct QuotientMatrix<F, EF, Inner: MatrixRowSlices<F>> {
+pub struct QuotientMatrix<F, Inner: MatrixRowSlices<F>> {
     inner: Inner,
-    openings: Vec<Opening<EF>>,
+    subgroup: Vec<F>,
+    openings: Vec<Opening<F>>,
     /// For each row (associated with a subgroup element `x`), for each opening point,
-    /// this holds `1 / (x - opened_point)`.
-    inv_denominators: Vec<EF>,
+    /// this holds `1 / (m(X))`.
+    inv_denominators: RowMajorMatrix<F>,
     _phantom: PhantomData<F>,
 }
 
-impl<F, EF, Inner: MatrixRowSlices<F>> Matrix<EF> for QuotientMatrix<F, EF, Inner> {
+impl<F, Inner: MatrixRowSlices<F>> Matrix<F> for QuotientMatrix<F, Inner> {
     fn width(&self) -> usize {
         self.inner.width() * self.openings.len()
     }
@@ -181,17 +240,15 @@ impl<F, EF, Inner: MatrixRowSlices<F>> Matrix<EF> for QuotientMatrix<F, EF, Inne
     }
 }
 
-impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRowSlices<F>> MatrixRows<EF>
-    for QuotientMatrix<F, EF, Inner>
-{
-    type Row<'a> = QuotientMatrixRow<'a, F, EF> where Inner: 'a;
+impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, Inner> {
+    type Row<'a> = QuotientMatrixRow<'a, F> where Inner: 'a;
 
     #[inline]
     fn row(&self, r: usize) -> Self::Row<'_> {
-        let num_openings = self.openings.len();
         QuotientMatrixRow {
+            x: self.subgroup[r],
             openings: &self.openings,
-            inv_denominator: &self.inv_denominators[r * num_openings..(r + 1) * num_openings],
+            inv_denominator: self.inv_denominators.row_slice(r),
             inner_row: self.inner.row_slice(r),
             opening_index: 0,
             inner_col_index: 0,
@@ -199,21 +256,18 @@ impl<F: Field, EF: ExtensionField<F>, Inner: MatrixRowSlices<F>> MatrixRows<EF>
     }
 }
 
-pub struct QuotientMatrixRow<'a, F, EF> {
-    openings: &'a [Opening<EF>],
+pub struct QuotientMatrixRow<'a, F> {
+    x: F,
+    openings: &'a [Opening<F>],
     /// `1 / (x - opened_point)`
-    inv_denominator: &'a [EF],
+    inv_denominator: &'a [F],
     inner_row: &'a [F],
     opening_index: usize,
     inner_col_index: usize,
 }
 
-impl<'a, F, EF> Iterator for QuotientMatrixRow<'a, F, EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    type Item = EF;
+impl<'a, F: Field> Iterator for QuotientMatrixRow<'a, F> {
+    type Item = F;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -224,11 +278,9 @@ where
         if self.opening_index == self.openings.len() {
             return None;
         }
-
         let eval = self.inner_row[self.inner_col_index];
         let opening = &self.openings[self.opening_index];
-        let opened_value = opening.values[self.inner_col_index];
-        let numerator: EF = EF::from_base(eval) - opened_value;
+        let numerator = eval - eval_poly(&opening.remainder_polys[self.opening_index], self.x);
         let result = numerator * self.inv_denominator[self.opening_index];
         self.inner_col_index += 1;
         Some(result)

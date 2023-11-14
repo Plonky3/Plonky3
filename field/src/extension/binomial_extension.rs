@@ -9,7 +9,7 @@ use itertools::Itertools;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use super::{HasFrobenuis, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
@@ -40,7 +40,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 {
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenuis<F> for BinomialExtensionField<F, D> {
+impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     fn frobenius(&self) -> Self {
         self.repeated_frobenius(1)

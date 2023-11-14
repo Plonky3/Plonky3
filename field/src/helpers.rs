@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
@@ -63,4 +64,38 @@ pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
     let mut arr = array::from_fn(|_| AF::zero());
     arr[0] = x;
     arr
+}
+
+/// Naive polynomial multiplication.
+pub fn naive_poly_mul<AF: AbstractField>(a: &[AF], b: &[AF]) -> Vec<AF> {
+    // Grade school algorithm
+    let mut product = vec![AF::zero(); a.len() + b.len() - 1];
+    for (i, c1) in a.iter().enumerate() {
+        for (j, c2) in b.iter().enumerate() {
+            product[i + j] += c1.clone() * c2.clone();
+        }
+    }
+    product
+}
+
+/// Expand a product of binomials (x - xs[0])(x - xs[1]).. into polynomial coefficients.
+pub fn binomial_expand<AF: AbstractField>(xs: &[AF]) -> Vec<AF> {
+    let mut coeffs = vec![AF::zero(); xs.len() + 1];
+    coeffs[0] = AF::one();
+    for (i, x) in xs.iter().enumerate() {
+        for j in (1..i + 2).rev() {
+            coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();
+        }
+        coeffs[0] *= -x.clone();
+    }
+    coeffs
+}
+
+pub fn eval_poly<AF: AbstractField>(poly: &[AF], x: AF) -> AF {
+    let mut acc = AF::zero();
+    for coeff in poly.iter().rev() {
+        acc *= x.clone();
+        acc += coeff.clone();
+    }
+    acc
 }

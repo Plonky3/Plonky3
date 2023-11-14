@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_field::extension::HasFrobenius;
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
@@ -39,11 +40,11 @@ impl<Val, EF, In, Dft, M, L, Challenger> UnivariatePcsWithLde<Val, EF, In, Chall
     for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
     Val: TwoAdicField,
-    EF: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField + HasFrobenius<Val>,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     fn coset_shift(&self) -> Val {
@@ -88,12 +89,12 @@ impl<Val, EF, In, Dft, M, L, Challenger> Pcs<Val, In>
     for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
     Val: TwoAdicField,
-    EF: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField + HasFrobenius<Val>,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
     for<'a> M::Mat<'a>: MatrixRowSlices<Val>,
-    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     type Commitment = M::Commitment;
@@ -110,11 +111,11 @@ impl<Val, EF, In, Dft, M, L, Challenger> UnivariatePcs<Val, EF, In, Challenger>
     for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
     Val: TwoAdicField,
-    EF: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField + HasFrobenius<Val>,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     #[instrument(name = "prove batch opening", skip_all)]
@@ -168,14 +169,14 @@ where
                         points
                             .iter()
                             .zip(opened_values_for_mat)
-                            .map(|(&point, opened_values_for_point)| Opening::<EF> {
-                                point,
-                                values: opened_values_for_point,
+                            .map(|(&point, opened_values_for_point)| {
+                                Opening::<Val>::new(point, opened_values_for_point)
                             })
                             .collect()
                     })
                     .collect();
-                QuotientMmcs::<Val, EF, _> {
+                // dbg!(&openings);
+                QuotientMmcs::<Val, _> {
                     inner: self.mmcs.clone(),
                     openings,
                     coset_shift,
