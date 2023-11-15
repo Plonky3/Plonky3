@@ -310,10 +310,9 @@ fn compute_quotient_matrix_row<F: Field>(
 
     // this is always EF::D.
     let r_poly_len = openings[0].remainder_polys[0].len();
-    // [P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
+    // [P(1,1,1,1),P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
     let packed_x_pows = x
         .powers()
-        .skip(1)
         .take(r_poly_len)
         .map(|x_pow| F::Packing::from(x_pow))
         .collect_vec();
@@ -352,7 +351,7 @@ fn compute_quotient_matrix_row<F: Field>(
             // first, we will evaluate the remainder polys at x, and put them in qp_ys_packed
             // the polynomial evaluation sum starts with the constant coefficients
             let mut packed_qp_ys = opening.r_transposed_packed.row_slice(0).to_vec();
-            for (coeff_idx, &packed_x_pow) in packed_x_pows.iter().enumerate() {
+            for (coeff_idx, &packed_x_pow) in packed_x_pows.iter().enumerate().skip(1) {
                 let coeffs = opening.r_transposed_packed.row_slice(coeff_idx);
                 for col in 0..packed_qp_ys.len() {
                     packed_qp_ys[col] += packed_x_pow * coeffs[col];
