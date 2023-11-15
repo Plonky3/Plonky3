@@ -184,11 +184,7 @@ mod tests {
         type EF = BinomialExtensionField<F, 4>;
         for _ in 0..1024 {
             let x: EF = thread_rng().gen();
-            let m: Vec<EF> = x
-                .minimal_poly()
-                .into_iter()
-                .map(|x| EF::from_base(x))
-                .collect();
+            let m: Vec<EF> = x.minimal_poly().into_iter().map(EF::from_base).collect();
             assert!(eval_poly(&m, x).is_zero());
         }
     }

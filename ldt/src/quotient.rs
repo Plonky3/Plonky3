@@ -1,15 +1,15 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::debug_assert_eq;
 use core::fmt::Debug;
 use core::marker::PhantomData;
-use core::{debug_assert, debug_assert_eq};
 
 use itertools::{izip, Itertools};
 use p3_commit::Mmcs;
 use p3_field::extension::HasFrobenius;
 use p3_field::{
     add_vecs, batch_multiplicative_inverse, binomial_expand, cyclic_subgroup_coset_known_order,
-    eval_poly, scale_vec, ExtensionField, Field, PackedField, TwoAdicField,
+    eval_poly, scale_vec, Field, PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
@@ -172,7 +172,7 @@ where
                         .map(|opening| eval_poly(&opening.minpoly, x))
                         .collect_vec(),
                 );
-                compute_quotient_matrix_row(x, &openings_for_mat, &m_invs, &inner_row)
+                compute_quotient_matrix_row(x, openings_for_mat, &m_invs, &inner_row)
             })
             .collect();
 
@@ -249,7 +249,7 @@ where
                             .iter()
                             .zip(&opening.remainder_polys)
                             .map(|(&quotient_value, r)| {
-                                quotient_value * eval_poly(&opening.minpoly, x) + eval_poly(&r, x)
+                                quotient_value * eval_poly(&opening.minpoly, x) + eval_poly(r, x)
                             })
                             .collect_vec()
                     })
@@ -261,7 +261,7 @@ where
 
         self.inner
             .verify_batch(commit, dimensions, index, &opened_original_values, proof)
-            .map_err(|e| QuotientError::InnerMmcs(e))
+            .map_err(QuotientError::InnerMmcs)
     }
 }
 
@@ -310,9 +310,10 @@ fn compute_quotient_matrix_row<F: Field>(
 
     // this is always EF::D.
     let r_poly_len = openings[0].remainder_polys[0].len();
-    // [P(1,1,1,1),P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
+    // [P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
     let packed_x_pows = x
         .powers()
+        .skip(1)
         .take(r_poly_len)
         .map(|x_pow| F::Packing::from(x_pow))
         .collect_vec();
@@ -353,10 +354,10 @@ fn compute_quotient_matrix_row<F: Field>(
             // first, we will evaluate the remainder polys at x, and put them in qp_ys_packed
             // the polynomial evaluation sum starts with the constant coefficients
             let mut packed_qp_ys = opening.r_transposed_packed.row_slice(0).to_vec();
-            for coeff_idx in 1..r_poly_len {
+            for (coeff_idx, &packed_x_pow) in packed_x_pows.iter().enumerate() {
                 let coeffs = opening.r_transposed_packed.row_slice(coeff_idx);
                 for col in 0..packed_qp_ys.len() {
-                    packed_qp_ys[col] += packed_x_pows[coeff_idx] * coeffs[col];
+                    packed_qp_ys[col] += packed_x_pow * coeffs[col];
                 }
             }
             for (packed_qp_y, &packed_y) in packed_qp_ys.iter_mut().zip(packed_ys) {
@@ -416,10 +417,7 @@ mod tests {
         for (r, y) in rs.into_iter().zip(values) {
             // r(alpha) = p(alpha)
             assert_eq!(
-                eval_poly(
-                    &r.into_iter().map(|x| EF::from_base(x)).collect_vec(),
-                    point
-                ),
+                eval_poly(&r.into_iter().map(EF::from_base).collect_vec(), point),
                 y
             );
         }
