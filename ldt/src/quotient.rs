@@ -331,17 +331,15 @@ fn compute_quotient_matrix_row<F: Field>(
         // and the system allocator default alignment is greater than F::Packing's alignment.
         // For example, with an inner DirectMmcs, default allocator, and 16 byte packing.
         // It isn't true, for example, with jemalloc, which can hand out 8 byte alignments.
-        // TODO: if not true, fall back to slow path of copying to aligned vec.
-        // if we just fell back to scalar code, the remainder polys wouldn't be aligned.
-        assert_eq!(pfx_ys.len(), 0);
+        // If that's the case, this code will slow down greatly and we will need to reconsider.
 
-        /*
-        // If we handled a prefix, we would need to do this and more.
-        pfx_ys
-            .iter()
-            .zip(&opening.remainder_polys)
-            .for_each(|(&y, r)| process_scalar(y, r, &mut qp_ys));
-        */
+        if !pfx_ys.is_empty() {
+            inner_row
+                .iter()
+                .zip(&opening.remainder_polys)
+                .for_each(|(&y, r)| process_scalar(y, r, &mut qp_ys));
+            continue;
+        }
 
         if opening.r_transposed_packed.height() > 0 {
             // we can't directly write to qp_ys as a &mut [F::Packing],
