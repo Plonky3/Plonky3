@@ -72,6 +72,7 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     /// 0 and it cannot exceed `WIDTH`.
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 
+    // TODO: shouldn't this check alignment?
     fn pack_slice(buf: &[Self::Scalar]) -> &[Self] {
         assert!(
             buf.len() % Self::WIDTH == 0,
@@ -94,6 +95,12 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
         let buf_ptr = buf.as_mut_ptr().cast::<Self>();
         let n = buf.len() / Self::WIDTH;
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
+    }
+
+    fn unpack_slice(buf: &[Self]) -> &[Self::Scalar] {
+        let buf_ptr = buf.as_ptr().cast::<Self::Scalar>();
+        let n = buf.len() * Self::WIDTH;
+        unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 }
 
