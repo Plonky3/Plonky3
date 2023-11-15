@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_field::extension::HasFrobenius;
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
@@ -9,6 +8,7 @@ use p3_commit::{
     UnivariatePcsWithLde,
 };
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;

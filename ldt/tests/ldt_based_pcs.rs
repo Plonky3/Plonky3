@@ -6,14 +6,11 @@ use p3_blake3::Blake3;
 use p3_challenger::{DuplexChallenger, FieldChallenger};
 use p3_commit::{DirectMmcs, ExtensionMmcs, Mmcs, OpenedValues, Pcs, UnivariatePcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-use p3_field::{
-    extension::BinomialExtensionField, AbstractField, ExtensionField, Field, TwoAdicField,
-};
+use p3_field::extension::BinomialExtensionField;
+use p3_field::{AbstractField, ExtensionField, Field, TwoAdicField};
 use p3_ldt::{Ldt, LdtBasedPcs, QuotientMmcs};
-use p3_matrix::{
-    dense::{RowMajorMatrix, RowMajorMatrixView},
-    Dimensions, Matrix, MatrixGet, MatrixRows,
-};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::{Dimensions, Matrix, MatrixGet, MatrixRows};
 use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};

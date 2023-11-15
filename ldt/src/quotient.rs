@@ -3,15 +3,15 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::{debug_assert, debug_assert_eq};
-use p3_field::eval_poly;
-use p3_matrix::dense::RowMajorMatrix;
 
 use itertools::{izip, Itertools};
 use p3_commit::Mmcs;
+use p3_field::extension::HasFrobenius;
 use p3_field::{
     add_vecs, batch_multiplicative_inverse, binomial_expand, cyclic_subgroup_coset_known_order,
-    extension::HasFrobenius, scale_vec, ExtensionField, Field, PackedField, TwoAdicField,
+    eval_poly, scale_vec, ExtensionField, Field, PackedField, TwoAdicField,
 };
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
@@ -392,7 +392,8 @@ mod tests {
     use p3_blake3::Blake3;
     use p3_commit::DirectMmcs;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use p3_field::{extension::BinomialExtensionField, AbstractExtensionField, AbstractField};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{AbstractExtensionField, AbstractField};
     use p3_interpolation::interpolate_subgroup;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};

@@ -7,6 +7,7 @@ mod binomial_extension;
 
 use alloc::vec;
 use alloc::vec::Vec;
+
 pub use binomial_extension::*;
 
 /// Binomial extension field trait.

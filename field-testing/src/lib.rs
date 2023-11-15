@@ -168,17 +168,15 @@ macro_rules! test_two_adic_extension_field {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use alloc::vec;
     use alloc::vec::Vec;
+
     use p3_baby_bear::BabyBear;
-    use p3_field::{
-        binomial_expand, eval_poly,
-        extension::{BinomialExtensionField, HasFrobenius},
-        AbstractExtensionField, AbstractField,
-    };
+    use p3_field::extension::{BinomialExtensionField, HasFrobenius};
+    use p3_field::{binomial_expand, eval_poly, AbstractExtensionField, AbstractField};
     use rand::{thread_rng, Rng};
+
+    use super::*;
 
     #[test]
     fn test_minimal_poly() {
