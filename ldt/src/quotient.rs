@@ -15,10 +15,20 @@ use p3_field::{
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
-/// A wrapper around an Inner MMCS, which transforms each inner value to
-/// `(inner - opened_point) / (x - opened_eval)`.
+/// A wrapper around an Inner MMCS, which transforms each inner value to (inner - r(X)) / m(X),
+/// where m(X) is the minimal polynomial of the opening point, and r(X) = inner mod m(X).
 ///
-/// `(inner - r(X))/m(X)`
+/// This technique was proposed by Liam Eagan.
+/// Instead of providing the quotient (p(X) - p(alpha))/(X - alpha) in the extension field,
+/// we express the value of p(X) at X=alpha as the remainder r(X) = p(X) mod m(X),
+/// where m(X) is the minimal polynomial such that m(alpha) = 0,
+/// and prove r(X) is correct by showing (p(X) - r(X)) is divisible by m(X).
+///
+/// This has the benefit that all coefficients and evaluations are performed in the base field.
+///
+/// Since we have the values p(alpha) = y, we can recover r(X) by interpolating
+/// [(alpha,y), (Frob alpha, Frob y), (Frob^2 alpha, Frob^2 y), ..]
+/// since the Galois action commutes with polynomials with coefficients over the base field.
 ///
 /// Since there can be multiple opening points, for each matrix, this transforms an inner opened row
 /// into a concatenation of rows, transformed as above, for each point.
@@ -261,7 +271,7 @@ pub struct QuotientMatrix<F: Field, Inner: MatrixRowSlices<F>> {
     subgroup: Vec<F>,
     openings: Vec<Opening<F>>,
     /// For each row (associated with a subgroup element `x`), for each opening point,
-    /// this holds `1 / (m(X))`.
+    /// this holds `1 / m(X)`.
     inv_denominators: RowMajorMatrix<F>,
     _phantom: PhantomData<F>,
 }
@@ -290,20 +300,6 @@ impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, In
     }
 }
 
-fn padded_packed<'a, F: Field>(
-    xs: &'a [F],
-    packed_limbs: usize,
-) -> impl Iterator<Item = F::Packing> + 'a {
-    (0..packed_limbs).map(|i| {
-        F::Packing::from_fn(|j| {
-            xs.get(i * F::Packing::WIDTH + j)
-                .copied()
-                .unwrap_or(F::zero())
-        })
-    })
-}
-
-// todo: pack this
 fn compute_quotient_matrix_row<F: Field>(
     x: F,
     openings: &[Opening<F>],
@@ -339,6 +335,7 @@ fn compute_quotient_matrix_row<F: Field>(
         assert_eq!(pfx_ys.len(), 0);
 
         /*
+        // If we handled a prefix, we would need to do this and more.
         pfx_ys
             .iter()
             .zip(&opening.remainder_polys)
@@ -349,6 +346,9 @@ fn compute_quotient_matrix_row<F: Field>(
             // we can't directly write to qp_ys as a &mut [F::Packing],
             // because there can be misalignment between openings.
             // todo: can we figure out how to, and avoid the alloc + extend_from_slice?
+
+            // once const generic exprs are stable, this will unroll a lot nicer.
+            // for now, we will not bother with threading a const D: usize through every function
 
             // first, we will evaluate the remainder polys at x, and put them in qp_ys_packed
             // the polynomial evaluation sum starts with the constant coefficients
