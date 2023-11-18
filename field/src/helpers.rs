@@ -78,11 +78,11 @@ pub fn naive_poly_mul<AF: AbstractField>(a: &[AF], b: &[AF]) -> Vec<AF> {
     product
 }
 
-/// Expand a product of binomials (x - xs[0])(x - xs[1]).. into polynomial coefficients.
-pub fn binomial_expand<AF: AbstractField>(xs: &[AF]) -> Vec<AF> {
-    let mut coeffs = vec![AF::zero(); xs.len() + 1];
+/// Expand a product of binomials (x - roots[0])(x - roots[1]).. into polynomial coefficients.
+pub fn binomial_expand<AF: AbstractField>(roots: &[AF]) -> Vec<AF> {
+    let mut coeffs = vec![AF::zero(); roots.len() + 1];
     coeffs[0] = AF::one();
-    for (i, x) in xs.iter().enumerate() {
+    for (i, x) in roots.iter().enumerate() {
         for j in (1..i + 2).rev() {
             coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();
         }
