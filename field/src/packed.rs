@@ -1,3 +1,4 @@
+use core::mem;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
@@ -72,8 +73,11 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     /// 0 and it cannot exceed `WIDTH`.
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 
-    // TODO: shouldn't this check alignment?
     fn pack_slice(buf: &[Self::Scalar]) -> &[Self] {
+        // Sources vary, but this should be true on all platforms we care about.
+        // This should be a const assert, but trait methods can't access `Self` in a const context,
+        // even with inner struct instantiation. So we will trust LLVM to optimize this out.
+        assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Scalar>());
         assert!(
             buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -86,6 +90,7 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     }
 
     fn pack_slice_mut(buf: &mut [Self::Scalar]) -> &mut [Self] {
+        assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Scalar>());
         assert!(
             buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -98,6 +103,7 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     }
 
     fn unpack_slice(buf: &[Self]) -> &[Self::Scalar] {
+        assert!(mem::align_of::<Self>() >= mem::align_of::<Self::Scalar>());
         let buf_ptr = buf.as_ptr().cast::<Self::Scalar>();
         let n = buf.len() * Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }
