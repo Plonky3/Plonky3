@@ -115,22 +115,20 @@ fn commit_phase<FC: FriConfig>(
     challenger: &mut FC::Challenger,
 ) -> CommitPhaseResult<FC> {
     let max_height = 1 << log_max_height;
-    let matrices_with_log_height = |log_height| {
-        input_mmcs
-            .iter()
-            .zip(input_data)
-            .flat_map(|(mmcs, commit)| mmcs.get_matrices(commit))
-            .filter(|mat| mat.height() == 1usize << log_height)
-            .collect_vec()
-    };
 
-    let largest_matrices = matrices_with_log_height(log_max_height);
+    let mut matrices_by_log_height: Vec<Vec<_>> = vec![];
+    matrices_by_log_height.resize_with(log_max_height + 1, Default::default);
+    for (mmcs, commit) in input_mmcs.iter().zip(input_data) {
+        for mat in mmcs.get_matrices(commit) {
+            matrices_by_log_height[log2_strict_usize(mat.height())].push(mat);
+        }
+    }
+
+    let largest_matrices = &matrices_by_log_height[log_max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
     let mut alpha_reducer = MatrixReducer::new(alpha);
     let mut current = vec![FC::Challenge::zero(); max_height];
-    alpha_reducer.reduce_matrices(&mut current, max_height, &largest_matrices);
-
-    // let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
+    alpha_reducer.reduce_matrices(&mut current, max_height, largest_matrices);
 
     let mut commits = vec![];
     let mut data = vec![];
@@ -149,9 +147,9 @@ fn commit_phase<FC: FriConfig>(
         let beta: FC::Challenge = challenger.sample_ext_element();
         current = fold_even_odd(&current, beta);
 
-        let matrices = matrices_with_log_height(log_folded_height);
+        let matrices = &matrices_by_log_height[log_folded_height];
         if !matrices.is_empty() {
-            alpha_reducer.reduce_matrices(&mut current, folded_height, &matrices);
+            alpha_reducer.reduce_matrices(&mut current, folded_height, matrices);
             // current = reduce_matrices(folded_height, &current, &matrices, alpha);
         }
     }
