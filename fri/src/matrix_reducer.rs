@@ -5,7 +5,7 @@ use p3_field::{AbstractField, ExtensionField, Field, PackedField};
 use p3_matrix::MatrixRows;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::indices_arr;
-use tracing::{info_span, instrument};
+use tracing::instrument;
 
 // seems to be the sweet spot, could be tweaked based on benches
 const BATCH_SIZE: usize = 8;
@@ -51,20 +51,18 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
     ) {
         // precompute alpha_pows, since we are not doing horner
         let mut alpha_pows = vec![];
-        info_span!("precompute alphas").in_scope(|| {
-            for mat in mats {
-                let num_packed = mat.width() / F::Packing::WIDTH;
-                let num_leftover = mat.width() % F::Packing::WIDTH;
-                for chunk in &(0..num_packed).chunks(BATCH_SIZE) {
-                    alpha_pows.push(self.current_alpha_pow);
-                    self.current_alpha_pow *= self.alpha_pow_width.exp_u64(chunk.count() as u64);
-                }
-                for _ in 0..num_leftover {
-                    alpha_pows.push(self.current_alpha_pow);
-                    self.current_alpha_pow *= self.alpha;
-                }
+        for mat in mats {
+            let num_packed = mat.width() / F::Packing::WIDTH;
+            let num_leftover = mat.width() % F::Packing::WIDTH;
+            for chunk in &(0..num_packed).chunks(BATCH_SIZE) {
+                alpha_pows.push(self.current_alpha_pow);
+                self.current_alpha_pow *= self.alpha_pow_width.exp_u64(chunk.count() as u64);
             }
-        });
+            for _ in 0..num_leftover {
+                alpha_pows.push(self.current_alpha_pow);
+                self.current_alpha_pow *= self.alpha;
+            }
+        }
 
         /*
         We have packed base elements ys and extension field α^n's
@@ -98,45 +96,33 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
 
         */
 
-        info_span!("reduce").in_scope(|| {
-            reduced
-                .into_par_iter()
-                // .into_iter()
-                .enumerate()
-                .for_each(|(r, reduced_row)| {
-                    let mut alpha_pow_iter = alpha_pows.iter();
-                    for mat in mats {
-                        let row_slice = mat.row(r).into_iter().collect_vec();
-                        let num_leftover = row_slice.len() % F::Packing::WIDTH;
-                        let leftover_start = row_slice.len() - num_leftover;
-                        let packed_row = F::Packing::pack_slice(&row_slice[..leftover_start]);
-                        let mut horiz_sum = vec![F::zero(); EF::D];
-                        for packed_col_chunk in packed_row.chunks(BATCH_SIZE) {
-                            for i in 0..EF::D {
-                                let mut chunk_limb_sum = F::Packing::zero();
-                                for (packed_col, packed_alpha) in
-                                    packed_col_chunk.into_iter().zip(self.transposed_alphas[i])
-                                {
-                                    chunk_limb_sum += *packed_col * packed_alpha;
-                                }
-                                horiz_sum[i] = chunk_limb_sum.as_slice().iter().copied().sum::<F>();
+        reduced
+            .into_par_iter()
+            .enumerate()
+            .for_each(|(r, reduced_row)| {
+                let mut alpha_pow_iter = alpha_pows.iter();
+                for mat in mats {
+                    let row_vec = mat.row_vec(r);
+                    let num_leftover = row_vec.len() % F::Packing::WIDTH;
+                    let leftover_start = row_vec.len() - num_leftover;
+                    let packed_row = F::Packing::pack_slice(&row_vec[..leftover_start]);
+                    for packed_col_chunk in packed_row.chunks(BATCH_SIZE) {
+                        let chunk_sum = EF::from_base_fn(|i| {
+                            let mut chunk_limb_sum = F::Packing::zero();
+                            for (packed_col, packed_alpha) in
+                                packed_col_chunk.into_iter().zip(self.transposed_alphas[i])
+                            {
+                                chunk_limb_sum += *packed_col * packed_alpha;
                             }
-
-                            /*
-                            for i in 0..EF::D {
-                                let x: F::Packing = packed_col * self.transposed_alphas[i];
-                                horiz_sum[i] = x.as_slice().iter().copied().sum::<F>();
-                            }
-                            */
-                            *reduced_row +=
-                                *alpha_pow_iter.next().unwrap() * EF::from_base_slice(&horiz_sum);
-                        }
-                        for &col in &row_slice[leftover_start..] {
-                            *reduced_row += *alpha_pow_iter.next().unwrap() * col;
-                        }
+                            chunk_limb_sum.as_slice().iter().copied().sum::<F>()
+                        });
+                        *reduced_row += *alpha_pow_iter.next().unwrap() * chunk_sum;
                     }
-                })
-        });
+                    for &col in &row_vec[leftover_start..] {
+                        *reduced_row += *alpha_pow_iter.next().unwrap() * col;
+                    }
+                }
+            })
     }
 }
 

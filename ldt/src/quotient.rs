@@ -300,6 +300,11 @@ impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, In
             self.inner.row_slice(r),
         )
     }
+
+    #[inline]
+    fn row_vec(&self, r: usize) -> Vec<F> {
+        self.row(r)
+    }
 }
 
 fn compute_quotient_matrix_row<F: Field>(

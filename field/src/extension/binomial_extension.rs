@@ -501,6 +501,13 @@ where
         }
     }
 
+    #[inline]
+    fn from_base_fn<F: FnMut(usize) -> AF>(f: F) -> Self {
+        Self {
+            value: array::from_fn(f),
+        }
+    }
+
     fn as_base_slice(&self) -> &[AF] {
         &self.value
     }
