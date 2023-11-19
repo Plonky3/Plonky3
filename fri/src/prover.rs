@@ -12,6 +12,7 @@ use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
+use crate::matrix_reducer::MatrixReducer;
 use crate::{CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
@@ -124,9 +125,12 @@ fn commit_phase<FC: FriConfig>(
     };
 
     let largest_matrices = matrices_with_log_height(log_max_height);
-    let zero_vec = vec![FC::Challenge::zero(); max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
-    let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
+    let mut alpha_reducer = MatrixReducer::new(alpha);
+    let mut current = vec![FC::Challenge::zero(); max_height];
+    alpha_reducer.reduce_matrices(&mut current, max_height, &largest_matrices);
+
+    // let mut current = reduce_matrices(max_height, &zero_vec, &largest_matrices, alpha);
 
     let mut commits = vec![];
     let mut data = vec![];
@@ -147,7 +151,8 @@ fn commit_phase<FC: FriConfig>(
 
         let matrices = matrices_with_log_height(log_folded_height);
         if !matrices.is_empty() {
-            current = reduce_matrices(folded_height, &current, &matrices, alpha);
+            alpha_reducer.reduce_matrices(&mut current, folded_height, &matrices);
+            // current = reduce_matrices(folded_height, &current, &matrices, alpha);
         }
     }
 
@@ -187,17 +192,36 @@ where
     Challenge: ExtensionField<F>,
     Mat: MatrixRows<F> + Sync,
 {
-    (0..height)
-        .into_par_iter()
-        .map(|r| {
-            let mut reduced = init[r];
-            for mat in matrices {
-                for col in mat.row(r) {
-                    reduced *= alpha;
-                    reduced += col;
+    let rows = info_span!("compute quotient rows").in_scope(|| {
+        (0..height)
+            .map(|r| {
+                matrices
+                    .iter()
+                    .map(move |m| m.row(r).into_iter().collect_vec())
+                    .collect_vec()
+            })
+            .collect_vec()
+    });
+    info_span!("reduce").in_scope(|| {
+        rows.into_iter()
+            .enumerate()
+            .map(|(r, mat_rows)| {
+                let mut reduced = init[r];
+                for row in mat_rows {
+                    for col in row {
+                        reduced *= alpha;
+                        reduced += col;
+                    }
                 }
-            }
-            reduced
-        })
-        .collect()
+                reduced
+            })
+            .collect()
+    })
+    /*
+        (0..height)
+            .into_par_iter()
+            .map(|r| {
+            })
+            .collect()
+    */
 }

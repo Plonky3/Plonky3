@@ -12,6 +12,7 @@ use crate::verifier::verify;
 
 mod config;
 mod fold_even_odd;
+mod matrix_reducer;
 mod proof;
 mod prover;
 mod verifier;
