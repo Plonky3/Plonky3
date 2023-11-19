@@ -100,16 +100,18 @@ impl<F: Field> Opening<F> {
 }
 
 /// For input `[
-///   [1,2,3],
-///   [4,5,6],
-///   [7,8,9],
+///   [ 1, 2, 3],
+///   [ 4, 5, 6],
+///   [ 7, 8, 9],
+///   [10,11,12],
+///   [13,14,15],
 /// ]`,
 /// and F::Packing::WIDTH = 2, returns `[
-///   [P(1,4)],
-///   [P(2,5)],
-///   [P(3,6)],
+///   [P(1,4),P(7,10)],
+///   [P(2,5),P(8,11)],
+///   [P(3,6),P(9,12)],
 /// ]`
-/// where P(..) is a packed field. Trailing values are ignored.
+/// where P(..) is a packed field. Trailing values (`[13,14,15]` above) are ignored.
 fn transpose_and_pack<F: Field>(polys: &[Vec<F>]) -> RowMajorMatrix<F::Packing> {
     let height = polys[0].len();
     let width = polys.len() / F::Packing::WIDTH;
@@ -395,12 +397,15 @@ mod tests {
     use p3_interpolation::interpolate_subgroup;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+    use rand::distributions::Standard;
+    use rand::prelude::Distribution;
     use rand::{thread_rng, Rng};
 
     use super::*;
 
     type F = BabyBear;
-    type EF = BinomialExtensionField<F, 4>;
+    type F4 = BinomialExtensionField<F, 4>;
+    type F5 = BinomialExtensionField<F, 4>;
     type MyHash = SerializingHasher32<Blake3>;
     type MyCompress = CompressionFunctionFromHasher<F, MyHash, 2, 8>;
     type ValMmcs = FieldMerkleTreeMmcs<F, MyHash, MyCompress, 8>;
@@ -408,19 +413,24 @@ mod tests {
     #[test]
     fn test_remainder_polys() {
         let trace: RowMajorMatrix<F> = RowMajorMatrix::rand(&mut thread_rng(), 32, 5);
-        let point: EF = thread_rng().gen();
+        let point: F4 = thread_rng().gen();
         let values = interpolate_subgroup(&trace, point);
         let rs = Opening::compute_remainder_polys(point, &values);
         for (r, y) in rs.into_iter().zip(values) {
             // r(alpha) = p(alpha)
             assert_eq!(
-                eval_poly(&r.into_iter().map(EF::from_base).collect_vec(), point),
+                eval_poly(&r.into_iter().map(F4::from_base).collect_vec(), point),
                 y
             );
         }
     }
 
-    fn test_quotient_mmcs_with_sizes(num_openings: usize, trace_sizes: &[(usize, usize)]) {
+    fn test_quotient_mmcs_with_sizes<EF: TwoAdicField + HasFrobenius<F>>(
+        num_openings: usize,
+        trace_sizes: &[(usize, usize)],
+    ) where
+        Standard: Distribution<EF>,
+    {
         let hash = MyHash::new(Blake3 {});
         let compress = MyCompress::new(hash);
         let inner = ValMmcs::new(hash, compress);
@@ -458,7 +468,7 @@ mod tests {
             Ok(())
         );
         let mut bad_opened_values = opened_values.clone();
-        bad_opened_values[0][0] += thread_rng().gen();
+        bad_opened_values[0][0] += thread_rng().gen::<F>();
         assert!(mmcs
             .verify_batch(&comm, &dims, index, &bad_opened_values, &proof)
             .is_err());
@@ -482,16 +492,24 @@ mod tests {
 
     #[test]
     fn test_quotient_mmcs() {
-        // single matrix
-        test_quotient_mmcs_with_sizes(1, &[(16, 1)]);
-        test_quotient_mmcs_with_sizes(3, &[(16, 1)]);
-        test_quotient_mmcs_with_sizes(1, &[(16, 10)]);
-        test_quotient_mmcs_with_sizes(3, &[(16, 14)]);
-        // multi matrix, same size
-        test_quotient_mmcs_with_sizes(1, &[(16, 5), (16, 10)]);
-        test_quotient_mmcs_with_sizes(3, &[(16, 10), (16, 5)]);
-        // multi matrix, different size
-        test_quotient_mmcs_with_sizes(3, &[(16, 10), (32, 5)]);
-        test_quotient_mmcs_with_sizes(5, &[(32, 52), (8, 30)]);
+        let sizes: &[&[(usize, usize)]] = &[
+            // single matrix
+            &[(16, 1)],
+            &[(16, 10)],
+            &[(16, 14)],
+            // multi matrix, same size
+            &[(16, 5), (16, 10)],
+            &[(8, 10), (8, 5)],
+            // multi matrix, different size
+            &[(16, 10), (32, 5)],
+            &[(32, 52), (8, 30)],
+        ];
+        for num_openings in [1, 2, 3] {
+            for sizes in sizes {
+                test_quotient_mmcs_with_sizes::<F4>(num_openings, sizes);
+                // make sure it works when Packing::WIDTH != Extension::D
+                test_quotient_mmcs_with_sizes::<F5>(num_openings, sizes);
+            }
+        }
     }
 }
