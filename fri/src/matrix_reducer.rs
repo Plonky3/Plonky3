@@ -5,7 +5,7 @@ use p3_field::{AbstractField, ExtensionField, Field, PackedField};
 use p3_matrix::MatrixRows;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::indices_arr;
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 // seems to be the sweet spot, could be tweaked based on benches
 const BATCH_SIZE: usize = 8;
@@ -96,13 +96,15 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
 
         */
 
+        let compute_row = info_span!("compute row");
         reduced
-            .into_par_iter()
+            // .into_par_iter()
+            .into_iter()
             .enumerate()
             .for_each(|(r, reduced_row)| {
                 let mut alpha_pow_iter = alpha_pows.iter();
                 for mat in mats {
-                    let row_vec = mat.row_vec(r);
+                    let row_vec = compute_row.in_scope(|| mat.row_vec(r));
                     let num_leftover = row_vec.len() % F::Packing::WIDTH;
                     let leftover_start = row_vec.len() - num_leftover;
                     let packed_row = F::Packing::pack_slice(&row_vec[..leftover_start]);

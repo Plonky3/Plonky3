@@ -89,6 +89,11 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
+    fn pack_slice_with_suffix(buf: &[Self::Scalar]) -> (&[Self], &[Self::Scalar]) {
+        let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
+        (Self::pack_slice(packed), suffix)
+    }
+
     fn pack_slice_mut(buf: &mut [Self::Scalar]) -> &mut [Self] {
         assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Scalar>());
         assert!(
