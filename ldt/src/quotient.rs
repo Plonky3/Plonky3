@@ -44,6 +44,9 @@ pub struct QuotientMmcs<F: Field, EF, Inner: Mmcs<F>> {
     // The coset shift for the inner MMCS's evals, to correct `x` in the denominator.
     pub(crate) coset_shift: F,
 
+    // QuotientMmcs and Opening, once constructed, technically do not need to know
+    // anything about the extension field. However, we keep it as a generic so that
+    // we can unroll the inner loop of `compute_quotient_matrix_row` over EF::D.
     pub(crate) _phantom: PhantomData<EF>,
 }
 
@@ -54,12 +57,13 @@ pub(crate) struct Opening<F: Field, EF> {
     pub(crate) minpoly: Vec<F>,
     // for each column, the remainder poly r(X) = p(X) mod m(X)
     pub(crate) remainder_polys: Vec<Vec<F>>,
+
     // each remainder poly always has degree EF::D.
-    // in this matrix, each row represents a coefficient of the remainder poly,
-    // and the packed columns are grouped chunks of remainder_polys.
-    // this matrix is missing any remaining coefficients that don't divide F::Packing::WIDTH
-    // evenly, so you have to get those from remainder_polys.
-    pub(crate) r_transposed_packed: Option<RowMajorMatrix<F::Packing>>,
+    // so, the width of this matrix is EF::D, and the height is
+    // `openings.len() // F::Packing::WIDTH`.
+    // this matrix is missing any remaining coefficients that don't divide
+    // F::Packing::WIDTH evenly, so you have to get those from remainder_polys.
+    pub(crate) r_vertically_packed: Option<RowMajorMatrix<F::Packing>>,
 
     pub(crate) _phantom: PhantomData<EF>,
 }
@@ -67,11 +71,11 @@ pub(crate) struct Opening<F: Field, EF> {
 impl<F: Field, EF: HasFrobenius<F>> Opening<F, EF> {
     pub(crate) fn new(point: EF, values: Vec<EF>) -> Self {
         let remainder_polys = Self::compute_remainder_polys(point, &values);
-        let r_transposed_packed = transpose_and_pack(&remainder_polys);
+        let r_vertically_packed = vertical_pack(&remainder_polys);
         Self {
             minpoly: point.minimal_poly(),
             remainder_polys,
-            r_transposed_packed,
+            r_vertically_packed,
             _phantom: PhantomData,
         }
     }
@@ -106,19 +110,18 @@ impl<F: Field, EF: HasFrobenius<F>> Opening<F, EF> {
 }
 
 /// For input `[
-///   [ 1, 2, 3],
-///   [ 4, 5, 6],
-///   [ 7, 8, 9],
-///   [10,11,12],
+///   [ 1, 2, 3], \ pack
+///   [ 4, 5, 6], /
+///   [ 7, 8, 9], \ pack
+///   [10,11,12], /
 ///   [13,14,15],
 /// ]`,
 /// and F::Packing::WIDTH = 2, returns `[
-///   [P(1,4),P(7,10)],
-///   [P(2,5),P(8,11)],
-///   [P(3,6),P(9,12)],
+///   [P(1, 4), P(2, 5), P(3, 6)],
+///   [P(7,10), P(8,11), P(9,12)],
 /// ]`
 /// where P(..) is a packed field. Trailing values (`[13,14,15]` above) are ignored.
-fn transpose_and_pack<F: Field>(polys: &[Vec<F>]) -> Option<RowMajorMatrix<F::Packing>> {
+fn vertical_pack<F: Field>(polys: &[Vec<F>]) -> Option<RowMajorMatrix<F::Packing>> {
     let width = polys[0].len();
     let height = polys.len() / F::Packing::WIDTH;
     if height == 0 {
@@ -126,12 +129,9 @@ fn transpose_and_pack<F: Field>(polys: &[Vec<F>]) -> Option<RowMajorMatrix<F::Pa
     }
     Some(RowMajorMatrix::new(
         (0..height)
-            .flat_map(|packed_col| {
-                (0..width).map(move |coeff_idx| {
-                    F::Packing::from_fn(move |i| {
-                        polys[packed_col * F::Packing::WIDTH + i][coeff_idx]
-                    })
-                })
+            .flat_map(|r| {
+                (0..width)
+                    .map(move |c| F::Packing::from_fn(move |i| polys[r * F::Packing::WIDTH + i][c]))
             })
             .collect(),
         width,
@@ -324,7 +324,7 @@ fn compute_quotient_matrix_row<F: Field, EF: HasFrobenius<F>>(
 ) -> Vec<F> {
     let mut qp_ys: Vec<F> = Vec::with_capacity(inner_row.len() * openings.len());
 
-    // [P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
+    // [P(1,1,1,1), P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
     let packed_x_pows = x
         .powers()
         .take(EF::D)
@@ -335,7 +335,7 @@ fn compute_quotient_matrix_row<F: Field, EF: HasFrobenius<F>>(
         let packed_m_inv = F::Packing::from(m_inv);
         let (packed_ys, sfx_ys) = F::Packing::pack_slice_with_suffix(inner_row);
 
-        if let Some(r_transposed_packed) = &opening.r_transposed_packed {
+        if let Some(r_vertically_packed) = &opening.r_vertically_packed {
             let uninit = qp_ys.spare_capacity_mut();
             assert!(uninit.len() >= packed_ys.len() * F::Packing::WIDTH);
             let packed_uninit = unsafe {
@@ -345,7 +345,7 @@ fn compute_quotient_matrix_row<F: Field, EF: HasFrobenius<F>>(
                 )
             };
             for (packed_qp_y, &packed_y, coeffs) in
-                izip!(packed_uninit, packed_ys, r_transposed_packed.rows())
+                izip!(packed_uninit, packed_ys, r_vertically_packed.rows())
             {
                 let mut r_at_x = coeffs[0];
                 for i in 1..EF::D {
