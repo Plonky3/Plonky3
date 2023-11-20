@@ -1,13 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
-use p3_field::{AbstractField, ExtensionField, Field};
+use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRows};
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
@@ -150,7 +148,6 @@ fn commit_phase<FC: FriConfig>(
         let matrices = &matrices_by_log_height[log_folded_height];
         if !matrices.is_empty() {
             alpha_reducer.reduce_matrices(&mut current, folded_height, matrices);
-            // current = reduce_matrices(folded_height, &current, &matrices, alpha);
         }
     }
 
@@ -172,54 +169,4 @@ struct CommitPhaseResult<FC: FriConfig> {
     commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
     data: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData>,
     final_poly: FC::Challenge,
-}
-
-#[instrument(
-    name = "fold in matrices",
-    level = "debug",
-    skip(init, matrices, alpha)
-)]
-fn reduce_matrices<F, Challenge, Mat>(
-    height: usize,
-    init: &[Challenge],
-    matrices: &[Mat],
-    alpha: Challenge,
-) -> Vec<Challenge>
-where
-    F: Field,
-    Challenge: ExtensionField<F>,
-    Mat: MatrixRows<F> + Sync,
-{
-    let rows = info_span!("compute quotient rows").in_scope(|| {
-        (0..height)
-            .map(|r| {
-                matrices
-                    .iter()
-                    .map(move |m| m.row(r).into_iter().collect_vec())
-                    .collect_vec()
-            })
-            .collect_vec()
-    });
-    info_span!("reduce").in_scope(|| {
-        rows.into_iter()
-            .enumerate()
-            .map(|(r, mat_rows)| {
-                let mut reduced = init[r];
-                for row in mat_rows {
-                    for col in row {
-                        reduced *= alpha;
-                        reduced += col;
-                    }
-                }
-                reduced
-            })
-            .collect()
-    })
-    /*
-        (0..height)
-            .into_par_iter()
-            .map(|r| {
-            })
-            .collect()
-    */
 }

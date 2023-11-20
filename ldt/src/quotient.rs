@@ -10,7 +10,7 @@ use p3_commit::Mmcs;
 use p3_field::extension::HasFrobenius;
 use p3_field::{
     add_vecs, batch_multiplicative_inverse, binomial_expand, cyclic_subgroup_coset_known_order,
-    eval_poly, scale_vec, ExtensionField, Field, PackedField, TwoAdicField,
+    eval_poly, scale_vec, Field, PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
@@ -344,7 +344,6 @@ fn compute_quotient_matrix_row<F: Field, EF: HasFrobenius<F>>(
                     packed_ys.len(),
                 )
             };
-
             for (packed_qp_y, &packed_y, coeffs) in
                 izip!(packed_uninit, packed_ys, r_transposed_packed.rows())
             {
@@ -449,10 +448,11 @@ mod tests {
             .multiunzip();
 
         let (comm, data) = inner.commit(ldes);
-        let mmcs = QuotientMmcs {
+        let mmcs = QuotientMmcs::<F, EF, _> {
             inner,
             openings,
             coset_shift: F::generator(),
+            _phantom: PhantomData,
         };
 
         let index = thread_rng().gen_range(0..max_height);
