@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
 use itertools::Itertools;
 use p3_field::{AbstractField, ExtensionField, Field, PackedField};
 use p3_matrix::MatrixRows;
@@ -129,9 +130,12 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+
     use p3_baby_bear::BabyBear;
-    use p3_field::{extension::BinomialExtensionField, AbstractField};
-    use p3_matrix::{dense::RowMajorMatrix, MatrixRows};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::AbstractField;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::MatrixRows;
     use rand::Rng;
 
     use super::MatrixReducer;

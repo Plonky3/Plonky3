@@ -1,6 +1,5 @@
-use core::mem;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
-use core::slice;
+use core::{mem, slice};
 
 use crate::field::Field;
 use crate::AbstractField;
