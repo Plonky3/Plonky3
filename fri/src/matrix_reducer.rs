@@ -104,9 +104,7 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
                 let mut alpha_pow_iter = alpha_pows.iter();
                 for mat in mats {
                     let row_vec = mat.row_vec(r);
-                    let num_leftover = row_vec.len() % F::Packing::WIDTH;
-                    let leftover_start = row_vec.len() - num_leftover;
-                    let packed_row = F::Packing::pack_slice(&row_vec[..leftover_start]);
+                    let (packed_row, sfx) = F::Packing::pack_slice_with_suffix(&row_vec);
                     for packed_col_chunk in packed_row.chunks(BATCH_SIZE) {
                         let chunk_sum = EF::from_base_fn(|i| {
                             let mut chunk_limb_sum = F::Packing::zero();
@@ -119,7 +117,7 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
                         });
                         *reduced_row += *alpha_pow_iter.next().unwrap() * chunk_sum;
                     }
-                    for &col in &row_vec[leftover_start..] {
+                    for &col in sfx {
                         *reduced_row += *alpha_pow_iter.next().unwrap() * col;
                     }
                 }
