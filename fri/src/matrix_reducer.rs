@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{AbstractField, ExtensionField, Field, PackedField};
+use p3_field::{ExtensionField, Field, PackedField};
 use p3_matrix::MatrixRows;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::indices_arr;
@@ -107,12 +107,11 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
                     let (packed_row, sfx) = F::Packing::pack_slice_with_suffix(&row_vec);
                     for packed_col_chunk in packed_row.chunks(BATCH_SIZE) {
                         let chunk_sum = EF::from_base_fn(|i| {
-                            let mut chunk_limb_sum = F::Packing::zero();
-                            for (packed_col, packed_alpha) in
-                                packed_col_chunk.iter().zip(self.transposed_alphas[i])
-                            {
-                                chunk_limb_sum += *packed_col * packed_alpha;
-                            }
+                            let chunk_limb_sum = packed_col_chunk
+                                .iter()
+                                .zip(self.transposed_alphas[i])
+                                .map(|(&packed_col, packed_alpha)| packed_col * packed_alpha)
+                                .sum::<F::Packing>();
                             chunk_limb_sum.as_slice().iter().copied().sum::<F>()
                         });
                         *reduced_row += *alpha_pow_iter.next().unwrap() * chunk_sum;
