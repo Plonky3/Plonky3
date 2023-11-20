@@ -17,7 +17,6 @@ pub(crate) struct MatrixReducer<F: Field, EF> {
     alpha: EF,
     alpha_pow_width: EF,
     transposed_alphas: Vec<[F::Packing; BATCH_SIZE]>,
-    current_alpha_pow: EF,
 }
 
 impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
@@ -39,29 +38,29 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
             alpha,
             alpha_pow_width: alpha.exp_u64(F::Packing::WIDTH as u64),
             transposed_alphas,
-            current_alpha_pow: EF::one(),
         }
     }
 
     #[instrument(name = "fold in matrices", level = "debug", skip(self, reduced, mats))]
     pub(crate) fn reduce_matrices<M: MatrixRows<F> + Sync>(
-        &mut self,
+        &self,
         reduced: &mut [EF],
         height: usize,
         mats: &[M],
     ) {
         // precompute alpha_pows, since we are not doing horner
+        let mut current_alpha_pow = EF::one();
         let mut alpha_pows = vec![];
         for mat in mats {
             let num_packed = mat.width() / F::Packing::WIDTH;
             let num_leftover = mat.width() % F::Packing::WIDTH;
             for chunk in &(0..num_packed).chunks(BATCH_SIZE) {
-                alpha_pows.push(self.current_alpha_pow);
-                self.current_alpha_pow *= self.alpha_pow_width.exp_u64(chunk.count() as u64);
+                alpha_pows.push(current_alpha_pow);
+                current_alpha_pow *= self.alpha_pow_width.exp_u64(chunk.count() as u64);
             }
             for _ in 0..num_leftover {
-                alpha_pows.push(self.current_alpha_pow);
-                self.current_alpha_pow *= self.alpha;
+                alpha_pows.push(current_alpha_pow);
+                current_alpha_pow *= self.alpha;
             }
         }
 
@@ -74,7 +73,7 @@ impl<F: Field, EF: ExtensionField<F>> MatrixReducer<F, EF> {
 
         Level 1: (assume Packing::WIDTH=4, D=2, for clarity, although D will usually be higher)
 
-            tranposed_alphas
+            transposed_alphas
             α^0 α^1 α^2 α^3
             [1] [.] [.] [.]
             [1] [.] [.] [.]
@@ -154,18 +153,20 @@ mod tests {
             RowMajorMatrix::rand(&mut rng, height, 41),
             RowMajorMatrix::rand(&mut rng, height, 10),
         ];
-        let mut reducer = MatrixReducer::new(alpha);
+        let reducer = MatrixReducer::new(alpha);
         let mut reduced = vec![EF::zero(); height];
         reducer.reduce_matrices(&mut reduced, height, mats0);
         reducer.reduce_matrices(&mut reduced, height, mats1);
 
         let mut correct = vec![EF::zero(); height];
         for (r, correct_reduced) in correct.iter_mut().enumerate() {
-            let mut current = EF::one();
-            for mat in mats0.iter().chain(mats1) {
-                for col in mat.row(r) {
-                    *correct_reduced += current * col;
-                    current *= alpha;
+            for batch in [mats0, mats1] {
+                let mut current = EF::one();
+                for mat in batch {
+                    for col in mat.row(r) {
+                        *correct_reduced += current * col;
+                        current *= alpha;
+                    }
                 }
             }
         }

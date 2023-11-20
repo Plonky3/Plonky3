@@ -124,7 +124,7 @@ fn commit_phase<FC: FriConfig>(
 
     let largest_matrices = &matrices_by_log_height[log_max_height];
     let alpha: FC::Challenge = challenger.sample_ext_element();
-    let mut alpha_reducer = MatrixReducer::new(alpha);
+    let alpha_reducer = MatrixReducer::new(alpha);
     let mut current = vec![FC::Challenge::zero(); max_height];
     alpha_reducer.reduce_matrices(&mut current, max_height, largest_matrices);
 
