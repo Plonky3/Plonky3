@@ -44,7 +44,7 @@ where
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    L: Ldt<Val, QuotientMmcs<Val, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     fn coset_shift(&self) -> Val {
@@ -94,7 +94,7 @@ where
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
     for<'a> M::Mat<'a>: MatrixRowSlices<Val>,
-    L: Ldt<Val, QuotientMmcs<Val, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     type Commitment = M::Commitment;
@@ -115,7 +115,7 @@ where
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    L: Ldt<Val, QuotientMmcs<Val, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     #[instrument(name = "prove batch opening", skip_all)]
@@ -170,15 +170,16 @@ where
                             .iter()
                             .zip(opened_values_for_mat)
                             .map(|(&point, opened_values_for_point)| {
-                                Opening::<Val>::new(point, opened_values_for_point)
+                                Opening::<Val, EF>::new(point, opened_values_for_point)
                             })
                             .collect()
                     })
                     .collect();
-                QuotientMmcs::<Val, _> {
+                QuotientMmcs::<Val, EF, _> {
                     inner: self.mmcs.clone(),
                     openings,
                     coset_shift,
+                    _phantom: PhantomData,
                 }
             })
             .collect_vec();

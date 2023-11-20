@@ -34,20 +34,22 @@ use p3_util::log2_strict_usize;
 /// Since there can be multiple opening points, for each matrix, this transforms an inner opened row
 /// into a concatenation of rows, transformed as above, for each point.
 #[derive(Clone)]
-pub struct QuotientMmcs<F: Field, Inner: Mmcs<F>> {
+pub struct QuotientMmcs<F: Field, EF, Inner: Mmcs<F>> {
     pub(crate) inner: Inner,
 
     /// For each matrix, a list of claimed openings, one for each point that we open that batch of
     /// polynomials at.
-    pub(crate) openings: Vec<Vec<Opening<F>>>,
+    pub(crate) openings: Vec<Vec<Opening<F, EF>>>,
 
     // The coset shift for the inner MMCS's evals, to correct `x` in the denominator.
     pub(crate) coset_shift: F,
+
+    pub(crate) _phantom: PhantomData<EF>,
 }
 
 /// A claimed opening.
 #[derive(Clone, Debug)]
-pub(crate) struct Opening<F: Field> {
+pub(crate) struct Opening<F: Field, EF> {
     // point.minimal_poly()
     pub(crate) minpoly: Vec<F>,
     // for each column, the remainder poly r(X) = p(X) mod m(X)
@@ -58,19 +60,22 @@ pub(crate) struct Opening<F: Field> {
     // this matrix is missing any remaining coefficients that don't divide F::Packing::WIDTH
     // evenly, so you have to get those from remainder_polys.
     pub(crate) r_transposed_packed: Option<RowMajorMatrix<F::Packing>>,
+
+    pub(crate) _phantom: PhantomData<EF>,
 }
 
-impl<F: Field> Opening<F> {
-    pub(crate) fn new<EF: HasFrobenius<F>>(point: EF, values: Vec<EF>) -> Self {
+impl<F: Field, EF: HasFrobenius<F>> Opening<F, EF> {
+    pub(crate) fn new(point: EF, values: Vec<EF>) -> Self {
         let remainder_polys = Self::compute_remainder_polys(point, &values);
         let r_transposed_packed = transpose_and_pack(&remainder_polys);
         Self {
             minpoly: point.minimal_poly(),
             remainder_polys,
             r_transposed_packed,
+            _phantom: PhantomData,
         }
     }
-    fn compute_remainder_polys<EF: HasFrobenius<F>>(point: EF, values: &[EF]) -> Vec<Vec<F>> {
+    fn compute_remainder_polys(point: EF, values: &[EF]) -> Vec<Vec<F>> {
         // compute lagrange basis for [point, Frob point, Frob^2 point, ..]
         let xs = point.galois_group();
         debug_assert_eq!(xs.len(), EF::D);
@@ -139,9 +144,10 @@ pub enum QuotientError<InnerMmcsError> {
     OriginalValueMismatch,
 }
 
-impl<F, Inner> Mmcs<F> for QuotientMmcs<F, Inner>
+impl<F, EF, Inner> Mmcs<F> for QuotientMmcs<F, EF, Inner>
 where
     F: TwoAdicField,
+    EF: HasFrobenius<F>,
     Inner: Mmcs<F>,
     for<'a> Inner::Mat<'a>: MatrixRowSlices<F>,
 {
@@ -149,7 +155,7 @@ where
     type Commitment = Inner::Commitment;
     type Proof = Inner::Proof;
     type Error = QuotientError<Inner::Error>;
-    type Mat<'a> = QuotientMatrix<F, Inner::Mat<'a>> where Self: 'a;
+    type Mat<'a> = QuotientMatrix<F, EF, Inner::Mat<'a>> where Self: 'a;
 
     fn open_batch(
         &self,
@@ -269,17 +275,17 @@ where
 }
 
 #[derive(Clone)]
-pub struct QuotientMatrix<F: Field, Inner: MatrixRowSlices<F>> {
+pub struct QuotientMatrix<F: Field, EF, Inner: MatrixRowSlices<F>> {
     inner: Inner,
     subgroup: Vec<F>,
-    openings: Vec<Opening<F>>,
+    openings: Vec<Opening<F, EF>>,
     /// For each row (associated with a subgroup element `x`), for each opening point,
     /// this holds `1 / m(X)`.
     inv_denominators: RowMajorMatrix<F>,
     _phantom: PhantomData<F>,
 }
 
-impl<F: Field, Inner: MatrixRowSlices<F>> Matrix<F> for QuotientMatrix<F, Inner> {
+impl<F: Field, EF, Inner: MatrixRowSlices<F>> Matrix<F> for QuotientMatrix<F, EF, Inner> {
     fn width(&self) -> usize {
         self.inner.width() * self.openings.len()
     }
@@ -289,7 +295,9 @@ impl<F: Field, Inner: MatrixRowSlices<F>> Matrix<F> for QuotientMatrix<F, Inner>
     }
 }
 
-impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, Inner> {
+impl<F: Field, EF: HasFrobenius<F>, Inner: MatrixRowSlices<F>> MatrixRows<F>
+    for QuotientMatrix<F, EF, Inner>
+{
     type Row<'a> = Vec<F> where Inner: 'a;
 
     #[inline]
@@ -308,23 +316,18 @@ impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, In
     }
 }
 
-#[inline]
-fn compute_quotient_matrix_row<F: Field>(
+fn compute_quotient_matrix_row<F: Field, EF: HasFrobenius<F>>(
     x: F,
-    openings: &[Opening<F>],
+    openings: &[Opening<F, EF>],
     m_invs: &[F],
     inner_row: &[F],
 ) -> Vec<F> {
     let mut qp_ys: Vec<F> = Vec::with_capacity(inner_row.len() * openings.len());
 
-    // this is always EF::D.
-    let r_poly_len = openings[0].remainder_polys[0].len();
-    assert_eq!(r_poly_len, EF::D);
     // [P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
     let packed_x_pows = x
         .powers()
-        .take(r_poly_len)
-        .skip(1)
+        .take(EF::D)
         .map(|x_pow| F::Packing::from(x_pow))
         .collect_vec();
 
@@ -333,10 +336,8 @@ fn compute_quotient_matrix_row<F: Field>(
         let (packed_ys, sfx_ys) = F::Packing::pack_slice_with_suffix(inner_row);
 
         if let Some(r_transposed_packed) = &opening.r_transposed_packed {
-            // once const generic exprs are stable, this will unroll a lot nicer.
-            // for now, we will not bother with threading a const D: usize through every function
-
             let uninit = qp_ys.spare_capacity_mut();
+            assert!(uninit.len() >= packed_ys.len() * F::Packing::WIDTH);
             let packed_uninit = unsafe {
                 slice::from_raw_parts_mut(
                     uninit.as_mut_ptr().cast::<MaybeUninit<F::Packing>>(),
@@ -344,19 +345,15 @@ fn compute_quotient_matrix_row<F: Field>(
                 )
             };
 
-            for (i, (&packed_y, coeffs)) in
-                packed_ys.iter().zip(r_transposed_packed.rows()).enumerate()
+            for (packed_qp_y, &packed_y, coeffs) in
+                izip!(packed_uninit, packed_ys, r_transposed_packed.rows())
             {
-                // assert!(coeffs.len() == packed_x_pows.len() + 1);
-                let r_at_x = coeffs[0]
-                    + coeffs[1..]
-                        .iter()
-                        .zip(&packed_x_pows)
-                        .map(|(&coeff, &x_pow)| coeff * x_pow)
-                        .sum::<F::Packing>();
+                let mut r_at_x = coeffs[0];
+                for i in 1..EF::D {
+                    r_at_x += coeffs[i] * packed_x_pows[i];
+                }
                 let qp_y = (packed_y - r_at_x) * packed_m_inv;
-                // qp_ys.extend_from_slice(qp_y.as_slice());
-                packed_uninit[i].write(qp_y);
+                packed_qp_y.write(qp_y);
             }
             unsafe {
                 qp_ys.set_len(qp_ys.len() + packed_ys.len() * F::Packing::WIDTH);
