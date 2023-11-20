@@ -1,15 +1,16 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::debug_assert_eq;
 use core::fmt::Debug;
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::{debug_assert_eq, slice};
 
 use itertools::{izip, Itertools};
 use p3_commit::Mmcs;
 use p3_field::extension::HasFrobenius;
 use p3_field::{
     add_vecs, batch_multiplicative_inverse, binomial_expand, cyclic_subgroup_coset_known_order,
-    eval_poly, scale_vec, Field, PackedField, TwoAdicField,
+    eval_poly, scale_vec, ExtensionField, Field, PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
@@ -113,15 +114,15 @@ impl<F: Field> Opening<F> {
 /// ]`
 /// where P(..) is a packed field. Trailing values (`[13,14,15]` above) are ignored.
 fn transpose_and_pack<F: Field>(polys: &[Vec<F>]) -> Option<RowMajorMatrix<F::Packing>> {
-    let height = polys[0].len();
-    let width = polys.len() / F::Packing::WIDTH;
-    if width == 0 {
+    let width = polys[0].len();
+    let height = polys.len() / F::Packing::WIDTH;
+    if height == 0 {
         return None;
     }
     Some(RowMajorMatrix::new(
         (0..height)
-            .flat_map(|coeff_idx| {
-                (0..width).map(move |packed_col| {
+            .flat_map(|packed_col| {
+                (0..width).map(move |coeff_idx| {
                     F::Packing::from_fn(move |i| {
                         polys[packed_col * F::Packing::WIDTH + i][coeff_idx]
                     })
@@ -307,6 +308,7 @@ impl<F: Field, Inner: MatrixRowSlices<F>> MatrixRows<F> for QuotientMatrix<F, In
     }
 }
 
+#[inline]
 fn compute_quotient_matrix_row<F: Field>(
     x: F,
     openings: &[Opening<F>],
@@ -317,10 +319,12 @@ fn compute_quotient_matrix_row<F: Field>(
 
     // this is always EF::D.
     let r_poly_len = openings[0].remainder_polys[0].len();
-    // [P(1,1,1,1),P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
+    assert_eq!(r_poly_len, EF::D);
+    // [P(x,x,x,x),P(x^2,x^2,x^2,x^2),..]
     let packed_x_pows = x
         .powers()
         .take(r_poly_len)
+        .skip(1)
         .map(|x_pow| F::Packing::from(x_pow))
         .collect_vec();
 
@@ -332,50 +336,31 @@ fn compute_quotient_matrix_row<F: Field>(
             // once const generic exprs are stable, this will unroll a lot nicer.
             // for now, we will not bother with threading a const D: usize through every function
 
-            // first, we will evaluate the remainder polys at x, and put them in qp_ys_packed
-            // the polynomial evaluation sum starts with the constant coefficients
-            /*
-            let mut packed_qp_ys = r_transposed_packed.row_slice(0).to_vec();
-            for (coeff_idx, &packed_x_pow) in packed_x_pows.iter().enumerate().skip(1) {
-                let coeffs = r_transposed_packed.row_slice(coeff_idx);
-                for col in 0..packed_qp_ys.len() {
-                    packed_qp_ys[col] += packed_x_pow * coeffs[col];
-                }
-            }
-            for (packed_qp_y, &packed_y) in packed_qp_ys.iter_mut().zip(packed_ys) {
-                // packed_qp_y currently holds r(X), but we want (p(X) - r(X))/m(X)
-                *packed_qp_y = (packed_y - *packed_qp_y) * packed_m_inv;
-            }
-            qp_ys.extend_from_slice(F::Packing::unpack_slice(&packed_qp_ys));
-            */
+            let uninit = qp_ys.spare_capacity_mut();
+            let packed_uninit = unsafe {
+                slice::from_raw_parts_mut(
+                    uninit.as_mut_ptr().cast::<MaybeUninit<F::Packing>>(),
+                    packed_ys.len(),
+                )
+            };
 
-            // Simplest implementation
-            packed_ys.iter().enumerate().for_each(|(col, &packed_y)| {
-                let r_at_x: F::Packing = r_transposed_packed
-                    .rows()
-                    .zip(&packed_x_pows)
-                    .map(|(coeffs, &x_pow)| coeffs[col] * x_pow)
-                    .sum();
+            for (i, (&packed_y, coeffs)) in
+                packed_ys.iter().zip(r_transposed_packed.rows()).enumerate()
+            {
+                // assert!(coeffs.len() == packed_x_pows.len() + 1);
+                let r_at_x = coeffs[0]
+                    + coeffs[1..]
+                        .iter()
+                        .zip(&packed_x_pows)
+                        .map(|(&coeff, &x_pow)| coeff * x_pow)
+                        .sum::<F::Packing>();
                 let qp_y = (packed_y - r_at_x) * packed_m_inv;
-                qp_ys.extend_from_slice(qp_y.as_slice());
-            });
-
-            /*
-            // reserve space for packed qp_ys
-            let start_idx = qp_ys.len();
-            // copy the constant coefficient into qp_ys
-            qp_ys.extend_from_slice(F::Packing::unpack_slice(r_transposed_packed.row_slice(0)));
-            let packed_qp_ys = F::Packing::pack_slice_mut(&mut qp_ys[start_idx..]);
-            for coeff_idx in 1..r_poly_len {
-                let coeffs = r_transposed_packed.row_slice(coeff_idx);
-                for col in 0..packed_qp_ys.len() {
-                    packed_qp_ys[col] += packed_x_pows[coeff_idx] * coeffs[col];
-                }
+                // qp_ys.extend_from_slice(qp_y.as_slice());
+                packed_uninit[i].write(qp_y);
             }
-            for (packed_qp_y, &packed_y) in packed_qp_ys.iter_mut().zip(packed_ys) {
-                *packed_qp_y = (packed_y - *packed_qp_y) * packed_m_inv;
+            unsafe {
+                qp_ys.set_len(qp_ys.len() + packed_ys.len() * F::Packing::WIDTH);
             }
-            */
         }
 
         sfx_ys
