@@ -1,19 +1,19 @@
 use alloc::vec::Vec;
 
-use p3_field::{Field, Powers, TwoAdicField, PrimeField32, Canonicalize};
+use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{
-    dif_butterfly_on_rows, dit_butterfly_on_rows, twiddle_free_butterfly_on_rows, twiddle_free_butterfly_on_rows_non_canonical, dif_butterfly_on_rows_non_canonical
+    dif_butterfly_on_rows, dit_butterfly_on_rows, twiddle_free_butterfly_on_rows,
 };
 use crate::util::{
     bit_reversed_zero_pad, divide_by_height, reverse_bits, reverse_matrix_index_bits,
     reverse_slice_index_bits,
 };
-use crate::{TwoAdicSubgroupDft, TwoAdicSubgroupDftNC};
+use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
@@ -149,74 +149,6 @@ fn par_chunks_bowers<F: Field, Fun>(
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if block == 0 {
                         twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk);
-                    } else {
-                        butterfly_fn(hi_chunk, lo_chunk, twiddle);
-                    }
-                });
-        });
-}
-
-/// The Bowers G FFT algorithm.
-/// See: "Improved Twiddle Access for Fast Fourier Transforms"
-#[derive(Default, Clone)]
-pub struct Radix2BowersNC;
-
-impl<F: TwoAdicField + PrimeField32, NCF:Canonicalize<F> + core::marker::Send> TwoAdicSubgroupDftNC<F, NCF> for Radix2BowersNC {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<NCF>) -> RowMajorMatrix<NCF> {
-        reverse_matrix_index_bits(&mut mat);
-        bowers_g_nc(&mut mat.as_view_mut());
-        mat
-    }
-}
-
-/// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
-/// bit-reversed order.
-fn bowers_g_nc<F: TwoAdicField + PrimeField32, NCF:Canonicalize<F> + core::marker::Send>(mat: &mut RowMajorMatrixViewMut<NCF>) {
-    let h = mat.height();
-    let log_h = log2_strict_usize(h);
-
-    let root = F::two_adic_generator(log_h);
-    let mut twiddles: Vec<F> = root.powers().take(h / 2).collect();
-    reverse_slice_index_bits(&mut twiddles);
-
-    let log_h = log2_strict_usize(mat.height());
-    for log_half_block_size in 0..log_h {
-        bowers_g_layer_nc(mat, log_half_block_size, &twiddles);
-    }
-}
-
-
-/// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
-fn bowers_g_layer_nc<F: TwoAdicField + PrimeField32, NCF:Canonicalize<F> + core::marker::Send>(
-    mat: &mut RowMajorMatrixViewMut<NCF>,
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let half_block_size = 1 << log_half_block_size;
-    let width = mat.width();
-    par_chunks_bowers_nc(mat, width, half_block_size, twiddles, dif_butterfly_on_rows_non_canonical)
-}
-
-fn par_chunks_bowers_nc<F: TwoAdicField + PrimeField32, NCF:Canonicalize<F> + core::marker::Send, Fun>(
-    mat: &mut RowMajorMatrixViewMut<NCF>,
-    width: usize,
-    half_block_size: usize,
-    twiddles: &[F],
-    butterfly_fn: Fun,
-) where
-    Fun: Fn(&mut [NCF], &mut [NCF], F) + Sync,
-{
-    mat.par_row_chunks_mut(2 * half_block_size)
-        .enumerate()
-        .for_each(|(block, chunks)| {
-            let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
-            let twiddle = twiddles[block];
-            hi_chunks
-                .par_chunks_exact_mut(width)
-                .zip(lo_chunks.par_chunks_exact_mut(width))
-                .for_each(|(hi_chunk, lo_chunk)| {
-                    if block == 0 {
-                        twiddle_free_butterfly_on_rows_non_canonical(hi_chunk, lo_chunk);
                     } else {
                         butterfly_fn(hi_chunk, lo_chunk, twiddle);
                     }

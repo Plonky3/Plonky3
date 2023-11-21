@@ -166,7 +166,7 @@ trait Convolution {
         let mut rhs_pos = [T::zero(); HALF_N]; // rhs_pos = lhs(x) mod x^{N/2} - 1
         let mut rhs_neg = [T::zero(); HALF_N]; // rhs_nos = lhs(x) mod x^{N/2} - 1
 
-        // Could mutably change the inputs?
+        // Could mutably change the inputs? Can't use transmute as compiler doesn't know that 2 * HALF_N = N.
 
         for i in 0..HALF_N {
             let s = lhs[i];

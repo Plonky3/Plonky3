@@ -1,4 +1,4 @@
-use p3_field::{Field, PrimeField32, Canonicalize};
+use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrixViewMut;
 
 /// DIF butterfly operation on rows.
@@ -117,28 +117,6 @@ fn dit<F: Field>(
         let x_2_twiddle = *x_2 * twiddle;
         let sum = *x_1 + x_2_twiddle;
         let diff = *x_1 - x_2_twiddle;
-        *x_1 = sum;
-        *x_2 = diff;
-    }
-}
-
-/// DIF butterfly operation on rows.
-#[inline]
-pub(crate) fn dif_butterfly_on_rows_non_canonical<F: PrimeField32, NCF: Canonicalize<F>>(row_1: &mut [NCF], row_2: &mut [NCF], twiddle: F) {
-    for (x_1, x_2) in row_1.iter_mut().zip(row_2) {
-        let sum = *x_1 + *x_2;
-        let diff = *x_1 - *x_2;
-        *x_1 = sum;
-        *x_2 = diff * twiddle;
-    }
-}
-
-/// Butterfly with twiddle factor 1 on rows (works in either DIT or DIF).
-#[inline]
-pub(crate) fn twiddle_free_butterfly_on_rows_non_canonical<F: PrimeField32, NCF: Canonicalize<F>>(row_1: &mut [NCF], row_2: &mut [NCF]) {
-    for (x_1, x_2) in row_1.iter_mut().zip(row_2) {
-        let sum = *x_1 + *x_2;
-        let diff = *x_1 - *x_2;
         *x_1 = sum;
         *x_2 = diff;
     }
