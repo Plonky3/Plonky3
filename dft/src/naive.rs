@@ -1,10 +1,9 @@
 use alloc::vec;
 
-use p3_field::{TwoAdicField, AbstractField, PrimeField32};
+use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
-use p3_baby_bear::{BabyBear, to_non_canonical_u32, from_monty_u32};
 
 use crate::TwoAdicSubgroupDft;
 
@@ -27,32 +26,6 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
             }
         }
         res
-    }
-}
-
-#[derive(Default, Clone)]
-pub struct BadDft;
-impl TwoAdicSubgroupDft<BabyBear> for BadDft {
-    fn dft_batch(&self, mat: RowMajorMatrix<BabyBear>) -> RowMajorMatrix<BabyBear> {
-        let w = mat.width();
-        let h = mat.height();
-        let log_h = log2_strict_usize(h);
-        let g = BabyBear::two_adic_generator(log_h);
-
-        let mut res = RowMajorMatrix::new(vec![0_u64; w * h], w);
-        for (res_r, point) in g.powers().take(h).enumerate() {
-            for (src_r, point_power) in point.powers().take(h).enumerate() {
-                for c in 0..w {
-                    res.values[res_r * w + c] += to_non_canonical_u32(point_power * mat.values[src_r * w + c]) as u64
-                }
-            }
-        }
-
-        let mut output = RowMajorMatrix::new(vec![BabyBear::zero(); w * h], w);
-        for i in 0..w*h {
-            output.values[i] = from_monty_u32((res.values[i] % BabyBear::ORDER_U32 as u64) as u32)
-        }
-        output
     }
 }
 
