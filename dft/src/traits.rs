@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{Canonicalize, PrimeField32, TwoAdicField};
+use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -93,16 +93,4 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             .resize(coeffs.values.len() << added_bits, F::zero());
         self.coset_dft_batch(coeffs, shift)
     }
-}
-
-pub trait TwoAdicSubgroupDftNC<F: TwoAdicField + PrimeField32, NCF: Canonicalize<F>>:
-    Clone + Default
-{
-    /// Compute the discrete Fourier transform (DFT) `vec`.
-    fn dft(&self, vec: Vec<NCF>) -> Vec<NCF> {
-        self.dft_batch(RowMajorMatrix::new(vec, 1)).values
-    }
-
-    /// Compute the discrete Fourier transform (DFT) of each column in `mat`.
-    fn dft_batch(&self, mat: RowMajorMatrix<NCF>) -> RowMajorMatrix<NCF>;
 }
