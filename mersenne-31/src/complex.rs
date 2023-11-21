@@ -306,6 +306,11 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne3
         Self::new(bs[0].clone(), bs[1].clone())
     }
 
+    #[inline]
+    fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
+        Self::new(f(0), f(1))
+    }
+
     fn as_base_slice(&self) -> &[AF] {
         &self.parts
     }

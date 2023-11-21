@@ -12,6 +12,7 @@ use crate::verifier::verify;
 
 mod config;
 mod fold_even_odd;
+mod matrix_reducer;
 mod proof;
 mod prover;
 mod verifier;
@@ -24,7 +25,7 @@ pub struct FriLdt<FC: FriConfig> {
     pub config: FC,
 }
 
-impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
+impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
     type Error = ();
 
@@ -35,7 +36,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> f
     fn prove(
         &self,
         input_mmcs: &[FC::InputMmcs],
-        input_data: &[&<FC::InputMmcs as Mmcs<FC::Challenge>>::ProverData],
+        input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
         challenger: &mut FC::Challenger,
     ) -> Self::Proof {
         prove::<FC>(&self.config, input_mmcs, input_data, challenger)
@@ -44,7 +45,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::Challenge, FC::InputMmcs, FC::Challenger> f
     fn verify(
         &self,
         input_mmcs: &[FC::InputMmcs],
-        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Challenge>>::Commitment],
+        _input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {

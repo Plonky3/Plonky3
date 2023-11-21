@@ -8,6 +8,7 @@ use p3_commit::{
     UnivariatePcsWithLde,
 };
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
@@ -39,11 +40,11 @@ impl<Val, EF, In, Dft, M, L, Challenger> UnivariatePcsWithLde<Val, EF, In, Chall
     for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
     Val: TwoAdicField,
-    EF: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField + HasFrobenius<Val>,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     fn coset_shift(&self) -> Val {
@@ -88,12 +89,12 @@ impl<Val, EF, In, Dft, M, L, Challenger> Pcs<Val, In>
     for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
     Val: TwoAdicField,
-    EF: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField + HasFrobenius<Val>,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
     for<'a> M::Mat<'a>: MatrixRowSlices<Val>,
-    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     type Commitment = M::Commitment;
@@ -110,11 +111,11 @@ impl<Val, EF, In, Dft, M, L, Challenger> UnivariatePcs<Val, EF, In, Challenger>
     for LdtBasedPcs<Val, EF, Dft, M, L, Challenger>
 where
     Val: TwoAdicField,
-    EF: ExtensionField<Val> + TwoAdicField,
+    EF: ExtensionField<Val> + TwoAdicField + HasFrobenius<Val>,
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    L: Ldt<Val, EF, QuotientMmcs<Val, EF, M>, Challenger>,
+    L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
     #[instrument(name = "prove batch opening", skip_all)]
@@ -168,9 +169,8 @@ where
                         points
                             .iter()
                             .zip(opened_values_for_mat)
-                            .map(|(&point, opened_values_for_point)| Opening::<EF> {
-                                point,
-                                values: opened_values_for_point,
+                            .map(|(&point, opened_values_for_point)| {
+                                Opening::<Val, EF>::new(point, opened_values_for_point)
                             })
                             .collect()
                     })
@@ -179,6 +179,7 @@ where
                     inner: self.mmcs.clone(),
                     openings,
                     coset_shift,
+                    _phantom: PhantomData,
                 }
             })
             .collect_vec();

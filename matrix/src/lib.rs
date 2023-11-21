@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 
 use crate::dense::RowMajorMatrix;
@@ -59,6 +60,10 @@ pub trait MatrixRows<T>: Matrix<T> {
 
     fn row(&self, r: usize) -> Self::Row<'_>;
 
+    fn row_vec(&self, r: usize) -> Vec<T> {
+        self.row(r).into_iter().collect()
+    }
+
     fn first_row(&self) -> Self::Row<'_> {
         self.row(0)
     }
@@ -72,7 +77,10 @@ pub trait MatrixRows<T>: Matrix<T> {
         Self: Sized,
         T: Clone,
     {
-        todo!()
+        RowMajorMatrix::new(
+            (0..self.height()).flat_map(|r| self.row(r)).collect(),
+            self.width(),
+        )
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
