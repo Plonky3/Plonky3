@@ -65,6 +65,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --all-features --all-targets -- -D warnings -A incomplete-features
+          args: --all-features --all-targets -- -D warnings -D clippy::unreadable_literal -A incomplete-features
         env:
           CARGO_INCREMENTAL: 1

@@ -31,7 +31,7 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
 
     // DTH_ROOT = W^((p^2 - 1)/2).
     fn dth_root() -> Self {
-        Self::new_real(Mersenne31::new(2147483646))
+        Self::new_real(Mersenne31::new(2_147_483_646))
     }
 }
 
@@ -43,7 +43,7 @@ impl HasTwoAdicBionmialExtension<2> for Mersenne31Complex<Mersenne31> {
         if bits == 33 {
             [
                 Self::zero(),
-                Self::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
+                Self::new(Mersenne31::new(1_437_746_044), Mersenne31::new(946_469_285)),
             ]
         } else {
             [Self::two_adic_generator(bits), Self::zero()]
@@ -68,7 +68,7 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
 
     // DTH_ROOT = W^((p^2 - 1)/2).
     fn dth_root() -> Self {
-        Self::new_real(Mersenne31::new(634005911))
+        Self::new_real(Mersenne31::new(634_005_911))
     }
 
     // Verifiable in Sage with

@@ -128,7 +128,7 @@ fn bench_m31(c: &mut Criterion) {
     c.bench_function("5th_root", |b| {
         b.iter_batched(
             rand::random::<F>,
-            |x| x.exp_u64(1717986917),
+            |x| x.exp_u64(1_717_986_917),
             BatchSize::SmallInput,
         )
     });

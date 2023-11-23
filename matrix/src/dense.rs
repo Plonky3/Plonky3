@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn test_transpose_larger_rectangular_matrix() {
         const START_INDEX: usize = 1;
-        const VALUE_LEN: usize = 131072; // 512 * 256
+        const VALUE_LEN: usize = 131_072; // 512 * 256
         const WIDTH: usize = 256;
         const HEIGHT: usize = 512;
 
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn test_transpose_very_large_rectangular_matrix() {
         const START_INDEX: usize = 1;
-        const VALUE_LEN: usize = 1048576; // 512 * 256
+        const VALUE_LEN: usize = 1_048_576; // 512 * 256
         const WIDTH: usize = 1024;
         const HEIGHT: usize = 1024;
 

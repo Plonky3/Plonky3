@@ -9,10 +9,10 @@ use p3_field::{
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-const P: u32 = 0x78000001;
+const P: u32 = 0x7800_0001;
 const MONTY_BITS: u32 = 31;
 const MONTY_MASK: u32 = (1 << MONTY_BITS) - 1;
-const MONTY_MU: u32 = 0x8000001;
+const MONTY_MU: u32 = 0x0800_0001;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
@@ -59,7 +59,7 @@ impl Distribution<BabyBear> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BabyBear {
         loop {
-            let next_u31 = rng.next_u32() & 0x7ffffff;
+            let next_u31 = rng.next_u32() & 0x07ff_ffff;
             let is_canonical = next_u31 < P;
             if is_canonical {
                 return BabyBear { value: next_u31 };
@@ -75,13 +75,13 @@ impl AbstractField for BabyBear {
         Self { value: 0 }
     }
     fn one() -> Self {
-        Self { value: 0x7ffffff }
+        Self { value: 0x07ff_ffff }
     }
     fn two() -> Self {
-        Self { value: 0xffffffe }
+        Self { value: 0x0fff_fffe }
     }
     fn neg_one() -> Self {
-        Self { value: 0x70000002 }
+        Self { value: 0x7000_0002 }
     }
 
     #[inline]
@@ -156,7 +156,7 @@ impl Field for BabyBear {
     #[inline]
     fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
         match power {
-            1725656503 => exp_1725656503(val), // used to compute x^{1/7}
+            1_725_656_503 => exp_1725656503(val), // used to compute x^{1/7}
             _ => exp_u64_by_squaring(val, power),
         }
     }
@@ -232,7 +232,7 @@ impl TwoAdicField for BabyBear {
     fn two_adic_generator(bits: usize) -> Self {
         // TODO: Consider a `match` which may speed this up.
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::from_canonical_u32(0x1a427a41); // generates the whole 2^TWO_ADICITY group
+        let base = Self::from_canonical_u32(0x1a42_7a41); // generates the whole 2^TWO_ADICITY group
         base.exp_power_of_2(Self::TWO_ADICITY - bits)
     }
 }
@@ -413,14 +413,14 @@ mod tests {
         let expected_result = f_p_minus_2;
         assert_eq!(f_p_minus_1 - f_1, expected_result);
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
-        let expected_prod = F::from_canonical_u32(0x1b5c8046);
+        let m1 = F::from_canonical_u32(0x3416_7c58);
+        let m2 = F::from_canonical_u32(0x61f3_207b);
+        let expected_prod = F::from_canonical_u32(0x1b5c_8046);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(m1.exp_u64(1725656503).exp_const_u64::<7>(), m1);
-        assert_eq!(m2.exp_u64(1725656503).exp_const_u64::<7>(), m2);
-        assert_eq!(f_2.exp_u64(1725656503).exp_const_u64::<7>(), f_2);
+        assert_eq!(m1.exp_u64(1_725_656_503).exp_const_u64::<7>(), m1);
+        assert_eq!(m2.exp_u64(1_725_656_503).exp_const_u64::<7>(), m2);
+        assert_eq!(f_2.exp_u64(1_725_656_503).exp_const_u64::<7>(), f_2);
     }
 
     test_field!(crate::BabyBear);

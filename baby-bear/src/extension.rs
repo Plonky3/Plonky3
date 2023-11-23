@@ -12,7 +12,7 @@ impl BinomiallyExtendable<4> for BabyBear {
 
     // DTH_ROOT = W^((p - 1)/4)
     fn dth_root() -> Self {
-        Self::new(1728404513)
+        Self::new(1_728_404_513)
     }
 
     fn ext_generator() -> [Self; 4] {
@@ -31,12 +31,12 @@ impl HasTwoAdicBionmialExtension<4> for BabyBear {
                 Self::zero(),
                 Self::zero(),
                 Self::zero(),
-                Self::from_canonical_u32(124907976),
+                Self::from_canonical_u32(124_907_976),
             ],
             28 => [
                 Self::zero(),
                 Self::zero(),
-                Self::from_canonical_u32(1996171314),
+                Self::from_canonical_u32(1_996_171_314),
                 Self::zero(),
             ],
             _ => [
@@ -58,7 +58,7 @@ impl BinomiallyExtendable<5> for BabyBear {
 
     // DTH_ROOT = W^((p - 1)/5)
     fn dth_root() -> Self {
-        Self::new(815036133)
+        Self::new(815_036_133)
     }
 
     fn ext_generator() -> [Self; 5] {

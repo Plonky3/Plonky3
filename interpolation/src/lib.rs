@@ -82,7 +82,7 @@ mod tests {
         // x^2 + 2 x + 3
         type F = BabyBear;
         let evals = [
-            6, 886605102, 1443543107, 708307799, 2, 556938009, 569722818, 1874680944,
+            6, 886_605_102, 1_443_543_107, 708_307_799, 2, 556_938_009, 569_722_818, 1_874_680_944,
         ]
         .map(F::from_canonical_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
@@ -97,7 +97,7 @@ mod tests {
         type F = BabyBear;
         let shift = F::generator();
         let evals = [
-            1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
+            1026, 129_027_310, 457_985_035, 994_890_337, 902, 1_988_942_953, 1_555_278_970, 913_671_254,
         ]
         .map(F::from_canonical_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);

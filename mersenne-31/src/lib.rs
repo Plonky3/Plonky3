@@ -208,7 +208,7 @@ impl Field for Mersenne31 {
     #[inline]
     fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
         match power {
-            1717986917 => exp_1717986917(val), // used in x^{1/5}
+            1_717_986_917 => exp_1717986917(val), // used in x^{1/5}
             _ => exp_u64_by_squaring(val, power),
         }
     }
@@ -428,12 +428,12 @@ mod tests {
     fn exp_root() {
         // Confirm that (x^{1/5})^5 = x
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
+        let m1 = F::from_canonical_u32(0x3416_7c58);
+        let m2 = F::from_canonical_u32(0x61f3_207b);
 
-        assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
-        assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::two().exp_u64(1717986917).exp_const_u64::<5>(), F::two());
+        assert_eq!(m1.exp_u64(1_717_986_917).exp_const_u64::<5>(), m1);
+        assert_eq!(m2.exp_u64(1_717_986_917).exp_const_u64::<5>(), m2);
+        assert_eq!(F::two().exp_u64(1_717_986_917).exp_const_u64::<5>(), F::two());
     }
 
     test_field!(crate::Mersenne31);

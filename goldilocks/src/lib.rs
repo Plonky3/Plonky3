@@ -158,7 +158,7 @@ impl Field for Goldilocks {
     #[inline]
     fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
         match power {
-            10540996611094048183 => exp_10540996611094048183(val), // used to compute x^{1/7}
+            10_540_996_611_094_048_183 => exp_10540996611094048183(val), // used to compute x^{1/7}
             _ => exp_u64_by_squaring(val, power),
         }
     }
@@ -507,9 +507,9 @@ mod tests {
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
 
-        assert_eq!(f.exp_u64(10540996611094048183).exp_const_u64::<7>(), f);
-        assert_eq!(y.exp_u64(10540996611094048183).exp_const_u64::<7>(), y);
-        assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
+        assert_eq!(f.exp_u64(10_540_996_611_094_048_183).exp_const_u64::<7>(), f);
+        assert_eq!(y.exp_u64(10_540_996_611_094_048_183).exp_const_u64::<7>(), y);
+        assert_eq!(f_2.exp_u64(10_540_996_611_094_048_183).exp_const_u64::<7>(), f_2);
     }
 
     test_field!(crate::Goldilocks);

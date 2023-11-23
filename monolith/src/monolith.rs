@@ -191,21 +191,21 @@ mod tests {
         }
         monolith.permutation(&mut input);
 
-        assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
-        assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));
-        assert_eq!(input[2], Mersenne31::from_canonical_u64(1900746598));
-        assert_eq!(input[3], Mersenne31::from_canonical_u64(1734707571));
-        assert_eq!(input[4], Mersenne31::from_canonical_u64(2050994835));
-        assert_eq!(input[5], Mersenne31::from_canonical_u64(1648553244));
-        assert_eq!(input[6], Mersenne31::from_canonical_u64(1307647296));
-        assert_eq!(input[7], Mersenne31::from_canonical_u64(1941164548));
-        assert_eq!(input[8], Mersenne31::from_canonical_u64(1707113065));
-        assert_eq!(input[9], Mersenne31::from_canonical_u64(1477714255));
-        assert_eq!(input[10], Mersenne31::from_canonical_u64(1170160793));
-        assert_eq!(input[11], Mersenne31::from_canonical_u64(93800695));
-        assert_eq!(input[12], Mersenne31::from_canonical_u64(769879348));
-        assert_eq!(input[13], Mersenne31::from_canonical_u64(375548503));
-        assert_eq!(input[14], Mersenne31::from_canonical_u64(1989726444));
-        assert_eq!(input[15], Mersenne31::from_canonical_u64(1349325635));
+        assert_eq!(input[0], Mersenne31::from_canonical_u64(609_156_607));
+        assert_eq!(input[1], Mersenne31::from_canonical_u64(290_107_110));
+        assert_eq!(input[2], Mersenne31::from_canonical_u64(1_900_746_598));
+        assert_eq!(input[3], Mersenne31::from_canonical_u64(1_734_707_571));
+        assert_eq!(input[4], Mersenne31::from_canonical_u64(2_050_994_835));
+        assert_eq!(input[5], Mersenne31::from_canonical_u64(1_648_553_244));
+        assert_eq!(input[6], Mersenne31::from_canonical_u64(1_307_647_296));
+        assert_eq!(input[7], Mersenne31::from_canonical_u64(1_941_164_548));
+        assert_eq!(input[8], Mersenne31::from_canonical_u64(1_707_113_065));
+        assert_eq!(input[9], Mersenne31::from_canonical_u64(1_477_714_255));
+        assert_eq!(input[10], Mersenne31::from_canonical_u64(1_170_160_793));
+        assert_eq!(input[11], Mersenne31::from_canonical_u64(93_800_695));
+        assert_eq!(input[12], Mersenne31::from_canonical_u64(769_879_348));
+        assert_eq!(input[13], Mersenne31::from_canonical_u64(375_548_503));
+        assert_eq!(input[14], Mersenne31::from_canonical_u64(1_989_726_444));
+        assert_eq!(input[15], Mersenne31::from_canonical_u64(1_349_325_635));
     }
 }

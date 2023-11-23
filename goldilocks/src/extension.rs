@@ -12,13 +12,13 @@ impl BinomiallyExtendable<2> for Goldilocks {
 
     // DTH_ROOT = W^((p - 1)/2).
     fn dth_root() -> Self {
-        Self::new(18446744069414584320)
+        Self::new(18_446_744_069_414_584_320)
     }
 
     fn ext_generator() -> [Self; 2] {
         [
-            Self::new(18081566051660590251),
-            Self::new(16121475356294670766),
+            Self::new(18_081_566_051_660_590_251),
+            Self::new(16_121_475_356_294_670_766),
         ]
     }
 }
@@ -30,7 +30,7 @@ impl HasTwoAdicBionmialExtension<2> for Goldilocks {
         assert!(bits <= 33);
 
         if bits == 33 {
-            [Self::zero(), Self::new(15659105665374529263)]
+            [Self::zero(), Self::new(15_659_105_665_374_529_263)]
         } else {
             [Self::two_adic_generator(bits), Self::zero()]
         }
