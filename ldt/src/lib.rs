@@ -8,17 +8,16 @@ mod quotient;
 pub use ldt_based_pcs::*;
 use p3_challenger::FieldChallenger;
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
 pub use quotient::*;
 
 extern crate alloc;
 
 /// A batch low-degree test (LDT).
-pub trait Ldt<Val, Domain, M, Challenger>
+pub trait Ldt<Val, M, Challenger>
 where
     Val: Field,
-    Domain: ExtensionField<Val>,
-    M: Mmcs<Domain>,
+    M: Mmcs<Val>,
     Challenger: FieldChallenger<Val>,
 {
     type Proof;

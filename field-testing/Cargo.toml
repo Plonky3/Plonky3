@@ -8,3 +8,6 @@ license = "MIT OR Apache-2.0"
 p3-field = { path = "../field" }
 rand = "0.8.5"
 criterion = "0.5.1"
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }

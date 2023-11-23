@@ -5,7 +5,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-brakedown = { path = "../brakedown" }
 p3-challenger = { path = "../challenger" }
 p3-code = { path = "../code" }
 p3-commit = { path = "../commit" }

@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::MatrixRows;
 
@@ -38,11 +38,10 @@ pub type OpenedValuesForRound<F> = Vec<OpenedValuesForPoint<F>>;
 pub type OpenedValuesForPoint<F> = Vec<OpenedValuesForMatrix<F>>;
 pub type OpenedValuesForMatrix<F> = Vec<F>;
 
-pub trait UnivariatePcs<Val, Domain, EF, In, Challenger>: Pcs<Val, In>
+pub trait UnivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
 where
     Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Domain>,
+    EF: ExtensionField<Val>,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
@@ -63,32 +62,45 @@ where
 
 /// A `UnivariatePcs` where the commitment process involves computing a low-degree extension (LDE)
 /// of each polynomial. These LDEs can be reused in other prover work.
-pub trait UnivariatePcsWithLde<Val, Domain, EF, In, Challenger>:
-    UnivariatePcs<Val, Domain, EF, In, Challenger>
+pub trait UnivariatePcsWithLde<Val, EF, In, Challenger>:
+    UnivariatePcs<Val, EF, In, Challenger>
 where
     Val: Field,
-    Domain: ExtensionField<Val> + TwoAdicField,
-    EF: ExtensionField<Domain>,
+    EF: ExtensionField<Val>,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
-    fn coset_shift(&self) -> Domain;
+    fn coset_shift(&self) -> Val;
 
     fn log_blowup(&self) -> usize;
 
     fn get_ldes<'a, 'b>(
         &'a self,
         _prover_data: &'b Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'b, Domain>>
+    ) -> Vec<RowMajorMatrixView<'b, Val>>
     where
         'a: 'b;
+
+    // Commit to polys that are already defined over a coset.
+    fn commit_shifted_batches(
+        &self,
+        polynomials: Vec<In>,
+        coset_shift: Val,
+    ) -> (Self::Commitment, Self::ProverData);
+
+    fn commit_shifted_batch(
+        &self,
+        polynomials: In,
+        coset_shift: Val,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit_shifted_batches(vec![polynomials], coset_shift)
+    }
 }
 
-pub trait MultivariatePcs<Val, Domain, EF, In, Challenger>: Pcs<Val, In>
+pub trait MultivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
 where
     Val: Field,
-    Domain: ExtensionField<Val>,
-    EF: ExtensionField<Domain>,
+    EF: ExtensionField<Val>,
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {

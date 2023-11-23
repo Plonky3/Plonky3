@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 criterion = "0.5"
-itertools = "0.11.0"
+itertools = "0.12.0"
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
