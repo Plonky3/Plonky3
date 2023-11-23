@@ -5,7 +5,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
 
 itertools = "0.12.0"
