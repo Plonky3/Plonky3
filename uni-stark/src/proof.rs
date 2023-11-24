@@ -14,6 +14,9 @@ pub struct Proof<SC: StarkConfig> {
     pub(crate) commitments: Commitments<Com<SC>>,
     pub(crate) opened_values: OpenedValues<SC::Challenge>,
     pub(crate) opening_proof: PcsProof<SC>,
+    /// Hack to pass degree bits to verifier so that it doesn't have to be hardcoded.
+    /// To be removed later according to plonky3 updates
+    pub(crate) degree_bits: usize,
 }
 
 pub struct Commitments<Com> {
