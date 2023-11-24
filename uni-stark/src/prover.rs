@@ -96,6 +96,7 @@ where
         commitments,
         opened_values,
         opening_proof,
+        degree_bits: log_degree,
     }
 }
 

@@ -19,15 +19,17 @@ where
     SC: StarkConfig,
     A: for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
 {
-    let degree_bits = 6; // TODO
+    // let degree_bits = 6; // TODO
     let log_quotient_degree = 1; // TODO
-    let g_subgroup = SC::Val::two_adic_generator(degree_bits);
 
     let Proof {
         commitments,
         opened_values,
         opening_proof,
+        degree_bits,
     } = proof;
+
+    let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
     challenger.observe(commitments.trace.clone());
     let alpha: SC::Challenge = challenger.sample_ext_element();
@@ -76,7 +78,7 @@ where
         .map(|(weight, part)| part * weight)
         .sum();
 
-    let z_h = zeta.exp_power_of_2(degree_bits) - SC::Challenge::one();
+    let z_h = zeta.exp_power_of_2(*degree_bits) - SC::Challenge::one();
     let is_first_row = z_h / (zeta - SC::Val::one());
     let is_last_row = z_h / (zeta - g_subgroup.inverse());
     let is_transition = zeta - g_subgroup.inverse();
