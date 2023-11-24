@@ -14,6 +14,7 @@ pub struct Proof<SC: StarkConfig> {
     pub(crate) commitments: Commitments<Com<SC>>,
     pub(crate) opened_values: OpenedValues<SC::Challenge>,
     pub(crate) opening_proof: PcsProof<SC>,
+    pub(crate) degree_bits: usize,
 }
 
 pub struct Commitments<Com> {
