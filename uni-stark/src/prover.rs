@@ -11,9 +11,10 @@ use p3_field::{
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
-use p3_util::log2_strict_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
 
+use crate::degree_builder::{get_max_constraint_degree, DegreeBuilder};
 use crate::{
     decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder, StarkConfig,
     ZerofierOnCoset,
@@ -28,11 +29,17 @@ pub fn prove<SC, A>(
 ) -> Proof<SC>
 where
     SC: StarkConfig,
-    A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<DegreeBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
-    let log_quotient_degree = 1; // TODO
+
+    let max_constraint_degree = get_max_constraint_degree(air);
+    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
+    // where subtracting 1 comes from division by the zerofier.
+    // But we pad it to a power of two so that we can efficiently decompose the quotient.
+    let log_quotient_degree = log2_ceil_usize(max_constraint_degree - 1);
+    // let log_quotient_degree = 1; // TODO
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 

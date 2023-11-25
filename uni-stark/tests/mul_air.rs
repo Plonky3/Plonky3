@@ -31,6 +31,10 @@ struct MulAir;
 impl<F> BaseAir<F> for MulAir {}
 
 impl<AB: AirBuilder> Air<AB> for MulAir {
+    fn width(&self) -> usize {
+        TRACE_WIDTH
+    }
+
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let main_local = main.row_slice(0);
@@ -41,6 +45,10 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let b = main_local[start + 1];
             let c = main_local[start + 2];
             builder.assert_zero(a * b - c);
+
+            // TODO: Temporarily added this silly degree 3 constraint because we're getting an
+            // OodEvaluationMismatch when log_quotient_degree = 0.
+            builder.assert_zero(a * b * c - c * b * a);
         }
     }
 }

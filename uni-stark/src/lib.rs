@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod config;
 mod decompose;
+mod degree_builder;
 mod folder;
 mod proof;
 mod prover;

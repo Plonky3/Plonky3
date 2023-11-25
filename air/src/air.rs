@@ -13,6 +13,9 @@ pub trait BaseAir<F>: Sync {
 
 /// An AIR that works with a particular `AirBuilder`.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
+    /// The number of columns (a.k.a. registers) in this AIR.
+    fn width(&self) -> usize;
+
     fn eval(&self, builder: &mut AB);
 }
 
@@ -230,6 +233,10 @@ mod tests {
     impl<F> BaseAir<F> for FibonacciAir {}
 
     impl<AB: AirBuilder> Air<AB> for FibonacciAir {
+        fn width(&self) -> usize {
+            1
+        }
+
         fn eval(&self, builder: &mut AB) {
             let main = builder.main();
 
