@@ -135,10 +135,10 @@ where
             self.sbox(state);
             external_linear_layer.permute_mut(state);
         }
-
+        
         // The internal rounds.
         let p_end = rounds_f_beggining + self.rounds_p;
-        for r in self.rounds_f..p_end {
+        for r in rounds_f_beggining..p_end {
             state[0] += AF::from_f(self.constants[r][0]);
             state[0] = self.sbox_p(&state[0]);
             self.internal_linear_layer.permute_mut(state);
@@ -197,8 +197,10 @@ mod tests {
 
         let mut rng = rand::thread_rng();
 
+        // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_8_PARAMS);
 
+        // Copy over RC8 round constants from zkhash.
         let round_constants: Vec<[F; WIDTH]> = RC8
             .iter()
             .map(|vec| {
@@ -211,6 +213,7 @@ mod tests {
             })
             .collect();
 
+        // Our Poseidon2 implementation.
         let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
             ROUNDS_F,
             ROUNDS_P,
@@ -218,6 +221,7 @@ mod tests {
             DiffusionMatrixGoldilocks,
         );
 
+        // Generate random input and convert to both Goldilocks field formats.
         let random_input_u64 = rng.gen::<[u64; WIDTH]>();
         let random_input_ref = random_input_u64
             .iter()
@@ -229,7 +233,14 @@ mod tests {
             .cloned()
             .map(F::from_wrapped_u64)
             .collect::<Vec<_>>();
+    
+        // Check that the conversion is correct.
+        assert!(random_input_ref
+            .iter()
+            .zip(random_input.iter())
+            .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
 
+        // Run reference implementation.
         let ref_output = poseidon2_ref.permutation(&random_input_ref);
         let ref_output_converted = ref_output
             .iter()
@@ -238,6 +249,7 @@ mod tests {
             .collect::<Vec<_>>();
         let ref_output_converted_arr: [F; WIDTH] = ref_output_converted.try_into().unwrap();
 
+        // Run our implementation.
         let mut output = random_input.clone().try_into().unwrap();
         poseidon2.permute_mut(&mut output);
 
