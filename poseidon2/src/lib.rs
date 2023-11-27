@@ -222,37 +222,35 @@ mod tests {
         );
 
         // Generate random input and convert to both Goldilocks field formats.
-        let random_input_u64 = rng.gen::<[u64; WIDTH]>();
-        let random_input_ref = random_input_u64
+        let input_u64 = rng.gen::<[u64; WIDTH]>();
+        let input_ref = input_u64
             .iter()
             .cloned()
             .map(FpGoldiLocks::from)
             .collect::<Vec<_>>();
-        let random_input = random_input_u64
-            .iter()
-            .cloned()
-            .map(F::from_wrapped_u64)
-            .collect::<Vec<_>>();
+        let input = input_u64
+            .map(F::from_wrapped_u64);
     
         // Check that the conversion is correct.
-        assert!(random_input_ref
+        assert!(input_ref
             .iter()
-            .zip(random_input.iter())
+            .zip(input.iter())
             .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
 
         // Run reference implementation.
-        let ref_output = poseidon2_ref.permutation(&random_input_ref);
-        let ref_output_converted = ref_output
+        let output_ref = poseidon2_ref.permutation(&input_ref);
+        let output_ref_converted: [F; WIDTH] = output_ref
             .iter()
             .cloned()
             .map(goldilocks_from_ark_ff)
-            .collect::<Vec<_>>();
-        let ref_output_converted_arr: [F; WIDTH] = ref_output_converted.try_into().unwrap();
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
 
         // Run our implementation.
-        let mut output = random_input.clone().try_into().unwrap();
+        let mut output = input;
         poseidon2.permute_mut(&mut output);
 
-        assert_eq!(output, ref_output_converted_arr);
+        assert_eq!(output, output_ref_converted);
     }
 }
