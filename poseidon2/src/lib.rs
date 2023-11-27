@@ -135,7 +135,7 @@ where
             self.sbox(state);
             external_linear_layer.permute_mut(state);
         }
-        
+
         // The internal rounds.
         let p_end = rounds_f_beggining + self.rounds_p;
         for r in rounds_f_beggining..p_end {
@@ -228,9 +228,8 @@ mod tests {
             .cloned()
             .map(FpGoldiLocks::from)
             .collect::<Vec<_>>();
-        let input = input_u64
-            .map(F::from_wrapped_u64);
-    
+        let input = input_u64.map(F::from_wrapped_u64);
+
         // Check that the conversion is correct.
         assert!(input_ref
             .iter()
