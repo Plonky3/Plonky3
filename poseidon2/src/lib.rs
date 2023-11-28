@@ -167,33 +167,46 @@ mod tests {
     use alloc::vec::Vec;
 
     use ark_ff::{BigInteger, PrimeField};
+    use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
     use rand::Rng;
+    use zkhash::fields::babybear::FpBabyBear;
     use zkhash::fields::goldilocks::FpGoldiLocks;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-    use zkhash::poseidon2::poseidon2_instance_goldilocks::{POSEIDON2_GOLDILOCKS_8_PARAMS, RC8};
+    use zkhash::poseidon2::poseidon2_instance_babybear::{POSEIDON2_BABYBEAR_16_PARAMS, RC16};
+    use zkhash::poseidon2::poseidon2_instance_goldilocks::{
+        POSEIDON2_GOLDILOCKS_12_PARAMS, POSEIDON2_GOLDILOCKS_8_PARAMS, RC12, RC8,
+    };
 
     use crate::goldilocks::DiffusionMatrixGoldilocks;
-    use crate::Poseidon2;
+    use crate::{DiffusionMatrixBabybear, Poseidon2};
 
-    type F = Goldilocks;
-
-    fn goldilocks_from_ark_ff(input: FpGoldiLocks) -> F {
+    fn goldilocks_from_ark_ff(input: FpGoldiLocks) -> Goldilocks {
         let as_bigint = input.into_bigint();
         let mut as_bytes = as_bigint.to_bytes_le();
         as_bytes.resize(8, 0);
         let as_u64 = u64::from_le_bytes(as_bytes[0..8].try_into().unwrap());
-        F::from_wrapped_u64(as_u64)
+        Goldilocks::from_wrapped_u64(as_u64)
+    }
+
+    fn babybear_from_ark_ff(input: FpBabyBear) -> BabyBear {
+        let as_bigint = input.into_bigint();
+        let mut as_bytes = as_bigint.to_bytes_le();
+        as_bytes.resize(4, 0);
+        let as_u32 = u32::from_le_bytes(as_bytes[0..4].try_into().unwrap());
+        BabyBear::from_wrapped_u32(as_u32)
     }
 
     #[test]
-    fn test_poseidon2_goldilocks() {
+    fn test_poseidon2_goldilocks_width_8() {
         const WIDTH: usize = 8;
         const D: u64 = 7;
         const ROUNDS_F: usize = 8;
         const ROUNDS_P: usize = 22;
+
+        type F = Goldilocks;
 
         let mut rng = rand::thread_rng();
 
@@ -238,7 +251,7 @@ mod tests {
 
         // Run reference implementation.
         let output_ref = poseidon2_ref.permutation(&input_ref);
-        let output_ref_converted: [F; WIDTH] = output_ref
+        let expected: [F; WIDTH] = output_ref
             .iter()
             .cloned()
             .map(goldilocks_from_ark_ff)
@@ -250,6 +263,136 @@ mod tests {
         let mut output = input;
         poseidon2.permute_mut(&mut output);
 
-        assert_eq!(output, output_ref_converted);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_poseidon2_goldilocks_width_12() {
+        const WIDTH: usize = 12;
+        const D: u64 = 7;
+        const ROUNDS_F: usize = 8;
+        const ROUNDS_P: usize = 22;
+
+        type F = Goldilocks;
+
+        let mut rng = rand::thread_rng();
+
+        // Poiseidon2 reference implementation from zkhash repo.
+        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_12_PARAMS);
+
+        // Copy over RC8 round constants from zkhash.
+        let round_constants: Vec<[F; WIDTH]> = RC12
+            .iter()
+            .map(|vec| {
+                vec.iter()
+                    .cloned()
+                    .map(goldilocks_from_ark_ff)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect();
+
+        // Our Poseidon2 implementation.
+        let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
+            ROUNDS_F,
+            ROUNDS_P,
+            round_constants,
+            DiffusionMatrixGoldilocks,
+        );
+
+        // Generate random input and convert to both Goldilocks field formats.
+        let input_u64 = rng.gen::<[u64; WIDTH]>();
+        let input_ref = input_u64
+            .iter()
+            .cloned()
+            .map(FpGoldiLocks::from)
+            .collect::<Vec<_>>();
+        let input = input_u64.map(F::from_wrapped_u64);
+
+        // Check that the conversion is correct.
+        assert!(input_ref
+            .iter()
+            .zip(input.iter())
+            .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
+
+        // Run reference implementation.
+        let output_ref = poseidon2_ref.permutation(&input_ref);
+        let expected: [F; WIDTH] = output_ref
+            .iter()
+            .cloned()
+            .map(goldilocks_from_ark_ff)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Run our implementation.
+        let mut output = input;
+        poseidon2.permute_mut(&mut output);
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_poseidon2_babybear_width_16() {
+        const WIDTH: usize = 16;
+        const D: u64 = 7;
+        const ROUNDS_F: usize = 8;
+        const ROUNDS_P: usize = 13;
+
+        type F = BabyBear;
+
+        let mut rng = rand::thread_rng();
+
+        // Poiseidon2 reference implementation from zkhash repo.
+        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BABYBEAR_16_PARAMS);
+
+        // Copy over RC8 round constants from zkhash.
+        let round_constants: Vec<[F; WIDTH]> = RC16
+            .iter()
+            .map(|vec| {
+                vec.iter()
+                    .cloned()
+                    .map(babybear_from_ark_ff)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect();
+
+        // Our Poseidon2 implementation.
+        let poseidon2: Poseidon2<BabyBear, DiffusionMatrixBabybear, WIDTH, D> =
+            Poseidon2::new(ROUNDS_F, ROUNDS_P, round_constants, DiffusionMatrixBabybear);
+
+        // Generate random input and convert to both BabyBear field formats.
+        let input_u32 = rng.gen::<[u32; WIDTH]>();
+        let input_ref = input_u32
+            .iter()
+            .cloned()
+            .map(FpBabyBear::from)
+            .collect::<Vec<_>>();
+        let input = input_u32.map(F::from_wrapped_u32);
+
+        // Check that the conversion is correct.
+        assert!(input_ref
+            .iter()
+            .zip(input.iter())
+            .all(|(a, b)| babybear_from_ark_ff(*a) == *b));
+
+        // Run reference implementation.
+        let output_ref = poseidon2_ref.permutation(&input_ref);
+        let expected: [F; WIDTH] = output_ref
+            .iter()
+            .cloned()
+            .map(babybear_from_ark_ff)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Run our implementation.
+        let mut output = input;
+        poseidon2.permute_mut(&mut output);
+
+        assert_eq!(output, expected);
     }
 }
