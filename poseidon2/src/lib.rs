@@ -129,16 +129,16 @@ where
 
         // The first half of the external rounds.
         let rounds = self.rounds_f + self.rounds_p;
-        let rounds_f_beggining = self.rounds_f / 2;
-        for r in 0..rounds_f_beggining {
+        let rounds_f_beginning = self.rounds_f / 2;
+        for r in 0..rounds_f_beginning {
             self.add_rc(state, &self.constants[r]);
             self.sbox(state);
             external_linear_layer.permute_mut(state);
         }
 
         // The internal rounds.
-        let p_end = rounds_f_beggining + self.rounds_p;
-        for r in rounds_f_beggining..p_end {
+        let p_end = rounds_f_beginning + self.rounds_p;
+        for r in rounds_f_beginning..p_end {
             state[0] += AF::from_f(self.constants[r][0]);
             state[0] = self.sbox_p(&state[0]);
             self.internal_linear_layer.permute_mut(state);
