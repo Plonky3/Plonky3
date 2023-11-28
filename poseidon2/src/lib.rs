@@ -213,7 +213,7 @@ mod tests {
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_8_PARAMS);
 
-        // Copy over RC8 round constants from zkhash.
+        // Copy over round constants from zkhash.
         let round_constants: Vec<[F; WIDTH]> = RC8
             .iter()
             .map(|vec| {
@@ -280,7 +280,7 @@ mod tests {
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_12_PARAMS);
 
-        // Copy over RC8 round constants from zkhash.
+        // Copy over round constants from zkhash.
         let round_constants: Vec<[F; WIDTH]> = RC12
             .iter()
             .map(|vec| {
@@ -347,7 +347,7 @@ mod tests {
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BABYBEAR_16_PARAMS);
 
-        // Copy over RC8 round constants from zkhash.
+        // Copy over round constants from zkhash.
         let round_constants: Vec<[F; WIDTH]> = RC16
             .iter()
             .map(|vec| {
