@@ -1,4 +1,5 @@
 # Plonky3
+![plonky3](https://github.com/Plonky3/Plonky3/assets/86010/877ef447-5f65-4902-ac10-ddd27f188381)
 
 Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown.
 
