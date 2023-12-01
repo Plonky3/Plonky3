@@ -6,6 +6,9 @@ use p3_matrix::MatrixRowSlices;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
+    /// The number of columns (a.k.a. registers) in this AIR.
+    fn width(&self) -> usize;
+
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
@@ -227,7 +230,11 @@ mod tests {
 
     struct FibonacciAir;
 
-    impl<F> BaseAir<F> for FibonacciAir {}
+    impl<F> BaseAir<F> for FibonacciAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
 
     impl<AB: AirBuilder> Air<AB> for FibonacciAir {
         fn eval(&self, builder: &mut AB) {
