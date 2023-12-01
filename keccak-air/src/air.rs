@@ -4,7 +4,7 @@ use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
 use p3_matrix::MatrixRowSlices;
 
-use crate::columns::KeccakCols;
+use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::logic::{andn_gen, xor3_gen, xor_gen};
 use crate::round_flags::eval_round_flags;
@@ -13,7 +13,11 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 /// Assumes the field size is at least 16 bits.
 pub struct KeccakAir {}
 
-impl<F> BaseAir<F> for KeccakAir {}
+impl<F> BaseAir<F> for KeccakAir {
+    fn width(&self) -> usize {
+        NUM_KECCAK_COLS
+    }
+}
 
 impl<AB: AirBuilder> Air<AB> for KeccakAir {
     fn eval(&self, builder: &mut AB) {
