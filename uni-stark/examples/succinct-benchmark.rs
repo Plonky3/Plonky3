@@ -14,7 +14,7 @@ use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfigImpl, VerificationError};
+use p3_uni_stark::{prove, verify, StarkConfigImpl};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 use tracing_forest::ForestLayer;
@@ -22,8 +22,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
+//  2^26 rows and 300 columns
 /// How many `a * b = c` operations to do per row in the AIR.
-const REPETITIONS: usize = 10;
+const REPETITIONS: usize = 300;
 const TRACE_WIDTH: usize = REPETITIONS * 3;
 
 struct MulAir;
@@ -67,14 +68,13 @@ where
     RowMajorMatrix::new(trace_values, TRACE_WIDTH)
 }
 
-#[test]
-fn benchmark_baby_bear() -> Result<(), VerificationError> {
+fn main () {
     Registry::default()
         .with(EnvFilter::from_default_env())
         .with(ForestLayer::default())
         .init();
 
-    const HEIGHT: usize = 1 << 6;
+    const HEIGHT: usize = 1 << 10;
 
     type Val = BabyBear;
     type Domain = Val;
@@ -119,5 +119,5 @@ fn benchmark_baby_bear() -> Result<(), VerificationError> {
     let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
 
     let mut challenger = Challenger::new(perm);
-    verify(&config, &MulAir, &mut challenger, &proof)
+    let _ = verify(&config, &MulAir, &mut challenger, &proof);
 }

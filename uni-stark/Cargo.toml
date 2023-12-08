@@ -29,3 +29,6 @@ p3-symmetric = { path = "../symmetric" }
 rand = "0.8.5"
 tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
 tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
+
+[[example]]
+name = "succinct-benchmark"
