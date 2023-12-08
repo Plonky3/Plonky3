@@ -17,6 +17,7 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfigImpl};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
+use tracing::level_filters::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -69,12 +70,16 @@ where
 }
 
 fn main () {
+    let env_filter = EnvFilter::builder()
+    .with_default_directive(LevelFilter::INFO.into())
+    .from_env_lossy();
+
     Registry::default()
-        .with(EnvFilter::from_default_env())
+        .with(env_filter)
         .with(ForestLayer::default())
         .init();
 
-    const HEIGHT: usize = 1 << 10;
+    const HEIGHT: usize = 1 << 3;
 
     type Val = BabyBear;
     type Domain = Val;
