@@ -23,16 +23,19 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-//  2^26 rows and 300 columns
-/// How many `a * b = c` operations to do per row in the AIR.
-const REPETITIONS: usize = 300;
-const TRACE_WIDTH: usize = REPETITIONS * 3;
+struct MulAir {
+    repetitions: usize,
+}
 
-struct MulAir;
+fn col_count_to_trace_width(col_count: usize) -> usize {
+    // How many columns of the AIR to use per row in the trace.
+    col_count * 3
+}
 
 impl<F> BaseAir<F> for MulAir {
     fn width(&self) -> usize {
-        TRACE_WIDTH
+        // How many `a * b = c` operations to do per row in the AIR.
+        col_count_to_trace_width(self.repetitions)
     }
 }
 
@@ -41,7 +44,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
         let main = builder.main();
         let main_local = main.row_slice(0);
 
-        for i in 0..REPETITIONS {
+        for i in 0..self.repetitions {
             let start = i * 3;
             let a = main_local[start];
             let b = main_local[start + 1];
@@ -55,31 +58,22 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     }
 }
 
-fn random_valid_trace<F: Field>(rows: usize) -> RowMajorMatrix<F>
+fn random_valid_trace<F: Field>(rows: usize, trace_width: usize) -> RowMajorMatrix<F>
 where
     Standard: Distribution<F>,
 {
     let mut rng = thread_rng();
-    let mut trace_values = vec![F::default(); rows * TRACE_WIDTH];
+    let mut trace_values = vec![F::default(); rows * trace_width];
     for (a, b, c) in trace_values.iter_mut().tuples() {
         *a = rng.gen();
         *b = rng.gen();
         *c = *a * *b;
     }
-    RowMajorMatrix::new(trace_values, TRACE_WIDTH)
+    RowMajorMatrix::new(trace_values, trace_width)
 }
 
-fn main () {
-    let env_filter = EnvFilter::builder()
-    .with_default_directive(LevelFilter::INFO.into())
-    .from_env_lossy();
-
-    Registry::default()
-        .with(env_filter)
-        .with(ForestLayer::default())
-        .init();
-
-    const HEIGHT: usize = 1 << 3;
+fn benchmark(num_rows: usize, num_cols: usize) {
+    println!("Running {} rows and {} cols", num_rows, num_cols);
 
     type Val = BabyBear;
     type Domain = Val;
@@ -120,9 +114,30 @@ fn main () {
     let pcs = Pcs::new(dft, val_mmcs, ldt);
     let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let trace = random_valid_trace::<Val>(HEIGHT);
-    let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
+    let trace = random_valid_trace::<Val>(num_rows, col_count_to_trace_width(num_cols));
+    let ma = MulAir { repetitions: num_cols};
+
+    let proof = prove::<MyConfig, _>(&config, &ma, &mut challenger, trace);
 
     let mut challenger = Challenger::new(perm);
-    let _ = verify(&config, &MulAir, &mut challenger, &proof);
+    let _ = verify(&config, &ma, &mut challenger, &proof);
+}
+
+fn main () {
+    let env_filter = EnvFilter::builder()
+    .with_default_directive(LevelFilter::INFO.into())
+    .from_env_lossy();
+
+    Registry::default()
+        .with(env_filter)
+        .with(ForestLayer::default())
+        .init();
+
+    let powers = [12, 15, 18];
+    let columns = [200, 300, 400];
+    for p in powers {
+        for c in columns {
+            benchmark(1 << p, c);
+        }
+    }
 }
