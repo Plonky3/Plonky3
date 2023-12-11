@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanSample, DuplexChallenger};
 use p3_commit::{DirectMmcs, ExtensionMmcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
@@ -52,12 +52,18 @@ fn test_fri_ldt() {
     let dims = ldes.iter().map(|m| m.dimensions()).collect_vec();
     let (comm, data) = val_mmcs.commit(ldes);
 
-    let mut challenger = Challenger::new(perm.clone());
-    let proof = ldt.prove(&[val_mmcs.clone()], &[&data], &mut challenger);
+    let mut p_challenger = Challenger::new(perm.clone());
+    let proof = ldt.prove(&[val_mmcs.clone()], &[&data], &mut p_challenger);
 
-    let mut challenger = Challenger::new(perm);
-    ldt.verify(&[val_mmcs], &[dims], &[comm], &proof, &mut challenger)
+    let mut v_challenger = Challenger::new(perm);
+    ldt.verify(&[val_mmcs], &[dims], &[comm], &proof, &mut v_challenger)
         .unwrap();
+
+    assert_eq!(
+        p_challenger.sample(),
+        v_challenger.sample(),
+        "prover and verifier transcript have same state after FRI"
+    );
 }
 
 /*

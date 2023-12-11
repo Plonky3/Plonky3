@@ -1,11 +1,16 @@
+use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits};
+use p3_commit::Mmcs;
+use p3_matrix::Dimensions;
 
 use crate::{FriConfig, FriProof, QueryProof};
 
 pub(crate) fn verify<FC: FriConfig>(
     config: &FC,
     input_mmcs: &[FC::InputMmcs],
+    _input_dims: &[Vec<Dimensions>],
+    _input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
     proof: &FriProof<FC>,
     challenger: &mut FC::Challenger,
 ) -> Result<(), ()> {
