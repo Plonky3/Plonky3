@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 use p3_field::{PackedField, TwoAdicField};
+use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_util::{ceil_div_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -70,6 +71,22 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
 
     res.truncate(half_n);
     res
+}
+
+#[instrument(skip_all, level = "debug")]
+pub fn fold_even_odd_2<F: TwoAdicField>(poly: &RowMajorMatrix<F>, beta: F) -> Vec<F> {
+    assert_eq!(poly.width(), 2);
+    let g_inv = F::two_adic_generator(log2_strict_usize(poly.height()) + 1).inverse();
+    let one_half = F::two().inverse();
+    let half_beta = beta * one_half;
+
+    // beta/2 times successive powers of g_inv
+    let powers = g_inv.shifted_powers(half_beta);
+
+    poly.rows()
+        .zip(powers)
+        .map(|(row, power)| (one_half + power) * row[0] + (one_half - power) * row[1])
+        .collect()
 }
 
 #[cfg(test)]

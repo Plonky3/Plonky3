@@ -2,7 +2,7 @@ use itertools::Itertools;
 use p3_baby_bear::BabyBear;
 use p3_challenger::{CanSample, DuplexChallenger};
 use p3_commit::{DirectMmcs, ExtensionMmcs};
-use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_dft::{reverse_matrix_index_bits, Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
 use p3_fri::{FriConfigImpl, FriLdt};
@@ -13,7 +13,8 @@ use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::thread_rng;
+use rand::{thread_rng, Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
@@ -27,9 +28,9 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16>;
 type MyFriConfig = FriConfigImpl<Val, Challenge, ValMmcs, ChallengeMmcs, Challenger>;
 
-fn get_ldt_for_testing() -> (Perm, ValMmcs, FriLdt<MyFriConfig>) {
+fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, ValMmcs, FriLdt<MyFriConfig>) {
     let mds = MyMds::default();
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
@@ -40,13 +41,16 @@ fn get_ldt_for_testing() -> (Perm, ValMmcs, FriLdt<MyFriConfig>) {
 
 #[test]
 fn test_fri_ldt() {
-    let (perm, val_mmcs, ldt) = get_ldt_for_testing();
+    let mut rng = ChaCha20Rng::seed_from_u64(0);
+    let (perm, val_mmcs, ldt) = get_ldt_for_testing(&mut rng);
     let dft = Radix2Dit;
 
-    let ldes: Vec<RowMajorMatrix<Val>> = (3..4)
+    let ldes: Vec<RowMajorMatrix<Val>> = (3..5)
         .map(|deg_bits| {
-            let evals = RowMajorMatrix::<Val>::rand_nonzero(&mut thread_rng(), 1 << deg_bits, 4);
-            dft.coset_lde_batch(evals, 1, Val::one())
+            let evals = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << deg_bits, 4);
+            let mut lde = dft.coset_lde_batch(evals, 1, Val::one());
+            // reverse_matrix_index_bits(&mut lde);
+            lde
         })
         .collect();
     let dims = ldes.iter().map(|m| m.dimensions()).collect_vec();
@@ -57,7 +61,7 @@ fn test_fri_ldt() {
 
     let mut v_challenger = Challenger::new(perm);
     ldt.verify(&[val_mmcs], &[dims], &[comm], &proof, &mut v_challenger)
-        .unwrap();
+        .expect("verification failed");
 
     assert_eq!(
         p_challenger.sample(),

@@ -66,13 +66,16 @@ where
             .map(|matrix| {
                 let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
-                let reduced_index = index >> bits_reduced;
+                // let reduced_index = index >> bits_reduced;
+                let reduced_index = index & ((1 << log2_height) - 1);
                 matrix.row(reduced_index).collect()
             })
             .collect_vec();
 
         let proof = (0..log_max_height)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
+            // TODO
+            // .map(|i| prover_data.digest_layers[i][(index & ((1 << (log_max_height - i)) - 1)) ^ 1])
             .collect();
 
         (openings, proof)
