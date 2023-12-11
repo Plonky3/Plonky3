@@ -16,7 +16,6 @@ mod config;
 mod fold_even_odd;
 mod matrix_reducer;
 mod proof;
-mod query_index;
 mod prover;
 mod verifier;
 

@@ -1,7 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::izip;
+use itertools::{izip, Itertools};
+use p3_dft::reverse_slice_index_bits;
 use p3_field::{PackedField, TwoAdicField};
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_util::{ceil_div_usize, log2_strict_usize};
@@ -81,7 +82,11 @@ pub fn fold_even_odd_2<F: TwoAdicField>(poly: &RowMajorMatrix<F>, beta: F) -> Ve
     let half_beta = beta * one_half;
 
     // beta/2 times successive powers of g_inv
-    let powers = g_inv.shifted_powers(half_beta);
+    let mut powers = g_inv
+        .shifted_powers(half_beta)
+        .take(poly.height())
+        .collect_vec();
+    reverse_slice_index_bits(&mut powers);
 
     poly.rows()
         .zip(powers)

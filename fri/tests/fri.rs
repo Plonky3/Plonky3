@@ -49,7 +49,7 @@ fn test_fri_ldt() {
         .map(|deg_bits| {
             let evals = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << deg_bits, 4);
             let mut lde = dft.coset_lde_batch(evals, 1, Val::one());
-            // reverse_matrix_index_bits(&mut lde);
+            reverse_matrix_index_bits(&mut lde);
             lde
         })
         .collect();

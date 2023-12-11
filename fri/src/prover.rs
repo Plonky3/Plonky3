@@ -11,7 +11,6 @@ use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
 use crate::matrix_reducer::MatrixReducer;
-use crate::query_index::query_index_sibling;
 use crate::{fold_even_odd_2, CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
@@ -82,21 +81,16 @@ fn answer_query<FC: FriConfig>(
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            /*
             let index_i = index >> i;
             let index_i_sibling = index_i ^ 1;
             let index_pair = index_i >> 1;
-            */
-            let index_sibling = query_index_sibling(index, log_max_height - i);
-            let index_pair = index_sibling >> 1;
 
             let (mut opened_rows, opening_proof) =
                 config.commit_phase_mmcs().open_batch(index_pair, commit);
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
-            // dbg!(opened_row[index_i % 2]);
-            let sibling_value = opened_row[index_sibling % 2];
+            let sibling_value = opened_row[index_i_sibling % 2];
 
             CommitPhaseProofStep {
                 sibling_value,
@@ -141,8 +135,8 @@ fn commit_phase<FC: FriConfig>(
     for log_folded_height in (config.log_blowup()..log_max_height).rev() {
         let folded_height = 1 << log_folded_height;
         // TODO: replace with a transposed matrix view
-        let leaves = RowMajorMatrix::new(current.clone(), folded_height).transpose();
-        // let leaves = RowMajorMatrix::new(current.clone(), 2);
+        // let leaves = RowMajorMatrix::new(current.clone(), folded_height).transpose();
+        let leaves = RowMajorMatrix::new(current.clone(), 2);
         dbg!(&leaves);
         let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves.clone());
         challenger.observe(commit.clone());
@@ -150,8 +144,8 @@ fn commit_phase<FC: FriConfig>(
         data.push(prover_data);
 
         let beta: FC::Challenge = challenger.sample_ext_element();
-        current = fold_even_odd(&current, beta);
-        // current = fold_even_odd_2(&leaves, beta);
+        // current = fold_even_odd(&current, beta);
+        current = fold_even_odd_2(&leaves, beta);
 
         let matrices = &matrices_by_log_height[log_folded_height];
         if !matrices.is_empty() {

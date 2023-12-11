@@ -47,7 +47,7 @@ pub(crate) fn verify<FC: FriConfig>(
             log_max_height,
         )?;
 
-        verify_query(
+        let folded_eval = verify_query(
             config,
             &proof.commit_phase_commits,
             index,
@@ -56,6 +56,8 @@ pub(crate) fn verify<FC: FriConfig>(
             &reduced_openings,
             log_max_height,
         )?;
+
+        assert_eq!(folded_eval, proof.final_poly);
     }
 
     Ok(())
@@ -75,15 +77,14 @@ fn verify_input<FC: FriConfig>(
     for (mmcs, commit, dims, opening) in
         izip!(input_mmcs, input_commits, input_dims, input_openings)
     {
-        let v = mmcs.verify_batch(
+        mmcs.verify_batch(
             commit,
             dims,
             index,
             &opening.opened_values,
             &opening.opening_proof,
-        );
-        dbg!(v);
-        // .unwrap();
+        )
+        .unwrap();
         // .map_err(|_e| ())?;
         dbg!(dims, opening.opened_values.len());
         for (mat_dims, mat_opening) in izip!(dims, &opening.opened_values) {
@@ -107,12 +108,12 @@ fn verify_input<FC: FriConfig>(
 fn verify_query<FC: FriConfig>(
     config: &FC,
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment],
-    index: usize,
+    mut index: usize,
     proof: &QueryProof<FC>,
     betas: &[FC::Challenge],
     reduced_openings: &[FC::Challenge],
     log_max_height: usize,
-) -> Result<(), ()> {
+) -> Result<FC::Challenge, ()> {
     let mut folded_eval = FC::Challenge::zero();
     // let mut folded_eval = *reduced_openings.last().unwrap();
     // let mut folded_eval = *reduced_openings.last().unwrap();
@@ -128,8 +129,10 @@ fn verify_query<FC: FriConfig>(
         folded_eval += reduced_openings[log_height];
         dbg!(folded_eval);
 
-        let index_sibling = query_index_sibling(index, log_height);
-        let index_pair = index_sibling >> 1;
+        // let index_sibling = query_index_sibling(index, log_height);
+        // let index_pair = index_sibling >> 1;
+        let index_sibling = index ^ 1;
+        let index_pair = index >> 1;
         println!("i={i} log_height={log_height} index={index:#08b} index_pair={index_pair:#08b}");
 
         let mut evals = vec![folded_eval; 2];
@@ -167,8 +170,9 @@ fn verify_query<FC: FriConfig>(
         }
         */
 
+        index = index_pair;
         x = x.square();
     }
 
-    Ok(())
+    Ok(folded_eval)
 }
