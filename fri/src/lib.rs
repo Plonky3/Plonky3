@@ -4,8 +4,10 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use p3_commit::Mmcs;
 use p3_ldt::{Ldt, LdtBasedPcs};
+use p3_matrix::Dimensions;
 
 use crate::prover::prove;
 use crate::verifier::verify;
@@ -45,6 +47,7 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     fn verify(
         &self,
         input_mmcs: &[FC::InputMmcs],
+        _input_dims: &[Vec<Dimensions>],
         _input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,

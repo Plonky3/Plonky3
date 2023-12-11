@@ -12,7 +12,7 @@ use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::{MatrixRowSlices, MatrixRows};
+use p3_matrix::{Dimensions, MatrixRowSlices, MatrixRows};
 use tracing::{info_span, instrument};
 
 use crate::quotient::QuotientMmcs;
@@ -191,6 +191,7 @@ where
     fn verify_multi_batches(
         &self,
         _commits_and_points: &[(Self::Commitment, &[EF])],
+        _dims: &[Vec<Dimensions>],
         _values: OpenedValues<EF>,
         _proof: &Self::Proof,
         _challenger: &mut Challenger,

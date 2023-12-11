@@ -5,10 +5,12 @@
 mod ldt_based_pcs;
 mod quotient;
 
+use alloc::vec::Vec;
 pub use ldt_based_pcs::*;
 use p3_challenger::FieldChallenger;
 use p3_commit::Mmcs;
 use p3_field::Field;
+use p3_matrix::Dimensions;
 pub use quotient::*;
 
 extern crate alloc;
@@ -40,6 +42,7 @@ where
     fn verify(
         &self,
         input_mmcs: &[M],
+        input_dims: &[Vec<Dimensions>],
         input_commits: &[M::Commitment],
         proof: &Self::Proof,
         challenger: &mut Challenger,
