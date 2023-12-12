@@ -1,10 +1,11 @@
 //! An implementation of the FRI low-degree test (LDT).
 
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 
 use alloc::vec::Vec;
+
 use p3_commit::Mmcs;
 use p3_ldt::{Ldt, LdtBasedPcs};
 use p3_matrix::Dimensions;

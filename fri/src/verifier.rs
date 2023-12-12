@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
 use itertools::izip;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::Mmcs;
