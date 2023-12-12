@@ -61,6 +61,21 @@ pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
         .0
 }
 
+pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
+    let n = vals.len();
+    if n == 0 {
+        return;
+    }
+    let log_n = log2_strict_usize(n);
+
+    for i in 0..n {
+        let j = reverse_bits_len(i, log_n);
+        if i < j {
+            vals.swap(i, j);
+        }
+    }
+}
+
 #[inline(always)]
 pub fn assume(p: bool) {
     debug_assert!(p);

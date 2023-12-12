@@ -14,7 +14,7 @@ use p3_field::{
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 
 /// A wrapper around an Inner MMCS, which transforms each inner value to (inner - r(X)) / m(X),
 /// where m(X) is the minimal polynomial of the opening point, and r(X) = inner mod m(X).
@@ -169,11 +169,11 @@ where
 
         let quotients = izip!(inner_values, &self.openings, matrix_heights)
             .map(|(inner_row, openings_for_mat, height)| {
-                let log2_height = log2_strict_usize(height);
-                let bits_reduced = log_max_height - log2_height;
-                let reduced_index = index >> bits_reduced;
+                let log_height = log2_strict_usize(height);
+                let bits_reduced = log_max_height - log_height;
+                let reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
                 let x = self.coset_shift
-                    * F::two_adic_generator(log2_height).exp_u64(reduced_index as u64);
+                    * F::two_adic_generator(log_height).exp_u64(reduced_index as u64);
 
                 let m_invs = batch_multiplicative_inverse(
                     &openings_for_mat
@@ -195,10 +195,11 @@ where
             .zip(self.openings.clone())
             .map(|(inner, openings)| {
                 let height = inner.height();
-                let log2_height = log2_strict_usize(height);
-                let g = F::two_adic_generator(log2_height);
-                let subgroup =
+                let log_height = log2_strict_usize(height);
+                let g = F::two_adic_generator(log_height);
+                let mut subgroup =
                     cyclic_subgroup_coset_known_order(g, self.coset_shift, height).collect_vec();
+                reverse_slice_index_bits(&mut subgroup);
 
                 let denominators: Vec<F> = subgroup
                     .iter()
@@ -245,7 +246,7 @@ where
             .map(|(quotient_row, openings, dims)| {
                 let log_height = log2_strict_usize(dims.height);
                 let bits_reduced = log_max_height - log_height;
-                let reduced_index = index >> bits_reduced;
+                let reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
                 let x = self.coset_shift
                     * F::two_adic_generator(log_height).exp_u64(reduced_index as u64);
 
@@ -387,7 +388,7 @@ mod tests {
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{AbstractExtensionField, AbstractField};
-    use p3_interpolation::interpolate_subgroup;
+    use p3_interpolation::{interpolate_coset, interpolate_subgroup};
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
     use rand::distributions::Standard;
@@ -398,7 +399,7 @@ mod tests {
 
     type F = BabyBear;
     type F4 = BinomialExtensionField<F, 4>;
-    type F5 = BinomialExtensionField<F, 4>;
+    type F5 = BinomialExtensionField<F, 5>;
     type MyHash = SerializingHasher32<Blake3>;
     type MyCompress = CompressionFunctionFromHasher<F, MyHash, 2, 8>;
     type ValMmcs = FieldMerkleTreeMmcs<F, MyHash, MyCompress, 8>;
@@ -407,7 +408,7 @@ mod tests {
     fn test_remainder_polys() {
         let trace: RowMajorMatrix<F> = RowMajorMatrix::rand(&mut thread_rng(), 32, 5);
         let point: F4 = thread_rng().gen();
-        let values = interpolate_subgroup(&trace, point);
+        let values = interpolate_subgroup::<_, _, _, false>(&trace, point);
         let rs = Opening::compute_remainder_polys(point, &values);
         for (r, y) in rs.into_iter().zip(values) {
             // r(alpha) = p(alpha)
@@ -424,9 +425,12 @@ mod tests {
     ) where
         Standard: Distribution<EF>,
     {
+        dbg!(num_openings, trace_sizes);
         let hash = MyHash::new(Blake3 {});
         let compress = MyCompress::new(hash);
         let inner = ValMmcs::new(hash, compress);
+
+        let shift = F::generator();
 
         let alphas: Vec<EF> = (0..num_openings).map(|_| thread_rng().gen()).collect_vec();
 
@@ -437,11 +441,20 @@ mod tests {
             .iter()
             .map(|&(height, width)| {
                 let trace = RowMajorMatrix::<F>::rand_nonzero(&mut thread_rng(), height, width);
-                let lde = Radix2Dit.coset_lde_batch(trace.clone(), 1, F::generator());
+                let lde = Radix2Dit.coset_lde_batch_bitrev::<false, true>(trace.clone(), 1, shift);
                 let dims = lde.dimensions();
+                let lde_truncated = RowMajorMatrix::new(
+                    lde.rows().take(height).flatten().copied().collect_vec(),
+                    width,
+                );
                 let openings = alphas
                     .iter()
-                    .map(|&alpha| Opening::new(alpha, interpolate_subgroup(&trace, alpha)))
+                    .map(|&alpha| {
+                        Opening::new(
+                            alpha,
+                            interpolate_coset::<_, _, _, true>(&lde_truncated, shift, alpha),
+                        )
+                    })
                     .collect_vec();
                 (trace, lde, dims, openings)
             })
@@ -451,7 +464,7 @@ mod tests {
         let mmcs = QuotientMmcs::<F, EF, _> {
             inner,
             openings,
-            coset_shift: F::generator(),
+            coset_shift: shift,
             _phantom: PhantomData,
         };
 
@@ -478,7 +491,7 @@ mod tests {
             assert_eq!(mat.row_slice(reduced_index), &opened_values_for_mat);
 
             // check low degree
-            let poly = Radix2Dit.idft_batch(mat);
+            let poly = Radix2Dit.idft_batch_bitrev::<true>(mat);
             let expected_degree = trace.height() - <EF as AbstractExtensionField<F>>::D;
             assert!((expected_degree..poly.height()).all(|r| poly.row(r).all(|x| x.is_zero())));
         }

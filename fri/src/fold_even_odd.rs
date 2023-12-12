@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_dft::reverse_slice_index_bits;
 use p3_field::TwoAdicField;
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_util::log2_strict_usize;
+use p3_util::reverse_slice_index_bits;
 use tracing::instrument;
 
 /// Fold a polynomial
@@ -66,13 +66,13 @@ mod tests {
         let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
 
         let dft = Radix2Dit;
-        let evals = dft.dft_bit_reversed(coeffs.clone());
+        let evals = dft.dft_bitrev::<false, true>(coeffs.clone());
 
         let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
-        let even_evals = dft.dft_bit_reversed(even_coeffs);
+        let even_evals = dft.dft_bitrev::<false, true>(even_coeffs);
 
         let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
-        let odd_evals = dft.dft_bit_reversed(odd_coeffs);
+        let odd_evals = dft.dft_bitrev::<false, true>(odd_coeffs);
 
         let beta = rng.gen::<F>();
         let expected = izip!(even_evals, odd_evals)

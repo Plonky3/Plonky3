@@ -10,7 +10,6 @@ use core::fmt::{Debug, Display, Formatter};
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
 
-pub mod bit_rev;
 pub mod dense;
 pub mod mul;
 pub mod sparse;

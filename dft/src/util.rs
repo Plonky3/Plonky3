@@ -6,21 +6,6 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
-pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
-    let n = vals.len();
-    if n == 0 {
-        return;
-    }
-    let log_n = log2_strict_usize(n);
-
-    for i in 0..n {
-        let j = reverse_bits_len(i, log_n);
-        if i < j {
-            vals.swap(i, j);
-        }
-    }
-}
-
 pub fn reverse_matrix_index_bits<F>(mat: &mut RowMajorMatrix<F>) {
     let w = mat.width();
     let h = mat.height();

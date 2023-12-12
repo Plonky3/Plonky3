@@ -76,8 +76,11 @@ where
                 .into_iter()
                 .map(|poly| {
                     let input = poly.to_row_major_matrix();
-                    self.dft
-                        .coset_lde_batch_bit_reversed(input, self.ldt.log_blowup(), shift)
+                    self.dft.coset_lde_batch_bitrev::<false, true>(
+                        input,
+                        self.ldt.log_blowup(),
+                        shift,
+                    )
                 })
                 .collect()
         });
@@ -129,9 +132,10 @@ where
             matrices
                 .iter()
                 .map(|mat| {
+                    // TODO: truncate instead of stride
                     let low_coset = mat.vertically_strided(self.ldt.blowup(), 0);
                     let shift = Val::generator();
-                    interpolate_coset(&low_coset, shift, point)
+                    interpolate_coset::<_, _, _, true>(&low_coset, shift, point)
                 })
                 .collect::<OpenedValuesForPoint<EF>>()
         };

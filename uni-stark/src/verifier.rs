@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::UnivariatePcs;
-use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
+use p3_util::reverse_slice_index_bits;
 
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
 

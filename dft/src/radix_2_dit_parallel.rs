@@ -4,11 +4,11 @@ use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, ParallelIterator};
-use p3_util::{log2_strict_usize, reverse_bits};
+use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 
 use crate::butterflies::dit_butterfly;
 use crate::util::{bit_reversed_zero_pad, reverse_matrix_index_bits};
-use crate::{reverse_slice_index_bits, TwoAdicSubgroupDft};
+use crate::TwoAdicSubgroupDft;
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -21,12 +21,10 @@ use crate::{reverse_slice_index_bits, TwoAdicSubgroupDft};
 pub struct Radix2DitParallel;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        mat = self.dft_batch_bit_reversed(mat);
-        reverse_matrix_index_bits(&mut mat);
-        mat
-    }
-    fn dft_batch_bit_reversed(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    fn dft_batch_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+    ) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
@@ -36,29 +34,23 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let mid = log_h / 2;
 
         // The first half looks like a normal DIT.
-        reverse_matrix_index_bits(&mut mat);
+        if !IN_BITREV {
+            reverse_matrix_index_bits(&mut mat);
+        }
         par_dit_layer(&mut mat, mid, &twiddles);
 
         // For the second half, we flip the DIT, working in bit-reversed order.
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
+        if !OUT_BITREV {
+            reverse_matrix_index_bits(&mut mat);
+        }
 
         mat
     }
 
-    fn coset_lde_batch(
-        &self,
-        mut mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-    ) -> RowMajorMatrix<F> {
-        mat = self.coset_lde_batch_bit_reversed(mat, added_bits, shift);
-        reverse_matrix_index_bits(&mut mat);
-        mat
-    }
-
-    fn coset_lde_batch_bit_reversed(
+    fn coset_lde_batch_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(
         &self,
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
@@ -75,7 +67,9 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let mut twiddles_inv: Vec<F> = root_inv.powers().take(h / 2).collect();
 
         // The first half looks like a normal DIT.
-        reverse_matrix_index_bits(&mut mat);
+        if !IN_BITREV {
+            reverse_matrix_index_bits(&mut mat);
+        }
         par_dit_layer(&mut mat, mid, &twiddles_inv);
 
         // For the second half, we flip the DIT, working in bit-reversed order.
@@ -114,6 +108,10 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
+
+        if !OUT_BITREV {
+            reverse_matrix_index_bits(&mut mat);
+        }
 
         mat
     }

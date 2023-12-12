@@ -15,17 +15,25 @@ type Ext = Mersenne31Complex<Base>;
 pub struct Mersenne31ComplexRadix2Dit;
 
 impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
+    fn dft_batch_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(
+        &self,
+        mut mat: RowMajorMatrix<Ext>,
+    ) -> RowMajorMatrix<Ext> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
         let root = Ext::two_adic_generator(log_h);
         let twiddles: Vec<Ext> = root.powers().take(h / 2).collect();
 
+        if !IN_BITREV {
+            reverse_matrix_index_bits(&mut mat);
+        }
         // DIT butterfly
-        reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
             dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
+        }
+        if OUT_BITREV {
+            reverse_matrix_index_bits(&mut mat);
         }
         mat
     }
