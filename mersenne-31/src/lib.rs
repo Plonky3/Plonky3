@@ -266,7 +266,7 @@ impl PrimeField64 for Mersenne31 {
         // In order not to overflow a u64, we must have sum(u) <= 2^32.
         debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
 
-        // We panic here, see assumptions for current method in `PrimeField64` trait definition
+        // PANICS: see assumptions for current method in `PrimeField64` trait definition
         let mut dot = u[0].checked_mul(v[0].value as u64).unwrap_or_else(|| {
             panic!(
                 "PrimeField64::linear_combination_u64: multiplication overflow for {} * {} at index 0",
