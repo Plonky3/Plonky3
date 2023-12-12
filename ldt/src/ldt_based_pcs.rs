@@ -12,7 +12,7 @@ use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::{Dimensions, MatrixRowSlices, MatrixRows};
+use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use tracing::{info_span, instrument};
 
 use crate::quotient::QuotientMmcs;
@@ -65,7 +65,7 @@ where
         self.mmcs.get_matrices(prover_data)
     }
 
-    fn commit_shifted_batches(
+    fn commit_shifted_batches<const IN_BITREV: bool>(
         &self,
         polynomials: Vec<In>,
         coset_shift: Val,
@@ -76,7 +76,7 @@ where
                 .into_iter()
                 .map(|poly| {
                     let input = poly.to_row_major_matrix();
-                    self.dft.coset_lde_batch_bitrev::<false, true>(
+                    self.dft.coset_lde_batch_bitrev::<IN_BITREV, true>(
                         input,
                         self.ldt.log_blowup(),
                         shift,
@@ -106,7 +106,7 @@ where
     type Error = L::Error;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(polynomials, Val::one())
+        self.commit_shifted_batches::<false>(polynomials, Val::one())
     }
 }
 
@@ -127,15 +127,16 @@ where
         prover_data_and_points: &[(&Self::ProverData, &[EF])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof) {
+        let coset_shift: Val =
+            <Self as UnivariatePcsWithLde<Val, EF, In, Challenger>>::coset_shift(self);
+
         // Use Barycentric interpolation to evaluate each matrix at a given point.
         let eval_at_point = |matrices: &[M::Mat<'_>], point| {
             matrices
                 .iter()
                 .map(|mat| {
-                    // TODO: truncate instead of stride
-                    let low_coset = mat.vertically_strided(self.ldt.blowup(), 0);
-                    let shift = Val::generator();
-                    interpolate_coset::<_, _, _, true>(&low_coset, shift, point)
+                    let (low_coset, _) = mat.split_rows(mat.height() >> self.ldt.log_blowup());
+                    interpolate_coset::<_, _, _, true>(&low_coset, coset_shift, point)
                 })
                 .collect::<OpenedValuesForPoint<EF>>()
         };
@@ -156,9 +157,6 @@ where
 
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
             prover_data_and_points.iter().copied().unzip();
-
-        let coset_shift: Val =
-            <Self as UnivariatePcsWithLde<Val, EF, In, Challenger>>::coset_shift(self);
 
         let quotient_mmcs = all_points
             .into_iter()

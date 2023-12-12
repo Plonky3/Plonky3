@@ -4,12 +4,13 @@ use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
+use p3_dft::reverse_matrix_index_bits;
 use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixGet};
+use p3_matrix::{Matrix, MatrixGet, MatrixRows};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
@@ -52,6 +53,11 @@ where
     let mut trace_ldes = pcs.get_ldes(&trace_data);
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
+
+    // TEMP: un-bit-reverse the trace lde
+    let mut trace_lde = trace_lde.to_row_major_matrix();
+    reverse_matrix_index_bits(&mut trace_lde);
+
     let quotient_values = quotient_values(
         config,
         air,
@@ -70,7 +76,7 @@ where
     });
     let (quotient_commit, quotient_data) =
         info_span!("commit to quotient poly chunks").in_scope(|| {
-            pcs.commit_shifted_batch(
+            pcs.commit_shifted_batch::<false>(
                 quotient_chunks_flattened,
                 pcs.coset_shift().exp_power_of_2(log_quotient_degree),
             )

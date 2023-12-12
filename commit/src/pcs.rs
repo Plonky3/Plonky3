@@ -83,18 +83,18 @@ where
         'a: 'b;
 
     // Commit to polys that are already defined over a coset.
-    fn commit_shifted_batches(
+    fn commit_shifted_batches<const IN_BITREV: bool>(
         &self,
         polynomials: Vec<In>,
         coset_shift: Val,
     ) -> (Self::Commitment, Self::ProverData);
 
-    fn commit_shifted_batch(
+    fn commit_shifted_batch<const IN_BITREV: bool>(
         &self,
         polynomials: In,
         coset_shift: Val,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(vec![polynomials], coset_shift)
+        self.commit_shifted_batches::<IN_BITREV>(vec![polynomials], coset_shift)
     }
 }
 
