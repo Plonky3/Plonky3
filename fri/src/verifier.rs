@@ -1,14 +1,11 @@
-use std::debug_assert_eq;
-
 use alloc::vec;
 use alloc::vec::Vec;
 use itertools::izip;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::Mmcs;
-use p3_dft::{reverse_bits, reverse_bits_len};
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::{FriConfig, FriProof, InputOpening, QueryProof};
 

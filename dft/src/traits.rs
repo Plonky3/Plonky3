@@ -4,7 +4,10 @@ use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
-use crate::util::{divide_by_height, swap_rows};
+use crate::{
+    reverse_matrix_index_bits,
+    util::{divide_by_height, swap_rows},
+};
 
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Compute the discrete Fourier transform (DFT) `vec`.
@@ -12,8 +15,22 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         self.dft_batch(RowMajorMatrix::new(vec, 1)).values
     }
 
+    fn dft_bit_reversed(&self, vec: Vec<F>) -> Vec<F> {
+        self.dft_batch_bit_reversed(RowMajorMatrix::new(vec, 1))
+            .values
+    }
+
     /// Compute the discrete Fourier transform (DFT) of each column in `mat`.
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F>;
+
+    /// `dft_batch`, but return the result in bit-reversed order.
+    fn dft_batch_bit_reversed(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        let mut m = self.dft_batch(mat);
+        // This is just for convenience. Any serious Dft implementation should override this method
+        // to avoid extra permutations.
+        reverse_matrix_index_bits(&mut m);
+        m
+    }
 
     /// Compute the "coset DFT" of `vec`. This can be viewed as interpolation onto a coset of a
     /// multiplicative subgroup, rather than the subgroup itself.
@@ -92,5 +109,16 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             .values
             .resize(coeffs.values.len() << added_bits, F::zero());
         self.coset_dft_batch(coeffs, shift)
+    }
+
+    fn coset_lde_batch_bit_reversed(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+    ) -> RowMajorMatrix<F> {
+        mat = self.coset_lde_batch(mat, added_bits, shift);
+        reverse_matrix_index_bits(&mut mat);
+        mat
     }
 }

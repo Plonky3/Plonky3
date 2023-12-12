@@ -77,7 +77,7 @@ where
                 .map(|poly| {
                     let input = poly.to_row_major_matrix();
                     self.dft
-                        .coset_lde_batch(input, self.ldt.log_blowup(), shift)
+                        .coset_lde_batch_bit_reversed(input, self.ldt.log_blowup(), shift)
                 })
                 .collect()
         });

@@ -5,13 +5,13 @@ use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixTranspose};
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
 use crate::matrix_reducer::MatrixReducer;
-use crate::{fold_even_odd_2, CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
 pub(crate) fn prove<FC: FriConfig>(
@@ -135,14 +135,13 @@ fn commit_phase<FC: FriConfig>(
         let folded_height = 1 << log_folded_height;
         // TODO: avoid cloning
         let leaves = RowMajorMatrix::new(current.clone(), 2);
-        let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves.clone());
+        let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 
         let beta: FC::Challenge = challenger.sample_ext_element();
-        // current = fold_even_odd(&current, beta);
-        current = fold_even_odd_2(&leaves, beta);
+        current = fold_even_odd(current, beta);
 
         let matrices = &matrices_by_log_height[log_folded_height];
         if !matrices.is_empty() {
