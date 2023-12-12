@@ -76,7 +76,6 @@ fn answer_query<FC: FriConfig>(
         })
         .collect();
 
-    let log_max_height = commit_phase_commits.len() + config.log_blowup();
     let commit_phase_openings = commit_phase_commits
         .iter()
         .enumerate()
@@ -134,10 +133,8 @@ fn commit_phase<FC: FriConfig>(
 
     for log_folded_height in (config.log_blowup()..log_max_height).rev() {
         let folded_height = 1 << log_folded_height;
-        // TODO: replace with a transposed matrix view
-        // let leaves = RowMajorMatrix::new(current.clone(), folded_height).transpose();
+        // TODO: avoid cloning
         let leaves = RowMajorMatrix::new(current.clone(), 2);
-        dbg!(&leaves);
         let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves.clone());
         challenger.observe(commit.clone());
         commits.push(commit);

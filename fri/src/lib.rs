@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use p3_commit::Mmcs;
 use p3_ldt::{Ldt, LdtBasedPcs};
 use p3_matrix::Dimensions;
+use verifier::VerificationErrorForFriConfig;
 
 use crate::prover::prove;
 use crate::verifier::verify;
@@ -29,7 +30,7 @@ pub struct FriLdt<FC: FriConfig> {
 
 impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
-    type Error = ();
+    type Error = VerificationErrorForFriConfig<FC>;
 
     fn log_blowup(&self) -> usize {
         self.config.log_blowup()

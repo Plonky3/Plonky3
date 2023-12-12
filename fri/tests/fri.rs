@@ -13,7 +13,7 @@ use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 type Val = BabyBear;
@@ -35,19 +35,17 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, ValMmcs, FriLdt<MyFriConfi
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let fri_config = MyFriConfig::new(1, challenge_mmcs);
+    let fri_config = MyFriConfig::new(10, challenge_mmcs);
     (perm, val_mmcs, FriLdt { config: fri_config })
 }
 
-#[test]
-fn test_fri_ldt() {
-    let mut rng = ChaCha20Rng::seed_from_u64(0);
-    let (perm, val_mmcs, ldt) = get_ldt_for_testing(&mut rng);
+fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
+    let (perm, val_mmcs, ldt) = get_ldt_for_testing(rng);
     let dft = Radix2Dit;
 
-    let ldes: Vec<RowMajorMatrix<Val>> = (3..5)
+    let ldes: Vec<RowMajorMatrix<Val>> = (3..6)
         .map(|deg_bits| {
-            let evals = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << deg_bits, 4);
+            let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 4);
             let mut lde = dft.coset_lde_batch(evals, 1, Val::one());
             reverse_matrix_index_bits(&mut lde);
             lde
@@ -70,27 +68,11 @@ fn test_fri_ldt() {
     );
 }
 
-/*
 #[test]
-#[ignore]
-fn test_fri_ldt_multiple_degrees() {
-    let (perm, challenge_mmcs, ldt) = get_ldt_for_testing();
-    let dft = Radix2Dit;
-
-    let ldes: Vec<RowMajorMatrix<Challenge>> = (3..5)
-        .map(|deg_bits| {
-            let evals = RowMajorMatrix::<Val>::rand_nonzero(&mut thread_rng(), 1 << deg_bits, 4);
-            dft.coset_lde_batch(evals, 1, Val::one()).to_ext()
-        })
-        .collect();
-    let dims = ldes.iter().map(|m| m.dimensions()).collect_vec();
-    let (comm, data) = challenge_mmcs.commit(ldes);
-
-    let mut challenger = Challenger::new(perm.clone());
-    let proof = ldt.prove(&[challenge_mmcs.clone()], &[&data], &mut challenger);
-
-    let mut challenger = Challenger::new(perm);
-    ldt.verify(&[challenge_mmcs], &[dims], &[comm], &proof, &mut challenger)
-        .unwrap();
+fn test_fri_ldt() {
+    // FRI is kind of flaky depending on indexing luck
+    for i in 0..20 {
+        let mut rng = ChaCha20Rng::seed_from_u64(i);
+        do_test_fri_ldt(&mut rng);
+    }
 }
-*/
