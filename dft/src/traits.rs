@@ -88,7 +88,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         shift: F,
     ) -> RowMajorMatrix<F> {
         let mut coeffs = self.idft_batch(mat);
-        // SAFETY: it panics if the new resized length overflows
+        // PANICS: possible panic if the new resized length overflows
         coeffs.values.resize(
             coeffs
                 .values
