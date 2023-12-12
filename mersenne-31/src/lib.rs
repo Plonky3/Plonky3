@@ -266,9 +266,20 @@ impl PrimeField64 for Mersenne31 {
         // In order not to overflow a u64, we must have sum(u) <= 2^32.
         debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
 
-        let mut dot = u[0] * v[0].value as u64;
+        // We panic here, see assumptions for current method in `PrimeField64` trait definition
+        let mut dot = u[0].checked_mul(v[0].value as u64).unwrap_or_else(|| {
+            panic!(
+                "PrimeField64::linear_combination_u64: multiplication overflow for {} * {} at index 0",
+                u[0], v[0].value
+            )
+        });
         for i in 1..N {
-            dot += u[i] * v[i].value as u64;
+            dot += u[i].checked_mul(v[i].value as u64).unwrap_or_else(|| {
+                panic!(
+                    "PrimeField64::linear_combination_u64: multiplication overflow for {} * {}, at index {i}",
+                    u[i], v[i].value
+                )
+            });
         }
         Self::from_wrapped_u64(dot)
     }
@@ -348,7 +359,7 @@ impl Mul for Mersenne31 {
     #[allow(clippy::cast_possible_truncation)]
     fn mul(self, rhs: Self) -> Self {
         let prod = u64::from(self.value) * u64::from(rhs.value);
-        let prod_lo = (prod as u32) & ((1 << 31) - 1);
+        let prod_lo = (prod & ((1 << 31) - 1)) as u32;
         let prod_hi = (prod >> 31) as u32;
         Self::new(prod_lo) + Self::new(prod_hi)
     }

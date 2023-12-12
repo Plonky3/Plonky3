@@ -12,7 +12,15 @@ pub trait SystematicCode<F: Field, In: MatrixRows<F>>:
     SystematicCodeOrFamily<F, In> + Code<F, In>
 {
     fn parity_len(&self) -> usize {
-        self.codeword_len() - self.message_len()
+        self.codeword_len()
+            .checked_sub(self.message_len())
+            .unwrap_or_else(|| {
+                panic!(
+                    "SystematicCode::parity_len underflow, codeword_len = {} < message_len = {}",
+                    self.codeword_len(),
+                    self.message_len()
+                );
+            })
     }
 }
 
