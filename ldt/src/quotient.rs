@@ -425,7 +425,6 @@ mod tests {
     ) where
         Standard: Distribution<EF>,
     {
-        dbg!(num_openings, trace_sizes);
         let hash = MyHash::new(Blake3 {});
         let compress = MyCompress::new(hash);
         let inner = ValMmcs::new(hash, compress);
