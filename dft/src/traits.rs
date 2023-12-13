@@ -88,9 +88,15 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         shift: F,
     ) -> RowMajorMatrix<F> {
         let mut coeffs = self.idft_batch(mat);
-        coeffs
-            .values
-            .resize(coeffs.values.len() << added_bits, F::zero());
+        // PANICS: possible panic if the new resized length overflows
+        coeffs.values.resize(
+            coeffs
+                .values
+                .len()
+                .checked_shl(added_bits.try_into().unwrap())
+                .unwrap(),
+            F::zero(),
+        );
         self.coset_dft_batch(coeffs, shift)
     }
 }
