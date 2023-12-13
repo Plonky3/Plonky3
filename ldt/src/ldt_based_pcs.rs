@@ -121,7 +121,7 @@ where
     #[instrument(name = "prove batch opening", skip_all)]
     fn open_multi_batches(
         &self,
-        prover_data_and_points: &[(&Self::ProverData, &[EF])],
+        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof) {
         // Use Barycentric interpolation to evaluate each matrix at a given point.
@@ -142,12 +142,19 @@ where
                     .iter()
                     .map(|(data, points)| {
                         let matrices = self.mmcs.get_matrices(data);
-                        points
+                        matrices
                             .iter()
-                            .map(|&point| eval_at_point(&matrices, point))
-                            .collect::<OpenedValuesForRound<EF>>()
+                            .enumerate()
+                            .map(|(i, &mat)| {
+                                let mat_eval_points = points[i];
+                                mat_eval_points
+                                    .iter()
+                                    .map(|&point| eval_at_point(&[mat], point))
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>()
                     })
-                    .collect::<OpenedValues<EF>>()
+                    .collect::<Vec<Vec<OpenedValuesForRound<EF>>>>()
             });
 
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
@@ -165,14 +172,17 @@ where
 
                 let openings = opened_values_for_round_by_matrix
                     .into_iter()
-                    .map(|opened_values_for_mat| {
-                        points
+                    .map(|opened_values_for_matrices| {
+                        opened_values_for_matrices
                             .iter()
-                            .zip(opened_values_for_mat)
-                            .map(|(&point, opened_values_for_point)| {
-                                Opening::<Val, EF>::new(point, opened_values_for_point)
-                            })
-                            .collect()
+                            .map(|opened_values_for_mat| {
+                                points
+                                    .iter()
+                                    .map(|&point| {
+                                        Opening::<Val, EF>::new(point, opened_values_for_points)
+                                    })
+                                    .collect()
+                            });
                     })
                     .collect();
                 QuotientMmcs::<Val, EF, _> {

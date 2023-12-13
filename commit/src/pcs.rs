@@ -47,7 +47,7 @@ where
 {
     fn open_multi_batches(
         &self,
-        prover_data_and_points: &[(&Self::ProverData, &[EF])],
+        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof);
 
