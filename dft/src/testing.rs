@@ -1,5 +1,6 @@
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::MatrixRows;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
@@ -105,6 +106,6 @@ where
         let original = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
         let dft_output = dft.dft_batch(original.clone());
         let idft_output = dft.idft_batch(dft_output);
-        assert_eq!(original, idft_output);
+        assert_eq!(original, idft_output.to_row_major_matrix());
     }
 }

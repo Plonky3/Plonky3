@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use p3_dft::{reverse_matrix_index_bits, TwoAdicSubgroupDft};
 use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
-use p3_matrix::Matrix;
+use p3_matrix::view::{MatrixView, RowPermutation};
+use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
 use crate::{Mersenne31, Mersenne31Complex};
@@ -15,7 +16,7 @@ type Ext = Mersenne31Complex<Base>;
 pub struct Mersenne31ComplexRadix2Dit;
 
 impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
+    fn dft_batch(&self, mat: impl MatrixRows<Ext>) -> MatrixView<Ext, RowMajorMatrix<Ext>> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
@@ -23,11 +24,13 @@ impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
         let twiddles: Vec<Ext> = root.powers().take(h / 2).collect();
 
         // DIT butterfly
-        reverse_matrix_index_bits(&mut mat);
+        let mut mat = mat
+            .permute_rows(RowPermutation::BitReversed)
+            .to_row_major_matrix();
         for layer in 0..log_h {
             dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }
-        mat
+        MatrixView::identity(mat)
     }
 }
 

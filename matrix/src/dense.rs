@@ -8,6 +8,7 @@ use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterato
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
+use crate::view::{MatrixView, RowPermutation};
 use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
 
 /// A default constant for block size matrix transposition. The value was chosen with 32-byte type, in mind.
@@ -200,9 +201,18 @@ impl<T: Clone> MatrixRows<T> for RowMajorMatrix<T> {
     {
         self
     }
+
+    type Permuted = MatrixView<T, Self>;
+    fn permute_rows(self, perm: RowPermutation) -> Self::Permuted
+    where
+        Self: Sized,
+    {
+        MatrixView::new(self, perm)
+    }
 }
 
 impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrix<T> {
+    type PermutedSlices = MatrixView<T, Self>;
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -210,6 +220,7 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrix<T> {
 }
 
 impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
+    type PermutedSlicesMut = MatrixView<T, Self>;
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
@@ -277,9 +288,18 @@ impl<T: Clone> MatrixRows<T> for RowMajorMatrixView<'_, T> {
     {
         RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
+
+    type Permuted = MatrixView<T, Self>;
+    fn permute_rows(self, perm: RowPermutation) -> Self::Permuted
+    where
+        Self: Sized,
+    {
+        MatrixView::new(self, perm)
+    }
 }
 
 impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
+    type PermutedSlices = MatrixView<T, Self>;
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -408,9 +428,18 @@ impl<T: Clone> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
     {
         RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
+
+    type Permuted = MatrixView<T, Self>;
+    fn permute_rows(self, perm: RowPermutation) -> Self::Permuted
+    where
+        Self: Sized,
+    {
+        MatrixView::new(self, perm)
+    }
 }
 
 impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
+    type PermutedSlices = MatrixView<T, Self>;
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
@@ -418,6 +447,7 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
 }
 
 impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
+    type PermutedSlicesMut = MatrixView<T, Self>;
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]

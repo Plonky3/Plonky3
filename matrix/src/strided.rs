@@ -1,4 +1,7 @@
-use crate::{Matrix, MatrixRows};
+use crate::{
+    view::{MatrixView, RowPermutation},
+    Matrix, MatrixRows,
+};
 
 pub struct VerticallyStridedMatrixView<Inner> {
     pub(crate) inner: Inner,
@@ -25,5 +28,13 @@ impl<T, Inner: MatrixRows<T>> MatrixRows<T> for VerticallyStridedMatrixView<Inne
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.inner.row(r * self.stride + self.offset)
+    }
+
+    type Permuted = MatrixView<T, Self>;
+    fn permute_rows(self, perm: RowPermutation) -> Self::Permuted
+    where
+        Self: Sized,
+    {
+        MatrixView::new(self, perm)
     }
 }

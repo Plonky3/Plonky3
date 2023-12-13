@@ -1,6 +1,9 @@
 use core::marker::PhantomData;
 
-use crate::{Matrix, MatrixRows};
+use crate::{
+    view::{MatrixView, RowPermutation},
+    Matrix, MatrixRows,
+};
 
 /// A combination of two matrices, stacked together vertically.
 pub struct VerticalPair<T, First: Matrix<T>, Second: Matrix<T>> {
@@ -43,6 +46,14 @@ where
         } else {
             EitherIterable::Right(self.second.row(r - self.first.height()))
         }
+    }
+
+    type Permuted = MatrixView<T, Self>;
+    fn permute_rows(self, perm: RowPermutation) -> Self::Permuted
+    where
+        Self: Sized,
+    {
+        MatrixView::new(self, perm)
     }
 }
 

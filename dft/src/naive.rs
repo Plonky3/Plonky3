@@ -2,7 +2,8 @@ use alloc::vec;
 
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::view::MatrixView;
+use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
@@ -11,12 +12,13 @@ use crate::TwoAdicSubgroupDft;
 pub struct NaiveDft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
-    fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    fn dft_batch(&self, mat: impl MatrixRows<F>) -> MatrixView<F, RowMajorMatrix<F>> {
         let w = mat.width();
         let h = mat.height();
         let log_h = log2_strict_usize(h);
         let g = F::two_adic_generator(log_h);
 
+        let mat = mat.to_row_major_matrix();
         let mut res = RowMajorMatrix::new(vec![F::zero(); w * h], w);
         for (res_r, point) in g.powers().take(h).enumerate() {
             for (src_r, point_power) in point.powers().take(h).enumerate() {
@@ -25,7 +27,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
                 }
             }
         }
-        res
+        MatrixView::identity(res)
     }
 }
 
@@ -36,7 +38,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::{dense::RowMajorMatrix, view::MatrixView, MatrixRows};
     use rand::thread_rng;
 
     use crate::{NaiveDft, TwoAdicSubgroupDft};
@@ -67,7 +69,7 @@ mod tests {
         // 5, -1
         // 0, 0
         assert_eq!(
-            dft,
+            dft.to_row_major_matrix(),
             RowMajorMatrix {
                 values: vec![
                     F::from_canonical_u8(9),
@@ -89,6 +91,6 @@ mod tests {
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.dft_batch(original.clone());
         let idft = NaiveDft.idft_batch(dft);
-        assert_eq!(original, idft);
+        assert_eq!(original, idft.to_row_major_matrix());
     }
 }

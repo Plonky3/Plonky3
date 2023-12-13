@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
+use view::RowPermutation;
 
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
@@ -15,6 +16,7 @@ pub mod mul;
 pub mod sparse;
 pub mod stack;
 pub mod strided;
+pub mod view;
 
 pub trait Matrix<T> {
     fn width(&self) -> usize;
@@ -83,6 +85,11 @@ pub trait MatrixRows<T>: Matrix<T> {
         )
     }
 
+    type Permuted: MatrixRows<T>;
+    fn permute_rows(self, perm: RowPermutation) -> Self::Permuted
+    where
+        Self: Sized;
+
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
     where
         Self: Sized,
@@ -96,12 +103,16 @@ pub trait MatrixRows<T>: Matrix<T> {
 }
 
 /// A `Matrix` which supports access its rows as slices.
-pub trait MatrixRowSlices<T>: MatrixRows<T> {
+pub trait MatrixRowSlices<T>: MatrixRows<T, Permuted = Self::PermutedSlices> {
+    type PermutedSlices: MatrixRowSlices<T>;
     fn row_slice(&self, r: usize) -> &[T];
 }
 
 /// A `Matrix` which supports access its rows as mutable slices.
-pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
+pub trait MatrixRowSlicesMut<T>:
+    MatrixRowSlices<T, PermutedSlices = Self::PermutedSlicesMut>
+{
+    type PermutedSlicesMut: MatrixRowSlicesMut<T>;
     fn row_slice_mut(&mut self, r: usize) -> &mut [T];
 }
 

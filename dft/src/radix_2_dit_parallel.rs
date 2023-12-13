@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
-use p3_matrix::Matrix;
+use p3_matrix::view::{MatrixView, RowPermutation};
+use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 use p3_maybe_rayon::{IndexedParallelIterator, ParallelIterator};
 use p3_util::log2_strict_usize;
 
@@ -21,7 +22,7 @@ use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
 pub struct Radix2DitParallel;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    fn dft_batch(&self, mat: impl MatrixRows<F>) -> MatrixView<F, RowMajorMatrix<F>> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
@@ -31,24 +32,25 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let mid = log_h / 2;
 
         // The first half looks like a normal DIT.
-        reverse_matrix_index_bits(&mut mat);
+        let mut mat = mat
+            .permute_rows(RowPermutation::BitReversed)
+            .to_row_major_matrix();
         par_dit_layer(&mut mat, mid, &twiddles);
 
         // For the second half, we flip the DIT, working in bit-reversed order.
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
-        reverse_matrix_index_bits(&mut mat);
 
-        mat
+        MatrixView::new(mat, RowPermutation::BitReversed)
     }
 
     fn coset_lde_batch(
         &self,
-        mut mat: RowMajorMatrix<F>,
+        mat: impl MatrixRows<F>,
         added_bits: usize,
         shift: F,
-    ) -> RowMajorMatrix<F> {
+    ) -> MatrixView<F, RowMajorMatrix<F>> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
         let mid = log_h / 2;
@@ -60,7 +62,9 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         let mut twiddles_inv: Vec<F> = root_inv.powers().take(h / 2).collect();
 
         // The first half looks like a normal DIT.
-        reverse_matrix_index_bits(&mut mat);
+        let mut mat = mat
+            .permute_rows(RowPermutation::BitReversed)
+            .to_row_major_matrix();
         par_dit_layer(&mut mat, mid, &twiddles_inv);
 
         // For the second half, we flip the DIT, working in bit-reversed order.
@@ -99,9 +103,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
-        reverse_matrix_index_bits(&mut mat);
 
-        mat
+        MatrixView::new(mat, RowPermutation::BitReversed)
     }
 }
 

@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
-use p3_matrix::Matrix;
+use p3_matrix::view::{MatrixView, RowPermutation};
+use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
 use p3_util::log2_strict_usize;
 
@@ -21,36 +22,45 @@ use crate::TwoAdicSubgroupDft;
 pub struct Radix2Bowers;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        reverse_matrix_index_bits(&mut mat);
+    fn dft_batch(&self, mat: impl MatrixRows<F>) -> MatrixView<F, RowMajorMatrix<F>> {
+        let mut mat = mat
+            .permute_rows(RowPermutation::BitReversed)
+            .to_row_major_matrix();
         bowers_g(&mut mat.as_view_mut());
-        mat
+        MatrixView::identity(mat)
     }
 
     /// Compute the inverse DFT of each column in `mat`.
-    fn idft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    fn idft_batch(&self, mat: impl MatrixRows<F>) -> MatrixView<F, RowMajorMatrix<F>> {
+        let mut mat = mat.to_row_major_matrix();
         bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
-        reverse_matrix_index_bits(&mut mat);
-        mat
+        MatrixView::new(mat, RowPermutation::BitReversed)
     }
 
-    fn lde_batch(&self, mut mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
+    fn lde_batch(
+        &self,
+        mat: impl MatrixRows<F>,
+        added_bits: usize,
+    ) -> MatrixView<F, RowMajorMatrix<F>> {
+        let mut mat = mat.to_row_major_matrix();
         bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
         bit_reversed_zero_pad(&mut mat, added_bits);
         bowers_g(&mut mat.as_view_mut());
-        mat
+        MatrixView::identity(mat)
     }
 
     fn coset_lde_batch(
         &self,
-        mut mat: RowMajorMatrix<F>,
+        mat: impl MatrixRows<F>,
         added_bits: usize,
         shift: F,
-    ) -> RowMajorMatrix<F> {
+    ) -> MatrixView<F, RowMajorMatrix<F>> {
         let h = mat.height();
         let h_inv = F::from_canonical_usize(h).inverse();
+
+        let mut mat = mat.to_row_major_matrix();
 
         bowers_g_t(&mut mat.as_view_mut());
 
@@ -71,7 +81,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
         bowers_g(&mut mat.as_view_mut());
 
-        mat
+        MatrixView::identity(mat)
     }
 }
 
