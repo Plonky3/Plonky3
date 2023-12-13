@@ -13,6 +13,9 @@ use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, 
 /// A default constant for block size matrix transposition. The value was chosen with 32-byte type, in mind.
 const TRANSPOSE_BLOCK_SIZE: usize = 64;
 
+/// Point at which to switch to parallel transpose implementation.
+const PARALLEL_MIN_SIZE: usize = 1000;
+
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowMajorMatrix<T> {
@@ -424,11 +427,11 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
     }
 }
 
-impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
+impl<T> RowMajorMatrix<T>
 where
     T: Clone + Default + Send + Sync,
 {
-    fn transpose(self) -> Self {
+    fn transpose_parallel(self) -> Self {
         let block_size = TRANSPOSE_BLOCK_SIZE;
         let height = self.height();
         let width = self.width();
@@ -457,6 +460,50 @@ where
             });
 
         transposed
+    }
+
+    fn transpose_serial(self) -> Self {
+        let block_size = TRANSPOSE_BLOCK_SIZE;
+        let height = self.height();
+        let width = self.width();
+
+        let transposed_values: Vec<T> = vec![T::default(); width * height];
+        let mut transposed = Self::new(transposed_values, height);
+
+        transposed
+            .values
+            .chunks_mut(height)
+            .enumerate()
+            .for_each(|(row_ind, row)| {
+                row.chunks_mut(block_size)
+                    .enumerate()
+                    .for_each(|(block_num, row_block)| {
+                        let row_block_len = row_block.len();
+                        (0..row_block_len).for_each(|col_ind| {
+                            let original_mat_row_ind = block_size * block_num + col_ind;
+                            let original_mat_col_ind = row_ind;
+                            let original_values_index =
+                                original_mat_row_ind * width + original_mat_col_ind;
+
+                            row_block[col_ind] = self.values[original_values_index].clone();
+                        });
+                    });
+            });
+
+        transposed
+    }
+}
+
+impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
+where
+    T: Clone + Default + Send + Sync,
+{
+    fn transpose(self) -> Self {
+        if self.width() < PARALLEL_MIN_SIZE && self.height() < PARALLEL_MIN_SIZE {
+            self.transpose_serial()
+        } else {
+            self.transpose_parallel()
+        }
     }
 }
 
