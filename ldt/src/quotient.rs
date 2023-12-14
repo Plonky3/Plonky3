@@ -389,7 +389,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{AbstractExtensionField, AbstractField};
     use p3_interpolation::{interpolate_coset, interpolate_subgroup};
-    use p3_matrix::bitrev::BitReversableMatrix;
+    use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
     use rand::distributions::Standard;
@@ -409,7 +409,7 @@ mod tests {
     fn test_remainder_polys() {
         let trace: RowMajorMatrix<F> = RowMajorMatrix::rand(&mut thread_rng(), 32, 5);
         let point: F4 = thread_rng().gen();
-        let values = interpolate_subgroup::<_, _, _, false>(&trace, point);
+        let values = interpolate_subgroup(&trace, point);
         let rs = Opening::compute_remainder_polys(point, &values);
         for (r, y) in rs.into_iter().zip(values) {
             // r(alpha) = p(alpha)
@@ -452,7 +452,11 @@ mod tests {
                     .map(|&alpha| {
                         Opening::new(
                             alpha,
-                            interpolate_coset::<_, _, _, true>(&lde_truncated, shift, alpha),
+                            interpolate_coset(
+                                &BitReversedMatrixView::new(lde_truncated.clone()),
+                                shift,
+                                alpha,
+                            ),
                         )
                     })
                     .collect_vec();

@@ -11,7 +11,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::BitReversableMatrix;
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use tracing::{info_span, instrument};
@@ -137,7 +137,7 @@ where
                 .iter()
                 .map(|mat| {
                     let (low_coset, _) = mat.split_rows(mat.height() >> self.ldt.log_blowup());
-                    interpolate_coset::<_, _, _, true>(&low_coset, coset_shift, point)
+                    interpolate_coset(&BitReversedMatrixView::new(low_coset), coset_shift, point)
                 })
                 .collect::<OpenedValuesForPoint<EF>>()
         };
