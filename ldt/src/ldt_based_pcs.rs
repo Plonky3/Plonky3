@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_matrix::bitrev::BitReversableMatrix;
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
@@ -12,6 +11,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
+use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
 use tracing::{info_span, instrument};

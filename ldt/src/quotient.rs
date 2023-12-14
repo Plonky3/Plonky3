@@ -445,10 +445,8 @@ mod tests {
                     .coset_lde_batch(trace.clone(), 1, shift)
                     .bit_reverse_rows();
                 let dims = lde.dimensions();
-                let lde_truncated = RowMajorMatrix::new(
-                    (0..height).map(|r| lde.row(r)).flatten().collect_vec(),
-                    width,
-                );
+                let lde_truncated =
+                    RowMajorMatrix::new((0..height).flat_map(|r| lde.row(r)).collect_vec(), width);
                 let openings = alphas
                     .iter()
                     .map(|&alpha| {
