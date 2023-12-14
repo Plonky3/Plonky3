@@ -13,7 +13,7 @@ use p3_field::{ExtensionField, TwoAdicField};
 use p3_interpolation::interpolate_coset;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::{Dimensions, Matrix, MatrixRowSlices, MatrixRows};
+use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use tracing::{info_span, instrument};
 
 use crate::quotient::QuotientMmcs;
@@ -48,6 +48,8 @@ where
     L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {
+    type Lde<'a> = BitReversedMatrixView<M::Mat<'a>> where Self: 'a;
+
     fn coset_shift(&self) -> Val {
         Val::generator()
     }
@@ -56,14 +58,16 @@ where
         self.ldt.log_blowup()
     }
 
-    fn get_ldes<'a, 'b>(
-        &'a self,
-        prover_data: &'b Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'b, Val>>
+    fn get_ldes<'a, 'b>(&'a self, prover_data: &'b Self::ProverData) -> Vec<Self::Lde<'b>>
     where
         'a: 'b,
     {
-        self.mmcs.get_matrices(prover_data)
+        // We committed to the bit-reversed LDE, so now we wrap it to return in natural order.
+        self.mmcs
+            .get_matrices(prover_data)
+            .into_iter()
+            .map(|m| BitReversedMatrixView::new(m))
+            .collect()
     }
 
     fn commit_shifted_batches(
@@ -97,7 +101,6 @@ where
     In: MatrixRows<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    for<'a> M::Mat<'a>: MatrixRowSlices<Val>,
     L: Ldt<Val, QuotientMmcs<Val, EF, M>, Challenger>,
     Challenger: FieldChallenger<Val>,
 {

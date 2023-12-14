@@ -8,7 +8,6 @@ use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
 };
-use p3_matrix::bitrev::BitReversedMatrixView;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
@@ -59,7 +58,7 @@ where
         air,
         log_degree,
         log_quotient_degree,
-        BitReversedMatrixView::new(trace_lde),
+        trace_lde,
         alpha,
     );
 

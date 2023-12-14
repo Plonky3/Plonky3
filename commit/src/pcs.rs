@@ -5,8 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::{Dimensions, MatrixRows};
+use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
 /// polynomials defined over the field `F`.
@@ -71,14 +70,15 @@ where
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
+    type Lde<'a>: MatrixGet<Val> + Sync
+    where
+        Self: 'a;
+
     fn coset_shift(&self) -> Val;
 
     fn log_blowup(&self) -> usize;
 
-    fn get_ldes<'a, 'b>(
-        &'a self,
-        _prover_data: &'b Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'b, Val>>
+    fn get_ldes<'a, 'b>(&'a self, prover_data: &'b Self::ProverData) -> Vec<Self::Lde<'b>>
     where
         'a: 'b;
 
