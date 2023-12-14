@@ -4,8 +4,8 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
 use p3_commit::{
-    DirectMmcs, OpenedValues, OpenedValuesForPoint, OpenedValuesForRound, Pcs, UnivariatePcs,
-    UnivariatePcsWithLde,
+    DirectMmcs, OpenedValues, OpenedValuesForMatrix, OpenedValuesForPoint, OpenedValuesForRound,
+    Pcs, UnivariatePcs, UnivariatePcsWithLde,
 };
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::HasFrobenius;
@@ -133,7 +133,7 @@ where
                     let shift = Val::generator();
                     interpolate_coset(&low_coset, shift, point)
                 })
-                .collect::<OpenedValuesForPoint<EF>>()
+                .collect::<OpenedValuesForMatrix<EF>>()
         };
 
         let all_opened_values = info_span!("compute opened values with Lagrange interpolation")
@@ -145,16 +145,16 @@ where
                         matrices
                             .iter()
                             .enumerate()
-                            .map(|(i, &mat)| {
-                                let mat_eval_points = points[i];
+                            .flat_map(|(i, &mat)| {
+                                let mat_eval_points = points[i].clone();
                                 mat_eval_points
                                     .iter()
                                     .map(|&point| eval_at_point(&[mat], point))
-                                    .collect::<Vec<_>>()
+                                    .collect::<Vec<OpenedValuesForMatrix<EF>>>()
                             })
                             .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<Vec<OpenedValuesForRound<EF>>>>()
+                    .collect::<Vec<OpenedValuesForRound<EF>>>()
             });
 
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
@@ -166,32 +166,43 @@ where
         let quotient_mmcs = all_points
             .into_iter()
             .zip(&all_opened_values)
-            .map(|(points, opened_values_for_round_by_point)| {
-                let opened_values_for_round_by_matrix =
-                    transpose(opened_values_for_round_by_point.to_vec());
+            .map(
+                |(points_per_matrix, opened_values_for_round_by_matrix_by_points): (
+                    &[Vec<EF>],
+                    &OpenedValuesForRound<EF>,
+                )| {
+                    let opened_values_for_round_by_matrices =
+                        transpose(opened_values_for_round_by_matrix_by_points.to_vec());
 
-                let openings = opened_values_for_round_by_matrix
-                    .into_iter()
-                    .map(|opened_values_for_matrices| {
-                        opened_values_for_matrices
-                            .iter()
-                            .map(|opened_values_for_mat| {
-                                points
-                                    .iter()
-                                    .map(|&point| {
-                                        Opening::<Val, EF>::new(point, opened_values_for_points)
-                                    })
-                                    .collect()
-                            });
-                    })
-                    .collect();
-                QuotientMmcs::<Val, EF, _> {
-                    inner: self.mmcs.clone(),
-                    openings,
-                    coset_shift,
-                    _phantom: PhantomData,
-                }
-            })
+                    let openings = opened_values_for_round_by_matrices
+                        .into_iter()
+                        .map(|opened_values_for_matrix: OpenedValuesForMatrix<EF>| {
+                            opened_values_for_matrix
+                                .iter()
+                                .enumerate()
+                                .flat_map(|(i, opened_values_for_point)| {
+                                    let points = points_per_matrix[i].clone();
+                                    points
+                                        .iter()
+                                        .map(|&point| {
+                                            Opening::<Val, EF>::new(
+                                                point,
+                                                opened_values_for_point.clone(),
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<Opening<Val, EF>>>()
+                        })
+                        .collect();
+                    QuotientMmcs::<Val, EF, _> {
+                        inner: self.mmcs.clone(),
+                        openings,
+                        coset_shift,
+                        _phantom: PhantomData,
+                    }
+                },
+            )
             .collect_vec();
 
         let proof = self.ldt.prove(&quotient_mmcs, &prover_data, challenger);

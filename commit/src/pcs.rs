@@ -34,9 +34,9 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
-pub type OpenedValuesForRound<F> = Vec<OpenedValuesForPoint<F>>;
-pub type OpenedValuesForPoint<F> = Vec<OpenedValuesForMatrix<F>>;
-pub type OpenedValuesForMatrix<F> = Vec<F>;
+pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
+pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
+pub type OpenedValuesForPoint<F> = Vec<F>;
 
 pub trait UnivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
 where
