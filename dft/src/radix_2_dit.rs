@@ -24,8 +24,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
         let root = F::two_adic_generator(log_h);
         let twiddles: Vec<F> = root.powers().take(h / 2).collect();
 
-        reverse_matrix_index_bits(&mut mat);
         // DIT butterfly
+        reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
             dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }

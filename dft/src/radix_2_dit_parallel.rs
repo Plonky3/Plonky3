@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
-use p3_matrix::bitrev::BitReversedMatrixView;
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -43,7 +43,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
 
-        BitReversedMatrixView::new(mat)
+        mat.bit_reverse_rows()
     }
 
     fn coset_lde_batch(
@@ -103,7 +103,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
 
-        BitReversedMatrixView::new(mat)
+        mat.bit_reverse_rows()
     }
 }
 

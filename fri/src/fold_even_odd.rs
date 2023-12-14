@@ -33,6 +33,8 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
     let one_half = F::two().inverse();
     let half_beta = beta * one_half;
 
+    // TODO: vectorize this (after we have packed extension fields)
+
     // beta/2 times successive powers of g_inv
     let mut powers = g_inv
         .shifted_powers(half_beta)
