@@ -5,24 +5,18 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::{reverse_matrix_index_bits, TwoAdicSubgroupDft};
+use crate::TwoAdicSubgroupDft;
 
 #[derive(Default, Clone)]
 pub struct NaiveDft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
-    fn dft_batch_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(
-        &self,
-        mut mat: RowMajorMatrix<F>,
-    ) -> RowMajorMatrix<F> {
+    type Evaluations = RowMajorMatrix<F>;
+    fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let w = mat.width();
         let h = mat.height();
         let log_h = log2_strict_usize(h);
         let g = F::two_adic_generator(log_h);
-
-        if IN_BITREV {
-            reverse_matrix_index_bits(&mut mat);
-        }
 
         let mut res = RowMajorMatrix::new(vec![F::zero(); w * h], w);
         for (res_r, point) in g.powers().take(h).enumerate() {
@@ -33,9 +27,6 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
             }
         }
 
-        if OUT_BITREV {
-            reverse_matrix_index_bits(&mut res);
-        }
         res
     }
 }

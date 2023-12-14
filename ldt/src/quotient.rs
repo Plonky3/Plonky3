@@ -389,6 +389,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{AbstractExtensionField, AbstractField};
     use p3_interpolation::{interpolate_coset, interpolate_subgroup};
+    use p3_matrix::bitrev::BitReversableMatrix;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
     use rand::distributions::Standard;
@@ -440,10 +441,12 @@ mod tests {
             .iter()
             .map(|&(height, width)| {
                 let trace = RowMajorMatrix::<F>::rand_nonzero(&mut thread_rng(), height, width);
-                let lde = Radix2Dit.coset_lde_batch_bitrev::<false, true>(trace.clone(), 1, shift);
+                let lde = Radix2Dit
+                    .coset_lde_batch(trace.clone(), 1, shift)
+                    .bit_reverse_rows();
                 let dims = lde.dimensions();
                 let lde_truncated = RowMajorMatrix::new(
-                    lde.rows().take(height).flatten().copied().collect_vec(),
+                    (0..height).map(|r| lde.row(r)).flatten().collect_vec(),
                     width,
                 );
                 let openings = alphas
@@ -455,7 +458,7 @@ mod tests {
                         )
                     })
                     .collect_vec();
-                (trace, lde, dims, openings)
+                (trace, lde.to_row_major_matrix(), dims, openings)
             })
             .multiunzip();
 
@@ -490,7 +493,7 @@ mod tests {
             assert_eq!(mat.row_slice(reduced_index), &opened_values_for_mat);
 
             // check low degree
-            let poly = Radix2Dit.idft_batch_bitrev::<true>(mat);
+            let poly = Radix2Dit.idft_batch(mat.bit_reverse_rows().to_row_major_matrix());
             let expected_degree = trace.height() - <EF as AbstractExtensionField<F>>::D;
             assert!((expected_degree..poly.height()).all(|r| poly.row(r).all(|x| x.is_zero())));
         }

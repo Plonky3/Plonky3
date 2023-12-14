@@ -1,60 +1,40 @@
 use alloc::vec::Vec;
 
 use p3_field::TwoAdicField;
+use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::util::swap_rows;
+use p3_matrix::{Matrix, MatrixRows};
 
-use crate::util::{divide_by_height, swap_rows};
+use crate::util::divide_by_height;
 
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
+    // Effectively this is either RowMajorMatrix or BitReversedMatrixView<RowMajorMatrix>.
+    type Evaluations: BitReversableMatrix<F>;
+
     /// Compute the discrete Fourier transform (DFT) `vec`.
     fn dft(&self, vec: Vec<F>) -> Vec<F> {
-        self.dft_bitrev::<false, false>(vec)
-    }
-
-    /// `dft`, but optionally takes and/or returns in bit-reversed row order.
-    fn dft_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(&self, vec: Vec<F>) -> Vec<F> {
-        self.dft_batch_bitrev::<IN_BITREV, OUT_BITREV>(RowMajorMatrix::new(vec, 1))
+        self.dft_batch(RowMajorMatrix::new_col(vec))
+            .to_row_major_matrix()
             .values
     }
 
     /// Compute the discrete Fourier transform (DFT) of each column in `mat`.
-    fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        self.dft_batch_bitrev::<false, false>(mat)
-    }
-
-    /// `dft_batch`, but optionally takes and/or returns in bit-reversed row order.
     /// This is the only method an implementer needs to define, all other
     /// methods can be derived from this one.
-    fn dft_batch_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(
-        &self,
-        mat: RowMajorMatrix<F>,
-    ) -> RowMajorMatrix<F>;
+    fn dft_batch(&self, mat: RowMajorMatrix<F>) -> Self::Evaluations;
 
     /// Compute the "coset DFT" of `vec`. This can be viewed as interpolation onto a coset of a
     /// multiplicative subgroup, rather than the subgroup itself.
     fn coset_dft(&self, vec: Vec<F>, shift: F) -> Vec<F> {
-        self.coset_dft_bitrev::<false>(vec, shift)
-    }
-
-    /// `coset_dft`, but optionally returns evaluations in bit-reversed row order.
-    fn coset_dft_bitrev<const OUT_BITREV: bool>(&self, vec: Vec<F>, shift: F) -> Vec<F> {
-        self.coset_dft_batch_bitrev::<OUT_BITREV>(RowMajorMatrix::new(vec, 1), shift)
+        self.coset_dft_batch(RowMajorMatrix::new_col(vec), shift)
+            .to_row_major_matrix()
             .values
     }
 
     /// Compute the "coset DFT" of each column in `mat`. This can be viewed as interpolation onto a
     /// coset of a multiplicative subgroup, rather than the subgroup itself.
-    fn coset_dft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        self.coset_dft_batch_bitrev::<false>(mat, shift)
-    }
-
-    /// `coset_dft_batch`, but optionally returns evaluations in bit-reversed row order.
-    fn coset_dft_batch_bitrev<const OUT_BITREV: bool>(
-        &self,
-        mut mat: RowMajorMatrix<F>,
-        shift: F,
-    ) -> RowMajorMatrix<F> {
+    fn coset_dft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
         // Observe that
         //     y_i = \sum_j c_j (s g^i)^j
         //         = \sum_j (c_j s^j) (g^i)^j
@@ -67,7 +47,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
                     *coeff *= weight;
                 })
             });
-        self.dft_batch_bitrev::<false, OUT_BITREV>(mat)
+        self.dft_batch(mat)
     }
 
     /// Compute the inverse DFT of `vec`.
@@ -77,15 +57,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
 
     /// Compute the inverse DFT of each column in `mat`.
     fn idft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        self.idft_batch_bitrev::<false>(mat)
-    }
-
-    /// `idft_batch`, but optionally takes evaluations in bit-reversed row order.
-    fn idft_batch_bitrev<const IN_BITREV: bool>(
-        &self,
-        mat: RowMajorMatrix<F>,
-    ) -> RowMajorMatrix<F> {
-        let mut dft = self.dft_batch_bitrev::<IN_BITREV, false>(mat);
+        let mut dft = self.dft_batch(mat).to_row_major_matrix();
         let h = dft.height();
 
         divide_by_height(&mut dft);
@@ -100,11 +72,12 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Compute the low-degree extension of `vec` onto a larger subgroup.
     fn lde(&self, vec: Vec<F>, added_bits: usize) -> Vec<F> {
         self.lde_batch(RowMajorMatrix::new(vec, 1), added_bits)
+            .to_row_major_matrix()
             .values
     }
 
     /// Compute the low-degree extension of each column in `mat` onto a larger subgroup.
-    fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
+    fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> Self::Evaluations {
         let mut coeffs = self.idft_batch(mat);
         coeffs
             .values
@@ -115,6 +88,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup.
     fn coset_lde(&self, vec: Vec<F>, added_bits: usize, shift: F) -> Vec<F> {
         self.coset_lde_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
+            .to_row_major_matrix()
             .values
     }
 
@@ -124,21 +98,11 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-    ) -> RowMajorMatrix<F> {
-        self.coset_lde_batch_bitrev::<false, false>(mat, added_bits, shift)
-    }
-
-    /// `coset_lde_batch`, but optionally takes and/or returns in bit-reversed row order.
-    fn coset_lde_batch_bitrev<const IN_BITREV: bool, const OUT_BITREV: bool>(
-        &self,
-        mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-    ) -> RowMajorMatrix<F> {
-        let mut coeffs = self.idft_batch_bitrev::<IN_BITREV>(mat);
+    ) -> Self::Evaluations {
+        let mut coeffs = self.idft_batch(mat);
         coeffs
             .values
             .resize(coeffs.values.len() << added_bits, F::zero());
-        self.coset_dft_batch_bitrev::<OUT_BITREV>(coeffs, shift)
+        self.coset_dft_batch(coeffs, shift)
     }
 }

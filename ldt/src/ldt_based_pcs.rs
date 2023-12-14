@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_matrix::bitrev::BitReversableMatrix;
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
@@ -65,7 +66,7 @@ where
         self.mmcs.get_matrices(prover_data)
     }
 
-    fn commit_shifted_batches<const IN_BITREV: bool>(
+    fn commit_shifted_batches(
         &self,
         polynomials: Vec<In>,
         coset_shift: Val,
@@ -76,11 +77,11 @@ where
                 .into_iter()
                 .map(|poly| {
                     let input = poly.to_row_major_matrix();
-                    self.dft.coset_lde_batch_bitrev::<IN_BITREV, true>(
-                        input,
-                        self.ldt.log_blowup(),
-                        shift,
-                    )
+                    // Commit to the bit-reversed LDE.
+                    self.dft
+                        .coset_lde_batch(input, self.ldt.log_blowup(), shift)
+                        .bit_reverse_rows()
+                        .to_row_major_matrix()
                 })
                 .collect()
         });
@@ -106,7 +107,7 @@ where
     type Error = L::Error;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches::<false>(polynomials, Val::one())
+        self.commit_shifted_batches(polynomials, Val::one())
     }
 }
 

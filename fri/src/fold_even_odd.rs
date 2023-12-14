@@ -66,19 +66,25 @@ mod tests {
         let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
 
         let dft = Radix2Dit;
-        let evals = dft.dft_bitrev::<false, true>(coeffs.clone());
+        let evals = dft.dft(coeffs.clone());
 
         let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
-        let even_evals = dft.dft_bitrev::<false, true>(even_coeffs);
+        let even_evals = dft.dft(even_coeffs);
 
         let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
-        let odd_evals = dft.dft_bitrev::<false, true>(odd_coeffs);
+        let odd_evals = dft.dft(odd_coeffs);
 
         let beta = rng.gen::<F>();
         let expected = izip!(even_evals, odd_evals)
             .map(|(even, odd)| even + beta * odd)
             .collect::<Vec<_>>();
-        let got = fold_even_odd(evals, beta);
-        assert_eq!(expected, got);
+
+        // fold_even_odd takes and returns in bitrev order.
+        let mut folded = evals;
+        reverse_slice_index_bits(&mut folded);
+        folded = fold_even_odd(folded, beta);
+        reverse_slice_index_bits(&mut folded);
+
+        assert_eq!(expected, folded);
     }
 }
