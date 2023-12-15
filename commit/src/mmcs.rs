@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
@@ -20,7 +21,7 @@ pub trait Mmcs<T>: Clone {
     type ProverData;
     type Commitment: Clone;
     type Proof;
-    type Error;
+    type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where
         Self: 'a;

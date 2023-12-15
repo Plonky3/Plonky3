@@ -77,8 +77,9 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
 mod tests {
     use itertools::Itertools;
     use p3_baby_bear::BabyBear;
-    use p3_dft::{reverse_slice_index_bits, Radix2Dit, TwoAdicSubgroupDft};
+    use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
     use p3_field::AbstractField;
+    use p3_util::reverse_slice_index_bits;
     use rand::{thread_rng, Rng};
 
     use super::*;

@@ -132,18 +132,16 @@ fn commit_phase<FC: FriConfig>(
     let mut data = vec![];
 
     for log_folded_height in (config.log_blowup()..log_max_height).rev() {
-        // TODO: Can we avoid cloning?
-        let (commit, prover_data) = config
-            .commit_phase_mmcs()
-            // TODO: Need to interleave the other way, unless we change things so the input comes bit-reversed.
-            .commit_matrix(RowMajorMatrix::new(current.clone(), 2));
+        let folded_height = 1 << log_folded_height;
+        // TODO: avoid cloning
+        let leaves = RowMajorMatrix::new(current.clone(), 2);
+        let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 
-        let folded_height = 1 << log_folded_height;
         let beta: FC::Challenge = challenger.sample_ext_element();
-        current = fold_even_odd(&current, beta);
+        current = fold_even_odd(current, beta);
 
         let matrices = &matrices_by_log_height[log_folded_height];
         if !matrices.is_empty() {

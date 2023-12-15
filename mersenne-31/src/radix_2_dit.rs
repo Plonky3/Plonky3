@@ -1,8 +1,9 @@
 use alloc::vec::Vec;
 
-use p3_dft::{reverse_matrix_index_bits, TwoAdicSubgroupDft};
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
@@ -15,6 +16,7 @@ type Ext = Mersenne31Complex<Base>;
 pub struct Mersenne31ComplexRadix2Dit;
 
 impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
+    type Evaluations = RowMajorMatrix<Ext>;
     fn dft_batch(&self, mut mat: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
