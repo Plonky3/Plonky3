@@ -86,7 +86,7 @@ where
     let zeta: SC::Challenge = challenger.sample_ext_element();
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
-            (&trace_data, &[vec![zeta], vec![zeta * g_subgroup]]),
+            (&trace_data, &[vec![zeta, zeta * g_subgroup]]),
             (
                 &quotient_data,
                 &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
