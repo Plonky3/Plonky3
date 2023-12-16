@@ -125,11 +125,11 @@ where
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof) {
         // Use Barycentric interpolation to evaluate each matrix at a given point.
-        let eval_at_point = |matrices: &[M::Mat<'_>], point| {
-            matrices
+        let eval_at_points = |matrix: M::Mat<'_>, points: Vec<EF>| {
+            points
                 .iter()
-                .map(|mat| {
-                    let low_coset = mat.vertically_strided(self.ldt.blowup(), 0);
+                .map(|&point| {
+                    let low_coset = matrix.vertically_strided(self.ldt.blowup(), 0);
                     let shift = Val::generator();
                     interpolate_coset(&low_coset, shift, point)
                 })
@@ -140,17 +140,15 @@ where
             .in_scope(|| {
                 prover_data_and_points
                     .iter()
-                    .map(|(data, points)| {
+                    .map(|(data, points_per_matrix)| {
                         let matrices = self.mmcs.get_matrices(data);
+
                         matrices
                             .iter()
                             .enumerate()
-                            .flat_map(|(i, &mat)| {
-                                let mat_eval_points = points[i].clone();
-                                mat_eval_points
-                                    .iter()
-                                    .map(|&point| eval_at_point(&[mat], point))
-                                    .collect::<Vec<OpenedValuesForMatrix<EF>>>()
+                            .map(|(i, &mat)| {
+                                let eval_points_for_matrix = points_per_matrix[i].clone();
+                                eval_at_points(mat, eval_points_for_matrix)
                             })
                             .collect::<Vec<_>>()
                     })
@@ -167,33 +165,40 @@ where
             .into_iter()
             .zip(&all_opened_values)
             .map(
-                |(points_per_matrix, opened_values_for_round_by_matrix_by_points): (
+                |(points_for_matrix, opened_values_for_round_per_matrix): (
                     &[Vec<EF>],
                     &OpenedValuesForRound<EF>,
                 )| {
-                    let opened_values_for_round_by_matrices =
-                        transpose(opened_values_for_round_by_matrix_by_points.to_vec());
+                    debug_assert!(
+                        points_for_matrix.len() == points_for_matrix.len(),
+                        "points_per_matrix.len() == {}, opened_values_for_round_per_matrix.len() = {}", 
+                        points_for_matrix.len(), points_for_matrix.len() 
+                    );
+                    let opened_values_for_round_per_matrix =
+                        transpose(opened_values_for_round_per_matrix.to_vec());
 
-                    let openings = opened_values_for_round_by_matrices
+                    let openings = opened_values_for_round_per_matrix
                         .into_iter()
-                        .map(|opened_values_for_matrix: OpenedValuesForMatrix<EF>| {
-                            opened_values_for_matrix
-                                .iter()
-                                .enumerate()
-                                .flat_map(|(i, opened_values_for_point)| {
-                                    let points = points_per_matrix[i].clone();
-                                    points
-                                        .iter()
-                                        .map(|&point| {
-                                            Opening::<Val, EF>::new(
-                                                point,
-                                                opened_values_for_point.clone(),
-                                            )
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .collect::<Vec<Opening<Val, EF>>>()
-                        })
+                        .map(
+                            |opened_values_for_matrix_per_point: OpenedValuesForMatrix<EF>| {
+                                opened_values_for_matrix_per_point
+                                    .iter()
+                                    .enumerate()
+                                    .flat_map(|(point_ind, opened_values_for_matrix): (usize, &OpenedValuesForPoint<EF>)| {
+                                        let points = points_for_matrix[point_ind].clone();
+                                        points
+                                            .iter()
+                                            .map(|&point| {
+                                                Opening::<Val, EF>::new(
+                                                    point,
+                                                    opened_values_for_matrix.clone(),
+                                                )
+                                            })
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .collect::<Vec<Opening<Val, EF>>>()
+                            },
+                        )
                         .collect();
                     QuotientMmcs::<Val, EF, _> {
                         inner: self.mmcs.clone(),
