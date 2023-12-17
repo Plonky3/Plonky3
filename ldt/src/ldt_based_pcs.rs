@@ -222,13 +222,13 @@ where
 
     fn verify_multi_batches(
         &self,
-        commits_and_points: &[(Self::Commitment, &[EF])],
+        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
         dims: &[Vec<Dimensions>],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        let (commits, points): (Vec<Self::Commitment>, Vec<&[EF]>) =
+        let (commits, points): (Vec<Self::Commitment>, Vec<&[Vec<EF>]>) =
             commits_and_points.iter().cloned().unzip();
         let coset_shift: Val =
             <Self as UnivariatePcsWithLde<Val, EF, In, Challenger>>::coset_shift(self);
@@ -237,18 +237,18 @@ where
             .zip_eq(values)
             .zip_eq(dims)
             .map(
-                |((points, opened_values_for_round_by_point), dims): (
-                    (&[EF], OpenedValuesForRound<EF>),
+                #[allow(clippy::type_complexity)]
+                |((points, opened_values_for_round_by_matrix), dims): (
+                    (&[Vec<EF>], OpenedValuesForRound<EF>),
                     &Vec<Dimensions>,
                 )| {
-                    let opened_values_for_round_by_matrix =
-                        transpose(opened_values_for_round_by_point.to_vec());
                     let openings = opened_values_for_round_by_matrix
                         .into_iter()
-                        .map(|opened_values_for_matrix| {
-                            points
+                        .enumerate()
+                        .map(|(mat_index, opened_values_for_matrix_by_point)| {
+                            points[mat_index]
                                 .iter()
-                                .zip(opened_values_for_matrix)
+                                .zip(opened_values_for_matrix_by_point)
                                 .map(|(&point, opened_values_for_point)| {
                                     Opening::<Val, EF>::new(point, opened_values_for_point)
                                 })
@@ -275,12 +275,4 @@ where
         self.ldt
             .verify(&quotient_mmcs, &dims, &commits, proof, challenger)
     }
-}
-
-fn transpose<T: Clone>(vec: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    let n = vec.len();
-    let m = vec[0].len();
-    (0..m)
-        .map(|r| (0..n).map(|c| vec[c][r].clone()).collect())
-        .collect()
 }

@@ -52,7 +52,7 @@ where
 
     fn verify_multi_batches(
         &self,
-        commits_and_points: &[(Self::Commitment, &[EF])],
+        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
         dims: &[Vec<Dimensions>],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
