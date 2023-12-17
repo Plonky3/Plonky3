@@ -150,7 +150,7 @@ where
                                 let points_for_mat_ref = &points_per_matrix[mat_ind];
                                 eval_at_points(mat, points_for_mat_ref)
                             })
-                            .collect::<Vec<_>>()
+                            .collect::<OpenedValuesForRound<EF>>()
                     })
                     .collect::<OpenedValues<EF>>()
             });
@@ -180,19 +180,19 @@ where
                                 usize,
                                 &OpenedValuesForMatrix<EF>,
                             )| {
+                                let points_for_matrix = &points_for_round[mat_index];
                                 opened_values_for_matrix
                                     .iter()
-                                    .flat_map(
-                                        |opened_values_for_point: &OpenedValuesForPoint<EF>| {
-                                            points_for_round[mat_index]
-                                                .iter()
-                                                .map(|&point| {
-                                                    Opening::<Val, EF>::new(
-                                                        point,
-                                                        opened_values_for_point.clone(),
-                                                    )
-                                                })
-                                                .collect::<Vec<_>>()
+                                    .zip(points_for_matrix)
+                                    .map(
+                                        |(opened_values_for_point, &point): (
+                                            &OpenedValuesForPoint<EF>,
+                                            &EF,
+                                        )| {
+                                            Opening::<Val, EF>::new(
+                                                point,
+                                                opened_values_for_point.clone(),
+                                            )
                                         },
                                     )
                                     .collect::<Vec<Opening<Val, EF>>>()
