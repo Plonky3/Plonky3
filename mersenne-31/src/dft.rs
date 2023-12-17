@@ -170,7 +170,7 @@ impl Mersenne31Dft {
         mat: RowMajorMatrix<Base>,
     ) -> RowMajorMatrix<Ext> {
         let dft = Dft::default();
-        dft_postprocess(dft.dft_batch(dft_preprocess(mat)))
+        dft_postprocess(dft.dft_batch(dft_preprocess(mat)).to_row_major_matrix())
     }
 
     /// Compute the inverse DFT of each column of `mat`.

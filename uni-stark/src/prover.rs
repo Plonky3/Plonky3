@@ -53,6 +53,7 @@ where
     let mut trace_ldes = pcs.get_ldes(&trace_data);
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
+
     let quotient_values = quotient_values(
         config,
         air,

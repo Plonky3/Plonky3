@@ -348,7 +348,7 @@ impl Mul for Mersenne31 {
     #[allow(clippy::cast_possible_truncation)]
     fn mul(self, rhs: Self) -> Self {
         let prod = u64::from(self.value) * u64::from(rhs.value);
-        let prod_lo = (prod as u32) & ((1 << 31) - 1);
+        let prod_lo = (prod & ((1 << 31) - 1)) as u32;
         let prod_hi = (prod >> 31) as u32;
         Self::new(prod_lo) + Self::new(prod_hi)
     }
