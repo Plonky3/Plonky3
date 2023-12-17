@@ -125,7 +125,7 @@ where
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof) {
         // Use Barycentric interpolation to evaluate each matrix at a given point.
-        let eval_at_points = |matrix: M::Mat<'_>, points: Vec<EF>| {
+        let eval_at_points = |matrix: M::Mat<'_>, points: &[EF]| {
             points
                 .iter()
                 .map(|&point| {
@@ -146,13 +146,13 @@ where
                         matrices
                             .iter()
                             .enumerate()
-                            .map(|(i, &mat)| {
-                                let eval_points_for_matrix = points_per_matrix[i].clone();
-                                eval_at_points(mat, eval_points_for_matrix)
+                            .map(|(mat_ind, &mat)| {
+                                let points_for_mat_ref = &points_per_matrix[mat_ind];
+                                eval_at_points(mat, points_for_mat_ref)
                             })
                             .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<OpenedValuesForRound<EF>>>()
+                    .collect::<OpenedValues<EF>>()
             });
 
         let (prover_data, all_points): (Vec<_>, Vec<_>) =
@@ -165,37 +165,36 @@ where
             .into_iter()
             .zip(&all_opened_values)
             .map(
-                |(points_for_matrix, opened_values_for_round_per_matrix): (
+                |(points_for_round, opened_values_for_round_by_matrix): (
                     &[Vec<EF>],
                     &OpenedValuesForRound<EF>,
                 )| {
-                    debug_assert!(
-                        points_for_matrix.len() == points_for_matrix.len(),
-                        "points_per_matrix.len() == {}, opened_values_for_round_per_matrix.len() = {}", 
-                        points_for_matrix.len(), points_for_matrix.len() 
-                    );
-                    let opened_values_for_round_per_matrix =
-                        transpose(opened_values_for_round_per_matrix.to_vec());
+                    // let opened_values_for_round_by_point =
+                    //     transpose(opened_values_for_round_by_matrix.to_vec());
 
-                    let openings = opened_values_for_round_per_matrix
+                    let openings = opened_values_for_round_by_matrix
                         .into_iter()
+                        .enumerate()
                         .map(
-                            |opened_values_for_matrix_per_point: OpenedValuesForMatrix<EF>| {
-                                opened_values_for_matrix_per_point
+                            |(mat_index, opened_values_for_matrix): (
+                                usize,
+                                &OpenedValuesForMatrix<EF>,
+                            )| {
+                                opened_values_for_matrix
                                     .iter()
-                                    .enumerate()
-                                    .flat_map(|(point_ind, opened_values_for_matrix): (usize, &OpenedValuesForPoint<EF>)| {
-                                        let points = points_for_matrix[point_ind].clone();
-                                        points
-                                            .iter()
-                                            .map(|&point| {
-                                                Opening::<Val, EF>::new(
-                                                    point,
-                                                    opened_values_for_matrix.clone(),
-                                                )
-                                            })
-                                            .collect::<Vec<_>>()
-                                    })
+                                    .flat_map(
+                                        |opened_values_for_point: &OpenedValuesForPoint<EF>| {
+                                            points_for_round[mat_index]
+                                                .iter()
+                                                .map(|&point| {
+                                                    Opening::<Val, EF>::new(
+                                                        point,
+                                                        opened_values_for_point.clone(),
+                                                    )
+                                                })
+                                                .collect::<Vec<_>>()
+                                        },
+                                    )
                                     .collect::<Vec<Opening<Val, EF>>>()
                             },
                         )
