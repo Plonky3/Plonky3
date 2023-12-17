@@ -173,7 +173,7 @@ where
                     //     transpose(opened_values_for_round_by_matrix.to_vec());
 
                     let openings = opened_values_for_round_by_matrix
-                        .into_iter()
+                        .iter()
                         .enumerate()
                         .map(
                             |(mat_index, opened_values_for_matrix): (
@@ -222,12 +222,4 @@ where
     ) -> Result<(), Self::Error> {
         Ok(()) // TODO
     }
-}
-
-fn transpose<T: Clone>(vec: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    let n = vec.len();
-    let m = vec[0].len();
-    (0..m)
-        .map(|r| (0..n).map(|c| vec[c][r].clone()).collect())
-        .collect()
 }
