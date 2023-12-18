@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -82,13 +83,16 @@ where
     let zeta: SC::Challenge = challenger.sample_ext_element();
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
-            (&trace_data, &[zeta, zeta * g_subgroup]),
-            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
+            (&trace_data, &[vec![zeta, zeta * g_subgroup]]),
+            (
+                &quotient_data,
+                &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
+            ),
         ],
         challenger,
     );
     let trace_local = opened_values[0][0][0].clone();
-    let trace_next = opened_values[0][1][0].clone();
+    let trace_next = opened_values[0][0][1].clone();
     let quotient_chunks = opened_values[1][0][0].clone();
     let opened_values = OpenedValues {
         trace_local,

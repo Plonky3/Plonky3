@@ -115,6 +115,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // TODO: remove when `p3_lde::NaiveUndefinedLde` is gone
 mod tests {
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;

@@ -37,12 +37,12 @@ where
     challenger.observe(commitments.quotient_chunks.clone());
     let zeta: SC::Challenge = challenger.sample_ext_element();
 
-    let local_and_next = [zeta, zeta * g_subgroup];
+    let local_and_next = [vec![zeta, zeta * g_subgroup]];
     let commits_and_points = &[
         (commitments.trace.clone(), local_and_next.as_slice()),
         (
             commitments.quotient_chunks.clone(),
-            &[zeta.exp_power_of_2(log_quotient_degree)],
+            &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
         ),
     ];
     let values = vec![

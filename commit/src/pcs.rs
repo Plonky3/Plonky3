@@ -33,9 +33,9 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
-pub type OpenedValuesForRound<F> = Vec<OpenedValuesForPoint<F>>;
-pub type OpenedValuesForPoint<F> = Vec<OpenedValuesForMatrix<F>>;
-pub type OpenedValuesForMatrix<F> = Vec<F>;
+pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
+pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
+pub type OpenedValuesForPoint<F> = Vec<F>;
 
 pub trait UnivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
 where
@@ -46,13 +46,13 @@ where
 {
     fn open_multi_batches(
         &self,
-        prover_data_and_points: &[(&Self::ProverData, &[EF])],
+        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof);
 
     fn verify_multi_batches(
         &self,
-        commits_and_points: &[(Self::Commitment, &[EF])],
+        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
         dims: &[Vec<Dimensions>],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
