@@ -17,10 +17,10 @@ use p3_matrix::{Dimensions, Matrix, MatrixRows};
 /// The `DirectMmcs` sub-trait represents an MMS which can be directly constructed from a set of
 /// matrices. Other MMCSs may be virtual combinations of child MMCSs, or may be constructed in a
 /// streaming manner.
-pub trait Mmcs<T>: Clone {
-    type ProverData;
+pub trait Mmcs<T>: Clone + Sync {
+    type ProverData: Sync;
     type Commitment: Clone;
-    type Proof;
+    type Proof: Send + Sync;
     type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where

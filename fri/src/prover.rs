@@ -6,6 +6,7 @@ use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
@@ -37,7 +38,7 @@ pub(crate) fn prove<FC: FriConfig>(
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
-            .into_iter() // TODO: into_par_iter?
+            .into_par_iter()
             .map(|index| {
                 answer_query(
                     config,

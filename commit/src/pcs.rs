@@ -18,7 +18,7 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     type Commitment: Clone;
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
-    type ProverData;
+    type ProverData: Sync;
 
     /// The opening argument.
     type Proof;

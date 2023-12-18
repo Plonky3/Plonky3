@@ -4,15 +4,16 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 
-pub trait FriConfig {
+pub trait FriConfig: Sync {
     type Val: PrimeField64;
     type Challenge: ExtensionField<Self::Val> + TwoAdicField;
 
-    type InputMmcs: Mmcs<Self::Val>;
+    type InputMmcs: Mmcs<Self::Val> + Sync;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
+        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>
+        + Sync;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
 
@@ -50,9 +51,10 @@ impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> FriConfig
 where
     Val: PrimeField64,
     Challenge: ExtensionField<Val> + TwoAdicField,
-    InputMmcs: Mmcs<Val>,
+    InputMmcs: Mmcs<Val> + Sync,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment> + Sync,
 {
     type Val = Val;
     type Challenge = Challenge;
