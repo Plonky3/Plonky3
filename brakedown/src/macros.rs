@@ -11,6 +11,7 @@ macro_rules! brakedown {
     }};
 }
 
+#[allow(deprecated)]
 macro_rules! brakedown_to_rs {
     ($a_width:literal, $a_height:literal, $a_density:literal,
      $b_width:literal, $b_height:literal, $b_density:literal) => {
