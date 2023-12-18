@@ -2,12 +2,36 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_air::AirBuilder;
+use p3_air::{Air, AirBuilder};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_util::log2_ceil_usize;
 
 use crate::symbolic_expression::SymbolicExpression;
 use crate::SymbolicVariable;
+
+pub fn get_log_quotient_degree<F, A>(air: &A) -> usize
+where
+    F: Field,
+    A: Air<SymbolicAirBuilder<F>>,
+{
+    let constraint_degree = get_max_constraint_degree(air).max(2);
+
+    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
+    // where subtracting 1 comes from division by the zerofier.
+    // But we pad it to a power of two so that we can efficiently decompose the quotient.
+    log2_ceil_usize(constraint_degree - 1)
+}
+
+pub fn get_max_constraint_degree<F, A>(air: &A) -> usize
+where
+    F: Field,
+    A: Air<SymbolicAirBuilder<F>>,
+{
+    let mut builder = SymbolicAirBuilder::new(air.width());
+    air.eval(&mut builder);
+    builder.max_degree_multiple()
+}
 
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
 pub struct SymbolicAirBuilder<F: Field> {

@@ -8,6 +8,7 @@ use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::reverse_slice_index_bits;
 
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
 
 pub fn verify<SC, A>(
@@ -18,10 +19,9 @@ pub fn verify<SC, A>(
 ) -> Result<(), VerificationError>
 where
     SC: StarkConfig,
-    A: for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
 {
-    // let degree_bits = 6; // TODO
-    let log_quotient_degree = 1; // TODO
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
 
     let Proof {
         commitments,

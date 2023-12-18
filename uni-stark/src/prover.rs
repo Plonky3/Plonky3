@@ -11,10 +11,10 @@ use p3_field::{
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::SymbolicAirBuilder;
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder, StarkConfig,
     ZerofierOnCoset,
@@ -34,11 +34,7 @@ where
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let max_constraint_degree = get_max_constraint_degree::<SC, A>(air);
-    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
-    // where subtracting 1 comes from division by the zerofier.
-    // But we pad it to a power of two so that we can efficiently decompose the quotient.
-    let log_quotient_degree = log2_ceil_usize(max_constraint_degree - 1);
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 
@@ -196,14 +192,4 @@ where
             })
         })
         .collect()
-}
-
-fn get_max_constraint_degree<SC, A>(air: &A) -> usize
-where
-    SC: StarkConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>>,
-{
-    let mut builder = SymbolicAirBuilder::new(air.width());
-    air.eval(&mut builder);
-    builder.max_degree_multiple()
 }
