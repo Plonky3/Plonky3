@@ -70,7 +70,7 @@ where
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
-    type Lde<'a>: MatrixGet<Val> + Sync
+    type Lde<'a>: MatrixRows<Val> + MatrixGet<Val> + Sync
     where
         Self: 'a;
 

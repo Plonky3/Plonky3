@@ -1,4 +1,4 @@
-use crate::{Matrix, MatrixRows};
+use crate::{Matrix, MatrixGet, MatrixRows};
 
 pub struct VerticallyStridedMatrixView<Inner> {
     pub(crate) inner: Inner,
@@ -17,6 +17,12 @@ impl<T, Inner: Matrix<T>> Matrix<T> for VerticallyStridedMatrixView<Inner> {
         let remainder = h % self.stride;
         let final_stride = self.offset < remainder;
         full_strides + final_stride as usize
+    }
+}
+
+impl<T, Inner: MatrixGet<T>> MatrixGet<T> for VerticallyStridedMatrixView<Inner> {
+    fn get(&self, r: usize, c: usize) -> T {
+        self.inner.get(r * self.stride + self.offset, c)
     }
 }
 
