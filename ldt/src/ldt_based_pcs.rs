@@ -155,11 +155,8 @@ where
 
                         matrices
                             .iter()
-                            .enumerate()
-                            .map(|(mat_ind, &mat)| {
-                                let points_for_mat_ref = &points_per_matrix[mat_ind];
-                                eval_at_points(mat, points_for_mat_ref)
-                            })
+                            .zip(*points_per_matrix)
+                            .map(|(&mat, points_for_mat)| eval_at_points(mat, points_for_mat))
                             .collect::<OpenedValuesForRound<EF>>()
                     })
                     .collect::<OpenedValues<EF>>()
@@ -181,13 +178,12 @@ where
 
                     let openings = opened_values_for_round_by_matrix
                         .iter()
-                        .enumerate()
+                        .zip(points_for_round)
                         .map(
-                            |(mat_index, opened_values_for_matrix): (
-                                usize,
+                            |(opened_values_for_matrix, points_for_matrix): (
                                 &OpenedValuesForMatrix<EF>,
+                                &Vec<EF>,
                             )| {
-                                let points_for_matrix = &points_for_round[mat_index];
                                 opened_values_for_matrix
                                     .iter()
                                     .zip(points_for_matrix)
@@ -244,9 +240,9 @@ where
                 )| {
                     let openings = opened_values_for_round_by_matrix
                         .into_iter()
-                        .enumerate()
-                        .map(|(mat_index, opened_values_for_matrix_by_point)| {
-                            points[mat_index]
+                        .zip(points)
+                        .map(|(opened_values_for_matrix_by_point, points_for_matrix)| {
+                            points_for_matrix
                                 .iter()
                                 .zip(opened_values_for_matrix_by_point)
                                 .map(|(&point, opened_values_for_point)| {
