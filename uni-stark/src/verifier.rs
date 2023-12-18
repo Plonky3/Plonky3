@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{Air, TwoRowMatrixView};
+use p3_air::{Air, BaseAir, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::UnivariatePcs;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
@@ -22,6 +22,7 @@ where
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
 {
     let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
+    let quotient_degree = 1 << log_quotient_degree;
 
     let Proof {
         commitments,
@@ -29,6 +30,15 @@ where
         opening_proof,
         degree_bits,
     } = proof;
+
+    let air_width = <A as BaseAir<SC::Val>>::width(air);
+    let quotient_chunks = quotient_degree * <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
+    let valid_shape = opened_values.trace_local.len() == air_width
+        && opened_values.trace_next.len() == air_width
+        && opened_values.quotient_chunks.len() == quotient_chunks;
+    if !valid_shape {
+        return Err(VerificationError::InvalidProofShape);
+    }
 
     let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
@@ -52,14 +62,13 @@ where
         ]],
         vec![vec![opened_values.quotient_chunks.clone()]],
     ];
-    // TODO
     let dims = &[
         vec![Dimensions {
-            width: opened_values.trace_local.len(),
+            width: air_width,
             height: 1 << degree_bits,
         }],
         vec![Dimensions {
-            width: opened_values.quotient_chunks.len(),
+            width: quotient_chunks,
             height: 1 << degree_bits,
         }],
     ];
@@ -119,6 +128,7 @@ where
 
 #[derive(Debug)]
 pub enum VerificationError {
+    InvalidProofShape,
     /// An error occurred while verifying the claimed openings.
     InvalidOpeningArgument,
     /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
