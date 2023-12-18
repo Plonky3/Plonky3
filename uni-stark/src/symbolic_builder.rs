@@ -15,6 +15,7 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
+    // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
     let constraint_degree = get_max_constraint_degree(air).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
@@ -28,9 +29,21 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
+    get_symbolic_constraints(air)
+        .iter()
+        .map(|c| c.degree_multiple())
+        .max()
+        .unwrap_or(0)
+}
+
+pub fn get_symbolic_constraints<F, A>(air: &A) -> Vec<SymbolicExpression<F>>
+where
+    F: Field,
+    A: Air<SymbolicAirBuilder<F>>,
+{
     let mut builder = SymbolicAirBuilder::new(air.width());
     air.eval(&mut builder);
-    builder.max_degree_multiple()
+    builder.constraints()
 }
 
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
@@ -57,12 +70,8 @@ impl<F: Field> SymbolicAirBuilder<F> {
         }
     }
 
-    pub(crate) fn max_degree_multiple(&self) -> usize {
+    pub(crate) fn constraints(self) -> Vec<SymbolicExpression<F>> {
         self.constraints
-            .iter()
-            .map(|c| c.degree_multiple())
-            .max()
-            .unwrap_or(0)
     }
 }
 
