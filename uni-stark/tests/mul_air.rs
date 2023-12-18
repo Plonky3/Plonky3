@@ -45,10 +45,6 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let b = main_local[start + 1];
             let c = main_local[start + 2];
             builder.assert_zero(a * b - c);
-
-            // TODO: Temporarily added this silly degree 3 constraint because we're getting an
-            // OodEvaluationMismatch when log_quotient_degree = 0.
-            builder.assert_zero(a * b * c - c * b * a);
         }
     }
 }

@@ -10,7 +10,7 @@ use p3_field::{
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixGet};
+use p3_matrix::{Matrix, MatrixGet, MatrixRows};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
@@ -50,12 +50,15 @@ where
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
 
+    let log_stride_for_quotient = pcs.log_blowup() - log_quotient_degree;
+    let trace_lde_for_quotient = trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);
+
     let quotient_values = quotient_values(
         config,
         air,
         log_degree,
         log_quotient_degree,
-        trace_lde,
+        trace_lde_for_quotient,
         alpha,
     );
 
