@@ -6,6 +6,8 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
 /// polynomials defined over the field `F`.
@@ -15,13 +17,13 @@ use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
 pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     /// The commitment that's sent to the verifier.
-    type Commitment: Clone;
+    type Commitment: Clone + Serialize + DeserializeOwned;
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
     type ProverData;
 
     /// The opening argument.
-    type Proof;
+    type Proof: Serialize + DeserializeOwned;
 
     type Error;
 

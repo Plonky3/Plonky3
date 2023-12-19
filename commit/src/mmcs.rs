@@ -4,6 +4,8 @@ use core::fmt::Debug;
 
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme; it
 /// supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
@@ -19,8 +21,8 @@ use p3_matrix::{Dimensions, Matrix, MatrixRows};
 /// streaming manner.
 pub trait Mmcs<T>: Clone {
     type ProverData;
-    type Commitment: Clone;
-    type Proof;
+    type Commitment: Clone + Serialize + DeserializeOwned;
+    type Proof: Serialize + DeserializeOwned;
     type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where

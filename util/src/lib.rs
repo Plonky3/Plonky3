@@ -2,7 +2,11 @@
 
 #![no_std]
 
+extern crate alloc;
+
 use core::hint::unreachable_unchecked;
+
+pub mod array_serialization;
 
 /// Computes `ceil(a / b)`. Assumes `a + b` does not overflow.
 #[must_use]

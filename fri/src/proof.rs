@@ -1,9 +1,12 @@
 use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
+use serde::{Deserialize, Serialize};
 
 use crate::FriConfig;
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct FriProof<FC: FriConfig> {
     pub(crate) commit_phase_commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
     pub(crate) query_proofs: Vec<QueryProof<FC>>,
@@ -12,6 +15,8 @@ pub struct FriProof<FC: FriConfig> {
     pub(crate) final_poly: FC::Challenge,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct QueryProof<FC: FriConfig> {
     /// For each input commitment, this contains openings of each matrix at the queried location,
     /// along with an opening proof.
@@ -24,6 +29,7 @@ pub struct QueryProof<FC: FriConfig> {
 
 /// Openings of each input codeword at the queried location, along with an opening proof, for a
 /// single commitment round.
+#[derive(Serialize, Deserialize)]
 pub struct InputOpening<FC: FriConfig> {
     /// The opening of each input codeword at the queried location.
     pub(crate) opened_values: Vec<Vec<FC::Val>>,
@@ -31,6 +37,7 @@ pub struct InputOpening<FC: FriConfig> {
     pub(crate) opening_proof: <FC::InputMmcs as Mmcs<FC::Val>>::Proof,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct CommitPhaseProofStep<FC: FriConfig> {
     /// The opening of the commit phase codeword at the sibling location.
     // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI

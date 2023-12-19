@@ -17,9 +17,10 @@ use p3_field::{
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
 pub struct Goldilocks {
     /// Not necessarily canonical.
     value: u64,
