@@ -17,12 +17,6 @@ use p3_field::{AbstractExtensionField, Field};
 pub trait CanObserve<T> {
     fn observe(&mut self, value: T);
 
-    fn observe_iter<I: IntoIterator<Item = T>>(&mut self, values: I) {
-        for value in values {
-            self.observe(value)
-        }
-    }
-
     fn observe_slice(&mut self, values: &[T])
     where
         T: Clone,

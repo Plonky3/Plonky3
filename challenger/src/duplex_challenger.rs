@@ -75,6 +75,18 @@ where
     }
 }
 
+impl<F, P, const N: usize, const WIDTH: usize> CanObserve<[F; N]> for DuplexChallenger<F, P, WIDTH>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn observe(&mut self, values: [F; N]) {
+        for value in values {
+            self.observe(value);
+        }
+    }
+}
+
 impl<F, P, const WIDTH: usize> CanSample<F> for DuplexChallenger<F, P, WIDTH>
 where
     F: Copy,

@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{DirectMmcs, Mmcs, MmcsCommitmentItem};
+use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 
 pub trait FriConfig {
@@ -12,7 +12,7 @@ pub trait FriConfig {
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<MmcsCommitmentItem<Self::CommitPhaseMmcs, Self::Challenge>>;
+        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
 
@@ -52,7 +52,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     InputMmcs: Mmcs<Val>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<MmcsCommitmentItem<CommitPhaseMmcs, Challenge>>,
+    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
     type Challenge = Challenge;

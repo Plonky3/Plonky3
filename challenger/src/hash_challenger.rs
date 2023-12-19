@@ -54,6 +54,19 @@ where
     }
 }
 
+impl<F, H, const N: usize, const OUT_LEN: usize> CanObserve<[F; N]>
+    for HashChallenger<F, H, OUT_LEN>
+where
+    F: Field,
+    H: CryptographicHasher<F, [F; OUT_LEN]>,
+{
+    fn observe(&mut self, values: [F; N]) {
+        for value in values {
+            self.observe(value);
+        }
+    }
+}
+
 impl<F, H, const OUT_LEN: usize> CanSample<F> for HashChallenger<F, H, OUT_LEN>
 where
     F: Field,

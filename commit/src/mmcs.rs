@@ -21,7 +21,7 @@ use serde::Serialize;
 /// streaming manner.
 pub trait Mmcs<T>: Clone {
     type ProverData;
-    type Commitment: Clone + Serialize + DeserializeOwned + IntoIterator;
+    type Commitment: Clone + Serialize + DeserializeOwned;
     type Proof: Serialize + DeserializeOwned;
     type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
@@ -83,5 +83,3 @@ pub trait DirectMmcs<T>: Mmcs<T> {
         self.commit_matrix(RowMajorMatrix::new_col(input))
     }
 }
-
-pub type MmcsCommitmentItem<M, T> = <<M as Mmcs<T>>::Commitment as IntoIterator>::Item;
