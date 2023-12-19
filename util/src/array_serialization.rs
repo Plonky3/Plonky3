@@ -1,11 +1,10 @@
-use core::{convert::TryInto, marker::PhantomData};
-
 use alloc::vec::Vec;
-use serde::{
-    de::{SeqAccess, Visitor},
-    ser::SerializeTuple,
-    Deserialize, Deserializer, Serialize, Serializer,
-};
+use core::convert::TryInto;
+use core::marker::PhantomData;
+
+use serde::de::{SeqAccess, Visitor};
+use serde::ser::SerializeTuple;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub fn serialize<S: Serializer, T: Serialize, const N: usize>(
     data: &[T; N],

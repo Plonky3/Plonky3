@@ -13,7 +13,8 @@ use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_matrix::Dimensions;
 pub use quotient::*;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 extern crate alloc;
 

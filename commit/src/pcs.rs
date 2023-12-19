@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
 /// polynomials defined over the field `F`.
