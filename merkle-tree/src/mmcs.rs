@@ -9,6 +9,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
+use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
 
@@ -35,6 +36,23 @@ impl<P, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, H, C, DIGEST_ELE
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FieldDigest<F, const DIGEST_ELEMS: usize>(
+    #[serde(
+        with = "p3_util::array_serialization",
+        bound(serialize = "F: Serialize", deserialize = "F: Deserialize<'de>")
+    )]
+    pub [F; DIGEST_ELEMS],
+);
+
+impl<F, const DIGEST_ELEMS: usize> IntoIterator for FieldDigest<F, DIGEST_ELEMS> {
+    type Item = F;
+    type IntoIter = <[F; DIGEST_ELEMS] as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 impl<P, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Scalar>
     for FieldMerkleTreeMmcs<P, H, C, DIGEST_ELEMS>
 where
@@ -47,8 +65,8 @@ where
     C: Sync,
 {
     type ProverData = FieldMerkleTree<P::Scalar, DIGEST_ELEMS>;
-    type Commitment = [P::Scalar; DIGEST_ELEMS];
-    type Proof = Vec<[P::Scalar; DIGEST_ELEMS]>;
+    type Commitment = FieldDigest<P::Scalar, DIGEST_ELEMS>;
+    type Proof = Vec<FieldDigest<P::Scalar, DIGEST_ELEMS>>;
     type Error = ();
     type Mat<'a> = RowMajorMatrixView<'a, P::Scalar> where H: 'a, C: 'a;
 
@@ -56,7 +74,10 @@ where
         &self,
         index: usize,
         prover_data: &FieldMerkleTree<P::Scalar, DIGEST_ELEMS>,
-    ) -> (Vec<Vec<P::Scalar>>, Vec<[P::Scalar; DIGEST_ELEMS]>) {
+    ) -> (
+        Vec<Vec<P::Scalar>>,
+        Vec<FieldDigest<P::Scalar, DIGEST_ELEMS>>,
+    ) {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
@@ -72,7 +93,7 @@ where
             .collect_vec();
 
         let proof = (0..log_max_height)
-            .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
+            .map(|i| FieldDigest(prover_data.digest_layers[i][(index >> i) ^ 1]))
             .collect();
 
         (openings, proof)
@@ -87,11 +108,11 @@ where
 
     fn verify_batch(
         &self,
-        commit: &[P::Scalar; DIGEST_ELEMS],
+        commit: &FieldDigest<P::Scalar, DIGEST_ELEMS>,
         dimensions: &[Dimensions],
         mut index: usize,
         opened_values: &[Vec<P::Scalar>],
-        proof: &Vec<[P::Scalar; DIGEST_ELEMS]>,
+        proof: &Vec<FieldDigest<P::Scalar, DIGEST_ELEMS>>,
     ) -> Result<(), Self::Error> {
         let mut heights_tallest_first = dimensions
             .iter()
@@ -114,11 +135,11 @@ where
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
-        for &sibling in proof.iter() {
+        for sibling in proof.iter() {
             let (left, right) = if index & 1 == 0 {
-                (root, sibling)
+                (root, sibling.0)
             } else {
-                (sibling, root)
+                (sibling.0, root)
             };
 
             root = self.compress.compress([left, right]);
@@ -140,7 +161,7 @@ where
             }
         }
 
-        if root == *commit {
+        if root == commit.0 {
             Ok(())
         } else {
             Err(())
@@ -164,7 +185,7 @@ where
         inputs: Vec<RowMajorMatrix<P::Scalar>>,
     ) -> (Self::Commitment, Self::ProverData) {
         let tree = FieldMerkleTree::new::<P, H, C>(&self.hash, &self.compress, inputs);
-        let root = tree.root();
+        let root = FieldDigest(tree.root());
         (root, tree)
     }
 }
@@ -227,7 +248,7 @@ mod tests {
                 compress.compress([hash.hash_item(v[6]), hash.hash_item(v[7])]),
             ]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit.0, expected_result);
     }
 
     #[test]
@@ -250,7 +271,7 @@ mod tests {
             hash.hash_slice(&[F::zero(), F::one()]),
             hash.hash_slice(&[F::two(), F::one()]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit.0, expected_result);
     }
 
     #[test]
@@ -281,7 +302,7 @@ mod tests {
             ]),
             compress.compress([hash.hash_slice(&[F::two(), F::two()]), default_digest]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit.0, expected_result);
     }
 
     #[test]
@@ -333,7 +354,7 @@ mod tests {
                 mat_2_leaf_hashes[1],
             ]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit.0, expected_result);
 
         let (opened_values, _proof) = mmcs.open_batch(2, &prover_data);
         assert_eq!(
@@ -407,7 +428,7 @@ mod tests {
 
         // open the 3rd row of each matrix, mess with proof, and verify
         let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
-        proof[0][0] += F::one();
+        proof[0].0[0] += F::one();
         mmcs.verify_batch(
             &commit,
             &large_mat_dims.chain(small_mat_dims).collect_vec(),

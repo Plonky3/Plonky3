@@ -24,7 +24,7 @@ pub trait StarkConfig {
 
     /// The challenger (Fiat-Shamir) implementation used.
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment>;
+        + CanObserve<<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment as IntoIterator>::Item>;
 
     fn pcs(&self) -> &Self::Pcs;
 }
@@ -53,7 +53,9 @@ where
     PackedChallenge: AbstractExtensionField<Val::Packing, F = Challenge>,
     Pcs: UnivariatePcsWithLde<Val, Challenge, RowMajorMatrix<Val>, Challenger>,
     Challenger: FieldChallenger<Val>
-        + CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
+        + CanObserve<
+            <<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment as IntoIterator>::Item,
+        >,
 {
     type Val = Val;
     type PackedVal = Val::Packing;

@@ -136,7 +136,7 @@ fn commit_phase<FC: FriConfig>(
         // TODO: avoid cloning
         let leaves = RowMajorMatrix::new(current.clone(), 2);
         let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
-        challenger.observe(commit.clone());
+        challenger.observe_iter(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 

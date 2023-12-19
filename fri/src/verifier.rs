@@ -38,7 +38,7 @@ pub(crate) fn verify<FC: FriConfig>(
         .commit_phase_commits
         .iter()
         .map(|comm| {
-            challenger.observe(comm.clone());
+            challenger.observe_iter(comm.clone());
             challenger.sample_ext_element()
         })
         .collect();

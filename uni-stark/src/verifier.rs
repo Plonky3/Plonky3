@@ -42,9 +42,9 @@ where
 
     let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
-    challenger.observe(commitments.trace.clone());
+    challenger.observe_iter(commitments.trace.clone());
     let alpha: SC::Challenge = challenger.sample_ext_element();
-    challenger.observe(commitments.quotient_chunks.clone());
+    challenger.observe_iter(commitments.quotient_chunks.clone());
     let zeta: SC::Challenge = challenger.sample_ext_element();
 
     let local_and_next = [vec![zeta, zeta * g_subgroup]];

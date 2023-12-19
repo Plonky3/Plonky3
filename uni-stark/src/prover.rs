@@ -43,7 +43,7 @@ where
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
-    challenger.observe(trace_commit.clone());
+    challenger.observe_iter(trace_commit.clone());
     let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
     let mut trace_ldes = pcs.get_ldes(&trace_data);
@@ -76,7 +76,7 @@ where
                 pcs.coset_shift().exp_power_of_2(log_quotient_degree),
             )
         });
-    challenger.observe(quotient_commit.clone());
+    challenger.observe_iter(quotient_commit.clone());
 
     let commitments = Commitments {
         trace: trace_commit,

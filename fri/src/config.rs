@@ -12,7 +12,9 @@ pub trait FriConfig {
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
+        + CanObserve<
+            <<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment as IntoIterator>::Item,
+        >;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
 
@@ -52,7 +54,8 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     InputMmcs: Mmcs<Val>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger: FieldChallenger<Val>
+        + CanObserve<<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment as IntoIterator>::Item>,
 {
     type Val = Val;
     type Challenge = Challenge;

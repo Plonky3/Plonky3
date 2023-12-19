@@ -4,6 +4,7 @@ use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
+use serde::{de::DeserializeOwned, Serialize};
 
 use p3_util::log2_ceil_u64;
 
@@ -155,6 +156,8 @@ pub trait Field:
     + Send
     + Sync
     + Display
+    + Serialize
+    + DeserializeOwned
 {
     type Packing: PackedField<Scalar = Self>;
 

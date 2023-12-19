@@ -11,10 +11,11 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 use crate::Mersenne31;
 
-#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Mersenne31Complex<AF: AbstractField<F = Mersenne31>> {
     pub(crate) parts: [AF; 2],
 }

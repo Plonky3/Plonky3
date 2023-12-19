@@ -1,6 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
@@ -19,8 +21,8 @@ use p3_matrix::{Dimensions, Matrix, MatrixRows};
 /// streaming manner.
 pub trait Mmcs<T>: Clone {
     type ProverData;
-    type Commitment: Clone;
-    type Proof;
+    type Commitment: Clone + Serialize + DeserializeOwned + IntoIterator;
+    type Proof: Serialize + DeserializeOwned;
     type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where
