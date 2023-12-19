@@ -83,3 +83,5 @@ pub trait DirectMmcs<T>: Mmcs<T> {
         self.commit_matrix(RowMajorMatrix::new_col(input))
     }
 }
+
+pub type MmcsCommitmentItem<M, T> = <<M as Mmcs<T>>::Commitment as IntoIterator>::Item;

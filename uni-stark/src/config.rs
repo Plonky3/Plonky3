@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, UnivariatePcsWithLde};
+use p3_commit::{PcsCommitmentItem, UnivariatePcsWithLde};
 use p3_field::{AbstractExtensionField, ExtensionField, PackedField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -24,7 +24,7 @@ pub trait StarkConfig {
 
     /// The challenger (Fiat-Shamir) implementation used.
     type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<<Self::Pcs as Pcs<Self::Val, RowMajorMatrix<Self::Val>>>::Commitment as IntoIterator>::Item>;
+        + CanObserve<PcsCommitmentItem<Self::Pcs, Self::Val, RowMajorMatrix<Self::Val>>>;
 
     fn pcs(&self) -> &Self::Pcs;
 }
@@ -52,10 +52,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     PackedChallenge: AbstractExtensionField<Val::Packing, F = Challenge>,
     Pcs: UnivariatePcsWithLde<Val, Challenge, RowMajorMatrix<Val>, Challenger>,
-    Challenger: FieldChallenger<Val>
-        + CanObserve<
-            <<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment as IntoIterator>::Item,
-        >,
+    Challenger: FieldChallenger<Val> + CanObserve<PcsCommitmentItem<Pcs, Val, RowMajorMatrix<Val>>>,
 {
     type Val = Val;
     type PackedVal = Val::Packing;

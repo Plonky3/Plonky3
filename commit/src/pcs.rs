@@ -33,6 +33,8 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     }
 }
 
+pub type PcsCommitmentItem<P, Val, In> = <<P as Pcs<Val, In>>::Commitment as IntoIterator>::Item;
+
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
 pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
 pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
