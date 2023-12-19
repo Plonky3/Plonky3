@@ -18,6 +18,8 @@ use p3_symmetric::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_poseidon2(criterion);
@@ -96,6 +98,7 @@ where
     C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
     C: Sync,
+    [P::Scalar; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     Standard: Distribution<P::Scalar>,
 {
     const ROWS: usize = 1 << 15;
