@@ -145,6 +145,9 @@ fn idft_postprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Base> {
     let mut output = Vec::with_capacity(input.width() * input.height() * 2);
     let mut buf = Vec::with_capacity(input.width());
 
+    // Convert each row of input into two rows, the first row
+    // having the real parts of the input, the second row
+    // having the imaginary parts.
     for row in input.rows() {
         for ext in row {
             output.push(ext.real());
