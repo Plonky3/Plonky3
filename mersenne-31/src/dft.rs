@@ -137,22 +137,23 @@ fn idft_preprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
 ///
 /// This function is inverse to `dft_preprocess()` above.
 fn idft_postprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Base> {
-    // TODO: Re-write this without using `unzip()`, which needlessly
-    // allocates two new temporary vectors while processing each row.
-    RowMajorMatrix::new(
-        input
-            .rows()
-            .flat_map(|row| {
-                // Convert each row of input into two rows, the first row
-                // having the real parts of the input, the second row
-                // having the imaginary parts.
-                let (reals, imags): (Vec<_>, Vec<_>) =
-                    row.iter().map(|x| (x.real(), x.imag())).unzip();
-                reals.into_iter().chain(imags)
-            })
-            .collect(),
-        input.width(),
-    )
+    // Allocate necessary `Vec`s upfront:
+    //   1) The actual output,
+    //   2) A temporary buf to store the imaginary parts.
+    //      This buf is filled and flushed per row
+    //      throughout postprocessing to save on allocations.
+    let mut output = Vec::with_capacity(input.width() * input.height() * 2);
+    let mut buf = Vec::with_capacity(input.width());
+
+    for row in input.rows() {
+        for ext in row {
+            output.push(ext.real());
+            buf.push(ext.imag());
+        }
+        output.append(&mut buf);
+    }
+
+    RowMajorMatrix::new(output, input.width())
 }
 
 /// The DFT for Mersenne31
