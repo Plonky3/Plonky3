@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-
 use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
@@ -8,7 +7,7 @@ use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
 };
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -16,48 +15,92 @@ use tracing::{info_span, instrument};
 
 use crate::symbolic_builder::SymbolicAirBuilder;
 use crate::{
-    decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder, StarkConfig,
-    ZerofierOnCoset,
+    config, decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder,
+    StarkConfig, ZerofierOnCoset,
 };
 
-#[instrument(skip_all)]
-pub fn prove<SC, A>(
+pub fn open<SC,A>(
+    config: &SC,
+    trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+	>>::ProverData,
+    quotient_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+	>>::ProverData,
+    log_degree: usize,
+    log_quotient_degree:usize,
+    challenger: &mut SC::Challenger
+) -> (
+<<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::Proof,
+ OpenedValues<<SC as config::StarkConfig>::Challenge>
+)
+where
+    SC: StarkConfig
+{
+    let pcs = config.pcs();    
+    let g_subgroup = SC::Val::two_adic_generator(log_degree);    
+    let zeta: SC::Challenge = challenger.sample_ext_element();
+    let (opened_values, opening_proof) = pcs.open_multi_batches(
+        &[
+            (&trace_data, &[zeta, zeta * g_subgroup]),
+            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
+        ],
+        challenger,
+    );
+    
+    let trace_local = opened_values[0][0][0].clone();
+    let trace_next = opened_values[0][1][0].clone();
+    let quotient_chunks = opened_values[1][0][0].clone();
+    let opened_values = OpenedValues {
+        trace_local,
+        trace_next,
+        quotient_chunks,
+    };
+
+    (opening_proof, opened_values)
+
+}
+
+pub fn get_quotient<SC,A>(
+    log_degree: usize,
+    log_quotient_degree: usize,
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
-    trace: RowMajorMatrix<SC::Val>,
-) -> Proof<SC>
+    trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::ProverData,
+) -> (
+    <<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::Commitment,
+    <<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::ProverData
+)
 where
     SC: StarkConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>
+
 {
-    let degree = trace.height();
-    let log_degree = log2_strict_usize(degree);
-
-    let max_constraint_degree = get_max_constraint_degree::<SC, A>(air);
-    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
-    // where subtracting 1 comes from division by the zerofier.
-    // But we pad it to a power of two so that we can efficiently decompose the quotient.
-    let log_quotient_degree = log2_ceil_usize(max_constraint_degree - 1);
-
-    let g_subgroup = SC::Val::two_adic_generator(log_degree);
-
     let pcs = config.pcs();
-    let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
-    challenger.observe(trace_commit.clone());
     let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
-    let mut trace_ldes = pcs.get_ldes(&trace_data);
-    assert_eq!(trace_ldes.len(), 1);
-    let trace_lde = trace_ldes.pop().unwrap();
     let quotient_values = quotient_values(
         config,
         air,
         log_degree,
         log_quotient_degree,
-        trace_lde,
+        trace_data,
         alpha,
     );
 
@@ -75,29 +118,73 @@ where
                 pcs.coset_shift().exp_power_of_2(log_quotient_degree),
             )
         });
+    (quotient_commit, quotient_data)
+}
+
+pub fn get_trace_lde<SC>(
+    config: &SC,
+    trace: RowMajorMatrix<SC::Val>,
+) -> (
+    <<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::Commitment,
+    <<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::ProverData,
+)
+where
+    SC: StarkConfig,
+{
+    let pcs = config.pcs();
+    let (trace_commit, trace_data) =
+        info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
+
+    (trace_commit, trace_data)
+}
+
+#[instrument(skip_all)]
+pub fn prove<SC, A>(
+    config: &SC,
+    air: &A,
+    challenger: &mut SC::Challenger,
+    trace: RowMajorMatrix<SC::Val>,
+) -> Proof<SC>
+where
+    SC: StarkConfig,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+{
+    let log_degree = log2_strict_usize(trace.height());
+    let log_quotient_degree = log2_ceil_usize(get_max_constraint_degree::<SC, A>(air) - 1);
+
+    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
+    // where subtracting 1 comes from division by the zerofier.
+    // But we pad it to a power of two so that we can efficiently decompose the quotient.
+
+    let (trace_commit, trace_data) = get_trace_lde::<SC>(config, trace);
+
+    challenger.observe(trace_commit.clone());
+    
+    let (quotient_commit, quotient_data) = get_quotient::<SC,A>(
+	log_degree,
+	log_quotient_degree,
+	config,
+	air,
+	challenger,
+	&trace_data);
+    
     challenger.observe(quotient_commit.clone());
+
+
+    let (opening_proof, opened_values) =
+	open::<SC,A>(config, &trace_data, &quotient_data, log_degree, log_quotient_degree, challenger);
 
     let commitments = Commitments {
         trace: trace_commit,
         quotient_chunks: quotient_commit,
-    };
-
-    let zeta: SC::Challenge = challenger.sample_ext_element();
-    let (opened_values, opening_proof) = pcs.open_multi_batches(
-        &[
-            (&trace_data, &[zeta, zeta * g_subgroup]),
-            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
-        ],
-        challenger,
-    );
-    let trace_local = opened_values[0][0][0].clone();
-    let trace_next = opened_values[0][1][0].clone();
-    let quotient_chunks = opened_values[1][0][0].clone();
-    let opened_values = OpenedValues {
-        trace_local,
-        trace_next,
-        quotient_chunks,
-    };
+    };    
+    
     Proof {
         commitments,
         opened_values,
@@ -106,20 +193,39 @@ where
     }
 }
 
+#[instrument(skip_all)]
+pub fn batch_prove<SC, A>(
+    config: &SC,
+    air: &Vec<A>,
+    challenger: &mut SC::Challenger,
+    trace: Vec<RowMajorMatrix<SC::Val>>,
+) where
+    SC: StarkConfig,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+{
+}
+
 #[instrument(name = "compute quotient polynomial", skip_all)]
-fn quotient_values<SC, A, Mat>(
+fn quotient_values<SC, A>(
     config: &SC,
     air: &A,
     degree_bits: usize,
     quotient_degree_bits: usize,
-    trace_lde: Mat,
+    trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::ProverData,
     alpha: SC::Challenge,
 ) -> Vec<SC::Challenge>
 where
     SC: StarkConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
-    Mat: MatrixGet<SC::Val> + Sync,
 {
+    let pcs = config.pcs();
+    let mut trace_ldes = pcs.get_ldes(trace_data);
+    assert_eq!(trace_ldes.len(), 1);
+    let trace_lde = trace_ldes.pop().unwrap();
+
     let degree = 1 << degree_bits;
     let quotient_size_bits = degree_bits + quotient_degree_bits;
     let quotient_size = 1 << quotient_size_bits;

@@ -23,3 +23,4 @@ pub use prover::*;
 pub use symbolic_variable::*;
 pub use verifier::*;
 pub use zerofier_coset::*;
+pub use symbolic_builder::*;
