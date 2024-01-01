@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
@@ -7,16 +8,18 @@ use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
 };
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Matrix, MatrixGet};
+
+use p3_matrix::dense::{RowMajorMatrix,RowMajorMatrixView};
+use p3_matrix::{Matrix, MatrixGet, MatrixRows};
+
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::{log2_strict_usize,log2_ceil_usize};
 use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::SymbolicAirBuilder;
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     config, decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder,
-    StarkConfig, ZerofierOnCoset,
+    StarkConfig, ZerofierOnCoset, get_max_constraint_degree
 };
 
 pub fn open<SC,A>(
@@ -47,8 +50,8 @@ where
     let zeta: SC::Challenge = challenger.sample_ext_element();
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
-            (&trace_data, &[zeta, zeta * g_subgroup]),
-            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
+            (&trace_data, &[vec![zeta], vec![zeta * g_subgroup]]),
+            (&quotient_data, &[vec![zeta.exp_power_of_2(log_quotient_degree)]]),
         ],
         challenger,
     );
@@ -56,6 +59,7 @@ where
     let trace_local = opened_values[0][0][0].clone();
     let trace_next = opened_values[0][1][0].clone();
     let quotient_chunks = opened_values[1][0][0].clone();
+
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
@@ -91,8 +95,8 @@ where
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>
 
 {
-    let pcs = config.pcs();
 
+    let pcs = config.pcs();
     let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
     let quotient_values = quotient_values(
@@ -156,7 +160,7 @@ where
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     let log_degree = log2_strict_usize(trace.height());
-    let log_quotient_degree = log2_ceil_usize(get_max_constraint_degree::<SC, A>(air) - 1);
+    let log_quotient_degree = log2_ceil_usize(get_max_constraint_degree(air) - 1);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the zerofier.
@@ -183,8 +187,8 @@ where
     let commitments = Commitments {
         trace: trace_commit,
         quotient_chunks: quotient_commit,
-    };    
-    
+    };
+
     Proof {
         commitments,
         opened_values,
@@ -215,17 +219,26 @@ fn quotient_values<SC, A>(
         <SC as config::StarkConfig>::Val,
         RowMajorMatrix<<SC as config::StarkConfig>::Val>,
     >>::ProverData,
-    alpha: SC::Challenge,
+    alpha: SC::Challenge
 ) -> Vec<SC::Challenge>
 where
     SC: StarkConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     let pcs = config.pcs();
-    let mut trace_ldes = pcs.get_ldes(trace_data);
+
+    let mut trace_ldes = pcs.get_ldes(&trace_data);
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
 
+    let log_stride_for_quotient = pcs.log_blowup() - quotient_degree_bits;
+    let trace_lde = trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);    
+
+/*    
+    let mut trace_ldes = pcs.get_ldes(trace_data);
+    assert_eq!(trace_ldes.len(), 1);
+    let trace_lde = trace_ldes.pop().unwrap();
+*/
     let degree = 1 << degree_bits;
     let quotient_size_bits = degree_bits + quotient_degree_bits;
     let quotient_size = 1 << quotient_size_bits;
@@ -301,14 +314,4 @@ where
             })
         })
         .collect()
-}
-
-fn get_max_constraint_degree<SC, A>(air: &A) -> usize
-where
-    SC: StarkConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>>,
-{
-    let mut builder = SymbolicAirBuilder::new(air.width());
-    air.eval(&mut builder);
-    builder.max_degree_multiple()
 }

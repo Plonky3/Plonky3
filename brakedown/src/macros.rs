@@ -21,6 +21,7 @@ macro_rules! brakedown_to_rs {
             $b_width,
             $b_height,
             $b_density,
+            #[allow(deprecated)] // TODO: Remove when UndefinedLDE is gone.
             p3_reed_solomon::UndefinedReedSolomonCode::new(
                 p3_lde::NaiveUndefinedLde,
                 $b_width,

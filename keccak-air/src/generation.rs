@@ -17,8 +17,8 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
     let mut trace =
         RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
-    assert!(prefix.is_empty(), "Data was not aligned");
-    assert!(suffix.is_empty(), "Data was not aligned");
+    assert!(prefix.is_empty(), "Alignment should match");
+    assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
     let padded_inputs = inputs.into_iter().chain(iter::repeat([0; 25]));

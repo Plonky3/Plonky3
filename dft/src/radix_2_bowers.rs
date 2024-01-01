@@ -2,17 +2,15 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 
 use crate::butterflies::{
     dif_butterfly_on_rows, dit_butterfly_on_rows, twiddle_free_butterfly_on_rows,
 };
-use crate::util::{
-    bit_reversed_zero_pad, divide_by_height, reverse_bits, reverse_matrix_index_bits,
-    reverse_slice_index_bits,
-};
+use crate::util::{bit_reversed_zero_pad, divide_by_height};
 use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
@@ -21,6 +19,8 @@ use crate::TwoAdicSubgroupDft;
 pub struct Radix2Bowers;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
+    type Evaluations = RowMajorMatrix<F>;
+
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         reverse_matrix_index_bits(&mut mat);
         bowers_g(&mut mat.as_view_mut());

@@ -1,12 +1,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{Air, TwoRowMatrixView};
+use p3_air::{Air, BaseAir, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::UnivariatePcs;
-use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
+use p3_matrix::Dimensions;
+use p3_util::reverse_slice_index_bits;
 
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
 
 pub fn verify<SC, A>(
@@ -17,10 +19,10 @@ pub fn verify<SC, A>(
 ) -> Result<(), VerificationError>
 where
     SC: StarkConfig,
-    A: for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
 {
-    // let degree_bits = 6; // TODO
-    let log_quotient_degree = 1; // TODO
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
+    let quotient_degree = 1 << log_quotient_degree;
 
     let Proof {
         commitments,
@@ -29,6 +31,15 @@ where
         degree_bits,
     } = proof;
 
+    let air_width = <A as BaseAir<SC::Val>>::width(air);
+    let quotient_chunks = quotient_degree * <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
+    let valid_shape = opened_values.trace_local.len() == air_width
+        && opened_values.trace_next.len() == air_width
+        && opened_values.quotient_chunks.len() == quotient_chunks;
+    if !valid_shape {
+        return Err(VerificationError::InvalidProofShape);
+    }
+
     let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
     challenger.observe(commitments.trace.clone());
@@ -36,12 +47,12 @@ where
     challenger.observe(commitments.quotient_chunks.clone());
     let zeta: SC::Challenge = challenger.sample_ext_element();
 
-    let local_and_next = [zeta, zeta * g_subgroup];
+    let local_and_next = [vec![zeta, zeta * g_subgroup]];
     let commits_and_points = &[
         (commitments.trace.clone(), local_and_next.as_slice()),
         (
             commitments.quotient_chunks.clone(),
-            &[zeta.exp_power_of_2(log_quotient_degree)],
+            &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
         ),
     ];
     let values = vec![
@@ -51,9 +62,19 @@ where
         ]],
         vec![vec![opened_values.quotient_chunks.clone()]],
     ];
+    let dims = &[
+        vec![Dimensions {
+            width: air_width,
+            height: 1 << degree_bits,
+        }],
+        vec![Dimensions {
+            width: quotient_chunks,
+            height: 1 << degree_bits,
+        }],
+    ];
     config
         .pcs()
-        .verify_multi_batches(commits_and_points, values, opening_proof, challenger)
+        .verify_multi_batches(commits_and_points, dims, values, opening_proof, challenger)
         .map_err(|_| VerificationError::InvalidOpeningArgument)?;
 
     // Derive the opening of the quotient polynomial, which was split into degree n chunks, then
@@ -107,6 +128,7 @@ where
 
 #[derive(Debug)]
 pub enum VerificationError {
+    InvalidProofShape,
     /// An error occurred while verifying the claimed openings.
     InvalidOpeningArgument,
     /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match

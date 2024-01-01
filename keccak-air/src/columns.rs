@@ -6,6 +6,7 @@ use p3_util::indices_arr;
 use crate::constants::R;
 use crate::{NUM_ROUNDS, RATE_LIMBS, U64_LIMBS};
 
+#[repr(C)]
 pub(crate) struct KeccakCols<T> {
     /// The `i`th value is set to 1 if we are in the `i`th round, otherwise 0.
     pub step_flags: [T; NUM_ROUNDS],
@@ -121,22 +122,22 @@ const fn make_col_map() -> KeccakCols<usize> {
 
 impl<T> Borrow<KeccakCols<T>> for [T] {
     fn borrow(&self) -> &KeccakCols<T> {
-        // TODO: Double check if this is correct & consider making asserts debug-only.
+        debug_assert_eq!(self.len(), NUM_KECCAK_COLS);
         let (prefix, shorts, suffix) = unsafe { self.align_to::<KeccakCols<T>>() };
-        assert!(prefix.is_empty(), "Data was not aligned");
-        assert!(suffix.is_empty(), "Data was not aligned");
-        assert_eq!(shorts.len(), 1);
+        debug_assert!(prefix.is_empty(), "Alignment should match");
+        debug_assert!(suffix.is_empty(), "Alignment should match");
+        debug_assert_eq!(shorts.len(), 1);
         &shorts[0]
     }
 }
 
 impl<T> BorrowMut<KeccakCols<T>> for [T] {
     fn borrow_mut(&mut self) -> &mut KeccakCols<T> {
-        // TODO: Double check if this is correct & consider making asserts debug-only.
+        debug_assert_eq!(self.len(), NUM_KECCAK_COLS);
         let (prefix, shorts, suffix) = unsafe { self.align_to_mut::<KeccakCols<T>>() };
-        assert!(prefix.is_empty(), "Data was not aligned");
-        assert!(suffix.is_empty(), "Data was not aligned");
-        assert_eq!(shorts.len(), 1);
+        debug_assert!(prefix.is_empty(), "Alignment should match");
+        debug_assert!(suffix.is_empty(), "Alignment should match");
+        debug_assert_eq!(shorts.len(), 1);
         &mut shorts[0]
     }
 }

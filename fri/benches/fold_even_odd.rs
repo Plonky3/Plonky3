@@ -27,7 +27,7 @@ where
 
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| {
-                fold_even_odd(&poly, beta);
+                fold_even_odd(poly.clone(), beta);
             })
         });
     }

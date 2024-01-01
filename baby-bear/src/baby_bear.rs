@@ -8,6 +8,7 @@ use p3_field::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 const P: u32 = 0x78000001;
 const MONTY_BITS: u32 = 31;
@@ -15,7 +16,7 @@ const MONTY_MASK: u32 = (1 << MONTY_BITS) - 1;
 const MONTY_MU: u32 = 0x8000001;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[repr(transparent)] // `PackedBabyBearNeon` relies on this!
 pub struct BabyBear {
     value: u32,

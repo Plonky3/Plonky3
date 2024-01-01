@@ -24,9 +24,10 @@ use p3_field::{
 pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     pub(crate) value: u32,
@@ -348,7 +349,7 @@ impl Mul for Mersenne31 {
     #[allow(clippy::cast_possible_truncation)]
     fn mul(self, rhs: Self) -> Self {
         let prod = u64::from(self.value) * u64::from(rhs.value);
-        let prod_lo = (prod as u32) & ((1 << 31) - 1);
+        let prod_lo = (prod & ((1 << 31) - 1)) as u32;
         let prod_hi = (prod >> 31) as u32;
         Self::new(prod_lo) + Self::new(prod_hi)
     }
