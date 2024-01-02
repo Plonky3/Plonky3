@@ -4,6 +4,8 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 
+use crate::prover::GrindingChallenger;
+
 pub trait FriConfig {
     type Val: PrimeField64;
     type Challenge: ExtensionField<Self::Val> + TwoAdicField;
@@ -11,7 +13,7 @@ pub trait FriConfig {
     type InputMmcs: Mmcs<Self::Val>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
-    type Challenger: FieldChallenger<Self::Val>
+    type Challenger: GrindingChallenger<Self::Val>
         + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
@@ -23,6 +25,8 @@ pub trait FriConfig {
     fn blowup(&self) -> usize {
         1 << self.log_blowup()
     }
+
+    fn proof_of_work_bits(&self) -> u32;
 
     // TODO: grinding bits
 }
@@ -70,5 +74,9 @@ where
 
     fn log_blowup(&self) -> usize {
         1 // TODO: 2x blowup for now, but should make it configurable
+    }
+
+    fn proof_of_work_bits(&self) -> u32 {
+        16 // TODO: should make this configurable too
     }
 }
