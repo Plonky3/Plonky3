@@ -56,7 +56,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     InputMmcs: Mmcs<Val>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger: GrindingChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
     type Challenge = Challenge;
