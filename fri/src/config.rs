@@ -1,10 +1,8 @@
 use core::marker::PhantomData;
 
-use p3_challenger::CanObserve;
+use p3_challenger::{CanObserve, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
-
-use crate::prover::GrindingChallenger;
 
 pub trait FriConfig {
     type Val: PrimeField64;
@@ -27,8 +25,6 @@ pub trait FriConfig {
     }
 
     fn proof_of_work_bits(&self) -> u32;
-
-    // TODO: grinding bits
 }
 
 pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
