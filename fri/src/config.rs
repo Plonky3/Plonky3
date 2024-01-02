@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::CanObserve;
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 

@@ -35,6 +35,8 @@ pub(crate) fn prove<FC: FriConfig>(
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
+    let pow_witness = generate_pow_witness(config, challenger);
+
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
             .into_iter() // TODO: into_par_iter?
@@ -54,6 +56,7 @@ pub(crate) fn prove<FC: FriConfig>(
         commit_phase_commits: commit_phase_result.commits,
         query_proofs,
         final_poly: commit_phase_result.final_poly,
+        pow_witness,
     }
 }
 
@@ -195,7 +198,7 @@ pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
     }
 }
 
-fn fri_proof_of_work<FC: FriConfig>(
+pub fn generate_pow_witness<FC: FriConfig>(
     config: &FC,
     challenger: &mut FC::Challenger,
 ) -> FC::Val {
