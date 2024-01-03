@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 use p3_commit::Mmcs;
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{AbstractField, Field, PrimeField64, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
@@ -16,6 +16,7 @@ pub enum VerificationError<InputMmcsErr, CommitMmcsErr> {
     InputMmcsError(InputMmcsErr),
     CommitPhaseMmcsError(CommitMmcsErr),
     FinalPolyMismatch,
+    InvalidPowWitness,
 }
 
 pub type VerificationErrorForFriConfig<FC> = VerificationError<
@@ -47,6 +48,11 @@ pub(crate) fn verify<FC: FriConfig>(
         return Err(VerificationError::InvalidProofShape);
     }
 
+    // Check PoW.
+    challenger.observe(proof.pow_witness);
+    let fri_pow_response = challenger.sample();
+    verify_pow(fri_pow_response, config)?;
+
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup();
 
     for query_proof in &proof.query_proofs {
@@ -75,6 +81,16 @@ pub(crate) fn verify<FC: FriConfig>(
         if folded_eval != proof.final_poly {
             return Err(VerificationError::FinalPolyMismatch);
         }
+    }
+
+    Ok(())
+}
+
+fn verify_pow<FC: FriConfig>(fri_pow_response: FC::Val, config: &FC) -> VerificationResult<FC, ()> {
+    if fri_pow_response.as_canonical_u64().leading_zeros()
+        < config.proof_of_work_bits() + (64 - FC::Val::bits()) as u32
+    {
+        return Err(VerificationError::InvalidPowWitness);
     }
 
     Ok(())
