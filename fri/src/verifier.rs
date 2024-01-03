@@ -50,8 +50,10 @@ pub(crate) fn verify<FC: FriConfig>(
 
     // Check PoW.
     challenger.observe(proof.pow_witness);
-    let fri_pow_response = challenger.sample();
-    verify_pow(fri_pow_response, config)?;
+    let pow_bits = challenger.sample_bits(config.proof_of_work_bits());
+    if pow_bits != 0 {
+        return Err(VerificationError::InvalidPowWitness);
+    }
 
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup();
 
@@ -81,16 +83,6 @@ pub(crate) fn verify<FC: FriConfig>(
         if folded_eval != proof.final_poly {
             return Err(VerificationError::FinalPolyMismatch);
         }
-    }
-
-    Ok(())
-}
-
-fn verify_pow<FC: FriConfig>(fri_pow_response: FC::Val, config: &FC) -> VerificationResult<FC, ()> {
-    if fri_pow_response.as_canonical_u64().leading_zeros()
-        < config.proof_of_work_bits() + (64 - FC::Val::bits()) as u32
-    {
-        return Err(VerificationError::InvalidPowWitness);
     }
 
     Ok(())
