@@ -176,7 +176,5 @@ pub fn generate_pow_witness<FC: FriConfig>(
     config: &FC,
     challenger: &mut FC::Challenger,
 ) -> FC::Val {
-    let min_leading_zeros = config.proof_of_work_bits() + (64 - FC::Val::bits()) as u32;
-
-    challenger.grind(min_leading_zeros as usize)
+    challenger.grind(config.proof_of_work_bits() as usize)
 }
