@@ -174,7 +174,7 @@ struct CommitPhaseResult<FC: FriConfig> {
 
 pub fn generate_pow_witness<FC: FriConfig>(
     config: &FC,
-    challenger: &mut FC::Challenger,
+    challenger: &FC::Challenger,
 ) -> FC::Val {
     challenger.grind(config.proof_of_work_bits() as usize)
 }
