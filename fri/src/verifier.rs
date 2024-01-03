@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
 use p3_commit::Mmcs;
-use p3_field::{AbstractField, Field, PrimeField64, TwoAdicField};
+use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
@@ -50,7 +50,7 @@ pub(crate) fn verify<FC: FriConfig>(
 
     // Check PoW.
     challenger.observe(proof.pow_witness);
-    let pow_bits = challenger.sample_bits(config.proof_of_work_bits());
+    let pow_bits = challenger.sample_bits(config.proof_of_work_bits() as usize);
     if pow_bits != 0 {
         return Err(VerificationError::InvalidPowWitness);
     }
