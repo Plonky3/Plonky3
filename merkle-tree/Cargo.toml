@@ -25,6 +25,9 @@ p3-rescue = { path = "../rescue" }
 criterion = "0.5.1"
 rand = "0.8.5"
 
+[features]
+parallel = ["p3-matrix/parallel", "p3-maybe-rayon/parallel"]
+
 [[bench]]
 name = "merkle_tree"
 harness = false

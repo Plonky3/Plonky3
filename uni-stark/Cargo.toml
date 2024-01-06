@@ -31,3 +31,6 @@ rand = "0.8.5"
 tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
 tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 postcard = { version = "1.0.0", default-features = false, features = ["alloc"] }
+
+[features]
+parallel = ["p3-maybe-rayon/parallel", "p3-matrix/parallel", "p3-dft/parallel"]

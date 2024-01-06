@@ -29,6 +29,9 @@ criterion = "0.5.1"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 
+[features]
+parallel = ["p3-dft/parallel", "p3-matrix/parallel", "p3-maybe-rayon/parallel", "p3-merkle-tree/parallel"]
+
 [[bench]]
 name = "fold_even_odd"
 harness = false

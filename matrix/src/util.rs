@@ -1,4 +1,6 @@
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
+use p3_maybe_rayon::MaybeIntoParIter;
+#[cfg(feature = "parallel")]
+use p3_maybe_rayon::ParallelIterator;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::dense::RowMajorMatrix;

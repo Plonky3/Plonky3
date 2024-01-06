@@ -13,6 +13,9 @@ rand = "0.8.5"
 [dev-dependencies]
 criterion = "0.5.1"
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [[bench]]
 name = "transpose_benchmark"
 path = "benches/transpose_benchmark.rs"
