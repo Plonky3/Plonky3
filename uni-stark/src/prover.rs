@@ -125,9 +125,9 @@ where
     (quotient_commit, quotient_data)
 }
 
-pub fn get_trace_lde<SC>(
+pub fn get_trace_ldes<SC>(
     config: &SC,
-    trace: RowMajorMatrix<SC::Val>,
+    traces: Vec<RowMajorMatrix<SC::Val>>,
 ) -> (
     <<SC as config::StarkConfig>::Pcs as Pcs<
         <SC as config::StarkConfig>::Val,
@@ -143,7 +143,7 @@ where
 {
     let pcs = config.pcs();
     let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
+        info_span!("commit to trace data").in_scope(|| pcs.commit_batches(traces));
 
     (trace_commit, trace_data)
 }
@@ -153,20 +153,22 @@ pub fn prove<SC, A>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
-    trace: RowMajorMatrix<SC::Val>,
+    trace: Vec<RowMajorMatrix<SC::Val>>,
 ) -> Proof<SC>
 where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
-    let log_degree = log2_strict_usize(trace.height());
+
+    let log_degree = log2_strict_usize(trace.iter().map(|t| t.height()).max().unwrap()); 
+
     let log_quotient_degree = log2_ceil_usize(get_max_constraint_degree(air) - 1);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the zerofier.
     // But we pad it to a power of two so that we can efficiently decompose the quotient.
 
-    let (trace_commit, trace_data) = get_trace_lde::<SC>(config, trace);
+    let (trace_commit, trace_data) = get_trace_ldes::<SC>(config, trace);
 
     challenger.observe(trace_commit.clone());
     
@@ -197,17 +199,6 @@ where
     }
 }
 
-#[instrument(skip_all)]
-pub fn batch_prove<SC, A>(
-    config: &SC,
-    air: &Vec<A>,
-    challenger: &mut SC::Challenger,
-    trace: Vec<RowMajorMatrix<SC::Val>>,
-) where
-    SC: StarkConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-{
-}
 
 #[instrument(name = "compute quotient polynomial", skip_all)]
 fn quotient_values<SC, A>(

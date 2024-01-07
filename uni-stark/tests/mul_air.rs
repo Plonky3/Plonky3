@@ -112,7 +112,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
-    let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
+    let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, vec![trace]);
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
