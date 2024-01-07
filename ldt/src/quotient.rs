@@ -157,6 +157,10 @@ where
     type Error = QuotientError<Inner::Error>;
     type Mat<'a> = QuotientMatrix<F, EF, Inner::Mat<'a>> where Self: 'a;
 
+    fn combine(&self, data:&Vec<Self::ProverData>) -> Self::ProverData{
+	self.combine(data)
+    }
+    
     fn open_batch(
         &self,
         index: usize,

@@ -27,6 +27,9 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
 
     type Error;
 
+    fn combine(&self, data:&Vec<Self::ProverData>) -> Self::ProverData;
+
+    
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData);
 
     fn commit_batch(&self, polynomials: In) -> (Self::Commitment, Self::ProverData) {

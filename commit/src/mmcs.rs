@@ -32,12 +32,16 @@ pub trait Mmcs<T>: Clone {
     /// returns `(openings, proof)`
     /// where `openings` is a vector whose `i`th element is the `j`th row of the ith matrix `M[i]`,
     /// and `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`.
+    fn combine(&self, data: &Vec<Self::ProverData>) -> Self::ProverData;
+    
     fn open_batch(
         &self,
         index: usize,
         prover_data: &Self::ProverData,
     ) -> (Vec<Vec<T>>, Self::Proof);
 
+
+    
     /// Get the matrices that were committed to.
     fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> Vec<Self::Mat<'a>>;
 

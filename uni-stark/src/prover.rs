@@ -125,9 +125,9 @@ where
     (quotient_commit, quotient_data)
 }
 
-pub fn get_trace_ldes<SC>(
+pub fn get_trace_lde<SC>(
     config: &SC,
-    traces: Vec<RowMajorMatrix<SC::Val>>,
+    trace: RowMajorMatrix<SC::Val>,
 ) -> (
     <<SC as config::StarkConfig>::Pcs as Pcs<
         <SC as config::StarkConfig>::Val,
@@ -143,24 +143,28 @@ where
 {
     let pcs = config.pcs();
     let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit_batches(traces));
+        info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
     (trace_commit, trace_data)
 }
+
+
+
+
 
 #[instrument(skip_all)]
 pub fn prove<SC, A>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
-    trace: Vec<RowMajorMatrix<SC::Val>>,
+    trace: RowMajorMatrix<SC::Val>,
 ) -> Proof<SC>
 where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
 
-    let log_degree = log2_strict_usize(trace.iter().map(|t| t.height()).max().unwrap()); 
+    let log_degree = log2_strict_usize(trace.height());
 
     let log_quotient_degree = log2_ceil_usize(get_max_constraint_degree(air) - 1);
 
@@ -168,7 +172,7 @@ where
     // where subtracting 1 comes from division by the zerofier.
     // But we pad it to a power of two so that we can efficiently decompose the quotient.
 
-    let (trace_commit, trace_data) = get_trace_ldes::<SC>(config, trace);
+    let (trace_commit, trace_data) = get_trace_lde::<SC>(config, trace);
 
     challenger.observe(trace_commit.clone());
     
@@ -225,11 +229,7 @@ where
     let log_stride_for_quotient = pcs.log_blowup() - quotient_degree_bits;
     let trace_lde = trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);    
 
-/*    
-    let mut trace_ldes = pcs.get_ldes(trace_data);
-    assert_eq!(trace_ldes.len(), 1);
-    let trace_lde = trace_ldes.pop().unwrap();
-*/
+
     let degree = 1 << degree_bits;
     let quotient_size_bits = degree_bits + quotient_degree_bits;
     let quotient_size = 1 << quotient_size_bits;

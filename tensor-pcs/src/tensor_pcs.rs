@@ -50,6 +50,10 @@ where
     type Proof = Vec<M::Proof>;
     type Error = ();
 
+    fn combine(&self, data:&Vec<Self::ProverData>) -> Self::ProverData{
+	self.mmcs.combine(data)
+    }
+
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
         let encoded_polynomials = polynomials
             .into_iter()

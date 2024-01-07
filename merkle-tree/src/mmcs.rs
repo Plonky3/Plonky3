@@ -54,6 +54,9 @@ where
     type Error = ();
     type Mat<'a> = RowMajorMatrixView<'a, P::Scalar> where H: 'a, C: 'a;
 
+    fn combine(&self, data:&Vec<Self::ProverData>) -> Self::ProverData{
+	Self::ProverData::combine::<P,H,C>(&self.hash, &self.compress, data)
+    }
     fn open_batch(
         &self,
         index: usize,
