@@ -9,14 +9,14 @@ use p3_field::{
     TwoAdicField,
 };
 
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::dense::{RowMajorMatrix};
 use p3_matrix::{Matrix, MatrixGet, MatrixRows};
 
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
+use crate::symbolic_builder::{SymbolicAirBuilder};
 use crate::{
     config, decompose_and_flatten, get_max_constraint_degree, Commitments, OpenedValues, Proof,
     ProverConstraintFolder, StarkConfig, ZerofierOnCoset,
@@ -31,10 +31,10 @@ type Commitment<SC> = (
         RowMajorMatrix<<SC as config::StarkConfig>::Val>,
     >>::ProverData,
 );
-type ProverData<SC> = (<<SC as config::StarkConfig>::Pcs as Pcs<
+type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
     <SC as config::StarkConfig>::Val,
     RowMajorMatrix<<SC as config::StarkConfig>::Val>,
->>::ProverData);
+>>::ProverData;
 
 pub fn open<SC, A>(
     config: &SC,
