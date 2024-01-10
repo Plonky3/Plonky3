@@ -36,7 +36,7 @@ type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
     RowMajorMatrix<<SC as config::StarkConfig>::Val>,
 >>::ProverData;
 
-pub fn open<SC, A>(
+pub fn open<SC>(
     config: &SC,
     trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
         <SC as config::StarkConfig>::Val,
@@ -140,13 +140,14 @@ where
 
     (trace_commit, trace_data)
 }
-
+type LogQuotientDegree = usize;
+type LogDegree = usize;
 pub fn get_trace_and_quotient_ldes<SC, A>(
     config: &SC,
     trace: RowMajorMatrix<SC::Val>,
     air: &A,
     challenger: &mut SC::Challenger,    
-) -> (ProverData<SC>, ProverData<SC>)
+) -> (ProverData<SC>, ProverData<SC>, LogQuotientDegree, LogDegree)
 where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
@@ -173,7 +174,7 @@ where
 
     challenger.observe(quotient_commit.clone());
 
-    (trace_data, quotient_data)
+    (trace_data, quotient_data, log_degree, log_quotient_degree)
 }
 
 pub fn get_trace_and_quotient_commitments<SC, A>(
@@ -233,7 +234,7 @@ where
     let ((trace_commit, trace_data), (quotient_commit, quotient_data)) =
         get_trace_and_quotient_commitments::<SC, A>(config, trace, log_quotient_degree, challenger, air);
 
-    let (opening_proof, opened_values) = open::<SC, A>(
+    let (opening_proof, opened_values) = open::<SC>(
         config,
         &trace_data,
         &quotient_data,

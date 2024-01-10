@@ -34,7 +34,7 @@ where
     type Error = InnerMmcs::Error;
     type Mat<'a> = ExtensionMatrix<F, EF, InnerMmcs::Mat<'a>> where Self: 'a;
 
-    fn combine(&self, data:&Vec<Self::ProverData>) -> Self::ProverData{
+    fn combine(&self, data:&Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData){
 	self.combine(data)
     }
     fn open_batch(

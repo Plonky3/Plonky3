@@ -109,7 +109,7 @@ where
     type Proof = L::Proof;
     type Error = L::Error;
 
-    fn combine(&self, data:&Vec<Self::ProverData>) -> Self::ProverData {
+    fn combine(&self, data:&Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData) {
 	self.mmcs.combine(data)
     }
     
