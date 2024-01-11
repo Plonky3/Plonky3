@@ -6,12 +6,14 @@ use crate::{DuplexChallenger, FieldChallenger};
 pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
     // Can be overridden for more efficient methods not involving cloning, depending on the
     // internals of the challenger.
-    fn grind(&self, bits: usize) -> F {
+    fn grind(&mut self, bits: usize) -> F {
         for i in 0..F::ORDER_U64 {
             let witness = F::from_canonical_u64(i);
             let mut forked = self.clone();
 
             if forked.check_witness(bits, witness) {
+                self.observe(witness);
+                self.sample_bits(bits);
                 return witness;
             }
         }
