@@ -12,8 +12,7 @@ pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
             let mut forked = self.clone();
 
             if forked.check_witness(bits, witness) {
-                self.observe(witness);
-                self.sample_bits(bits);
+                self.check_witness(bits, witness);
                 return witness;
             }
         }
@@ -21,7 +20,6 @@ pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
         panic!("failed to find witness")
     }
 
-    #[must_use]
     fn check_witness(&mut self, bits: usize, witness: F) -> bool {
         self.observe(witness);
         self.sample_bits(bits) == 0
