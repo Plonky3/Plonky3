@@ -9,7 +9,7 @@ pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
     fn grind(&self, bits: usize) -> F {
         for i in 0..F::ORDER_U64 {
             let witness = F::from_canonical_u64(i);
-            let mut forked = self.fork();
+            let mut forked = self.clone();
 
             if forked.check_witness(bits, witness) {
                 return witness;
