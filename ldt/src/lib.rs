@@ -13,6 +13,8 @@ use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_matrix::Dimensions;
 pub use quotient::*;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 extern crate alloc;
 
@@ -23,7 +25,7 @@ where
     M: Mmcs<Val>,
     Challenger: FieldChallenger<Val>,
 {
-    type Proof;
+    type Proof: Serialize + DeserializeOwned;
     type Error;
 
     fn log_blowup(&self) -> usize;

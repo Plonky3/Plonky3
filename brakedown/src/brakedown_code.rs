@@ -113,3 +113,54 @@ where
     In: MatrixRows<F> + Sync,
 {
 }
+
+#[cfg(test)]
+#[allow(deprecated)] // TODO: remove when `p3_lde::NaiveUndefinedLde` is gone
+mod tests {
+    use p3_matrix::Matrix;
+    use p3_mersenne_31::Mersenne31;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+
+    use super::*;
+    use crate::macros::{brakedown, brakedown_to_rs};
+
+    type F = Mersenne31;
+    type Mat = RowMajorMatrix<F>;
+
+    #[test]
+    fn test_brakedown_methods() {
+        let brakedown = brakedown!(237, 29, 11, 41, 60, 15, brakedown_to_rs!(29, 4, 0, 5, 7, 0));
+
+        assert_eq!(brakedown.y_len(), 29);
+        assert_eq!(
+            brakedown.z_parity_len(),
+            <BrakedownCode<F, _> as Code<F, Mat>>::codeword_len(&brakedown.inner_code)
+                - <BrakedownCode<F, _> as Code<F, Mat>>::message_len(&brakedown.inner_code)
+        );
+        assert_eq!(brakedown.v_len(), 60);
+    }
+
+    #[test]
+    fn test_brakedown_systematic_code_impl() {
+        let brakedown = brakedown!(237, 29, 11, 41, 60, 15, brakedown_to_rs!(29, 4, 0, 5, 7, 0));
+        assert_eq!(
+            <BrakedownCode<F, _> as SystematicCode<F, Mat>>::parity_len(&brakedown),
+            brakedown.y_len() + brakedown.z_parity_len() + brakedown.v_len()
+        );
+    }
+
+    #[test]
+    fn test_brakedown_code_impl() {
+        let brakedown = brakedown!(237, 29, 11, 41, 60, 15, brakedown_to_rs!(29, 4, 0, 5, 7, 0));
+        assert_eq!(
+            <BrakedownCode<F, _> as Code<F, Mat>>::message_len(&brakedown),
+            brakedown.a.width()
+        );
+        assert_eq!(
+            <BrakedownCode<F, _> as Code<F, Mat>>::codeword_len(&brakedown),
+            <BrakedownCode<F, _> as Code<F, Mat>>::message_len(&brakedown)
+                + <BrakedownCode<F, _> as SystematicCode<F, Mat>>::parity_len(&brakedown)
+        );
+    }
+}

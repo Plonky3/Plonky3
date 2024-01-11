@@ -24,9 +24,10 @@ use p3_field::{
 pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     pub(crate) value: u32,

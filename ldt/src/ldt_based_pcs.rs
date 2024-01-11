@@ -4,8 +4,8 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
 use p3_commit::{
-    DirectMmcs, OpenedValues, OpenedValuesForPoint, OpenedValuesForRound, Pcs, UnivariatePcs,
-    UnivariatePcsWithLde,
+    DirectMmcs, OpenedValues, OpenedValuesForMatrix, OpenedValuesForPoint, OpenedValuesForRound,
+    Pcs, UnivariatePcs, UnivariatePcsWithLde,
 };
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::HasFrobenius;
@@ -128,32 +128,35 @@ where
     #[instrument(name = "prove batch opening", skip_all)]
     fn open_multi_batches(
         &self,
-        prover_data_and_points: &[(&Self::ProverData, &[EF])],
+        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof) {
         let coset_shift: Val =
             <Self as UnivariatePcsWithLde<Val, EF, In, Challenger>>::coset_shift(self);
 
         // Use Barycentric interpolation to evaluate each matrix at a given point.
-        let eval_at_point = |matrices: &[M::Mat<'_>], point| {
-            matrices
+        let eval_at_points = |matrix: M::Mat<'_>, points: &[EF]| {
+            points
                 .iter()
-                .map(|mat| {
-                    let (low_coset, _) = mat.split_rows(mat.height() >> self.ldt.log_blowup());
+                .map(|&point| {
+                    let (low_coset, _) =
+                        matrix.split_rows(matrix.height() >> self.ldt.log_blowup());
                     interpolate_coset(&BitReversedMatrixView::new(low_coset), coset_shift, point)
                 })
-                .collect::<OpenedValuesForPoint<EF>>()
+                .collect::<OpenedValuesForMatrix<EF>>()
         };
 
         let all_opened_values = info_span!("compute opened values with Lagrange interpolation")
             .in_scope(|| {
                 prover_data_and_points
                     .iter()
-                    .map(|(data, points)| {
+                    .map(|(data, points_per_matrix)| {
                         let matrices = self.mmcs.get_matrices(data);
-                        points
+
+                        matrices
                             .iter()
-                            .map(|&point| eval_at_point(&matrices, point))
+                            .zip(*points_per_matrix)
+                            .map(|(&mat, points_for_mat)| eval_at_points(mat, points_for_mat))
                             .collect::<OpenedValuesForRound<EF>>()
                     })
                     .collect::<OpenedValues<EF>>()
@@ -165,29 +168,48 @@ where
         let quotient_mmcs = all_points
             .into_iter()
             .zip(&all_opened_values)
-            .map(|(points, opened_values_for_round_by_point)| {
-                let opened_values_for_round_by_matrix =
-                    transpose(opened_values_for_round_by_point.to_vec());
+            .map(
+                |(points_for_round, opened_values_for_round_by_matrix): (
+                    &[Vec<EF>],
+                    &OpenedValuesForRound<EF>,
+                )| {
+                    // let opened_values_for_round_by_point =
+                    //     transpose(opened_values_for_round_by_matrix.to_vec());
 
-                let openings = opened_values_for_round_by_matrix
-                    .into_iter()
-                    .map(|opened_values_for_mat| {
-                        points
-                            .iter()
-                            .zip(opened_values_for_mat)
-                            .map(|(&point, opened_values_for_point)| {
-                                Opening::<Val, EF>::new(point, opened_values_for_point)
-                            })
-                            .collect()
-                    })
-                    .collect();
-                QuotientMmcs::<Val, EF, _> {
-                    inner: self.mmcs.clone(),
-                    openings,
-                    coset_shift,
-                    _phantom: PhantomData,
-                }
-            })
+                    let openings = opened_values_for_round_by_matrix
+                        .iter()
+                        .zip(points_for_round)
+                        .map(
+                            |(opened_values_for_matrix, points_for_matrix): (
+                                &OpenedValuesForMatrix<EF>,
+                                &Vec<EF>,
+                            )| {
+                                opened_values_for_matrix
+                                    .iter()
+                                    .zip(points_for_matrix)
+                                    .map(
+                                        |(opened_values_for_point, &point): (
+                                            &OpenedValuesForPoint<EF>,
+                                            &EF,
+                                        )| {
+                                            Opening::<Val, EF>::new(
+                                                point,
+                                                opened_values_for_point.clone(),
+                                            )
+                                        },
+                                    )
+                                    .collect::<Vec<Opening<Val, EF>>>()
+                            },
+                        )
+                        .collect();
+                    QuotientMmcs::<Val, EF, _> {
+                        inner: self.mmcs.clone(),
+                        openings,
+                        coset_shift,
+                        _phantom: PhantomData,
+                    }
+                },
+            )
             .collect_vec();
 
         let proof = self.ldt.prove(&quotient_mmcs, &prover_data, challenger);
@@ -196,13 +218,13 @@ where
 
     fn verify_multi_batches(
         &self,
-        commits_and_points: &[(Self::Commitment, &[EF])],
+        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
         dims: &[Vec<Dimensions>],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        let (commits, points): (Vec<Self::Commitment>, Vec<&[EF]>) =
+        let (commits, points): (Vec<Self::Commitment>, Vec<&[Vec<EF>]>) =
             commits_and_points.iter().cloned().unzip();
         let coset_shift: Val =
             <Self as UnivariatePcsWithLde<Val, EF, In, Challenger>>::coset_shift(self);
@@ -211,18 +233,18 @@ where
             .zip_eq(values)
             .zip_eq(dims)
             .map(
-                |((points, opened_values_for_round_by_point), dims): (
-                    (&[EF], OpenedValuesForRound<EF>),
+                #[allow(clippy::type_complexity)]
+                |((points, opened_values_for_round_by_matrix), dims): (
+                    (&[Vec<EF>], OpenedValuesForRound<EF>),
                     &Vec<Dimensions>,
                 )| {
-                    let opened_values_for_round_by_matrix =
-                        transpose(opened_values_for_round_by_point.to_vec());
                     let openings = opened_values_for_round_by_matrix
                         .into_iter()
-                        .map(|opened_values_for_matrix| {
-                            points
+                        .zip(points)
+                        .map(|(opened_values_for_matrix_by_point, points_for_matrix)| {
+                            points_for_matrix
                                 .iter()
-                                .zip(opened_values_for_matrix)
+                                .zip(opened_values_for_matrix_by_point)
                                 .map(|(&point, opened_values_for_point)| {
                                     Opening::<Val, EF>::new(point, opened_values_for_point)
                                 })
@@ -249,12 +271,4 @@ where
         self.ldt
             .verify(&quotient_mmcs, &dims, &commits, proof, challenger)
     }
-}
-
-fn transpose<T: Clone>(vec: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    let n = vec.len();
-    let m = vec[0].len();
-    (0..m)
-        .map(|r| (0..n).map(|c| vec[c][r].clone()).collect())
-        .collect()
 }

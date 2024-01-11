@@ -6,6 +6,8 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
 /// polynomials defined over the field `F`.
@@ -15,13 +17,13 @@ use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
 pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     /// The commitment that's sent to the verifier.
-    type Commitment: Clone;
+    type Commitment: Clone + Serialize + DeserializeOwned;
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
     type ProverData;
 
     /// The opening argument.
-    type Proof;
+    type Proof: Serialize + DeserializeOwned;
 
     type Error;
 
@@ -33,9 +35,9 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
-pub type OpenedValuesForRound<F> = Vec<OpenedValuesForPoint<F>>;
-pub type OpenedValuesForPoint<F> = Vec<OpenedValuesForMatrix<F>>;
-pub type OpenedValuesForMatrix<F> = Vec<F>;
+pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
+pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
+pub type OpenedValuesForPoint<F> = Vec<F>;
 
 pub trait UnivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
 where
@@ -46,13 +48,13 @@ where
 {
     fn open_multi_batches(
         &self,
-        prover_data_and_points: &[(&Self::ProverData, &[EF])],
+        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
         challenger: &mut Challenger,
     ) -> (OpenedValues<EF>, Self::Proof);
 
     fn verify_multi_batches(
         &self,
-        commits_and_points: &[(Self::Commitment, &[EF])],
+        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
         dims: &[Vec<Dimensions>],
         values: OpenedValues<EF>,
         proof: &Self::Proof,
@@ -70,7 +72,7 @@ where
     In: MatrixRows<Val>,
     Challenger: FieldChallenger<Val>,
 {
-    type Lde<'a>: MatrixGet<Val> + Sync
+    type Lde<'a>: MatrixRows<Val> + MatrixGet<Val> + Sync
     where
         Self: 'a;
 

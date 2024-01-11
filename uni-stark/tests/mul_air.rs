@@ -45,10 +45,6 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let b = main_local[start + 1];
             let c = main_local[start + 2];
             builder.assert_zero(a * b - c);
-
-            // TODO: Temporarily added this silly degree 3 constraint because we're getting an
-            // OodEvaluationMismatch when log_quotient_degree = 0.
-            builder.assert_zero(a * b * c - c * b * a);
         }
     }
 }
@@ -118,8 +114,14 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     let trace = random_valid_trace::<Val>(HEIGHT);
     let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
 
+    let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
+    tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
+
+    let deserialized_proof =
+        postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
+
     let mut challenger = Challenger::new(perm);
-    verify(&config, &MulAir, &mut challenger, &proof)
+    verify(&config, &MulAir, &mut challenger, &deserialized_proof)
 }
 
 #[test]

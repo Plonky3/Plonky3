@@ -39,7 +39,7 @@ pub(crate) fn prove<FC: FriConfig>(
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
-            .into_iter() // TODO: into_par_iter?
+            .into_iter()
             .map(|index| {
                 answer_query(
                     config,

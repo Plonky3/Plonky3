@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -9,19 +10,23 @@ use p3_field::{
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixGet};
+use p3_matrix::{Matrix, MatrixGet, MatrixRows};
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::SymbolicAirBuilder;
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder, StarkConfig,
     ZerofierOnCoset,
 };
 
 #[instrument(skip_all)]
-pub fn prove<SC, A>(
+pub fn prove<
+    SC,
+    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, SC::Val>>,
+    #[cfg(not(debug_assertions))] A,
+>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
@@ -31,14 +36,13 @@ where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
+    #[cfg(debug_assertions)]
+    crate::check_constraints::check_constraints(air, &trace);
+
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let max_constraint_degree = get_max_constraint_degree::<SC, A>(air);
-    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
-    // where subtracting 1 comes from division by the zerofier.
-    // But we pad it to a power of two so that we can efficiently decompose the quotient.
-    let log_quotient_degree = log2_ceil_usize(max_constraint_degree - 1);
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 
@@ -53,12 +57,15 @@ where
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
 
+    let log_stride_for_quotient = pcs.log_blowup() - log_quotient_degree;
+    let trace_lde_for_quotient = trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);
+
     let quotient_values = quotient_values(
         config,
         air,
         log_degree,
         log_quotient_degree,
-        trace_lde,
+        trace_lde_for_quotient,
         alpha,
     );
 
@@ -86,13 +93,16 @@ where
     let zeta: SC::Challenge = challenger.sample_ext_element();
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
-            (&trace_data, &[zeta, zeta * g_subgroup]),
-            (&quotient_data, &[zeta.exp_power_of_2(log_quotient_degree)]),
+            (&trace_data, &[vec![zeta, zeta * g_subgroup]]),
+            (
+                &quotient_data,
+                &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
+            ),
         ],
         challenger,
     );
     let trace_local = opened_values[0][0][0].clone();
-    let trace_next = opened_values[0][1][0].clone();
+    let trace_next = opened_values[0][0][1].clone();
     let quotient_chunks = opened_values[1][0][0].clone();
     let opened_values = OpenedValues {
         trace_local,
@@ -196,14 +206,4 @@ where
             })
         })
         .collect()
-}
-
-fn get_max_constraint_degree<SC, A>(air: &A) -> usize
-where
-    SC: StarkConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>>,
-{
-    let mut builder = SymbolicAirBuilder::new(air.width());
-    air.eval(&mut builder);
-    builder.max_degree_multiple()
 }
