@@ -24,7 +24,7 @@ pub trait FriConfig {
         1 << self.log_blowup()
     }
 
-    fn proof_of_work_bits(&self) -> u32;
+    fn proof_of_work_bits(&self) -> usize;
 }
 
 pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
@@ -73,7 +73,7 @@ where
         1 // TODO: 2x blowup for now, but should make it configurable
     }
 
-    fn proof_of_work_bits(&self) -> u32 {
+    fn proof_of_work_bits(&self) -> usize {
         16 // TODO: should make this configurable too
     }
 }

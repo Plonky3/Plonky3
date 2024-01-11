@@ -31,11 +31,11 @@ pub(crate) fn prove<FC: FriConfig>(
     let commit_phase_result =
         commit_phase::<FC>(config, input_mmcs, input_data, log_max_height, challenger);
 
+    let pow_witness = challenger.grind(config.proof_of_work_bits());
+
     let query_indices: Vec<usize> = (0..config.num_queries())
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
-
-    let pow_witness = generate_pow_witness(config, challenger);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
@@ -170,8 +170,4 @@ struct CommitPhaseResult<FC: FriConfig> {
     commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
     data: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData>,
     final_poly: FC::Challenge,
-}
-
-pub fn generate_pow_witness<FC: FriConfig>(config: &FC, challenger: &FC::Challenger) -> FC::Val {
-    challenger.grind(config.proof_of_work_bits() as usize)
 }

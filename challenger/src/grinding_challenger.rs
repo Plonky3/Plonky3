@@ -4,11 +4,8 @@ use p3_symmetric::CryptographicPermutation;
 use crate::{DuplexChallenger, FieldChallenger};
 
 pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
-    // Can be overridden to allow more efficient ways to fork, not cloning the entire state.
-    fn fork(&self) -> Self {
-        self.clone()
-    }
-
+    // Can be overridden for more efficient methods not involving cloning, depending on the
+    // internals of the challenger.
     fn grind(&self, bits: usize) -> F {
         for i in 0..F::ORDER_U64 {
             let witness = F::from_canonical_u64(i);
