@@ -50,7 +50,7 @@ pub(crate) fn verify<FC: FriConfig>(
 
     // Check PoW.
     challenger.observe(proof.pow_witness);
-    let pow_bits = challenger.sample_bits(config.proof_of_work_bits() as usize);
+    let pow_bits = challenger.sample_bits(config.proof_of_work_bits());
     if pow_bits != 0 {
         return Err(VerificationError::InvalidPowWitness);
     }
