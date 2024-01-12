@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;
@@ -31,6 +31,8 @@ pub(crate) fn prove<FC: FriConfig>(
     let commit_phase_result =
         commit_phase::<FC>(config, input_mmcs, input_data, log_max_height, challenger);
 
+    let pow_witness = challenger.grind(config.proof_of_work_bits());
+
     let query_indices: Vec<usize> = (0..config.num_queries())
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
@@ -54,6 +56,7 @@ pub(crate) fn prove<FC: FriConfig>(
         commit_phase_commits: commit_phase_result.commits,
         query_proofs,
         final_poly: commit_phase_result.final_poly,
+        pow_witness,
     }
 }
 

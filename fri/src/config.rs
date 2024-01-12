@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::{CanObserve, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 
@@ -11,7 +11,7 @@ pub trait FriConfig {
     type InputMmcs: Mmcs<Self::Val>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
-    type Challenger: FieldChallenger<Self::Val>
+    type Challenger: GrindingChallenger<Self::Val>
         + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
@@ -24,7 +24,7 @@ pub trait FriConfig {
         1 << self.log_blowup()
     }
 
-    // TODO: grinding bits
+    fn proof_of_work_bits(&self) -> usize;
 }
 
 pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
@@ -52,7 +52,8 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     InputMmcs: Mmcs<Val>,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger:
+        GrindingChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
 {
     type Val = Val;
     type Challenge = Challenge;
@@ -70,5 +71,9 @@ where
 
     fn log_blowup(&self) -> usize {
         1 // TODO: 2x blowup for now, but should make it configurable
+    }
+
+    fn proof_of_work_bits(&self) -> usize {
+        16 // TODO: should make this configurable too
     }
 }

@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger};
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
@@ -16,6 +16,7 @@ pub enum VerificationError<InputMmcsErr, CommitMmcsErr> {
     InputMmcsError(InputMmcsErr),
     CommitPhaseMmcsError(CommitMmcsErr),
     FinalPolyMismatch,
+    InvalidPowWitness,
 }
 
 pub type VerificationErrorForFriConfig<FC> = VerificationError<
@@ -45,6 +46,11 @@ pub(crate) fn verify<FC: FriConfig>(
 
     if proof.query_proofs.len() != config.num_queries() {
         return Err(VerificationError::InvalidProofShape);
+    }
+
+    // Check PoW.
+    if !challenger.check_witness(config.proof_of_work_bits(), proof.pow_witness) {
+        return Err(VerificationError::InvalidPowWitness);
     }
 
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup();
