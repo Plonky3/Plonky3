@@ -36,6 +36,7 @@ type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
     RowMajorMatrix<<SC as config::StarkConfig>::Val>,
 >>::ProverData;
 
+
 pub fn open<SC>(
     config: &SC,
     trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
@@ -101,6 +102,7 @@ where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
+
     let pcs = config.pcs();
     let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
@@ -212,8 +214,12 @@ where
     ((trace_commit, trace_data), (quotient_commit, quotient_data))
 }
 
-#[instrument(skip_all)]
-pub fn prove<SC, A>(
+    #[instrument(skip_all)]
+	
+    pub fn prove<
+    SC,
+    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, SC::Val>>,
+    #[cfg(not(debug_assertions))] A>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
@@ -222,7 +228,10 @@ pub fn prove<SC, A>(
 where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-{
+    {
+
+    #[cfg(debug_assertions)]
+    crate::check_constraints::check_constraints(air, &trace);
     let log_degree = log2_strict_usize(trace.height());
 
     let log_quotient_degree = log2_ceil_usize(get_max_constraint_degree(air) - 1);
