@@ -1,0 +1,16 @@
+[package]
+name = "p3-cfft"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-field = { path = "../field" }
+p3-mersenne-31 = { path = "../mersenne-31" }
+itertools		= "0.8.0"
+criterion       = "0.5"
+rand            = "0.8.5"
+
+[[bench]]
+name = "cfft"
+harness = false
