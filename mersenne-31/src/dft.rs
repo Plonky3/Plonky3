@@ -159,6 +159,14 @@ fn idft_postprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Base> {
 #[derive(Default, Clone)]
 pub struct Mersenne31Dft;
 
+/// The compressed LDE for Mersenne31
+#[derive(Clone)]
+pub struct Mersenne31CompressedLDE {
+    c: Vec<Ext>,
+    base_bits: usize,
+    mat: RowMajorMatrix<Base>,
+}
+
 impl Mersenne31Dft {
     /// Compute the DFT of each column of `mat`.
     ///
@@ -181,6 +189,93 @@ impl Mersenne31Dft {
     ) -> RowMajorMatrix<Base> {
         let dft = Dft::default();
         idft_postprocess(dft.idft_batch(idft_preprocess(mat)))
+    }
+
+    pub fn lde_batch_compress<Dft: TwoAdicSubgroupDft<Ext>>(
+        points: RowMajorMatrix<Base>,
+        added_bits: usize,
+    ) -> Mersenne31CompressedLDE {
+        let base_bits = log2_strict_usize(points.height());
+        let bits = base_bits + added_bits;
+
+        // this function only works when the evaluation domain is in the unit circle
+        // x^{p+1} = 1
+        assert!(bits <= 31);
+
+        let mut polys = Mersenne31Dft::dft_batch::<Dft>(points);
+
+        // store c0
+        let c = polys
+            .row_slice(0)
+            .iter()
+            .map(|x| (*x).div_2exp_u64(base_bits as u64))
+            .collect_vec();
+
+        // p(x)-c0
+        polys.row_mut(0).iter_mut().for_each(|x| *x = Ext::zero());
+
+        // The coset is the chracterized by the quotient set
+        // NB: current DFT is based on inverse group (1, g^-1,g^-2,...) so we need to inverse the generator
+        let cosets = Ext::two_adic_generator(base_bits + added_bits)
+            .inverse()
+            .powers()
+            .take(1 << added_bits)
+            .map(|tau| {
+                // tau^{-|H|/2} = (tau^{|H|/2})*
+                let phi_inv = tau.exp_power_of_2(base_bits - 1).inverse();
+
+                // { tau^k }
+                let tks: Vec<Mersenne31Complex<Mersenne31>> =
+                    tau.powers().take(polys.height()).collect_vec();
+
+                Mersenne31Dft::idft_batch::<Dft>(RowMajorMatrix::new(
+                    polys
+                        .rows()
+                        .zip(&tks)
+                        .flat_map(|(row, tk)| row.iter().map(|&x| *tk * x * phi_inv))
+                        .collect_vec(),
+                    polys.width(),
+                ))
+            })
+            .collect_vec();
+
+        let mut value = Vec::with_capacity(polys.width() * (1 << bits));
+
+        // reorganize the value to allign with the group structure of evaluation domain.
+        for i in 0..(1 << base_bits) {
+            value.extend(cosets.iter().flat_map(|x| x.row_slice(i)));
+        }
+
+        Mersenne31CompressedLDE {
+            c,
+            base_bits,
+            mat: RowMajorMatrix::new(value, polys.width()),
+        }
+    }
+}
+
+impl Mersenne31CompressedLDE {
+    pub fn decompress(&self) -> RowMajorMatrix<Ext> {
+        let bits = log2_strict_usize(self.mat.height());
+        let added_bits = bits - self.base_bits;
+
+        let mut output = Vec::with_capacity(self.mat.height() * self.mat.width());
+
+        let phis = Ext::two_adic_generator(bits)
+            .powers()
+            .take(1 << added_bits)
+            .map(|x| x.exp_power_of_2(self.base_bits - 1))
+            .collect_vec();
+
+        for chunk in self.mat.rows().chunks(1 << added_bits).into_iter() {
+            output.extend(
+                chunk.into_iter().zip(&phis).flat_map(|(row, phi)| {
+                    row.iter().zip(&self.c).map(|(&x, &c0)| ((*phi * x) + c0))
+                }),
+            )
+        }
+
+        RowMajorMatrix::new(output, self.mat.width())
     }
 }
 
@@ -209,6 +304,35 @@ mod tests {
         let fft_input = Mersenne31Dft::dft_batch::<Dft>(input.clone());
         let output = Mersenne31Dft::idft_batch::<Dft>(fft_input);
         assert_eq!(input, output);
+    }
+
+    #[test]
+    fn lde_consistency()
+    where
+        Standard: Distribution<Base>,
+    {
+        const ADDED_BITS: usize = 1;
+
+        let value = [Base::one(), Base::two(), Base::zero(), Base::neg_one()].to_vec();
+        let input_real = RowMajorMatrix::new_col(value);
+
+        let expected_values = RowMajorMatrix::new_col(
+            [
+                Ext::new_real(Base::one()),
+                Ext::new(Base::new(1073741824), Base::new(32768)),
+                Ext::new_real(Base::two()),
+                Ext::new(Base::new(1073741824), Base::new(2147418111)),
+                Ext::new_real(Base::zero()),
+                Ext::new(Base::new(1073741824), Base::new(2147450879)),
+                Ext::new_real(Base::neg_one()),
+                Ext::new(Base::new(1073741824), Base::new(65536)),
+            ]
+            .to_vec(),
+        );
+        let compressed = Mersenne31Dft::lde_batch_compress::<Dft>(input_real, ADDED_BITS);
+        let output = compressed.decompress();
+
+        assert_eq!(expected_values, output);
     }
 
     #[test]

@@ -16,7 +16,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use complex::*;
-pub use dft::Mersenne31Dft;
+pub use dft::{Mersenne31CompressedLDE, Mersenne31Dft};
 use p3_field::{
     exp_1717986917, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
     PrimeField64,
