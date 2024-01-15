@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use p3_field::{Field, AbstractField, AbstractExtensionField, TwoAdicField};
+use p3_field::{Field, AbstractField, AbstractExtensionField, TwoAdicField, Powers};
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 
 use core::fmt::Debug;
@@ -15,29 +15,6 @@ pub struct Point<F> {
     x: F,
     y: F,
 }
-
-/// An iterator which outputs g, gh, gh^2, ... when initialised with base h and current g.
-/// If g = h this yeilds the values in the subgroup H = <h>.
-/// Otherwise, we get the values in the coset gH.
-#[derive(Clone)]
-struct Powers<F> {
-    base: F,
-    current: F,
-}
-
-impl<F: AbstractField> Iterator for Powers<F> {
-    type Item = F;
-
-    fn next(&mut self) -> Option<F> {
-        let result = self.current.clone();
-        self.current *= self.base.clone();
-        Some(result)
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Next we define some helper functions.
 
