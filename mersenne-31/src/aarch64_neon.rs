@@ -192,7 +192,7 @@ fn mul(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     //     = prod_lo32 - prod_hi31 * P                                                   (mod 2^32)
     //
     // t is in 0, ..., 2 P, so we apply reduce_sum to get the result.
-    
+
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let prod_hi31 = mul_31x31_to_hi_31(lhs, rhs);
