@@ -4,10 +4,9 @@
 
 use std::any::type_name;
 
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_cfft::{cfft, cfft_inv, cfft_inv_twiddles, cfft_twiddles};
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
-
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 

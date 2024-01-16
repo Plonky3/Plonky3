@@ -3,7 +3,6 @@
 #![no_std]
 
 extern crate alloc;
-mod naive;
 mod radix_2_butterfly;
 mod traits;
 mod util;
@@ -11,166 +10,16 @@ mod util;
 #[cfg(test)]
 mod testing;
 
-pub use naive::*;
 pub use radix_2_butterfly::*;
 pub use traits::*;
 
-use alloc::vec;
 use alloc::vec::Vec;
-use itertools::Itertools;
-use p3_field::{AbstractExtensionField, AbstractField, ComplexExtension, Field, Powers};
-use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 
-/// Get the cfft polynomial basis.
-/// The basis consists off all multi-linear products of: y, x, 2x^2 - 1, 2(2x^2 - 1)^2 - 1, ...
-/// The ordering of these basis elements is the bit reversal of the sequence: 1, y, x, xy, (2x^2 - 1), (2x^2 - 1)y, ...
-/// We also need to throw in a couple of negative signs for technical reasons.
-fn cfft_poly_basis<Base: AbstractField + Field, Ext: ComplexExtension<Base>>(
-    point: &Ext,
-    n: u32,
-) -> Vec<Base> {
-    if n == 0 {
-        return vec![Base::one()]; // Base case
-    }
-
-    let mut output = vec![Base::one(), point.imag()]; // The n = 1 case is also special as y only appears once.
-
-    let mut current = point.real();
-
-    for _ in 1..n {
-        let new = output.clone().into_iter().map(|val| val * current); // New basis elements to add.
-
-        output = output.into_iter().interleave(new).collect(); // Interleave the two basis together to keep the bit reversal ordering.
-
-        current = (Base::two()) * current * current - Base::one();
-        // Find the next basis vector.
-    }
-
-    // We need to handle the negatives which can appear in our cFFT method.
-    // For the i'th basis element, we multiply it by -1 for every occurance of 11 in the binary decomposition of i.
-    // There is almost certainly a better way to do this but this code is only here for cross checks and won't be used in production.
-    for (i, val) in output.iter_mut().enumerate() {
-        let mut last = false;
-        for j in 0..n {
-            let test_bit = 1 << j;
-            let non_zero_test = i & test_bit != 0;
-            if non_zero_test && last {
-                *val *= -Base::one();
-            }
-            last = non_zero_test;
-        }
-    }
-
-    output
-}
-
-/// Evaluate a polynomial with coefficents given in the CFFT basis at a point (x, y)
-/// len(coeffs) needs to be a power of 2.
-/// Gives a simple O(n^2) equivalent to check our CFFT against.
-pub fn evaluate_cfft_poly<Base: AbstractField + Field, Ext: ComplexExtension<Base>>(
-    coeffs: &[Base],
-    point: Ext,
-) -> Base {
-    let n = coeffs.len();
-
-    debug_assert!(n.is_power_of_two()); // If n is not a power of 2 something has gone badly wrong.
-
-    let log_n = n.trailing_zeros();
-
-    let basis = cfft_poly_basis(&point, log_n); // Get the cfft polynomial basis evaluated at the point x.
-
-    let mut output = Base::zero();
-
-    for i in 0..n {
-        output += coeffs[i] * basis[i] // Dot product the basis with the coefficients.
-    }
-
-    output
-}
-
-/// Given an integer bits, generate half of the points in the coset gH.
-/// Here H is the unique subgroup of order 2^bits and g is an element of order 2^{bits + 1}.
-/// The output will be a list {g, g^3, g^5, ...} of length size.
-/// Use size = 2^{bits} for the full domain or 2^{bits - 1} for the half domain.
-#[inline]
-fn cfft_domain(bits: usize, size: usize) -> Vec<Mersenne31Complex<Mersenne31>> {
-    let generator = Mersenne31Complex::circle_two_adic_generator(bits + 1);
-
-    let powers = Powers {
-        base: generator * generator,
-        current: generator,
-    };
-
-    powers.take(size).collect()
-}
-
-/// Given a generator h for H and an element k, generate points in the twin coset kH u k^{-1}H.
-/// The ordering is important here, the points will generated in the following interleaved pattern:
-/// {k, k^{-1}h, kh, k^{-1}h^2, kh^2, ..., k^{-1}h^{-1}, kh^{-1}, k^{-1}}.
-/// Size controls how many of these we want to compute. It should either be |H| or |H|/2 depending on if
-/// we want simply the twiddles or the full domain. If k is has order 2|H| this is equal to cfft_domain.
-#[inline]
-fn twin_coset_domain(
-    generator: Mersenne31Complex<Mersenne31>,
-    coset_elem: Mersenne31Complex<Mersenne31>,
-    size: usize,
-) -> Vec<Mersenne31Complex<Mersenne31>> {
-    let coset_powers = Powers {
-        base: generator,
-        current: coset_elem,
-    };
-
-    let inv_coset_powers = Powers {
-        base: generator,
-        current: generator * coset_elem.inverse(),
-    };
-
-    coset_powers
-        .interleave(inv_coset_powers)
-        .take(size)
-        .collect()
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+use p3_field::{AbstractExtensionField};
+use p3_mersenne_31::{Mersenne31};
 
 // Finally we move on to defining the CFFT, Inverse CFFT and Coset Extrapolation algorithms.
 // Handily, the Inverse CFFT and Coset Extrapolation algorithms are actually identical, we just need to change our choice of twiddles.
-
-/// Compute the twiddles for the CFFT.
-/// Let N = 2^n be the size of our initial set. Then we start with the domain
-/// {g, g^3, ..., g^{-3}, g^{-1}} for g a 2N'th root of unity.
-/// The initial twiddle domain is the first half of the full domain.
-/// In the first step our twiddles are the inverse imaginary parts and we simply halve the domain size.
-/// In all subsequent steps our twiddles are the inverse real parts and we both halve the domain size and square every element.
-pub fn cfft_twiddles(log_n: usize) -> Vec<Vec<Mersenne31>> {
-    let size = 1 << (log_n - 1);
-    let init_domain = cfft_domain(log_n, size); // Get the starting domain.
-
-    let mut working_domain: Vec<_> = init_domain
-        .iter()
-        .take(size / 2)
-        .map(|x| x.real())
-        .collect(); // After the first step we only need the real part.
-
-    (0..log_n)
-        .map(|i| {
-            let size = working_domain.len();
-            if i == 0 {
-                init_domain.iter().map(|x| x.imag().inverse()).collect() // The twiddles in step one are the inverse imaginary parts.
-            } else {
-                let output = working_domain.iter().map(|x| x.inverse()).collect(); // The twiddles in subsequent steps are the inverse real parts.
-                working_domain = working_domain
-                    .iter()
-                    .take(size / 2)
-                    .map(|x| Mersenne31::two() * *x * *x - Mersenne31::one())
-                    .collect(); // When we square a point, the real part changes as x -> 2x^2 - 1.
-                output
-            }
-        })
-        .collect()
-}
 
 /// Given a vector v of length N = 2^n, we consider this vector as the evaluations of a polynomial
 /// f \in F_P[X, Y]/<X^2 + Y^2 = 1> on the circle coset gH = {g, g^3, ..., g^{2N - 1}}.
@@ -198,38 +47,6 @@ pub fn cfft<F: AbstractExtensionField<Mersenne31>>(coeffs: &mut [F], twiddles: &
             }
         }
     }
-}
-
-/// Compute the twiddles for the inverse CFFT.
-/// The twiddles are essentially the same as in the CFFT case except we no longer need to take inverses.
-pub fn cfft_inv_twiddles(log_n: usize) -> Vec<Vec<Mersenne31>> {
-    let size = 1 << (log_n - 1);
-    let init_domain = cfft_domain(log_n, size);
-
-    let mut working_domain: Vec<_> = init_domain
-        .iter()
-        .take(size / 2)
-        .map(|x| x.real())
-        .collect();
-
-    (0..log_n)
-        .map(|i| {
-            let size = working_domain.len();
-            if i == 0 {
-                init_domain.iter().map(|x| x.imag()).collect() // The twiddles in the outer step are the imaginary parts.
-            } else {
-                // Not sure if this is the cleanest was of doing this.
-
-                let output = working_domain.clone(); // The twiddles in all other steps are the real parts.
-                working_domain = working_domain
-                    .iter()
-                    .take(size / 2)
-                    .map(|x| Mersenne31::two() * *x * *x - Mersenne31::one())
-                    .collect();
-                output
-            }
-        })
-        .collect()
 }
 
 /// This is the inverse of the CFFT. Given the coefficients it computes the evaluations.
@@ -261,51 +78,19 @@ pub fn cfft_inv<F: AbstractExtensionField<Mersenne31>>(
     }
 }
 
-/// Compute the twiddles for the coset evaluation.
-/// Unlike the previous cases, here we actually need to start with a given group element.
-/// TODO: Explain what these twiddles are.
-pub fn coset_eval_twiddles(
-    log_n: usize,
-    coset_elem: Mersenne31Complex<Mersenne31>,
-) -> Vec<Vec<Mersenne31>> {
-    let size = 1 << (log_n - 1);
-    let generator = Mersenne31Complex::circle_two_adic_generator(log_n - 1);
-
-    let init_domain = twin_coset_domain(generator, coset_elem, size);
-
-    let mut working_domain: Vec<_> = init_domain
-        .iter()
-        .take(size / 2)
-        .map(|x| x.real())
-        .collect();
-
-    (0..log_n)
-        .map(|i| {
-            let size = working_domain.len();
-            if i == 0 {
-                init_domain.iter().map(|x| x.imag()).collect()
-            } else {
-                let output = working_domain.clone();
-                working_domain = working_domain
-                    .iter()
-                    .take(size / 2)
-                    .map(|x| Mersenne31::two() * *x * *x - Mersenne31::one())
-                    .collect();
-                output
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    
+    use crate::util::{cfft_domain, twin_coset_domain};
     use super::*;
-    use p3_field::TwoAdicField;
+    use crate::testing::evaluate_cfft_poly;
+    use p3_field::{Field, AbstractField, ComplexExtension};
+    use p3_mersenne_31::{Mersenne31Complex}; 
 
     #[test]
     fn fft_size_2() {
         let mut a = [(1 << 31) - 3, 2].map(Mersenne31::from_canonical_u32);
-        let twiddles = cfft_twiddles(1);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(1);
 
         cfft(&mut a, &twiddles);
 
@@ -319,11 +104,11 @@ mod tests {
         let size_u32 = size as u32;
         let log_size = size.trailing_zeros() as usize;
 
-        let twiddles = cfft_twiddles(log_size);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size);
 
         cfft(&mut a, &twiddles);
 
-        let points = cfft_domain(log_size, size);
+        let points = cfft_domain::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size, size);
 
         let evals: Vec<_> = points
             .into_iter()
@@ -342,11 +127,11 @@ mod tests {
         let size_u32 = size as u32;
         let log_size = size.trailing_zeros() as usize;
 
-        let twiddles = cfft_twiddles(log_size);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size);
 
         cfft(&mut a, &twiddles);
 
-        let points = cfft_domain(log_size, size);
+        let points = cfft_domain::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size, size);
 
         let evals: Vec<_> = points
             .into_iter()
@@ -368,13 +153,13 @@ mod tests {
         let size: usize = a.len();
         let size_u32 = size as u32;
         let log_size = size.trailing_zeros() as usize;
-        let twiddles = cfft_twiddles(log_size);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size);
 
         let expected = a;
 
         cfft(&mut a, &twiddles);
 
-        let points = cfft_domain(log_size, size);
+        let points = cfft_domain::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size, size);
 
         let evals: Vec<_> = points
             .into_iter()
@@ -393,7 +178,7 @@ mod tests {
             .to_vec();
         let size: u32 = a.len() as u32;
         let log_size: usize = size.trailing_zeros() as usize;
-        let cfft_twiddles = cfft_twiddles(log_size);
+        let cfft_twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size);
 
         let expected: Vec<_> = a
             .iter()
@@ -401,7 +186,7 @@ mod tests {
             .collect();
         cfft(&mut a, &cfft_twiddles);
 
-        let cfft_inv_twiddles = cfft_inv_twiddles(log_size);
+        let cfft_inv_twiddles = cfft_inv_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size);
         cfft_inv(&mut a, &cfft_inv_twiddles);
 
         assert_eq!(a, expected);
@@ -417,13 +202,13 @@ mod tests {
         let size_u32: u32 = size.try_into().unwrap();
         let log_size: usize = size_u32.trailing_zeros() as usize;
 
-        let cfft_twiddles = cfft_twiddles(log_size);
+        let cfft_twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(log_size);
 
         // shuffle(&mut a);
         cfft(&mut a, &cfft_twiddles);
 
-        let coset_elem = Mersenne31Complex::two_adic_generator(10);
-        let group_generator = Mersenne31Complex::two_adic_generator(log_size - 1);
+        let coset_elem = Mersenne31Complex::circle_two_adic_generator(10);
+        let group_generator = Mersenne31Complex::circle_two_adic_generator(log_size - 1);
 
         let coset_points = twin_coset_domain(group_generator, coset_elem, size);
 

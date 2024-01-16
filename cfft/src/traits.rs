@@ -35,9 +35,7 @@ pub trait CircleSubgroupFFT<Base: Field, Ext: ComplexExtension<Base>>: Clone + D
 
     /// Compute the "coset CFFT" of each column in `mat`. This is interpolation onto a different twin coset of
     /// the circle group rather than the standard one.
-    fn coset_cfft_batch(&self, mut _mat: RowMajorMatrix<Base>, _shift: Ext) -> Self::Evaluations {
-        todo!();
-    }
+    fn coset_cfft_batch(&self, mat: RowMajorMatrix<Base>, shift: Ext) -> Self::Evaluations;
 
     /// Compute the inverse CFFT of `vec`.
     fn icfft(&self, vec: Vec<Base>) -> Vec<Base> {
