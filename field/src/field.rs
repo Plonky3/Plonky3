@@ -341,15 +341,32 @@ pub trait TwoAdicField: Field {
 }
 
 /// A field extension of the form F[i] where the order of the circle group S^1 is divisible by a large power of 2.
-/// As |S^1| = |F| + 1 wheras |F*| = |F| - 1 this trait is incompatible with TwoAdicField. 
+/// As |S^1| = |F| + 1 wheras |F*| = |F| - 1 this trait is incompatible with TwoAdicField.
 /// Required for implementing the CFFT.
 pub trait ComplexExtension<Base: Field>: ExtensionField<Base> {
-    /// IS THERE A WAY TO FORCE ComplexExtension TO ACTUALLY BE A COMPLEX EXTENSION? (Namely DEG = 2 and i = (0, 1) is a 4th roof of unity)
-    /// TODO
-
-    
     /// The number of factors of two in the order of the circle group.
     const CIRCLE_TWO_ADICITY: usize;
+
+    /// Get the real part.
+    /// x + yi -> x
+    #[must_use]
+    fn real(&self) -> Base;
+
+    /// Get the imaginary part.
+    /// x + yi -> y
+    #[must_use]
+    fn imag(&self) -> Base;
+
+    /// Take the conjugate.
+    /// x + yi -> x - yi
+    /// Note that if x^2 + y^2 = 1 then the conjugate is also the inverse.
+    #[must_use]
+    fn conjugate(&self) -> Self;
+
+    /// Compute the norm
+    /// x + yi -> x^2 + y^2
+    #[must_use]
+    fn norm(&self) -> Base;
 
     /// Returns a generator of the sub circle group of order `2^bits`.
     /// Assumes `bits < CIRCLE_TWO_ADICITY`, otherwise the result is undefined.

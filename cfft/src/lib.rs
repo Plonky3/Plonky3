@@ -18,54 +18,32 @@ pub use traits::*;
 use alloc::vec;
 use alloc::vec::Vec;
 use itertools::Itertools;
-use p3_field::{AbstractExtensionField, AbstractField, Field, Powers, TwoAdicField};
+use p3_field::{AbstractExtensionField, AbstractField, ComplexExtension, Field, Powers};
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
-
-// Currently unused but will be used eventually.
-// use crate::CircleSubgroupFFT;
-
-use core::fmt::Debug;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// A point in F^2. When F = M31 this is literally the point x + iy in M31[i] but
-// we distingush this as we might want to let F be something more general.
-#[derive(Debug)]
-pub struct Point<F> {
-    x: F,
-    y: F,
-}
-
-// Next we define some helper functions.
-
-pub fn from_complex(val: Mersenne31Complex<Mersenne31>) -> Point<Mersenne31> {
-    Point {
-        x: val.real(),
-        y: val.imag(),
-    }
-}
 
 /// Get the cfft polynomial basis.
 /// The basis consists off all multi-linear products of: y, x, 2x^2 - 1, 2(2x^2 - 1)^2 - 1, ...
 /// The ordering of these basis elements is the bit reversal of the sequence: 1, y, x, xy, (2x^2 - 1), (2x^2 - 1)y, ...
 /// We also need to throw in a couple of negative signs for technical reasons.
-fn cfft_poly_basis<F: AbstractField>(point: &Point<F>, n: u32) -> Vec<F> {
+fn cfft_poly_basis<Base: AbstractField + Field, Ext: ComplexExtension<Base>>(
+    point: &Ext,
+    n: u32,
+) -> Vec<Base> {
     if n == 0 {
-        return vec![F::one()]; // Base case
+        return vec![Base::one()]; // Base case
     }
 
-    let mut output = vec![F::one(), point.y.clone()]; // The n = 1 case is also special as y only appears once.
+    let mut output = vec![Base::one(), point.imag()]; // The n = 1 case is also special as y only appears once.
 
-    let mut current = point.x.clone();
+    let mut current = point.real();
 
     for _ in 1..n {
-        let new = output.clone().into_iter().map(|val| val * current.clone()); // New basis elements to add.
+        let new = output.clone().into_iter().map(|val| val * current); // New basis elements to add.
 
         output = output.into_iter().interleave(new).collect(); // Interleave the two basis together to keep the bit reversal ordering.
 
-        current = (F::two()) * current.clone() * current.clone() - F::one(); // Find the next basis vector.
+        current = (Base::two()) * current * current - Base::one();
+        // Find the next basis vector.
     }
 
     // We need to handle the negatives which can appear in our cFFT method.
@@ -77,7 +55,7 @@ fn cfft_poly_basis<F: AbstractField>(point: &Point<F>, n: u32) -> Vec<F> {
             let test_bit = 1 << j;
             let non_zero_test = i & test_bit != 0;
             if non_zero_test && last {
-                *val *= -F::one();
+                *val *= -Base::one();
             }
             last = non_zero_test;
         }
@@ -89,7 +67,10 @@ fn cfft_poly_basis<F: AbstractField>(point: &Point<F>, n: u32) -> Vec<F> {
 /// Evaluate a polynomial with coefficents given in the CFFT basis at a point (x, y)
 /// len(coeffs) needs to be a power of 2.
 /// Gives a simple O(n^2) equivalent to check our CFFT against.
-pub fn evaluate_cfft_poly<F: AbstractField>(coeffs: &[F], point: Point<F>) -> F {
+pub fn evaluate_cfft_poly<Base: AbstractField + Field, Ext: ComplexExtension<Base>>(
+    coeffs: &[Base],
+    point: Ext,
+) -> Base {
     let n = coeffs.len();
 
     debug_assert!(n.is_power_of_two()); // If n is not a power of 2 something has gone badly wrong.
@@ -98,10 +79,10 @@ pub fn evaluate_cfft_poly<F: AbstractField>(coeffs: &[F], point: Point<F>) -> F 
 
     let basis = cfft_poly_basis(&point, log_n); // Get the cfft polynomial basis evaluated at the point x.
 
-    let mut output = F::zero();
+    let mut output = Base::zero();
 
     for i in 0..n {
-        output += coeffs[i].clone() * basis[i].clone() // Dot product the basis with the coefficients.
+        output += coeffs[i] * basis[i] // Dot product the basis with the coefficients.
     }
 
     output
@@ -113,7 +94,7 @@ pub fn evaluate_cfft_poly<F: AbstractField>(coeffs: &[F], point: Point<F>) -> F 
 /// Use size = 2^{bits} for the full domain or 2^{bits - 1} for the half domain.
 #[inline]
 fn cfft_domain(bits: usize, size: usize) -> Vec<Mersenne31Complex<Mersenne31>> {
-    let generator = Mersenne31Complex::two_adic_generator(bits + 1);
+    let generator = Mersenne31Complex::circle_two_adic_generator(bits + 1);
 
     let powers = Powers {
         base: generator * generator,
@@ -288,7 +269,7 @@ pub fn coset_eval_twiddles(
     coset_elem: Mersenne31Complex<Mersenne31>,
 ) -> Vec<Vec<Mersenne31>> {
     let size = 1 << (log_n - 1);
-    let generator = Mersenne31Complex::two_adic_generator(log_n - 1);
+    let generator = Mersenne31Complex::circle_two_adic_generator(log_n - 1);
 
     let init_domain = twin_coset_domain(generator, coset_elem, size);
 
@@ -347,8 +328,7 @@ mod tests {
         let evals: Vec<_> = points
             .into_iter()
             .map(|point| {
-                Mersenne31::from_canonical_u32(size_u32).inverse()
-                    * evaluate_cfft_poly(&a, from_complex(point))
+                Mersenne31::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&a, point)
             })
             .collect();
         assert_eq!(evals, [1, 11, 5, 1234].map(Mersenne31::from_canonical_u32))
@@ -371,8 +351,7 @@ mod tests {
         let evals: Vec<_> = points
             .into_iter()
             .map(|point| {
-                Mersenne31::from_canonical_u32(size_u32).inverse()
-                    * evaluate_cfft_poly(&a, from_complex(point))
+                Mersenne31::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&a, point)
             })
             .collect();
 
@@ -400,8 +379,7 @@ mod tests {
         let evals: Vec<_> = points
             .into_iter()
             .map(|point| {
-                Mersenne31::from_canonical_u32(size_u32).inverse()
-                    * evaluate_cfft_poly(&a, from_complex(point))
+                Mersenne31::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&a, point)
             })
             .collect();
 
@@ -451,7 +429,7 @@ mod tests {
 
         let coset_evals: Vec<_> = coset_points
             .into_iter()
-            .map(|point| evaluate_cfft_poly(&a, from_complex(point)))
+            .map(|point| evaluate_cfft_poly(&a, point))
             .collect();
 
         let coset_twiddles = coset_eval_twiddles(log_size, coset_elem);
