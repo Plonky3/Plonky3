@@ -1,6 +1,28 @@
+//! This crate contains implementations of the CFT (Circle Fourier Transform) from the "Circle Stark" Paper
+
+#![no_std]
+
+extern crate alloc;
+mod naive;
+mod radix_2_butterfly;
+mod traits;
+mod util;
+
+#[cfg(test)]
+mod testing;
+
+pub use naive::*;
+pub use radix_2_butterfly::*;
+pub use traits::*;
+
+use alloc::vec;
+use alloc::vec::Vec;
 use itertools::Itertools;
-use p3_field::{Field, AbstractField, AbstractExtensionField, TwoAdicField, Powers};
+use p3_field::{AbstractExtensionField, AbstractField, Field, Powers, TwoAdicField};
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
+
+// Currently unused but will be used eventually.
+// use crate::CircleSubgroupFFT;
 
 use core::fmt::Debug;
 
@@ -49,13 +71,13 @@ fn cfft_poly_basis<F: AbstractField>(point: &Point<F>, n: u32) -> Vec<F> {
     // We need to handle the negatives which can appear in our cFFT method.
     // For the i'th basis element, we multiply it by -1 for every occurance of 11 in the binary decomposition of i.
     // There is almost certainly a better way to do this but this code is only here for cross checks and won't be used in production.
-    for i in 0..output.len() {
+    for (i, val) in output.iter_mut().enumerate() {
         let mut last = false;
         for j in 0..n {
             let test_bit = 1 << j;
             let non_zero_test = i & test_bit != 0;
             if non_zero_test && last {
-                output[i] = -output[i].clone();
+                *val *= -F::one();
             }
             last = non_zero_test;
         }
@@ -132,7 +154,7 @@ fn twin_coset_domain(
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Finally we move on to definint the CFFT, Inverse CFFT and Coset Extrapolation algorithms.
+// Finally we move on to defining the CFFT, Inverse CFFT and Coset Extrapolation algorithms.
 // Handily, the Inverse CFFT and Coset Extrapolation algorithms are actually identical, we just need to change our choice of twiddles.
 
 /// Compute the twiddles for the CFFT.
@@ -174,16 +196,13 @@ pub fn cfft_twiddles(log_n: usize) -> Vec<Vec<Mersenne31>> {
 /// Here H is the unique subgroup of order N and g is an element of order 2N.
 /// We can assume that deg_X(f) < N/2 and deg_Y(f) <= 1.
 /// Then cfft computes the coefficients of f (In a slightly unusual basis).
-pub fn cfft<F: AbstractExtensionField<Mersenne31>>(
-    coeffs: &mut [F],
-    twiddles: &[Vec<Mersenne31>],
-) {
+pub fn cfft<F: AbstractExtensionField<Mersenne31>>(coeffs: &mut [F], twiddles: &[Vec<Mersenne31>]) {
     let n = coeffs.len();
     let n_u32: u32 = n.try_into().unwrap();
-    let log_n = n.trailing_zeros().try_into().unwrap();
+    let log_n: usize = n.trailing_zeros().try_into().unwrap();
     debug_assert_eq!(1_u32 << log_n, n_u32); // Our input better be a power of 2.
 
-    for i in 0..log_n {
+    for (i, twiddle) in twiddles.iter().enumerate() {
         let block_size = 1 << (log_n - i);
         let half_block_size = block_size >> 1;
 
@@ -194,7 +213,7 @@ pub fn cfft<F: AbstractExtensionField<Mersenne31>>(
                 let s = chunck[j].clone();
                 let t = chunck[block_size - j - 1].clone();
                 chunck[j] = s.clone() + t.clone();
-                chunck[block_size - j - 1] = (s - t) * twiddles[i][j];
+                chunck[block_size - j - 1] = (s - t) * twiddle[j];
             }
         }
     }
@@ -264,7 +283,10 @@ pub fn cfft_inv<F: AbstractExtensionField<Mersenne31>>(
 /// Compute the twiddles for the coset evaluation.
 /// Unlike the previous cases, here we actually need to start with a given group element.
 /// TODO: Explain what these twiddles are.
-pub fn coset_eval_twiddles(log_n: usize, coset_elem: Mersenne31Complex<Mersenne31>) -> Vec<Vec<Mersenne31>> {
+pub fn coset_eval_twiddles(
+    log_n: usize,
+    coset_elem: Mersenne31Complex<Mersenne31>,
+) -> Vec<Vec<Mersenne31>> {
     let size = 1 << (log_n - 1);
     let generator = Mersenne31Complex::two_adic_generator(log_n - 1);
 
@@ -298,7 +320,6 @@ pub fn coset_eval_twiddles(log_n: usize, coset_elem: Mersenne31Complex<Mersenne3
 mod tests {
     use super::*;
     use p3_field::TwoAdicField;
-    
 
     #[test]
     fn fft_size_2() {
@@ -326,7 +347,8 @@ mod tests {
         let evals: Vec<_> = points
             .into_iter()
             .map(|point| {
-                Mersenne31::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&a, from_complex(point))
+                Mersenne31::from_canonical_u32(size_u32).inverse()
+                    * evaluate_cfft_poly(&a, from_complex(point))
             })
             .collect();
         assert_eq!(evals, [1, 11, 5, 1234].map(Mersenne31::from_canonical_u32))
@@ -349,22 +371,27 @@ mod tests {
         let evals: Vec<_> = points
             .into_iter()
             .map(|point| {
-                Mersenne31::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&a, from_complex(point))
+                Mersenne31::from_canonical_u32(size_u32).inverse()
+                    * evaluate_cfft_poly(&a, from_complex(point))
             })
             .collect();
 
-        assert_eq!(evals, [1, 2, 1235, 4, 9, 11, 17, 6].map(Mersenne31::from_canonical_u32))
+        assert_eq!(
+            evals,
+            [1, 2, 1235, 4, 9, 11, 17, 6].map(Mersenne31::from_canonical_u32)
+        )
     }
 
     #[test]
     fn fft_size_16() {
-        let mut a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].map(Mersenne31::from_canonical_u32);
+        let mut a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            .map(Mersenne31::from_canonical_u32);
         let size: usize = a.len();
         let size_u32 = size as u32;
         let log_size = size.trailing_zeros() as usize;
         let twiddles = cfft_twiddles(log_size);
 
-        let expected = a.clone();
+        let expected = a;
 
         cfft(&mut a, &twiddles);
 
@@ -373,7 +400,8 @@ mod tests {
         let evals: Vec<_> = points
             .into_iter()
             .map(|point| {
-                Mersenne31::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&a, from_complex(point))
+                Mersenne31::from_canonical_u32(size_u32).inverse()
+                    * evaluate_cfft_poly(&a, from_complex(point))
             })
             .collect();
 
@@ -389,7 +417,10 @@ mod tests {
         let log_size: usize = size.trailing_zeros() as usize;
         let cfft_twiddles = cfft_twiddles(log_size);
 
-        let expected: Vec<_> = a.iter().map(|val| Mersenne31::from_canonical_u32(size) * *val).collect();
+        let expected: Vec<_> = a
+            .iter()
+            .map(|val| Mersenne31::from_canonical_u32(size) * *val)
+            .collect();
         cfft(&mut a, &cfft_twiddles);
 
         let cfft_inv_twiddles = cfft_inv_twiddles(log_size);
@@ -423,7 +454,7 @@ mod tests {
             .map(|point| evaluate_cfft_poly(&a, from_complex(point)))
             .collect();
 
-        let coset_twiddles = coset_eval_twiddles(log_size, coset_elem.clone());
+        let coset_twiddles = coset_eval_twiddles(log_size, coset_elem);
         cfft_inv(&mut a, &coset_twiddles);
 
         assert_eq!(coset_evals, a)
