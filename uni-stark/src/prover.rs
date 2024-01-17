@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
 use itertools::Itertools;
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
@@ -8,15 +9,13 @@ use p3_field::{
     cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
     TwoAdicField,
 };
-
-use p3_matrix::dense::{RowMajorMatrix};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet, MatrixRows};
-
 use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::{SymbolicAirBuilder};
+use crate::symbolic_builder::SymbolicAirBuilder;
 use crate::{
     config, decompose_and_flatten, get_max_constraint_degree, Commitments, OpenedValues, Proof,
     ProverConstraintFolder, StarkConfig, ZerofierOnCoset,
@@ -31,11 +30,10 @@ type Commitment<SC> = (
         RowMajorMatrix<<SC as config::StarkConfig>::Val>,
     >>::ProverData,
 );
-type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
+pub type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
     <SC as config::StarkConfig>::Val,
     RowMajorMatrix<<SC as config::StarkConfig>::Val>,
 >>::ProverData;
-
 
 pub fn open<SC>(
     config: &SC,
@@ -102,7 +100,6 @@ where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
-
     let pcs = config.pcs();
     let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
 
@@ -148,7 +145,7 @@ pub fn get_trace_and_quotient_ldes<SC, A>(
     config: &SC,
     trace: RowMajorMatrix<SC::Val>,
     air: &A,
-    challenger: &mut SC::Challenger,    
+    challenger: &mut SC::Challenger,
 ) -> (ProverData<SC>, ProverData<SC>, LogQuotientDegree, LogDegree)
 where
     SC: StarkConfig,
@@ -214,12 +211,13 @@ where
     ((trace_commit, trace_data), (quotient_commit, quotient_data))
 }
 
-    #[instrument(skip_all)]
-	
-    pub fn prove<
+#[instrument(skip_all)]
+
+pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, SC::Val>>,
-    #[cfg(not(debug_assertions))] A>(
+    #[cfg(not(debug_assertions))] A,
+>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
@@ -228,8 +226,7 @@ where
 where
     SC: StarkConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-    {
-
+{
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace);
     let log_degree = log2_strict_usize(trace.height());
@@ -241,7 +238,13 @@ where
     // But we pad it to a power of two so that we can efficiently decompose the quotient.
 
     let ((trace_commit, trace_data), (quotient_commit, quotient_data)) =
-        get_trace_and_quotient_commitments::<SC, A>(config, trace, log_quotient_degree, challenger, air);
+        get_trace_and_quotient_commitments::<SC, A>(
+            config,
+            trace,
+            log_quotient_degree,
+            challenger,
+            air,
+        );
 
     let (opening_proof, opened_values) = open::<SC>(
         config,

@@ -109,10 +109,10 @@ where
     type Proof = L::Proof;
     type Error = L::Error;
 
-    fn combine(&self, data:&Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData) {
-	self.mmcs.combine(data)
+    fn combine(&self, data: &Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData) {
+        self.mmcs.combine(data)
     }
-    
+
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
         self.commit_shifted_batches(polynomials, Val::one())
     }
