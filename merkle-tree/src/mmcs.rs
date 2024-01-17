@@ -54,11 +54,10 @@ where
     type Error = ();
     type Mat<'a> = RowMajorMatrixView<'a, P::Scalar> where H: 'a, C: 'a;
 
-    fn combine(&self, data: &Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData) {
+    fn combine(&self, data: &[Self::ProverData]) -> (Self::Commitment, Self::ProverData) {
         let leaves = data
-            .into_iter()
-            .map(|t| t.leaves.clone())
-            .flatten()
+            .iter()
+            .flat_map(|t| t.leaves.clone())
             .collect::<Vec<RowMajorMatrix<P::Scalar>>>();
         self.commit(leaves)
     }

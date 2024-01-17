@@ -34,7 +34,10 @@ pub type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
     <SC as config::StarkConfig>::Val,
     RowMajorMatrix<<SC as config::StarkConfig>::Val>,
 >>::ProverData;
-
+pub type ConfigProof<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
+        <SC as config::StarkConfig>::Val,
+        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+    >>::Proof;
 pub fn open<SC>(
     config: &SC,
     trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
@@ -49,10 +52,7 @@ pub fn open<SC>(
     log_quotient_degree: usize,
     challenger: &mut SC::Challenger,
 ) -> (
-    <<SC as config::StarkConfig>::Pcs as Pcs<
-        <SC as config::StarkConfig>::Val,
-        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
-    >>::Proof,
+    ConfigProof<SC>,
     OpenedValues<<SC as config::StarkConfig>::Challenge>,
 )
 where
@@ -286,7 +286,7 @@ where
 {
     let pcs = config.pcs();
 
-    let mut trace_ldes = pcs.get_ldes(&trace_data);
+    let mut trace_ldes = pcs.get_ldes(trace_data);
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
 

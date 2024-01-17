@@ -50,7 +50,7 @@ where
     type Proof = Vec<M::Proof>;
     type Error = ();
 
-    fn combine(&self, data: &Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData) {
+    fn combine(&self, data: &[Self::ProverData]) -> (Self::Commitment, Self::ProverData) {
         self.mmcs.combine(data)
     }
 

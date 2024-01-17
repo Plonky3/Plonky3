@@ -87,7 +87,7 @@ impl<F: Field, const DIGEST_ELEMS: usize> FieldMerkleTree<F, DIGEST_ELEMS> {
         }
     }
 
-    pub fn combine<P, H, C>(h: &H, c: &C, data: &Vec<Self>) -> Self
+    pub fn combine<P, H, C>(h: &H, c: &C, data: &[Self]) -> Self
     where
         P: PackedField<Scalar = F>,
         H: CryptographicHasher<F, [F; DIGEST_ELEMS]>,
@@ -98,9 +98,8 @@ impl<F: Field, const DIGEST_ELEMS: usize> FieldMerkleTree<F, DIGEST_ELEMS> {
         C: Sync,
     {
         let leaves = data
-            .into_iter()
-            .map(|t| t.leaves.clone())
-            .flatten()
+            .iter()
+            .flat_map(|t| t.leaves.clone())
             .collect::<Vec<RowMajorMatrix<F>>>();
         Self::new::<P, H, C>(h, c, leaves)
     }

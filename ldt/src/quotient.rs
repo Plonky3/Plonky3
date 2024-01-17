@@ -157,8 +157,8 @@ where
     type Error = QuotientError<Inner::Error>;
     type Mat<'a> = QuotientMatrix<F, EF, Inner::Mat<'a>> where Self: 'a;
 
-    fn combine(&self, data: &Vec<Self::ProverData>) -> (Self::Commitment, Self::ProverData) {
-        self.combine(data)
+    fn combine(&self, data: &[Self::ProverData]) -> (Self::Commitment, Self::ProverData) {
+        self.inner.combine(data)
     }
 
     fn open_batch(
