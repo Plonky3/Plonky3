@@ -77,12 +77,38 @@ impl<Base: Field, Ext: ComplexExtension<Base>> CircleSubgroupFFT<Base, Ext> for 
         mat
     }
 
-    fn coset_cfft_batch(
+    fn coset_icfft_batch(
         &self,
-        _: RowMajorMatrix<Base>,
-        _: Ext,
-    ) -> <Self as CircleSubgroupFFT<Base, Ext>>::Evaluations {
-        todo!()
+        mut mat: RowMajorMatrix<Base>,
+        coset_elem: Ext,
+    ) -> RowMajorMatrix<Base> {
+        let n = mat.height();
+        let n_u32: u32 = n.try_into().unwrap();
+        let log_n = n.trailing_zeros().try_into().unwrap();
+        debug_assert_eq!(1_u32 << log_n, n_u32); // Our input better be a power of 2.
+
+        let width = mat.width();
+
+        let twiddles = coset_eval_twiddles::<Base, Ext>(log_n, coset_elem);
+
+        for (i, twiddle) in twiddles.iter().rev().enumerate() {
+            let block_size = 1 << (i + 1);
+            let half_block_size = block_size >> 1;
+
+            for chuncks in mat.values.chunks_mut(block_size * width) {
+                let (low_chunks, high_chunks) = chuncks.split_at_mut(half_block_size * width);
+
+                low_chunks
+                    .chunks_mut(width)
+                    .zip(high_chunks.chunks_mut(width).rev())
+                    .zip(twiddle)
+                    .for_each(|((low_chunk, hi_chunk), twiddle)| {
+                        butterfly_icfft(low_chunk, hi_chunk, *twiddle)
+                    })
+            }
+        }
+
+        mat
     }
 }
 
@@ -229,7 +255,7 @@ mod tests {
 
     use super::*;
     use crate::old::{cfft, cfft_inv, evaluate_cfft_poly};
-    use crate::testing::{fft_ifft_test, fft_test};
+    use crate::testing::{coset_eval_test, fft_ifft_test, fft_test, ifft_test};
     use crate::util::twin_coset_domain;
 
     #[test]
@@ -243,6 +269,16 @@ mod tests {
     }
 
     #[test]
+    fn ifft_size_16() {
+        ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 16>();
+    }
+
+    #[test]
+    fn ifft_size_32() {
+        ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32>();
+    }
+
+    #[test]
     fn fft_ifft_size_16() {
         fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 16>();
     }
@@ -250,6 +286,16 @@ mod tests {
     #[test]
     fn fft_ifft_size_32() {
         fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32>();
+    }
+
+    #[test]
+    fn coset_eval_size_16() {
+        coset_eval_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 16>();
+    }
+
+    #[test]
+    fn coset_eval_size_32() {
+        coset_eval_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32>();
     }
 
     #[test]
