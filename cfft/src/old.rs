@@ -3,8 +3,8 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use itertools::Itertools;
 
+use itertools::Itertools;
 use p3_field::{AbstractField, ComplexExtension, Field};
 
 /// Get the cfft polynomial basis.

@@ -1,12 +1,12 @@
-use crate::util::cfft_domain;
-use crate::CircleSubgroupFFT;
-use crate::{cfft, cfft_twiddles, evaluate_cfft_poly};
-
 use alloc::vec::Vec;
 
 use p3_field::{ComplexExtension, Field};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+
+use crate::util::cfft_domain;
+use crate::CircleSubgroupFFT;
+use crate::{cfft, cfft_twiddles, evaluate_cfft_poly};
 
 /// Unlike the standard DFT where both directions can be reinterpreted as polynomial evaluation,
 /// In the CFFT only the iCFFT naturally corresponds to such an evaluation.

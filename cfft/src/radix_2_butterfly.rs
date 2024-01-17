@@ -1,9 +1,11 @@
-use crate::traits::CircleSubgroupFFT;
-use crate::util::{cfft_domain, twin_coset_domain};
 use alloc::vec::Vec;
+
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+
+use crate::traits::CircleSubgroupFFT;
+use crate::util::{cfft_domain, twin_coset_domain};
 
 /// An O(N Log(N)) implementation of the CFT roughly analagous to the FFT approach to the DFT.
 /// See the paper "Circle Stark".
@@ -220,13 +222,15 @@ pub fn coset_eval_twiddles<Base: Field, Ext: ComplexExtension<Base>>(
 #[cfg(test)]
 mod tests {
 
+    use alloc::vec::Vec;
+
+    use p3_field::{AbstractField, ComplexExtension};
+    use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
+
     use super::*;
     use crate::old::{cfft, cfft_inv, evaluate_cfft_poly};
     use crate::testing::{fft_ifft_test, fft_test};
     use crate::util::twin_coset_domain;
-    use alloc::vec::Vec;
-    use p3_field::{AbstractField, ComplexExtension};
-    use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 
     #[test]
     fn fft_size_16() {
