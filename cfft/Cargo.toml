@@ -9,10 +9,10 @@ p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 itertools		= "0.8.0"
+rand            = "0.8.5"
 
 [dev-dependencies]
 criterion       = "0.5"
-rand            = "0.8.5"
 
 [[bench]]
 name = "cfft"

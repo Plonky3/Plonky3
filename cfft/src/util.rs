@@ -1,6 +1,6 @@
-use itertools::Itertools;
 use alloc::vec::Vec;
-use p3_field::{Field, ComplexExtension, Powers};
+use itertools::Itertools;
+use p3_field::{ComplexExtension, Field, Powers};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -9,7 +9,10 @@ use p3_matrix::Matrix;
 /// The output will be a list {g, g^3, g^5, ...} of length size.
 /// Use size = 2^{bits} for the full domain or 2^{bits - 1} for the half domain.
 #[inline]
-pub(crate) fn cfft_domain<Base: Field, Ext: ComplexExtension<Base>>(bits: usize, size: usize) -> Vec<Ext> {
+pub(crate) fn cfft_domain<Base: Field, Ext: ComplexExtension<Base>>(
+    bits: usize,
+    size: usize,
+) -> Vec<Ext> {
     let generator = Ext::circle_two_adic_generator(bits + 1);
 
     let powers = Powers {
