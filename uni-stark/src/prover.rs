@@ -63,9 +63,9 @@ where
     let zeta: SC::Challenge = challenger.sample_ext_element();
     let (opened_values, opening_proof) = pcs.open_multi_batches(
         &[
-            (&trace_data, &[vec![zeta, zeta * g_subgroup]]),
+            (trace_data, &[vec![zeta, zeta * g_subgroup]]),
             (
-                &quotient_data,
+                quotient_data,
                 &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
             ),
         ],
@@ -160,7 +160,7 @@ where
 
     let (trace_commit, trace_data) = get_trace_lde::<SC>(config, trace);
 
-    challenger.observe(trace_commit.clone());
+    challenger.observe(trace_commit);
 
     let (quotient_commit, quotient_data) = get_quotient::<SC, A>(
         log_degree,
@@ -171,7 +171,7 @@ where
         &trace_data,
     );
 
-    challenger.observe(quotient_commit.clone());
+    challenger.observe(quotient_commit);
 
     (trace_data, quotient_data, log_degree, log_quotient_degree)
 }
