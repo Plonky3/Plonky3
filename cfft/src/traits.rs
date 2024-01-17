@@ -3,11 +3,9 @@ use alloc::vec::Vec;
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::util::swap_rows;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::MatrixRows;
 
 // TODO, import the right thing here.
-use crate::util::divide_by_height;
 
 pub trait CircleSubgroupFFT<Base: Field, Ext: ComplexExtension<Base>>: Clone + Default {
     // Effectively this is either RowMajorMatrix or BitReversedMatrixView<RowMajorMatrix>.
@@ -43,18 +41,7 @@ pub trait CircleSubgroupFFT<Base: Field, Ext: ComplexExtension<Base>>: Clone + D
     }
 
     /// Compute the inverse CFFT of each column in `mat`.
-    fn icfft_batch(&self, mat: RowMajorMatrix<Base>) -> RowMajorMatrix<Base> {
-        let mut cfft = self.cfft_batch(mat).to_row_major_matrix();
-        let h = cfft.height();
-
-        divide_by_height(&mut cfft);
-
-        for row in 1..h / 2 {
-            swap_rows(&mut cfft, row, h - row);
-        }
-
-        cfft
-    }
+    fn icfft_batch(&self, mat: RowMajorMatrix<Base>) -> RowMajorMatrix<Base>;
 
     /// Compute the low-degree extension of `vec` onto a larger subgroup.
     fn lde(&self, vec: Vec<Base>, added_bits: usize) -> Vec<Base> {

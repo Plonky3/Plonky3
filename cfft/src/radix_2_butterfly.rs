@@ -22,18 +22,15 @@ impl<Base: Field, Ext: ComplexExtension<Base>> CircleSubgroupFFT<Base, Ext> for 
         let log_n: usize = n.trailing_zeros().try_into().unwrap();
         debug_assert_eq!(1_u32 << log_n, n_u32); // The Height better be a power of 2.
 
+        let width = mat.width();
+
         let twiddles = cfft_twiddles::<Base, Ext>(log_n);
 
         for (i, twiddle) in twiddles.iter().enumerate() {
             let block_size = 1 << (log_n - i);
             let half_block_size = block_size >> 1;
 
-            let width = mat.width();
-
             for chuncks in mat.values.chunks_mut(block_size * width) {
-                // Need this if we didn't change the twiddles.
-                // chunck[half_block_size..].reverse();
-
                 let (low_chunks, high_chunks) = chuncks.split_at_mut(half_block_size * width);
 
                 low_chunks
@@ -45,6 +42,36 @@ impl<Base: Field, Ext: ComplexExtension<Base>> CircleSubgroupFFT<Base, Ext> for 
                     })
             }
         }
+        mat
+    }
+
+    fn icfft_batch(&self, mut mat: RowMajorMatrix<Base>) -> RowMajorMatrix<Base> {
+        let n = mat.height();
+        let n_u32: u32 = n.try_into().unwrap();
+        let log_n = n.trailing_zeros().try_into().unwrap();
+        debug_assert_eq!(1_u32 << log_n, n_u32); // Our input better be a power of 2.
+
+        let width = mat.width();
+
+        let twiddles = cfft_inv_twiddles::<Base, Ext>(log_n);
+
+        for (i, twiddle) in twiddles.iter().rev().enumerate() {
+            let block_size = 1 << (i + 1);
+            let half_block_size = block_size >> 1;
+
+            for chuncks in mat.values.chunks_mut(block_size * width) {
+                let (low_chunks, high_chunks) = chuncks.split_at_mut(half_block_size * width);
+
+                low_chunks
+                    .chunks_mut(width)
+                    .zip(high_chunks.chunks_mut(width).rev())
+                    .zip(twiddle)
+                    .for_each(|((low_chunk, hi_chunk), twiddle)| {
+                        butterfly_icfft(low_chunk, hi_chunk, *twiddle)
+                    })
+            }
+        }
+
         mat
     }
 
@@ -65,6 +92,16 @@ fn butterfly_cfft<Base: Field>(low_chunk: &mut [Base], high_chunk: &mut [Base], 
     for (low, high) in low_chunk.iter_mut().zip(high_chunk) {
         let sum = *low + *high;
         let diff = (*low - *high) * twiddle;
+        *low = sum;
+        *high = diff;
+    }
+}
+
+fn butterfly_icfft<Base: Field>(low_chunk: &mut [Base], high_chunk: &mut [Base], twiddle: Base) {
+    for (low, high) in low_chunk.iter_mut().zip(high_chunk) {
+        let high_twiddle = *high * twiddle;
+        let sum = *low + high_twiddle;
+        let diff = *low - high_twiddle;
         *low = sum;
         *high = diff;
     }
@@ -184,8 +221,9 @@ pub fn coset_eval_twiddles<Base: Field, Ext: ComplexExtension<Base>>(
 mod tests {
 
     use super::*;
-    use crate::testing::{cfft, cfft_inv, evaluate_cfft_poly, fft_test};
-    use crate::util::{twin_coset_domain};
+    use crate::old::{cfft, cfft_inv, evaluate_cfft_poly};
+    use crate::testing::{fft_ifft_test, fft_test};
+    use crate::util::twin_coset_domain;
     use alloc::vec::Vec;
     use p3_field::{AbstractField, ComplexExtension};
     use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
@@ -198,6 +236,16 @@ mod tests {
     #[test]
     fn fft_size_32() {
         fft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32>();
+    }
+
+    #[test]
+    fn fft_ifft_size_16() {
+        fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 16>();
+    }
+
+    #[test]
+    fn fft_ifft_size_32() {
+        fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32>();
     }
 
     #[test]

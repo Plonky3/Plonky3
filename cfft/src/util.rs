@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_field::{ComplexExtension, Field, Powers};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+// use p3_matrix::dense::RowMajorMatrix;
+// use p3_matrix::Matrix;
 
 /// Given an integer bits, generate half of the points in the coset gH.
 /// Here H is the unique subgroup of order 2^bits and g is an element of order 2^{bits + 1}.
@@ -50,12 +50,12 @@ pub(crate) fn twin_coset_domain<Base: Field, Ext: ComplexExtension<Base>>(
         .collect()
 }
 
-/// Divide each coefficient of the given matrix by its height.
-pub(crate) fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
-    let h = mat.height();
-    let h_inv = F::from_canonical_usize(h).inverse();
-    let (prefix, shorts, suffix) = unsafe { mat.values.align_to_mut::<F::Packing>() };
-    prefix.iter_mut().for_each(|x| *x *= h_inv);
-    shorts.iter_mut().for_each(|x| *x *= h_inv);
-    suffix.iter_mut().for_each(|x| *x *= h_inv);
-}
+// Divide each coefficient of the given matrix by its height.
+// pub(crate) fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
+//     let h = mat.height();
+//     let h_inv = F::from_canonical_usize(h).inverse();
+//     let (prefix, shorts, suffix) = unsafe { mat.values.align_to_mut::<F::Packing>() };
+//     prefix.iter_mut().for_each(|x| *x *= h_inv);
+//     shorts.iter_mut().for_each(|x| *x *= h_inv);
+//     suffix.iter_mut().for_each(|x| *x *= h_inv);
+// }

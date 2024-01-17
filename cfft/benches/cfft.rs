@@ -2,18 +2,24 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
+use p3_field::{ComplexExtension, Field};
+use p3_matrix::dense::RowMajorMatrix;
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_cfft::{cfft, cfft_inv, cfft_inv_twiddles, cfft_twiddles};
+use p3_cfft::{cfft, cfft_inv, cfft_inv_twiddles, cfft_twiddles, CircleSubgroupFFT, Radix2CFT};
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 use rand::distributions::{Distribution, Standard};
-use rand::Rng;
+use rand::{thread_rng, Rng};
 
 fn bench_cfft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     let log_sizes = &[3, 6, 10];
 
+    const BATCH_SIZE: usize = 1;
+
+    test_cfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
+    test_icfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
     cfft_timing(c, log_sizes);
     cfft_inv_timing(c, log_sizes);
 }
@@ -36,10 +42,13 @@ fn cfft_timing(c: &mut Criterion, log_sizes: &[usize]) {
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
-        let twiddles = cfft_twiddles(*log_n);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
 
         group.bench_function(&format!("Benching Size {}", n), |b| {
-            b.iter(|| cfft(&mut message, &twiddles))
+            b.iter(|| {
+                let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
+                cfft(&mut message, &twiddles)
+            })
         });
     }
 }
@@ -62,10 +71,72 @@ fn cfft_inv_timing(c: &mut Criterion, log_sizes: &[usize]) {
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
-        let twiddles = cfft_inv_twiddles(*log_n);
-
         group.bench_function(&format!("Benching Size {}", n), |b| {
-            b.iter(|| cfft_inv(&mut message, &twiddles))
+            b.iter(|| {
+                let twiddles =
+                    cfft_inv_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
+                cfft_inv(&mut message, &twiddles)
+            })
+        });
+    }
+}
+
+fn test_cfft<Base, Ext, Cfft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+where
+    Base: Field,
+    Standard: Distribution<Base>,
+    Ext: ComplexExtension<Base>,
+    Cfft: CircleSubgroupFFT<Base, Ext>,
+{
+    let mut group = c.benchmark_group(&format!(
+        "cfft::<{}, {}, {}>",
+        type_name::<Base>(),
+        type_name::<Cfft>(),
+        BATCH_SIZE
+    ));
+    group.sample_size(10);
+
+    let mut rng = thread_rng();
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+
+        let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
+
+        let cfft = Cfft::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &cfft, |b, dft| {
+            b.iter(|| {
+                cfft.cfft_batch(messages.clone());
+            });
+        });
+    }
+}
+
+fn test_icfft<Base, Ext, Cfft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+where
+    Base: Field,
+    Standard: Distribution<Base>,
+    Ext: ComplexExtension<Base>,
+    Cfft: CircleSubgroupFFT<Base, Ext>,
+{
+    let mut group = c.benchmark_group(&format!(
+        "icfft::<{}, {}, {}>",
+        type_name::<Base>(),
+        type_name::<Cfft>(),
+        BATCH_SIZE
+    ));
+    group.sample_size(10);
+
+    let mut rng = thread_rng();
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+
+        let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
+
+        let cfft = Cfft::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &cfft, |b, dft| {
+            b.iter(|| {
+                cfft.icfft_batch(messages.clone());
+            });
         });
     }
 }
