@@ -35,9 +35,9 @@ pub type ProverData<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
     RowMajorMatrix<<SC as config::StarkConfig>::Val>,
 >>::ProverData;
 pub type ConfigProof<SC> = <<SC as config::StarkConfig>::Pcs as Pcs<
-        <SC as config::StarkConfig>::Val,
-        RowMajorMatrix<<SC as config::StarkConfig>::Val>,
-    >>::Proof;
+    <SC as config::StarkConfig>::Val,
+    RowMajorMatrix<<SC as config::StarkConfig>::Val>,
+>>::Proof;
 pub fn open<SC>(
     config: &SC,
     trace_data: &<<SC as config::StarkConfig>::Pcs as Pcs<
