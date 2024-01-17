@@ -5,8 +5,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 use crate::util::cfft_domain;
-use crate::CircleSubgroupFFT;
-use crate::{cfft, cfft_twiddles, evaluate_cfft_poly};
+use crate::{cfft, cfft_twiddles, evaluate_cfft_poly, CircleSubgroupFFT};
 
 /// Unlike the standard DFT where both directions can be reinterpreted as polynomial evaluation,
 /// In the CFFT only the iCFFT naturally corresponds to such an evaluation.
