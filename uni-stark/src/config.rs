@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcsWithLde};
-use p3_field::{AbstractExtensionField, ExtensionField, PackedField, TwoAdicField, PrimeField};
+use p3_field::{AbstractExtensionField, ExtensionField, PackedField, PrimeField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 pub trait StarkConfig {
