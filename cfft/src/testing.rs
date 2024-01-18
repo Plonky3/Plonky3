@@ -119,8 +119,6 @@ where
     assert_eq!(values, cfft_evals);
 }
 
-
-
 ///Divide each coefficient of the given matrix by its height.
 fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
     let h = mat.height();
