@@ -1,5 +1,4 @@
-// A place to store some old/naive implementations we keep around for testing purposes.
-// Plan is to eventually remove this before merging the branch and move some of these to testing.rs
+// A place to store some old/naive implementations we keep around for timing/testing purposes.
 
 use alloc::vec;
 use alloc::vec::Vec;

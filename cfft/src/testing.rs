@@ -76,11 +76,17 @@ where
     Base: Field,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
+    Standard: Distribution<Ext>,
     Cfft: CircleSubgroupFFT<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
     let values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
-    let coset_elem = Ext::circle_two_adic_generator(20);
+
+    // The following chooses a uniform random element from S^1.
+    let rng_elem = rng.gen::<Ext>();
+    let coset_elem = rng_elem * rng_elem * rng_elem.norm().inverse();
+    assert!(coset_elem.norm().is_one());
+
     let log_size = N.trailing_zeros() as usize;
 
     let cfft_fn = Cfft::default();
@@ -116,6 +122,32 @@ where
     divide_by_height(&mut cfft_evals);
 
     assert_eq!(values, cfft_evals);
+}
+
+// Check that doing the lde extension is the same as the cfft followed by coset_icfft
+pub(crate) fn coset_lde_test<Base, Ext, Cfft, const N: usize, const BATCH_SIZE: usize>()
+where
+    Base: Field,
+    Standard: Distribution<Base>,
+    Ext: ComplexExtension<Base>,
+    Standard: Distribution<Ext>,
+    Cfft: CircleSubgroupFFT<Base, Ext>,
+{
+    let mut rng = rand::thread_rng();
+
+    // The following chooses a uniform random element from S^1.
+    let rng_elem = rng.gen::<Ext>();
+    let coset_elem = rng_elem * rng_elem * rng_elem.norm().inverse();
+    assert!(coset_elem.norm().is_one());
+
+    let values = RowMajorMatrix::<Base>::rand(&mut rng, N, BATCH_SIZE);
+
+    let cfft_fn = Cfft::default();
+
+    let cfft_evals = cfft_fn.coset_icfft_batch(cfft_fn.cfft_batch(values.clone()), coset_elem);
+    let cfft_lde_evals = cfft_fn.coset_lde_batch(values, coset_elem);
+
+    assert_eq!(cfft_evals, cfft_lde_evals);
 }
 
 ///Divide each coefficient of the given matrix by its height.

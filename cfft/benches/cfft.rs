@@ -18,8 +18,8 @@ fn bench_cfft(c: &mut Criterion) {
 
     const BATCH_SIZE: usize = 1;
 
-    test_cfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
-    test_icfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
+    // test_cfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
+    // test_icfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
     cfft_timing(c, log_sizes);
     cfft_inv_timing(c, log_sizes);
 }
@@ -42,11 +42,10 @@ fn cfft_timing(c: &mut Criterion, log_sizes: &[usize]) {
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
+
         group.bench_function(&format!("Benching Size {}", n), |b| {
-            b.iter(|| {
-                let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
-                cfft(&mut message, &twiddles)
-            })
+            b.iter(|| cfft(&mut message, &twiddles))
         });
     }
 }
@@ -69,12 +68,10 @@ fn cfft_inv_timing(c: &mut Criterion, log_sizes: &[usize]) {
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
+        let twiddles = cfft_inv_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
+
         group.bench_function(&format!("Benching Size {}", n), |b| {
-            b.iter(|| {
-                let twiddles =
-                    cfft_inv_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
-                cfft_inv(&mut message, &twiddles)
-            })
+            b.iter(|| cfft_inv(&mut message, &twiddles))
         });
     }
 }

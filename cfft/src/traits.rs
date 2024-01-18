@@ -3,9 +3,10 @@ use alloc::vec::Vec;
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::{Matrix, MatrixRows};
 
-// TODO, import the right thing here.
+// In comparison to TwoAdicSubgroupDft, CircleSubgroupFFT denotes a group theoretic, non harmonic DFT.
+// In particular this means that cfft and icfft are fundamentally different algorithms and cannot be derived from each other.
 
 pub trait CircleSubgroupFFT<Base: Field, Ext: ComplexExtension<Base>>: Clone + Default {
     // Effectively this is either RowMajorMatrix or BitReversedMatrixView<RowMajorMatrix>.
@@ -40,48 +41,26 @@ pub trait CircleSubgroupFFT<Base: Field, Ext: ComplexExtension<Base>>: Clone + D
     }
 
     /// Compute the inverse CFFT of each column in `mat`.
-    fn icfft_batch(&self, mat: RowMajorMatrix<Base>) -> RowMajorMatrix<Base>;
+    fn icfft_batch(&self, mat: RowMajorMatrix<Base>) -> RowMajorMatrix<Base> {
+        let height = mat.height();
+        let log_height = height.trailing_zeros() as usize;
+        let gen = Ext::circle_two_adic_generator(log_height + 1);
+        self.coset_icfft_batch(mat, gen) // It will likely be faster to reimplement this as opposed to calling coset_icfft_batch.
+    }
 
-    /// Compute the low-degree extension of `vec` onto a larger subgroup.
-    fn lde(&self, vec: Vec<Base>, added_bits: usize) -> Vec<Base> {
-        self.lde_batch(RowMajorMatrix::new(vec, 1), added_bits)
+    /// Compute the low-degree extension of `vec` onto a different twin coset.
+    fn coset_lde(&self, vec: Vec<Base>, shift: Ext) -> Vec<Base> {
+        self.coset_lde_batch(RowMajorMatrix::new(vec, 1), shift)
             .to_row_major_matrix()
             .values
     }
 
-    /// Compute the low-degree extension of each column in `mat` onto a larger subgroup.
-    fn lde_batch(&self, mat: RowMajorMatrix<Base>, added_bits: usize) -> RowMajorMatrix<Base> {
-        let mut coeffs = self.cfft_batch(mat);
-        coeffs
-            .values
-            .resize(coeffs.values.len() << added_bits, Base::zero());
-        self.icfft_batch(coeffs)
-    }
-
-    /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup.
-    fn coset_lde(&self, vec: Vec<Base>, added_bits: usize, shift: Ext) -> Vec<Base> {
-        self.coset_lde_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
-            .to_row_major_matrix()
-            .values
-    }
-
-    /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup.
-    fn coset_lde_batch(
-        &self,
-        mat: RowMajorMatrix<Base>,
-        added_bits: usize,
-        shift: Ext,
-    ) -> RowMajorMatrix<Base> {
-        let mut coeffs = self.icfft_batch(mat);
-        // PANICS: possible panic if the new resized length overflows
-        coeffs.values.resize(
-            coeffs
-                .values
-                .len()
-                .checked_shl(added_bits.try_into().unwrap())
-                .unwrap(),
-            Base::zero(),
-        );
+    /// Compute the low-degree extension of each column in `mat` onto a different twin coset.
+    /// Interprets columns of `mat` as evaluations over gH = gH^2 u g^{-1}H^2
+    /// Computes their extensions to shift H^2 u shift^{-1} H^2.
+    fn coset_lde_batch(&self, mat: RowMajorMatrix<Base>, shift: Ext) -> RowMajorMatrix<Base> {
+        debug_assert!(shift.norm().is_one()); // Shift needs to be in S^1.
+        let coeffs = self.cfft_batch(mat);
         self.coset_icfft_batch(coeffs, shift)
     }
 }
