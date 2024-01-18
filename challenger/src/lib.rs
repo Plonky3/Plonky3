@@ -60,10 +60,12 @@ impl<'a, C, T> CanObserve<T> for &'a mut C
 where
     C: CanObserve<T>,
 {
+    #[inline(always)]
     fn observe(&mut self, value: T) {
         (**self).observe(value)
     }
 
+    #[inline(always)]
     fn observe_slice(&mut self, values: &[T])
     where
         T: Clone,
@@ -76,14 +78,17 @@ impl<'a, C, T> CanSample<T> for &'a mut C
 where
     C: CanSample<T>,
 {
+    #[inline(always)]
     fn sample(&mut self) -> T {
         (**self).sample()
     }
 
+    #[inline(always)]
     fn sample_array<const N: usize>(&mut self) -> [T; N] {
         (**self).sample_array()
     }
 
+    #[inline(always)]
     fn sample_vec(&mut self, n: usize) -> Vec<T> {
         (**self).sample_vec(n)
     }
@@ -93,6 +98,7 @@ impl<'a, C, T> CanSampleBits<T> for &'a mut C
 where
     C: CanSampleBits<T>,
 {
+    #[inline(always)]
     fn sample_bits(&mut self, bits: usize) -> T {
         (**self).sample_bits(bits)
     }
@@ -102,10 +108,12 @@ impl<'a, C, F: Field> FieldChallenger<F> for &'a mut C
 where
     C: FieldChallenger<F>,
 {
+    #[inline(always)]
     fn observe_ext_element<EF: AbstractExtensionField<F>>(&mut self, ext: EF) {
         (**self).observe_ext_element(ext)
     }
 
+    #[inline(always)]
     fn sample_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
         (**self).sample_ext_element()
     }
