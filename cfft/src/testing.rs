@@ -3,7 +3,6 @@ use alloc::vec::Vec;
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
