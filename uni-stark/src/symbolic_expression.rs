@@ -5,7 +5,7 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{AbstractField, Field};
 
-use crate::SymbolicVariable;
+use crate::symbolic_variable::SymbolicVariable;
 
 /// An expression over `SymbolicVariable`s.
 #[derive(Clone, Debug)]

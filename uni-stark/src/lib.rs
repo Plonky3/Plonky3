@@ -23,6 +23,5 @@ pub use decompose::*;
 pub use folder::*;
 pub use proof::*;
 pub use prover::*;
-pub use symbolic_variable::*;
 pub use verifier::*;
 pub use zerofier_coset::*;

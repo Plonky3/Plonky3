@@ -6,20 +6,24 @@ use p3_field::{AbstractExtensionField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
-
-use crate::StarkConfig;
+use tracing::instrument;
 
 /// Decompose the quotient polynomial into chunks using a generalization of even-odd decomposition.
 /// Then, arrange the results in a row-major matrix, so that each chunk of the decomposed polynomial
 /// becomes `D` columns of the resulting matrix, where `D` is the field extension degree.
-pub fn decompose_and_flatten<SC: StarkConfig>(
-    quotient_poly: Vec<SC::Challenge>,
-    shift: SC::Challenge,
+#[instrument(name = "decompose and flatten quotient", skip_all)]
+pub fn decompose_and_flatten<Val, Challenge>(
+    quotient_poly: Vec<Challenge>,
+    shift: Challenge,
     log_chunks: usize,
-) -> RowMajorMatrix<SC::Val> {
-    let chunks: Vec<Vec<SC::Challenge>> = decompose(quotient_poly, shift, log_chunks);
+) -> RowMajorMatrix<Val>
+where
+    Val: TwoAdicField,
+    Challenge: AbstractExtensionField<Val> + TwoAdicField,
+{
+    let chunks: Vec<Vec<Challenge>> = decompose(quotient_poly, shift, log_chunks);
     let degree = chunks[0].len();
-    let quotient_chunks_flattened: Vec<SC::Val> = (0..degree)
+    let quotient_chunks_flattened: Vec<Val> = (0..degree)
         .into_par_iter()
         .flat_map_iter(|row| {
             chunks
@@ -27,7 +31,7 @@ pub fn decompose_and_flatten<SC: StarkConfig>(
                 .flat_map(move |chunk| chunk[row].as_base_slice().iter().copied())
         })
         .collect();
-    let challenge_ext_degree = <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
+    let challenge_ext_degree = <Challenge as AbstractExtensionField<Val>>::D;
     RowMajorMatrix::new(
         quotient_chunks_flattened,
         challenge_ext_degree << log_chunks,
