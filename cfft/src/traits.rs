@@ -19,8 +19,7 @@ pub trait CircleSubgroupFFT<Base: Field, Ext: ComplexExtension<Base>>: Clone + D
     }
 
     /// Compute the Circle Finite Fourier transform (CFFT) of each column in `mat`.
-    /// This is the only method an implementer needs to define, all other
-    /// methods can be derived from this one.
+    /// This takes a vector of evaluations and computes a vector of coefficients.
     fn cfft_batch(&self, mat: RowMajorMatrix<Base>) -> RowMajorMatrix<Base>;
 
     /// Compute the "coset CFFT" of `vec`. This is interpolation onto a different twin coset of

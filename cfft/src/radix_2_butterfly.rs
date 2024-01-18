@@ -279,13 +279,13 @@ mod tests {
     }
 
     #[test]
-    fn fft_ifft_size_16() {
-        fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 16>();
+    fn fft_ifft_size_16_5() {
+        fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 16, 5>();
     }
 
     #[test]
-    fn fft_ifft_size_32() {
-        fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32>();
+    fn fft_ifft_size_32_3() {
+        fft_ifft_test::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, 32, 3>();
     }
 
     #[test]

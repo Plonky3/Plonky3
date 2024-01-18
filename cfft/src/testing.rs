@@ -1,6 +1,9 @@
 use alloc::vec::Vec;
 
 use p3_field::{ComplexExtension, Field};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
+
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -95,7 +98,7 @@ where
 }
 
 // Test that the cfft and icfft are inverses.
-pub(crate) fn fft_ifft_test<Base, Ext, Cfft, const N: usize>()
+pub(crate) fn fft_ifft_test<Base, Ext, Cfft, const N: usize, const BATCH_SIZE: usize>()
 where
     Base: Field,
     Standard: Distribution<Base>,
@@ -103,19 +106,27 @@ where
     Cfft: CircleSubgroupFFT<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
-    let values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
-    let initial = values.to_vec();
+
+    let values = RowMajorMatrix::<Base>::rand(&mut rng, N, BATCH_SIZE);
 
     let cfft_fn = Cfft::default();
-    let cfft_coeffs = cfft_fn.cfft(values.to_vec());
-    let cfft_evals_scaled = cfft_fn.icfft(cfft_coeffs);
 
-    let scale_inv = Base::from_canonical_u32(N as u32).inverse();
+    let cfft_coeffs = cfft_fn.cfft_batch(values.clone());
+    let mut cfft_evals = cfft_fn.icfft_batch(cfft_coeffs);
 
-    let cfft_evals: Vec<_> = cfft_evals_scaled
-        .into_iter()
-        .map(|x| x * scale_inv)
-        .collect();
+    divide_by_height(&mut cfft_evals);
 
-    assert_eq!(initial, cfft_evals);
+    assert_eq!(values, cfft_evals);
+}
+
+
+
+///Divide each coefficient of the given matrix by its height.
+fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
+    let h = mat.height();
+    let h_inv = F::from_canonical_usize(h).inverse();
+    let (prefix, shorts, suffix) = unsafe { mat.values.align_to_mut::<F::Packing>() };
+    prefix.iter_mut().for_each(|x| *x *= h_inv);
+    shorts.iter_mut().for_each(|x| *x *= h_inv);
+    suffix.iter_mut().for_each(|x| *x *= h_inv);
 }

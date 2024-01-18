@@ -42,8 +42,6 @@ fn cfft_timing(c: &mut Criterion, log_sizes: &[usize]) {
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
-        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
-
         group.bench_function(&format!("Benching Size {}", n), |b| {
             b.iter(|| {
                 let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
