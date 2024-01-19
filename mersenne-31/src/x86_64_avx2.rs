@@ -852,9 +852,13 @@ mod tests {
 
     #[test]
     fn test_multiplicative_inverse() {
-        let vec = packed_from_random(0xb0c7a5153103c5a8);
-        let inverses = packed_from_random(0x51204f4ca8e8b32e);
-        let res = vec * inverses;
+        let arr = array_from_random(0xb0c7a5153103c5a8);
+        let arr_inv = arr.map(|x| x.inverse());
+
+        let vec = PackedMersenne31AVX2(arr);
+        let vec_inv = PackedMersenne31AVX2(arr_inv);
+        
+        let res = vec * vec_inv;
         assert_eq!(res, P::one());
     }
 
