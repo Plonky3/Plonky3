@@ -5,6 +5,7 @@ members = [
     "baby-bear",
     "blake3",
     "brakedown",
+    "cfft",
     "challenger",
     "code",
     "commit",
