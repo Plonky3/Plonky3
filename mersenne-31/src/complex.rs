@@ -8,6 +8,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use p3_field::extension::{Complex, ComplexExtendable};
 use p3_field::{
     AbstractExtensionField, AbstractField, ComplexExtension, ExtensionField, Field, TwoAdicField,
 };
@@ -351,6 +352,34 @@ impl ComplexExtension<Mersenne31> for Mersenne31Complex<Mersenne31> {
         // sage: assert(g.multiplicative_order() == 2^31)
         // sage: assert(g.norm() == 1)
         let base = Self::new(Mersenne31::new(311_014_874), Mersenne31::new(1_584_694_829));
+        base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits)
+    }
+}
+
+impl ComplexExtendable for Mersenne31 {
+    const CIRCLE_TWO_ADICITY: usize = 31;
+
+    // sage: p = 2^31 - 1
+    // sage: F = GF(p)
+    // sage: R.<x> = F[]
+    // sage: F2.<u> = F.extension(x^2 + 1)
+    // sage: F2.multiplicative_generator()
+    // u + 12
+    fn complex_generator() -> Complex<Self> {
+        Complex::new(Mersenne31::new(12), Mersenne31::one())
+    }
+
+    fn circle_two_adic_generator(bits: usize) -> Complex<Self> {
+        // Generator of the whole 2^TWO_ADICITY group
+        // sage: p = 2^31 - 1
+        // sage: F = GF(p)
+        // sage: R.<x> = F[]
+        // sage: F2.<u> = F.extension(x^2 + 1)
+        // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^31); g
+        // 1584694829*u + 311014874
+        // sage: assert(g.multiplicative_order() == 2^31)
+        // sage: assert(g.norm() == 1)
+        let base = Complex::new(Mersenne31::new(311_014_874), Mersenne31::new(1_584_694_829));
         base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits)
     }
 }
