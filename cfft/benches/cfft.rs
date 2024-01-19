@@ -9,7 +9,7 @@ use p3_cfft::{cfft_twiddles, CircleSubgroupFt, Radix2Cft};
 use p3_field::extension::ComplexExtendable;
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
+use p3_mersenne_31::Mersenne31;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
