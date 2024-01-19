@@ -4,7 +4,7 @@
 
 use std::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use p3_cfft::{cfft, cfft_inv, cfft_twiddles, CircleSubgroupFt, Radix2Cft};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ComplexExtension, Field};
@@ -15,7 +15,7 @@ use rand::{thread_rng, Rng};
 
 fn bench_cfft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
-    let log_sizes = &[16];
+    let log_sizes = &[10, 14, 18];
 
     const BATCH_SIZE: usize = 1;
 
@@ -33,12 +33,31 @@ fn cfft_timing(c: &mut Criterion, log_sizes: &[usize]) {
     for log_n in log_sizes {
         let n = 1 << log_n;
 
-        let mut message: Vec<_> = (0..n).map(|_| rng.gen::<Mersenne31>()).collect();
+        let message: Vec<_> = (0..n).map(|_| rng.gen::<Mersenne31>()).collect();
 
         let twiddles = cfft_twiddles::<Mersenne31>(*log_n, true);
 
-        group.bench_function(&format!("Benching Size {}", n), |b| {
-            b.iter(|| cfft(&mut message, &twiddles))
+        group.bench_function(&format!("{} (precomputed twiddles)", n), |b| {
+            b.iter_batched(
+                || message.clone(),
+                |mut message| {
+                    cfft(&mut message, &twiddles);
+                    message
+                },
+                BatchSize::LargeInput,
+            )
+        });
+
+        group.bench_function(&format!("{} (no precomputed twiddles)", n), |b| {
+            b.iter_batched(
+                || message.clone(),
+                |mut message| {
+                    let twiddles = cfft_twiddles::<Mersenne31>(*log_n, true);
+                    cfft(&mut message, &twiddles);
+                    message
+                },
+                BatchSize::LargeInput,
+            )
         });
     }
 }
@@ -51,15 +70,16 @@ fn cfft_inv_timing(c: &mut Criterion, log_sizes: &[usize]) {
     for log_n in log_sizes {
         let n = 1 << log_n;
 
-        let mut message: Vec<_> = vec![(); n]
-            .iter()
-            .map(|_| rng.gen::<Mersenne31>())
-            .collect();
+        let message: Vec<_> = (0..n).map(|_| rng.gen::<Mersenne31>()).collect();
 
         let twiddles = cfft_twiddles::<Mersenne31>(*log_n, false);
 
         group.bench_function(&format!("Benching Size {}", n), |b| {
-            b.iter(|| cfft_inv(&mut message, &twiddles))
+            b.iter_batched(
+                || message.clone(),
+                |mut message| cfft_inv(&mut message, &twiddles),
+                BatchSize::LargeInput,
+            )
         });
     }
 }
@@ -87,9 +107,13 @@ where
 
         let cfft = Cfft::default();
         group.bench_with_input(BenchmarkId::from_parameter(n), &cfft, |b, dft| {
-            b.iter(|| {
-                cfft.cfft_batch(messages.clone());
-            });
+            b.iter_batched(
+                || messages.clone(),
+                |messages| {
+                    cfft.cfft_batch(messages);
+                },
+                BatchSize::LargeInput,
+            );
         });
     }
 }
@@ -117,9 +141,13 @@ where
 
         let cfft = Cfft::default();
         group.bench_with_input(BenchmarkId::from_parameter(n), &cfft, |b, dft| {
-            b.iter(|| {
-                cfft.icfft_batch(messages.clone());
-            });
+            b.iter_batched(
+                || messages.clone(),
+                |messages| {
+                    cfft.icfft_batch(messages);
+                },
+                BatchSize::LargeInput,
+            );
         });
     }
 }
