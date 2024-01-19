@@ -496,8 +496,8 @@ fn interleave1(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
         // First form
         //   t = [ a1   0  a3   0  a5   0  a7   0 ].
         //   u = [  0  b0   0  b2   0  b4   0  b6 ].
-        let t = x86_64::_mm256_slli_epi64::<32>(a);
-        let u = x86_64::_mm256_srli_epi64::<32>(b);
+        let t = x86_64::_mm256_srli_epi64::<32>(a);
+        let u = x86_64::_mm256_slli_epi64::<32>(b);
 
         // Then
         //   res0 = [ a0  b0  a2  b2  a4  b4  a6  b6 ],
