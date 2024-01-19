@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{ComplexExtension, Field, Powers};
+use p3_field::{ComplexExtension, Field};
 
 /// Given an integer bits, generate half of the points in the coset gH.
 /// Here H is the unique subgroup of order 2^bits and g is an element of order 2^{bits + 1}.
@@ -14,12 +14,10 @@ pub(crate) fn cfft_domain<Base: Field, Ext: ComplexExtension<Base>>(
 ) -> Vec<Ext> {
     let generator = Ext::circle_two_adic_generator(bits + 1);
 
-    let powers = Powers {
-        base: generator * generator,
-        current: generator,
-    };
-
-    powers.take(size).collect()
+    (generator * generator)
+        .shifted_powers(generator)
+        .take(size)
+        .collect()
 }
 
 /// Given a generator h for H and an element k, generate points in the twin coset kH u k^{-1}H.
@@ -33,18 +31,9 @@ pub(crate) fn twin_coset_domain<Base: Field, Ext: ComplexExtension<Base>>(
     coset_elem: Ext,
     size: usize,
 ) -> Vec<Ext> {
-    let coset_powers = Powers {
-        base: generator,
-        current: coset_elem,
-    };
-
-    let inv_coset_powers = Powers {
-        base: generator,
-        current: generator * coset_elem.inverse(),
-    };
-
-    coset_powers
-        .interleave(inv_coset_powers)
+    generator
+        .shifted_powers(coset_elem)
+        .interleave(generator.shifted_powers(generator * coset_elem.inverse()))
         .take(size)
         .collect()
 }

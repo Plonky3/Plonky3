@@ -3,11 +3,12 @@ use alloc::vec::Vec;
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_util::log2_strict_usize;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 use crate::util::{cfft_domain, twin_coset_domain};
-use crate::{cfft, cfft_twiddles, evaluate_cfft_poly, CircleSubgroupFFT};
+use crate::{cfft, cfft_twiddles, evaluate_cfft_poly, CircleSubgroupFt};
 
 /// Unlike the standard DFT where both directions can be reinterpreted as polynomial evaluation,
 /// In the CFFT only the iCFFT naturally corresponds to such an evaluation.
@@ -20,14 +21,14 @@ where
     Base: Field,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
     let mut values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
     let expected = values;
     let size_u32 = N as u32;
-    let log_size = N.trailing_zeros() as usize;
-    let twiddles = cfft_twiddles::<Base, Ext>(log_size);
+    let log_size = log2_strict_usize(N);
+    let twiddles = cfft_twiddles::<Base, Ext>(log_size, true);
 
     let cfft_fn = Cfft::default();
     let cfft_coeffs = cfft_fn.cfft(values.to_vec());
@@ -53,11 +54,11 @@ where
     Base: Field,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
     let values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
-    let log_size = N.trailing_zeros() as usize;
+    let log_size = log2_strict_usize(N);
 
     let cfft_fn = Cfft::default();
     let cfft_evals = cfft_fn.icfft(values.to_vec());
@@ -77,7 +78,7 @@ where
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
     Standard: Distribution<Ext>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
     let values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
@@ -87,7 +88,7 @@ where
     let coset_elem = rng_elem * rng_elem * rng_elem.norm().inverse();
     assert!(coset_elem.norm().is_one());
 
-    let log_size = N.trailing_zeros() as usize;
+    let log_size = log2_strict_usize(N);
 
     let cfft_fn = Cfft::default();
     let cfft_evals = cfft_fn.coset_icfft(values.to_vec(), coset_elem);
@@ -108,7 +109,7 @@ where
     Base: Field,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
 
@@ -131,7 +132,7 @@ where
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
     Standard: Distribution<Ext>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut rng = rand::thread_rng();
 

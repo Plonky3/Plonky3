@@ -5,7 +5,7 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_cfft::{cfft, cfft_inv, cfft_inv_twiddles, cfft_twiddles, CircleSubgroupFFT, Radix2CFT};
+use p3_cfft::{cfft, cfft_inv, cfft_twiddles, CircleSubgroupFt, Radix2Cft};
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
@@ -18,8 +18,8 @@ fn bench_cfft(c: &mut Criterion) {
 
     const BATCH_SIZE: usize = 1;
 
-    // test_cfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
-    // test_icfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2CFT, BATCH_SIZE>(c, log_sizes);
+    test_cfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2Cft, BATCH_SIZE>(c, log_sizes);
+    test_icfft::<Mersenne31, Mersenne31Complex<Mersenne31>, Radix2Cft, BATCH_SIZE>(c, log_sizes);
     cfft_timing(c, log_sizes);
     cfft_inv_timing(c, log_sizes);
 }
@@ -32,17 +32,9 @@ fn cfft_timing(c: &mut Criterion, log_sizes: &[usize]) {
     for log_n in log_sizes {
         let n = 1 << log_n;
 
-        // let mut message = Vec::new();
-        // for _ in 0..n {
-        //     message.push(rng.gen::<Mersenne31>())
-        // }
+        let mut message: Vec<_> = (0..n).map(|_| rng.gen::<Mersenne31>()).collect();
 
-        let mut message: Vec<_> = vec![(); n]
-            .iter()
-            .map(|_| rng.gen::<Mersenne31>())
-            .collect();
-
-        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n, true);
 
         group.bench_function(&format!("Benching Size {}", n), |b| {
             b.iter(|| cfft(&mut message, &twiddles))
@@ -58,17 +50,12 @@ fn cfft_inv_timing(c: &mut Criterion, log_sizes: &[usize]) {
     for log_n in log_sizes {
         let n = 1 << log_n;
 
-        // let mut message = Vec::new();
-        // for _ in 0..n {
-        //     message.push(rng.gen::<Mersenne31>())
-        // }
-
         let mut message: Vec<_> = vec![(); n]
             .iter()
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
-        let twiddles = cfft_inv_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n);
+        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n, false);
 
         group.bench_function(&format!("Benching Size {}", n), |b| {
             b.iter(|| cfft_inv(&mut message, &twiddles))
@@ -81,7 +68,7 @@ where
     Base: Field,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut group = c.benchmark_group(&format!(
         "cfft::<{}, {}, {}>",
@@ -111,7 +98,7 @@ where
     Base: Field,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFFT<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base, Ext>,
 {
     let mut group = c.benchmark_group(&format!(
         "icfft::<{}, {}, {}>",

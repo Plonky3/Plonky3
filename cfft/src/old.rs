@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{AbstractField, ComplexExtension, Field};
+use p3_util::log2_strict_usize;
 
 /// Get the cfft polynomial basis.
 /// The basis consists off all multi-linear products of: y, x, 2x^2 - 1, 2(2x^2 - 1)^2 - 1, ...
@@ -58,9 +59,7 @@ pub fn evaluate_cfft_poly<Base: AbstractField + Field, Ext: ComplexExtension<Bas
 ) -> Base {
     let n = coeffs.len();
 
-    debug_assert!(n.is_power_of_two()); // If n is not a power of 2 something has gone badly wrong.
-
-    let log_n = n.trailing_zeros();
+    let log_n = log2_strict_usize(n) as u32;
 
     let basis = cfft_poly_basis(&point, log_n); // Get the cfft polynomial basis evaluated at the point x.
 
@@ -83,9 +82,7 @@ pub fn evaluate_cfft_poly<Base: AbstractField + Field, Ext: ComplexExtension<Bas
 /// Then cfft computes the coefficients of f (In a slightly unusual basis).
 pub fn cfft<Base: Field>(coeffs: &mut [Base], twiddles: &[Vec<Base>]) {
     let n = coeffs.len();
-    let n_u32: u32 = n.try_into().unwrap();
-    let log_n: usize = n.trailing_zeros().try_into().unwrap();
-    debug_assert_eq!(1_u32 << log_n, n_u32); // Our input better be a power of 2.
+    let log_n = log2_strict_usize(n);
 
     for (i, twiddle) in twiddles.iter().enumerate() {
         let block_size = 1 << (log_n - i);
@@ -108,9 +105,7 @@ pub fn cfft<Base: Field>(coeffs: &mut [Base], twiddles: &[Vec<Base>]) {
 /// Depending on the twiddles input, this can also compute the coset evaluation as the algorithms are otherwise identical.
 pub fn cfft_inv<Base: Field>(coeffs: &mut [Base], twiddles: &[Vec<Base>]) {
     let n = coeffs.len();
-    let n_u32: u32 = n.try_into().unwrap();
-    let log_n = n.trailing_zeros().try_into().unwrap();
-    debug_assert_eq!(1_u32 << log_n, n_u32); // Our input better be a power of 2.
+    let log_n = log2_strict_usize(n);
 
     for i in 0..log_n {
         let block_size = 1 << (i + 1);
