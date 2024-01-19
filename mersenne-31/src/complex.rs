@@ -8,13 +8,15 @@ use core::fmt::{Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBionmialExtension};
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::Mersenne31;
+
+/*
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Mersenne31Complex<AF: AbstractField<F = Mersenne31>> {
@@ -319,6 +321,7 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne3
 }
 
 impl ExtensionField<Mersenne31> for Mersenne31Complex<Mersenne31> {}
+*/
 
 impl ComplexExtendable for Mersenne31 {
     const CIRCLE_TWO_ADICITY: usize = 31;
@@ -348,6 +351,29 @@ impl ComplexExtendable for Mersenne31 {
     }
 }
 
+impl HasTwoAdicBionmialExtension<2> for Mersenne31 {
+    const EXT_TWO_ADICITY: usize = 32;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; 2] {
+        // TODO: Consider a `match` which may speed this up.
+        assert!(bits <= Self::EXT_TWO_ADICITY);
+        // Generator of the whole 2^TWO_ADICITY group
+        // sage: p = 2^31 - 1
+        // sage: F = GF(p)
+        // sage: R.<x> = F[]
+        // sage: F2.<u> = F.extension(x^2 + 1)
+        // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
+        // 1117296306*u + 1166849849
+        // sage: assert(g.multiplicative_order() == 2^32)
+        let base = Complex::<Self>::new(
+            Mersenne31::new(1_166_849_849),
+            Mersenne31::new(1_117_296_306),
+        );
+        base.exp_power_of_2(Self::EXT_TWO_ADICITY - bits).to_array()
+    }
+}
+
+/*
 impl Distribution<Mersenne31Complex<Mersenne31>> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31Complex<Mersenne31> {
         Mersenne31Complex::<Mersenne31>::new(rng.gen(), rng.gen())
@@ -476,3 +502,5 @@ mod tests {
     test_field!(crate::Mersenne31Complex<crate::Mersenne31>);
     test_two_adic_field!(crate::Mersenne31Complex<crate::Mersenne31>);
 }
+
+*/

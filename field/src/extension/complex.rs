@@ -1,6 +1,6 @@
 use crate::{AbstractField, Field};
 
-use super::{BinomialExtensionField, BinomiallyExtendable};
+use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
 
 pub type Complex<AF> = BinomialExtensionField<AF, 2>;
 
@@ -53,5 +53,49 @@ impl<AF: AbstractField> Complex<AF> {
     }
     pub fn norm(&self) -> AF {
         self.real().square() + self.imag().square()
+    }
+    pub fn to_array(&self) -> [AF; 2] {
+        self.value.clone()
+    }
+}
+
+/// The complex extension of this field has a binomial extension.
+pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
+    fn w() -> Complex<Self>;
+    fn dth_root() -> Complex<Self>;
+    fn ext_generator() -> [Complex<Self>; D];
+}
+
+impl<F, const D: usize> BinomiallyExtendable<D> for Complex<F>
+where
+    F: HasComplexBinomialExtension<D>,
+{
+    fn w() -> Self {
+        <F as HasComplexBinomialExtension<D>>::w()
+    }
+    fn dth_root() -> Self {
+        <F as HasComplexBinomialExtension<D>>::dth_root()
+    }
+    fn ext_generator() -> [Self; D] {
+        <F as HasComplexBinomialExtension<D>>::ext_generator()
+    }
+}
+
+/// The complex extension of this field has a two-adic binomial extension.
+pub trait HasTwoAdicComplexBinomialExtension<const D: usize>:
+    HasComplexBinomialExtension<D>
+{
+    const COMPLEX_EXT_TWO_ADICITY: usize;
+    fn complex_ext_two_adic_generator(bits: usize) -> [Complex<Self>; D];
+}
+
+impl<F, const D: usize> HasTwoAdicBionmialExtension<D> for Complex<F>
+where
+    F: HasTwoAdicComplexBinomialExtension<D>,
+{
+    const EXT_TWO_ADICITY: usize = F::COMPLEX_EXT_TWO_ADICITY;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; D] {
+        F::complex_ext_two_adic_generator(bits)
     }
 }
