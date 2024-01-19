@@ -6,6 +6,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_cfft::{cfft, cfft_inv, cfft_twiddles, CircleSubgroupFt, Radix2Cft};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{ComplexExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
@@ -14,7 +15,7 @@ use rand::{thread_rng, Rng};
 
 fn bench_cfft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
-    let log_sizes = &[3, 6, 10];
+    let log_sizes = &[16];
 
     const BATCH_SIZE: usize = 1;
 
@@ -34,7 +35,7 @@ fn cfft_timing(c: &mut Criterion, log_sizes: &[usize]) {
 
         let mut message: Vec<_> = (0..n).map(|_| rng.gen::<Mersenne31>()).collect();
 
-        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n, true);
+        let twiddles = cfft_twiddles::<Mersenne31>(*log_n, true);
 
         group.bench_function(&format!("Benching Size {}", n), |b| {
             b.iter(|| cfft(&mut message, &twiddles))
@@ -55,7 +56,7 @@ fn cfft_inv_timing(c: &mut Criterion, log_sizes: &[usize]) {
             .map(|_| rng.gen::<Mersenne31>())
             .collect();
 
-        let twiddles = cfft_twiddles::<Mersenne31, Mersenne31Complex<Mersenne31>>(*log_n, false);
+        let twiddles = cfft_twiddles::<Mersenne31>(*log_n, false);
 
         group.bench_function(&format!("Benching Size {}", n), |b| {
             b.iter(|| cfft_inv(&mut message, &twiddles))
@@ -65,10 +66,10 @@ fn cfft_inv_timing(c: &mut Criterion, log_sizes: &[usize]) {
 
 fn test_cfft<Base, Ext, Cfft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
-    Base: Field,
+    Base: ComplexExtendable,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFt<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base>,
 {
     let mut group = c.benchmark_group(&format!(
         "cfft::<{}, {}, {}>",
@@ -95,10 +96,10 @@ where
 
 fn test_icfft<Base, Ext, Cfft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
-    Base: Field,
+    Base: ComplexExtendable,
     Standard: Distribution<Base>,
     Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFt<Base, Ext>,
+    Cfft: CircleSubgroupFt<Base>,
 {
     let mut group = c.benchmark_group(&format!(
         "icfft::<{}, {}, {}>",

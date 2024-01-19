@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 
 use itertools::izip;
+use p3_field::extension::{Complex, ComplexExtendable};
 use p3_field::{batch_multiplicative_inverse, ComplexExtension, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -14,19 +15,19 @@ use crate::util::{cfft_domain, twin_coset_domain};
 #[derive(Default, Clone)]
 pub struct Radix2Cft;
 
-impl<Base: Field, Ext: ComplexExtension<Base>> CircleSubgroupFt<Base, Ext> for Radix2Cft {
+impl<Base: ComplexExtendable> CircleSubgroupFt<Base> for Radix2Cft {
     type Evaluations = RowMajorMatrix<Base>;
 
     fn cfft_batch(
         &self,
         mut mat: RowMajorMatrix<Base>,
-    ) -> <Self as CircleSubgroupFt<Base, Ext>>::Evaluations {
+    ) -> <Self as CircleSubgroupFt<Base>>::Evaluations {
         let n = mat.height();
         let log_n: usize = log2_strict_usize(n);
 
         let width = mat.width();
 
-        let twiddles = cfft_twiddles::<Base, Ext>(log_n, true); // These should be precomputed.
+        let twiddles = cfft_twiddles::<Base>(log_n, true); // These should be precomputed.
 
         for (i, twiddle) in twiddles.iter().enumerate() {
             let block_size = 1 << (log_n - i);
@@ -50,13 +51,13 @@ impl<Base: Field, Ext: ComplexExtension<Base>> CircleSubgroupFt<Base, Ext> for R
     fn coset_icfft_batch(
         &self,
         mut mat: RowMajorMatrix<Base>,
-        coset_elem: Ext,
+        coset_elem: Complex<Base>,
     ) -> RowMajorMatrix<Base> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
         let width = mat.width();
 
-        let twiddles = coset_eval_twiddles::<Base, Ext>(log_n, coset_elem); // Likely fast to precompute these.
+        let twiddles = coset_eval_twiddles::<Base>(log_n, coset_elem); // Likely fast to precompute these.
 
         for (i, twiddle) in twiddles.iter().rev().enumerate() {
             let block_size = 1 << (i + 1);
@@ -113,12 +114,9 @@ fn butterfly_icfft<Base: Field>(low_chunk: &mut [Base], high_chunk: &mut [Base],
 /// In the first step our twiddles come from the imaginary parts and we simply halve the domain size.
 /// In all subsequent steps our twiddles come from the real parts and we both halve the domain size and square every element.
 /// If inv is True, we invert all twiddles to get the cfft. If inv is false this produces the twiddles for the icfft.
-pub fn cfft_twiddles<Base: Field, Ext: ComplexExtension<Base>>(
-    log_n: usize,
-    inv: bool,
-) -> Vec<Vec<Base>> {
+pub fn cfft_twiddles<Base: ComplexExtendable>(log_n: usize, inv: bool) -> Vec<Vec<Base>> {
     let size = 1 << (log_n - 1);
-    let init_domain = cfft_domain::<Base, Ext>(log_n, size); // Get the starting domain.
+    let init_domain = cfft_domain::<Base>(log_n, size); // Get the starting domain.
 
     let mut working_domain: Vec<_> = init_domain
         .iter()
@@ -155,14 +153,14 @@ pub fn cfft_twiddles<Base: Field, Ext: ComplexExtension<Base>>(
 /// The initial twiddle domain is the first half of the full domain.
 /// In the first step our twiddles are the imaginary parts and we simply halve the domain size.
 /// In all subsequent steps our twiddles are the real parts and we both halve the domain size and square every element.
-pub fn coset_eval_twiddles<Base: Field, Ext: ComplexExtension<Base>>(
+pub fn coset_eval_twiddles<Base: ComplexExtendable>(
     log_n: usize,
-    coset_elem: Ext,
+    coset_elem: Complex<Base>,
 ) -> Vec<Vec<Base>> {
     let size = 1 << (log_n - 1);
-    let generator = Ext::circle_two_adic_generator(log_n - 1);
+    let generator = Base::circle_two_adic_generator(log_n - 1);
 
-    let init_domain = twin_coset_domain::<Base, Ext>(generator, coset_elem, size);
+    let init_domain = twin_coset_domain::<Base>(generator, coset_elem, size);
 
     let mut working_domain: Vec<_> = init_domain
         .iter()
