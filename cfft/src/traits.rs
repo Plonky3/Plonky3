@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{ComplexExtension, Field};
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRows};

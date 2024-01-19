@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_field::{
     extension::{Complex, ComplexExtendable},
-    AbstractField, ComplexExtension, Field,
+    AbstractField, Field,
 };
 
 /// Given an integer bits, generate half of the points in the coset gH.

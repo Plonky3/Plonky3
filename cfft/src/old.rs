@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{AbstractField, ComplexExtension, Field};
+use p3_field::{AbstractField, Field};
 use p3_util::log2_strict_usize;
 
 /// Get the cfft polynomial basis.

@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{ComplexExtension, Field};
+use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
@@ -11,62 +11,54 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 use crate::util::{cfft_domain, twin_coset_domain};
-use crate::{cfft, cfft_twiddles, CircleSubgroupFt};
+use crate::CircleSubgroupFt;
 
 /// Unlike the standard DFT where both directions can be reinterpreted as polynomial evaluation,
 /// In the CFFT only the iCFFT naturally corresponds to such an evaluation.
 /// Thus instead of writing a "Naive" CFFT, we just give the polynomial evaluation and some auxillary functions.
 
-// Test that on input a single vector, the Cfft algorithm output is the same as the old Cfft algorithm saved here.
-// Additionally ensure that if we perform a Cfft to get coefficients and then evaluate those same coefficients we get back what we started with.
-pub(crate) fn fft_test<Base, Ext, Cfft, const N: usize>()
+// Ensure that if we perform a Cfft to get coefficients and then evaluate those same coefficients we get back what we started with.
+pub(crate) fn fft_test<F, Cfft, const N: usize>()
 where
-    Base: ComplexExtendable,
-    Standard: Distribution<Base>,
-    Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFt<Base>,
+    F: ComplexExtendable,
+    Standard: Distribution<F>,
+    Cfft: CircleSubgroupFt<F>,
 {
     let mut rng = rand::thread_rng();
-    let mut values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
+    let values: [F; N] = core::array::from_fn(|_| rng.gen::<F>());
     let expected = values;
     let size_u32 = N as u32;
     let log_size = log2_strict_usize(N);
-    let twiddles = cfft_twiddles::<Base>(log_size, true);
 
     let cfft_fn = Cfft::default();
     let cfft_coeffs = cfft_fn.cfft(values.to_vec());
 
-    cfft(&mut values, &twiddles);
-
-    assert_eq!(cfft_coeffs, values);
-
-    let points = cfft_domain::<Base>(log_size, N);
+    let points = cfft_domain::<F>(log_size, N);
 
     let evals: Vec<_> = points
         .into_iter()
         .map(|point| {
-            Base::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&cfft_coeffs, point)
+            F::from_canonical_u32(size_u32).inverse() * evaluate_cfft_poly(&cfft_coeffs, point)
         })
         .collect();
 
     assert_eq!(evals, expected)
 }
 
-pub(crate) fn ifft_test<Base, Ext, Cfft, const N: usize>()
+pub(crate) fn ifft_test<F, Cfft, const N: usize>()
 where
-    Base: ComplexExtendable,
-    Standard: Distribution<Base>,
-    Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFt<Base>,
+    F: ComplexExtendable,
+    Standard: Distribution<F>,
+    Cfft: CircleSubgroupFt<F>,
 {
     let mut rng = rand::thread_rng();
-    let values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
+    let values: [F; N] = core::array::from_fn(|_| rng.gen::<F>());
     let log_size = log2_strict_usize(N);
 
     let cfft_fn = Cfft::default();
     let cfft_evals = cfft_fn.icfft(values.to_vec());
 
-    let points = cfft_domain::<Base>(log_size, N);
+    let points = cfft_domain::<F>(log_size, N);
     let evals: Vec<_> = points
         .into_iter()
         .map(|point| evaluate_cfft_poly(&values, point))
@@ -75,19 +67,17 @@ where
     assert_eq!(cfft_evals, evals);
 }
 
-pub(crate) fn coset_eval_test<Base, Ext, Cfft, const N: usize>()
+pub(crate) fn coset_eval_test<F, Cfft, const N: usize>()
 where
-    Base: ComplexExtendable,
-    Standard: Distribution<Base>,
-    Ext: ComplexExtension<Base>,
-    Standard: Distribution<Ext>,
-    Cfft: CircleSubgroupFt<Base>,
+    F: ComplexExtendable,
+    Standard: Distribution<F>,
+    Cfft: CircleSubgroupFt<F>,
 {
     let mut rng = rand::thread_rng();
-    let values: [Base; N] = core::array::from_fn(|_| rng.gen::<Base>());
+    let values: [F; N] = core::array::from_fn(|_| rng.gen::<F>());
 
     // The following chooses a uniform random element from S^1.
-    let rng_elem = rng.gen::<Complex<Base>>();
+    let rng_elem = rng.gen::<Complex<F>>();
     let coset_elem = rng_elem * rng_elem * rng_elem.norm().inverse();
     assert!(coset_elem.norm().is_one());
 
@@ -96,8 +86,7 @@ where
     let cfft_fn = Cfft::default();
     let cfft_evals = cfft_fn.coset_icfft(values.to_vec(), coset_elem);
 
-    let points =
-        twin_coset_domain::<Base>(Base::circle_two_adic_generator(log_size - 1), coset_elem, N);
+    let points = twin_coset_domain::<F>(F::circle_two_adic_generator(log_size - 1), coset_elem, N);
     let evals: Vec<_> = points
         .into_iter()
         .map(|point| evaluate_cfft_poly(&values, point))
@@ -107,16 +96,15 @@ where
 }
 
 // Test that the cfft and icfft are inverses.
-pub(crate) fn fft_ifft_test<Base, Ext, Cfft, const N: usize, const BATCH_SIZE: usize>()
+pub(crate) fn fft_ifft_test<F, Cfft, const N: usize, const BATCH_SIZE: usize>()
 where
-    Base: ComplexExtendable,
-    Standard: Distribution<Base>,
-    Ext: ComplexExtension<Base>,
-    Cfft: CircleSubgroupFt<Base>,
+    F: ComplexExtendable,
+    Standard: Distribution<F>,
+    Cfft: CircleSubgroupFt<F>,
 {
     let mut rng = rand::thread_rng();
 
-    let values = RowMajorMatrix::<Base>::rand(&mut rng, N, BATCH_SIZE);
+    let values = RowMajorMatrix::<F>::rand(&mut rng, N, BATCH_SIZE);
 
     let cfft_fn = Cfft::default();
 
@@ -129,22 +117,20 @@ where
 }
 
 // Check that doing the lde extension is the same as the cfft followed by coset_icfft
-pub(crate) fn coset_lde_test<Base, Ext, Cfft, const N: usize, const BATCH_SIZE: usize>()
+pub(crate) fn coset_lde_test<F, Cfft, const N: usize, const BATCH_SIZE: usize>()
 where
-    Base: ComplexExtendable,
-    Standard: Distribution<Base>,
-    Ext: ComplexExtension<Base>,
-    Standard: Distribution<Ext>,
-    Cfft: CircleSubgroupFt<Base>,
+    F: ComplexExtendable,
+    Standard: Distribution<F>,
+    Cfft: CircleSubgroupFt<F>,
 {
     let mut rng = rand::thread_rng();
 
     // The following chooses a uniform random element from S^1.
-    let rng_elem = rng.gen::<Complex<Base>>();
+    let rng_elem = rng.gen::<Complex<F>>();
     let coset_elem = rng_elem * rng_elem * rng_elem.norm().inverse();
     assert!(coset_elem.norm().is_one());
 
-    let values = RowMajorMatrix::<Base>::rand(&mut rng, N, BATCH_SIZE);
+    let values = RowMajorMatrix::<F>::rand(&mut rng, N, BATCH_SIZE);
 
     let cfft_fn = Cfft::default();
 
@@ -168,7 +154,7 @@ fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
 /// The basis consists off all multi-linear products of: y, x, 2x^2 - 1, 2(2x^2 - 1)^2 - 1, ...
 /// The ordering of these basis elements is the bit reversal of the sequence: 1, y, x, xy, (2x^2 - 1), (2x^2 - 1)y, ...
 /// We also need to throw in a couple of negative signs for technical reasons.
-pub fn cfft_poly_basis<F: ComplexExtendable>(point: &Complex<F>, n: u32) -> Vec<F> {
+pub fn cfft_poly_basis<F: ComplexExtendable>(point: &Complex<F>, n: usize) -> Vec<F> {
     if n == 0 {
         return vec![F::one()]; // Base case
     }
@@ -208,17 +194,9 @@ pub fn cfft_poly_basis<F: ComplexExtendable>(point: &Complex<F>, n: u32) -> Vec<
 /// len(coeffs) needs to be a power of 2.
 /// Gives a simple O(n^2) equivalent to check our CFFT against.
 fn evaluate_cfft_poly<F: ComplexExtendable>(coeffs: &[F], point: Complex<F>) -> F {
-    let n = coeffs.len();
-
-    let log_n = log2_strict_usize(n) as u32;
-
-    let basis = cfft_poly_basis(&point, log_n); // Get the cfft polynomial basis evaluated at the point x.
-
-    let mut output = F::zero();
-
-    for i in 0..n {
-        output += coeffs[i] * basis[i] // Dot product the basis with the coefficients.
-    }
-
-    output
+    coeffs
+        .iter()
+        .zip(cfft_poly_basis(&point, log2_strict_usize(coeffs.len())))
+        .map(|(&coeff, basis)| coeff * basis)
+        .sum()
 }
