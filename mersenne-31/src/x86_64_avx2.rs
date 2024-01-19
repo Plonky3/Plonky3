@@ -186,7 +186,7 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
         // We now need to extract the low 31 bits and the high 31 bits of each 62 bit product and
         // prepare to add them.
         // Put the low 31 bits of the product (recall that it is shifted left by 1) in an odd
-        // doubleword. (Notice that the high 31 bits are already in an odd doubleword in 
+        // doubleword. (Notice that the high 31 bits are already in an odd doubleword in
         // prod_odd_dbl.) We will still need to clear the sign bit, hence we mark it _dirty.
         let prod_odd_lo_dirty = x86_64::_mm256_slli_epi64::<31>(prod_odd_dbl);
         // Put the high 31 bits in an even doubleword, again noting that in prod_evn the even
@@ -207,7 +207,6 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
         add(prod_lo, prod_hi)
     }
 }
-
 
 /// Negate a vector of Mersenne-31 field elements represented as values in {0, ..., P}.
 /// If the input does not conform to this representation, the result is undefined.
@@ -490,7 +489,7 @@ fn interleave1(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
     //          (2 -> 2)  1 cyc
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
-        
+
         // We currently have:
         //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
         //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
@@ -631,9 +630,10 @@ unsafe impl PackedField for PackedMersenne31AVX2 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha20Rng;
+
+    use super::*;
 
     type F = Mersenne31;
     type P = PackedMersenne31AVX2;
@@ -662,13 +662,15 @@ mod tests {
     }
 
     /// Zero has a redundant representation, so let's test both.
-    const BOTH_ZEROS: P = packed_from_valid_reps(
-        [0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff]
-    );
+    const BOTH_ZEROS: P = packed_from_valid_reps([
+        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
+        0x7fffffff,
+    ]);
 
-    const SPECIAL_VALS: [F; WIDTH] = array_from_valid_reps(
-        [0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000, 0x3fffffff]
-    );
+    const SPECIAL_VALS: [F; WIDTH] = array_from_valid_reps([
+        0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
+        0x3fffffff,
+    ]);
 
     #[test]
     fn test_interleave_1() {
@@ -857,7 +859,7 @@ mod tests {
 
         let vec = PackedMersenne31AVX2(arr);
         let vec_inv = PackedMersenne31AVX2(arr_inv);
-        
+
         let res = vec * vec_inv;
         assert_eq!(res, P::one());
     }
