@@ -4,15 +4,15 @@
 //! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
-use core::fmt::{Debug, Display, Formatter};
-use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+
+
+
 
 use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBionmialExtension};
-use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field, TwoAdicField};
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
+use p3_field::{AbstractField, Field};
+
+
+
 
 use crate::Mersenne31;
 
