@@ -1,9 +1,11 @@
-use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
+use p3_field::extension::{
+    Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
+};
 use p3_field::{field_to_array, AbstractField, TwoAdicField};
 
-use crate::{Mersenne31, Mersenne31Complex};
+use crate::Mersenne31;
 
-impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
+impl HasComplexBinomialExtension<2> for Mersenne31 {
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
@@ -14,8 +16,8 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // f2 = y^2 - i - 2
     // assert f2.is_irreducible()
     // ```
-    fn w() -> Self {
-        Self::new(Mersenne31::new(2), Mersenne31::one())
+    fn w() -> Complex<Self> {
+        Complex::new(Mersenne31::new(2), Mersenne31::one())
     }
 
     // Verifiable in Sage with
@@ -25,33 +27,33 @@ impl BinomiallyExtendable<2> for Mersenne31Complex<Mersenne31> {
     // for f in factor(p^4 - 1):
     //   assert g^((p^4-1) // f) != 1
     // ```
-    fn ext_generator() -> [Self; 2] {
-        [Self::new_real(Mersenne31::new(6)), Self::one()]
+    fn ext_generator() -> [Complex<Self>; 2] {
+        [Complex::new_real(Mersenne31::new(6)), Complex::one()]
     }
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    fn dth_root() -> Self {
-        Self::new_real(Mersenne31::new(2147483646))
+    fn dth_root() -> Complex<Self> {
+        Complex::new_real(Mersenne31::new(2147483646))
     }
 }
 
-impl HasTwoAdicBionmialExtension<2> for Mersenne31Complex<Mersenne31> {
-    const EXT_TWO_ADICITY: usize = 33;
+impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
+    const COMPLEX_EXT_TWO_ADICITY: usize = 33;
 
-    fn ext_two_adic_generator(bits: usize) -> [Self; 2] {
+    fn complex_ext_two_adic_generator(bits: usize) -> [Complex<Self>; 2] {
         assert!(bits <= 33);
         if bits == 33 {
             [
-                Self::zero(),
-                Self::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
+                Complex::zero(),
+                Complex::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
             ]
         } else {
-            [Self::two_adic_generator(bits), Self::zero()]
+            [Complex::two_adic_generator(bits), Complex::zero()]
         }
     }
 }
 
-impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
+impl HasComplexBinomialExtension<3> for Mersenne31 {
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
@@ -62,13 +64,13 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // f2 = y^3 - 5*i
     // assert f2.is_irreducible()
     // ```
-    fn w() -> Self {
-        Self::new_imag(Mersenne31::new(5))
+    fn w() -> Complex<Self> {
+        Complex::new_imag(Mersenne31::new(5))
     }
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    fn dth_root() -> Self {
-        Self::new_real(Mersenne31::new(634005911))
+    fn dth_root() -> Complex<Self> {
+        Complex::new_real(Mersenne31::new(634005911))
     }
 
     // Verifiable in Sage with
@@ -78,31 +80,31 @@ impl BinomiallyExtendable<3> for Mersenne31Complex<Mersenne31> {
     // for f in factor(p^6 - 1):
     //   assert g^((p^6-1) // f) != 1
     // ```
-    fn ext_generator() -> [Self; 3] {
+    fn ext_generator() -> [Complex<Self>; 3] {
         [
-            Self::new_real(Mersenne31::new(5)),
-            Self::new_real(Mersenne31::one()),
-            Self::zero(),
+            Complex::new_real(Mersenne31::new(5)),
+            Complex::new_real(Mersenne31::one()),
+            Complex::zero(),
         ]
     }
 }
 
-impl HasTwoAdicBionmialExtension<3> for Mersenne31Complex<Mersenne31> {
-    const EXT_TWO_ADICITY: usize = 32;
+impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
+    const COMPLEX_EXT_TWO_ADICITY: usize = 32;
 
-    fn ext_two_adic_generator(bits: usize) -> [Self; 3] {
-        field_to_array::<Self, 3>(Self::two_adic_generator(bits))
+    fn complex_ext_two_adic_generator(bits: usize) -> [Complex<Self>; 3] {
+        field_to_array::<Complex<Self>, 3>(Complex::two_adic_generator(bits))
     }
 }
 
 #[cfg(test)]
 mod test_cubic_extension {
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::extension::{BinomialExtensionField, Complex};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
-    use crate::{Mersenne31, Mersenne31Complex};
+    use crate::Mersenne31;
 
-    type F = Mersenne31Complex<Mersenne31>;
+    type F = Complex<Mersenne31>;
     type EF = BinomialExtensionField<F, 3>;
 
     test_field!(super::EF);
@@ -113,12 +115,12 @@ mod test_cubic_extension {
 #[cfg(test)]
 mod test_quadratic_extension {
 
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::extension::{BinomialExtensionField, Complex};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
-    use crate::{Mersenne31, Mersenne31Complex};
+    use crate::Mersenne31;
 
-    type F = Mersenne31Complex<Mersenne31>;
+    type F = Complex<Mersenne31>;
     type EF = BinomialExtensionField<F, 2>;
 
     test_field!(super::EF);
