@@ -1,6 +1,5 @@
-use crate::{AbstractField, Field};
-
 use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
+use crate::{AbstractField, Field};
 
 pub type Complex<AF> = BinomialExtensionField<AF, 2>;
 

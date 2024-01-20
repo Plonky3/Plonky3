@@ -1,10 +1,8 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{
-    extension::{Complex, ComplexExtendable},
-    AbstractField, Field,
-};
+use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::{AbstractField, Field};
 
 /// Given an integer bits, generate half of the points in the coset gH.
 /// Here H is the unique subgroup of order 2^bits and g is an element of order 2^{bits + 1}.
