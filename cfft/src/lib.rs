@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod old;
 mod radix_2_butterfly;
 mod traits;
 mod util;
@@ -11,5 +12,6 @@ mod util;
 #[cfg(test)]
 mod testing;
 
+pub use old::*;
 pub use radix_2_butterfly::*;
 pub use traits::*;

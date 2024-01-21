@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use p3_field::extension::{BinomialExtensionField, Complex};
+use p3_field::extension::BinomialExtensionField;
 use p3_field_testing::bench_func::{benchmark_inv, benchmark_mul, benchmark_square};
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
 
-type EF2 = BinomialExtensionField<Complex<Mersenne31>, 2>;
-type EF3 = BinomialExtensionField<Complex<Mersenne31>, 3>;
+type EF2 = BinomialExtensionField<Mersenne31Complex<Mersenne31>, 2>;
+type EF3 = BinomialExtensionField<Mersenne31Complex<Mersenne31>, 3>;
 
 fn bench_qudratic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<Mersenne31Complex<Mersenne31>, 2>";

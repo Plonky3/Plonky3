@@ -14,16 +14,15 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::extension::Complex;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
-use crate::Mersenne31;
+use crate::{Mersenne31, Mersenne31Complex};
 
-type F = Mersenne31;
-type C = Complex<Mersenne31>;
+type Base = Mersenne31;
+type Ext = Mersenne31Complex<Base>;
 
 /// Given an hxw matrix M = (m_{ij}) where h is even, return an
 /// (h/2)xw matrix N whose (k,l) entry is
@@ -36,7 +35,7 @@ type C = Complex<Mersenne31>;
 /// This packing is suitable as input to a Fourier Transform over the
 /// domain Mersenne31Complex; it is inverse to `idft_postprocess()`
 /// below.
-fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
+fn dft_preprocess(input: RowMajorMatrix<Base>) -> RowMajorMatrix<Ext> {
     assert!(input.height() % 2 == 0, "input height must be even");
     RowMajorMatrix::new(
         input
@@ -47,7 +46,7 @@ fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
                 // two-element column into a Mersenne31Complex
                 // treating the first row as the real part and the
                 // second row as the imaginary part.
-                row_0.iter().zip(row_1).map(|(&x, &y)| C::new(x, y))
+                row_0.iter().zip(row_1).map(|(&x, &y)| Ext::new(x, y))
             })
             .collect(),
         input.width(),
@@ -60,17 +59,21 @@ fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
 /// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
 ///
 /// NB: This function and `idft_preprocess()` are inverses.
-fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
+fn dft_postprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
     let h = input.height();
     let log2_h = log2_strict_usize(h); // checks that h is a power of two
 
     // NB: The original real matrix had height 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2h-th root of unity
-    let omega = C::two_adic_generator(log2_h + 1);
+    let omega = Ext::two_adic_generator(log2_h + 1);
     let mut omega_j = omega;
 
     let mut output = Vec::with_capacity((h + 1) * input.width());
-    output.extend(input.first_row().map(|x| C::new_real(x.real() + x.imag())));
+    output.extend(
+        input
+            .first_row()
+            .map(|x| Ext::new_real(x.real() + x.imag())),
+    );
 
     for j in 1..h {
         let row_x = input.row_slice(j);
@@ -79,14 +82,18 @@ fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
         let row = row_x.iter().zip(row_y).map(|(&x, y)| {
             let even = x + y.conjugate();
             // odd = (x - y.conjugate()) * -i
-            let odd = C::new(x.imag() + y.imag(), y.real() - x.real());
+            let odd = Ext::new(x.imag() + y.imag(), y.real() - x.real());
             (even + odd * omega_j).div_2exp_u64(1)
         });
         output.extend(row);
         omega_j *= omega;
     }
 
-    output.extend(input.first_row().map(|x| C::new_real(x.real() - x.imag())));
+    output.extend(
+        input
+            .first_row()
+            .map(|x| Ext::new_real(x.real() - x.imag())),
+    );
     debug_assert_eq!(output.len(), (h + 1) * input.width());
     RowMajorMatrix::new(output, input.width())
 }
@@ -97,14 +104,14 @@ fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
 /// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
 ///
 /// NB: This function and `dft_postprocess()` are inverses.
-fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
+fn idft_preprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
     let h = input.height() - 1;
     let log2_h = log2_strict_usize(h); // checks that h is a power of two
 
     // NB: The original real matrix had length 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2n-th root of unity
-    let omega = C::two_adic_generator(log2_h + 1).inverse();
-    let mut omega_j = C::one();
+    let omega = Ext::two_adic_generator(log2_h + 1).inverse();
+    let mut omega_j = Ext::one();
 
     let mut output = Vec::with_capacity(h * input.width());
     // TODO: Specialise j = 0 and j = n (which we know must be real)?
@@ -115,7 +122,7 @@ fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
         let row = row_x.iter().zip(row_y).map(|(&x, y)| {
             let even = x + y.conjugate();
             // odd = (x - y.conjugate()) * -i
-            let odd = C::new(x.imag() + y.imag(), y.real() - x.real());
+            let odd = Ext::new(x.imag() + y.imag(), y.real() - x.real());
             (even - odd * omega_j).div_2exp_u64(1)
         });
         output.extend(row);
@@ -129,7 +136,7 @@ fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
 /// entry is a_{i/2,j} if i is even and b_{(i-1)/2,j} if i is odd.
 ///
 /// This function is inverse to `dft_preprocess()` above.
-fn idft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<F> {
+fn idft_postprocess(input: RowMajorMatrix<Ext>) -> RowMajorMatrix<Base> {
     // TODO: Re-write this without using `unzip()`, which needlessly
     // allocates two new temporary vectors while processing each row.
     RowMajorMatrix::new(
@@ -159,7 +166,9 @@ impl Mersenne31Dft {
     /// a `Mersenne31Complex` and doing a (half-length) DFT on the
     /// result. In particular, the type of the result elements are in
     /// the extension field, not the domain field.
-    pub fn dft_batch<Dft: TwoAdicSubgroupDft<C>>(mat: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
+    pub fn dft_batch<Dft: TwoAdicSubgroupDft<Ext>>(
+        mat: RowMajorMatrix<Base>,
+    ) -> RowMajorMatrix<Ext> {
         let dft = Dft::default();
         dft_postprocess(dft.dft_batch(dft_preprocess(mat)).to_row_major_matrix())
     }
@@ -167,7 +176,9 @@ impl Mersenne31Dft {
     /// Compute the inverse DFT of each column of `mat`.
     ///
     /// NB: See comment on `dft_batch()` for information on packing.
-    pub fn idft_batch<Dft: TwoAdicSubgroupDft<C>>(mat: RowMajorMatrix<C>) -> RowMajorMatrix<F> {
+    pub fn idft_batch<Dft: TwoAdicSubgroupDft<Ext>>(
+        mat: RowMajorMatrix<Ext>,
+    ) -> RowMajorMatrix<Base> {
         let dft = Dft::default();
         idft_postprocess(dft.idft_batch(idft_preprocess(mat)))
     }

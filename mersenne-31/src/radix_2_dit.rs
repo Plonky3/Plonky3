@@ -1,29 +1,28 @@
 use alloc::vec::Vec;
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::extension::Complex;
 use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
-use crate::Mersenne31;
+use crate::{Mersenne31, Mersenne31Complex};
 
-type F = Mersenne31;
-type C = Complex<F>;
+type Base = Mersenne31;
+type Ext = Mersenne31Complex<Base>;
 
 #[derive(Default, Clone)]
 pub struct Mersenne31ComplexRadix2Dit;
 
-impl TwoAdicSubgroupDft<C> for Mersenne31ComplexRadix2Dit {
-    type Evaluations = RowMajorMatrix<C>;
-    fn dft_batch(&self, mut mat: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
+impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
+    type Evaluations = RowMajorMatrix<Ext>;
+    fn dft_batch(&self, mut mat: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        let root = C::two_adic_generator(log_h);
-        let twiddles: Vec<C> = root.powers().take(h / 2).collect();
+        let root = Ext::two_adic_generator(log_h);
+        let twiddles: Vec<Ext> = root.powers().take(h / 2).collect();
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
@@ -40,7 +39,7 @@ impl TwoAdicSubgroupDft<C> for Mersenne31ComplexRadix2Dit {
 // (in `dit_butterfly_inner()` below) into the existing structure.
 
 /// One layer of a DIT butterfly network.
-fn dit_layer(mat: &mut RowMajorMatrixViewMut<C>, layer: usize, twiddles: &[C]) {
+fn dit_layer(mat: &mut RowMajorMatrixViewMut<Ext>, layer: usize, twiddles: &[Ext]) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
     let layer_rev = log_h - 1 - layer;
@@ -64,7 +63,7 @@ fn dit_layer(mat: &mut RowMajorMatrixViewMut<C>, layer: usize, twiddles: &[C]) {
 }
 
 #[inline]
-fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_2: usize) {
+fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<Ext>, row_1: usize, row_2: usize) {
     let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
         mat.packing_aligned_rows(row_1, row_2);
 
@@ -83,7 +82,7 @@ fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_
 }
 
 #[inline]
-fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_2: usize, twiddle: C) {
+fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<Ext>, row_1: usize, row_2: usize, twiddle: Ext) {
     let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
         mat.packing_aligned_rows(row_1, row_2);
 
@@ -112,21 +111,20 @@ fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_2: usize,
 /// with the one below approximately halved the runtime of a DFT over
 /// `Mersenne31Complex`.
 #[inline]
-fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
+fn dit_butterfly_inner(x: &mut Ext, y: &mut Ext, twiddle: Ext) {
     // Adding any multiple of P doesn't change the result modulo P;
     // we use this to ensure that the inputs to `from_wrapped_u64`
     // below are non-negative.
-    const P_SQR: i64 = (F::ORDER_U64 * F::ORDER_U64) as i64;
+    const P_SQR: i64 = (Base::ORDER_U64 * Base::ORDER_U64) as i64;
     const TWO_P_SQR: i64 = 2 * P_SQR;
 
     // Unpack the inputs;
     //   x = x1 + i*x2
     //   y = y1 + i*y2
     //   twiddle = w1 + i*w2
-    let unpack = |x: C| (x.to_array()[0].value as i64, x.to_array()[1].value as i64);
-    let (x1, x2) = unpack(*x);
-    let (y1, y2) = unpack(*y);
-    let (w1, w2) = unpack(twiddle);
+    let (x1, x2) = (x.parts[0].value as i64, x.parts[1].value as i64);
+    let (y1, y2) = (y.parts[0].value as i64, y.parts[1].value as i64);
+    let (w1, w2) = (twiddle.parts[0].value as i64, twiddle.parts[1].value as i64);
 
     // x ± y*twiddle
     // = (x1 + i*x2) ± (y1 + i*y2)*(w1 + i*w2)
@@ -141,19 +139,19 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     // NB: 2*P^2 + P < 2^63
 
     // -P^2 <= x1 + z1 <= P^2 + P
-    let a1 = F::from_wrapped_u64((P_SQR + x1 + z1) as u64);
+    let a1 = Base::from_wrapped_u64((P_SQR + x1 + z1) as u64);
     // -P^2 <= x1 - z1 <= P^2 + P
-    let b1 = F::from_wrapped_u64((P_SQR + x1 - z1) as u64);
+    let b1 = Base::from_wrapped_u64((P_SQR + x1 - z1) as u64);
 
     // SAFE: multiplying `u64` values within the range of `Mersennes31` doesn't overflow:
     // 2 * (2^31 - 1) * (2^31 - 1) = 2 * (2^62 - 2^32 + 1) < 2^64 - 1
     let z2 = y2 * w1 + y1 * w2; // 0 <= z2 <= 2*P^2
 
     // 0 <= x2 + z2 <= 2*P^2 + P
-    let a2 = F::from_wrapped_u64((x2 + z2) as u64);
+    let a2 = Base::from_wrapped_u64((x2 + z2) as u64);
     // -2*P^2 <= x2 - z2 <= P
-    let b2 = F::from_wrapped_u64((TWO_P_SQR + x2 - z2) as u64);
+    let b2 = Base::from_wrapped_u64((TWO_P_SQR + x2 - z2) as u64);
 
-    *x = C::new(a1, a2);
-    *y = C::new(b1, b2);
+    *x = Ext::new(a1, a2);
+    *y = Ext::new(b1, b2);
 }

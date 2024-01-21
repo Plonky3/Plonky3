@@ -21,7 +21,7 @@ pub struct BinomialExtensionField<AF, const D: usize> {
         with = "p3_util::array_serialization",
         bound(serialize = "AF: Serialize", deserialize = "AF: Deserialize<'de>")
     )]
-    pub(crate) value: [AF; D],
+    value: [AF; D],
 }
 
 impl<AF: AbstractField, const D: usize> Default for BinomialExtensionField<AF, D> {
