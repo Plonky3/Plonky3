@@ -4,7 +4,7 @@ use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
-use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::butterflies::{dit_butterfly_on_rows, twiddle_free_butterfly_on_rows};

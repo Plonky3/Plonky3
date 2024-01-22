@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedField};
 use p3_matrix::MatrixRows;
-use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 use p3_util::indices_arr;
 use tracing::instrument;
 
