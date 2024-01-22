@@ -8,8 +8,9 @@ mod serial;
 
 #[cfg(not(feature = "parallel"))]
 pub mod prelude {
-    pub use super::serial::*;
     pub use core::iter::{
         ExactSizeIterator as IndexedParallelIterator, Iterator as ParallelIterator,
     };
+
+    pub use super::serial::*;
 }
