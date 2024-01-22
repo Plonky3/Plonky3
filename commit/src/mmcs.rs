@@ -1,8 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme; it
 /// supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
@@ -18,16 +21,16 @@ use p3_matrix::{Dimensions, Matrix, MatrixRows};
 /// streaming manner.
 pub trait Mmcs<T>: Clone {
     type ProverData;
-    type Commitment: Clone;
-    type Proof;
-    type Error;
+    type Commitment: Clone + Serialize + DeserializeOwned;
+    type Proof: Serialize + DeserializeOwned;
+    type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where
         Self: 'a;
 
     /// Opens a batch of rows from committed matrices
-    /// returns (openings, proof)
-    /// where `openings` is a vector whose ith element is the jth row of the ith matrix `M[i]`,
+    /// returns `(openings, proof)`
+    /// where `openings` is a vector whose `i`th element is the `j`th row of the ith matrix `M[i]`,
     /// and `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`.
     fn open_batch(
         &self,

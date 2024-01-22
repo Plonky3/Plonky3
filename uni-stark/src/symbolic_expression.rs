@@ -3,11 +3,17 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::field::{AbstractField, Field};
+use p3_field::{AbstractField, Field};
 
+use crate::SymbolicVariable;
+
+/// An expression over `SymbolicVariable`s.
 #[derive(Clone, Debug)]
-pub enum SymbolicField<F: Field, Var> {
-    Variable(Var),
+pub enum SymbolicExpression<F: Field> {
+    Variable(SymbolicVariable<F>),
+    IsFirstRow,
+    IsLastRow,
+    IsTransition,
     Constant(F),
     Add(Rc<Self>, Rc<Self>),
     Sub(Rc<Self>, Rc<Self>),
@@ -15,19 +21,36 @@ pub enum SymbolicField<F: Field, Var> {
     Mul(Rc<Self>, Rc<Self>),
 }
 
-impl<F: Field, Var> Default for SymbolicField<F, Var> {
+impl<F: Field> SymbolicExpression<F> {
+    /// Returns the multiple of `n` (the trace length) in this expression's degree.
+    pub(crate) fn degree_multiple(&self) -> usize {
+        match self {
+            SymbolicExpression::Variable(_) => 1,
+            SymbolicExpression::IsFirstRow => 1,
+            SymbolicExpression::IsLastRow => 1,
+            SymbolicExpression::IsTransition => 0,
+            SymbolicExpression::Constant(_) => 0,
+            SymbolicExpression::Add(x, y) => x.degree_multiple().max(y.degree_multiple()),
+            SymbolicExpression::Sub(x, y) => x.degree_multiple().max(y.degree_multiple()),
+            SymbolicExpression::Neg(x) => x.degree_multiple(),
+            SymbolicExpression::Mul(x, y) => x.degree_multiple() + y.degree_multiple(),
+        }
+    }
+}
+
+impl<F: Field> Default for SymbolicExpression<F> {
     fn default() -> Self {
         Self::Constant(F::zero())
     }
 }
 
-impl<F: Field, Var> From<F> for SymbolicField<F, Var> {
+impl<F: Field> From<F> for SymbolicExpression<F> {
     fn from(value: F) -> Self {
         Self::Constant(value)
     }
 }
 
-impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
+impl<F: Field> AbstractField for SymbolicExpression<F> {
     type F = F;
 
     fn zero() -> Self {
@@ -89,7 +112,7 @@ impl<F: Field, Var: Clone + Debug> AbstractField for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Add for SymbolicField<F, Var> {
+impl<F: Field> Add for SymbolicExpression<F> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -97,7 +120,7 @@ impl<F: Field, Var: Clone + Debug> Add for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Add<F> for SymbolicField<F, Var> {
+impl<F: Field> Add<F> for SymbolicExpression<F> {
     type Output = Self;
 
     fn add(self, rhs: F) -> Self {
@@ -105,31 +128,31 @@ impl<F: Field, Var: Clone + Debug> Add<F> for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> AddAssign for SymbolicField<F, Var> {
+impl<F: Field> AddAssign for SymbolicExpression<F> {
     fn add_assign(&mut self, rhs: Self) {
         *self = self.clone() + rhs;
     }
 }
 
-impl<F: Field, Var: Clone + Debug> AddAssign<F> for SymbolicField<F, Var> {
+impl<F: Field> AddAssign<F> for SymbolicExpression<F> {
     fn add_assign(&mut self, rhs: F) {
         *self += Self::from(rhs);
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Sum for SymbolicField<F, Var> {
+impl<F: Field> Sum for SymbolicExpression<F> {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Sum<F> for SymbolicField<F, Var> {
+impl<F: Field> Sum<F> for SymbolicExpression<F> {
     fn sum<I: Iterator<Item = F>>(iter: I) -> Self {
         iter.map(|x| Self::from(x)).sum()
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Sub for SymbolicField<F, Var> {
+impl<F: Field> Sub for SymbolicExpression<F> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -137,7 +160,7 @@ impl<F: Field, Var: Clone + Debug> Sub for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Sub<F> for SymbolicField<F, Var> {
+impl<F: Field> Sub<F> for SymbolicExpression<F> {
     type Output = Self;
 
     fn sub(self, rhs: F) -> Self {
@@ -145,19 +168,19 @@ impl<F: Field, Var: Clone + Debug> Sub<F> for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> SubAssign for SymbolicField<F, Var> {
+impl<F: Field> SubAssign for SymbolicExpression<F> {
     fn sub_assign(&mut self, rhs: Self) {
         *self = self.clone() - rhs;
     }
 }
 
-impl<F: Field, Var: Clone + Debug> SubAssign<F> for SymbolicField<F, Var> {
+impl<F: Field> SubAssign<F> for SymbolicExpression<F> {
     fn sub_assign(&mut self, rhs: F) {
         *self -= Self::from(rhs);
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Neg for SymbolicField<F, Var> {
+impl<F: Field> Neg for SymbolicExpression<F> {
     type Output = Self;
 
     fn neg(self) -> Self {
@@ -165,7 +188,7 @@ impl<F: Field, Var: Clone + Debug> Neg for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Mul for SymbolicField<F, Var> {
+impl<F: Field> Mul for SymbolicExpression<F> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -173,7 +196,7 @@ impl<F: Field, Var: Clone + Debug> Mul for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Mul<F> for SymbolicField<F, Var> {
+impl<F: Field> Mul<F> for SymbolicExpression<F> {
     type Output = Self;
 
     fn mul(self, rhs: F) -> Self {
@@ -181,25 +204,25 @@ impl<F: Field, Var: Clone + Debug> Mul<F> for SymbolicField<F, Var> {
     }
 }
 
-impl<F: Field, Var: Clone + Debug> MulAssign for SymbolicField<F, Var> {
+impl<F: Field> MulAssign for SymbolicExpression<F> {
     fn mul_assign(&mut self, rhs: Self) {
         *self = self.clone() * rhs;
     }
 }
 
-impl<F: Field, Var: Clone + Debug> MulAssign<F> for SymbolicField<F, Var> {
+impl<F: Field> MulAssign<F> for SymbolicExpression<F> {
     fn mul_assign(&mut self, rhs: F) {
         *self *= Self::from(rhs);
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Product for SymbolicField<F, Var> {
+impl<F: Field> Product for SymbolicExpression<F> {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
-impl<F: Field, Var: Clone + Debug> Product<F> for SymbolicField<F, Var> {
+impl<F: Field> Product<F> for SymbolicExpression<F> {
     fn product<I: Iterator<Item = F>>(iter: I) -> Self {
         iter.map(|x| Self::from(x)).product()
     }

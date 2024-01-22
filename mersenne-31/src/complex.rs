@@ -11,10 +11,11 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 use crate::Mersenne31;
 
-#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Mersenne31Complex<AF: AbstractField<F = Mersenne31>> {
     pub(crate) parts: [AF; 2],
 }
@@ -308,6 +309,11 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for Mersenne3
     fn from_base_slice(bs: &[AF]) -> Self {
         assert_eq!(bs.len(), 2);
         Self::new(bs[0].clone(), bs[1].clone())
+    }
+
+    #[inline]
+    fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
+        Self::new(f(0), f(1))
     }
 
     fn as_base_slice(&self) -> &[AF] {

@@ -6,6 +6,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use p3_util::log2_ceil_u64;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
@@ -156,6 +158,8 @@ pub trait Field:
     + Send
     + Sync
     + Display
+    + Serialize
+    + DeserializeOwned
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -263,6 +267,10 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// different f might have been used.
     fn from_base_slice(bs: &[Base]) -> Self;
 
+    /// Similar to `core:array::from_fn`, with the same caveats as
+    /// `from_base_slice`.
+    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
+
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a field element
@@ -289,6 +297,13 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = 
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
+    fn as_base(&self) -> Option<Base> {
+        if self.is_in_basefield() {
+            Some(self.as_base_slice()[0])
+        } else {
+            None
+        }
+    }
 }
 
 impl<F: Field> ExtensionField<F> for F {}
@@ -303,6 +318,10 @@ impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     fn from_base_slice(bs: &[AF]) -> Self {
         assert_eq!(bs.len(), 1);
         bs[0].clone()
+    }
+
+    fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
+        f(0)
     }
 
     fn as_base_slice(&self) -> &[AF] {

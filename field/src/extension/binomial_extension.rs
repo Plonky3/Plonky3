@@ -8,14 +8,19 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use itertools::Itertools;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
+use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenuis, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BinomialExtensionField<AF, const D: usize> {
+    #[serde(
+        with = "p3_util::array_serialization",
+        bound(serialize = "AF: Serialize", deserialize = "AF: Deserialize<'de>")
+    )]
     value: [AF; D],
 }
 
@@ -40,7 +45,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 {
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenuis<F> for BinomialExtensionField<F, D> {
+impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     fn frobenius(&self) -> Self {
         self.repeated_frobenius(1)
@@ -502,6 +507,13 @@ where
     fn from_base_slice(bs: &[AF]) -> Self {
         Self {
             value: bs.to_vec().try_into().expect("slice has wrong length"),
+        }
+    }
+
+    #[inline]
+    fn from_base_fn<F: FnMut(usize) -> AF>(f: F) -> Self {
+        Self {
+            value: array::from_fn(f),
         }
     }
 

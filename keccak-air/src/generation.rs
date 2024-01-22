@@ -17,8 +17,8 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
     let mut trace =
         RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
-    assert!(prefix.is_empty(), "Data was not aligned");
-    assert!(suffix.is_empty(), "Data was not aligned");
+    assert!(prefix.is_empty(), "Alignment should match");
+    assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
     let padded_inputs = inputs.into_iter().chain(iter::repeat([0; 25]));
@@ -78,11 +78,11 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
         for z in 0..64 {
             let limb = z / BITS_PER_LIMB;
             let bit_in_limb = z % BITS_PER_LIMB;
-            let a = [0, 1, 2, 3, 4].map(|i| {
-                let a_limb = row.a[i][x][limb].as_canonical_u64() as u16;
-                F::from_bool(((a_limb >> bit_in_limb) & 1) != 0)
+            let a = (0..5).map(|y| {
+                let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
+                ((a_limb >> bit_in_limb) & 1) != 0
             });
-            row.c[x][z] = xor(a);
+            row.c[x][z] = F::from_bool(a.fold(false, |acc, x| acc ^ x));
         }
     }
 
@@ -108,7 +108,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
                 let bit_in_limb = z % BITS_PER_LIMB;
                 let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
                 let a_bit = F::from_bool(((a_limb >> bit_in_limb) & 1) != 0);
-                row.a_prime[x][y][z] = xor([a_bit, row.c[x][z], row.c_prime[x][z]]);
+                row.a_prime[y][x][z] = xor([a_bit, row.c[x][z], row.c_prime[x][z]]);
             }
         }
     }

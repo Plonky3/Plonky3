@@ -11,7 +11,7 @@ Fields:
 - [x] Mersenne31
   - [x] "complex" extension field
   - [x] ~128 bit extension field
-  - [ ] AVX2
+  - [x] AVX2
   - [ ] AVX-512
   - [x] NEON
 - [x] BabyBear

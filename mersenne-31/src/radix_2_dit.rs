@@ -1,8 +1,9 @@
 use alloc::vec::Vec;
 
-use p3_dft::{reverse_matrix_index_bits, TwoAdicSubgroupDft};
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
@@ -15,6 +16,7 @@ type Ext = Mersenne31Complex<Base>;
 pub struct Mersenne31ComplexRadix2Dit;
 
 impl TwoAdicSubgroupDft<Ext> for Mersenne31ComplexRadix2Dit {
+    type Evaluations = RowMajorMatrix<Ext>;
     fn dft_batch(&self, mut mat: RowMajorMatrix<Ext>) -> RowMajorMatrix<Ext> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -130,6 +132,8 @@ fn dit_butterfly_inner(x: &mut Ext, y: &mut Ext, twiddle: Ext) {
     // = (x1 ± z1) + i*(x2 ± z2)
     // where z1 + i*z2 = y*twiddle
 
+    // SAFE: multiplying `u64` values within the range of `Mersennes31` doesn't overflow:
+    // (2^31 - 1) * (2^31 - 1) = 2^62 - 2^32 + 1 < 2^64 - 1
     let z1 = y1 * w1 - y2 * w2; // -P^2 <= z1 <= P^2
 
     // NB: 2*P^2 + P < 2^63
@@ -139,6 +143,8 @@ fn dit_butterfly_inner(x: &mut Ext, y: &mut Ext, twiddle: Ext) {
     // -P^2 <= x1 - z1 <= P^2 + P
     let b1 = Base::from_wrapped_u64((P_SQR + x1 - z1) as u64);
 
+    // SAFE: multiplying `u64` values within the range of `Mersennes31` doesn't overflow:
+    // 2 * (2^31 - 1) * (2^31 - 1) = 2 * (2^62 - 2^32 + 1) < 2^64 - 1
     let z2 = y2 * w1 + y1 * w2; // 0 <= z2 <= 2*P^2
 
     // 0 <= x2 + z2 <= 2*P^2 + P

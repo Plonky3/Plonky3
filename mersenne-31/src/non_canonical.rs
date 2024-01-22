@@ -1,6 +1,6 @@
+use crate::Mersenne31;
 use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
-use crate::{Mersenne31};
-use p3_field::{AbstractField, PrimeField32, IntegerLike, NonCanonicalPrimeField32, Canonicalize};
+use p3_field::{AbstractField, Canonicalize, IntegerLike, NonCanonicalPrimeField32, PrimeField32};
 
 /// Roughly a wrapper for i64's but treated as non canonical representatives of elements in the Mersenne31 field.
 #[derive(Debug, Copy, Clone, Default, Eq, Hash, PartialEq)]
@@ -108,10 +108,10 @@ impl Mul<Mersenne31> for Mersenne31NonCanonical {
         let val = (self.value as i128) * (rhs.value as i128); // Output has is at most 96 bits.
 
         let small = (val & LOWMASK) as i64; // This has 31 bits.
-        let mid = ((val >> 31) & LOWMASK) as i64;  // This has 31 bits.
-        let high = (val >> 62) as i64;  // This has 34 bits.
+        let mid = ((val >> 31) & LOWMASK) as i64; // This has 31 bits.
+        let high = (val >> 62) as i64; // This has 34 bits.
 
-        return Self::from_i64(small + mid + high)
+        return Self::from_i64(small + mid + high);
     }
 }
 

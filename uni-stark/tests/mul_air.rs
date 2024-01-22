@@ -28,7 +28,11 @@ const TRACE_WIDTH: usize = REPETITIONS * 3;
 
 struct MulAir;
 
-impl<F> BaseAir<F> for MulAir {}
+impl<F> BaseAir<F> for MulAir {
+    fn width(&self) -> usize {
+        TRACE_WIDTH
+    }
+}
 
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
@@ -97,21 +101,27 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
     type Quotient = QuotientMmcs<Domain, Challenge, ValMmcs>;
-    type MyFriConfig = FriConfigImpl<Val, Domain, Challenge, Quotient, ChallengeMmcs, Challenger>;
+    type MyFriConfig = FriConfigImpl<Val, Challenge, Quotient, ChallengeMmcs, Challenger>;
     let fri_config = MyFriConfig::new(40, challenge_mmcs);
     let ldt = FriLdt { config: fri_config };
 
     type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
-    type MyConfig = StarkConfigImpl<Val, Domain, Challenge, PackedChallenge, Pcs, Challenger>;
+    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
 
-    let pcs = Pcs::new(dft, 1, val_mmcs, ldt);
+    let pcs = Pcs::new(dft, val_mmcs, ldt);
     let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
     let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
 
+    let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
+    tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
+
+    let deserialized_proof =
+        postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
+
     let mut challenger = Challenger::new(perm);
-    verify(&config, &MulAir, &mut challenger, &proof)
+    verify(&config, &MulAir, &mut challenger, &deserialized_proof)
 }
 
 #[test]

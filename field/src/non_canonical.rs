@@ -1,5 +1,5 @@
-use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
 use crate::field::PrimeField32;
+use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
 
 // A collection of methods able to be appied to simple integers.
 pub trait IntegerLike:
@@ -22,7 +22,8 @@ pub trait IntegerLike:
 /// Potentially should come with an "unsafe" label as improper use will lead to wraparound and cause errors.
 /// Ensuring algorithms are correct is entirely left to the programmer.
 /// Should only be used with small fields.
-pub trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128> // Multiplication of 2 field elements will yeild an i128.
+pub trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128>
+// Multiplication of 2 field elements will yeild an i128.
 {
     /// The order of the field.
     const ORDER_U32: u32;
@@ -90,10 +91,10 @@ pub trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128> // Multipli
 
         let n = lhs.len();
 
-        let mut output = lhs[0]*rhs[0];
+        let mut output = lhs[0] * rhs[0];
 
         for i in 1..n {
-            output += lhs[i]*rhs[i];
+            output += lhs[i] * rhs[i];
         }
 
         output
@@ -102,8 +103,8 @@ pub trait NonCanonicalPrimeField32: IntegerLike + Mul<Output = i128> // Multipli
 
 /// This lets us pass from our non Canonical representatives back to canonical field elements.
 /// We implement a couple of different methods to be used in different situtations.
-pub trait Canonicalize<Base: PrimeField32>: NonCanonicalPrimeField32 + 
-    Mul<Base, Output = Self> // Given a non canonical field element and an element of the base field we implement a product such that |output| < max(2^40, |non canonical input|)
+pub trait Canonicalize<Base: PrimeField32>:
+    NonCanonicalPrimeField32 + Mul<Base, Output = Self>
 {
     /// Given a generic non canonical field element, produce a canonical one.
     fn to_canonical(self) -> Base;

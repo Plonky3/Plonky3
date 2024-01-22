@@ -13,7 +13,6 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-blake3 = { path = "../blake3" }
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
