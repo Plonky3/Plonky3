@@ -37,7 +37,6 @@ impl<T> ParChunksMut<T> for [T] {
 }
 
 pub trait ParIterExt: Iterator {
-    // type Item;
     fn find_any<P>(self, predicate: P) -> Option<Self::Item>
     where
         P: Fn(&Self::Item) -> bool + Sync + Send;
