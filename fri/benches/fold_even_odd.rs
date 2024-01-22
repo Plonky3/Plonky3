@@ -3,10 +3,11 @@ use std::any::type_name;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
+use p3_field::extension::Complex;
 use p3_field::TwoAdicField;
 use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
-use p3_mersenne_31::{Mersenne31, Mersenne31Complex};
+use p3_mersenne_31::Mersenne31;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
@@ -38,7 +39,7 @@ fn bench_fold_even_odd(c: &mut Criterion) {
 
     bench::<BabyBear>(c, &log_sizes);
     bench::<Goldilocks>(c, &log_sizes);
-    bench::<Mersenne31Complex<Mersenne31>>(c, &log_sizes);
+    bench::<Complex<Mersenne31>>(c, &log_sizes);
 }
 
 criterion_group!(benches, bench_fold_even_odd);

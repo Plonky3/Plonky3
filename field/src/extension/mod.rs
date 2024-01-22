@@ -4,11 +4,13 @@ use crate::field::Field;
 use crate::{naive_poly_mul, ExtensionField};
 
 mod binomial_extension;
+mod complex;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 pub use binomial_extension::*;
+pub use complex::*;
 
 /// Binomial extension field trait.
 /// A extension field with a irreducible polynomial X^d-W
