@@ -31,10 +31,10 @@ fn bench_fft(c: &mut Criterion) {
     fft::<Complex<Mersenne31>, Radix2DitParallel, BATCH_SIZE>(c, log_half_sizes);
 
     fft::<Complex<Mersenne31>, Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_half_sizes);
-    m31_fft::<Radix2Dit, BATCH_SIZE>(c, log_sizes);
+    m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
 
-    ifft::<Goldilocks, Radix2Dit, BATCH_SIZE>(c);
+    ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c);
 
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c);
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c);

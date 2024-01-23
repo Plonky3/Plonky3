@@ -78,31 +78,31 @@ mod tests {
 
     #[test]
     fn dft_matches_naive() {
-        test_dft_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
+        test_dft_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
+        test_coset_dft_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn idft_matches_naive() {
-        test_idft_matches_naive::<Goldilocks, Radix2Dit<Goldilocks>>();
+        test_idft_matches_naive::<Goldilocks, Radix2Dit<_>>();
     }
 
     #[test]
     fn lde_matches_naive() {
-        test_lde_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
+        test_lde_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
+        test_coset_lde_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn dft_idft_consistency() {
-        test_dft_idft_consistency::<BabyBear, Radix2Dit<BabyBear>>();
+        test_dft_idft_consistency::<BabyBear, Radix2Dit<_>>();
     }
 }
