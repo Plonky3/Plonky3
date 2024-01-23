@@ -42,7 +42,7 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, ValMmcs, FriLdt<MyFriConfi
 
 fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let (perm, val_mmcs, ldt) = get_ldt_for_testing(rng);
-    let dft = Radix2Dit;
+    let dft = Radix2Dit::default();
 
     let ldes: Vec<RowMajorMatrix<Val>> = (3..6)
         .map(|deg_bits| {

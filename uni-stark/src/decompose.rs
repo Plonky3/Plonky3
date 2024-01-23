@@ -95,7 +95,7 @@ mod tests {
         type F = BabyBear;
 
         let mut rng = thread_rng();
-        let dft = Radix2Dit;
+        let dft = Radix2Dit::default();
 
         let log_n = 5;
         let n = 1 << log_n;
