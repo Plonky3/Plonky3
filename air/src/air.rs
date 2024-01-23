@@ -147,31 +147,16 @@ pub trait PairBuilder: AirBuilder {
 pub trait PermutationAirBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
-    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>
-        + From<Self::EF>
-        + Add<Self::EF, Output = Self::ExprEF>
-        + Add<Self::VarEF, Output = Self::ExprEF>
-        + Sub<Self::EF, Output = Self::ExprEF>
-        + Sub<Self::VarEF, Output = Self::ExprEF>
-        + Mul<Self::EF, Output = Self::ExprEF>
-        + Mul<Self::VarEF, Output = Self::ExprEF>;
+    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
 
-    type VarEF: Into<Self::ExprEF>
-        + Copy
-        + Add<Self::EF, Output = Self::ExprEF>
-        + Add<Self::VarEF, Output = Self::ExprEF>
-        + Add<Self::ExprEF, Output = Self::ExprEF>
-        + Sub<Self::EF, Output = Self::ExprEF>
-        + Sub<Self::VarEF, Output = Self::ExprEF>
-        + Sub<Self::ExprEF, Output = Self::ExprEF>
-        + Mul<Self::EF, Output = Self::ExprEF>
-        + Mul<Self::VarEF, Output = Self::ExprEF>
-        + Mul<Self::ExprEF, Output = Self::ExprEF>;
+    type VarEF: Into<Self::ExprEF> + Copy;
 
     type MP: MatrixRowSlices<Self::VarEF>;
 
     fn permutation(&self) -> Self::MP;
 
+    // TODO: The return type should be some kind of variable to support symbolic evaluation,
+    // but maybe separate from `VarEF` since that might be a `PackedField`?
     fn permutation_randomness(&self) -> &[Self::EF];
 }
 

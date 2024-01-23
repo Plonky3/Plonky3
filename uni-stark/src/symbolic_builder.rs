@@ -8,7 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
 
 use crate::symbolic_expression::SymbolicExpression;
-use crate::SymbolicVariable;
+use crate::symbolic_variable::SymbolicVariable;
 
 pub fn get_log_quotient_degree<F, A>(air: &A) -> usize
 where

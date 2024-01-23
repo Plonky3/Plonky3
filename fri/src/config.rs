@@ -28,6 +28,7 @@ pub trait FriConfig {
 }
 
 pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
+    log_blowup: usize,
     num_queries: usize,
     commit_phase_mmcs: CommitPhaseMmcs,
     _phantom: PhantomData<(Val, Challenge, InputMmcs, Challenger)>,
@@ -36,8 +37,9 @@ pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
     FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
 {
-    pub fn new(num_queries: usize, commit_phase_mmcs: CommitPhaseMmcs) -> Self {
+    pub fn new(log_blowup: usize, num_queries: usize, commit_phase_mmcs: CommitPhaseMmcs) -> Self {
         Self {
+            log_blowup,
             num_queries,
             commit_phase_mmcs,
             _phantom: PhantomData,
@@ -70,7 +72,7 @@ where
     }
 
     fn log_blowup(&self) -> usize {
-        1 // TODO: 2x blowup for now, but should make it configurable
+        self.log_blowup
     }
 
     fn proof_of_work_bits(&self) -> usize {
