@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -12,22 +13,28 @@ use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]
-pub struct Radix2Dit;
+pub struct Radix2Dit<F: TwoAdicField> {
+    twiddles: RefCell<Vec<Vec<F>>>,
+}
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit {
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
     type Evaluations = RowMajorMatrix<F>;
 
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        let root = F::two_adic_generator(log_h);
-        let twiddles: Vec<F> = root.powers().take(h / 2).collect();
+        for log_h_for_twiddles in self.twiddles.borrow().len()..=log_h {
+            let root = F::two_adic_generator(log_h_for_twiddles);
+            let twiddles: Vec<F> = root.powers().take(h / 2).collect();
+            self.twiddles.borrow_mut().push(twiddles);
+        }
+        let twiddles = &self.twiddles.borrow()[log_h];
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
-            dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
+            dit_layer(&mut mat.as_view_mut(), layer, twiddles);
         }
         mat
     }
@@ -71,31 +78,31 @@ mod tests {
 
     #[test]
     fn dft_matches_naive() {
-        test_dft_matches_naive::<BabyBear, Radix2Dit>();
+        test_dft_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
     }
 
     #[test]
     fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<BabyBear, Radix2Dit>();
+        test_coset_dft_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
     }
 
     #[test]
     fn idft_matches_naive() {
-        test_idft_matches_naive::<Goldilocks, Radix2Dit>();
+        test_idft_matches_naive::<Goldilocks, Radix2Dit<Goldilocks>>();
     }
 
     #[test]
     fn lde_matches_naive() {
-        test_lde_matches_naive::<BabyBear, Radix2Dit>();
+        test_lde_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
     }
 
     #[test]
     fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<BabyBear, Radix2Dit>();
+        test_coset_lde_matches_naive::<BabyBear, Radix2Dit<BabyBear>>();
     }
 
     #[test]
     fn dft_idft_consistency() {
-        test_dft_idft_consistency::<BabyBear, Radix2Dit>();
+        test_dft_idft_consistency::<BabyBear, Radix2Dit<BabyBear>>();
     }
 }
