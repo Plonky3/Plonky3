@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::izip;
 use p3_field::{AbstractExtensionField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::StarkConfig;

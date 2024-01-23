@@ -1,7 +1,7 @@
 use alloc::vec;
 
 use p3_field::{add_scaled_slice_in_place, Field};
-use p3_maybe_rayon::{MaybeIntoParIter, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 
 use crate::dense::RowMajorMatrix;
 use crate::sparse::CsrMatrix;
