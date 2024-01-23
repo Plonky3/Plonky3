@@ -14,6 +14,7 @@ use crate::TwoAdicSubgroupDft;
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]
 pub struct Radix2Dit<F: TwoAdicField> {
+    /// Twiddle factors for each log_n.
     twiddles: RefCell<Vec<Vec<F>>>,
 }
 
@@ -24,7 +25,10 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        for log_h_for_twiddles in self.twiddles.borrow().len()..=log_h {
+        // Precompute twiddle factors if we haven't already.
+        // Because of how they're stored, we also precompute any missing twiddles for smaller sizes.
+        let num_twiddles = self.twiddles.borrow().len();
+        for log_h_for_twiddles in num_twiddles..=log_h {
             let root = F::two_adic_generator(log_h_for_twiddles);
             let twiddles: Vec<F> = root.powers().take(h / 2).collect();
             self.twiddles.borrow_mut().push(twiddles);
