@@ -20,13 +20,13 @@ fn bench_fft(c: &mut Criterion) {
 
     const BATCH_SIZE: usize = 100;
 
-    fft::<BabyBear, Radix2Dit, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
-    fft::<Goldilocks, Radix2Dit, BATCH_SIZE>(c, log_sizes);
+    fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
-    fft::<Complex<Mersenne31>, Radix2Dit, BATCH_SIZE>(c, log_half_sizes);
+    fft::<Complex<Mersenne31>, Radix2Dit<_>, BATCH_SIZE>(c, log_half_sizes);
     fft::<Complex<Mersenne31>, Radix2Bowers, BATCH_SIZE>(c, log_half_sizes);
     fft::<Complex<Mersenne31>, Radix2DitParallel, BATCH_SIZE>(c, log_half_sizes);
 
