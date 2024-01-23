@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_air::{Air, AirBuilder};
+use p3_air::{Air, AirBuilder, EmptyMessageBuilder};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
@@ -105,3 +105,5 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
         self.constraints.push(x.into());
     }
 }
+
+impl<F: Field> EmptyMessageBuilder for SymbolicAirBuilder<F> {}

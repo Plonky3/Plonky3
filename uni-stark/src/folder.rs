@@ -1,4 +1,4 @@
-use p3_air::{AirBuilder, TwoRowMatrixView};
+use p3_air::{AirBuilder, EmptyMessageBuilder, TwoRowMatrixView};
 use p3_field::{AbstractField, Field};
 
 use crate::StarkConfig;
@@ -54,6 +54,8 @@ impl<'a, SC: StarkConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 }
 
+impl<'a, SC: StarkConfig> EmptyMessageBuilder for ProverConstraintFolder<'a, SC> {}
+
 impl<'a, Challenge: Field> AirBuilder for VerifierConstraintFolder<'a, Challenge> {
     type F = Challenge;
     type Expr = Challenge;
@@ -86,3 +88,5 @@ impl<'a, Challenge: Field> AirBuilder for VerifierConstraintFolder<'a, Challenge
         self.accumulator += x;
     }
 }
+
+impl<'a, Challenge: Field> EmptyMessageBuilder for VerifierConstraintFolder<'a, Challenge> {}
