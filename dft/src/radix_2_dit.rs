@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
@@ -14,8 +15,8 @@ use crate::TwoAdicSubgroupDft;
 /// The DIT FFT algorithm.
 #[derive(Default, Clone)]
 pub struct Radix2Dit<F: TwoAdicField> {
-    /// Twiddle factors for each log_n.
-    twiddles: RefCell<Vec<Vec<F>>>,
+    /// Memoized twiddle factors for each length log_n.
+    twiddles: RefCell<BTreeMap<usize, Vec<F>>>,
 }
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
@@ -25,15 +26,12 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
-        // Precompute twiddle factors if we haven't already.
-        // Because of how they're stored, we also precompute any missing twiddles for smaller sizes.
-        let num_twiddles = self.twiddles.borrow().len();
-        for log_h_for_twiddles in num_twiddles..=log_h {
-            let root = F::two_adic_generator(log_h_for_twiddles);
-            let twiddles: Vec<F> = root.powers().take(h / 2).collect();
-            self.twiddles.borrow_mut().push(twiddles);
-        }
-        let twiddles = &self.twiddles.borrow()[log_h];
+        // Compute twiddle factors, or take memoized ones if already available.
+        let mut twiddles_ref_mut = self.twiddles.borrow_mut();
+        let twiddles = twiddles_ref_mut.entry(log_h).or_insert_with(|| {
+            let root = F::two_adic_generator(log_h);
+            root.powers().take(1 << log_h).collect()
+        });
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
