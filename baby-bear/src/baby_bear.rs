@@ -10,16 +10,34 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+/// The Baby Bear prime
 const P: u32 = 0x78000001;
-const MONTY_BITS: u32 = 31;
-const MONTY_MASK: u32 = (1 << MONTY_BITS) - 1;
-const MONTY_MU: u32 = 0x8000001;
+
+// We want a different set of parameters on ARM/NEON than elsewhere. In particular, we want ARM to
+// use 31 bits for the limb size, because that lets us use the SQDMULH instruction to do really fast
+// multiplications in NEON. However, other architectures don't have this instruction, so 32-bit
+// limbs are more convenient, being a nice power of 2.
+const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
+    31
+} else {
+    32
+};
+const MONTY_MU: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
+    0x08000001
+} else {
+    0x88000001
+};
+
+// This is derived from above.
+const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[repr(transparent)] // `PackedBabyBearNeon` relies on this!
 pub struct BabyBear {
-    value: u32,
+    // This is `pub(crate)` just for tests. If you're accessing `value` outside of those, you're
+    // likely doing something fishy.
+    pub(crate) value: u32,
 }
 
 impl BabyBear {
@@ -69,20 +87,27 @@ impl Distribution<BabyBear> for Standard {
     }
 }
 
+const MONTY_ZERO: u32 = 0;
+const MONTY_ONE: u32 = ((1u64 << MONTY_BITS) % (P as u64)) as u32;
+const MONTY_TWO: u32 = ((2u64 << MONTY_BITS) % (P as u64)) as u32;
+const MONTY_NEG_ONE: u32 = (((P as u64 - 1) << MONTY_BITS) % (P as u64)) as u32;
+
 impl AbstractField for BabyBear {
     type F = Self;
 
     fn zero() -> Self {
-        Self { value: 0 }
+        Self { value: MONTY_ZERO }
     }
     fn one() -> Self {
-        Self { value: 0x7ffffff }
+        Self { value: MONTY_ONE }
     }
     fn two() -> Self {
-        Self { value: 0xffffffe }
+        Self { value: MONTY_TWO }
     }
     fn neg_one() -> Self {
-        Self { value: 0x70000002 }
+        Self {
+            value: MONTY_NEG_ONE,
+        }
     }
 
     #[inline]
@@ -144,7 +169,12 @@ impl AbstractField for BabyBear {
 impl Field for BabyBear {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedBabyBearNeon;
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    type Packing = crate::PackedBabyBearAVX2;
+    #[cfg(not(any(
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "x86_64", target_feature = "avx2"),
+    )))]
     type Packing = Self;
 
     #[inline]
@@ -333,13 +363,13 @@ impl Div for BabyBear {
 #[inline]
 #[must_use]
 const fn to_monty(x: u32) -> u32 {
-    (((x as u64) << 31) % P as u64) as u32
+    (((x as u64) << MONTY_BITS) % P as u64) as u32
 }
 
 #[inline]
 #[must_use]
 fn to_monty_64(x: u64) -> u32 {
-    (((x as u128) << 31) % P as u128) as u32
+    (((x as u128) << MONTY_BITS) % P as u128) as u32
 }
 
 #[inline]
@@ -356,7 +386,7 @@ fn monty_reduce(x: u64) -> u32 {
     let u = t * (P as u64);
 
     let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> 31) as u32;
+    let x_sub_u_hi = (x_sub_u >> MONTY_BITS) as u32;
     let corr = if over { P } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
 }
