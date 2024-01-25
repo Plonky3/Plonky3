@@ -1,23 +1,22 @@
 use p3_field::PrimeField64;
+use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
+use tracing::instrument;
 
 use crate::{DuplexChallenger, FieldChallenger};
 
 pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
     // Can be overridden for more efficient methods not involving cloning, depending on the
     // internals of the challenger.
+    #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> F {
-        for i in 0..F::ORDER_U64 {
-            let witness = F::from_canonical_u64(i);
-            let mut forked = self.clone();
-
-            if forked.check_witness(bits, witness) {
-                assert!(self.check_witness(bits, witness));
-                return witness;
-            }
-        }
-
-        panic!("failed to find witness")
+        let witness = (0..F::ORDER_U64)
+            .into_par_iter()
+            .map(|i| F::from_canonical_u64(i))
+            .find_any(|witness| self.clone().check_witness(bits, *witness))
+            .expect("failed to find witness");
+        assert!(self.check_witness(bits, witness));
+        witness
     }
 
     #[must_use]
