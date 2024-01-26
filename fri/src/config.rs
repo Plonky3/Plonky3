@@ -1,18 +1,17 @@
 use core::marker::PhantomData;
 
-use p3_challenger::{CanObserve, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
+use p3_field::TwoAdicField;
 
 pub trait FriConfig {
-    type Val: PrimeField64;
-    type Challenge: ExtensionField<Self::Val> + TwoAdicField;
+    type Challenge: TwoAdicField;
 
-    type InputMmcs: Mmcs<Self::Val>;
     type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
 
-    type Challenger: GrindingChallenger<Self::Val>
-        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
+    type Challenger: GrindingChallenger
+        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>
+        + CanSample<Self::Challenge>;
 
     fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
 
@@ -27,17 +26,15 @@ pub trait FriConfig {
     fn proof_of_work_bits(&self) -> usize;
 }
 
-pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
+pub struct FriConfigImpl<Challenge, CommitPhaseMmcs, Challenger> {
     log_blowup: usize,
     num_queries: usize,
     proof_of_work_bits: usize,
     commit_phase_mmcs: CommitPhaseMmcs,
-    _phantom: PhantomData<(Val, Challenge, InputMmcs, Challenger)>,
+    _phantom: PhantomData<(Challenge, Challenger)>,
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
-    FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
-{
+impl<Challenge, CommitPhaseMmcs, Challenger> FriConfigImpl<Challenge, CommitPhaseMmcs, Challenger> {
     pub fn new(
         log_blowup: usize,
         num_queries: usize,
@@ -54,19 +51,16 @@ impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
     }
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> FriConfig
-    for FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
+impl<Challenge, CommitPhaseMmcs, Challenger> FriConfig
+    for FriConfigImpl<Challenge, CommitPhaseMmcs, Challenger>
 where
-    Val: PrimeField64,
-    Challenge: ExtensionField<Val> + TwoAdicField,
-    InputMmcs: Mmcs<Val>,
+    Challenge: TwoAdicField,
     CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger:
-        GrindingChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
+    Challenger: GrindingChallenger
+        + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>
+        + CanSample<Challenge>,
 {
-    type Val = Val;
     type Challenge = Challenge;
-    type InputMmcs = InputMmcs;
     type CommitPhaseMmcs = CommitPhaseMmcs;
     type Challenger = Challenger;
 

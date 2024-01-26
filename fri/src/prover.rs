@@ -2,39 +2,20 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
-use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
-use p3_maybe_rayon::prelude::IntoParallelRefMutIterator;
-use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
-use crate::matrix_reducer::MatrixReducer;
-use crate::{CommitPhaseProofStep, FriConfig, FriProof, InputOpening, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<FC: FriConfig>(
     config: &FC,
-    /*
-    input_mmcs: &[FC::InputMmcs],
-    input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
-    */
     input: &[Option<Vec<FC::Challenge>>],
     challenger: &mut FC::Challenger,
 ) -> (FriProof<FC>, Vec<usize>) {
-    /*
-    let max_height = input_mmcs
-        .iter()
-        .zip(input_data)
-        .map(|(mmcs, commit)| mmcs.get_max_height(commit))
-        .max()
-        .unwrap_or_else(|| panic!("No matrices?"));
-    let log_max_height = log2_strict_usize(max_height);
-    */
-
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
     let commit_phase_result = commit_phase::<FC>(config, input, log_max_height, challenger);
@@ -48,18 +29,7 @@ pub fn prove<FC: FriConfig>(
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
             .iter()
-            .map(|&index| {
-                answer_query(
-                    config,
-                    /*
-                    input_mmcs,
-                    input_data,
-                    input,
-                    */
-                    &commit_phase_result.data,
-                    index,
-                )
-            })
+            .map(|&index| answer_query(config, &commit_phase_result.data, index))
             .collect()
     });
 
@@ -76,28 +46,9 @@ pub fn prove<FC: FriConfig>(
 
 fn answer_query<FC: FriConfig>(
     config: &FC,
-    /*
-    input_mmcs: &[FC::InputMmcs],
-    input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
-    */
-    // input: &[Option<&[FC::Challenge]>],
     commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
     index: usize,
 ) -> QueryProof<FC> {
-    /*
-    let input_openings = input_mmcs
-        .iter()
-        .zip(input_data)
-        .map(|(mmcs, commit)| {
-            let (opened_values, opening_proof) = mmcs.open_batch(index, commit);
-            InputOpening {
-                opened_values,
-                opening_proof,
-            }
-        })
-        .collect();
-    */
-
     let commit_phase_openings = commit_phase_commits
         .iter()
         .enumerate()
@@ -121,7 +72,6 @@ fn answer_query<FC: FriConfig>(
         .collect();
 
     QueryProof {
-        // input_openings,
         commit_phase_openings,
     }
 }
@@ -129,59 +79,27 @@ fn answer_query<FC: FriConfig>(
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<FC: FriConfig>(
     config: &FC,
-    /*
-    input_mmcs: &[FC::InputMmcs],
-    input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
-    */
     input: &[Option<Vec<FC::Challenge>>],
     log_max_height: usize,
     challenger: &mut FC::Challenger,
 ) -> CommitPhaseResult<FC> {
-    /*
-    let max_height = 1 << log_max_height;
-
-    let mut matrices_by_log_height: Vec<Vec<_>> = vec![];
-    matrices_by_log_height.resize_with(log_max_height + 1, Default::default);
-    for (mmcs, commit) in input_mmcs.iter().zip(input_data) {
-        for mat in mmcs.get_matrices(commit) {
-            matrices_by_log_height[log2_strict_usize(mat.height())].push(mat);
-        }
-    }
-    */
-
-    /*
-    let largest_matrices = &matrices_by_log_height[log_max_height];
-    let alpha: FC::Challenge = challenger.sample_ext_element();
-    let alpha_reducer = MatrixReducer::new(alpha);
-    let mut current = vec![FC::Challenge::zero(); max_height];
-    alpha_reducer.reduce_matrices(&mut current, max_height, largest_matrices);
-    */
-
     let mut current = input[log_max_height].as_ref().unwrap().clone();
 
     let mut commits = vec![];
     let mut data = vec![];
 
     for log_folded_height in (config.log_blowup()..log_max_height).rev() {
-        let folded_height = 1 << log_folded_height;
-        // TODO: avoid cloning
         let leaves = RowMajorMatrix::new(current.clone(), 2);
         let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 
-        let beta: FC::Challenge = challenger.sample_ext_element();
+        let beta: FC::Challenge = challenger.sample();
         current = fold_even_odd(current, beta);
 
-        /*
-        let matrices = &matrices_by_log_height[log_folded_height];
-        if !matrices.is_empty() {
-            alpha_reducer.reduce_matrices(&mut current, folded_height, matrices);
-        }
-        */
         if let Some(v) = &input[log_folded_height] {
-            current.iter_mut().zip_eq(v).for_each(|(mut c, v)| *c += *v);
+            current.iter_mut().zip_eq(v).for_each(|(c, v)| *c += *v);
         }
     }
 

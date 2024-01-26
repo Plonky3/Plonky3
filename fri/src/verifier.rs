@@ -2,25 +2,24 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
-use p3_util::{log2_strict_usize, reverse_bits_len};
+use p3_util::reverse_bits_len;
 
-use crate::{FriConfig, FriProof, InputOpening, QueryProof};
+use crate::{FriConfig, FriProof, QueryProof};
 
 #[derive(Debug)]
-pub enum VerificationError<InputMmcsErr, CommitMmcsErr> {
+pub enum VerificationError<CommitMmcsErr> {
     InvalidProofShape,
-    InputMmcsError(InputMmcsErr),
+    // InputMmcsError(InputMmcsErr),
     CommitPhaseMmcsError(CommitMmcsErr),
     FinalPolyMismatch,
     InvalidPowWitness,
 }
 
 pub type VerificationErrorForFriConfig<FC> = VerificationError<
-    <<FC as FriConfig>::InputMmcs as Mmcs<<FC as FriConfig>::Val>>::Error,
     <<FC as FriConfig>::CommitPhaseMmcs as Mmcs<<FC as FriConfig>::Challenge>>::Error,
 >;
 
@@ -28,22 +27,16 @@ type VerificationResult<FC, T> = Result<T, VerificationErrorForFriConfig<FC>>;
 
 pub fn verify<FC: FriConfig>(
     config: &FC,
-    /*
-    input_mmcs: &[FC::InputMmcs],
-    input_dims: &[Vec<Dimensions>],
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
-    */
     proof: &FriProof<FC>,
     input: &[Vec<FC::Challenge>],
     challenger: &mut FC::Challenger,
 ) -> VerificationResult<FC, Vec<usize>> {
-    // let alpha: FC::Challenge = challenger.sample_ext_element();
     let betas: Vec<FC::Challenge> = proof
         .commit_phase_commits
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            challenger.sample_ext_element()
+            challenger.sample()
         })
         .collect();
 
@@ -52,7 +45,7 @@ pub fn verify<FC: FriConfig>(
     }
 
     // Check PoW.
-    if !challenger.check_witness(config.proof_of_work_bits(), proof.pow_witness) {
+    if !challenger.check_witness(config.proof_of_work_bits(), proof.pow_witness.clone()) {
         return Err(VerificationError::InvalidPowWitness);
     }
 
@@ -64,21 +57,6 @@ pub fn verify<FC: FriConfig>(
 
     for (&index, query_proof, reduced_openings) in izip!(&query_indices, &proof.query_proofs, input)
     {
-        /*
-        let index = challenger.sample_bits(log_max_height);
-
-        let reduced_openings = verify_input(
-            input_mmcs,
-            input_commits,
-            input_dims,
-            &query_proof.input_openings,
-            index,
-            alpha,
-            log_max_height,
-        )?;
-        let reduced_openings = todo!();
-        */
-
         let folded_eval = verify_query(
             config,
             &proof.commit_phase_commits,
@@ -95,44 +73,6 @@ pub fn verify<FC: FriConfig>(
     }
 
     Ok(query_indices)
-}
-
-fn verify_input<FC: FriConfig>(
-    input_mmcs: &[FC::InputMmcs],
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
-    input_dims: &[Vec<Dimensions>],
-    input_openings: &[InputOpening<FC>],
-    index: usize,
-    alpha: FC::Challenge,
-    log_max_height: usize,
-) -> VerificationResult<FC, Vec<FC::Challenge>> {
-    let mut openings_by_log_height: Vec<Vec<FC::Val>> = vec![vec![]; log_max_height + 1];
-    for (mmcs, commit, dims, opening) in
-        izip!(input_mmcs, input_commits, input_dims, input_openings)
-    {
-        mmcs.verify_batch(
-            commit,
-            dims,
-            index,
-            &opening.opened_values,
-            &opening.opening_proof,
-        )
-        .map_err(VerificationError::InputMmcsError)?;
-        for (mat_dims, mat_opening) in izip!(dims, &opening.opened_values) {
-            let log_height = log2_strict_usize(mat_dims.height);
-            openings_by_log_height[log_height].extend_from_slice(mat_opening);
-        }
-    }
-    let reduced_openings = openings_by_log_height
-        .into_iter()
-        .map(|o| {
-            o.into_iter()
-                .zip(alpha.powers())
-                .map(|(y, alpha_pow)| alpha_pow * y)
-                .sum()
-        })
-        .collect();
-    Ok(reduced_openings)
 }
 
 fn verify_query<FC: FriConfig>(

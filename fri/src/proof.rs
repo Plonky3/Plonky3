@@ -1,19 +1,19 @@
 use alloc::vec::Vec;
 
+use p3_challenger::GrindingChallenger;
 use p3_commit::Mmcs;
 use serde::{Deserialize, Serialize};
 
 use crate::FriConfig;
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "")]
 pub struct FriProof<FC: FriConfig> {
     pub(crate) commit_phase_commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
     pub(crate) query_proofs: Vec<QueryProof<FC>>,
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
     pub(crate) final_poly: FC::Challenge,
-    pub(crate) pow_witness: FC::Val,
+    pub(crate) pow_witness: <FC::Challenger as GrindingChallenger>::Witness,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -30,6 +30,7 @@ pub struct QueryProof<FC: FriConfig> {
 
 /// Openings of each input codeword at the queried location, along with an opening proof, for a
 /// single commitment round.
+/*
 #[derive(Serialize, Deserialize)]
 pub struct InputOpening<FC: FriConfig> {
     /// The opening of each input codeword at the queried location.
@@ -37,6 +38,7 @@ pub struct InputOpening<FC: FriConfig> {
 
     pub(crate) opening_proof: <FC::InputMmcs as Mmcs<FC::Val>>::Proof,
 }
+*/
 
 #[derive(Serialize, Deserialize)]
 pub struct CommitPhaseProofStep<FC: FriConfig> {

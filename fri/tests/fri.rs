@@ -1,12 +1,11 @@
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_challenger::{CanSample, DuplexChallenger, FieldChallenger};
+use p3_challenger::{CanSample, CanSampleBits, DuplexChallenger, FieldChallenger};
 use p3_commit::{DirectMmcs, ExtensionMmcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
 use p3_fri::{prover, verifier, FriConfigImpl};
-use p3_ldt::Ldt;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::{Matrix, MatrixRows};
@@ -28,7 +27,7 @@ type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16>;
-type MyFriConfig = FriConfigImpl<Val, Challenge, ValMmcs, ChallengeMmcs, Challenger>;
+type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
 
 fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, ValMmcs, MyFriConfig) {
     let mds = MyMds::default();
@@ -102,7 +101,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             })
             .collect();
 
-        (proof, reduced_openings, chal.sample())
+        (proof, reduced_openings, chal.sample_bits(32))
     };
 
     /*
@@ -120,7 +119,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 
     assert_eq!(
         p_sample,
-        v_challenger.sample(),
+        v_challenger.sample_bits(32),
         "prover and verifier transcript have same state after FRI"
     );
 }
