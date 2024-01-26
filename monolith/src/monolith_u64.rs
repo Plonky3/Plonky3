@@ -15,6 +15,21 @@ use sha3::{Shake128, Shake128Reader};
 use crate::monolith_mds_u64::MonolithMdsMatrixMersenne31U64Width16;
 use crate::util::get_random_u32;
 
+pub(crate) fn reduce64(x: &mut u64) {
+    let x_lo = *x & Mersenne31::ORDER_U64;
+    let x_hi = *x >> 31;
+    *x = x_lo + x_hi;
+    let msb = *x & (1 << 31);
+    *x ^= msb;
+    *x += (msb != 0) as u64;
+}
+
+pub(crate) fn reduce64_all<const N: usize>(x: &mut [u64; N]) {
+    for el in x.iter_mut() {
+        reduce64(el);
+    }
+}
+
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
@@ -148,49 +163,47 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31U64Width16<NUM_FULL_ROUNDS>
         for rc in self.round_constants {
             self.bars(state);
             Self::bricks(state);
+            reduce64_all(state);
             self.concrete(state);
             self.add_round_constants(state, &rc);
         }
         self.bars(state);
         Self::bricks(state);
+        reduce64_all(state);
         self.concrete(state);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
-    use p3_mersenne_31::Mersenne31;
-
-    use crate::monolith::MonolithMersenne31;
-    use crate::monolith_mds::MonolithMdsMatrixMersenne31;
+    use crate::{MonolithMdsMatrixMersenne31U64Width16, MonolithMersenne31U64Width16};
 
     #[test]
-    fn test_monolith_31() {
-        let mds = MonolithMdsMatrixMersenne31::<6>;
-        let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
+    fn test_monolith_31_u64() {
+        let mds = MonolithMdsMatrixMersenne31U64Width16;
+        let monolith: MonolithMersenne31U64Width16<5> = MonolithMersenne31U64Width16::new(mds);
 
-        let mut input: [Mersenne31; 16] = [Mersenne31::zero(); 16];
+        let mut input: [u64; 16] = [0; 16];
         for (i, inp) in input.iter_mut().enumerate() {
-            *inp = Mersenne31::from_canonical_usize(i);
+            *inp = i as u64;
         }
         monolith.permutation(&mut input);
 
-        assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
-        assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));
-        assert_eq!(input[2], Mersenne31::from_canonical_u64(1900746598));
-        assert_eq!(input[3], Mersenne31::from_canonical_u64(1734707571));
-        assert_eq!(input[4], Mersenne31::from_canonical_u64(2050994835));
-        assert_eq!(input[5], Mersenne31::from_canonical_u64(1648553244));
-        assert_eq!(input[6], Mersenne31::from_canonical_u64(1307647296));
-        assert_eq!(input[7], Mersenne31::from_canonical_u64(1941164548));
-        assert_eq!(input[8], Mersenne31::from_canonical_u64(1707113065));
-        assert_eq!(input[9], Mersenne31::from_canonical_u64(1477714255));
-        assert_eq!(input[10], Mersenne31::from_canonical_u64(1170160793));
-        assert_eq!(input[11], Mersenne31::from_canonical_u64(93800695));
-        assert_eq!(input[12], Mersenne31::from_canonical_u64(769879348));
-        assert_eq!(input[13], Mersenne31::from_canonical_u64(375548503));
-        assert_eq!(input[14], Mersenne31::from_canonical_u64(1989726444));
-        assert_eq!(input[15], Mersenne31::from_canonical_u64(1349325635));
+        assert_eq!(input[0], 609156607);
+        assert_eq!(input[1], 290107110);
+        assert_eq!(input[2], 1900746598);
+        assert_eq!(input[3], 1734707571);
+        assert_eq!(input[4], 2050994835);
+        assert_eq!(input[5], 1648553244);
+        assert_eq!(input[6], 1307647296);
+        assert_eq!(input[7], 1941164548);
+        assert_eq!(input[8], 1707113065);
+        assert_eq!(input[9], 1477714255);
+        assert_eq!(input[10], 1170160793);
+        assert_eq!(input[11], 93800695);
+        assert_eq!(input[12], 769879348);
+        assert_eq!(input[13], 375548503);
+        assert_eq!(input[14], 1989726444);
+        assert_eq!(input[15], 1349325635);
     }
 }

@@ -1,10 +1,10 @@
 //! Monolith-31's default MDS permutation.
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
-use core::array;
-
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
+
+use crate::monolith_u64::{reduce64, reduce64_all};
 
 #[derive(Clone)]
 pub struct MonolithMdsMatrixMersenne31U64Width16;
@@ -21,7 +21,7 @@ fn dot_product<const N: usize>(u: &[u64; N], v: &[u64; N]) -> u64 {
 fn apply_circulant_u64<const N: usize>(circ_matrix: &[u64; N], input: [u64; N]) -> [u64; N] {
     let mut matrix = *circ_matrix;
 
-    let mut output = array::from_fn(|_| 0);
+    let mut output = [0; N];
     for out_i in output.iter_mut().take(N - 1) {
         *out_i = dot_product(&matrix, &input);
         matrix.rotate_right(1);
@@ -35,7 +35,11 @@ impl Permutation<[u64; 16]> for MonolithMdsMatrixMersenne31U64Width16 {
         let matrix: [u64; 16] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
             .try_into()
             .unwrap();
-        apply_circulant_u64(&matrix, input)
+        let mut output = apply_circulant_u64(&matrix, input);
+
+        reduce64_all(&mut output);
+
+        output
     }
 
     fn permute_mut(&self, input: &mut [u64; 16]) {
