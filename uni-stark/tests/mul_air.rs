@@ -80,7 +80,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     type MyMds = CosetMds<Val, 16>;
     let mds = MyMds::default();
 
-    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 5>;
+    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 7>;
     let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;

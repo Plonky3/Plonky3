@@ -40,7 +40,7 @@ fn main() -> Result<(), VerificationError> {
     type MyMds = CosetMds<Val, 8>;
     let mds = MyMds::default();
 
-    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixGoldilocks, 8, 5>;
+    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixGoldilocks, 8, 7>;
     let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixGoldilocks, &mut thread_rng());
 
     type MyHash = SerializingHasher64<Keccak256Hash>;
