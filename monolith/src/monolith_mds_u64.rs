@@ -4,7 +4,7 @@
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::monolith_u64::{reduce64, reduce64_all};
+use crate::monolith_u64::reduce64_all;
 
 #[derive(Clone)]
 pub struct MonolithMdsMatrixMersenne31U64Width16;
