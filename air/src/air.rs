@@ -161,7 +161,7 @@ pub trait PermutationAirBuilder: AirBuilder {
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
-    inner: &'a mut AB,
+    pub inner: &'a mut AB,
     condition: AB::Expr,
 }
 
