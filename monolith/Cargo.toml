@@ -19,3 +19,7 @@ criterion = "0.5.1"
 [[bench]]
 name = "permute"
 harness = false
+
+[[bench]]
+name = "permute_u64"
+harness = false
