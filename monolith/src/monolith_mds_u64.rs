@@ -19,7 +19,7 @@ fn dot_product<const N: usize>(u: &[u64; N], v: &[u64; N]) -> u64 {
 }
 
 fn apply_circulant_u64<const N: usize>(circ_matrix: &[u64; N], input: [u64; N]) -> [u64; N] {
-    let mut matrix = circ_matrix.clone();
+    let mut matrix = *circ_matrix;
 
     let mut output = array::from_fn(|_| 0);
     for out_i in output.iter_mut().take(N - 1) {

@@ -90,7 +90,7 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31U64Width16<NUM_FULL_ROUNDS>
 
         let mut shake = Shake128::default();
         shake.update("Monolith".as_bytes());
-        shake.update(&[16 as u8, num_rounds]);
+        shake.update(&[16_u8, num_rounds]);
         shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
         shake.update(&[8, 8, 8, 7]);
         shake.finalize_xof()

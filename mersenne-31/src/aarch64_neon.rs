@@ -571,7 +571,7 @@ mod tests {
     type P = PackedMersenne31Neon;
 
     fn array_from_canonical(vals: [u32; WIDTH]) -> [F; WIDTH] {
-        vals.map(|v| F::from_canonical_u32(v))
+        vals.map(F::from_canonical_u32)
     }
 
     fn packed_from_canonical(vals: [u32; WIDTH]) -> P {
