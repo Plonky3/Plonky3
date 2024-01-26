@@ -26,15 +26,18 @@ pub type VerificationErrorForFriConfig<FC> = VerificationError<
 
 type VerificationResult<FC, T> = Result<T, VerificationErrorForFriConfig<FC>>;
 
-pub(crate) fn verify<FC: FriConfig>(
+pub fn verify<FC: FriConfig>(
     config: &FC,
+    /*
     input_mmcs: &[FC::InputMmcs],
     input_dims: &[Vec<Dimensions>],
     input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
+    */
     proof: &FriProof<FC>,
+    input: &[Vec<FC::Challenge>],
     challenger: &mut FC::Challenger,
-) -> VerificationResult<FC, ()> {
-    let alpha: FC::Challenge = challenger.sample_ext_element();
+) -> VerificationResult<FC, Vec<usize>> {
+    // let alpha: FC::Challenge = challenger.sample_ext_element();
     let betas: Vec<FC::Challenge> = proof
         .commit_phase_commits
         .iter()
@@ -55,7 +58,13 @@ pub(crate) fn verify<FC: FriConfig>(
 
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup();
 
-    for query_proof in &proof.query_proofs {
+    let query_indices: Vec<usize> = (0..config.num_queries())
+        .map(|_| challenger.sample_bits(log_max_height))
+        .collect();
+
+    for (&index, query_proof, reduced_openings) in izip!(&query_indices, &proof.query_proofs, input)
+    {
+        /*
         let index = challenger.sample_bits(log_max_height);
 
         let reduced_openings = verify_input(
@@ -67,6 +76,8 @@ pub(crate) fn verify<FC: FriConfig>(
             alpha,
             log_max_height,
         )?;
+        let reduced_openings = todo!();
+        */
 
         let folded_eval = verify_query(
             config,
@@ -83,7 +94,7 @@ pub(crate) fn verify<FC: FriConfig>(
         }
     }
 
-    Ok(())
+    Ok(query_indices)
 }
 
 fn verify_input<FC: FriConfig>(
@@ -130,19 +141,19 @@ fn verify_query<FC: FriConfig>(
     mut index: usize,
     proof: &QueryProof<FC>,
     betas: &[FC::Challenge],
-    reduced_openings: Vec<FC::Challenge>,
+    reduced_openings: &[FC::Challenge],
     log_max_height: usize,
 ) -> VerificationResult<FC, FC::Challenge> {
     let mut folded_eval = FC::Challenge::zero();
     let mut x = FC::Challenge::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
 
-    for (log_folded_height, commit, step, &beta, reduced_opening_for_height) in izip!(
+    for (log_folded_height, commit, step, &beta, &reduced_opening_for_height) in izip!(
         (0..log_max_height).rev(),
         commit_phase_commits,
         &proof.commit_phase_openings,
         betas,
-        reduced_openings.into_iter().rev()
+        reduced_openings.iter().rev()
     ) {
         folded_eval += reduced_opening_for_height;
 

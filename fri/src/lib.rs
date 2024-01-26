@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
-use p3_ldt::{Ldt, LdtBasedPcs};
+use p3_ldt::Ldt;
 use p3_matrix::Dimensions;
 use verifier::VerificationErrorForFriConfig;
 
@@ -18,18 +18,19 @@ mod config;
 mod fold_even_odd;
 mod matrix_reducer;
 mod proof;
-mod prover;
-mod verifier;
+pub mod prover;
+pub mod verifier;
 
 pub use config::*;
 pub use fold_even_odd::*;
 pub use proof::*;
 
+/*
 pub struct FriLdt<FC: FriConfig> {
     pub config: FC,
 }
 
-impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
+impl<FC: FriConfig> Ldt<FC::Challenge, /*FC::InputMmcs,*/ FC::Challenger> for FriLdt<FC> {
     type Proof = FriProof<FC>;
     type Error = VerificationErrorForFriConfig<FC>;
 
@@ -39,21 +40,28 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
 
     fn prove(
         &self,
+        /*
         input_mmcs: &[FC::InputMmcs],
         input_data: &[&<FC::InputMmcs as Mmcs<FC::Val>>::ProverData],
+        */
+        input: &[Option<&[FC::Challenge]>],
         challenger: &mut FC::Challenger,
     ) -> Self::Proof {
-        prove::<FC>(&self.config, input_mmcs, input_data, challenger)
+        // prove::<FC>(&self.config, input_mmcs, input_data, challenger)
+        prove::<FC>(&self.config, input, challenger)
     }
 
     fn verify(
         &self,
+        /*
         input_mmcs: &[FC::InputMmcs],
         input_dims: &[Vec<Dimensions>],
         input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
+        */
         proof: &Self::Proof,
         challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
+        /*
         verify::<FC>(
             &self.config,
             input_mmcs,
@@ -62,9 +70,13 @@ impl<FC: FriConfig> Ldt<FC::Val, FC::InputMmcs, FC::Challenger> for FriLdt<FC> {
             proof,
             challenger,
         )
+        */
+        todo!()
     }
 }
+*/
 
+/*
 pub type FriBasedPcs<FC, Mmcs, Dft, Challenger> = LdtBasedPcs<
     <FC as FriConfig>::Val,
     <FC as FriConfig>::Challenge,
@@ -73,3 +85,4 @@ pub type FriBasedPcs<FC, Mmcs, Dft, Challenger> = LdtBasedPcs<
     FriLdt<FC>,
     Challenger,
 >;
+*/

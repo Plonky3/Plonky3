@@ -21,7 +21,7 @@ pub struct FriProof<FC: FriConfig> {
 pub struct QueryProof<FC: FriConfig> {
     /// For each input commitment, this contains openings of each matrix at the queried location,
     /// along with an opening proof.
-    pub(crate) input_openings: Vec<InputOpening<FC>>,
+    // pub(crate) input_openings: Vec<InputOpening<FC>>,
 
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
     /// queried location, along with an opening proof.
