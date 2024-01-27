@@ -12,5 +12,5 @@ mod util;
 
 pub use monolith::MonolithMersenne31;
 pub use monolith_mds::MonolithMdsMatrixMersenne31;
-pub use monolith_mds_u64::MonolithMdsMatrixMersenne31U64Width16;
-pub use monolith_u64::MonolithMersenne31U64Width16;
+pub use monolith_mds_u64::MonolithMdsMatrixMersenne31Width16;
+pub use monolith_u64::MonolithMersenne31Width16;

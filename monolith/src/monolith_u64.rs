@@ -12,7 +12,7 @@ use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::monolith_mds_u64::MonolithMdsMatrixMersenne31U64Width16;
+use crate::monolith_mds_u64::MonolithMdsMatrixMersenne31Width16;
 use crate::util::get_random_u32;
 
 pub(crate) fn reduce64(x: &mut u64) {
@@ -24,26 +24,20 @@ pub(crate) fn reduce64(x: &mut u64) {
     *x += (msb != 0) as u64;
 }
 
-pub(crate) fn reduce64_all<const N: usize>(x: &mut [u64; N]) {
-    for el in x.iter_mut() {
-        reduce64(el);
-    }
-}
-
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
-pub struct MonolithMersenne31U64Width16<const NUM_FULL_ROUNDS: usize> {
+pub struct MonolithMersenne31Width16<const NUM_FULL_ROUNDS: usize> {
     pub round_constants: [[u64; 16]; NUM_FULL_ROUNDS],
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
-    pub mds: MonolithMdsMatrixMersenne31U64Width16,
+    pub mds: MonolithMdsMatrixMersenne31Width16,
 }
 
-impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31U64Width16<NUM_FULL_ROUNDS> {
+impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31Width16<NUM_FULL_ROUNDS> {
     pub const NUM_BARS: usize = 8;
 
-    pub fn new(mds: MonolithMdsMatrixMersenne31U64Width16) -> Self {
+    pub fn new(mds: MonolithMdsMatrixMersenne31Width16) -> Self {
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
@@ -133,6 +127,10 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31U64Width16<NUM_FULL_ROUNDS>
         for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
             *x_mut += x * x;
         }
+
+        for el in state.iter_mut() {
+            reduce64(el);
+        }
     }
 
     pub fn bar(&self, el: u64) -> u64 {
@@ -163,25 +161,23 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31U64Width16<NUM_FULL_ROUNDS>
         for rc in self.round_constants {
             self.bars(state);
             Self::bricks(state);
-            reduce64_all(state);
             self.concrete(state);
             self.add_round_constants(state, &rc);
         }
         self.bars(state);
         Self::bricks(state);
-        reduce64_all(state);
         self.concrete(state);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{MonolithMdsMatrixMersenne31U64Width16, MonolithMersenne31U64Width16};
+    use crate::{MonolithMdsMatrixMersenne31Width16, MonolithMersenne31Width16};
 
     #[test]
     fn test_monolith_31_u64() {
-        let mds = MonolithMdsMatrixMersenne31U64Width16;
-        let monolith: MonolithMersenne31U64Width16<5> = MonolithMersenne31U64Width16::new(mds);
+        let mds = MonolithMdsMatrixMersenne31Width16;
+        let monolith: MonolithMersenne31Width16<5> = MonolithMersenne31Width16::new(mds);
 
         let mut input: [u64; 16] = [0; 16];
         for (i, inp) in input.iter_mut().enumerate() {
