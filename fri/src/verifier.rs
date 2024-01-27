@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
@@ -13,7 +13,6 @@ use crate::{FriConfig, FriProof, QueryProof};
 #[derive(Debug)]
 pub enum VerificationError<CommitMmcsErr> {
     InvalidProofShape,
-    // InputMmcsError(InputMmcsErr),
     CommitPhaseMmcsError(CommitMmcsErr),
     FinalPolyMismatch,
     InvalidPowWitness,
@@ -28,7 +27,7 @@ type VerificationResult<FC, T> = Result<T, VerificationErrorForFriConfig<FC>>;
 pub fn verify<FC: FriConfig>(
     config: &FC,
     proof: &FriProof<FC>,
-    input: &[Vec<FC::Challenge>],
+    reduced_openings: &[[FC::Challenge; 32]],
     challenger: &mut FC::Challenger,
 ) -> VerificationResult<FC, Vec<usize>> {
     let betas: Vec<FC::Challenge> = proof
@@ -55,15 +54,14 @@ pub fn verify<FC: FriConfig>(
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
-    for (&index, query_proof, reduced_openings) in izip!(&query_indices, &proof.query_proofs, input)
-    {
+    for (&index, query_proof, ro) in izip!(&query_indices, &proof.query_proofs, reduced_openings) {
         let folded_eval = verify_query(
             config,
             &proof.commit_phase_commits,
             index,
             query_proof,
             &betas,
-            reduced_openings,
+            ro,
             log_max_height,
         )?;
 
@@ -81,21 +79,20 @@ fn verify_query<FC: FriConfig>(
     mut index: usize,
     proof: &QueryProof<FC>,
     betas: &[FC::Challenge],
-    reduced_openings: &[FC::Challenge],
+    reduced_openings: &[FC::Challenge; 32],
     log_max_height: usize,
 ) -> VerificationResult<FC, FC::Challenge> {
     let mut folded_eval = FC::Challenge::zero();
     let mut x = FC::Challenge::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
 
-    for (log_folded_height, commit, step, &beta, &reduced_opening_for_height) in izip!(
+    for (log_folded_height, commit, step, &beta) in izip!(
         (0..log_max_height).rev(),
         commit_phase_commits,
         &proof.commit_phase_openings,
         betas,
-        reduced_openings.iter().rev()
     ) {
-        folded_eval += reduced_opening_for_height;
+        folded_eval += reduced_openings[log_folded_height];
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;

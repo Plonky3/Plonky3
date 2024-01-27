@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
@@ -13,7 +13,7 @@ use crate::{CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<FC: FriConfig>(
     config: &FC,
-    input: &[Option<Vec<FC::Challenge>>],
+    input: &[Option<Vec<FC::Challenge>>; 32],
     challenger: &mut FC::Challenger,
 ) -> (FriProof<FC>, Vec<usize>) {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
@@ -79,7 +79,7 @@ fn answer_query<FC: FriConfig>(
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<FC: FriConfig>(
     config: &FC,
-    input: &[Option<Vec<FC::Challenge>>],
+    input: &[Option<Vec<FC::Challenge>>; 32],
     log_max_height: usize,
     challenger: &mut FC::Challenger,
 ) -> CommitPhaseResult<FC> {

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::FriConfig;
 
 #[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct FriProof<FC: FriConfig> {
     pub(crate) commit_phase_commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
     pub(crate) query_proofs: Vec<QueryProof<FC>>,

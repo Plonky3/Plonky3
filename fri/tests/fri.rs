@@ -84,11 +84,11 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         let (proof, idxs) = prover::prove(&fc, &input, &mut chal);
 
         let log_max_height = input.iter().rposition(Option::is_some).unwrap();
-        let reduced_openings: Vec<Vec<Challenge>> = idxs
+        let reduced_openings: Vec<[Challenge; 32]> = idxs
             .into_iter()
             .map(|idx| {
-                input[..log_max_height + 1]
-                    .into_iter()
+                input
+                    .iter()
                     .enumerate()
                     .map(|(log_height, v)| {
                         if let Some(v) = v {
@@ -97,7 +97,9 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
                             Challenge::zero()
                         }
                     })
-                    .collect()
+                    .collect_vec()
+                    .try_into()
+                    .unwrap()
             })
             .collect();
 
