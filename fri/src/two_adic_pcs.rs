@@ -180,25 +180,30 @@ where
                 for &point in points_for_mat {
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
                     let (low_coset, _) = mat.split_rows(mat.height() >> self.fri.log_blowup());
-                    let values = interpolate_coset(
-                        &BitReversedMatrixView::new(low_coset),
-                        coset_shift,
-                        point,
-                    );
-                    for (&x, row, reduced_opening) in izip!(
-                        &subgroup,
-                        mat.rows(),
-                        reduced_opening_for_log_height.iter_mut()
-                    ) {
-                        debug_assert_eq!(row.len(), values.len());
-                        for (&p_at_x, &p_at_point, alpha_pow) in
-                            izip!(row, &values, alpha.shifted_powers(alpha_pows[log_height]))
-                        {
-                            *reduced_opening += alpha_pow
-                                * ((FC::Challenge::from_base(p_at_x) - p_at_point)
-                                    / (FC::Challenge::from_base(x) - point));
+                    let values = info_span!("compute opened values with Lagrange interpolation")
+                        .in_scope(|| {
+                            interpolate_coset(
+                                &BitReversedMatrixView::new(low_coset),
+                                coset_shift,
+                                point,
+                            )
+                        });
+                    info_span!("reduce openings").in_scope(|| {
+                        for (&x, row, reduced_opening) in izip!(
+                            &subgroup,
+                            mat.rows(),
+                            reduced_opening_for_log_height.iter_mut()
+                        ) {
+                            debug_assert_eq!(row.len(), values.len());
+                            for (&p_at_x, &p_at_point, alpha_pow) in
+                                izip!(row, &values, alpha.shifted_powers(alpha_pows[log_height]))
+                            {
+                                *reduced_opening += alpha_pow
+                                    * ((FC::Challenge::from_base(p_at_x) - p_at_point)
+                                        / (FC::Challenge::from_base(x) - point));
+                            }
                         }
-                    }
+                    });
                     alpha_pows[log_height] *= alpha.exp_u64(mat.width() as u64);
                     opened_values_for_mat.push(values);
                 }
