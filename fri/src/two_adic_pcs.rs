@@ -191,13 +191,15 @@ where
                         reduced_opening_for_log_height.iter_mut()
                     ) {
                         debug_assert_eq!(row.len(), values.len());
-                        for (&p_at_x, &p_at_point) in izip!(row, &values) {
-                            *reduced_opening += alpha_pows[log_height]
+                        for (&p_at_x, &p_at_point, alpha_pow) in
+                            izip!(row, &values, alpha.shifted_powers(alpha_pows[log_height]))
+                        {
+                            *reduced_opening += alpha_pow
                                 * ((FC::Challenge::from_base(p_at_x) - p_at_point)
                                     / (FC::Challenge::from_base(x) - point));
-                            // alpha_pows[log_height] *= alpha;
                         }
                     }
+                    alpha_pows[log_height] *= alpha.exp_u64(mat.width() as u64);
                     opened_values_for_mat.push(values);
                 }
             }
