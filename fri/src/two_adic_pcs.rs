@@ -7,18 +7,18 @@ use p3_challenger::{CanSample, FieldChallenger};
 use p3_commit::{DirectMmcs, OpenedValues, Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, ExtensionField,
-    TwoAdicField,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractExtensionField,
+    AbstractField, ExtensionField, Field, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::{
     bitrev::{BitReversableMatrix, BitReversedMatrixView},
-    dense::RowMajorMatrixView,
+    dense::{RowMajorMatrix, RowMajorMatrixView},
     Dimensions, Matrix, MatrixRows,
 };
 use p3_util::{log2_strict_usize, reverse_slice_index_bits, VecExt};
 use serde::{Deserialize, Serialize};
-use tracing::info_span;
+use tracing::{info_span, instrument};
 
 use crate::{prover, verifier::VerificationErrorForFriConfig, FriConfig, FriProof};
 
@@ -50,7 +50,7 @@ impl<FC, Val, Dft, M> TwoAdicFriPcs<FC, Val, Dft, M> {
 pub struct TwoAdicFriPcsProof<FC: FriConfig, Val, InputMmcsProof> {
     #[serde(bound = "")]
     pub(crate) fri_proof: FriProof<FC>,
-    /// For each query, for each commitment, openings for that commitment
+    /// For each query, for each committed batch, query openings for that batch
     pub(crate) input_openings: Vec<Vec<InputOpening<Val, InputMmcsProof>>>,
 }
 
@@ -147,6 +147,7 @@ where
     M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
     In: MatrixRows<Val>,
 {
+    #[instrument(name = "open_multi_batches", skip_all)]
     fn open_multi_batches(
         &self,
         prover_data_and_points: &[(&Self::ProverData, &[Vec<FC::Challenge>])],
@@ -154,12 +155,13 @@ where
     ) -> (OpenedValues<FC::Challenge>, Self::Proof) {
         // Batch combination challenge
         let alpha = <FC::Challenger as CanSample<FC::Challenge>>::sample(challenger);
+        let mut cached_alpha_pows = vec![FC::Challenge::one()];
 
         let coset_shift = self.coset_shift();
 
         let mut all_opened_values: OpenedValues<FC::Challenge> = vec![];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
-        let mut alpha_pows = [FC::Challenge::one(); 32];
+        let mut num_reduced = [0; 32];
 
         for (data, points) in prover_data_and_points {
             let mats = self.mmcs.get_matrices(data);
@@ -169,6 +171,7 @@ where
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![FC::Challenge::zero(); mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
+
                 let mut subgroup = cyclic_subgroup_coset_known_order(
                     Val::two_adic_generator(log_height),
                     coset_shift,
@@ -176,35 +179,59 @@ where
                 )
                 .collect_vec();
                 reverse_slice_index_bits(&mut subgroup);
+
+                let inv_denoms = info_span!("batch invert denominators").in_scope(|| {
+                    let denoms = points_for_mat
+                        .iter()
+                        .flat_map(|&z| {
+                            subgroup
+                                .iter()
+                                .map(move |&x| FC::Challenge::from_base(x) - z)
+                        })
+                        .collect_vec();
+                    RowMajorMatrix::new(batch_multiplicative_inverse(&denoms), mat.height())
+                });
+
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                for &point in points_for_mat {
+                for (&point, inv_denoms) in izip!(points_for_mat, inv_denoms.rows()) {
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
-                    let (low_coset, _) = mat.split_rows(mat.height() >> self.fri.log_blowup());
                     let values = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
+                            let (low_coset, _) =
+                                mat.split_rows(mat.height() >> self.fri.log_blowup());
                             interpolate_coset(
                                 &BitReversedMatrixView::new(low_coset),
                                 coset_shift,
                                 point,
                             )
                         });
+
+                    let alpha_pows = get_cached_powers(
+                        alpha,
+                        &mut cached_alpha_pows,
+                        num_reduced[log_height],
+                        mat.width(),
+                    );
+
                     info_span!("reduce openings").in_scope(|| {
-                        for (&x, row, reduced_opening) in izip!(
-                            &subgroup,
+                        // for each row
+                        for (row, reduced_opening, &inv_denom) in izip!(
                             mat.rows(),
-                            reduced_opening_for_log_height.iter_mut()
+                            reduced_opening_for_log_height.iter_mut(),
+                            inv_denoms,
                         ) {
-                            debug_assert_eq!(row.len(), values.len());
-                            for (&p_at_x, &p_at_point, alpha_pow) in
-                                izip!(row, &values, alpha.shifted_powers(alpha_pows[log_height]))
+                            // for each column
+                            for (&p_at_x, &p_at_point, &alpha_pow) in
+                                izip!(row, &values, alpha_pows)
                             {
                                 *reduced_opening += alpha_pow
-                                    * ((FC::Challenge::from_base(p_at_x) - p_at_point)
-                                        / (FC::Challenge::from_base(x) - point));
+                                    * /* p(X) - p(z) */ (FC::Challenge::from_base(p_at_x) - p_at_point)
+                                    * /* 1/(X - z)  */ inv_denom;
                             }
                         }
                     });
-                    alpha_pows[log_height] *= alpha.exp_u64(mat.width() as u64);
+
+                    num_reduced[log_height] += mat.width();
                     opened_values_for_mat.push(values);
                 }
             }
@@ -248,4 +275,16 @@ where
         // todo!()
         Ok(())
     }
+}
+
+fn get_cached_powers<'a, F: Field>(
+    power: F,
+    cache: &'a mut Vec<F>,
+    start: usize,
+    count: usize,
+) -> &'a [F] {
+    while cache.len() < start + count {
+        cache.push(*cache.last().unwrap() * power);
+    }
+    &cache[start..start + count]
 }
