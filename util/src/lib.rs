@@ -120,3 +120,22 @@ pub fn branch_hint() {
         core::arch::asm!("", options(nomem, nostack, preserves_flags));
     }
 }
+
+/// Convenience methods for Vec.
+pub trait VecExt<T> {
+    /// Push `elem` and return a reference to it.
+    fn pushed_ref(&mut self, elem: T) -> &T;
+    /// Push `elem` and return a mutable reference to it.
+    fn pushed_mut(&mut self, elem: T) -> &mut T;
+}
+
+impl<T> VecExt<T> for alloc::vec::Vec<T> {
+    fn pushed_ref(&mut self, elem: T) -> &T {
+        self.push(elem);
+        self.last().unwrap()
+    }
+    fn pushed_mut(&mut self, elem: T) -> &mut T {
+        self.push(elem);
+        self.last_mut().unwrap()
+    }
+}

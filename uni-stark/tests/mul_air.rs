@@ -6,8 +6,8 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
-use p3_ldt::QuotientMmcs;
+use p3_fri::two_adic_pcs::TwoAdicFriPcs;
+use p3_fri::FriConfigImpl;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 use p3_mds::coset_mds::CosetMds;
@@ -100,15 +100,15 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    type Quotient = QuotientMmcs<Domain, Challenge, ValMmcs>;
-    type MyFriConfig = FriConfigImpl<Val, Challenge, Quotient, ChallengeMmcs, Challenger>;
+    // type Quotient = QuotientMmcs<Domain, Challenge, ValMmcs>;
+    type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
     let fri_config = MyFriConfig::new(1, 40, 8, challenge_mmcs);
-    let ldt = FriLdt { config: fri_config };
 
-    type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
+    // type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
+    type Pcs = TwoAdicFriPcs<MyFriConfig, Val, Dft, ValMmcs>;
     type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
 
-    let pcs = Pcs::new(dft, val_mmcs, ldt);
+    let pcs = Pcs::new(fri_config, dft, val_mmcs);
     let config = StarkConfigImpl::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);

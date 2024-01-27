@@ -44,10 +44,12 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let (perm, val_mmcs, fc) = get_ldt_for_testing(rng);
     let dft = Radix2Dit::default();
 
+    let shift = Val::generator();
+
     let ldes: Vec<RowMajorMatrix<Val>> = (3..10)
         .map(|deg_bits| {
-            let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 4);
-            let mut lde = dft.coset_lde_batch(evals, 1, Val::one());
+            let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
+            let mut lde = dft.coset_lde_batch(evals, 1, shift);
             reverse_matrix_index_bits(&mut lde);
             lde
         })
@@ -103,7 +105,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             })
             .collect();
 
-        (proof, reduced_openings, chal.sample_bits(32))
+        (proof, reduced_openings, chal.sample_bits(8))
     };
 
     /*
@@ -121,7 +123,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 
     assert_eq!(
         p_sample,
-        v_challenger.sample_bits(32),
+        v_challenger.sample_bits(8),
         "prover and verifier transcript have same state after FRI"
     );
 }

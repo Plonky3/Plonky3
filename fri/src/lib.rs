@@ -1,6 +1,6 @@
 //! An implementation of the FRI low-degree test (LDT).
 
-#![no_std]
+// #![no_std]
 
 extern crate alloc;
 
@@ -9,7 +9,7 @@ mod fold_even_odd;
 // mod matrix_reducer;
 mod proof;
 pub mod prover;
-mod two_adic_pcs;
+pub mod two_adic_pcs;
 pub mod verifier;
 
 pub use config::*;

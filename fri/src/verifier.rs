@@ -92,7 +92,7 @@ fn verify_query<FC: FriConfig>(
         &proof.commit_phase_openings,
         betas,
     ) {
-        folded_eval += reduced_openings[log_folded_height];
+        folded_eval += reduced_openings[log_folded_height + 1];
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
