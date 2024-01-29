@@ -241,9 +241,9 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
     //   Let d := lhs - rhs and t := d mod 2^32. We want to return a value r in {0, ..., P} such
     // that r = d (mod P).
     //   Define u := (t + P) mod 2^32 and r := min(t, u). d is in {-P, ..., P}. We argue by cases.
-    //   If d is in {0, ..., P}, then t = d and u is in {P, ..., 2 P - 1}. r = t is in the correct
+    //   If d is in {0, ..., P}, then t = d and u is in {P, ..., 2 P}. r = t is in the correct
     // range.
-    //   If d is in {-P + , ..., -1}, then t is in {2^32 - P, ..., 2^32 - 1} and u is in
+    //   If d is in {-P, ..., -1}, then t is in {2^32 - P, ..., 2^32 - 1} and u is in
     // {0, ..., P - 1}. r = u is in the correct range.
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
