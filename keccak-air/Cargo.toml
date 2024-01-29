@@ -19,7 +19,6 @@ p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
-p3-ldt = { path = "../ldt" }
 p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-poseidon2 = { path = "../poseidon2" }
