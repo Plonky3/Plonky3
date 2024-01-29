@@ -22,6 +22,8 @@ const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "n
 } else {
     32
 };
+// We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
+// (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
 const MONTY_MU: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
     0x08000001
 } else {
@@ -87,10 +89,10 @@ impl Distribution<BabyBear> for Standard {
     }
 }
 
-const MONTY_ZERO: u32 = 0;
-const MONTY_ONE: u32 = ((1u64 << MONTY_BITS) % (P as u64)) as u32;
-const MONTY_TWO: u32 = ((2u64 << MONTY_BITS) % (P as u64)) as u32;
-const MONTY_NEG_ONE: u32 = (((P as u64 - 1) << MONTY_BITS) % (P as u64)) as u32;
+const MONTY_ZERO: u32 = to_monty(0);
+const MONTY_ONE: u32 = to_monty(1);
+const MONTY_TWO: u32 = to_monty(2);
+const MONTY_NEG_ONE: u32 = to_monty(P - 1);
 
 impl AbstractField for BabyBear {
     type F = Self;
