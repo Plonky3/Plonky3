@@ -6,7 +6,7 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use p3_field::{PrimeField32, PrimeField64, AbstractField};
+use p3_field::{AbstractField, PrimeField32, PrimeField64};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
@@ -188,7 +188,7 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
 
-    use crate::{MonolithMdsMatrixM31Width16, MonolithM31Width16};
+    use crate::{MonolithM31Width16, MonolithMdsMatrixM31Width16};
 
     #[test]
     fn test_monolith_31_u64() {

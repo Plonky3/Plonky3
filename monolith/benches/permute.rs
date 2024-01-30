@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use p3_field::AbstractField;
 use p3_mersenne_31::Mersenne31;
-use p3_monolith::{MonolithMdsMatrixM31, MonolithM31};
+use p3_monolith::{MonolithM31, MonolithMdsMatrixM31};
 
 fn permute_benchmark(c: &mut Criterion) {
     let mds = MonolithMdsMatrixM31::<6>;

@@ -32,9 +32,7 @@ fn apply_circulant_width16<const N: usize>(circ_matrix: &[u64; N], input: [u64; 
 
 impl Permutation<[u64; 16]> for MonolithMdsMatrixM31Width16 {
     fn permute(&self, input: [u64; 16]) -> [u64; 16] {
-        let matrix: [u64; 16] = MATRIX_CIRC_MDS_16_M31_MONOLITH[..]
-            .try_into()
-            .unwrap();
+        let matrix: [u64; 16] = MATRIX_CIRC_MDS_16_M31_MONOLITH[..].try_into().unwrap();
         let mut output = apply_circulant_width16(&matrix, input);
 
         for el in output.iter_mut() {
