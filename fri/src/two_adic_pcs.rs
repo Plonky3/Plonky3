@@ -1,4 +1,5 @@
 use core::marker::PhantomData;
+use std::collections::HashMap;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -159,6 +160,48 @@ where
 
         let coset_shift = self.coset_shift();
 
+        // For each unique opening point z, we will find the largest degree bound
+        // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
+        let inv_denoms: HashMap<FC::Challenge, Vec<FC::Challenge>> =
+            info_span!("invert denominators").in_scope(|| {
+                let mut max_log_height_for_point = HashMap::<FC::Challenge, usize>::new();
+                for (data, points) in prover_data_and_points {
+                    let mats = self.mmcs.get_matrices(data);
+                    for (mat, points_for_mat) in izip!(mats, *points) {
+                        let log_height = log2_strict_usize(mat.height());
+                        for z in points_for_mat {
+                            max_log_height_for_point
+                                .entry(*z)
+                                .and_modify(|lh| *lh = core::cmp::max(*lh, log_height))
+                                .or_insert(log_height);
+                        }
+                    }
+                }
+                let max_log_height = *max_log_height_for_point.values().max().unwrap();
+                // Compute the largest subgroup we will use, in bitrev order.
+                let mut subgroup = cyclic_subgroup_coset_known_order(
+                    Val::two_adic_generator(max_log_height),
+                    coset_shift,
+                    1 << max_log_height,
+                )
+                .collect_vec();
+                reverse_slice_index_bits(&mut subgroup);
+                max_log_height_for_point
+                    .into_iter()
+                    .map(|(z, log_height)| {
+                        (
+                            z,
+                            batch_multiplicative_inverse(
+                                &subgroup[..(1 << log_height)]
+                                    .into_iter()
+                                    .map(|&x| FC::Challenge::from_base(x) - z)
+                                    .collect_vec(),
+                            ),
+                        )
+                    })
+                    .collect()
+            });
+
         let mut all_opened_values: OpenedValues<FC::Challenge> = vec![];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
@@ -172,30 +215,10 @@ where
                     .get_or_insert_with(|| vec![FC::Challenge::zero(); mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
-                let mut subgroup = cyclic_subgroup_coset_known_order(
-                    Val::two_adic_generator(log_height),
-                    coset_shift,
-                    mat.height(),
-                )
-                .collect_vec();
-                reverse_slice_index_bits(&mut subgroup);
-
-                let inv_denoms = info_span!("batch invert denominators").in_scope(|| {
-                    let denoms = points_for_mat
-                        .iter()
-                        .flat_map(|&z| {
-                            subgroup
-                                .iter()
-                                .map(move |&x| FC::Challenge::from_base(x) - z)
-                        })
-                        .collect_vec();
-                    RowMajorMatrix::new(batch_multiplicative_inverse(&denoms), mat.height())
-                });
-
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                for (&point, inv_denoms) in izip!(points_for_mat, inv_denoms.rows()) {
+                for &point in points_for_mat {
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
-                    let values = info_span!("compute opened values with Lagrange interpolation")
+                    let ys = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
                             let (low_coset, _) =
                                 mat.split_rows(mat.height() >> self.fri.log_blowup());
@@ -213,26 +236,31 @@ where
                         mat.width(),
                     );
 
+                    let alpha_pows_times_neg_y = izip!(alpha_pows, &ys)
+                        .map(|(&alpha_pow, &y)| alpha_pow * -y)
+                        .collect_vec();
+
                     info_span!("reduce openings").in_scope(|| {
                         // for each row
                         for (row, reduced_opening, &inv_denom) in izip!(
                             mat.rows(),
                             reduced_opening_for_log_height.iter_mut(),
-                            inv_denoms,
+                            inv_denoms.get(&point).unwrap()
                         ) {
-                            // for each column
-                            for (&p_at_x, &p_at_point, &alpha_pow) in
-                                izip!(row, &values, alpha_pows)
-                            {
-                                *reduced_opening += alpha_pow
-                                    * /* p(X) - p(z) */ (FC::Challenge::from_base(p_at_x) - p_at_point)
-                                    * /* 1/(X - z)  */ inv_denom;
-                            }
+                            let row_sum: FC::Challenge =
+                                izip!(row, alpha_pows, &alpha_pows_times_neg_y)
+                                    // .map(|(&p_at_x, &y, &alpha_pow)| alpha_pow * (-y + p_at_x))
+                                    .map(|(&p_at_x, &alpha_pow, &alpha_pow_times_neg_y)| {
+                                        // Hot loop is just (ext+ext) and (ext*base).
+                                        alpha_pow_times_neg_y + alpha_pow * p_at_x
+                                    })
+                                    .sum();
+                            *reduced_opening += inv_denom * row_sum;
                         }
                     });
 
                     num_reduced[log_height] += mat.width();
-                    opened_values_for_mat.push(values);
+                    opened_values_for_mat.push(ys);
                 }
             }
         }
