@@ -233,6 +233,13 @@ impl<'a, T> RowMajorMatrixView<'a, T> {
         self.values.chunks_exact(self.width)
     }
 
+    pub fn par_rows(&self) -> impl IndexedParallelIterator<Item = &[T]>
+    where
+        T: Sync,
+    {
+        self.values.par_chunks_exact(self.width)
+    }
+
     pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
         let (upper_values, lower_values) = self.values.split_at(r * self.width);
         let upper = RowMajorMatrixView {
