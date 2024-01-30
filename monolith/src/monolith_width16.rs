@@ -12,7 +12,7 @@ use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::monolith_mds_u64::MonolithMdsMatrixMersenne31Width16;
+use crate::monolith_mds_width16::MonolithMdsMatrixM31Width16;
 use crate::util::get_random_u32;
 
 pub(crate) fn reduce64(x: &mut u64) {
@@ -27,17 +27,17 @@ pub(crate) fn reduce64(x: &mut u64) {
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
-pub struct MonolithMersenne31Width16<const NUM_FULL_ROUNDS: usize> {
+pub struct MonolithM31Width16<const NUM_FULL_ROUNDS: usize> {
     pub round_constants: [[u64; 16]; NUM_FULL_ROUNDS],
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
-    pub mds: MonolithMdsMatrixMersenne31Width16,
+    pub mds: MonolithMdsMatrixM31Width16,
 }
 
-impl<const NUM_FULL_ROUNDS: usize> MonolithMersenne31Width16<NUM_FULL_ROUNDS> {
+impl<const NUM_FULL_ROUNDS: usize> MonolithM31Width16<NUM_FULL_ROUNDS> {
     pub const NUM_BARS: usize = 8;
 
-    pub fn new(mds: MonolithMdsMatrixMersenne31Width16) -> Self {
+    pub fn new(mds: MonolithMdsMatrixM31Width16) -> Self {
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
@@ -188,12 +188,12 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
 
-    use crate::{MonolithMdsMatrixMersenne31Width16, MonolithMersenne31Width16};
+    use crate::{MonolithMdsMatrixM31Width16, MonolithM31Width16};
 
     #[test]
     fn test_monolith_31_u64() {
-        let mds = MonolithMdsMatrixMersenne31Width16;
-        let monolith: MonolithMersenne31Width16<5> = MonolithMersenne31Width16::new(mds);
+        let mds = MonolithMdsMatrixM31Width16;
+        let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
 
         let mut input: [Mersenne31; 16] = [Mersenne31::zero(); 16];
         for (i, inp) in input.iter_mut().enumerate() {

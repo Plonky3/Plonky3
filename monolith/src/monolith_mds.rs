@@ -2,7 +2,6 @@
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
 use p3_field::PrimeField32;
-use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
@@ -12,32 +11,20 @@ use sha3::{Shake128, Shake128Reader};
 use crate::util::get_random_u32;
 
 #[derive(Clone)]
-pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
-
-const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
-    61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244, 7454,
-    33823, 28750, 1108,
-];
+pub struct MonolithMdsMatrixM31<const NUM_ROUNDS: usize>;
 
 impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+    for MonolithMdsMatrixM31<NUM_ROUNDS>
 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
-        if WIDTH == 16 {
-            let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
-                .try_into()
-                .unwrap();
-            apply_circulant(&matrix, input)
-        } else {
-            let mut shake = Shake128::default();
-            shake.update("Monolith".as_bytes());
-            shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
-            shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
-            shake.update(&[16, 15]);
-            shake.update("MDS".as_bytes());
-            let mut shake_finalized = shake.finalize_xof();
-            apply_cauchy_mds_matrix(&mut shake_finalized, input)
-        }
+        let mut shake = Shake128::default();
+        shake.update("Monolith".as_bytes());
+        shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
+        shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
+        shake.update(&[16, 15]);
+        shake.update("MDS".as_bytes());
+        let mut shake_finalized = shake.finalize_xof();
+        apply_cauchy_mds_matrix(&mut shake_finalized, input)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; WIDTH]) {
@@ -46,7 +33,7 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
 }
 
 impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+    for MonolithMdsMatrixM31<NUM_ROUNDS>
 {
 }
 

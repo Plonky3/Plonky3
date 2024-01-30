@@ -3,7 +3,7 @@ use p3_field::AbstractField;
 use p3_mersenne_31::Mersenne31;
 use p3_monolith::{MonolithMdsMatrixMersenne31Width16, MonolithMersenne31Width16};
 
-fn permute_u64_benchmark(c: &mut Criterion) {
+fn permute_width16_benchmark(c: &mut Criterion) {
     let mds = MonolithMdsMatrixMersenne31Width16;
     let monolith: MonolithMersenne31Width16<5> = MonolithMersenne31Width16::new(mds);
 
@@ -12,10 +12,10 @@ fn permute_u64_benchmark(c: &mut Criterion) {
         *inp = Mersenne31::from_canonical_usize(i);
     }
 
-    c.bench_function("monolith permutation u64", |b| {
+    c.bench_function("monolith permutation (optimized width=16)", |b| {
         b.iter(|| monolith.permutation(&mut input))
     });
 }
 
-criterion_group!(benches, permute_u64_benchmark);
+criterion_group!(benches, permute_width16_benchmark);
 criterion_main!(benches);

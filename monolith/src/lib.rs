@@ -6,11 +6,11 @@ extern crate alloc;
 
 mod monolith;
 mod monolith_mds;
-mod monolith_mds_u64;
-mod monolith_u64;
+mod monolith_mds_width16;
+mod monolith_width16;
 mod util;
 
-pub use monolith::MonolithMersenne31;
-pub use monolith_mds::MonolithMdsMatrixMersenne31;
-pub use monolith_mds_u64::MonolithMdsMatrixMersenne31Width16;
-pub use monolith_u64::MonolithMersenne31Width16;
+pub use monolith::MonolithM31;
+pub use monolith_mds::MonolithMdsMatrixM31;
+pub use monolith_mds_width16::MonolithMdsMatrixM31Width16;
+pub use monolith_width16::MonolithM31Width16;

@@ -4,12 +4,12 @@
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::monolith_u64::reduce64;
+use crate::monolith_width16::reduce64;
 
 #[derive(Clone)]
-pub struct MonolithMdsMatrixMersenne31Width16;
+pub struct MonolithMdsMatrixM31Width16;
 
-const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
+const MATRIX_CIRC_MDS_16_M31_MONOLITH: [u64; 16] = [
     61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244, 7454,
     33823, 28750, 1108,
 ];
@@ -18,7 +18,7 @@ fn dot_product<const N: usize>(u: &[u64; N], v: &[u64; N]) -> u64 {
     u.iter().zip(v).map(|(x, y)| x * y).sum()
 }
 
-fn apply_circulant_u64<const N: usize>(circ_matrix: &[u64; N], input: [u64; N]) -> [u64; N] {
+fn apply_circulant_width16<const N: usize>(circ_matrix: &[u64; N], input: [u64; N]) -> [u64; N] {
     let mut matrix = *circ_matrix;
 
     let mut output = [0; N];
@@ -30,12 +30,12 @@ fn apply_circulant_u64<const N: usize>(circ_matrix: &[u64; N], input: [u64; N]) 
     output
 }
 
-impl Permutation<[u64; 16]> for MonolithMdsMatrixMersenne31Width16 {
+impl Permutation<[u64; 16]> for MonolithMdsMatrixM31Width16 {
     fn permute(&self, input: [u64; 16]) -> [u64; 16] {
-        let matrix: [u64; 16] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
+        let matrix: [u64; 16] = MATRIX_CIRC_MDS_16_M31_MONOLITH[..]
             .try_into()
             .unwrap();
-        let mut output = apply_circulant_u64(&matrix, input);
+        let mut output = apply_circulant_width16(&matrix, input);
 
         for el in output.iter_mut() {
             reduce64(el);
@@ -49,4 +49,4 @@ impl Permutation<[u64; 16]> for MonolithMdsMatrixMersenne31Width16 {
     }
 }
 
-impl MdsPermutation<u64, 16> for MonolithMdsMatrixMersenne31Width16 {}
+impl MdsPermutation<u64, 16> for MonolithMdsMatrixM31Width16 {}

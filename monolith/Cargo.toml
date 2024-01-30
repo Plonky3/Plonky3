@@ -21,5 +21,5 @@ name = "permute"
 harness = false
 
 [[bench]]
-name = "permute_u64"
+name = "permute_width16"
 harness = false

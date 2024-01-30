@@ -17,7 +17,7 @@ use crate::util::get_random_u32;
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
-pub struct MonolithMersenne31<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
+pub struct MonolithM31<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,
 {
@@ -28,7 +28,7 @@ where
 }
 
 impl<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
-    MonolithMersenne31<Mds, WIDTH, NUM_FULL_ROUNDS>
+    MonolithM31<Mds, WIDTH, NUM_FULL_ROUNDS>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,
 {
@@ -177,13 +177,13 @@ mod tests {
     use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
 
-    use crate::monolith::MonolithMersenne31;
-    use crate::monolith_mds::MonolithMdsMatrixMersenne31;
+    use crate::monolith::MonolithM31;
+    use crate::monolith_mds::MonolithMdsMatrixM31;
 
     #[test]
     fn test_monolith_31() {
-        let mds = MonolithMdsMatrixMersenne31::<6>;
-        let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
+        let mds = MonolithMdsMatrixM31::<6>;
+        let monolith: MonolithM31<_, 16, 5> = MonolithM31::new(mds);
 
         let mut input: [Mersenne31; 16] = [Mersenne31::zero(); 16];
         for (i, inp) in input.iter_mut().enumerate() {
