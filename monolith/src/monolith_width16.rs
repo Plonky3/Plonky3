@@ -133,15 +133,17 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithM31Width16<NUM_FULL_ROUNDS> {
         }
     }
 
-    pub fn bar(&self, el: u64) -> u64 {
-        let val: &mut u32 = &mut (el % Mersenne31::ORDER_U64).try_into().unwrap();
+    pub fn bar(&self, mut el: u64) -> u64 {
+        // reduce64(&mut el);
+        el = el % Mersenne31::ORDER_U64;
+        let val: &mut u32 = &mut el.try_into().unwrap();
 
         unsafe {
             // get_unchecked here is safe because lookup table 1 contains 2^16 elements
             let low = *self.lookup1.get_unchecked(*val as u16 as usize);
 
             // get_unchecked here is safe because lookup table 2 contains 2^15 elements,
-            // and el >> 16 < 2^15 (since el < Mersenne31::ORDER_U32 < 2^31)
+            // and val >> 16 < 2^15 (since val < Mersenne31::ORDER_U32 < 2^31)
             let high = *self.lookup2.get_unchecked((*val >> 16) as u16 as usize);
             *val = (high as u32) << 16 | low as u32
         }
