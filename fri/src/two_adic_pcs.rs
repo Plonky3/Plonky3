@@ -217,6 +217,9 @@ where
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
                 for &point in points_for_mat {
+                    let _guard =
+                        info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
+
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
                     let ys = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
@@ -229,33 +232,30 @@ where
                             )
                         });
 
-                    let alpha_pows = get_cached_powers(
-                        alpha,
-                        &mut cached_alpha_pows,
-                        num_reduced[log_height],
-                        mat.width(),
-                    );
+                    let alpha_pows = get_cached_powers(alpha, &mut cached_alpha_pows, mat.width());
+                    let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
 
-                    let alpha_pows_times_neg_y = izip!(alpha_pows, &ys)
+                    let sum_alpha_pows_times_neg_y: FC::Challenge = izip!(alpha_pows, &ys)
                         .map(|(&alpha_pow, &y)| alpha_pow * -y)
-                        .collect_vec();
+                        .sum();
 
-                    info_span!("reduce openings").in_scope(|| {
-                        // for each row
+                    info_span!("reduce rows").in_scope(|| {
                         for (row, reduced_opening, &inv_denom) in izip!(
                             mat.rows(),
                             reduced_opening_for_log_height.iter_mut(),
-                            inv_denoms.get(&point).unwrap()
+                            // This might be longer, but zip will truncate to smaller subgroup
+                            // (which is ok because it's bitrev)
+                            inv_denoms.get(&point).unwrap(),
                         ) {
-                            let row_sum: FC::Challenge =
-                                izip!(row, alpha_pows, &alpha_pows_times_neg_y)
-                                    // .map(|(&p_at_x, &y, &alpha_pow)| alpha_pow * (-y + p_at_x))
-                                    .map(|(&p_at_x, &alpha_pow, &alpha_pow_times_neg_y)| {
-                                        // Hot loop is just (ext+ext) and (ext*base).
-                                        alpha_pow_times_neg_y + alpha_pow * p_at_x
-                                    })
-                                    .sum();
-                            *reduced_opening += inv_denom * row_sum;
+                            let row_sum: FC::Challenge = izip!(row, alpha_pows)
+                                .map(|(&p_at_x, &alpha_pow)| {
+                                    // Hot loop is just sum of (ext*base).
+                                    alpha_pow * p_at_x
+                                })
+                                .sum();
+                            *reduced_opening += inv_denom
+                                * alpha_pow_offset
+                                * (sum_alpha_pows_times_neg_y + row_sum);
                         }
                     });
 
@@ -305,14 +305,9 @@ where
     }
 }
 
-fn get_cached_powers<'a, F: Field>(
-    power: F,
-    cache: &'a mut Vec<F>,
-    start: usize,
-    count: usize,
-) -> &'a [F] {
-    while cache.len() < start + count {
+fn get_cached_powers<'a, F: Field>(power: F, cache: &'a mut Vec<F>, count: usize) -> &'a [F] {
+    while cache.len() < count {
         cache.push(*cache.last().unwrap() * power);
     }
-    &cache[start..start + count]
+    &cache[..count]
 }
