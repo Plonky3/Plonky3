@@ -88,7 +88,7 @@ where
     fn commit_shifted_batches(
         &self,
         polynomials: Vec<In>,
-        coset_shift: Val,
+        coset_shifts: &[Val],
     ) -> (Self::Commitment, Self::ProverData);
 
     fn commit_shifted_batch(
@@ -96,7 +96,7 @@ where
         polynomials: In,
         coset_shift: Val,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(vec![polynomials], coset_shift)
+        self.commit_shifted_batches(vec![polynomials], &[coset_shift])
     }
 }
 
