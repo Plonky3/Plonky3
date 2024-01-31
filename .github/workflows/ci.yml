@@ -13,34 +13,43 @@ jobs:
   build_and_test:
     name: Build and Test
     runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    env:
+      CARGO_INCREMENTAL: 1
 
     steps:
     - uses: actions/checkout@v4
+
     - uses: dtolnay/rust-toolchain@stable
-    - name: Build
-      run: cargo build --verbose --all-targets
-    - name: Test
-      run: cargo test --verbose
-
-  lints:
-    name: Formatting and Clippy
-    runs-on: ubuntu-latest
-    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
+      with:
           components: clippy
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
+      id: rs-stable
 
-      - name: Run cargo fmt
-        run: cargo +nightly fmt --all -- --check 
-        env:
-          CARGO_INCREMENTAL: 1
+    - uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rustfmt
 
-      - name: Run cargo clippy
-        run: cargo +stable clippy --all-features --all-targets -- -D warnings
-        env:
-          CARGO_INCREMENTAL: 1
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Build
+      run: cargo +stable build --verbose --all-targets
+
+    - name: Check with parallel
+      run: cargo +stable check --verbose --all-targets --features parallel
+
+    - name: Test
+      run: cargo +stable test --verbose
+
+    - name: Clippy
+      run: cargo +stable clippy --all-targets -- -D warnings
+
+    - name: Format
+      run: cargo +nightly fmt --all -- --check 
