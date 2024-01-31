@@ -1,5 +1,4 @@
 use core::marker::PhantomData;
-use std::collections::HashMap;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -14,7 +13,7 @@ use p3_field::{
 use p3_interpolation::interpolate_coset;
 use p3_matrix::{
     bitrev::{BitReversableMatrix, BitReversedMatrixView},
-    dense::{RowMajorMatrix, RowMajorMatrixView},
+    dense::RowMajorMatrixView,
     Dimensions, Matrix, MatrixRows,
 };
 use p3_maybe_rayon::prelude::*;
@@ -210,42 +209,31 @@ where
 
         let alpha_reducer = PowersReducer::<Val, FC::Challenge>::new(alpha, max_width);
 
-        /*
-        let alpha_pows: Vec<FC::Challenge> = alpha
-            .powers()
-            .take(max_width.next_multiple_of(Val::Packing::WIDTH))
-            .collect();
-
-        let alpha_pows_transposed_packed: Vec<Vec<Val::Packing>> = (0..FC::Challenge::D)
-            .map(|i| {
-                Val::Packing::pack_slice(
-                    &alpha_pows
-                        .iter()
-                        .map(|a| a.as_base_slice()[i])
-                        .collect_vec(),
-                )
-                .to_vec()
-            })
-            .collect();
-        */
-
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
-        let inv_denoms: HashMap<FC::Challenge, Vec<FC::Challenge>> =
+        // No std, so no HashMap.
+        let inv_denoms: Vec<(FC::Challenge, Vec<FC::Challenge>)> =
             info_span!("invert denominators").in_scope(|| {
-                let mut max_log_height_for_point = HashMap::<FC::Challenge, usize>::new();
+                let mut max_log_height_for_point: Vec<(FC::Challenge, usize)> = vec![];
                 for (mats, points) in mats_and_points {
                     for (mat, points_for_mat) in izip!(mats, points) {
                         let log_height = log2_strict_usize(mat.height());
-                        for z in points_for_mat {
-                            max_log_height_for_point
-                                .entry(*z)
-                                .and_modify(|lh| *lh = core::cmp::max(*lh, log_height))
-                                .or_insert(log_height);
+                        for &z in points_for_mat {
+                            if let Some((_, lh)) =
+                                max_log_height_for_point.iter_mut().find(|(zz, _)| *zz == z)
+                            {
+                                *lh = core::cmp::max(*lh, log_height);
+                            } else {
+                                max_log_height_for_point.push((z, log_height));
+                            }
                         }
                     }
                 }
-                let max_log_height = *max_log_height_for_point.values().max().unwrap();
+                let max_log_height = *max_log_height_for_point
+                    .iter()
+                    .map(|(_, lh)| lh)
+                    .max()
+                    .unwrap();
                 // Compute the largest subgroup we will use, in bitrev order.
                 let mut subgroup = cyclic_subgroup_coset_known_order(
                     Val::two_adic_generator(max_log_height),
@@ -303,13 +291,16 @@ where
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
 
+                    let inv_denoms_for_point: &[FC::Challenge] =
+                        &inv_denoms.iter().find(|(z, _)| *z == point).unwrap().1;
+
                     info_span!("reduce rows").in_scope(|| {
                         reduced_opening_for_log_height
                             .par_iter_mut()
                             .zip_eq(mat.par_rows())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
-                            .zip(inv_denoms.get(&point).unwrap())
+                            .zip(inv_denoms_for_point)
                             .for_each(|((reduced_opening, row), &inv_denom)| {
                                 let row_sum = alpha_reducer.reduce_base(row);
                                 *reduced_opening += inv_denom
@@ -353,11 +344,11 @@ where
 
     fn verify_multi_batches(
         &self,
-        commits_and_points: &[(Self::Commitment, &[Vec<FC::Challenge>])],
-        dims: &[Vec<Dimensions>],
-        values: OpenedValues<FC::Challenge>,
-        proof: &Self::Proof,
-        challenger: &mut FC::Challenger,
+        _commits_and_points: &[(Self::Commitment, &[Vec<FC::Challenge>])],
+        _dims: &[Vec<Dimensions>],
+        _values: OpenedValues<FC::Challenge>,
+        _proof: &Self::Proof,
+        _challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
         // todo!()
         Ok(())
