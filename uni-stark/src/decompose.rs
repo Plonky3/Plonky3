@@ -50,7 +50,7 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
         return vec![poly];
     }
 
-    fft_decompose(poly, log_chunks)
+    fft_decompose(poly, shift, log_chunks)
 }
 
 mod dit_decompose {
@@ -80,7 +80,7 @@ mod dit_decompose {
         let g = F::two_adic_generator(log2_strict_usize(n));
     
         for (i, item) in poly.iter_mut().enumerate() {
-            *item = *item * shift.powers(&g.exp_usize(i));
+            *item = *item * shift.pow(&g.exp_usize(i));
         }
     }    
     
