@@ -1,7 +1,7 @@
-use core::marker::PhantomData;
-
 use alloc::vec;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
+
 use itertools::{izip, Itertools};
 use p3_challenger::{CanSample, FieldChallenger};
 use p3_commit::{DirectMmcs, OpenedValues, Pcs, UnivariatePcs, UnivariatePcsWithLde};
@@ -11,23 +11,17 @@ use p3_field::{
     Field, PackedField, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::{
-    bitrev::{BitReversableMatrix, BitReversedMatrixView},
-    dense::RowMajorMatrixView,
-    Dimensions, Matrix, MatrixRows,
-};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
+use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_maybe_rayon::prelude::*;
-use p3_util::{
-    linear_map::LinearMap, log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt,
-};
+use p3_util::linear_map::LinearMap;
+use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
-use crate::{
-    prover,
-    verifier::{self, VerificationErrorForFriConfig},
-    FriConfig, FriProof,
-};
+use crate::verifier::{self, VerificationErrorForFriConfig};
+use crate::{prover, FriConfig, FriProof};
 
 pub struct TwoAdicFriPcs<FC, Val, Dft, M> {
     fri: FC,
@@ -474,7 +468,8 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
 mod tests {
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{extension::BinomialExtensionField, AbstractExtensionField};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::AbstractExtensionField;
     use rand::{thread_rng, Rng};
 
     use super::*;
