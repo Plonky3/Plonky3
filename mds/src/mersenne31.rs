@@ -7,12 +7,8 @@
 use p3_mersenne_31::{Mersenne31, Mersenne31NonCanonical};
 use p3_symmetric::Permutation;
 
+use crate::karatsuba_convolution::{Convolve, SmallConvolvePrimeField32};
 use crate::util::first_row_to_first_col;
-// apply_circulant_8_sml, apply_circulant_8_karat, apply_circulant_karat_generic_i64
-use crate::karatsuba_convolution::{
-    apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
-    apply_circulant_64_karat, apply_circulant_8_karat,
-};
 use crate::MdsPermutation;
 
 #[derive(Clone, Default)]
@@ -25,10 +21,10 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
         // apply_circulant_8_sml(input)
-        apply_circulant_8_karat::<Mersenne31, Mersenne31NonCanonical>(
-            input,
-            MATRIX_CIRC_MDS_8_SML_COL,
-        )
+        let input = input.map(|x| x.value as i64);
+        let mut output = [i64::default(); 8];
+        SmallConvolvePrimeField32::conv8(input.into(), MATRIX_CIRC_MDS_8_SML_COL, &mut output);
+        output.map(Mersenne31::from_wrapped_i64)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 8]) {

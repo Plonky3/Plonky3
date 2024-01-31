@@ -372,6 +372,28 @@ impl Div for Mersenne31 {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct MdsMatrixMersenne31;
+
+const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
+
+impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
+    fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        // apply_circulant_8_sml(input)
+        let input = input.map(|x| x.value as i64);
+        let mut output = [i64::default(); 8];
+        SmallConvolvePrimeField32::conv8(input.into(), MATRIX_CIRC_MDS_8_SML_COL, &mut output);
+        output.map(Mersenne31::from_wrapped_i64)
+    }
+
+    fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
+        *input = self.permute(*input);
+    }
+}
+impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
+
 #[cfg(test)]
 mod tests {
     use p3_field::{AbstractField, Field, PrimeField32};
