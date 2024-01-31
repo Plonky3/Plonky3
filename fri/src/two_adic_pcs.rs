@@ -9,7 +9,7 @@ use p3_commit::{DirectMmcs, OpenedValues, Pcs, UnivariatePcs, UnivariatePcsWithL
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractExtensionField,
-    AbstractField, ExtensionField, Field, TwoAdicField,
+    AbstractField, ExtensionField, Field, PackedField, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::{
@@ -208,7 +208,26 @@ where
             .max()
             .unwrap();
 
-        let alpha_pows: Vec<FC::Challenge> = alpha.powers().take(max_width).collect();
+        let alpha_reducer = PowersReducer::<Val, FC::Challenge>::new(alpha, max_width);
+
+        /*
+        let alpha_pows: Vec<FC::Challenge> = alpha
+            .powers()
+            .take(max_width.next_multiple_of(Val::Packing::WIDTH))
+            .collect();
+
+        let alpha_pows_transposed_packed: Vec<Vec<Val::Packing>> = (0..FC::Challenge::D)
+            .map(|i| {
+                Val::Packing::pack_slice(
+                    &alpha_pows
+                        .iter()
+                        .map(|a| a.as_base_slice()[i])
+                        .collect_vec(),
+                )
+                .to_vec()
+            })
+            .collect();
+        */
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
@@ -282,47 +301,21 @@ where
                         });
 
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
-
-                    let sum_alpha_pows_times_neg_y: FC::Challenge = izip!(&alpha_pows, &ys)
-                        .map(|(&alpha_pow, &y)| alpha_pow * -y)
-                        .sum();
+                    let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
 
                     info_span!("reduce rows").in_scope(|| {
                         reduced_opening_for_log_height
                             .par_iter_mut()
                             .zip_eq(mat.par_rows())
-                            .zip(inv_denoms.get(&point).unwrap())
-                            .for_each(|((reduced_opening, row), &inv_denom)| {
-                                let row_sum: FC::Challenge = izip!(row, &alpha_pows)
-                                    .map(|(&p_at_x, &alpha_pow)| {
-                                        // Hot loop is just sum of (ext*base).
-                                        alpha_pow * p_at_x
-                                    })
-                                    .sum();
-                                *reduced_opening += inv_denom
-                                    * alpha_pow_offset
-                                    * (sum_alpha_pows_times_neg_y + row_sum);
-                            });
-
-                        /*
-                        for (row, reduced_opening, &inv_denom) in izip!(
-                            mat.rows(),
-                            reduced_opening_for_log_height.iter_mut(),
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
-                            inv_denoms.get(&point).unwrap(),
-                        ) {
-                            let row_sum: FC::Challenge = izip!(row, &alpha_pows)
-                                .map(|(&p_at_x, &alpha_pow)| {
-                                    // Hot loop is just sum of (ext*base).
-                                    alpha_pow * p_at_x
-                                })
-                                .sum();
-                            *reduced_opening += inv_denom
-                                * alpha_pow_offset
-                                * (sum_alpha_pows_times_neg_y + row_sum);
-                        }
-                        */
+                            .zip(inv_denoms.get(&point).unwrap())
+                            .for_each(|((reduced_opening, row), &inv_denom)| {
+                                let row_sum = alpha_reducer.reduce_base(row);
+                                *reduced_opening += inv_denom
+                                    * alpha_pow_offset
+                                    * (row_sum - sum_alpha_pows_times_y);
+                            });
                     });
 
                     num_reduced[log_height] += mat.width();
@@ -368,5 +361,128 @@ where
     ) -> Result<(), Self::Error> {
         // todo!()
         Ok(())
+    }
+}
+
+pub struct PowersReducer<F: Field, EF> {
+    powers: Vec<EF>,
+    // If EF::D = 2 and powers is [01 23 45 67],
+    // this holds [[02 46] [13 57]]
+    transposed_packed: Vec<Vec<F::Packing>>,
+}
+
+impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
+    pub fn new(base: EF, max_width: usize) -> Self {
+        let powers: Vec<EF> = base
+            .powers()
+            .take(max_width.next_multiple_of(F::Packing::WIDTH))
+            .collect();
+
+        let transposed_packed: Vec<Vec<F::Packing>> = (0..EF::D)
+            .map(|i| {
+                F::Packing::pack_slice(&powers.iter().map(|a| a.as_base_slice()[i]).collect_vec())
+                    .to_vec()
+            })
+            .collect();
+
+        Self {
+            powers,
+            transposed_packed,
+        }
+    }
+
+    // Compute sum_i base^i * x_i
+    fn reduce_ext(&self, xs: &[EF]) -> EF {
+        self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()
+    }
+
+    // Same as `self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()`
+    // For some reason, this is 2x faster than naive in benches but has
+    // the exact same performance in the actual implementation (for BabyBear).
+    // More investigation is needed.
+    fn reduce_base(&self, xs: &[F]) -> EF {
+        let (xs_packed, xs_sfx) = F::Packing::pack_slice_with_suffix(xs);
+        let packed_sum = EF::from_base_fn(|i| {
+            // slightly faster than .zip().sum()
+            let mut s = F::Packing::zero();
+            let tp = &self.transposed_packed[i];
+            for j in 0..xs_packed.len() {
+                s += xs_packed[j] * tp[j];
+            }
+            s.as_slice().iter().copied().sum()
+        });
+        let sfx_sum = xs_sfx
+            .into_iter()
+            .zip(&self.powers[(xs_packed.len() * F::Packing::WIDTH)..])
+            .map(|(&x, &pow)| pow * x)
+            .sum::<EF>();
+        packed_sum + sfx_sum
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::{thread_rng, Rng};
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    #[test]
+    fn test_powers_reducer() {
+        let mut rng = thread_rng();
+        let alpha: EF = rng.gen();
+        let n = 1000;
+        let sizes = [5, 110, 512, 999, 1000];
+        let r = PowersReducer::<F, EF>::new(alpha, n);
+
+        // check reduce_ext
+        for size in sizes {
+            let xs: Vec<EF> = (0..size).map(|_| rng.gen()).collect();
+            assert_eq!(
+                r.reduce_ext(&xs),
+                xs.iter()
+                    .enumerate()
+                    .map(|(i, &x)| alpha.exp_u64(i as u64) * x)
+                    .sum()
+            );
+        }
+
+        // check reduce_base
+        for size in sizes {
+            let xs: Vec<F> = (0..size).map(|_| rng.gen()).collect();
+            assert_eq!(
+                r.reduce_base(&xs),
+                xs.iter()
+                    .enumerate()
+                    .map(|(i, &x)| alpha.exp_u64(i as u64) * EF::from_base(x))
+                    .sum()
+            );
+        }
+
+        // bench reduce_base
+        /*
+        use core::hint::black_box;
+        use std::time::Instant;
+        let samples = 1_000;
+        for i in 0..5 {
+            let xs: Vec<F> = (0..999).map(|_| rng.gen()).collect();
+            let t0 = Instant::now();
+            for _ in 0..samples {
+                black_box(r.reduce_base_slow(black_box(&xs)));
+            }
+            let dt_slow = t0.elapsed();
+            let t0 = Instant::now();
+            for _ in 0..samples {
+                black_box(r.reduce_base(black_box(&xs)));
+            }
+            let dt_fast = t0.elapsed();
+            println!("sample {i}: slow: {dt_slow:?} fast: {dt_fast:?}");
+        }
+        */
     }
 }

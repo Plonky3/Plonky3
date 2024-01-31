@@ -5,6 +5,7 @@ use p3_commit::{DirectMmcs, ExtensionMmcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
+use p3_fri::two_adic_pcs::PowersReducer;
 use p3_fri::{prover, verifier, FriConfigImpl};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -14,7 +15,7 @@ use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
-use rand::{Rng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 type Val = BabyBear;
@@ -136,3 +137,15 @@ fn test_fri_ldt() {
         do_test_fri_ldt(&mut rng);
     }
 }
+
+// You can uncomment this for use with `cargo-show-asm` to investigate `reduce_base`.
+/*
+#[test]
+fn force_monomorphize() {
+    let mut rng = thread_rng();
+    let alpha: Challenge = rng.gen();
+    let r = PowersReducer::new(alpha, 1024);
+    let xs: Vec<Val> = (0..1024).map(|_| rng.gen()).collect();
+    core::hint::black_box(r.reduce_base(&xs));
+}
+*/
