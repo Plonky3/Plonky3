@@ -221,7 +221,9 @@ mod tests {
 
         (0..WIDTH / 2).for_each(|element| {
             assert_eq!(
-                duplex_challenger.sample(),
+                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                    &mut duplex_challenger
+                ),
                 F::from_canonical_u8(element as u8)
             );
             assert_eq!(
@@ -232,7 +234,12 @@ mod tests {
         });
 
         (0..WIDTH / 2).for_each(|i| {
-            assert_eq!(duplex_challenger.sample(), F::from_canonical_u8(0));
+            assert_eq!(
+                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                    &mut duplex_challenger
+                ),
+                F::from_canonical_u8(0)
+            );
             assert_eq!(duplex_challenger.input_buffer, vec![]);
             assert_eq!(
                 duplex_challenger.output_buffer,

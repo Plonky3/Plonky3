@@ -20,26 +20,10 @@ pub struct FriProof<FC: FriConfig> {
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct QueryProof<FC: FriConfig> {
-    /// For each input commitment, this contains openings of each matrix at the queried location,
-    /// along with an opening proof.
-    // pub(crate) input_openings: Vec<InputOpening<FC>>,
-
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
     /// queried location, along with an opening proof.
     pub(crate) commit_phase_openings: Vec<CommitPhaseProofStep<FC>>,
 }
-
-/// Openings of each input codeword at the queried location, along with an opening proof, for a
-/// single commitment round.
-/*
-#[derive(Serialize, Deserialize)]
-pub struct InputOpening<FC: FriConfig> {
-    /// The opening of each input codeword at the queried location.
-    pub(crate) opened_values: Vec<Vec<FC::Val>>,
-
-    pub(crate) opening_proof: <FC::InputMmcs as Mmcs<FC::Val>>::Proof,
-}
-*/
 
 #[derive(Serialize, Deserialize)]
 pub struct CommitPhaseProofStep<FC: FriConfig> {

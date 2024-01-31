@@ -1,11 +1,10 @@
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_challenger::{CanSample, CanSampleBits, DuplexChallenger, FieldChallenger};
-use p3_commit::{DirectMmcs, ExtensionMmcs};
+use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
+use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
-use p3_fri::two_adic_pcs::PowersReducer;
 use p3_fri::{prover, verifier, FriConfigImpl};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -15,7 +14,7 @@ use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 type Val = BabyBear;
@@ -30,19 +29,18 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16>;
 type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
 
-fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, ValMmcs, MyFriConfig) {
+fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
     let mds = MyMds::default();
     let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_config = MyFriConfig::new(1, 10, 8, challenge_mmcs);
-    (perm, val_mmcs, fri_config)
+    (perm, fri_config)
 }
 
 fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
-    let (perm, val_mmcs, fc) = get_ldt_for_testing(rng);
+    let (perm, fc) = get_ldt_for_testing(rng);
     let dft = Radix2Dit::default();
 
     let shift = Val::generator();
@@ -55,8 +53,6 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             lde
         })
         .collect();
-    let dims = ldes.iter().map(|m| m.dimensions()).collect_vec();
-    let (comm, data) = val_mmcs.commit(ldes.clone());
 
     let (proof, reduced_openings, p_sample) = {
         // Prover world
@@ -109,26 +105,13 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         (proof, reduced_openings, chal.sample_bits(8))
     };
 
-    /*
-    let proof = ldt.prove(&[val_mmcs.clone()], &[&data], &mut p_challenger);
-    */
-
     let mut v_challenger = Challenger::new(perm);
-    let alpha: Challenge = v_challenger.sample_ext_element();
-    /*
-    let v_idxs = verifier::verify(&fc, &proof, &reduced_openings, &mut v_challenger)
-        .expect("verification failed");
-        */
+    let _alpha: Challenge = v_challenger.sample_ext_element();
     let fri_challenges =
         verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
             .expect("failed verify shape and sample");
     verifier::verify_challenges(&fc, &proof, &fri_challenges, &reduced_openings)
         .expect("failed verify challenges");
-
-    /*
-    ldt.verify(&[val_mmcs], &[dims], &[comm], &proof, &mut v_challenger)
-        .expect("verification failed");
-        */
 
     assert_eq!(
         p_sample,

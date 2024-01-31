@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::mem;
 
+/// O(n) Vec-backed map for keys that only implement Eq.
+/// Only use this for a very small number of keys.
 pub struct LinearMap<K, V>(Vec<(K, V)>);
 
 impl<K, V> Default for LinearMap<K, V> {
