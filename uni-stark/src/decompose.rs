@@ -8,6 +8,8 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
+use self::dit_decompose::fft_decompose;
+
 /// Decompose the quotient polynomial into chunks using a generalization of even-odd decomposition.
 /// Then, arrange the results in a row-major matrix, so that each chunk of the decomposed polynomial
 /// becomes `D` columns of the resulting matrix, where `D` is the field extension degree.
@@ -48,33 +50,82 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
         return vec![poly];
     }
 
-    let n = poly.len();
-    debug_assert!(n > 1);
-    let log_n = log2_strict_usize(n);
-    let half_n = poly.len() / 2;
-    let g_inv = F::two_adic_generator(log_n).inverse();
+    fft_decompose(poly, log_chunks)
+}
 
-    let mut even = Vec::with_capacity(half_n);
-    let mut odd = Vec::with_capacity(half_n);
+mod dit_decompose {
+    use alloc::vec::Vec;
+    use p3_field::TwoAdicField;
+    use p3_util::log2_strict_usize;
 
-    // Note that
-    //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
-    //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 s g^i)
-
-    //     p_e(g^(2i)) = (a + b) / 2
-    //     p_o(g^(2i)) = (a - b) / (2 s g^i)
-    let one_half = F::two().inverse();
-    let (first, second) = poly.split_at(half_n);
-    for (g_inv_power, &a, &b) in izip!(g_inv.shifted_powers(shift.inverse()), first, second) {
-        let sum = a + b;
-        let diff = a - b;
-        even.push(sum * one_half);
-        odd.push(diff * one_half * g_inv_power);
+    pub fn fft_decompose<F: TwoAdicField>(mut poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<Vec<F>> {
+        let n = poly.len();
+        let log_n = log2_strict_usize(n);
+    
+        // Ensure the poly length is a power of 2
+        assert!(n.is_power_of_two());
+    
+        // Apply the shift for coset FFT
+        apply_shift(&mut poly, &shift);
+    
+        // Transform the polynomial using a partial FFT (only up to log_chunks layers)
+        partial_fft(&mut poly, log_n, log_chunks);
+    
+        // Split the transformed polynomial into chunks
+        poly.chunks(1 << log_chunks).map(|chunk| chunk.to_vec()).collect()
     }
-
-    let mut combined = decompose(even, shift.square(), log_chunks - 1);
-    combined.extend(decompose(odd, shift.square(), log_chunks - 1));
-    combined
+    
+    fn apply_shift<F: TwoAdicField>(poly: &mut [F], shift: &F) {
+        let n = poly.len();
+        let g = F::two_adic_generator(log2_strict_usize(n));
+    
+        for (i, item) in poly.iter_mut().enumerate() {
+            *item = *item * shift.powers(&g.exp_usize(i));
+        }
+    }    
+    
+    fn partial_fft<F: TwoAdicField>(poly: &mut [F], log_n: usize, log_chunks: usize) {
+        let n = poly.len();
+        if n <= 1 || log_chunks == 0 {
+            return;
+        }
+    
+        // Bit-reverse the order of the coefficients
+        for i in 0..n {
+            let rev = bit_reverse(i, log_n);
+            if i < rev {
+                poly.swap(i, rev);
+            }
+        }
+    
+        // Perform the butterfly operations only up to log_chunks layers
+        let mut m = 1;
+        for _ in 0..log_chunks {
+            let w_m = F::two_adic_generator(m * 2);
+            let mut k = 0;
+            while k < n {
+                let mut w = F::one();
+                for j in 0..m {
+                    let t = w * poly[k + j + m];
+                    let u = poly[k + j];
+                    poly[k + j] = u + t;
+                    poly[k + j + m] = u - t;
+                    w = w * w_m;
+                }
+                k += m * 2;
+            }
+            m *= 2;
+        }
+    }
+    
+    fn bit_reverse(mut x: usize, log_n: usize) -> usize {
+        let mut result = 0;
+        for _ in 0..log_n {
+            result = (result << 1) | (x & 1);
+            x >>= 1;
+        }
+        result
+    }    
 }
 
 #[cfg(test)]
