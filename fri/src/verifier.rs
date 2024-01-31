@@ -24,12 +24,17 @@ pub type VerificationErrorForFriConfig<FC> = VerificationError<
 
 type VerificationResult<FC, T> = Result<T, VerificationErrorForFriConfig<FC>>;
 
-pub fn verify<FC: FriConfig>(
+#[derive(Debug)]
+pub struct FriChallenges<Challenge> {
+    pub query_indices: Vec<usize>,
+    betas: Vec<Challenge>,
+}
+
+pub fn verify_shape_and_sample_challenges<FC: FriConfig>(
     config: &FC,
     proof: &FriProof<FC>,
-    reduced_openings: &[[FC::Challenge; 32]],
     challenger: &mut FC::Challenger,
-) -> VerificationResult<FC, Vec<usize>> {
+) -> VerificationResult<FC, FriChallenges<FC::Challenge>> {
     let betas: Vec<FC::Challenge> = proof
         .commit_phase_commits
         .iter()
@@ -44,7 +49,7 @@ pub fn verify<FC: FriConfig>(
     }
 
     // Check PoW.
-    if !challenger.check_witness(config.proof_of_work_bits(), proof.pow_witness.clone()) {
+    if !challenger.check_witness(config.proof_of_work_bits(), proof.pow_witness) {
         return Err(VerificationError::InvalidPowWitness);
     }
 
@@ -54,13 +59,30 @@ pub fn verify<FC: FriConfig>(
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
-    for (&index, query_proof, ro) in izip!(&query_indices, &proof.query_proofs, reduced_openings) {
+    Ok(FriChallenges {
+        query_indices,
+        betas,
+    })
+}
+
+pub fn verify_challenges<FC: FriConfig>(
+    config: &FC,
+    proof: &FriProof<FC>,
+    challenges: &FriChallenges<FC::Challenge>,
+    reduced_openings: &[[FC::Challenge; 32]],
+) -> VerificationResult<FC, ()> {
+    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup();
+    for (&index, query_proof, ro) in izip!(
+        &challenges.query_indices,
+        &proof.query_proofs,
+        reduced_openings
+    ) {
         let folded_eval = verify_query(
             config,
             &proof.commit_phase_commits,
             index,
             query_proof,
-            &betas,
+            &challenges.betas,
             ro,
             log_max_height,
         )?;
@@ -70,7 +92,7 @@ pub fn verify<FC: FriConfig>(
         }
     }
 
-    Ok(query_indices)
+    Ok(())
 }
 
 fn verify_query<FC: FriConfig>(

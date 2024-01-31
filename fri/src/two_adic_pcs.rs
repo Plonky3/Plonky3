@@ -17,11 +17,15 @@ use p3_matrix::{
     Dimensions, Matrix, MatrixRows,
 };
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_slice_index_bits, VecExt};
+use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
-use crate::{prover, verifier::VerificationErrorForFriConfig, FriConfig, FriProof};
+use crate::{
+    prover,
+    verifier::{self, VerificationErrorForFriConfig},
+    FriConfig, FriProof,
+};
 
 pub struct TwoAdicFriPcs<FC, Val, Dft, M> {
     fri: FC,
@@ -52,11 +56,11 @@ pub struct TwoAdicFriPcsProof<FC: FriConfig, Val, InputMmcsProof> {
     #[serde(bound = "")]
     pub(crate) fri_proof: FriProof<FC>,
     /// For each query, for each committed batch, query openings for that batch
-    pub(crate) input_openings: Vec<Vec<InputOpening<Val, InputMmcsProof>>>,
+    pub(crate) query_openings: Vec<Vec<BatchOpening<Val, InputMmcsProof>>>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct InputOpening<Val, InputMmcsProof> {
+pub struct BatchOpening<Val, InputMmcsProof> {
     pub(crate) opened_values: Vec<Vec<Val>>,
     pub(crate) opening_proof: InputMmcsProof,
 }
@@ -196,7 +200,7 @@ where
         */
 
         let mats_and_points: Vec<(Vec<_>, &[Vec<FC::Challenge>])> = prover_data_and_points
-            .into_iter()
+            .iter()
             .map(|(data, points)| (self.mmcs.get_matrices(data), *points))
             .collect();
 
@@ -249,7 +253,7 @@ where
                             z,
                             batch_multiplicative_inverse(
                                 &subgroup[..(1 << log_height)]
-                                    .into_iter()
+                                    .iter()
                                     .map(|&x| FC::Challenge::from_base(x) - z)
                                     .collect_vec(),
                             ),
@@ -317,14 +321,14 @@ where
 
         let (fri_proof, query_indices) = prover::prove(&self.fri, &reduced_openings, challenger);
 
-        let input_openings = query_indices
+        let query_openings = query_indices
             .into_iter()
             .map(|index| {
                 prover_data_and_points
                     .iter()
                     .map(|(data, _)| {
                         let (opened_values, opening_proof) = self.mmcs.open_batch(index, data);
-                        InputOpening {
+                        BatchOpening {
                             opened_values,
                             opening_proof,
                         }
@@ -337,20 +341,79 @@ where
             all_opened_values,
             TwoAdicFriPcsProof {
                 fri_proof,
-                input_openings,
+                query_openings,
             },
         )
     }
 
     fn verify_multi_batches(
         &self,
-        _commits_and_points: &[(Self::Commitment, &[Vec<FC::Challenge>])],
-        _dims: &[Vec<Dimensions>],
-        _values: OpenedValues<FC::Challenge>,
-        _proof: &Self::Proof,
-        _challenger: &mut FC::Challenger,
+        commits_and_points: &[(Self::Commitment, &[Vec<FC::Challenge>])],
+        dims: &[Vec<Dimensions>],
+        values: OpenedValues<FC::Challenge>,
+        proof: &Self::Proof,
+        challenger: &mut FC::Challenger,
     ) -> Result<(), Self::Error> {
-        // todo!()
+        // Batch combination challenge
+        let alpha = <FC::Challenger as CanSample<FC::Challenge>>::sample(challenger);
+
+        let fri_challenges =
+            verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
+                .unwrap();
+
+        let log_max_height = proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup();
+
+        let reduced_openings: Vec<[FC::Challenge; 32]> = proof
+            .query_openings
+            .iter()
+            .zip(&fri_challenges.query_indices)
+            .map(|(query_opening, &index)| {
+                let x = self.coset_shift()
+                    * Val::two_adic_generator(log_max_height)
+                        .exp_u64(reverse_bits_len(index, log_max_height) as u64);
+
+                let mut ro = [FC::Challenge::zero(); 32];
+                let mut alpha_pow = [FC::Challenge::one(); 32];
+                for (batch_opening, batch_dims, (batch_commit, batch_points), batch_at_z) in
+                    izip!(query_opening, dims, commits_and_points, &values)
+                {
+                    self.mmcs.verify_batch(
+                        batch_commit,
+                        batch_dims,
+                        index,
+                        &batch_opening.opened_values,
+                        &batch_opening.opening_proof,
+                    )?;
+                    for (mat_opening, mat_dims, mat_points, mat_at_z) in izip!(
+                        &batch_opening.opened_values,
+                        batch_dims,
+                        *batch_points,
+                        batch_at_z
+                    ) {
+                        let log_height = log2_strict_usize(mat_dims.height) + self.fri.log_blowup();
+
+                        for (&z, ps_at_z) in izip!(mat_points, mat_at_z) {
+                            for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
+                                let quotient = (-p_at_z + p_at_x) / (-z + x);
+                                ro[log_height] += alpha_pow[log_height] * quotient;
+                                alpha_pow[log_height] *= alpha;
+                            }
+                        }
+                    }
+                }
+                Ok(ro)
+            })
+            .collect::<Result<Vec<_>, M::Error>>()
+            .expect("input mmcs error");
+
+        verifier::verify_challenges(
+            &self.fri,
+            &proof.fri_proof,
+            &fri_challenges,
+            &reduced_openings,
+        )
+        .unwrap();
+
         Ok(())
     }
 }
@@ -403,7 +466,7 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
             s.as_slice().iter().copied().sum()
         });
         let sfx_sum = xs_sfx
-            .into_iter()
+            .iter()
             .zip(&self.powers[(xs_packed.len() * F::Packing::WIDTH)..])
             .map(|(&x, &pow)| pow * x)
             .sum::<EF>();

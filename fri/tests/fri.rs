@@ -115,8 +115,16 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 
     let mut v_challenger = Challenger::new(perm);
     let alpha: Challenge = v_challenger.sample_ext_element();
+    /*
     let v_idxs = verifier::verify(&fc, &proof, &reduced_openings, &mut v_challenger)
         .expect("verification failed");
+        */
+    let fri_challenges =
+        verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
+            .expect("failed verify shape and sample");
+    verifier::verify_challenges(&fc, &proof, &fri_challenges, &reduced_openings)
+        .expect("failed verify challenges");
+
     /*
     ldt.verify(&[val_mmcs], &[dims], &[comm], &proof, &mut v_challenger)
         .expect("verification failed");
