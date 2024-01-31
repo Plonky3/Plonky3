@@ -38,13 +38,13 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             .assert_zero(local.export);
 
         // If this is not the final step, the local and next preimages must match.
-        for x in 0..5 {
-            for y in 0..5 {
+        for y in 0..5 {
+            for x in 0..5 {
                 for limb in 0..U64_LIMBS {
-                    let diff = local.preimage[y][x][limb] - next.preimage[y][x][limb];
                     builder
                         .when_transition()
-                        .assert_eq(not_final_step.clone(), diff);
+                        .when(not_final_step.clone())
+                        .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
                 }
             }
         }
@@ -68,8 +68,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         //            = xor(A'[x, y, z], C[x, z], C'[x, z]).
         // The last step is valid based on the identity we checked above.
         // It isn't required, but makes this check a bit cleaner.
-        for x in 0..5 {
-            for y in 0..5 {
+        for y in 0..5 {
+            for x in 0..5 {
                 let get_bit = |z| {
                     let a_prime: AB::Var = local.a_prime[y][x][z];
                     let c: AB::Var = local.c[x][z];
@@ -92,11 +92,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // diff = sum_{i=0}^4 A'[x, i, z] - C'[x, z]
         for x in 0..5 {
             for z in 0..64 {
-                // TODO: from_fn
-                let sum: AB::Expr = [0, 1, 2, 3, 4]
-                    .map(|y| local.a_prime[y][x][z].into())
-                    .into_iter()
-                    .sum();
+                let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
                 let four = AB::Expr::from_canonical_u8(4);
                 builder
@@ -105,8 +101,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         }
 
         // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
-        for x in 0..5 {
-            for y in 0..5 {
+        for y in 0..5 {
+            for x in 0..5 {
                 let get_bit = |z| {
                     let andn = andn_gen::<AB::Expr>(
                         local.b((x + 1) % 5, y, z).into(),

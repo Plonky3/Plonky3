@@ -13,6 +13,7 @@ pub struct FriProof<FC: FriConfig> {
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
     pub(crate) final_poly: FC::Challenge,
+    pub(crate) pow_witness: FC::Val,
 }
 
 #[derive(Serialize, Deserialize)]
