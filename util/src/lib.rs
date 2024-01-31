@@ -7,6 +7,7 @@ extern crate alloc;
 use core::hint::unreachable_unchecked;
 
 pub mod array_serialization;
+pub mod linear_map;
 
 /// Computes `ceil(a / b)`. Assumes `a + b` does not overflow.
 #[must_use]

@@ -7,8 +7,8 @@ use p3_challenger::{CanSample, FieldChallenger};
 use p3_commit::{DirectMmcs, OpenedValues, Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractExtensionField,
-    AbstractField, ExtensionField, Field, PackedField, TwoAdicField,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
+    Field, PackedField, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::{
@@ -17,7 +17,9 @@ use p3_matrix::{
     Dimensions, Matrix, MatrixRows,
 };
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
+use p3_util::{
+    linear_map::LinearMap, log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
@@ -160,7 +162,6 @@ where
     ) -> (OpenedValues<FC::Challenge>, Self::Proof) {
         // Batch combination challenge
         let alpha = <FC::Challenger as CanSample<FC::Challenge>>::sample(challenger);
-        let coset_shift = self.coset_shift();
 
         /*
 
@@ -199,10 +200,10 @@ where
 
         */
 
-        let mats_and_points: Vec<(Vec<_>, &[Vec<FC::Challenge>])> = prover_data_and_points
+        let mats_and_points = prover_data_and_points
             .iter()
             .map(|(data, points)| (self.mmcs.get_matrices(data), *points))
-            .collect();
+            .collect_vec();
 
         let max_width = mats_and_points
             .iter()
@@ -215,52 +216,7 @@ where
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
-        // No std, so no HashMap.
-        let inv_denoms: Vec<(FC::Challenge, Vec<FC::Challenge>)> =
-            info_span!("invert denominators").in_scope(|| {
-                let mut max_log_height_for_point: Vec<(FC::Challenge, usize)> = vec![];
-                for (mats, points) in mats_and_points {
-                    for (mat, points_for_mat) in izip!(mats, points) {
-                        let log_height = log2_strict_usize(mat.height());
-                        for &z in points_for_mat {
-                            if let Some((_, lh)) =
-                                max_log_height_for_point.iter_mut().find(|(zz, _)| *zz == z)
-                            {
-                                *lh = core::cmp::max(*lh, log_height);
-                            } else {
-                                max_log_height_for_point.push((z, log_height));
-                            }
-                        }
-                    }
-                }
-                let max_log_height = *max_log_height_for_point
-                    .iter()
-                    .map(|(_, lh)| lh)
-                    .max()
-                    .unwrap();
-                // Compute the largest subgroup we will use, in bitrev order.
-                let mut subgroup = cyclic_subgroup_coset_known_order(
-                    Val::two_adic_generator(max_log_height),
-                    coset_shift,
-                    1 << max_log_height,
-                )
-                .collect_vec();
-                reverse_slice_index_bits(&mut subgroup);
-                max_log_height_for_point
-                    .into_iter()
-                    .map(|(z, log_height)| {
-                        (
-                            z,
-                            batch_multiplicative_inverse(
-                                &subgroup[..(1 << log_height)]
-                                    .iter()
-                                    .map(|&x| FC::Challenge::from_base(x) - z)
-                                    .collect_vec(),
-                            ),
-                        )
-                    })
-                    .collect()
-            });
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, self.coset_shift());
 
         let mut all_opened_values: OpenedValues<FC::Challenge> = vec![];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
@@ -287,7 +243,7 @@ where
                                 mat.split_rows(mat.height() >> self.fri.log_blowup());
                             interpolate_coset(
                                 &BitReversedMatrixView::new(low_coset),
-                                coset_shift,
+                                self.coset_shift(),
                                 point,
                             )
                         });
@@ -295,16 +251,13 @@ where
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
 
-                    let inv_denoms_for_point: &[FC::Challenge] =
-                        &inv_denoms.iter().find(|(z, _)| *z == point).unwrap().1;
-
                     info_span!("reduce rows").in_scope(|| {
                         reduced_opening_for_log_height
                             .par_iter_mut()
                             .zip_eq(mat.par_rows())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
-                            .zip(inv_denoms_for_point)
+                            .zip(inv_denoms.get(&point).unwrap())
                             .for_each(|((reduced_opening, row), &inv_denom)| {
                                 let row_sum = alpha_reducer.reduce_base(row);
                                 *reduced_opening += inv_denom
@@ -418,7 +371,50 @@ where
     }
 }
 
-pub struct PowersReducer<F: Field, EF> {
+#[instrument(skip_all)]
+fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
+    mats_and_points: &[(Vec<M>, &[Vec<EF>])],
+    coset_shift: F,
+) -> LinearMap<EF, Vec<EF>> {
+    let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
+    for (mats, points) in mats_and_points {
+        for (mat, points_for_mat) in izip!(mats, *points) {
+            let log_height = log2_strict_usize(mat.height());
+            for &z in points_for_mat {
+                if let Some(lh) = max_log_height_for_point.get_mut(&z) {
+                    *lh = core::cmp::max(*lh, log_height);
+                } else {
+                    max_log_height_for_point.insert(z, log_height);
+                }
+            }
+        }
+    }
+    let max_log_height = *max_log_height_for_point.values().max().unwrap();
+    // Compute the largest subgroup we will use, in bitrev order.
+    let mut subgroup = cyclic_subgroup_coset_known_order(
+        F::two_adic_generator(max_log_height),
+        coset_shift,
+        1 << max_log_height,
+    )
+    .collect_vec();
+    reverse_slice_index_bits(&mut subgroup);
+    max_log_height_for_point
+        .into_iter()
+        .map(|(z, log_height)| {
+            (
+                z,
+                batch_multiplicative_inverse(
+                    &subgroup[..(1 << log_height)]
+                        .iter()
+                        .map(|&x| EF::from_base(x) - z)
+                        .collect_vec(),
+                ),
+            )
+        })
+        .collect()
+}
+
+struct PowersReducer<F: Field, EF> {
     powers: Vec<EF>,
     // If EF::D = 2 and powers is [01 23 45 67],
     // this holds [[02 46] [13 57]]
@@ -426,7 +422,7 @@ pub struct PowersReducer<F: Field, EF> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
-    pub fn new(base: EF, max_width: usize) -> Self {
+    fn new(base: EF, max_width: usize) -> Self {
         let powers: Vec<EF> = base
             .powers()
             .take(max_width.next_multiple_of(F::Packing::WIDTH))
