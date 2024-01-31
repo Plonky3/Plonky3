@@ -25,3 +25,4 @@ harness = false
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
+rand_chacha = "0.3.1"

@@ -441,7 +441,7 @@ mod tests {
             .iter()
             .map(|&(height, width)| {
                 let trace = RowMajorMatrix::<F>::rand_nonzero(&mut thread_rng(), height, width);
-                let lde = Radix2Dit
+                let lde = Radix2Dit::default()
                     .coset_lde_batch(trace.clone(), 1, shift)
                     .bit_reverse_rows();
                 let dims = lde.dimensions();
@@ -495,7 +495,8 @@ mod tests {
             assert_eq!(mat.row_slice(reduced_index), &opened_values_for_mat);
 
             // check low degree
-            let poly = Radix2Dit.idft_batch(mat.bit_reverse_rows().to_row_major_matrix());
+            let poly =
+                Radix2Dit::default().idft_batch(mat.bit_reverse_rows().to_row_major_matrix());
             let expected_degree = trace.height() - <EF as AbstractExtensionField<F>>::D;
             assert!((expected_degree..poly.height()).all(|r| poly.row(r).all(|x| x.is_zero())));
         }

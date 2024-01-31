@@ -45,7 +45,9 @@ pub trait CanSampleBits<T> {
     fn sample_bits(&mut self, bits: usize) -> T;
 }
 
-pub trait FieldChallenger<F: Field>: CanObserve<F> + CanSample<F> + CanSampleBits<usize> {
+pub trait FieldChallenger<F: Field>:
+    CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
+{
     fn observe_ext_element<EF: AbstractExtensionField<F>>(&mut self, ext: EF) {
         self.observe_slice(ext.as_base_slice());
     }

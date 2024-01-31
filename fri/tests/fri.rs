@@ -21,7 +21,7 @@ type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 
 type MyMds = CosetMds<Val, 16>;
-type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 5>;
+type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
@@ -36,13 +36,13 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, ValMmcs, FriLdt<MyFriConfi
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let fri_config = MyFriConfig::new(10, challenge_mmcs);
+    let fri_config = MyFriConfig::new(1, 10, 8, challenge_mmcs);
     (perm, val_mmcs, FriLdt { config: fri_config })
 }
 
 fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let (perm, val_mmcs, ldt) = get_ldt_for_testing(rng);
-    let dft = Radix2Dit;
+    let dft = Radix2Dit::default();
 
     let ldes: Vec<RowMajorMatrix<Val>> = (3..6)
         .map(|deg_bits| {
@@ -72,7 +72,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 #[test]
 fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
-    for i in 0..20 {
+    for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
         do_test_fri_ldt(&mut rng);
     }

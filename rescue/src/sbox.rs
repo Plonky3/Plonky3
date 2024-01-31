@@ -4,7 +4,7 @@ use p3_field::{AbstractField, PrimeField, PrimeField64};
 
 use crate::util::get_inverse;
 
-pub trait SboxLayers<AF, const WIDTH: usize>: Clone
+pub trait SboxLayers<AF, const WIDTH: usize>: Clone + Sync
 where
     AF: AbstractField,
     AF::F: PrimeField,
