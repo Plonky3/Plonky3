@@ -47,6 +47,12 @@ impl<FC, Val, Dft, M> TwoAdicFriPcs<FC, Val, Dft, M> {
     }
 }
 
+#[derive(Debug)]
+pub enum VerificationError<FC: FriConfig, InputMmcsError> {
+    FriError(VerificationErrorForFriConfig<FC>),
+    InputMmcsError(InputMmcsError),
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct TwoAdicFriPcsProof<FC: FriConfig, Val, InputMmcsProof> {
     #[serde(bound = "")]
@@ -74,7 +80,7 @@ where
     type Commitment = M::Commitment;
     type ProverData = M::ProverData;
     type Proof = TwoAdicFriPcsProof<FC, Val, M::Proof>;
-    type Error = VerificationErrorForFriConfig<FC>;
+    type Error = VerificationError<FC, M::Error>;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
         self.commit_shifted_batches(polynomials, Val::one())
@@ -306,7 +312,7 @@ where
 
         let fri_challenges =
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
-                .unwrap();
+                .map_err(VerificationError::FriError)?;
 
         let log_max_height = proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup();
 
@@ -351,7 +357,7 @@ where
                 Ok(ro)
             })
             .collect::<Result<Vec<_>, M::Error>>()
-            .expect("input mmcs error");
+            .map_err(VerificationError::InputMmcsError)?;
 
         verifier::verify_challenges(
             &self.fri,
@@ -359,7 +365,7 @@ where
             &fri_challenges,
             &reduced_openings,
         )
-        .unwrap();
+        .map_err(VerificationError::FriError)?;
 
         Ok(())
     }
