@@ -8,14 +8,43 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 1
 
 jobs:
   build_and_test:
     name: Build and Test
     runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
-    env:
-      CARGO_INCREMENTAL: 1
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+      id: rs-stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Build
+      run: cargo build --verbose --all-targets
+
+    - name: Check with parallel
+      run: cargo check --verbose --all-targets --features parallel
+
+    - name: Test
+      run: cargo test --verbose
+
+  lint:
+    name: Formatting and Clippy
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
     - uses: actions/checkout@v4
@@ -39,17 +68,9 @@ jobs:
           target/
         key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
 
-    - name: Build
-      run: cargo +stable build --verbose --all-targets
-
-    - name: Check with parallel
-      run: cargo +stable check --verbose --all-targets --features parallel
-
-    - name: Test
-      run: cargo +stable test --verbose
-
     - name: Clippy
       run: cargo +stable clippy --all-targets -- -D warnings
 
     - name: Format
       run: cargo +nightly fmt --all -- --check 
+
