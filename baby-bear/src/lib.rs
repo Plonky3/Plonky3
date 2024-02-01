@@ -4,6 +4,7 @@ extern crate alloc;
 
 mod baby_bear;
 mod extension;
+mod mds;
 mod non_canonical;
 
 pub use baby_bear::*;

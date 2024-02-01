@@ -5,12 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-baby-bear = { path = "../baby-bear" }
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
-p3-goldilocks = { path = "../goldilocks" }
 p3-matrix = { path = "../matrix" }
-p3-mersenne-31 = { path = "../mersenne-31" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
@@ -18,6 +15,7 @@ itertools = { version = "0.11.0" }
 
 [dev-dependencies]
 criterion = "0.5.1"
+p3-baby-bear = { path = "../baby-bear" }
 
 [[bench]]
 name = "mds"

@@ -4,15 +4,56 @@
 //! Supported sizes: 8, 12, 16, 32, 64.
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
-use p3_mersenne_31::{Mersenne31, Mersenne31NonCanonical};
+use crate::Mersenne31;
+use p3_field::{AbstractField, PrimeField64};
 use p3_symmetric::Permutation;
 
-use crate::karatsuba_convolution::{Convolve, SmallConvolvePrimeField32};
-use crate::util::first_row_to_first_col;
-use crate::MdsPermutation;
+use p3_mds::karatsuba_convolution::{
+    Convolve, LargeConvolvePrimeField32, SmallConvolvePrimeField32,
+};
+use p3_mds::util::first_row_to_first_col;
+use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
+
+// FIXME: implement properly
+fn reduce_i64(x: i64) -> Mersenne31 {
+    const P_SQR: u64 = Mersenne31::ORDER_U64 * Mersenne31::ORDER_U64;
+    Mersenne31::from_wrapped_u128((x as i128 + P_SQR as i128) as u128)
+}
+
+// FIXME: implement properly
+fn reduce_i128(x: i128) -> Mersenne31 {
+    const P_SQR: u64 = Mersenne31::ORDER_U64 * Mersenne31::ORDER_U64;
+    const P_EXP4: u128 = P_SQR as u128 * P_SQR as u128;
+    let x = if x < 0 { x as i128 + P_EXP4 as i128 } else { x } as u128;
+    Mersenne31::from_wrapped_u128(x)
+}
+
+#[inline(always)]
+fn apply_conv_small<const N: usize, C: Fn([i64; N], [i64; N], &mut [i64])>(
+    lhs: [Mersenne31; N],
+    rhs: [i64; N],
+    conv: C,
+) -> [Mersenne31; N] {
+    let lhs = lhs.map(|x| x.value as i64);
+    let mut output = [i64::default(); N];
+    conv(lhs, rhs, &mut output);
+    output.map(reduce_i64)
+}
+
+#[inline(always)]
+fn apply_conv_large<const N: usize, C: Fn([i64; N], [i64; N], &mut [i128])>(
+    lhs: [Mersenne31; N],
+    rhs: [i64; N],
+    conv: C,
+) -> [Mersenne31; N] {
+    let lhs = lhs.map(|x| x.value as i64);
+    let mut output = [i128::default(); N];
+    conv(lhs, rhs, &mut output);
+    output.map(reduce_i128)
+}
 
 const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
@@ -20,11 +61,12 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
-        // apply_circulant_8_sml(input)
-        let input = input.map(|x| x.value as i64);
-        let mut output = [i64::default(); 8];
-        SmallConvolvePrimeField32::conv8(input.into(), MATRIX_CIRC_MDS_8_SML_COL, &mut output);
-        output.map(Mersenne31::from_wrapped_i64)
+
+        apply_conv_small(
+            input,
+            MATRIX_CIRC_MDS_8_SML_COL,
+            SmallConvolvePrimeField32::conv8,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
@@ -39,10 +81,10 @@ impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
         const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
-        // apply_circulant_12_sml(input)
-        apply_circulant_12_karat::<Mersenne31, Mersenne31NonCanonical>(
+        apply_conv_small(
             input,
             MATRIX_CIRC_MDS_12_SML_COL,
+            SmallConvolvePrimeField32::conv12,
         )
     }
 
@@ -59,12 +101,11 @@ impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
-        // apply_circulant_16_sml(input)
-        apply_circulant_16_karat::<Mersenne31, Mersenne31NonCanonical>(
+        apply_conv_small(
             input,
             MATRIX_CIRC_MDS_16_SML_COL,
+            SmallConvolvePrimeField32::conv16,
         )
-        // apply_circulant_karat_generic_i64(input, MATRIX_CIRC_MDS_16_SML)
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 16]) {
@@ -89,10 +130,10 @@ impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
         const MATRIX_CIRC_MDS_32_MERSENNE31_COL: [i64; 32] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_32_MERSENNE31_ROW);
-        // apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
-        apply_circulant_32_karat::<Mersenne31, Mersenne31NonCanonical>(
+        apply_conv_large(
             input,
             MATRIX_CIRC_MDS_32_MERSENNE31_COL,
+            LargeConvolvePrimeField32::conv32,
         )
     }
 
@@ -126,10 +167,10 @@ impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
         const MATRIX_CIRC_MDS_64_MERSENNE31_COL: [i64; 64] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_64_MERSENNE31_ROW);
-        // apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
-        apply_circulant_64_karat::<Mersenne31, Mersenne31NonCanonical>(
+        apply_conv_large(
             input,
             MATRIX_CIRC_MDS_64_MERSENNE31_COL,
+            LargeConvolvePrimeField32::conv64,
         )
     }
 
@@ -141,8 +182,8 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
+    use super::Mersenne31;
     use p3_field::AbstractField;
-    use p3_mersenne_31::Mersenne31;
     use p3_symmetric::Permutation;
 
     use super::MdsMatrixMersenne31;

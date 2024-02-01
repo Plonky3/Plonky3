@@ -3,6 +3,7 @@
 #![no_std]
 
 mod extension;
+mod mds;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};

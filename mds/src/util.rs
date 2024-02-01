@@ -66,7 +66,7 @@ pub(crate) const fn rotate_right<const N: usize>(input: [u64; N], offset: usize)
 /// As for `apply_circulant()` above, but with `circ_matrix` set to a
 /// fixed 8x8 MDS matrix with small entries that satisfy the condition
 /// on `PrimeField64::z_linear_combination_sml()`.
-pub(crate) fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
+pub fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
     const N: usize = 8;
     let mut output = [F::zero(); N];
 
@@ -93,7 +93,7 @@ pub(crate) fn apply_circulant_8_sml<F: PrimeField64>(input: [F; 8]) -> [F; 8] {
 /// As for `apply_circulant()` above, but with `circ_matrix` set to a
 /// fixed 12x12 MDS matrix with small entries that satisfy the condition
 /// on `PrimeField64::z_linear_combination_sml()`.
-pub(crate) fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
+pub fn apply_circulant_12_sml<F: PrimeField64>(input: [F; 12]) -> [F; 12] {
     const N: usize = 12;
     let mut output = [F::zero(); N];
 
@@ -180,7 +180,7 @@ pub fn apply_circulant_16_sml<F: PrimeField64>(input: [F; 16]) -> [F; 16] {
 /// NB: The algorithm is inefficient but simple enough that this
 /// function can be declared `const`, and that is the intended context
 /// for use.
-pub(crate) const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; N] {
+pub const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; N] {
     // Can do this to get a simple Default value. Might be better ways?
     let mut output = [v[0]; N];
     let mut i = 1;
@@ -199,7 +199,7 @@ pub(crate) const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) 
 /// be specified by its first *column*, not its first row. If you have
 /// the row as an array, you can obtain the column with `first_row_to_first_col()`.
 #[inline]
-pub(crate) fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroupDft<F>>(
+pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroupDft<F>>(
     fft: FFT,
     column: [u64; N],
     input: &[F; N],

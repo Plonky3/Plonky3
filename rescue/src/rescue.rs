@@ -154,8 +154,7 @@ where
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_mds::mersenne31::MdsMatrixMersenne31;
-    use p3_mersenne_31::Mersenne31;
+    use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
     use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 
     use crate::rescue::Rescue;

@@ -1,6 +1,6 @@
-use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
 use crate::{from_monty_u32, BabyBear};
-use p3_field::{PrimeField32, IntegerLike, NonCanonicalPrimeField32, Canonicalize};
+use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+use p3_field::{Canonicalize, IntegerLike, NonCanonicalPrimeField32, PrimeField32};
 
 const _P: u32 = 0x78000001;
 const _MONTY_BITS: u32 = 31;
@@ -116,8 +116,8 @@ impl Mul<BabyBear> for BabyBearNonCanonical {
         // This is currently a placeholder for the actual algorithm. DO NOT USE IN PRODUCTION IT IS CLEARLY WRONG. JUST HERE FOR SOME TESTING PURPOSES.
 
         let prod = self.value.wrapping_mul(rhs.value as i64); // This is an i96 at worst.
-        // let t = prod.wrapping_mul(MONTY_MU as i128) & (MONTY_MASK as i128);
-        // let u = (t as u64) * (P as u64);
+                                                              // let t = prod.wrapping_mul(MONTY_MU as i128) & (MONTY_MASK as i128);
+                                                              // let u = (t as u64) * (P as u64);
 
         // let x_sub_u = prod - (u as i128);
         // let x_sub_u_hi = (x_sub_u >> 31) as i64;
@@ -165,14 +165,12 @@ impl Canonicalize<BabyBear> for BabyBearNonCanonical {
         )
     }
 
-
     /// Currently we take the "Monty" form.
     /// Need to be careful of this.
     #[inline]
     fn from_canonical(input: BabyBear) -> Self {
         Self::from_u32(input.value)
     }
-
 
     #[inline]
     fn from_canonical_to_i31(input: BabyBear) -> Self {

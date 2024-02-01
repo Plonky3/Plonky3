@@ -4,21 +4,62 @@
 //! Supported sizes: 8, 12, 16, 24, 32, 64.
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
-use p3_baby_bear::{BabyBear, BabyBearNonCanonical};
-// use p3_dft::Radix2Bowers;
+use crate::BabyBear;
+use p3_field::PrimeField64;
 use p3_symmetric::Permutation;
 
-use crate::karatsuba_convolution::{
-    apply_circulant_12_karat, apply_circulant_16_karat, apply_circulant_32_karat,
-    apply_circulant_64_karat, apply_circulant_8_karat,
+use p3_mds::karatsuba_convolution::{
+    Convolve, LargeConvolvePrimeField32, SmallConvolvePrimeField32,
 };
-use crate::util::{apply_circulant, first_row_to_first_col};
-use crate::MdsPermutation;
+use p3_mds::util::{apply_circulant, first_row_to_first_col};
+use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
-// const FFT_ALGO: Radix2Bowers = Radix2Bowers;
+// FIXME: implement properly
+fn reduce_i64(x: i64) -> BabyBear {
+    const P_SQR: u64 = BabyBear::ORDER_U64 << 32;
+    let x = x as i128 + P_SQR as i128;
+    assert!(x >= 0);
+    BabyBear {
+        value: (x as u128 % BabyBear::ORDER_U64 as u128) as u32,
+    }
+}
+
+// FIXME: implement properly
+fn reduce_i128(x: i128) -> BabyBear {
+    const P_EXP4: u128 = (BabyBear::ORDER_U64 as u128) << 96;
+    let x = if x < 0 { x as i128 + P_EXP4 as i128 } else { x };
+    assert!(x >= 0);
+    BabyBear {
+        value: (x as u128 % BabyBear::ORDER_U64 as u128) as u32,
+    }
+}
+
+#[inline(always)]
+fn apply_conv_small<const N: usize, C: Fn([i64; N], [i64; N], &mut [i64])>(
+    lhs: [BabyBear; N],
+    rhs: [i64; N],
+    conv: C,
+) -> [BabyBear; N] {
+    let lhs = lhs.map(|x| x.value as i64);
+    let mut output = [i64::default(); N];
+    conv(lhs, rhs, &mut output);
+    output.map(reduce_i64)
+}
+
+#[inline(always)]
+fn apply_conv_large<const N: usize, C: Fn([i64; N], [i64; N], &mut [i128])>(
+    lhs: [BabyBear; N],
+    rhs: [i64; N],
+    conv: C,
+) -> [BabyBear; N] {
+    let lhs = lhs.map(|x| x.value as i64);
+    let mut output = [i128::default(); N];
+    conv(lhs, rhs, &mut output);
+    output.map(reduce_i128)
+}
 
 const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
@@ -26,8 +67,11 @@ impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
-
-        apply_circulant_8_karat::<BabyBear, BabyBearNonCanonical>(input, MATRIX_CIRC_MDS_8_SML_COL)
+        apply_conv_small(
+            input,
+            MATRIX_CIRC_MDS_8_SML_COL,
+            SmallConvolvePrimeField32::conv8,
+        )
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 8]) {
@@ -42,9 +86,10 @@ impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
         const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
-        apply_circulant_12_karat::<BabyBear, BabyBearNonCanonical>(
+        apply_conv_small(
             input,
             MATRIX_CIRC_MDS_12_SML_COL,
+            SmallConvolvePrimeField32::conv12,
         )
     }
 
@@ -63,11 +108,10 @@ impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
         const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
-        // const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_BABYBEAR);
-        // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
-        apply_circulant_16_karat::<BabyBear, BabyBearNonCanonical>(
+        apply_conv_small(
             input,
             MATRIX_CIRC_MDS_16_SML_COL,
+            SmallConvolvePrimeField32::conv16,
         )
     }
 
@@ -114,11 +158,11 @@ impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
         const MATRIX_CIRC_MDS_32_BABYBEAR_COL: [i64; 32] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR_ROW);
-        apply_circulant_32_karat::<BabyBear, BabyBearNonCanonical>(
+        apply_conv_large(
             input,
             MATRIX_CIRC_MDS_32_BABYBEAR_COL,
+            LargeConvolvePrimeField32::conv32,
         )
-        // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 32]) {
@@ -151,11 +195,11 @@ impl Permutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
         const MATRIX_CIRC_MDS_64_BABYBEAR_COL: [i64; 64] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR_ROW);
-        apply_circulant_64_karat::<BabyBear, BabyBearNonCanonical>(
+        apply_conv_large(
             input,
             MATRIX_CIRC_MDS_64_BABYBEAR_COL,
+            LargeConvolvePrimeField32::conv64,
         )
-        // apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 64]) {
@@ -166,7 +210,7 @@ impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 
 #[cfg(test)]
 mod tests {
-    use p3_baby_bear::BabyBear;
+    use super::BabyBear;
     use p3_field::AbstractField;
     use p3_symmetric::Permutation;
 

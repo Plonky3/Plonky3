@@ -1,6 +1,6 @@
 use core::ops::{Add, AddAssign, ShrAssign, Sub, SubAssign};
 
-trait RngElt:
+pub trait RngElt:
     Add<Output = Self> + AddAssign + Copy + Default + ShrAssign<u32> + Sub<Output = Self> + SubAssign
 {
 }
@@ -15,12 +15,17 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
     /// output(x) = lhs(x)rhs(x) mod x^N - 1
     /// We split this into a convolution and signed convolution of size N/2
     #[inline(always)]
-    fn conv_n<const N: usize, const HALF_N: usize>(
+    fn conv_n<
+        const N: usize,
+        const HALF_N: usize,
+        C: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
+        SC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
+    >(
         lhs: [T; N],
         rhs: [U; N],
         output: &mut [V],
-        inner_conv: fn([T; HALF_N], [U; HALF_N], &mut [V]),
-        inner_signed_conv: fn([T; HALF_N], [U; HALF_N], &mut [V]),
+        inner_conv: C,
+        inner_signed_conv: SC,
     ) {
         debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
@@ -60,11 +65,15 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
     /// Compute the signed convolution of two vectors of length N.
     /// output(x) = lhs(x)rhs(x) mod x^N + 1
     #[inline(always)]
-    fn signed_conv_n<const N: usize, const HALF_N: usize>(
+    fn signed_conv_n<
+        const N: usize,
+        const HALF_N: usize,
+        SC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
+    >(
         lhs: [T; N],
         rhs: [U; N],
         output: &mut [V],
-        inner_signed_conv: fn([T; HALF_N], [U; HALF_N], &mut [V]),
+        inner_signed_conv: SC,
     ) {
         debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
@@ -174,7 +183,7 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        Self::conv_n::<6, 3>(lhs, rhs, output, Self::conv3, Self::signed_conv3)
+        Self::conv_n::<6, 3, _, _>(lhs, rhs, output, Self::conv3, Self::signed_conv3)
     }
 
     #[inline(always)]
@@ -222,42 +231,42 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        Self::conv_n::<8, 4>(lhs, rhs, output, Self::conv4, Self::signed_conv4)
+        Self::conv_n::<8, 4, _, _>(lhs, rhs, output, Self::conv4, Self::signed_conv4)
     }
 
     #[inline(always)]
     fn signed_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        Self::signed_conv_n::<8, 4>(lhs, rhs, output, Self::signed_conv4)
+        Self::signed_conv_n::<8, 4, _>(lhs, rhs, output, Self::signed_conv4)
     }
 
     #[inline(always)]
     fn conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        Self::conv_n::<12, 6>(lhs, rhs, output, Self::conv6, Self::signed_conv6)
+        Self::conv_n::<12, 6, _, _>(lhs, rhs, output, Self::conv6, Self::signed_conv6)
     }
 
     #[inline(always)]
     fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        Self::conv_n::<16, 8>(lhs, rhs, output, Self::conv8, Self::signed_conv8)
+        Self::conv_n::<16, 8, _, _>(lhs, rhs, output, Self::conv8, Self::signed_conv8)
     }
 
     #[inline(always)]
     fn signed_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        Self::signed_conv_n::<16, 8>(lhs, rhs, output, Self::signed_conv8)
+        Self::signed_conv_n::<16, 8, _>(lhs, rhs, output, Self::signed_conv8)
     }
 
     #[inline(always)]
     fn conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        Self::conv_n::<32, 16>(lhs, rhs, output, Self::conv16, Self::signed_conv16)
+        Self::conv_n::<32, 16, _, _>(lhs, rhs, output, Self::conv16, Self::signed_conv16)
     }
 
     #[inline(always)]
     fn signed_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        Self::signed_conv_n::<32, 16>(lhs, rhs, output, Self::signed_conv16)
+        Self::signed_conv_n::<32, 16, _>(lhs, rhs, output, Self::signed_conv16)
     }
 
     #[inline(always)]
     fn conv64(lhs: [T; 64], rhs: [U; 64], output: &mut [V]) {
-        Self::conv_n::<64, 32>(lhs, rhs, output, Self::conv32, Self::signed_conv32)
+        Self::conv_n::<64, 32, _, _>(lhs, rhs, output, Self::conv32, Self::signed_conv32)
     }
 }
 

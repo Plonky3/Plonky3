@@ -4,15 +4,15 @@
 //! Supported sizes: 8, 12, 16, 24, 32, 64, 68.
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
+use crate::Goldilocks;
 use p3_dft::Radix2Bowers;
-use p3_goldilocks::Goldilocks;
 use p3_symmetric::Permutation;
 
-use crate::util::{
+use p3_mds::util::{
     apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
     first_row_to_first_col,
 };
-use crate::MdsPermutation;
+use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
@@ -172,8 +172,8 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
+    use super::Goldilocks;
     use p3_field::AbstractField;
-    use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
     use super::MdsMatrixGoldilocks;
