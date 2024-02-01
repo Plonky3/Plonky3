@@ -100,11 +100,9 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    // type Quotient = QuotientMmcs<Domain, Challenge, ValMmcs>;
     type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
     let fri_config = MyFriConfig::new(1, 40, 8, challenge_mmcs);
 
-    // type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
     type Pcs = TwoAdicFriPcs<MyFriConfig, Val, Dft, ValMmcs>;
     type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
 
