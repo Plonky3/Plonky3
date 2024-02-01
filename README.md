@@ -57,6 +57,14 @@ Hashes
 - [x] Monolith
 
 
+## Benchmark
+
+We sometimes use a Keccak AIR to compare Plonky3's performance to other libraries like Plonky2. Several variations are possible here, with different fields and so forth, but here is one example:
+```
+RUST_LOG=info cargo run --example prove_baby_bear_keccak --release --features parallel
+```
+
+
 ## License
 
 Licensed under either of
