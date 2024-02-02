@@ -62,14 +62,14 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
 
     //     p_e(g^(2i)) = (a + b) / 2
     //     p_o(g^(2i)) = (a - b) / (2 s g^i)
-    let mut g_powers = g_inv.shifted_powers(shift.inverse());
-    let g_powers = (0..first.len())
-        .map(|_| g_powers.next().unwrap())
+    let mut g_inv_powers = g_inv.shifted_powers(shift.inverse());
+    let g_inv_powers = (0..first.len())
+        .map(|_| g_inv_powers.next().unwrap())
         .collect::<Vec<_>>();
     let (even, odd): (Vec<_>, Vec<_>) = first
         .par_iter()
         .zip(second.par_iter())
-        .zip(g_powers.par_iter())
+        .zip(g_inv_powers.par_iter())
         .map(|((&a, &b), g_inv_power)| {
             let sum = a + b;
             let diff = a - b;
