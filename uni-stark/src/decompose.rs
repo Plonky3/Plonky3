@@ -77,7 +77,7 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
         })
         .unzip();
 
-    let (even_decomp, odd_decomp) = rayon::join(
+    let (even_decomp, odd_decomp) = join(
         || decompose(even, shift.square(), log_chunks - 1),
         || decompose(odd, shift.square(), log_chunks - 1),
     );

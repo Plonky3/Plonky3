@@ -1,6 +1,7 @@
 #[cfg(feature = "parallel")]
 pub mod prelude {
     pub use rayon::prelude::*;
+    pub use rayon::join;
 }
 
 #[cfg(not(feature = "parallel"))]
