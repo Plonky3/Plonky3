@@ -115,7 +115,9 @@ where
     InnerMat: Matrix<F>,
 {
     fn width(&self) -> usize {
-        self.inner.width() / <EF as AbstractExtensionField<F>>::D
+        let d = <EF as AbstractExtensionField<F>>::D;
+        debug_assert!(self.inner.width() % d == 0);
+        self.inner.width() / d
     }
 
     fn height(&self) -> usize {
