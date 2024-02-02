@@ -2,6 +2,7 @@
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
 use alloc::borrow::ToOwned;
+
 use p3_field::PrimeField32;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;

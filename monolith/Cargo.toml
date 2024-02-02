@@ -12,6 +12,8 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-mds = { path = "../mds" }
 p3-symmetric = { path = "../symmetric" }
 sha3 = "0.10"
+zkhash = { git = "https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo.git" }
+rand = "0.8.5"
 
 [dev-dependencies]
 criterion = "0.5.1"

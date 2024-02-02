@@ -12,7 +12,6 @@ use p3_mersenne_31::Mersenne31;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::monolith_width16::reduce64;
 use crate::util::get_random_u32_le;
 
 // The Monolith-31 permutation over Mersenne31.
@@ -174,38 +173,50 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use alloc::vec::Vec;
+
+    use p3_field::{AbstractField, PrimeField32};
     use p3_mersenne_31::Mersenne31;
+    use zkhash::fields::const_f31::ConstF31;
+    use zkhash::fields::f31::Field32;
+    use zkhash::monolith_31::monolith_31::Monolith31 as MonolithM31Reference;
+    use zkhash::monolith_31::monolith_31_instances::MONOLITH_CONST31_16_PARAMS;
 
     use crate::monolith::MonolithM31;
     use crate::monolith_mds::MonolithMdsMatrixM31;
+
+    fn mersenne31_to_constf31(m: Mersenne31) -> ConstF31 {
+        ConstF31::from_u32(m.as_canonical_u32())
+    }
 
     #[test]
     fn test_monolith_31() {
         let mds = MonolithMdsMatrixM31::<6>;
         let monolith: MonolithM31<_, 16, 5> = MonolithM31::new(mds);
 
-        let mut input: [Mersenne31; 16] = [Mersenne31::zero(); 16];
-        for (i, inp) in input.iter_mut().enumerate() {
-            *inp = Mersenne31::from_canonical_usize(i);
+        let mut state: [Mersenne31; 16] = [Mersenne31::zero(); 16];
+        for (_, inp) in state.iter_mut().enumerate() {
+            *inp = rand::random::<Mersenne31>();
         }
-        monolith.permutation(&mut input);
 
-        assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
-        assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));
-        assert_eq!(input[2], Mersenne31::from_canonical_u64(1900746598));
-        assert_eq!(input[3], Mersenne31::from_canonical_u64(1734707571));
-        assert_eq!(input[4], Mersenne31::from_canonical_u64(2050994835));
-        assert_eq!(input[5], Mersenne31::from_canonical_u64(1648553244));
-        assert_eq!(input[6], Mersenne31::from_canonical_u64(1307647296));
-        assert_eq!(input[7], Mersenne31::from_canonical_u64(1941164548));
-        assert_eq!(input[8], Mersenne31::from_canonical_u64(1707113065));
-        assert_eq!(input[9], Mersenne31::from_canonical_u64(1477714255));
-        assert_eq!(input[10], Mersenne31::from_canonical_u64(1170160793));
-        assert_eq!(input[11], Mersenne31::from_canonical_u64(93800695));
-        assert_eq!(input[12], Mersenne31::from_canonical_u64(769879348));
-        assert_eq!(input[13], Mersenne31::from_canonical_u64(375548503));
-        assert_eq!(input[14], Mersenne31::from_canonical_u64(1989726444));
-        assert_eq!(input[15], Mersenne31::from_canonical_u64(1349325635));
+        let state_reference: [ConstF31; 16] = state
+            .iter()
+            .map(|x| mersenne31_to_constf31(*x))
+            .collect::<Vec<ConstF31>>()
+            .try_into()
+            .unwrap();
+
+        monolith.permutation(&mut state);
+        let output_converted: Vec<ConstF31> = state
+            .iter()
+            .map(|x| mersenne31_to_constf31(*x))
+            .collect::<Vec<ConstF31>>()
+            .try_into()
+            .unwrap();
+
+        let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_16_PARAMS);
+        let ref_output = monolith_reference.permutation(&state_reference);
+
+        assert_eq!(output_converted, ref_output);
     }
 }

@@ -193,7 +193,7 @@ mod tests {
     use crate::{MonolithM31Width16, MonolithMdsMatrixM31Width16};
 
     #[test]
-    fn test_monolith_31_u64() {
+    fn test_monolith_31_width16() {
         let mds = MonolithMdsMatrixM31Width16;
         let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
 
