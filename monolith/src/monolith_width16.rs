@@ -135,7 +135,7 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithM31Width16<NUM_FULL_ROUNDS> {
 
     pub fn bar(&self, mut el: u64) -> u64 {
         // reduce64(&mut el);
-        el = el % Mersenne31::ORDER_U64;
+        el %= Mersenne31::ORDER_U64;
         let val: &mut u32 = &mut el.try_into().unwrap();
 
         unsafe {
