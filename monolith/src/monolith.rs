@@ -12,7 +12,8 @@ use p3_mersenne_31::Mersenne31;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
-use crate::util::get_random_u32;
+use crate::monolith_width16::reduce64;
+use crate::util::get_random_u32_le;
 
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
@@ -86,9 +87,9 @@ where
     }
 
     fn random_field_element(shake: &mut Shake128Reader) -> Mersenne31 {
-        let mut val = get_random_u32(shake);
+        let mut val = get_random_u32_le(shake);
         while val >= Mersenne31::ORDER_U32 {
-            val = get_random_u32(shake);
+            val = get_random_u32_le(shake);
         }
 
         Mersenne31::from_canonical_u32(val)

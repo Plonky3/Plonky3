@@ -13,7 +13,7 @@ use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
 use crate::monolith_mds_width16::MonolithMdsMatrixM31Width16;
-use crate::util::get_random_u32;
+use crate::util::get_random_u32_le;
 
 pub(crate) fn reduce64(x: &mut u64) {
     let x_lo = *x & Mersenne31::ORDER_U64;
@@ -86,9 +86,9 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithM31Width16<NUM_FULL_ROUNDS> {
     }
 
     fn random_field_element(shake: &mut Shake128Reader) -> u64 {
-        let mut val = get_random_u32(shake);
+        let mut val = get_random_u32_le(shake);
         while val >= Mersenne31::ORDER_U32 {
-            val = get_random_u32(shake);
+            val = get_random_u32_le(shake);
         }
 
         val as u64
