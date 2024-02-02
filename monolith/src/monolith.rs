@@ -180,7 +180,7 @@ mod tests {
     use zkhash::fields::const_f31::ConstF31;
     use zkhash::fields::f31::Field32;
     use zkhash::monolith_31::monolith_31::Monolith31 as MonolithM31Reference;
-    use zkhash::monolith_31::monolith_31_instances::MONOLITH_CONST31_16_PARAMS;
+    use zkhash::monolith_31::monolith_31_instances::MONOLITH_CONST31_24_PARAMS;
 
     use crate::monolith::MonolithM31;
     use crate::monolith_mds::MonolithMdsMatrixM31;
@@ -192,14 +192,14 @@ mod tests {
     #[test]
     fn test_monolith_31() {
         let mds = MonolithMdsMatrixM31::<6>;
-        let monolith: MonolithM31<_, 16, 5> = MonolithM31::new(mds);
+        let monolith: MonolithM31<_, 24, 5> = MonolithM31::new(mds);
 
-        let mut state: [Mersenne31; 16] = [Mersenne31::zero(); 16];
+        let mut state: [Mersenne31; 24] = [Mersenne31::zero(); 24];
         for (_, inp) in state.iter_mut().enumerate() {
             *inp = rand::random::<Mersenne31>();
         }
 
-        let state_reference: [ConstF31; 16] = state
+        let state_reference: [ConstF31; 24] = state
             .iter()
             .map(|x| mersenne31_to_constf31(*x))
             .collect::<Vec<ConstF31>>()
@@ -214,7 +214,7 @@ mod tests {
             .try_into()
             .unwrap();
 
-        let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_16_PARAMS);
+        let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_24_PARAMS);
         let ref_output = monolith_reference.permutation(&state_reference);
 
         assert_eq!(output_converted, ref_output);
