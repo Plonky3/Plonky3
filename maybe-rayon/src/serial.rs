@@ -28,6 +28,7 @@ pub trait IntoParallelRefIterator<'data> {
 
     fn par_iter(&'data self) -> Self::Iter;
 }
+
 impl<'data, I: 'data + ?Sized> IntoParallelRefIterator<'data> for I
 where
     &'data I: IntoParallelIterator,
@@ -46,6 +47,7 @@ pub trait IntoParallelRefMutIterator<'data> {
 
     fn par_iter_mut(&'data mut self) -> Self::Iter;
 }
+
 impl<'data, I: 'data + ?Sized> IntoParallelRefMutIterator<'data> for I
 where
     &'data mut I: IntoParallelIterator,
@@ -162,4 +164,14 @@ impl<T: Iterator> ParIterExt for T {
     {
         self.flat_map(map_op)
     }
+}
+
+pub fn join<A, B, RA, RB>(oper_a: A, oper_b: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA,
+    B: FnOnce() -> RB,
+{
+    let result_a = oper_a();
+    let result_b = oper_b();
+    (result_a, result_b)
 }
