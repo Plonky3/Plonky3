@@ -14,3 +14,4 @@ pub mod verifier;
 pub use config::*;
 pub use fold_even_odd::*;
 pub use proof::*;
+pub use two_adic_pcs::*;
