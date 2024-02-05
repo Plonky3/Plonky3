@@ -15,10 +15,25 @@ pub enum SymbolicExpression<F: Field> {
     IsLastRow,
     IsTransition,
     Constant(F),
-    Add(Rc<Self>, Rc<Self>),
-    Sub(Rc<Self>, Rc<Self>),
-    Neg(Rc<Self>),
-    Mul(Rc<Self>, Rc<Self>),
+    Add {
+        x: Rc<Self>,
+        y: Rc<Self>,
+        degree_multiple: usize,
+    },
+    Sub {
+        x: Rc<Self>,
+        y: Rc<Self>,
+        degree_multiple: usize,
+    },
+    Neg {
+        x: Rc<Self>,
+        degree_multiple: usize,
+    },
+    Mul {
+        x: Rc<Self>,
+        y: Rc<Self>,
+        degree_multiple: usize,
+    },
 }
 
 impl<F: Field> SymbolicExpression<F> {
@@ -30,10 +45,18 @@ impl<F: Field> SymbolicExpression<F> {
             SymbolicExpression::IsLastRow => 1,
             SymbolicExpression::IsTransition => 0,
             SymbolicExpression::Constant(_) => 0,
-            SymbolicExpression::Add(x, y) => x.degree_multiple().max(y.degree_multiple()),
-            SymbolicExpression::Sub(x, y) => x.degree_multiple().max(y.degree_multiple()),
-            SymbolicExpression::Neg(x) => x.degree_multiple(),
-            SymbolicExpression::Mul(x, y) => x.degree_multiple() + y.degree_multiple(),
+            SymbolicExpression::Add {
+                degree_multiple, ..
+            } => *degree_multiple,
+            SymbolicExpression::Sub {
+                degree_multiple, ..
+            } => *degree_multiple,
+            SymbolicExpression::Neg {
+                degree_multiple, ..
+            } => *degree_multiple,
+            SymbolicExpression::Mul {
+                degree_multiple, ..
+            } => *degree_multiple,
         }
     }
 }
@@ -112,7 +135,12 @@ impl<F: Field> Add for SymbolicExpression<F> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
-        Self::Add(Rc::new(self), Rc::new(rhs))
+        let degree_multiple = self.degree_multiple().max(rhs.degree_multiple());
+        Self::Add {
+            x: Rc::new(self),
+            y: Rc::new(rhs),
+            degree_multiple,
+        }
     }
 }
 
@@ -152,7 +180,12 @@ impl<F: Field> Sub for SymbolicExpression<F> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
-        Self::Sub(Rc::new(self), Rc::new(rhs))
+        let degree_multiple = self.degree_multiple().max(rhs.degree_multiple());
+        Self::Sub {
+            x: Rc::new(self),
+            y: Rc::new(rhs),
+            degree_multiple,
+        }
     }
 }
 
@@ -180,7 +213,11 @@ impl<F: Field> Neg for SymbolicExpression<F> {
     type Output = Self;
 
     fn neg(self) -> Self {
-        Self::Neg(Rc::new(self))
+        let degree_multiple = self.degree_multiple();
+        Self::Neg {
+            x: Rc::new(self),
+            degree_multiple,
+        }
     }
 }
 
@@ -188,7 +225,12 @@ impl<F: Field> Mul for SymbolicExpression<F> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        Self::Mul(Rc::new(self), Rc::new(rhs))
+        let degree_multiple = self.degree_multiple() + rhs.degree_multiple();
+        Self::Mul {
+            x: Rc::new(self),
+            y: Rc::new(rhs),
+            degree_multiple,
+        }
     }
 }
 
