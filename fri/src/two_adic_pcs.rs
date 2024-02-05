@@ -428,12 +428,16 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
             .take(max_width.next_multiple_of(F::Packing::WIDTH))
             .collect();
 
-        let transposed_packed: Vec<Vec<F::Packing>> = (0..EF::D)
-            .map(|i| {
-                F::Packing::pack_slice(&powers.iter().map(|a| a.as_base_slice()[i]).collect_vec())
+        let transposed_packed: Vec<Vec<F::Packing>> = transpose_vec(
+            (0..EF::D)
+                .map(|d| {
+                    F::Packing::pack_slice(
+                        &powers.iter().map(|a| a.as_base_slice()[d]).collect_vec(),
+                    )
                     .to_vec()
-            })
-            .collect();
+                })
+                .collect(),
+        );
 
         Self {
             powers,
@@ -447,20 +451,20 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
     }
 
     // Same as `self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()`
-    // For some reason, this is 2x faster than naive in benches but has
-    // the exact same performance in the actual implementation (for BabyBear).
-    // More investigation is needed.
     fn reduce_base(&self, xs: &[F]) -> EF {
         let (xs_packed, xs_sfx) = F::Packing::pack_slice_with_suffix(xs);
-        let packed_sum = EF::from_base_fn(|i| {
-            // slightly faster than .zip().sum()
-            let mut s = F::Packing::zero();
-            let tp = &self.transposed_packed[i];
-            for j in 0..xs_packed.len() {
-                s += xs_packed[j] * tp[j];
+        // Max extension degree of 8, we trust LLVM to unroll this.
+        // OK to bump if we need higher extensions, just check that it still gets unrolled.
+        assert!(EF::D <= 8);
+        let mut sums = (0..EF::D)
+            .map(|_| F::Packing::zero())
+            .collect::<heapless::Vec<_, 8>>();
+        for (&x, pows) in izip!(xs_packed, &self.transposed_packed) {
+            for d in 0..EF::D {
+                sums[d] += x * pows[d];
             }
-            s.as_slice().iter().copied().sum()
-        });
+        }
+        let packed_sum = EF::from_base_fn(|d| sums[d].as_slice().iter().copied().sum());
         let sfx_sum = xs_sfx
             .iter()
             .zip(&self.powers[(xs_packed.len() * F::Packing::WIDTH)..])
@@ -468,6 +472,20 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
             .sum::<EF>();
         packed_sum + sfx_sum
     }
+}
+
+fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
+    assert!(!v.is_empty());
+    let len = v[0].len();
+    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect();
+    (0..len)
+        .map(|_| {
+            iters
+                .iter_mut()
+                .map(|n| n.next().unwrap())
+                .collect::<Vec<T>>()
+        })
+        .collect()
 }
 
 #[cfg(test)]
