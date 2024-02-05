@@ -5,6 +5,8 @@
 mod extension;
 mod mds;
 
+pub use mds::*;
+
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};

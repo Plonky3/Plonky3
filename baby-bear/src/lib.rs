@@ -8,6 +8,7 @@ mod mds;
 mod non_canonical;
 
 pub use baby_bear::*;
+pub use mds::*;
 pub use non_canonical::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]

@@ -3,13 +3,13 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
+use p3_baby_bear::MdsMatrixBabyBear;
 use p3_field::{AbstractField, Field, PrimeField64};
 use p3_goldilocks::Goldilocks;
-use p3_mds::babybear::MdsMatrixBabyBear;
-use p3_mds::goldilocks::MdsMatrixGoldilocks;
+use p3_goldilocks::MdsMatrixGoldilocks;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
-use p3_mds::mersenne31::MdsMatrixMersenne31;
 use p3_mds::MdsPermutation;
+use p3_mersenne_31::MdsMatrixMersenne31;
 use p3_mersenne_31::Mersenne31;
 use p3_rescue::{BasicSboxLayer, Rescue};
 use p3_symmetric::Permutation;
