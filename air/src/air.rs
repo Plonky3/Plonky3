@@ -112,20 +112,12 @@ pub trait PairBuilder: AirBuilder {
     fn preprocessed(&self) -> Self::M;
 }
 
-pub trait PermutationAirBuilder: AirBuilder {
+pub trait ExtensionBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
     type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
 
     type VarEF: Into<Self::ExprEF> + Copy;
-
-    type MP: MatrixRowSlices<Self::VarEF>;
-
-    fn permutation(&self) -> Self::MP;
-
-    // TODO: The return type should be some kind of variable to support symbolic evaluation,
-    // but maybe separate from `VarEF` since that might be a `PackedField`?
-    fn permutation_randomness(&self) -> &[Self::EF];
 
     fn assert_zero_ext<I>(&mut self, x: I)
     where
@@ -147,32 +139,19 @@ pub trait PermutationAirBuilder: AirBuilder {
     }
 }
 
+pub trait PermutationAirBuilder: ExtensionBuilder {
+    type MP: MatrixRowSlices<Self::VarEF>;
+
+    fn permutation(&self) -> Self::MP;
+
+    // TODO: The return type should be some kind of variable to support symbolic evaluation,
+    // but maybe separate from `VarEF` since that might be a `PackedField`?
+    fn permutation_randomness(&self) -> &[Self::EF];
+}
+
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     pub inner: &'a mut AB,
     condition: AB::Expr,
-}
-
-impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
-    type EF = AB::EF;
-    type VarEF = AB::VarEF;
-    type ExprEF = AB::ExprEF;
-    type MP = AB::MP;
-
-    fn permutation(&self) -> Self::MP {
-        self.inner.permutation()
-    }
-
-    fn assert_zero_ext<I>(&mut self, x: I)
-    where
-        I: Into<Self::ExprEF>,
-    {
-        self.inner
-            .assert_zero_ext(x.into() * self.condition.clone());
-    }
-
-    fn permutation_randomness(&self) -> &[Self::EF] {
-        self.inner.permutation_randomness()
-    }
 }
 
 impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
@@ -199,6 +178,32 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition.clone() * x.into());
+    }
+}
+
+impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
+    type EF = AB::EF;
+    type VarEF = AB::VarEF;
+    type ExprEF = AB::ExprEF;
+
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.inner
+            .assert_zero_ext(x.into() * self.condition.clone());
+    }
+}
+
+impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
+    type MP = AB::MP;
+
+    fn permutation(&self) -> Self::MP {
+        self.inner.permutation()
+    }
+
+    fn permutation_randomness(&self) -> &[Self::EF] {
+        self.inner.permutation_randomness()
     }
 }
 
