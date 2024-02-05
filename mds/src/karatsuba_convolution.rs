@@ -1,13 +1,35 @@
 use core::ops::{Add, AddAssign, ShrAssign, Sub, SubAssign};
 
 pub trait RngElt:
-    Add<Output = Self> + AddAssign + Copy + Default + ShrAssign<u32> + Sub<Output = Self> + SubAssign
+    Add<Output = Self>
+    + AddAssign
+    + Copy
+    + Default
+    + ShrAssign<u32>
+    + Sub<Output = Self>
+    + SubAssign
+    + Eq
 {
 }
 
 impl RngElt for i64 {}
 impl RngElt for i128 {}
 
+/// In practice, one of the parameters to the convolution will be
+/// constant (the MDS matrix); after inspecting Godbolt output, it
+/// seems that the compiler does indeed generate single constants as
+/// inputs to the multiplication, rather than doing all that
+/// arithmetic on the constant values every time. Note however that
+/// these compile-time generated constants will be about N times
+/// bigger than they need to be in principle, which could be a
+/// potential avenue for some minor improvements.
+///
+/// NB: Note that the convolution code does some `ShrAssign`s after
+/// calling `mul`, so if `mul` does an intermediate/partial reduction,
+/// then the definition of `ShrAssign` will have to be replaced with
+/// the corresponding field "divide-by-2" function, rather than the
+/// primitive "bit-shift-to-the-right" which relies on the knowledge
+/// that the input is even if no reduction has taken place.
 pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
     fn mul(x: T, y: U) -> V;
 
@@ -85,13 +107,17 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
         let mut rhs_sum = [U::default(); HALF_N];
 
         for i in 0..HALF_N {
-            lhs_even[i] = lhs[2 * i];
-            lhs_odd[i] = lhs[2 * i + 1];
-            lhs_sum[i] = lhs_even[i] + lhs_odd[i];
+            let s = lhs[2 * i];
+            let t = lhs[2 * i + 1];
+            lhs_even[i] = s;
+            lhs_odd[i] = t;
+            lhs_sum[i] = s + t;
 
-            rhs_even[i] = rhs[2 * i];
-            rhs_odd[i] = rhs[2 * i + 1];
-            rhs_sum[i] = rhs_even[i] + rhs_odd[i];
+            let s = rhs[2 * i];
+            let t = rhs[2 * i + 1];
+            rhs_even[i] = s;
+            rhs_odd[i] = t;
+            rhs_sum[i] = s + t;
         }
 
         // Could make some scratch space to draw from here?
