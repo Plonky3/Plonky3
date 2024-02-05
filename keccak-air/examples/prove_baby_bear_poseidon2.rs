@@ -4,8 +4,8 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::two_adic_pcs::TwoAdicFriPcs;
-use p3_fri::FriConfigImpl;
+use p3_fri::two_adic_pcs::{TwoAdicFriPcs, TwoAdicFriPcsConfig};
+use p3_fri::FriConfig;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
@@ -59,14 +59,19 @@ fn main() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
-    let fri_config = MyFriConfig::new(1, 100, 16, challenge_mmcs);
-
-    type Pcs = TwoAdicFriPcs<MyFriConfig, Val, Dft, ValMmcs>;
-    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
-
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        num_queries: 100,
+        proof_of_work_bits: 16,
+        mmcs: challenge_mmcs,
+    };
+    type Pcs =
+        TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
+
+    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
     let config = StarkConfigImpl::new(pcs);
+
     let mut challenger = Challenger::new(perm.clone());
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
