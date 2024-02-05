@@ -167,7 +167,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
         self.mmcs
             .get_matrices(prover_data)
             .into_iter()
-            .map(|m| BitReversedMatrixView::new(m))
+            .map(BitReversedMatrixView::new)
             .collect()
     }
 
