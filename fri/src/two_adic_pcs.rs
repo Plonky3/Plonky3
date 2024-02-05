@@ -23,6 +23,7 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
+/// We group all of our type bounds into this trait to reduce duplication across signatures.
 pub trait TwoAdicFriPcsGenericConfig: Default {
     type Val: TwoAdicField;
     type Challenge: TwoAdicField + ExtensionField<Self::Val>;
@@ -111,44 +112,9 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for 
     }
 }
 
-/*
-impl<FC, Val, Dft, M, In> Pcs<Val, In> for TwoAdicFriPcs<FC, Val, Dft, M>
-where
-    Val: TwoAdicField,
-    FC: FriConfig,
-    FC::Challenge: ExtensionField<Val>,
-    FC::Challenger: FieldChallenger<Val>,
-    Dft: TwoAdicSubgroupDft<Val>,
-    M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    In: MatrixRows<Val>,
-{
-    type Commitment = M::Commitment;
-    type ProverData = M::ProverData;
-    type Proof = TwoAdicFriPcsProof<FC, Val, M::Proof>;
-    type Error = VerificationError<FC, M::Error>;
-
-    fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(polynomials, Val::one())
-    }
-}
-*/
-
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
 {
-    /*
-    impl<FC, Val, Dft, M, In> UnivariatePcsWithLde<Val, FC::Challenge, In, FC::Challenger>
-        for TwoAdicFriPcs<FC, Val, Dft, M>
-    where
-        Val: TwoAdicField,
-        FC: FriConfig,
-        FC::Challenge: ExtensionField<Val>,
-        FC::Challenger: FieldChallenger<Val>,
-        Dft: TwoAdicSubgroupDft<Val>,
-        M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-        In: MatrixRows<Val>,
-    {
-        */
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
 
     fn coset_shift(&self) -> C::Val {
@@ -196,18 +162,6 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
 
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
-/*
-impl<FC, Val, Dft, M, In> UnivariatePcs<Val, FC::Challenge, In, FC::Challenger>
-    for TwoAdicFriPcs<FC, Val, Dft, M>
-where
-    Val: TwoAdicField,
-    FC: FriConfig,
-    FC::Challenge: ExtensionField<Val>,
-    FC::Challenger: FieldChallenger<Val>,
-    Dft: TwoAdicSubgroupDft<Val>,
-    M: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    In: MatrixRows<Val>,
-    */
 {
     #[instrument(name = "open_multi_batches", skip_all)]
     fn open_multi_batches(
