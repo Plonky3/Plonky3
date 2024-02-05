@@ -204,7 +204,7 @@ mod tests {
         let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
 
         let mut state: [Mersenne31; 16] = [Mersenne31::zero(); 16];
-        for (_, inp) in state.iter_mut().enumerate() {
+        for inp in state.iter_mut() {
             *inp = rand::random::<Mersenne31>();
         }
 

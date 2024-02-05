@@ -193,7 +193,7 @@ mod tests {
         let monolith: MonolithM31<_, 24, 5> = MonolithM31::new(mds);
 
         let mut state: [Mersenne31; 24] = [Mersenne31::zero(); 24];
-        for (_, inp) in state.iter_mut().enumerate() {
+        for inp in state.iter_mut() {
             *inp = rand::random::<Mersenne31>();
         }
 
