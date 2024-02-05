@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
 
@@ -11,18 +12,23 @@ use crate::fold_even_odd::fold_even_odd;
 use crate::{CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<FC: FriConfig>(
-    config: &FC,
-    input: &[Option<Vec<FC::Challenge>>; 32],
-    challenger: &mut FC::Challenger,
-) -> (FriProof<FC>, Vec<usize>) {
+pub fn prove<F, M, Challenger>(
+    config: &FriConfig<M>,
+    input: &[Option<Vec<F>>; 32],
+    challenger: &mut Challenger,
+) -> (FriProof<F, M, Challenger::Witness>, Vec<usize>)
+where
+    F: TwoAdicField,
+    M: DirectMmcs<F>,
+    Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+{
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
-    let commit_phase_result = commit_phase::<FC>(config, input, log_max_height, challenger);
+    let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
 
-    let pow_witness = challenger.grind(config.proof_of_work_bits());
+    let pow_witness = challenger.grind(config.proof_of_work_bits);
 
-    let query_indices: Vec<usize> = (0..config.num_queries())
+    let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
@@ -44,11 +50,15 @@ pub fn prove<FC: FriConfig>(
     )
 }
 
-fn answer_query<FC: FriConfig>(
-    config: &FC,
-    commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData],
+fn answer_query<F, M>(
+    config: &FriConfig<M>,
+    commit_phase_commits: &[M::ProverData],
     index: usize,
-) -> QueryProof<FC> {
+) -> QueryProof<F, M>
+where
+    F: Field,
+    M: Mmcs<F>,
+{
     let commit_phase_openings = commit_phase_commits
         .iter()
         .enumerate()
@@ -57,8 +67,7 @@ fn answer_query<FC: FriConfig>(
             let index_i_sibling = index_i ^ 1;
             let index_pair = index_i >> 1;
 
-            let (mut opened_rows, opening_proof) =
-                config.commit_phase_mmcs().open_batch(index_pair, commit);
+            let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index_pair, commit);
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
@@ -77,25 +86,30 @@ fn answer_query<FC: FriConfig>(
 }
 
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<FC: FriConfig>(
-    config: &FC,
-    input: &[Option<Vec<FC::Challenge>>; 32],
+fn commit_phase<F, M, Challenger>(
+    config: &FriConfig<M>,
+    input: &[Option<Vec<F>>; 32],
     log_max_height: usize,
-    challenger: &mut FC::Challenger,
-) -> CommitPhaseResult<FC> {
+    challenger: &mut Challenger,
+) -> CommitPhaseResult<F, M>
+where
+    F: TwoAdicField,
+    M: DirectMmcs<F>,
+    Challenger: CanObserve<M::Commitment> + CanSample<F>,
+{
     let mut current = input[log_max_height].as_ref().unwrap().clone();
 
     let mut commits = vec![];
     let mut data = vec![];
 
-    for log_folded_height in (config.log_blowup()..log_max_height).rev() {
+    for log_folded_height in (config.log_blowup..log_max_height).rev() {
         let leaves = RowMajorMatrix::new(current.clone(), 2);
-        let (commit, prover_data) = config.commit_phase_mmcs().commit_matrix(leaves);
+        let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
         data.push(prover_data);
 
-        let beta: FC::Challenge = challenger.sample();
+        let beta: F = challenger.sample();
         current = fold_even_odd(current, beta);
 
         if let Some(v) = &input[log_folded_height] {
@@ -117,8 +131,8 @@ fn commit_phase<FC: FriConfig>(
     }
 }
 
-struct CommitPhaseResult<FC: FriConfig> {
-    commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
-    data: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::ProverData>,
-    final_poly: FC::Challenge,
+struct CommitPhaseResult<F, M: Mmcs<F>> {
+    commits: Vec<M::Commitment>,
+    data: Vec<M::ProverData>,
+    final_poly: F,
 }

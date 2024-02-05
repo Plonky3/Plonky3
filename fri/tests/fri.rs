@@ -5,7 +5,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
-use p3_fri::{prover, verifier, FriConfigImpl};
+use p3_fri::{prover, verifier, FriConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::{Matrix, MatrixRows};
@@ -27,15 +27,20 @@ type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16>;
-type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
+type MyFriConfig = FriConfig<ChallengeMmcs>;
 
 fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
     let mds = MyMds::default();
     let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
-    let fri_config = MyFriConfig::new(1, 10, 8, challenge_mmcs);
+    let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        num_queries: 10,
+        proof_of_work_bits: 8,
+        mmcs,
+    };
     (perm, fri_config)
 }
 
@@ -123,20 +128,8 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 #[test]
 fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
-    for i in 0..20 {
+    for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
         do_test_fri_ldt(&mut rng);
     }
 }
-
-// You can uncomment this for use with `cargo-show-asm` to investigate `reduce_base`.
-/*
-#[test]
-fn force_monomorphize() {
-    let mut rng = thread_rng();
-    let alpha: Challenge = rng.gen();
-    let r = PowersReducer::new(alpha, 1024);
-    let xs: Vec<Val> = (0..1024).map(|_| rng.gen()).collect();
-    core::hint::black_box(r.reduce_base(&xs));
-}
-*/

@@ -1,9 +1,17 @@
-use core::marker::PhantomData;
+pub struct FriConfig<M> {
+    pub log_blowup: usize,
+    pub num_queries: usize,
+    pub proof_of_work_bits: usize,
+    pub mmcs: M,
+}
 
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
-use p3_commit::{DirectMmcs, Mmcs};
-use p3_field::TwoAdicField;
+impl<M> FriConfig<M> {
+    pub fn blowup(&self) -> usize {
+        1 << self.log_blowup
+    }
+}
 
+/*
 pub trait FriConfig {
     type Challenge: TwoAdicField;
 
@@ -80,3 +88,5 @@ where
         self.proof_of_work_bits
     }
 }
+
+*/
