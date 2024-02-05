@@ -106,38 +106,6 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::one()));
     }
-
-    fn assert_zero_ext<ExprExt, I>(&mut self, x: I)
-    where
-        ExprExt: AbstractExtensionField<Self::Expr>,
-        I: Into<ExprExt>,
-    {
-        for xb in x.into().as_base_slice().iter().cloned() {
-            self.assert_zero(xb);
-        }
-    }
-
-    fn assert_eq_ext<ExprExt, I1, I2>(&mut self, x: I1, y: I2)
-    where
-        ExprExt: AbstractExtensionField<Self::Expr>,
-        I1: Into<ExprExt>,
-        I2: Into<ExprExt>,
-    {
-        self.assert_zero_ext::<ExprExt, ExprExt>(x.into() - y.into());
-    }
-
-    fn assert_one_ext<ExprExt, I>(&mut self, x: I)
-    where
-        ExprExt: AbstractExtensionField<Self::Expr>,
-        I: Into<ExprExt>,
-    {
-        let xe: ExprExt = x.into();
-        let parts = xe.as_base_slice();
-        self.assert_one(parts[0].clone());
-        for part in &parts[1..] {
-            self.assert_zero(part.clone());
-        }
-    }
 }
 
 pub trait PairBuilder: AirBuilder {
@@ -158,6 +126,25 @@ pub trait PermutationAirBuilder: AirBuilder {
     // TODO: The return type should be some kind of variable to support symbolic evaluation,
     // but maybe separate from `VarEF` since that might be a `PackedField`?
     fn permutation_randomness(&self) -> &[Self::EF];
+
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>;
+
+    fn assert_eq_ext<I1, I2>(&mut self, x: I1, y: I2)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+    {
+        self.assert_zero_ext(x.into() - y.into());
+    }
+
+    fn assert_one_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.assert_eq_ext(x, Self::ExprEF::one())
+    }
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
@@ -173,6 +160,14 @@ impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder
 
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
+    }
+
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.inner
+            .assert_zero_ext(x.into() * self.condition.clone());
     }
 
     fn permutation_randomness(&self) -> &[Self::EF] {
