@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::PrimeField64;
+use p3_field::{ExtensionField, Field, PrimeField64};
 use p3_symmetric::CryptographicPermutation;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -87,21 +87,24 @@ where
     }
 }
 
-impl<F, P, const WIDTH: usize> CanSample<F> for DuplexChallenger<F, P, WIDTH>
+impl<F, EF, P, const WIDTH: usize> CanSample<EF> for DuplexChallenger<F, P, WIDTH>
 where
-    F: Copy,
+    F: Field,
+    EF: ExtensionField<F>,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn sample(&mut self) -> F {
-        // If we have buffered inputs, we must perform a duplexing so that the challenge will
-        // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
-        if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
-            self.duplexing();
-        }
+    fn sample(&mut self) -> EF {
+        EF::from_base_fn(|_| {
+            // If we have buffered inputs, we must perform a duplexing so that the challenge will
+            // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
+            if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
+                self.duplexing();
+            }
 
-        self.output_buffer
-            .pop()
-            .expect("Output buffer should be non-empty")
+            self.output_buffer
+                .pop()
+                .expect("Output buffer should be non-empty")
+        })
     }
 }
 
@@ -218,7 +221,9 @@ mod tests {
 
         (0..WIDTH / 2).for_each(|element| {
             assert_eq!(
-                duplex_challenger.sample(),
+                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                    &mut duplex_challenger
+                ),
                 F::from_canonical_u8(element as u8)
             );
             assert_eq!(
@@ -229,7 +234,12 @@ mod tests {
         });
 
         (0..WIDTH / 2).for_each(|i| {
-            assert_eq!(duplex_challenger.sample(), F::from_canonical_u8(0));
+            assert_eq!(
+                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                    &mut duplex_challenger
+                ),
+                F::from_canonical_u8(0)
+            );
             assert_eq!(duplex_challenger.input_buffer, vec![]);
             assert_eq!(
                 duplex_challenger.output_buffer,

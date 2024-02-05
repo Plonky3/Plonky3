@@ -2,149 +2,126 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::Dimensions;
-use p3_util::{log2_strict_usize, reverse_bits_len};
+use p3_util::reverse_bits_len;
 
-use crate::{FriConfig, FriProof, InputOpening, QueryProof};
+use crate::{FriConfig, FriProof, QueryProof};
 
 #[derive(Debug)]
-pub enum VerificationError<InputMmcsErr, CommitMmcsErr> {
+pub enum FriError<CommitMmcsErr> {
     InvalidProofShape,
-    InputMmcsError(InputMmcsErr),
     CommitPhaseMmcsError(CommitMmcsErr),
     FinalPolyMismatch,
     InvalidPowWitness,
 }
 
-pub type VerificationErrorForFriConfig<FC> = VerificationError<
-    <<FC as FriConfig>::InputMmcs as Mmcs<<FC as FriConfig>::Val>>::Error,
-    <<FC as FriConfig>::CommitPhaseMmcs as Mmcs<<FC as FriConfig>::Challenge>>::Error,
->;
+#[derive(Debug)]
+pub struct FriChallenges<F> {
+    pub query_indices: Vec<usize>,
+    betas: Vec<F>,
+}
 
-type VerificationResult<FC, T> = Result<T, VerificationErrorForFriConfig<FC>>;
-
-pub(crate) fn verify<FC: FriConfig>(
-    config: &FC,
-    input_mmcs: &[FC::InputMmcs],
-    input_dims: &[Vec<Dimensions>],
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
-    proof: &FriProof<FC>,
-    challenger: &mut FC::Challenger,
-) -> VerificationResult<FC, ()> {
-    let alpha: FC::Challenge = challenger.sample_ext_element();
-    let betas: Vec<FC::Challenge> = proof
+pub fn verify_shape_and_sample_challenges<F, M, Challenger>(
+    config: &FriConfig<M>,
+    proof: &FriProof<F, M, Challenger::Witness>,
+    challenger: &mut Challenger,
+) -> Result<FriChallenges<F>, FriError<M::Error>>
+where
+    F: Field,
+    M: Mmcs<F>,
+    Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+{
+    let betas: Vec<F> = proof
         .commit_phase_commits
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            challenger.sample_ext_element()
+            challenger.sample()
         })
         .collect();
 
-    if proof.query_proofs.len() != config.num_queries() {
-        return Err(VerificationError::InvalidProofShape);
+    if proof.query_proofs.len() != config.num_queries {
+        return Err(FriError::InvalidProofShape);
     }
 
     // Check PoW.
-    if !challenger.check_witness(config.proof_of_work_bits(), proof.pow_witness) {
-        return Err(VerificationError::InvalidPowWitness);
+    if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
+        return Err(FriError::InvalidPowWitness);
     }
 
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup();
+    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
 
-    for query_proof in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height);
+    let query_indices: Vec<usize> = (0..config.num_queries)
+        .map(|_| challenger.sample_bits(log_max_height))
+        .collect();
 
-        let reduced_openings = verify_input(
-            input_mmcs,
-            input_commits,
-            input_dims,
-            &query_proof.input_openings,
-            index,
-            alpha,
-            log_max_height,
-        )?;
+    Ok(FriChallenges {
+        query_indices,
+        betas,
+    })
+}
 
+pub fn verify_challenges<F, M, Witness>(
+    config: &FriConfig<M>,
+    proof: &FriProof<F, M, Witness>,
+    challenges: &FriChallenges<F>,
+    reduced_openings: &[[F; 32]],
+) -> Result<(), FriError<M::Error>>
+where
+    F: TwoAdicField,
+    M: Mmcs<F>,
+{
+    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    for (&index, query_proof, ro) in izip!(
+        &challenges.query_indices,
+        &proof.query_proofs,
+        reduced_openings
+    ) {
         let folded_eval = verify_query(
             config,
             &proof.commit_phase_commits,
             index,
             query_proof,
-            &betas,
-            reduced_openings,
+            &challenges.betas,
+            ro,
             log_max_height,
         )?;
 
         if folded_eval != proof.final_poly {
-            return Err(VerificationError::FinalPolyMismatch);
+            return Err(FriError::FinalPolyMismatch);
         }
     }
 
     Ok(())
 }
 
-fn verify_input<FC: FriConfig>(
-    input_mmcs: &[FC::InputMmcs],
-    input_commits: &[<FC::InputMmcs as Mmcs<FC::Val>>::Commitment],
-    input_dims: &[Vec<Dimensions>],
-    input_openings: &[InputOpening<FC>],
-    index: usize,
-    alpha: FC::Challenge,
-    log_max_height: usize,
-) -> VerificationResult<FC, Vec<FC::Challenge>> {
-    let mut openings_by_log_height: Vec<Vec<FC::Val>> = vec![vec![]; log_max_height + 1];
-    for (mmcs, commit, dims, opening) in
-        izip!(input_mmcs, input_commits, input_dims, input_openings)
-    {
-        mmcs.verify_batch(
-            commit,
-            dims,
-            index,
-            &opening.opened_values,
-            &opening.opening_proof,
-        )
-        .map_err(VerificationError::InputMmcsError)?;
-        for (mat_dims, mat_opening) in izip!(dims, &opening.opened_values) {
-            let log_height = log2_strict_usize(mat_dims.height);
-            openings_by_log_height[log_height].extend_from_slice(mat_opening);
-        }
-    }
-    let reduced_openings = openings_by_log_height
-        .into_iter()
-        .map(|o| {
-            o.into_iter()
-                .zip(alpha.powers())
-                .map(|(y, alpha_pow)| alpha_pow * y)
-                .sum()
-        })
-        .collect();
-    Ok(reduced_openings)
-}
-
-fn verify_query<FC: FriConfig>(
-    config: &FC,
-    commit_phase_commits: &[<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment],
+fn verify_query<F, M>(
+    config: &FriConfig<M>,
+    commit_phase_commits: &[M::Commitment],
     mut index: usize,
-    proof: &QueryProof<FC>,
-    betas: &[FC::Challenge],
-    reduced_openings: Vec<FC::Challenge>,
+    proof: &QueryProof<F, M>,
+    betas: &[F],
+    reduced_openings: &[F; 32],
     log_max_height: usize,
-) -> VerificationResult<FC, FC::Challenge> {
-    let mut folded_eval = FC::Challenge::zero();
-    let mut x = FC::Challenge::two_adic_generator(log_max_height)
+) -> Result<F, FriError<M::Error>>
+where
+    F: TwoAdicField,
+    M: Mmcs<F>,
+{
+    let mut folded_eval = F::zero();
+    let mut x = F::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
 
-    for (log_folded_height, commit, step, &beta, reduced_opening_for_height) in izip!(
+    for (log_folded_height, commit, step, &beta) in izip!(
         (0..log_max_height).rev(),
         commit_phase_commits,
         &proof.commit_phase_openings,
         betas,
-        reduced_openings.into_iter().rev()
     ) {
-        folded_eval += reduced_opening_for_height;
+        folded_eval += reduced_openings[log_folded_height + 1];
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
@@ -157,7 +134,7 @@ fn verify_query<FC: FriConfig>(
             height: (1 << log_folded_height),
         }];
         config
-            .commit_phase_mmcs()
+            .mmcs
             .verify_batch(
                 commit,
                 dims,
@@ -165,10 +142,10 @@ fn verify_query<FC: FriConfig>(
                 &[evals.clone()],
                 &step.opening_proof,
             )
-            .map_err(VerificationError::CommitPhaseMmcsError)?;
+            .map_err(FriError::CommitPhaseMmcsError)?;
 
         let mut xs = [x; 2];
-        xs[index_sibling % 2] *= FC::Challenge::two_adic_generator(1);
+        xs[index_sibling % 2] *= F::two_adic_generator(1);
         // interpolate and evaluate at beta
         folded_eval = evals[0] + (beta - xs[0]) * (evals[1] - evals[0]) / (xs[1] - xs[0]);
 
@@ -177,7 +154,7 @@ fn verify_query<FC: FriConfig>(
     }
 
     debug_assert!(index == 0 || index == 1);
-    debug_assert!(x.is_one() || x == FC::Challenge::two_adic_generator(1));
+    debug_assert!(x.is_one() || x == F::two_adic_generator(1));
 
     Ok(folded_eval)
 }
