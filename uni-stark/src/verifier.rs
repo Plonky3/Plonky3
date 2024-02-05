@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use tracing::instrument;
 
 use p3_air::{Air, BaseAir, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
@@ -11,6 +12,7 @@ use p3_util::reverse_slice_index_bits;
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{Proof, StarkConfig, VerifierConstraintFolder};
 
+#[instrument(skip_all)]
 pub fn verify<SC, A>(
     config: &SC,
     air: &A,
