@@ -17,18 +17,37 @@ use p3_mds::MdsPermutation;
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
 
-// FIXME: implement properly
+// For N <= 16 we have small MDS entries and the maximum result we can
+// get is |x| < 2^51.
+#[inline(always)]
 fn reduce_i64(x: i64) -> Mersenne31 {
-    const P_SQR: u64 = Mersenne31::ORDER_U64 * Mersenne31::ORDER_U64;
-    Mersenne31::from_wrapped_u128((x as i128 + P_SQR as i128) as u128)
+    debug_assert!(x < (1 << 62));
+    debug_assert!(x > -(1 << 62));
+
+    const MAKE_POSITIVE: i64 = (Mersenne31::ORDER_U64 << 31) as i64;
+    let pos_x = x + MAKE_POSITIVE;
+    Mersenne31::from_wrapped_u64(pos_x as u64)
 }
 
-// FIXME: implement properly
+#[inline(always)]
 fn reduce_i128(x: i128) -> Mersenne31 {
-    const P_SQR: u64 = Mersenne31::ORDER_U64 * Mersenne31::ORDER_U64;
-    const P_EXP4: u128 = P_SQR as u128 * P_SQR as u128;
-    let x = if x < 0 { x as i128 + P_EXP4 as i128 } else { x } as u128;
-    Mersenne31::from_wrapped_u128(x)
+    // We assume below that (x + MAKE_POSITIVE) < 2^96.
+    debug_assert!(x < (1i128 << 95));
+    debug_assert!(x > -(1 << 95));
+    const MAKE_POSITIVE: i128 = (Mersenne31::ORDER_U64 as i128) << (95 - 31);
+    // For some reason the conditional is much faster than always adding.
+    let pos_x = if x < 0 { x + MAKE_POSITIVE } else { x };
+    // pos_x = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
+    let (hi, mid, lo) = (
+        (pos_x >> 64) as u64,
+        (pos_x >> 32) as u32 as u64,
+        pos_x as u32 as u64,
+    );
+    // 2^32 = 2 (mod P), hence
+    // pos_x = lo + 2^32 * mid + 2^64 * hi
+    //       = lo + 2 * mid + 4 * hi (mod P)
+    let res = lo + 2 * mid + 4 * hi;
+    Mersenne31::from_wrapped_u64(res)
 }
 
 #[inline(always)]
@@ -61,7 +80,6 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
-
         apply_conv_small(
             input,
             MATRIX_CIRC_MDS_8_SML_COL,
