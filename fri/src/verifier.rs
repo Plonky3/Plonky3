@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 

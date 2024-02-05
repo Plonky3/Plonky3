@@ -23,7 +23,7 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
-pub trait TwoAdicFriPcsConfig {
+pub trait TwoAdicFriPcsGenericConfig: Default {
     type Val: TwoAdicField;
     type Challenge: TwoAdicField + ExtensionField<Self::Val>;
     type Challenger: FieldChallenger<Self::Val>
@@ -34,21 +34,21 @@ pub trait TwoAdicFriPcsConfig {
     type InputMmcs: 'static
         + for<'a> DirectMmcs<Self::Val, Mat<'a> = RowMajorMatrixView<'a, Self::Val>>;
     type FriMmcs: DirectMmcs<Self::Challenge>;
-
-    fn fri(&self) -> &FriConfig<Self::FriMmcs>;
-    fn dft(&self) -> &Self::Dft;
-    fn mmcs(&self) -> &Self::InputMmcs;
 }
 
-struct TwoAdicFriPcsConfigImpl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs> {
-    fri: FriConfig<FriMmcs>,
-    dft: Dft,
-    mmcs: InputMmcs,
-    _phantom: PhantomData<(Val, Challenge, Challenger)>,
+pub struct TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>(
+    PhantomData<(Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs)>,
+);
+impl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs> Default
+    for TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
+{
+    fn default() -> Self {
+        Self(PhantomData)
+    }
 }
 
-impl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs> TwoAdicFriPcsConfig
-    for TwoAdicFriPcsConfigImpl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
+impl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs> TwoAdicFriPcsGenericConfig
+    for TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
 where
     Val: TwoAdicField,
     Challenge: TwoAdicField + ExtensionField<Val>,
@@ -66,56 +66,41 @@ where
     type Dft = Dft;
     type InputMmcs = InputMmcs;
     type FriMmcs = FriMmcs;
-
-    fn fri(&self) -> &FriConfig<Self::FriMmcs> {
-        &self.fri
-    }
-
-    fn dft(&self) -> &Self::Dft {
-        &self.dft
-    }
-
-    fn mmcs(&self) -> &Self::InputMmcs {
-        &self.mmcs
-    }
 }
 
-impl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
-    TwoAdicFriPcsConfigImpl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
-{
-    pub fn new(fri: FriConfig<FriMmcs>, dft: Dft, mmcs: InputMmcs) -> Self {
-        Self {
-            fri,
-            dft,
-            mmcs,
-            _phantom: PhantomData,
-        }
-    }
+pub struct TwoAdicFriPcs<C: TwoAdicFriPcsGenericConfig> {
+    fri: FriConfig<C::FriMmcs>,
+    dft: C::Dft,
+    mmcs: C::InputMmcs,
 }
 
-pub struct TwoAdicFriPcs<C>(C);
+impl<C: TwoAdicFriPcsGenericConfig> TwoAdicFriPcs<C> {
+    pub fn new(fri: FriConfig<C::FriMmcs>, dft: C::Dft, mmcs: C::InputMmcs) -> Self {
+        Self { fri, dft, mmcs }
+    }
+}
 
 #[derive(Debug)]
-pub enum VerificationError<C: TwoAdicFriPcsConfig> {
+pub enum VerificationError<C: TwoAdicFriPcsGenericConfig> {
     InputMmcsError(<C::InputMmcs as Mmcs<C::Val>>::Error),
     FriError(FriError<<C::FriMmcs as Mmcs<C::Challenge>>::Error>),
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct TwoAdicFriPcsProof<C: TwoAdicFriPcsConfig> {
+pub struct TwoAdicFriPcsProof<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) fri_proof: FriProof<C::Challenge, C::FriMmcs, C::Val>,
     /// For each query, for each committed batch, query openings for that batch
     pub(crate) query_openings: Vec<Vec<BatchOpening<C>>>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct BatchOpening<C: TwoAdicFriPcsConfig> {
+pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) opened_values: Vec<Vec<C::Val>>,
     pub(crate) opening_proof: <C::InputMmcs as Mmcs<C::Val>>::Proof,
 }
 
-impl<C: TwoAdicFriPcsConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for TwoAdicFriPcs<C> {
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for TwoAdicFriPcs<C> {
     type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
     type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
     type Proof = TwoAdicFriPcsProof<C>;
@@ -148,7 +133,7 @@ where
 }
 */
 
-impl<C: TwoAdicFriPcsConfig, In: MatrixRows<C::Val>>
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
 {
     /*
@@ -171,7 +156,7 @@ impl<C: TwoAdicFriPcsConfig, In: MatrixRows<C::Val>>
     }
 
     fn log_blowup(&self) -> usize {
-        self.0.fri().log_blowup
+        self.fri.log_blowup
     }
 
     fn get_ldes<'a, 'b>(&'a self, prover_data: &'b Self::ProverData) -> Vec<Self::Lde<'b>>
@@ -179,8 +164,7 @@ impl<C: TwoAdicFriPcsConfig, In: MatrixRows<C::Val>>
         'a: 'b,
     {
         // We committed to the bit-reversed LDE, so now we wrap it to return in natural order.
-        self.0
-            .mmcs()
+        self.mmcs
             .get_matrices(prover_data)
             .into_iter()
             .map(|m| BitReversedMatrixView::new(m))
@@ -199,19 +183,18 @@ impl<C: TwoAdicFriPcsConfig, In: MatrixRows<C::Val>>
                 .map(|poly| {
                     let input = poly.to_row_major_matrix();
                     // Commit to the bit-reversed LDE.
-                    self.0
-                        .dft()
-                        .coset_lde_batch(input, self.0.fri().log_blowup, shift)
+                    self.dft
+                        .coset_lde_batch(input, self.fri.log_blowup, shift)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 })
                 .collect()
         });
-        self.0.mmcs().commit(ldes)
+        self.mmcs.commit(ldes)
     }
 }
 
-impl<C: TwoAdicFriPcsConfig, In: MatrixRows<C::Val>>
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
 /*
 impl<FC, Val, Dft, M, In> UnivariatePcs<Val, FC::Challenge, In, FC::Challenger>
@@ -274,7 +257,7 @@ where
 
         let mats_and_points = prover_data_and_points
             .iter()
-            .map(|(data, points)| (self.0.mmcs().get_matrices(data), *points))
+            .map(|(data, points)| (self.mmcs.get_matrices(data), *points))
             .collect_vec();
 
         let max_width = mats_and_points
@@ -295,7 +278,7 @@ where
         let mut num_reduced = [0; 32];
 
         for (data, points) in prover_data_and_points {
-            let mats = self.0.mmcs().get_matrices(data);
+            let mats = self.mmcs.get_matrices(data);
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
             for (mat, points_for_mat) in izip!(mats, *points) {
                 let log_height = log2_strict_usize(mat.height());
@@ -312,7 +295,7 @@ where
                     let ys = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
                             let (low_coset, _) =
-                                mat.split_rows(mat.height() >> self.0.fri().log_blowup);
+                                mat.split_rows(mat.height() >> self.fri.log_blowup);
                             interpolate_coset(
                                 &BitReversedMatrixView::new(low_coset),
                                 C::Val::generator(),
@@ -344,8 +327,7 @@ where
             }
         }
 
-        let (fri_proof, query_indices) =
-            prover::prove(&self.0.fri(), &reduced_openings, challenger);
+        let (fri_proof, query_indices) = prover::prove(&self.fri, &reduced_openings, challenger);
 
         let query_openings = query_indices
             .into_iter()
@@ -353,7 +335,7 @@ where
                 prover_data_and_points
                     .iter()
                     .map(|(data, _)| {
-                        let (opened_values, opening_proof) = self.0.mmcs().open_batch(index, data);
+                        let (opened_values, opening_proof) = self.mmcs.open_batch(index, data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
@@ -383,14 +365,11 @@ where
         // Batch combination challenge
         let alpha = <C::Challenger as CanSample<C::Challenge>>::sample(challenger);
 
-        let fri_challenges = verifier::verify_shape_and_sample_challenges(
-            self.0.fri(),
-            &proof.fri_proof,
-            challenger,
-        )
-        .map_err(VerificationError::FriError)?;
+        let fri_challenges =
+            verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
+                .map_err(VerificationError::FriError)?;
 
-        let log_max_height = proof.fri_proof.commit_phase_commits.len() + self.0.fri().log_blowup;
+        let log_max_height = proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
 
         let reduced_openings: Vec<[C::Challenge; 32]> = proof
             .query_openings
@@ -409,7 +388,7 @@ where
                 for (batch_opening, batch_dims, (batch_commit, batch_points), batch_at_z) in
                     izip!(query_opening, dims, commits_and_points, &values)
                 {
-                    self.0.mmcs().verify_batch(
+                    self.mmcs.verify_batch(
                         batch_commit,
                         batch_dims,
                         index,
@@ -422,8 +401,7 @@ where
                         *batch_points,
                         batch_at_z
                     ) {
-                        let log_height =
-                            log2_strict_usize(mat_dims.height) + self.0.fri().log_blowup;
+                        let log_height = log2_strict_usize(mat_dims.height) + self.fri.log_blowup;
 
                         for (&z, ps_at_z) in izip!(mat_points, mat_at_z) {
                             for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
@@ -440,7 +418,7 @@ where
             .map_err(VerificationError::InputMmcsError)?;
 
         verifier::verify_challenges(
-            &self.0.fri(),
+            &self.fri,
             &proof.fri_proof,
             &fri_challenges,
             &reduced_openings,

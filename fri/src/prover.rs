@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;

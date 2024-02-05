@@ -6,8 +6,8 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::two_adic_pcs::TwoAdicFriPcs;
-use p3_fri::FriConfigImpl;
+use p3_fri::two_adic_pcs::{TwoAdicFriPcs, TwoAdicFriPcsConfig};
+use p3_fri::FriConfig;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 use p3_mds::coset_mds::CosetMds;
@@ -100,14 +100,19 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    type MyFriConfig = FriConfigImpl<Challenge, ChallengeMmcs, Challenger>;
-    let fri_config = MyFriConfig::new(1, 40, 8, challenge_mmcs);
-
-    type Pcs = TwoAdicFriPcs<MyFriConfig, Val, Dft, ValMmcs>;
-    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
-
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        num_queries: 40,
+        proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+    type Pcs =
+        TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
+
+    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
     let config = StarkConfigImpl::new(pcs);
+
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
     let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
