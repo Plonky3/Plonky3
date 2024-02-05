@@ -225,6 +225,7 @@ impl<F: Field> Mul for SymbolicExpression<F> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
+        #[allow(clippy::suspicious_arithmetic_impl)]
         let degree_multiple = self.degree_multiple() + rhs.degree_multiple();
         Self::Mul {
             x: Rc::new(self),
