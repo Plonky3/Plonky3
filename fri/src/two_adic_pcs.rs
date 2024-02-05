@@ -453,12 +453,7 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
     // Same as `self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()`
     fn reduce_base(&self, xs: &[F]) -> EF {
         let (xs_packed, xs_sfx) = F::Packing::pack_slice_with_suffix(xs);
-        // Max extension degree of 8, we trust LLVM to unroll this.
-        // OK to bump if we need higher extensions, just check that it still gets unrolled.
-        assert!(EF::D <= 8);
-        let mut sums = (0..EF::D)
-            .map(|_| F::Packing::zero())
-            .collect::<heapless::Vec<_, 8>>();
+        let mut sums = (0..EF::D).map(|_| F::Packing::zero()).collect::<Vec<_>>();
         for (&x, pows) in izip!(xs_packed, &self.transposed_packed) {
             for d in 0..EF::D {
                 sums[d] += x * pows[d];
