@@ -34,6 +34,8 @@ where
     pub const NUM_BARS: usize = 8;
 
     pub fn new(mds: Mds) -> Self {
+        assert!(WIDTH != 16, "Use MonolithM31Width16 instead");
+
         assert!(WIDTH >= 8);
         assert!(WIDTH <= 24);
         assert_eq!(WIDTH % 4, 0);
@@ -185,10 +187,6 @@ mod tests {
     use crate::monolith::MonolithM31;
     use crate::monolith_mds::MonolithMdsMatrixM31;
 
-    fn mersenne31_to_constf31(m: Mersenne31) -> ConstF31 {
-        ConstF31::from_u32(m.as_canonical_u32())
-    }
-
     #[test]
     fn test_monolith_31() {
         let mds = MonolithMdsMatrixM31::<6>;
@@ -201,7 +199,7 @@ mod tests {
 
         let state_reference: [ConstF31; 24] = state
             .iter()
-            .map(|x| mersenne31_to_constf31(*x))
+            .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
             .collect::<Vec<ConstF31>>()
             .try_into()
             .unwrap();
@@ -209,7 +207,7 @@ mod tests {
         monolith.permutation(&mut state);
         let output_converted: Vec<ConstF31> = state
             .iter()
-            .map(|x| mersenne31_to_constf31(*x))
+            .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
             .collect::<Vec<ConstF31>>()
             .try_into()
             .unwrap();

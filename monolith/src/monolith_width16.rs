@@ -187,13 +187,50 @@ impl<const NUM_FULL_ROUNDS: usize> MonolithM31Width16<NUM_FULL_ROUNDS> {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use alloc::vec::Vec;
+
+    use p3_field::{AbstractField, PrimeField32};
     use p3_mersenne_31::Mersenne31;
+    use zkhash::fields::const_f31::ConstF31;
+    use zkhash::fields::f31::Field32;
+    use zkhash::monolith_31::monolith_31::Monolith31 as MonolithM31Reference;
+    use zkhash::monolith_31::monolith_31_instances::MONOLITH_CONST31_16_PARAMS;
 
     use crate::{MonolithM31Width16, MonolithMdsMatrixM31Width16};
 
     #[test]
     fn test_monolith_31_width16() {
+        let mds = MonolithMdsMatrixM31Width16;
+        let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
+
+        let mut state: [Mersenne31; 16] = [Mersenne31::zero(); 16];
+        for (_, inp) in state.iter_mut().enumerate() {
+            *inp = rand::random::<Mersenne31>();
+        }
+
+        let state_reference: [ConstF31; 16] = state
+            .iter()
+            .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
+            .collect::<Vec<ConstF31>>()
+            .try_into()
+            .unwrap();
+
+        monolith.permutation(&mut state);
+        let output_converted: Vec<ConstF31> = state
+            .iter()
+            .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
+            .collect::<Vec<ConstF31>>()
+            .try_into()
+            .unwrap();
+
+        let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_16_PARAMS);
+        let ref_output = monolith_reference.permutation(&state_reference);
+
+        assert_eq!(output_converted, ref_output);
+    }
+
+    #[test]
+    fn test_monolith_31_width16_basic() {
         let mds = MonolithMdsMatrixM31Width16;
         let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
 
