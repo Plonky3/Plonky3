@@ -271,6 +271,11 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
     }
 
     #[inline(always)]
+    fn signed_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
+        Self::signed_conv_n::<12, 6, _>(lhs, rhs, output, Self::signed_conv6)
+    }
+
+    #[inline(always)]
     fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
         Self::conv_n::<16, 8, _, _>(lhs, rhs, output, Self::conv8, Self::signed_conv8)
     }
@@ -278,6 +283,11 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
     #[inline(always)]
     fn signed_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
         Self::signed_conv_n::<16, 8, _>(lhs, rhs, output, Self::signed_conv8)
+    }
+
+    #[inline(always)]
+    fn conv24(lhs: [T; 24], rhs: [U; 24], output: &mut [V]) {
+        Self::conv_n::<24, 12, _, _>(lhs, rhs, output, Self::conv12, Self::signed_conv12)
     }
 
     #[inline(always)]

@@ -19,12 +19,18 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<<BabyBear as Field>::Packing, IntegratedCosetMds<BabyBear, 16>, 16>(c);
     bench_mds::<BabyBear, CosetMds<BabyBear, 16>, 16>(c);
     bench_mds::<<BabyBear as Field>::Packing, CosetMds<BabyBear, 16>, 16>(c);
+    bench_mds::<BabyBear, MdsMatrixBabyBear, 8>(c);
     bench_mds::<BabyBear, MdsMatrixBabyBear, 12>(c);
+    bench_mds::<BabyBear, MdsMatrixBabyBear, 16>(c);
     bench_mds::<BabyBear, MdsMatrixBabyBear, 24>(c);
+    bench_mds::<BabyBear, MdsMatrixBabyBear, 32>(c);
+    bench_mds::<BabyBear, MdsMatrixBabyBear, 64>(c);
 
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 8>(c);
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 12>(c);
     bench_mds::<Goldilocks, MdsMatrixGoldilocks, 16>(c);
+    bench_mds::<Goldilocks, MdsMatrixGoldilocks, 32>(c);
+    bench_mds::<Goldilocks, MdsMatrixGoldilocks, 64>(c);
 
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 8>(c);
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 12>(c);

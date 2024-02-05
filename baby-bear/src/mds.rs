@@ -11,29 +11,29 @@ use p3_symmetric::Permutation;
 use p3_mds::karatsuba_convolution::{
     Convolve, LargeConvolvePrimeField32, SmallConvolvePrimeField32,
 };
-use p3_mds::util::{apply_circulant, first_row_to_first_col};
+use p3_mds::util::first_row_to_first_col;
 use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
-// FIXME: implement properly
 fn reduce_i64(x: i64) -> BabyBear {
-    const P_SQR: u64 = BabyBear::ORDER_U64 << 32;
-    let x = x as i128 + P_SQR as i128;
-    assert!(x >= 0);
+    const MAKE_POSITIVE: i64 = (BabyBear::ORDER_U64 as i64) << 31;
+    let pos_x = x + MAKE_POSITIVE;
+    debug_assert!(pos_x >= 0);
     BabyBear {
-        value: (x as u128 % BabyBear::ORDER_U64 as u128) as u32,
+        value: (x as u64 % BabyBear::ORDER_U64) as u32,
     }
 }
 
-// FIXME: implement properly
 fn reduce_i128(x: i128) -> BabyBear {
-    const P_EXP4: u128 = (BabyBear::ORDER_U64 as u128) << 96;
-    let x = if x < 0 { x as i128 + P_EXP4 as i128 } else { x };
-    assert!(x >= 0);
+    debug_assert!(x < (1i128 << 95));
+    debug_assert!(x > -(1 << 95));
+    const MAKE_POSITIVE: i128 = (BabyBear::ORDER_U64 as i128) << (95 - 31);
+    // For some reason the conditional is much faster than always adding.
+    let pos_x = if x < 0 { x + MAKE_POSITIVE } else { x };
     BabyBear {
-        value: (x as u128 % BabyBear::ORDER_U64 as u128) as u32,
+        value: (pos_x as u128 % BabyBear::ORDER_U64 as u128) as u32,
     }
 }
 
@@ -122,7 +122,7 @@ impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
 impl MdsPermutation<BabyBear, 16> for MdsMatrixBabyBear {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
+const MATRIX_CIRC_MDS_24_BABYBEAR_ROW: [i64; 24] = [
     0x2D0AAAAB, 0x64850517, 0x17F5551D, 0x04ECBEB5,
     0x6D91A8D5, 0x60703026, 0x18D6F3CA, 0x729601A7,
     0x77CDA9E2, 0x3C0F5038, 0x26D52A61, 0x0360405D,
@@ -133,7 +133,13 @@ const MATRIX_CIRC_MDS_24_BABYBEAR: [u64; 24] = [
 
 impl Permutation<[BabyBear; 24]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
-        apply_circulant(&MATRIX_CIRC_MDS_24_BABYBEAR, input)
+        const MATRIX_CIRC_MDS_24_BABYBEAR_COL: [i64; 24] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_24_BABYBEAR_ROW);
+        apply_conv_large(
+            input,
+            MATRIX_CIRC_MDS_24_BABYBEAR_COL,
+            LargeConvolvePrimeField32::conv24,
+        )
     }
 
     fn permute_mut(&self, input: &mut [BabyBear; 24]) {
