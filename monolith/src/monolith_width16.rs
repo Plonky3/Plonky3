@@ -219,9 +219,7 @@ mod tests {
         let output_converted: Vec<ConstF31> = state
             .iter()
             .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
-            .collect::<Vec<ConstF31>>()
-            .try_into()
-            .unwrap();
+            .collect::<Vec<ConstF31>>();
 
         let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_16_PARAMS);
         let ref_output = monolith_reference.permutation(&state_reference);
