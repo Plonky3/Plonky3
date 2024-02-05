@@ -19,6 +19,7 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<<BabyBear as Field>::Packing, IntegratedCosetMds<BabyBear, 16>, 16>(c);
     bench_mds::<BabyBear, CosetMds<BabyBear, 16>, 16>(c);
     bench_mds::<<BabyBear as Field>::Packing, CosetMds<BabyBear, 16>, 16>(c);
+
     bench_mds::<BabyBear, MdsMatrixBabyBear, 8>(c);
     bench_mds::<BabyBear, MdsMatrixBabyBear, 12>(c);
     bench_mds::<BabyBear, MdsMatrixBabyBear, 16>(c);

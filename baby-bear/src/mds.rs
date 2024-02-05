@@ -8,57 +8,61 @@ use crate::BabyBear;
 use p3_field::PrimeField64;
 use p3_symmetric::Permutation;
 
-use p3_mds::karatsuba_convolution::{
-    Convolve, LargeConvolvePrimeField32, SmallConvolvePrimeField32,
-};
+use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::first_row_to_first_col;
 use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
-fn reduce_i64(x: i64) -> BabyBear {
-    const MAKE_POSITIVE: i64 = (BabyBear::ORDER_U64 as i64) << 31;
-    let pos_x = x + MAKE_POSITIVE;
-    debug_assert!(pos_x >= 0);
-    BabyBear {
-        value: (x as u64 % BabyBear::ORDER_U64) as u32,
+struct SmallConvolveBabyBear;
+impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
+    #[inline(always)]
+    fn read(input: BabyBear) -> i64 {
+        input.value as i64
+    }
+
+    #[inline(always)]
+    fn mul(x: i64, y: i64) -> i64 {
+        x * y
+    }
+
+    /// FIX: For N <= 16 we have small MDS entries and the maximum result we can
+    /// get is |x| < 2^51.
+    #[inline(always)]
+    fn reduce(z: i64) -> BabyBear {
+        const MAKE_POSITIVE: i64 = (BabyBear::ORDER_U64 as i64) << 31;
+        let pos_z = z + MAKE_POSITIVE;
+        debug_assert!(pos_z >= 0);
+        BabyBear {
+            value: (z as u64 % BabyBear::ORDER_U64) as u32,
+        }
     }
 }
 
-fn reduce_i128(x: i128) -> BabyBear {
-    debug_assert!(x < (1i128 << 95));
-    debug_assert!(x > -(1 << 95));
-    const MAKE_POSITIVE: i128 = (BabyBear::ORDER_U64 as i128) << (95 - 31);
-    // For some reason the conditional is much faster than always adding.
-    let pos_x = if x < 0 { x + MAKE_POSITIVE } else { x };
-    BabyBear {
-        value: (pos_x as u128 % BabyBear::ORDER_U64 as u128) as u32,
+struct LargeConvolveBabyBear;
+impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
+    #[inline(always)]
+    fn read(input: BabyBear) -> i64 {
+        input.value as i64
     }
-}
 
-#[inline(always)]
-fn apply_conv_small<const N: usize, C: Fn([i64; N], [i64; N], &mut [i64])>(
-    lhs: [BabyBear; N],
-    rhs: [i64; N],
-    conv: C,
-) -> [BabyBear; N] {
-    let lhs = lhs.map(|x| x.value as i64);
-    let mut output = [i64::default(); N];
-    conv(lhs, rhs, &mut output);
-    output.map(reduce_i64)
-}
+    #[inline(always)]
+    fn mul(x: i64, y: i64) -> i128 {
+        x as i128 * y as i128
+    }
 
-#[inline(always)]
-fn apply_conv_large<const N: usize, C: Fn([i64; N], [i64; N], &mut [i128])>(
-    lhs: [BabyBear; N],
-    rhs: [i64; N],
-    conv: C,
-) -> [BabyBear; N] {
-    let lhs = lhs.map(|x| x.value as i64);
-    let mut output = [i128::default(); N];
-    conv(lhs, rhs, &mut output);
-    output.map(reduce_i128)
+    #[inline(always)]
+    fn reduce(z: i128) -> BabyBear {
+        debug_assert!(z < (1i128 << 95));
+        debug_assert!(z > -(1 << 95));
+        const MAKE_POSITIVE: i128 = (BabyBear::ORDER_U64 as i128) << (95 - 31);
+        // For some reason the conditional is much faster than always adding.
+        let pos_z = if z < 0 { z + MAKE_POSITIVE } else { z };
+        BabyBear {
+            value: (pos_z as u128 % BabyBear::ORDER_U64 as u128) as u32,
+        }
+    }
 }
 
 const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
@@ -67,10 +71,10 @@ impl Permutation<[BabyBear; 8]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 8]) -> [BabyBear; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
-        apply_conv_small(
+        SmallConvolveBabyBear::apply(
             input,
             MATRIX_CIRC_MDS_8_SML_COL,
-            SmallConvolvePrimeField32::conv8,
+            SmallConvolveBabyBear::conv8,
         )
     }
 
@@ -86,10 +90,10 @@ impl Permutation<[BabyBear; 12]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 12]) -> [BabyBear; 12] {
         const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
-        apply_conv_small(
+        SmallConvolveBabyBear::apply(
             input,
             MATRIX_CIRC_MDS_12_SML_COL,
-            SmallConvolvePrimeField32::conv12,
+            SmallConvolveBabyBear::conv12,
         )
     }
 
@@ -108,10 +112,10 @@ impl Permutation<[BabyBear; 16]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 16]) -> [BabyBear; 16] {
         const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
-        apply_conv_small(
+        SmallConvolveBabyBear::apply(
             input,
             MATRIX_CIRC_MDS_16_SML_COL,
-            SmallConvolvePrimeField32::conv16,
+            SmallConvolveBabyBear::conv16,
         )
     }
 
@@ -135,10 +139,10 @@ impl Permutation<[BabyBear; 24]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 24]) -> [BabyBear; 24] {
         const MATRIX_CIRC_MDS_24_BABYBEAR_COL: [i64; 24] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_24_BABYBEAR_ROW);
-        apply_conv_large(
+        LargeConvolveBabyBear::apply(
             input,
             MATRIX_CIRC_MDS_24_BABYBEAR_COL,
-            LargeConvolvePrimeField32::conv24,
+            LargeConvolveBabyBear::conv24,
         )
     }
 
@@ -164,10 +168,10 @@ impl Permutation<[BabyBear; 32]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 32]) -> [BabyBear; 32] {
         const MATRIX_CIRC_MDS_32_BABYBEAR_COL: [i64; 32] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_32_BABYBEAR_ROW);
-        apply_conv_large(
+        LargeConvolveBabyBear::apply(
             input,
             MATRIX_CIRC_MDS_32_BABYBEAR_COL,
-            LargeConvolvePrimeField32::conv32,
+            LargeConvolveBabyBear::conv32,
         )
     }
 
@@ -201,10 +205,10 @@ impl Permutation<[BabyBear; 64]> for MdsMatrixBabyBear {
     fn permute(&self, input: [BabyBear; 64]) -> [BabyBear; 64] {
         const MATRIX_CIRC_MDS_64_BABYBEAR_COL: [i64; 64] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_64_BABYBEAR_ROW);
-        apply_conv_large(
+        LargeConvolveBabyBear::apply(
             input,
             MATRIX_CIRC_MDS_64_BABYBEAR_COL,
-            LargeConvolvePrimeField32::conv64,
+            LargeConvolveBabyBear::conv64,
         )
     }
 

@@ -6,22 +6,52 @@
 
 use crate::Goldilocks;
 use p3_dft::Radix2Bowers;
+use p3_field::{AbstractField, PrimeField64};
 use p3_symmetric::Permutation;
 
-use p3_mds::util::{
-    apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
-    first_row_to_first_col,
-};
+use p3_mds::karatsuba_convolution::Convolve;
+use p3_mds::util::{apply_circulant, apply_circulant_fft, first_row_to_first_col};
 use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
 
+pub struct SmallConvolveGoldilocks;
+impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
+    #[inline(always)]
+    fn read(input: Goldilocks) -> i128 {
+        input.value as i128
+    }
+
+    #[inline(always)]
+    fn mul(x: i128, y: i64) -> i128 {
+        x * y as i128
+    }
+
+    #[inline(always)]
+    fn reduce(x: i128) -> Goldilocks {
+        debug_assert!(x < (1 << 126));
+        debug_assert!(x > -(1 << 126));
+
+        const MAKE_POSITIVE: i128 = (Goldilocks::ORDER_U64 as i128) << 62;
+        let pos_x = x + MAKE_POSITIVE;
+        Goldilocks::from_wrapped_u128(pos_x as u128)
+    }
+}
+
 const FFT_ALGO: Radix2Bowers = Radix2Bowers;
+
+const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
-        apply_circulant_8_sml(input)
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        SmallConvolveGoldilocks::apply(
+            input,
+            MATRIX_CIRC_MDS_8_SML_COL,
+            SmallConvolveGoldilocks::conv8,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 8]) {
@@ -30,9 +60,17 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
+const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
 impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {
-        apply_circulant_12_sml(input)
+        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        SmallConvolveGoldilocks::apply(
+            input,
+            MATRIX_CIRC_MDS_12_SML_COL,
+            SmallConvolveGoldilocks::conv12,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 12]) {

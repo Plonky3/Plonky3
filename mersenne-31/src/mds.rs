@@ -8,70 +8,70 @@ use crate::Mersenne31;
 use p3_field::{AbstractField, PrimeField64};
 use p3_symmetric::Permutation;
 
-use p3_mds::karatsuba_convolution::{
-    Convolve, LargeConvolvePrimeField32, SmallConvolvePrimeField32,
-};
+use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::first_row_to_first_col;
 use p3_mds::MdsPermutation;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
 
-// For N <= 16 we have small MDS entries and the maximum result we can
-// get is |x| < 2^51.
-#[inline(always)]
-fn reduce_i64(x: i64) -> Mersenne31 {
-    debug_assert!(x < (1 << 62));
-    debug_assert!(x > -(1 << 62));
+struct SmallConvolveMersenne31;
+impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
+    #[inline(always)]
+    fn read(input: Mersenne31) -> i64 {
+        input.value as i64
+    }
 
-    const MAKE_POSITIVE: i64 = (Mersenne31::ORDER_U64 << 31) as i64;
-    let pos_x = x + MAKE_POSITIVE;
-    Mersenne31::from_wrapped_u64(pos_x as u64)
+    #[inline(always)]
+    fn mul(x: i64, y: i64) -> i64 {
+        x * y
+    }
+
+    /// FIX: For N <= 16 we have small MDS entries and the maximum result we can
+    /// get is |x| < 2^51.
+    #[inline(always)]
+    fn reduce(z: i64) -> Mersenne31 {
+        debug_assert!(z < (1 << 62));
+        debug_assert!(z > -(1 << 62));
+
+        const MAKE_POSITIVE: i64 = (Mersenne31::ORDER_U64 << 31) as i64;
+        let pos_z = z + MAKE_POSITIVE;
+        Mersenne31::from_wrapped_u64(pos_z as u64)
+    }
 }
 
-#[inline(always)]
-fn reduce_i128(x: i128) -> Mersenne31 {
-    // We assume below that (x + MAKE_POSITIVE) < 2^96.
-    debug_assert!(x < (1i128 << 95));
-    debug_assert!(x > -(1 << 95));
-    const MAKE_POSITIVE: i128 = (Mersenne31::ORDER_U64 as i128) << (95 - 31);
-    // For some reason the conditional is much faster than always adding.
-    let pos_x = if x < 0 { x + MAKE_POSITIVE } else { x };
-    // pos_x = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
-    let (hi, mid, lo) = (
-        (pos_x >> 64) as u64,
-        (pos_x >> 32) as u32 as u64,
-        pos_x as u32 as u64,
-    );
-    // 2^32 = 2 (mod P), hence
-    // pos_x = lo + 2^32 * mid + 2^64 * hi
-    //       = lo + 2 * mid + 4 * hi (mod P)
-    let res = lo + 2 * mid + 4 * hi;
-    Mersenne31::from_wrapped_u64(res)
-}
+struct LargeConvolveMersenne31;
+impl Convolve<Mersenne31, i64, i64, i128> for LargeConvolveMersenne31 {
+    #[inline(always)]
+    fn read(input: Mersenne31) -> i64 {
+        input.value as i64
+    }
 
-#[inline(always)]
-fn apply_conv_small<const N: usize, C: Fn([i64; N], [i64; N], &mut [i64])>(
-    lhs: [Mersenne31; N],
-    rhs: [i64; N],
-    conv: C,
-) -> [Mersenne31; N] {
-    let lhs = lhs.map(|x| x.value as i64);
-    let mut output = [i64::default(); N];
-    conv(lhs, rhs, &mut output);
-    output.map(reduce_i64)
-}
+    #[inline(always)]
+    fn mul(x: i64, y: i64) -> i128 {
+        x as i128 * y as i128
+    }
 
-#[inline(always)]
-fn apply_conv_large<const N: usize, C: Fn([i64; N], [i64; N], &mut [i128])>(
-    lhs: [Mersenne31; N],
-    rhs: [i64; N],
-    conv: C,
-) -> [Mersenne31; N] {
-    let lhs = lhs.map(|x| x.value as i64);
-    let mut output = [i128::default(); N];
-    conv(lhs, rhs, &mut output);
-    output.map(reduce_i128)
+    #[inline(always)]
+    fn reduce(z: i128) -> Mersenne31 {
+        // We assume below that (z + MAKE_POSITIVE) < 2^96.
+        debug_assert!(z < (1i128 << 95));
+        debug_assert!(z > -(1 << 95));
+        const MAKE_POSITIVE: i128 = (Mersenne31::ORDER_U64 as i128) << (95 - 31);
+        // For some reason the conditional is much faster than always adding.
+        let pos_z = if z < 0 { z + MAKE_POSITIVE } else { z };
+        // pos_z = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
+        let (hi, mid, lo) = (
+            (pos_z >> 64) as u64,
+            (pos_z >> 32) as u32 as u64,
+            pos_z as u32 as u64,
+        );
+        // 2^32 = 2 (mod P), hence
+        // pos_z = lo + 2^32 * mid + 2^64 * hi
+        //       = lo + 2 * mid + 4 * hi (mod P)
+        let res = lo + 2 * mid + 4 * hi;
+        Mersenne31::from_wrapped_u64(res)
+    }
 }
 
 const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
@@ -80,10 +80,10 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
-        apply_conv_small(
+        SmallConvolveMersenne31::apply(
             input,
             MATRIX_CIRC_MDS_8_SML_COL,
-            SmallConvolvePrimeField32::conv8,
+            SmallConvolveMersenne31::conv8,
         )
     }
 
@@ -99,10 +99,10 @@ impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
         const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
-        apply_conv_small(
+        SmallConvolveMersenne31::apply(
             input,
             MATRIX_CIRC_MDS_12_SML_COL,
-            SmallConvolvePrimeField32::conv12,
+            SmallConvolveMersenne31::conv12,
         )
     }
 
@@ -119,10 +119,10 @@ impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
         const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
-        apply_conv_small(
+        SmallConvolveMersenne31::apply(
             input,
             MATRIX_CIRC_MDS_16_SML_COL,
-            SmallConvolvePrimeField32::conv16,
+            SmallConvolveMersenne31::conv16,
         )
     }
 
@@ -148,10 +148,10 @@ impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
         const MATRIX_CIRC_MDS_32_MERSENNE31_COL: [i64; 32] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_32_MERSENNE31_ROW);
-        apply_conv_large(
+        LargeConvolveMersenne31::apply(
             input,
             MATRIX_CIRC_MDS_32_MERSENNE31_COL,
-            LargeConvolvePrimeField32::conv32,
+            LargeConvolveMersenne31::conv32,
         )
     }
 
@@ -185,10 +185,10 @@ impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
         const MATRIX_CIRC_MDS_64_MERSENNE31_COL: [i64; 64] =
             first_row_to_first_col(&MATRIX_CIRC_MDS_64_MERSENNE31_ROW);
-        apply_conv_large(
+        LargeConvolveMersenne31::apply(
             input,
             MATRIX_CIRC_MDS_64_MERSENNE31_COL,
-            LargeConvolvePrimeField32::conv64,
+            LargeConvolveMersenne31::conv64,
         )
     }
 

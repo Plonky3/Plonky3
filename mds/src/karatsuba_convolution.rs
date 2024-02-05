@@ -30,8 +30,24 @@ impl RngElt for i128 {}
 /// the corresponding field "divide-by-2" function, rather than the
 /// primitive "bit-shift-to-the-right" which relies on the knowledge
 /// that the input is even if no reduction has taken place.
-pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
+pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
+    fn read(input: F) -> T;
+
     fn mul(x: T, y: U) -> V;
+
+    fn reduce(z: V) -> F;
+
+    #[inline(always)]
+    fn apply<const N: usize, C: Fn([T; N], [U; N], &mut [V])>(
+        lhs: [F; N],
+        rhs: [U; N],
+        conv: C,
+    ) -> [F; N] {
+        let lhs = lhs.map(Self::read);
+        let mut output = [V::default(); N];
+        conv(lhs, rhs, &mut output);
+        output.map(Self::reduce)
+    }
 
     /// Compute the convolution of two vectors of length N.
     /// output(x) = lhs(x)rhs(x) mod x^N - 1
@@ -305,44 +321,6 @@ pub trait Convolve<T: RngElt, U: RngElt, V: RngElt> {
         Self::conv_n::<64, 32, _, _>(lhs, rhs, output, Self::conv32, Self::signed_conv32)
     }
 }
-
-pub struct SmallConvolvePrimeField32;
-impl Convolve<i64, i64, i64> for SmallConvolvePrimeField32 {
-    #[inline(always)]
-    fn mul(x: i64, y: i64) -> i64 {
-        x * y
-    }
-}
-
-pub struct LargeConvolvePrimeField32;
-impl Convolve<i64, i64, i128> for LargeConvolvePrimeField32 {
-    #[inline(always)]
-    fn mul(x: i64, y: i64) -> i128 {
-        x as i128 * y as i128
-    }
-}
-
-pub struct SmallConvolvePrimeField64;
-impl Convolve<i128, i64, i128> for SmallConvolvePrimeField64 {
-    #[inline(always)]
-    fn mul(x: i128, y: i64) -> i128 {
-        x * y as i128
-    }
-}
-
-// FIXME: Move to mds/goldilocks.rs
-/*
-struct LargeConvolveGoldilocks;
-impl Convolve<i128, i128, i128> for LargeConvolveGoldilocks {
-    #[inline(always)]
-    fn mul(x: i128, y: i128) -> i128 {
-        let x = Goldilocks::from_wrapped_i128(x);
-        let y = Goldilocks::from_wrapped_i128(y);
-        let xy = x * y;
-        xy.0 as i128
-    }
-}
-*/
 
 /*
 
