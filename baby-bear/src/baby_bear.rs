@@ -433,8 +433,11 @@ mod tests {
     #[test]
     fn test_baby_bear_two_adicity_generators() {
         let base = BabyBear::from_canonical_u32(0x1a427a41);
-        for bits in 0..BabyBear::TWO_ADICITY {
-            assert_eq!(BabyBear::two_adic_generator(bits), base.exp_power_of_2(BabyBear::TWO_ADICITY - bits));
+        for bits in 0..=BabyBear::TWO_ADICITY {
+            assert_eq!(
+                BabyBear::two_adic_generator(bits),
+                base.exp_power_of_2(BabyBear::TWO_ADICITY - bits)
+            );
         }
     }
 
