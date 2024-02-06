@@ -2,7 +2,9 @@
 //!
 //! NB: Not all sizes have fast implementations of their permutations.
 //! Supported sizes: 8, 12, 16, 32, 64.
-//! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
+//! Sizes 8 and 12 are from Plonky2, size 16 was found as part of concurrent
+//! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
+//! database.
 
 use crate::Mersenne31;
 use p3_field::AbstractField;
@@ -15,47 +17,73 @@ use p3_mds::MdsPermutation;
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
 
+/// Instantiate convolution for "small" RHS vectors over Mersenne31.
+///
+/// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
+/// 2^24 (roughly), though in practice the sum will be less than 2^9.
 struct SmallConvolveMersenne31;
 impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
+    /// Return the lift of an (almost) reduced Mersenne31 element.
+    /// The Mersenne31 implementation guarantees that
+    /// 0 <= input.value <= P < 2^31.
     #[inline(always)]
     fn read(input: Mersenne31) -> i64 {
         input.value as i64
     }
 
+    /// For a convolution of size N, |x| < N * 2^31 and (as per the
+    /// assumption above), |y| < 2^24. So the product is at most N * 2^55
+    /// which will not overflow for N <= 16.
     #[inline(always)]
     fn mul(x: i64, y: i64) -> i64 {
         x * y
     }
 
-    /// FIX: For N <= 16 we have small MDS entries and the maximum result we can
-    /// get is |x| < 2^51.
+    /// The assumptions above mean z < N^2 * 2^55, which is at most
+    /// 2^63 when N <= 16.
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
     #[inline(always)]
     fn reduce(z: i64) -> Mersenne31 {
-        debug_assert!(z < (1 << 62));
         debug_assert!(z >= 0);
-
         Mersenne31::from_wrapped_u64(z as u64)
     }
 }
 
+/// Instantiate convolution for "large" RHS vectors over Mersenne31.
+///
+/// Here "large" means the elements can be as big as the field
+/// characteristic, and the size N of the RHS is <= 64.
 struct LargeConvolveMersenne31;
 impl Convolve<Mersenne31, i64, i64, i128> for LargeConvolveMersenne31 {
+    /// Return the lift of an (almost) reduced Mersenne31 element.
+    /// The Mersenne31 implementation guarantees that
+    /// 0 <= input.value <= P < 2^31.
     #[inline(always)]
     fn read(input: Mersenne31) -> i64 {
         input.value as i64
     }
 
+    /// For a convolution of size N, |x|, |y| < N * 2^31, so the product
+    /// could be as much as N^2 * 2^62. This will overflow an i64, so
+    /// we first widen to i128.
     #[inline(always)]
     fn mul(x: i64, y: i64) -> i128 {
         x as i128 * y as i128
     }
 
+    /// The assumptions above mean z < N^3 * 2^62, which is at most
+    /// 2^80 when N <= 64 (the largest N). Thus we specialise the
+    /// reduction knowing that the input is the smaller value.
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
     #[inline(always)]
     fn reduce(z: i128) -> Mersenne31 {
-        // Even though intermediate values could be negative, the
-        // output must be non-negative since the inputs were
-        // non-negative.
-        debug_assert!(z < (1i128 << 95));
+        debug_assert!(z < (1i128 << 80));
         debug_assert!(z >= 0);
         // z = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
         let (hi, mid, lo) = ((z >> 64) as u64, (z >> 32) as u32 as u64, z as u32 as u64);

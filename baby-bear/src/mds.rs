@@ -2,7 +2,9 @@
 //!
 //! NB: Not all sizes have fast implementations of their permutations.
 //! Supported sizes: 8, 12, 16, 24, 32, 64.
-//! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
+//! Sizes 8 and 12 are from Plonky2, size 16 was found as part of concurrent
+//! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
+//! database.
 
 use crate::BabyBear;
 use p3_field::PrimeField64;
@@ -15,25 +17,44 @@ use p3_mds::MdsPermutation;
 #[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
 
+/// Instantiate convolution for "small" RHS vectors over BabyBear.
+///
+/// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
+/// 2^24 (roughly), though in practice the sum will be less than 2^9.
 struct SmallConvolveBabyBear;
 impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
+    /// Return the lift of a BabyBear element, satisfying 0 <=
+    /// input.value < P < 2^31. Note that BabyBear elements are
+    /// represented in Monty form.
     #[inline(always)]
     fn read(input: BabyBear) -> i64 {
         input.value as i64
     }
 
+    /// For a convolution of size N, |x| < N * 2^31 and (as per the
+    /// assumption above), |y| < 2^24. So the product is at most N * 2^55
+    /// which will not overflow for N <= 16.
+    ///
+    /// Note that the LHS element is in Monty form, while the RHS
+    /// element is an "plain integer". This informs the implementation
+    /// of `reduction()` below.
     #[inline(always)]
     fn mul(x: i64, y: i64) -> i64 {
         x * y
     }
 
-    /// FIX: For N <= 16 we have small MDS entries and the maximum result we can
-    /// get is |x| < 2^51.
+    /// The assumptions above mean z < N^2 * 2^55, which is at most
+    /// 2^63 when N <= 16.
+    ///
+    /// Because the LHS elements were in Monty form and the RHS
+    /// elements were plain integers, reduction is simply the usual
+    /// reduction modulo P, rather than "Monty reduction".
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
     #[inline(always)]
     fn reduce(z: i64) -> BabyBear {
-        // Even though intermediate values could be negative, the
-        // output must be non-negative since the inputs were
-        // non-negative.
         debug_assert!(z >= 0);
         BabyBear {
             value: (z as u64 % BabyBear::ORDER_U64) as u32,
@@ -41,23 +62,41 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     }
 }
 
+/// Instantiate convolution for "large" RHS vectors over BabyBear.
+///
+/// Here "large" means the elements can be as big as the field
+/// characteristic, and the size N of the RHS is <= 64.
 struct LargeConvolveBabyBear;
 impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
+    /// Return the lift of a BabyBear element, satisfying 0 <=
+    /// input.value < P < 2^31. Note that BabyBear elements are
+    /// represented in Monty form.
     #[inline(always)]
     fn read(input: BabyBear) -> i64 {
         input.value as i64
     }
 
+    /// For a convolution of size N, |x|, |y| < N * 2^31, so the product
+    /// could be as much as N^2 * 2^62. This will overflow an i64, so
+    /// we first widen to i128.
     #[inline(always)]
     fn mul(x: i64, y: i64) -> i128 {
         x as i128 * y as i128
     }
 
+    /// The assumptions above mean z < N^3 * 2^62, which is at most
+    /// 2^80 when N <= 64 (the largest N).
+    ///
+    /// NB: It may be worth specialising the reduction using the
+    /// knowledge that the input is the smaller value.
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
     #[inline(always)]
     fn reduce(z: i128) -> BabyBear {
-        debug_assert!(z < (1i128 << 95));
+        debug_assert!(z < (1i128 << 80));
         debug_assert!(z > 0);
-        // For some reason the conditional is much faster than always adding.
         BabyBear {
             value: (z as u128 % BabyBear::ORDER_U64 as u128) as u32,
         }

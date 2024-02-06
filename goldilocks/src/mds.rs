@@ -2,7 +2,9 @@
 //!
 //! NB: Not all sizes have fast implementations of their permutations.
 //! Supported sizes: 8, 12, 16, 24, 32, 64, 68.
-//! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
+//! Sizes 8 and 12 are from Plonky2, size 16 was found as part of concurrent
+//! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
+//! database.
 
 use crate::Goldilocks;
 use p3_dft::Radix2Bowers;
@@ -16,23 +18,38 @@ use p3_mds::MdsPermutation;
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
 
+/// Instantiate convolution for "small" RHS vectors over Goldilocks.
+///
+/// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
+/// 2^51, though in practice the sum will be less than 2^9.
 pub struct SmallConvolveGoldilocks;
 impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
+    /// Return the lift of a Goldilocks element, 0 <= input.value <= P
+    /// < 2^64. We widen immediately, since some valid Goldilocks elements
+    /// don't fit in an i64, and since in any case overflow can occur
+    /// for even the smallest convolutions.
     #[inline(always)]
     fn read(input: Goldilocks) -> i128 {
         input.value as i128
     }
 
+    /// For a convolution of size N, |x| < N * 2^64 and (as per the
+    /// assumption above), |y| < 2^51. So the product is at most N *
+    /// 2^115 which will not overflow for N <= 16. We widen `y` at
+    /// this point to perform the multiplication.
     #[inline(always)]
     fn mul(x: i128, y: i64) -> i128 {
         x * y as i128
     }
 
+    /// The assumptions above mean z < N^2 * 2^115, which is at most
+    /// 2^123 when N <= 16.
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
     #[inline(always)]
     fn reduce(z: i128) -> Goldilocks {
-        // Even though intermediate values could be negative, the
-        // output must be non-negative since the inputs were
-        // non-negative.
         debug_assert!(z >= 0);
         Goldilocks::from_wrapped_u128(z as u128)
     }
