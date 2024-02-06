@@ -5,14 +5,13 @@
 mod extension;
 mod mds;
 
-pub use mds::*;
-
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+pub use mds::*;
 use p3_field::{
     exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField64,
     TwoAdicField,

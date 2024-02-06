@@ -1,6 +1,8 @@
-use crate::{from_monty_u32, BabyBear};
 use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+
 use p3_field::{Canonicalize, IntegerLike, NonCanonicalPrimeField32, PrimeField32};
+
+use crate::{from_monty_u32, BabyBear};
 
 const _P: u32 = 0x78000001;
 const _MONTY_BITS: u32 = 31;

@@ -1,6 +1,8 @@
-use crate::Mersenne31;
 use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+
 use p3_field::{AbstractField, Canonicalize, IntegerLike, NonCanonicalPrimeField32, PrimeField32};
+
+use crate::Mersenne31;
 
 /// Roughly a wrapper for i64's but treated as non canonical representatives of elements in the Mersenne31 field.
 #[derive(Debug, Copy, Clone, Default, Eq, Hash, PartialEq)]

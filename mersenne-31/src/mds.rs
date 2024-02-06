@@ -6,13 +6,13 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use crate::Mersenne31;
 use p3_field::AbstractField;
-use p3_symmetric::Permutation;
-
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::first_row_to_first_col;
 use p3_mds::MdsPermutation;
+use p3_symmetric::Permutation;
+
+use crate::Mersenne31;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
@@ -221,11 +221,10 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
-    use super::Mersenne31;
     use p3_field::AbstractField;
     use p3_symmetric::Permutation;
 
-    use super::MdsMatrixMersenne31;
+    use super::{MdsMatrixMersenne31, Mersenne31};
 
     #[test]
     fn mersenne8() {

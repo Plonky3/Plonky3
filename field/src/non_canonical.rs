@@ -1,5 +1,6 @@
-use crate::field::PrimeField32;
 use core::ops::{Add, AddAssign, Mul, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+
+use crate::field::PrimeField32;
 
 // A collection of methods able to be appied to simple integers.
 pub trait IntegerLike:

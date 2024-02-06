@@ -6,13 +6,13 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use crate::BabyBear;
 use p3_field::PrimeField64;
-use p3_symmetric::Permutation;
-
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::first_row_to_first_col;
 use p3_mds::MdsPermutation;
+use p3_symmetric::Permutation;
+
+use crate::BabyBear;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixBabyBear;
@@ -258,11 +258,10 @@ impl MdsPermutation<BabyBear, 64> for MdsMatrixBabyBear {}
 
 #[cfg(test)]
 mod tests {
-    use super::BabyBear;
     use p3_field::AbstractField;
     use p3_symmetric::Permutation;
 
-    use super::MdsMatrixBabyBear;
+    use super::{BabyBear, MdsMatrixBabyBear};
 
     #[test]
     fn babybear8() {

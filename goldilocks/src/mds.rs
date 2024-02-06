@@ -6,14 +6,14 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use crate::Goldilocks;
 use p3_dft::Radix2Bowers;
 use p3_field::AbstractField;
-use p3_symmetric::Permutation;
-
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{apply_circulant, apply_circulant_fft, first_row_to_first_col};
 use p3_mds::MdsPermutation;
+use p3_symmetric::Permutation;
+
+use crate::Goldilocks;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
@@ -226,11 +226,10 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
-    use super::Goldilocks;
     use p3_field::AbstractField;
     use p3_symmetric::Permutation;
 
-    use super::MdsMatrixGoldilocks;
+    use super::{Goldilocks, MdsMatrixGoldilocks};
 
     #[test]
     fn goldilocks8() {
