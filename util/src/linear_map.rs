@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::mem;
 
+use crate::VecExt;
+
 /// O(n) Vec-backed map for keys that only implement Eq.
 /// Only use this for a very small number of keys.
 pub struct LinearMap<K, V>(Vec<(K, V)>);
@@ -28,6 +30,15 @@ impl<K: Eq, V> LinearMap<K, V> {
         } else {
             self.0.push((k, v));
             None
+        }
+    }
+    pub fn get_or_insert_with(&mut self, k: K, f: impl FnOnce() -> V) -> &mut V {
+        let existing = self.0.iter().position(|(kk, _)| kk == &k);
+        if let Some(idx) = existing {
+            &mut self.0[idx].1
+        } else {
+            let slot = self.0.pushed_mut((k, f()));
+            &mut slot.1
         }
     }
     pub fn values(&self) -> impl Iterator<Item = &V> {

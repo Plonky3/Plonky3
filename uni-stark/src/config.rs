@@ -5,7 +5,7 @@ use p3_commit::{Pcs, UnivariatePcsWithLde};
 use p3_field::{AbstractExtensionField, ExtensionField, PackedField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
-pub trait StarkConfig {
+pub trait StarkGenericConfig {
     /// The field over which trace data is encoded.
     type Val: TwoAdicField;
     type PackedVal: PackedField<Scalar = Self::Val>;
@@ -29,13 +29,13 @@ pub trait StarkConfig {
     fn pcs(&self) -> &Self::Pcs;
 }
 
-pub struct StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger> {
+pub struct StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger> {
     pcs: Pcs,
     _phantom: PhantomData<(Val, Challenge, PackedChallenge, Challenger)>,
 }
 
 impl<Val, Challenge, PackedChallenge, Pcs, Challenger>
-    StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>
+    StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>
 {
     pub fn new(pcs: Pcs) -> Self {
         Self {
@@ -45,8 +45,8 @@ impl<Val, Challenge, PackedChallenge, Pcs, Challenger>
     }
 }
 
-impl<Val, Challenge, PackedChallenge, Pcs, Challenger> StarkConfig
-    for StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>
+impl<Val, Challenge, PackedChallenge, Pcs, Challenger> StarkGenericConfig
+    for StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val> + TwoAdicField,
