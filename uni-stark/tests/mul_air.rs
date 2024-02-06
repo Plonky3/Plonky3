@@ -13,7 +13,7 @@ use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfigImpl, VerificationError};
+use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 use tracing_forest::ForestLayer;
@@ -109,8 +109,8 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
         TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
 
-    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
-    let config = StarkConfigImpl::new(pcs);
+    type MyConfig = StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>;
+    let config = StarkConfig::new(pcs);
 
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
