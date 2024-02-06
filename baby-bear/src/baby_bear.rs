@@ -263,10 +263,38 @@ impl TwoAdicField for BabyBear {
     const TWO_ADICITY: usize = 27;
 
     fn two_adic_generator(bits: usize) -> Self {
-        // TODO: Consider a `match` which may speed this up.
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::from_canonical_u32(0x1a427a41); // generates the whole 2^TWO_ADICITY group
-        base.exp_power_of_2(Self::TWO_ADICITY - bits)
+        match bits {
+            0 => Self::one(),
+            1 => Self::from_canonical_u32(0x78000000),
+            2 => Self::from_canonical_u32(0x67055c21),
+            3 => Self::from_canonical_u32(0x5ee99486),
+            4 => Self::from_canonical_u32(0xbb4c4e4),
+            5 => Self::from_canonical_u32(0x2d4cc4da),
+            6 => Self::from_canonical_u32(0x669d6090),
+            7 => Self::from_canonical_u32(0x17b56c64),
+            8 => Self::from_canonical_u32(0x67456167),
+            9 => Self::from_canonical_u32(0x688442f9),
+            10 => Self::from_canonical_u32(0x145e952d),
+            11 => Self::from_canonical_u32(0x4fe61226),
+            12 => Self::from_canonical_u32(0x4c734715),
+            13 => Self::from_canonical_u32(0x11c33e2a),
+            14 => Self::from_canonical_u32(0x62c3d2b1),
+            15 => Self::from_canonical_u32(0x77cad399),
+            16 => Self::from_canonical_u32(0x54c131f4),
+            17 => Self::from_canonical_u32(0x4cabd6a6),
+            18 => Self::from_canonical_u32(0x5cf5713f),
+            19 => Self::from_canonical_u32(0x3e9430e8),
+            20 => Self::from_canonical_u32(0xba067a3),
+            21 => Self::from_canonical_u32(0x18adc27d),
+            22 => Self::from_canonical_u32(0x21fd55bc),
+            23 => Self::from_canonical_u32(0x4b859b3d),
+            24 => Self::from_canonical_u32(0x3bd57996),
+            25 => Self::from_canonical_u32(0x4483d85a),
+            26 => Self::from_canonical_u32(0x3a26eef8),
+            27 => Self::from_canonical_u32(0x1a427a41),
+            _ => unreachable!("Already asserted that bits <= Self::TWO_ADICITY"),
+        }
     }
 }
 
@@ -401,6 +429,14 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn test_baby_bear_two_adicity_generators() {
+        let base = BabyBear::from_canonical_u32(0x1a427a41);
+        for bits in 0..BabyBear::TWO_ADICITY {
+            assert_eq!(BabyBear::two_adic_generator(bits), base.exp_power_of_2(BabyBear::TWO_ADICITY - bits));
+        }
+    }
 
     #[test]
     fn test_baby_bear() {
