@@ -31,9 +31,10 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     /// get is |x| < 2^51.
     #[inline(always)]
     fn reduce(z: i64) -> BabyBear {
-        const MAKE_POSITIVE: i64 = (BabyBear::ORDER_U64 as i64) << 31;
-        let pos_z = z + MAKE_POSITIVE;
-        debug_assert!(pos_z >= 0);
+        // Even though intermediate values could be negative, the
+        // output must be non-negative since the inputs were
+        // non-negative.
+        debug_assert!(z >= 0);
         BabyBear {
             value: (z as u64 % BabyBear::ORDER_U64) as u32,
         }
@@ -55,12 +56,10 @@ impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
     #[inline(always)]
     fn reduce(z: i128) -> BabyBear {
         debug_assert!(z < (1i128 << 95));
-        debug_assert!(z > -(1 << 95));
-        const MAKE_POSITIVE: i128 = (BabyBear::ORDER_U64 as i128) << (95 - 31);
+        debug_assert!(z > 0);
         // For some reason the conditional is much faster than always adding.
-        let pos_z = if z < 0 { z + MAKE_POSITIVE } else { z };
         BabyBear {
-            value: (pos_z as u128 % BabyBear::ORDER_U64 as u128) as u32,
+            value: (z as u128 % BabyBear::ORDER_U64 as u128) as u32,
         }
     }
 }

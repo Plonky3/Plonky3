@@ -5,7 +5,7 @@
 //! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
 
 use crate::Mersenne31;
-use p3_field::{AbstractField, PrimeField64};
+use p3_field::AbstractField;
 use p3_symmetric::Permutation;
 
 use p3_mds::karatsuba_convolution::Convolve;
@@ -32,11 +32,9 @@ impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
     #[inline(always)]
     fn reduce(z: i64) -> Mersenne31 {
         debug_assert!(z < (1 << 62));
-        debug_assert!(z > -(1 << 62));
+        debug_assert!(z >= 0);
 
-        const MAKE_POSITIVE: i64 = (Mersenne31::ORDER_U64 << 31) as i64;
-        let pos_z = z + MAKE_POSITIVE;
-        Mersenne31::from_wrapped_u64(pos_z as u64)
+        Mersenne31::from_wrapped_u64(z as u64)
     }
 }
 
@@ -54,21 +52,16 @@ impl Convolve<Mersenne31, i64, i64, i128> for LargeConvolveMersenne31 {
 
     #[inline(always)]
     fn reduce(z: i128) -> Mersenne31 {
-        // We assume below that (z + MAKE_POSITIVE) < 2^96.
+        // Even though intermediate values could be negative, the
+        // output must be non-negative since the inputs were
+        // non-negative.
         debug_assert!(z < (1i128 << 95));
-        debug_assert!(z > -(1 << 95));
-        const MAKE_POSITIVE: i128 = (Mersenne31::ORDER_U64 as i128) << (95 - 31);
-        // For some reason the conditional is much faster than always adding.
-        let pos_z = if z < 0 { z + MAKE_POSITIVE } else { z };
-        // pos_z = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
-        let (hi, mid, lo) = (
-            (pos_z >> 64) as u64,
-            (pos_z >> 32) as u32 as u64,
-            pos_z as u32 as u64,
-        );
+        debug_assert!(z >= 0);
+        // z = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
+        let (hi, mid, lo) = ((z >> 64) as u64, (z >> 32) as u32 as u64, z as u32 as u64);
         // 2^32 = 2 (mod P), hence
-        // pos_z = lo + 2^32 * mid + 2^64 * hi
-        //       = lo + 2 * mid + 4 * hi (mod P)
+        // z = lo + 2^32 * mid + 2^64 * hi
+        //   = lo + 2 * mid + 4 * hi (mod P)
         let res = lo + 2 * mid + 4 * hi;
         Mersenne31::from_wrapped_u64(res)
     }

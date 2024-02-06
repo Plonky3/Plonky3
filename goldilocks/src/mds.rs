@@ -6,7 +6,7 @@
 
 use crate::Goldilocks;
 use p3_dft::Radix2Bowers;
-use p3_field::{AbstractField, PrimeField64};
+use p3_field::AbstractField;
 use p3_symmetric::Permutation;
 
 use p3_mds::karatsuba_convolution::Convolve;
@@ -29,13 +29,12 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
     }
 
     #[inline(always)]
-    fn reduce(x: i128) -> Goldilocks {
-        debug_assert!(x < (1 << 126));
-        debug_assert!(x > -(1 << 126));
-
-        const MAKE_POSITIVE: i128 = (Goldilocks::ORDER_U64 as i128) << 62;
-        let pos_x = x + MAKE_POSITIVE;
-        Goldilocks::from_wrapped_u128(pos_x as u128)
+    fn reduce(z: i128) -> Goldilocks {
+        // Even though intermediate values could be negative, the
+        // output must be non-negative since the inputs were
+        // non-negative.
+        debug_assert!(z >= 0);
+        Goldilocks::from_wrapped_u128(z as u128)
     }
 }
 
