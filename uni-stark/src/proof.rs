@@ -29,8 +29,7 @@ pub struct Commitments<Com> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct OpenedValues<Challenge>
-{
+pub struct OpenedValues<Challenge> {
     #[serde(bound(deserialize = "Vec<Challenge>: Deserialize<'de>"))]
     #[serde(bound(serialize = "Vec<Challenge>: Serialize"))]
     pub(crate) trace_local: Vec<Challenge>,
