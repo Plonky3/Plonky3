@@ -119,7 +119,8 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for 
     type Error = VerificationError<C>;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(polynomials, C::Val::one())
+        let ones = vec![C::Val::one(); polynomials.len()];
+        self.commit_shifted_batches(polynomials, &ones)
     }
 }
 
@@ -151,13 +152,14 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
     fn commit_shifted_batches(
         &self,
         polynomials: Vec<In>,
-        coset_shift: C::Val,
+        coset_shifts: &[C::Val],
     ) -> (Self::Commitment, Self::ProverData) {
-        let shift = C::Val::generator() / coset_shift;
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .into_iter()
-                .map(|poly| {
+                .zip_eq(coset_shifts)
+                .map(|(poly, coset_shift)| {
+                    let shift = C::Val::generator() / *coset_shift;
                     let input = poly.to_row_major_matrix();
                     // Commit to the bit-reversed LDE.
                     self.dft
