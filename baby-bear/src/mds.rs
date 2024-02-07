@@ -39,8 +39,12 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     /// element is an "plain integer". This informs the implementation
     /// of `reduction()` below.
     #[inline(always)]
-    fn mul(x: i64, y: i64) -> i64 {
-        x * y
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        let mut s = 0i64;
+        for i in 0..N {
+            s += u[i] * v[i];
+        }
+        s
     }
 
     /// The assumptions above mean z < N^2 * 2^55, which is at most
@@ -80,8 +84,12 @@ impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
     /// could be as much as N^2 * 2^62. This will overflow an i64, so
     /// we first widen to i128.
     #[inline(always)]
-    fn mul(x: i64, y: i64) -> i128 {
-        x as i128 * y as i128
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i128 {
+        let mut s = 0i128;
+        for i in 0..N {
+            s += u[i] as i128 * v[i] as i128;
+        }
+        s
     }
 
     /// The assumptions above mean z < N^3 * 2^62, which is at most

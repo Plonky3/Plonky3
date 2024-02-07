@@ -57,13 +57,20 @@
 //! Of course, for small sizes we just explicitly write out the O(n^2)
 //! approach.
 
-use core::ops::{Add, AddAssign, ShrAssign, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Neg, ShrAssign, Sub, SubAssign};
 
 /// This trait collects the operations needed by `Convolve` below.
 ///
 /// TODO: Think of a better name for this.
 pub trait RngElt:
-    Add<Output = Self> + AddAssign + Copy + Default + ShrAssign<u32> + Sub<Output = Self> + SubAssign
+    Add<Output = Self>
+    + AddAssign
+    + Copy
+    + Default
+    + Neg<Output = Self>
+    + ShrAssign<u32>
+    + Sub<Output = Self>
+    + SubAssign
 {
 }
 
@@ -108,9 +115,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     /// element that will be used in calculations.
     fn read(input: F) -> T;
 
-    /// Multiply two internal elements. This may involve widening to a
-    /// larger type in `V`.
-    fn mul(x: T, y: U) -> V;
+    fn parity_dot<const N: usize>(lhs: [T; N], rhs: [U; N]) -> V;
 
     /// Convert an internal element of type `V` back into an external
     /// element.
@@ -247,35 +252,29 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
-        output[0] =
-            Self::mul(lhs[0], rhs[0]) + Self::mul(lhs[1], rhs[2]) + Self::mul(lhs[2], rhs[1]);
-        output[1] =
-            Self::mul(lhs[0], rhs[1]) + Self::mul(lhs[1], rhs[0]) + Self::mul(lhs[2], rhs[2]);
-        output[2] =
-            Self::mul(lhs[0], rhs[2]) + Self::mul(lhs[1], rhs[1]) + Self::mul(lhs[2], rhs[0]);
+        output[0] = Self::parity_dot(lhs, [rhs[0], rhs[2], rhs[1]]);
+        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], rhs[2]]);
+        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
     }
 
     #[inline(always)]
     fn signed_conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
-        output[0] =
-            Self::mul(lhs[0], rhs[0]) - Self::mul(lhs[1], rhs[2]) - Self::mul(lhs[2], rhs[1]);
-        output[1] =
-            Self::mul(lhs[0], rhs[1]) + Self::mul(lhs[1], rhs[0]) - Self::mul(lhs[2], rhs[2]);
-        output[2] =
-            Self::mul(lhs[0], rhs[2]) + Self::mul(lhs[1], rhs[1]) + Self::mul(lhs[2], rhs[0]);
+        output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[2], -rhs[1]]);
+        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[2]]);
+        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
     }
 
     #[inline(always)]
     fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
-        let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]]; // v_0(x)
-        let u_m = [lhs[0] - lhs[2], lhs[1] - lhs[3]]; // v_1(x)
-        let v_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]]; // u_0(x)
-        let v_m = [rhs[0] - rhs[2], rhs[1] - rhs[3]]; // u_1(x)
+        let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]];
+        let u_m = [lhs[0] - lhs[2], lhs[1] - lhs[3]];
+        let v_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]];
+        let v_m = [rhs[0] - rhs[2], rhs[1] - rhs[3]];
 
-        output[0] = Self::mul(u_m[0], v_m[0]) - Self::mul(u_m[1], v_m[1]);
-        output[1] = Self::mul(u_m[0], v_m[1]) + Self::mul(u_m[1], v_m[0]);
-        output[2] = Self::mul(u_p[0], v_p[0]) + Self::mul(u_p[1], v_p[1]);
-        output[3] = Self::mul(u_p[0], v_p[1]) + Self::mul(u_p[1], v_p[0]);
+        output[0] = Self::parity_dot(u_m, [v_m[0], -v_m[1]]);
+        output[1] = Self::parity_dot(u_m, [v_m[1], v_m[0]]);
+        output[2] = Self::parity_dot(u_p, v_p);
+        output[3] = Self::parity_dot(u_p, [v_p[1], v_p[0]]);
 
         output[0] += output[2];
         output[1] += output[3];
@@ -289,20 +288,10 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn signed_conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
-        output[0] = Self::mul(lhs[0], rhs[0])
-            - Self::mul(lhs[1], rhs[3])
-            - Self::mul(lhs[2], rhs[2])
-            - Self::mul(lhs[3], rhs[1]);
-        output[1] = Self::mul(lhs[0], rhs[1]) + Self::mul(lhs[1], rhs[0])
-            - Self::mul(lhs[2], rhs[3])
-            - Self::mul(lhs[3], rhs[2]);
-        output[2] =
-            Self::mul(lhs[0], rhs[2]) + Self::mul(lhs[1], rhs[1]) + Self::mul(lhs[2], rhs[0])
-                - Self::mul(lhs[3], rhs[3]);
-        output[3] = Self::mul(lhs[0], rhs[3])
-            + Self::mul(lhs[1], rhs[2])
-            + Self::mul(lhs[2], rhs[1])
-            + Self::mul(lhs[3], rhs[0]);
+        output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[3], -rhs[2], -rhs[1]]);
+        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[3], -rhs[2]]);
+        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0], -rhs[3]]);
+        output[3] = Self::parity_dot(lhs, [rhs[3], rhs[2], rhs[1], rhs[0]]);
     }
 
     #[inline(always)]
@@ -310,6 +299,12 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         Self::conv_n::<6, 3, _, _>(lhs, rhs, output, Self::conv3, Self::signed_conv3)
     }
 
+    #[inline(always)]
+    fn signed_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
+        Self::signed_conv_n::<6, 3, _>(lhs, rhs, output, Self::signed_conv3)
+    }
+
+    /*
     #[inline(always)]
     fn signed_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
         output[0] = Self::mul(lhs[0], rhs[0])
@@ -352,6 +347,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
             + Self::mul(lhs[4], rhs[1])
             + Self::mul(lhs[5], rhs[0]);
     }
+    */
 
     #[inline(always)]
     fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {

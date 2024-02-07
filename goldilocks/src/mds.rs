@@ -38,8 +38,12 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
     /// 2^115 which will not overflow for N <= 16. We widen `y` at
     /// this point to perform the multiplication.
     #[inline(always)]
-    fn mul(x: i128, y: i64) -> i128 {
-        x * y as i128
+    fn parity_dot<const N: usize>(u: [i128; N], v: [i64; N]) -> i128 {
+        let mut s = 0i128;
+        for i in 0..N {
+            s += u[i] * v[i] as i128;
+        }
+        s
     }
 
     /// The assumptions above mean z < N^2 * 2^115, which is at most
