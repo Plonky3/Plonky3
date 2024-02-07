@@ -218,7 +218,7 @@ mod tests {
                 PERMUTATION_OUTPUTS[test_run].map(Mersenne31::from_canonical_u64);
 
             let actual = rescue_prime.permute(state);
-            assert_eq!(actual, expected, "different {:?}", rescue_prime);
+            assert_eq!(actual, expected);
         }
     }
 
