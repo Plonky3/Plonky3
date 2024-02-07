@@ -210,20 +210,6 @@ impl PrimeField64 for BabyBear {
     fn as_canonical_u64(&self) -> u64 {
         u64::from(self.as_canonical_u32())
     }
-
-    #[inline]
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
-        // In order not to overflow a u64, we must have sum(u) <= 2^32.
-        debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
-
-        let mut dot = u[0] * v[0].value as u64;
-        for i in 1..N {
-            dot += u[i] * v[i].value as u64;
-        }
-        Self {
-            value: (dot % (P as u64)) as u32,
-        }
-    }
 }
 
 impl PrimeField32 for BabyBear {
