@@ -10,7 +10,6 @@ mod exponentiation;
 pub mod extension;
 mod field;
 mod helpers;
-mod non_canonical;
 mod packed;
 
 pub use array::*;
@@ -18,5 +17,4 @@ pub use batch_inverse::*;
 pub use exponentiation::*;
 pub use field::*;
 pub use helpers::*;
-pub use non_canonical::*;
 pub use packed::*;
