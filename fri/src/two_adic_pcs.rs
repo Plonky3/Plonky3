@@ -341,13 +341,6 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
             .iter()
             .zip(&fri_challenges.query_indices)
             .map(|(query_opening, &index)| {
-                let x = C::Val::generator()
-                    * C::Val::two_adic_generator(log_max_height).exp_u64(reverse_bits_len(
-                        index,
-                        log_max_height,
-                    )
-                        as u64);
-
                 let mut ro = [C::Challenge::zero(); 32];
                 let mut alpha_pow = [C::Challenge::one(); 32];
                 for (batch_opening, batch_dims, (batch_commit, batch_points), batch_at_z) in
@@ -367,6 +360,13 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
                         batch_at_z
                     ) {
                         let log_height = log2_strict_usize(mat_dims.height) + self.fri.log_blowup;
+
+                        let bits_reduced = log_max_height - log_height;
+                        let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
+
+                        let x = C::Val::generator()
+                            * C::Val::two_adic_generator(log_height)
+                                .exp_u64(rev_reduced_index as u64);
 
                         for (&z, ps_at_z) in izip!(mat_points, mat_at_z) {
                             for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
@@ -412,8 +412,9 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
             }
         }
     }
-    let max_log_height = *max_log_height_for_point.values().max().unwrap();
+
     // Compute the largest subgroup we will use, in bitrev order.
+    let max_log_height = *max_log_height_for_point.values().max().unwrap();
     let mut subgroup = cyclic_subgroup_coset_known_order(
         F::two_adic_generator(max_log_height),
         coset_shift,
@@ -421,6 +422,7 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
     )
     .collect_vec();
     reverse_slice_index_bits(&mut subgroup);
+
     max_log_height_for_point
         .into_iter()
         .map(|(z, log_height)| {
