@@ -2,6 +2,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
@@ -25,7 +26,7 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     /// The opening argument.
     type Proof: Serialize + DeserializeOwned;
 
-    type Error;
+    type Error: Debug;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData);
 

@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
@@ -81,10 +82,20 @@ impl<C: TwoAdicFriPcsGenericConfig> TwoAdicFriPcs<C> {
     }
 }
 
-#[derive(Debug)]
 pub enum VerificationError<C: TwoAdicFriPcsGenericConfig> {
     InputMmcsError(<C::InputMmcs as Mmcs<C::Val>>::Error),
     FriError(FriError<<C::FriMmcs as Mmcs<C::Challenge>>::Error>),
+}
+
+impl<C: TwoAdicFriPcsGenericConfig> Debug for VerificationError<C> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            VerificationError::InputMmcsError(e) => {
+                f.debug_tuple("InputMmcsError").field(e).finish()
+            }
+            VerificationError::FriError(e) => f.debug_tuple("FriError").field(e).finish(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
