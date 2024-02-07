@@ -2,14 +2,14 @@ use p3_baby_bear::BabyBear;
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
 use p3_commit::{ExtensionMmcs, Pcs, UnivariatePcs};
 use p3_dft::Radix2DitParallel;
-use p3_field::{extension::BinomialExtensionField, AbstractField, Field};
+use p3_field::{extension::BinomialExtensionField, Field};
 use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 
 fn make_test_fri_pcs(log_degrees: &[usize]) {
     let mut rng = thread_rng();
@@ -78,16 +78,15 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
         .iter()
         .map(|p| p.dimensions())
         .collect::<Vec<_>>();
-    let res = <Pcs as UnivariatePcs<_, _, RowMajorMatrix<Val>, _>>::verify_multi_batches(
+    <Pcs as UnivariatePcs<_, _, RowMajorMatrix<Val>, _>>::verify_multi_batches(
         &pcs,
         &[(commit, &points)],
         &[dims],
         opening,
         &proof,
         &mut challenger,
-    );
-
-    assert!(res.is_ok());
+    )
+    .unwrap();
 }
 
 #[test]
