@@ -62,7 +62,7 @@ impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
 /// Here "large" means the elements can be as big as the field
 /// characteristic, and the size N of the RHS is <= 64.
 struct LargeConvolveMersenne31;
-impl Convolve<Mersenne31, i64, i64, i128> for LargeConvolveMersenne31 {
+impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
     /// Return the lift of an (almost) reduced Mersenne31 element.
     /// The Mersenne31 implementation guarantees that
     /// 0 <= input.value <= P < 2^31.
@@ -75,12 +75,30 @@ impl Convolve<Mersenne31, i64, i64, i128> for LargeConvolveMersenne31 {
     /// could be as much as N^2 * 2^62. This will overflow an i64, so
     /// we first widen to i128.
     #[inline(always)]
-    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i128 {
-        let mut s = 0i128;
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        let mut dp = 0i128;
         for i in 0..N {
-            s += u[i] as i128 * v[i] as i128;
+            dp += u[i] as i128 * v[i] as i128;
         }
-        s
+
+        const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
+        const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
+
+        let low_bits = (dp & LOWMASK) as i64; // low_bits < 2**42
+        let high_bits = ((dp & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
+
+        // We quickly prove that low_bits + high_bits is what we want.
+
+        // The individual bounds clearly show that low_bits +
+        // high_bits < 2**(n - 30).
+        //
+        // Next observe that low_bits + high_bits = input - (2**31 -
+        // 1) * (high_bits) = input mod P.
+        //
+        // Finally note that 2**11 divides high_bits and so low_bits +
+        // high_bits = low_bits mod 2**11 = input mod 2**11.
+
+        low_bits + high_bits
     }
 
     /// The assumptions above mean z < N^3 * 2^62, which is at most
@@ -91,16 +109,18 @@ impl Convolve<Mersenne31, i64, i64, i128> for LargeConvolveMersenne31 {
     /// output must be non-negative since the inputs were
     /// non-negative.
     #[inline(always)]
-    fn reduce(z: i128) -> Mersenne31 {
-        debug_assert!(z < (1i128 << 80));
-        debug_assert!(z >= 0);
-        // z = lo + 2^32 * mid + 2^64 * hi with lo, mid, hi < 2^32.
-        let (hi, mid, lo) = ((z >> 64) as u64, (z >> 32) as u32 as u64, z as u32 as u64);
-        // 2^32 = 2 (mod P), hence
-        // z = lo + 2^32 * mid + 2^64 * hi
-        //   = lo + 2 * mid + 4 * hi (mod P)
-        let res = lo + 2 * mid + 4 * hi;
-        Mersenne31::from_wrapped_u64(res)
+    fn reduce(z: i64) -> Mersenne31 {
+        const MASK: i64 = (1 << 31) - 1;
+        // Morally, our value is a i62 not a i64 as the top 3 bits are garunteed to be equal.
+        let low_bits = Mersenne31::from_canonical_u32((z & MASK) as u32);
+        let high_bits = ((z >> 31) & MASK) as i32;
+        let sign_bits = (z >> 62) as i32;
+
+        // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
+
+        let high = Mersenne31::from_canonical_u32((high_bits + sign_bits) as u32);
+
+        low_bits + high
     }
 }
 
