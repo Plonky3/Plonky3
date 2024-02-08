@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::array;
+use core::ops::{AddAssign, Mul};
 
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, TwoAdicField};
@@ -7,7 +8,7 @@ use p3_field::{AbstractField, TwoAdicField};
 // NB: These are all MDS for M31, BabyBear and Goldilocks
 // const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
 // const MATRIX_CIRC_MDS_8_SML: [u64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
-// Much smaller: [1, 1, -1, 2, 3, 8, 2, -3] but not sure how to deal with the -ve's
+// Much smaller: [1, 1, -1, 2, 3, 8, 2, -3] but need to deal with the -ve's
 
 // const MATRIX_CIRC_MDS_12_2EXP: [u64; 12] = [1, 1, 2, 1, 8, 32, 2, 256, 4096, 8, 65536, 1024];
 // const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [9, 7, 4, 1, 16, 2, 256, 128, 3, 32, 1, 1];
@@ -19,6 +20,18 @@ use p3_field::{AbstractField, TwoAdicField};
 //   [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 // 1, 1, 51, 52, 11, 63, 1, 2, 1, 2, 15, 67, 2, 22, 13, 3
 // [1, 1, 2, 1, 8, 32, 2, 65, 77, 8, 91, 31, 3, 65, 32, 7];
+
+#[inline(always)]
+pub fn dot_product<T, const N: usize>(u: [T; N], v: [T; N]) -> T
+where
+    T: Copy + AddAssign + Mul<Output = T>,
+{
+    let mut dp = u[0] * v[0];
+    for i in 1..N {
+        dp += u[i] * v[i];
+    }
+    dp
+}
 
 /// Given the first row `circ_matrix` of an NxN circulant matrix, say
 /// C, return the product `C*input`.

@@ -304,48 +304,17 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         Self::signed_conv_n::<6, 3, _>(lhs, rhs, output, Self::signed_conv3)
     }
 
-    /*
+    /* TODO: Verify more thoroughly whether this version or the recursive version above is
+     * faster. Initial tests suggest the recursive one is better by 1-5%
+
     #[inline(always)]
     fn signed_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        output[0] = Self::mul(lhs[0], rhs[0])
-            - Self::mul(lhs[1], rhs[5])
-            - Self::mul(lhs[2], rhs[4])
-            - Self::mul(lhs[3], rhs[3])
-            - Self::mul(lhs[4], rhs[2])
-            - Self::mul(lhs[5], rhs[1]);
-
-        output[1] = Self::mul(lhs[0], rhs[1]) + Self::mul(lhs[1], rhs[0])
-            - Self::mul(lhs[2], rhs[5])
-            - Self::mul(lhs[3], rhs[4])
-            - Self::mul(lhs[4], rhs[3])
-            - Self::mul(lhs[5], rhs[2]);
-
-        output[2] =
-            Self::mul(lhs[0], rhs[2]) + Self::mul(lhs[1], rhs[1]) + Self::mul(lhs[2], rhs[0])
-                - Self::mul(lhs[3], rhs[5])
-                - Self::mul(lhs[4], rhs[4])
-                - Self::mul(lhs[5], rhs[3]);
-
-        output[3] = Self::mul(lhs[0], rhs[3])
-            + Self::mul(lhs[1], rhs[2])
-            + Self::mul(lhs[2], rhs[1])
-            + Self::mul(lhs[3], rhs[0])
-            - Self::mul(lhs[4], rhs[5])
-            - Self::mul(lhs[5], rhs[4]);
-
-        output[4] = Self::mul(lhs[0], rhs[4])
-            + Self::mul(lhs[1], rhs[3])
-            + Self::mul(lhs[2], rhs[2])
-            + Self::mul(lhs[3], rhs[1])
-            + Self::mul(lhs[4], rhs[0])
-            - Self::mul(lhs[5], rhs[5]);
-
-        output[5] = Self::mul(lhs[0], rhs[5])
-            + Self::mul(lhs[1], rhs[4])
-            + Self::mul(lhs[2], rhs[3])
-            + Self::mul(lhs[3], rhs[2])
-            + Self::mul(lhs[4], rhs[1])
-            + Self::mul(lhs[5], rhs[0]);
+        output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[5], -rhs[4], -rhs[3], -rhs[2], -rhs[1]]);
+        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[5], -rhs[4], -rhs[3], -rhs[2]]);
+        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0], -rhs[5], -rhs[4], -rhs[3]]);
+        output[3] = Self::parity_dot(lhs, [rhs[3], rhs[2], rhs[1], rhs[0], -rhs[5], -rhs[4]]);
+        output[4] = Self::parity_dot(lhs, [rhs[4], rhs[3], rhs[2], rhs[1], rhs[0], -rhs[5]]);
+        output[5] = Self::parity_dot(lhs, [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]]);
     }
     */
 

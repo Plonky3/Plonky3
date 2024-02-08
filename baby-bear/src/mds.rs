@@ -6,9 +6,9 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use p3_field::PrimeField64;
+use p3_field::{PrimeField32, PrimeField64};
 use p3_mds::karatsuba_convolution::Convolve;
-use p3_mds::util::first_row_to_first_col;
+use p3_mds::util::{dot_product, first_row_to_first_col};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
@@ -40,11 +40,7 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     /// of `reduction()` below.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
-        let mut s = 0i64;
-        for i in 0..N {
-            s += u[i] * v[i];
-        }
-        s
+        dot_product(u, v)
     }
 
     /// The assumptions above mean z < N^2 * 2^55, which is at most
@@ -66,12 +62,42 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     }
 }
 
+/// Given |x| < 2^80 compute x' such that:
+/// |x'| < 2**50
+/// x' = x mod p
+/// x' = x mod 2^10
+/// See Thm 1 (Below function) for a proof that this function is correct.
+#[inline(always)]
+fn barret_red_babybear(input: i128) -> i64 {
+    const N: usize = 40; // beta = 2^N, fixing N = 40 here
+    const P: i128 = BabyBear::ORDER_U32 as i128;
+    const I: i64 = (((1_i128) << (2 * N)) / P) as i64; // I = 2^80 / P => I < 2**50
+                                                       // I: i64 = 0x22222221d950c
+    const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
+
+    // input = input_low + beta*input_high
+    // So input_high < 2**63 and fits in an i64.
+    let input_high = (input >> N) as i64; // input_high < input / beta < 2**{80 - N}
+
+    // I, input_high are i64's so this mulitiplication can't overflow.
+    let quot = (((input_high as i128) * (I as i128)) >> N) as i64;
+
+    // Replace quot by a close value which is divisibly by 2^10.
+    let quot_2adic = quot & MASK;
+
+    // quot_2adic, P are i64's so this can't overflow.
+    // sub is by construction divisible by both P and 2^10.
+    let sub = (quot_2adic as i128) * P;
+
+    (input - sub) as i64
+}
+
 /// Instantiate convolution for "large" RHS vectors over BabyBear.
 ///
 /// Here "large" means the elements can be as big as the field
 /// characteristic, and the size N of the RHS is <= 64.
 struct LargeConvolveBabyBear;
-impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
+impl Convolve<BabyBear, i64, i64, i64> for LargeConvolveBabyBear {
     /// Return the lift of a BabyBear element, satisfying 0 <=
     /// input.value < P < 2^31. Note that BabyBear elements are
     /// represented in Monty form.
@@ -84,12 +110,12 @@ impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
     /// could be as much as N^2 * 2^62. This will overflow an i64, so
     /// we first widen to i128.
     #[inline(always)]
-    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i128 {
-        let mut s = 0i128;
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        let mut dp = 0i128;
         for i in 0..N {
-            s += u[i] as i128 * v[i] as i128;
+            dp += u[i] as i128 * v[i] as i128;
         }
-        s
+        barret_red_babybear(dp)
     }
 
     /// The assumptions above mean z < N^3 * 2^62, which is at most
@@ -102,12 +128,20 @@ impl Convolve<BabyBear, i64, i64, i128> for LargeConvolveBabyBear {
     /// output must be non-negative since the inputs were
     /// non-negative.
     #[inline(always)]
-    fn reduce(z: i128) -> BabyBear {
-        debug_assert!(z < (1i128 << 80));
-        debug_assert!(z > 0);
-        BabyBear {
-            value: (z as u128 % BabyBear::ORDER_U64 as u128) as u32,
-        }
+    fn reduce(z: i64) -> BabyBear {
+        // Note we do NOT move it into MONTY form. We assume it is already
+        // in this form.
+        let red = ((z as i64) % (BabyBear::ORDER_U32 as i64)) as u32;
+
+        // If z >= 0: 0 <= red < P is the correct value and P + red will
+        // not overflow.
+        // If z < 0: -P < red < 0 and the value we want is P + red.
+        // On bits, + acts identically for i32 and u32. Hence we can use
+        // u32's and just check for overflow.
+
+        let (corr, over) = red.overflowing_add(BabyBear::ORDER_U32);
+        let value = if over { corr } else { red };
+        BabyBear { value }
     }
 }
 
