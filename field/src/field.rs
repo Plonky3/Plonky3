@@ -242,6 +242,7 @@ pub trait PrimeField32: PrimeField64 {
 
 pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
+    + From<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>
