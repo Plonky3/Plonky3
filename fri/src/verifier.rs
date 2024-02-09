@@ -153,8 +153,8 @@ where
         x = x.square();
     }
 
-    debug_assert!(index == 0 || index == 1);
-    debug_assert!(x.is_one() || x == F::two_adic_generator(1));
+    debug_assert!(index < config.blowup(), "index was {}", index);
+    debug_assert_eq!(x.exp_power_of_2(config.log_blowup), F::one());
 
     Ok(folded_eval)
 }
