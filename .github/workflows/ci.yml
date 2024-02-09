@@ -8,63 +8,69 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 1
 
 jobs:
   build_and_test:
     name: Build and Test
     runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: nightly
-    - name: Build
-      run: cargo +nightly build --verbose --all-targets
-    - name: Test
-      run: |
-        cargo +nightly test --verbose
+    - uses: actions/checkout@v4
 
-  lints:
+    - uses: dtolnay/rust-toolchain@stable
+      id: rs-stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Build
+      run: cargo build --verbose --all-targets
+
+    - name: Check with parallel
+      run: cargo check --verbose --all-targets --features parallel
+
+    - name: Test
+      run: cargo test --verbose
+
+  lint:
     name: Formatting and Clippy
     runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
-      - name: Install nightly toolchain
-        id: rustc-toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly-2023-06-30
-          override: true
-          components: rustfmt, clippy
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+          components: clippy
+      id: rs-stable
 
-      - name: rust-cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: rustc-lints-${{ steps.rustc-toolchain.outputs.rustc_hash }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+    - uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rustfmt
 
-      - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
-        env:
-          CARGO_INCREMENTAL: 1
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --all-features --all-targets -- -D warnings -A incomplete-features
-        env:
-          CARGO_INCREMENTAL: 1
+    - name: Clippy
+      run: cargo +stable clippy --all-targets -- -D warnings
+
+    - name: Format
+      run: cargo +nightly fmt --all -- --check 
+

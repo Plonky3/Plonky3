@@ -171,7 +171,9 @@ impl AbstractField for Mersenne31 {
 }
 
 impl Field for Mersenne31 {
-    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    type Packing = crate::PackedMersenne31Neon;
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
     type Packing = Self;
 
     #[inline]

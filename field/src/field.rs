@@ -235,6 +235,7 @@ pub trait PrimeField32: PrimeField64 {
 
 pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
+    + From<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>
@@ -285,7 +286,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     }
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }

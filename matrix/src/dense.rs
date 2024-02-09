@@ -4,7 +4,7 @@ use core::iter::Cloned;
 use core::slice;
 
 use p3_field::{ExtensionField, Field, PackedField};
-use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -231,6 +231,13 @@ impl<'a, T> RowMajorMatrixView<'a, T> {
 
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
         self.values.chunks_exact(self.width)
+    }
+
+    pub fn par_rows(&self) -> impl IndexedParallelIterator<Item = &[T]>
+    where
+        T: Sync,
+    {
+        self.values.par_chunks_exact(self.width)
     }
 
     pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {

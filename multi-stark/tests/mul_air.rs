@@ -1,5 +1,5 @@
 // use p3_air::{Air, AirBuilder};
-// use p3_multi_stark::{prove, StarkConfigImpl};
+// use p3_multi_stark::{prove, StarkConfig};
 // use p3_challenger::DuplexChallenger;
 // use p3_fri::FRIBasedPcs;
 // use p3_lde::NaiveCosetLde;
@@ -55,12 +55,12 @@
 //
 //     type Mmcs = MerkleTreeMMCS<Val, [Val; 4], H4, C>;
 //     type Pcs = TensorPcs<Val, MyCode>;
-//     type MyConfig = StarkConfigImpl<Val, Challenge, Challenge, Pcs>;
+//     type MyConfig = StarkConfig<Val, Challenge, Challenge, Pcs>;
 //
 //     let mut rng = thread_rng();
 //     let trace = RowMajorMatrix::rand(&mut rng, 256, 10);
 //     let pcs = todo!();
-//     let config = StarkConfigImpl::new(pcs);
+//     let config = StarkConfig::new(pcs);
 //     let mut challenger = DuplexChallenger::new(perm);
 //     prove::<MyConfig, _, _>(&MulAir, config, &mut challenger, trace);
 // }

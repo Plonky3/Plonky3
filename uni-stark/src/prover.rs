@@ -11,14 +11,14 @@ use p3_field::{
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet, MatrixRows};
-use p3_maybe_rayon::{IndexedParallelIterator, MaybeIntoParIter, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
-    decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder, StarkConfig,
-    ZerofierOnCoset,
+    decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder,
+    StarkGenericConfig, ZerofierOnCoset,
 };
 
 #[instrument(skip_all)]
@@ -33,7 +33,7 @@ pub fn prove<
     trace: RowMajorMatrix<SC::Val>,
 ) -> Proof<SC>
 where
-    SC: StarkConfig,
+    SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
@@ -51,7 +51,7 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
     challenger.observe(trace_commit.clone());
-    let alpha: SC::Challenge = challenger.sample_ext_element::<SC::Challenge>();
+    let alpha: SC::Challenge = challenger.sample_ext_element();
 
     let mut trace_ldes = pcs.get_ldes(&trace_data);
     assert_eq!(trace_ldes.len(), 1);
@@ -68,14 +68,11 @@ where
         trace_lde_for_quotient,
         alpha,
     );
-
-    let quotient_chunks_flattened = info_span!("decompose quotient polynomial").in_scope(|| {
-        decompose_and_flatten::<SC>(
-            quotient_values,
-            SC::Challenge::from_base(pcs.coset_shift()),
-            log_quotient_degree,
-        )
-    });
+    let quotient_chunks_flattened = decompose_and_flatten(
+        quotient_values,
+        SC::Challenge::from_base(pcs.coset_shift()),
+        log_quotient_degree,
+    );
     let (quotient_commit, quotient_data) =
         info_span!("commit to quotient poly chunks").in_scope(|| {
             pcs.commit_shifted_batch(
@@ -127,7 +124,7 @@ fn quotient_values<SC, A, Mat>(
     alpha: SC::Challenge,
 ) -> Vec<SC::Challenge>
 where
-    SC: StarkConfig,
+    SC: StarkGenericConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: MatrixGet<SC::Val> + Sync,
 {
@@ -140,14 +137,24 @@ where
     let coset_shift = config.pcs().coset_shift();
     let next_step = 1 << quotient_degree_bits;
 
-    let coset: Vec<_> =
+    let mut coset: Vec<_> =
         cyclic_subgroup_coset_known_order(g_extended, coset_shift, quotient_size).collect();
 
     let zerofier_on_coset = ZerofierOnCoset::new(degree_bits, quotient_degree_bits, coset_shift);
 
     // Evaluations of L_first(x) = Z_H(x) / (x - 1) on our coset s H.
-    let lagrange_first_evals = zerofier_on_coset.lagrange_basis_unnormalized(0);
-    let lagrange_last_evals = zerofier_on_coset.lagrange_basis_unnormalized(degree - 1);
+    let mut lagrange_first_evals = zerofier_on_coset.lagrange_basis_unnormalized(0);
+    let mut lagrange_last_evals = zerofier_on_coset.lagrange_basis_unnormalized(degree - 1);
+
+    // We have a few vectors of length `quotient_size`, and we're going to take slices therein of
+    // length `WIDTH`. In the edge case where `quotient_size < WIDTH`, we need to pad those vectors
+    // in order for the slices to exist. The entries beyond quotient_size will be ignored, so we can
+    // just use default values.
+    for _ in quotient_size..SC::PackedVal::WIDTH {
+        coset.push(SC::Val::default());
+        lagrange_first_evals.push(SC::Val::default());
+        lagrange_last_evals.push(SC::Val::default());
+    }
 
     (0..quotient_size)
         .into_par_iter()
@@ -198,7 +205,8 @@ where
             let quotient = folder.accumulator * zerofier_inv;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            (0..SC::PackedVal::WIDTH).map(move |idx_in_packing| {
+            let limit = SC::PackedVal::WIDTH.min(quotient_size);
+            (0..limit).map(move |idx_in_packing| {
                 let quotient_value = (0..<SC::Challenge as AbstractExtensionField<SC::Val>>::D)
                     .map(|coeff_idx| quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing])
                     .collect_vec();

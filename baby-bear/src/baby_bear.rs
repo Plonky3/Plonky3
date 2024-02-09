@@ -10,15 +10,35 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+/// The Baby Bear prime
 const P: u32 = 0x78000001;
-const MONTY_BITS: u32 = 31;
-const MONTY_MASK: u32 = (1 << MONTY_BITS) - 1;
-const MONTY_MU: u32 = 0x8000001;
+
+// We want a different set of parameters on ARM/NEON than elsewhere. In particular, we want ARM to
+// use 31 bits for the limb size, because that lets us use the SQDMULH instruction to do really fast
+// multiplications in NEON. However, other architectures don't have this instruction, so 32-bit
+// limbs are more convenient, being a nice power of 2.
+const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
+    31
+} else {
+    32
+};
+// We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
+// (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
+const MONTY_MU: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
+    0x08000001
+} else {
+    0x88000001
+};
+
+// This is derived from above.
+const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[repr(transparent)] // `PackedBabyBearNeon` relies on this!
 pub struct BabyBear {
+    // This is `pub(crate)` just for tests. If you're accessing `value` outside of those, you're
+    // likely doing something fishy.
     pub(crate) value: u32,
 }
 
@@ -69,20 +89,27 @@ impl Distribution<BabyBear> for Standard {
     }
 }
 
+const MONTY_ZERO: u32 = to_monty(0);
+const MONTY_ONE: u32 = to_monty(1);
+const MONTY_TWO: u32 = to_monty(2);
+const MONTY_NEG_ONE: u32 = to_monty(P - 1);
+
 impl AbstractField for BabyBear {
     type F = Self;
 
     fn zero() -> Self {
-        Self { value: 0 }
+        Self { value: MONTY_ZERO }
     }
     fn one() -> Self {
-        Self { value: 0x7ffffff }
+        Self { value: MONTY_ONE }
     }
     fn two() -> Self {
-        Self { value: 0xffffffe }
+        Self { value: MONTY_TWO }
     }
     fn neg_one() -> Self {
-        Self { value: 0x70000002 }
+        Self {
+            value: MONTY_NEG_ONE,
+        }
     }
 
     #[inline]
@@ -152,7 +179,12 @@ impl AbstractField for BabyBear {
 impl Field for BabyBear {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedBabyBearNeon;
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    type Packing = crate::PackedBabyBearAVX2;
+    #[cfg(not(any(
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "x86_64", target_feature = "avx2"),
+    )))]
     type Packing = Self;
 
     #[inline]
@@ -225,10 +257,38 @@ impl TwoAdicField for BabyBear {
     const TWO_ADICITY: usize = 27;
 
     fn two_adic_generator(bits: usize) -> Self {
-        // TODO: Consider a `match` which may speed this up.
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::from_canonical_u32(0x1a427a41); // generates the whole 2^TWO_ADICITY group
-        base.exp_power_of_2(Self::TWO_ADICITY - bits)
+        match bits {
+            0 => Self::one(),
+            1 => Self::from_canonical_u32(0x78000000),
+            2 => Self::from_canonical_u32(0x67055c21),
+            3 => Self::from_canonical_u32(0x5ee99486),
+            4 => Self::from_canonical_u32(0xbb4c4e4),
+            5 => Self::from_canonical_u32(0x2d4cc4da),
+            6 => Self::from_canonical_u32(0x669d6090),
+            7 => Self::from_canonical_u32(0x17b56c64),
+            8 => Self::from_canonical_u32(0x67456167),
+            9 => Self::from_canonical_u32(0x688442f9),
+            10 => Self::from_canonical_u32(0x145e952d),
+            11 => Self::from_canonical_u32(0x4fe61226),
+            12 => Self::from_canonical_u32(0x4c734715),
+            13 => Self::from_canonical_u32(0x11c33e2a),
+            14 => Self::from_canonical_u32(0x62c3d2b1),
+            15 => Self::from_canonical_u32(0x77cad399),
+            16 => Self::from_canonical_u32(0x54c131f4),
+            17 => Self::from_canonical_u32(0x4cabd6a6),
+            18 => Self::from_canonical_u32(0x5cf5713f),
+            19 => Self::from_canonical_u32(0x3e9430e8),
+            20 => Self::from_canonical_u32(0xba067a3),
+            21 => Self::from_canonical_u32(0x18adc27d),
+            22 => Self::from_canonical_u32(0x21fd55bc),
+            23 => Self::from_canonical_u32(0x4b859b3d),
+            24 => Self::from_canonical_u32(0x3bd57996),
+            25 => Self::from_canonical_u32(0x4483d85a),
+            26 => Self::from_canonical_u32(0x3a26eef8),
+            27 => Self::from_canonical_u32(0x1a427a41),
+            _ => unreachable!("Already asserted that bits <= Self::TWO_ADICITY"),
+        }
     }
 }
 
@@ -327,13 +387,13 @@ impl Div for BabyBear {
 #[inline]
 #[must_use]
 const fn to_monty(x: u32) -> u32 {
-    (((x as u64) << 31) % P as u64) as u32
+    (((x as u64) << MONTY_BITS) % P as u64) as u32
 }
 
 #[inline]
 #[must_use]
 fn to_monty_64(x: u64) -> u32 {
-    (((x as u128) << 31) % P as u128) as u32
+    (((x as u128) << MONTY_BITS) % P as u128) as u32
 }
 
 #[inline]
@@ -357,7 +417,7 @@ fn monty_reduce(x: u64) -> u32 {
     let u = t * (P as u64);
 
     let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> 31) as u32;
+    let x_sub_u_hi = (x_sub_u >> MONTY_BITS) as u32;
     let corr = if over { P } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
 }
@@ -382,6 +442,17 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn test_baby_bear_two_adicity_generators() {
+        let base = BabyBear::from_canonical_u32(0x1a427a41);
+        for bits in 0..=BabyBear::TWO_ADICITY {
+            assert_eq!(
+                BabyBear::two_adic_generator(bits),
+                base.exp_power_of_2(BabyBear::TWO_ADICITY - bits)
+            );
+        }
+    }
 
     #[test]
     fn test_baby_bear() {

@@ -1,35 +1,39 @@
-use p3_field::PrimeField64;
+use p3_field::{Field, PrimeField64};
+use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
+use tracing::instrument;
 
-use crate::{DuplexChallenger, FieldChallenger};
+use crate::{CanObserve, CanSampleBits, DuplexChallenger};
 
-pub trait GrindingChallenger<F: PrimeField64>: FieldChallenger<F> + Clone {
-    // Can be overridden for more efficient methods not involving cloning, depending on the
-    // internals of the challenger.
-    fn grind(&mut self, bits: usize) -> F {
-        for i in 0..F::ORDER_U64 {
-            let witness = F::from_canonical_u64(i);
-            let mut forked = self.clone();
+pub trait GrindingChallenger:
+    CanObserve<Self::Witness> + CanSampleBits<usize> + Sync + Clone
+{
+    type Witness: Field;
 
-            if forked.check_witness(bits, witness) {
-                assert!(self.check_witness(bits, witness));
-                return witness;
-            }
-        }
-
-        panic!("failed to find witness")
-    }
+    fn grind(&mut self, bits: usize) -> Self::Witness;
 
     #[must_use]
-    fn check_witness(&mut self, bits: usize, witness: F) -> bool {
+    fn check_witness(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
         self.sample_bits(bits) == 0
     }
 }
 
-impl<F, P, const WIDTH: usize> GrindingChallenger<F> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const WIDTH: usize> GrindingChallenger for DuplexChallenger<F, P, WIDTH>
 where
     F: PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
+    type Witness = F;
+
+    #[instrument(name = "grind for proof-of-work witness", skip_all)]
+    fn grind(&mut self, bits: usize) -> Self::Witness {
+        let witness = (0..F::ORDER_U64)
+            .into_par_iter()
+            .map(|i| F::from_canonical_u64(i))
+            .find_any(|witness| self.clone().check_witness(bits, *witness))
+            .expect("failed to find witness");
+        assert!(self.check_witness(bits, witness));
+        witness
+    }
 }
