@@ -131,7 +131,7 @@ impl Convolve<BabyBear, i64, i64, i64> for LargeConvolveBabyBear {
     fn reduce(z: i64) -> BabyBear {
         // Note we do NOT move it into MONTY form. We assume it is already
         // in this form.
-        let red = ((z as i64) % (BabyBear::ORDER_U32 as i64)) as u32;
+        let red = (z % (BabyBear::ORDER_U32 as i64)) as u32;
 
         // If z >= 0: 0 <= red < P is the correct value and P + red will
         // not overflow.
