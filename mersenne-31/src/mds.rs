@@ -70,7 +70,7 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
     /// For a convolution of size N, |x|, |y| < N * 2^31, so the product
     /// could be as much as N^2 * 2^62. This will overflow an i64, so
     /// we first widen to i128.
-    #[inline(always)]
+    #[inline]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
         let mut dp = 0i128;
         for i in 0..N {
@@ -104,7 +104,7 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
     /// NB: Even though intermediate values could be negative, the
     /// output must be non-negative since the inputs were
     /// non-negative.
-    #[inline(always)]
+    #[inline]
     fn reduce(z: i64) -> Mersenne31 {
         const MASK: i64 = (1 << 31) - 1;
         // Morally, our value is a i62 not a i64 as the top 3 bits are
