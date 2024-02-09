@@ -397,6 +397,11 @@ impl AbstractField for PackedBabyBearAVX2 {
     }
 
     #[inline]
+    fn from_wrapped_u128(n: u128) -> Self {
+        BabyBear::from_wrapped_u128(n).into()
+    }
+
+    #[inline]
     fn generator() -> Self {
         BabyBear::generator().into()
     }
