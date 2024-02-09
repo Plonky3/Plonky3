@@ -107,15 +107,14 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
     #[inline(always)]
     fn reduce(z: i64) -> Mersenne31 {
         const MASK: i64 = (1 << 31) - 1;
-        // Morally, our value is a i62 not a i64 as the top 3 bits are garunteed to be equal.
+        // Morally, our value is a i62 not a i64 as the top 3 bits are
+        // guaranteed to be equal.
         let low_bits = Mersenne31::from_canonical_u32((z & MASK) as u32);
         let high_bits = ((z >> 31) & MASK) as i32;
         let sign_bits = (z >> 62) as i32;
 
         // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
-
         let high = Mersenne31::from_canonical_u32((high_bits + sign_bits) as u32);
-
         low_bits + high
     }
 }
