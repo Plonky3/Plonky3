@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::Permutation;
 
