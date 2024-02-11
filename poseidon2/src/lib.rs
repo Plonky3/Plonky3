@@ -122,7 +122,7 @@ where
     Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        let external_linear_layer = Poseidon2MEMatrix::<WIDTH, D>::default();
+        let external_linear_layer = Poseidon2MEMatrix::<WIDTH, D>;
 
         // The initial linear layer.
         external_linear_layer.permute_mut(state);
