@@ -24,7 +24,7 @@ use crate::{
 #[instrument(skip_all)]
 pub fn prove<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, SC::Val>>,
+    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constrainulSclgConstraintBuilder<'a, SC::Val>>,
     #[cfg(not(debug_assertions))] A,
 >(
     config: &SC,
