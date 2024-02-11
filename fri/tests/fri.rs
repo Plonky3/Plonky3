@@ -38,7 +38,6 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
         proof_of_work_bits: 8,
         mmcs,
     };
-
     (perm, fri_config)
 }
 
