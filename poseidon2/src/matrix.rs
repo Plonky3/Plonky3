@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::marker::{PhantomData, Sync};
 
 use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::Permutation;
@@ -12,26 +11,8 @@ extern crate alloc;
 // [ 1 3 5 7 ]
 // [ 1 1 4 6 ].
 // The permutation calculation is based on Appendix B from the Poseidon2 paper.
-#[derive(Clone)]
-pub struct Poseidon2MEMatrix<AF, const WIDTH: usize, const D: u64>
-where
-    AF: AbstractField + Sync,
-    AF::F: PrimeField,
-{
-    _phantom: PhantomData<AF>,
-}
-
-impl<AF, const WIDTH: usize, const D: u64> Poseidon2MEMatrix<AF, WIDTH, D>
-where
-    AF: AbstractField + Sync,
-    AF::F: PrimeField,
-{
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
+#[derive(Copy, Clone, Default)]
+pub struct Poseidon2MEMatrix<const WIDTH: usize, const D: u64>;
 
 // Multiply a 4-element vector x by M_4, in place.
 // This uses the formula from the start of Appendix B, with multiplications unrolled into additions.
@@ -54,10 +35,9 @@ where
     x[3] = t4;
 }
 
-impl<AF, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]>
-    for Poseidon2MEMatrix<AF, WIDTH, D>
+impl<AF, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]> for Poseidon2MEMatrix<WIDTH, D>
 where
-    AF: AbstractField + Sync,
+    AF: AbstractField,
     AF::F: PrimeField,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
