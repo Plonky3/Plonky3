@@ -35,7 +35,7 @@ fn main() -> Result<(), VerificationError> {
     type Challenge = BinomialExtensionField<Val, 2>;
     type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 2>;
 
-    type Perm = Poseidon2<Val, DiffusionMatrixGoldilocks, 8, 5>;
+    type Perm = Poseidon2<Val, DiffusionMatrixGoldilocks, 8, 7>;
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixGoldilocks, &mut thread_rng());
 
     type MyHash = SerializingHasher64<Keccak256Hash>;

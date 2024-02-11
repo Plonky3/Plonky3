@@ -34,7 +34,7 @@ fn main() -> Result<(), VerificationError> {
     type Challenge = BinomialExtensionField<Val, 4>;
     type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
-    type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 5>;
+    type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
