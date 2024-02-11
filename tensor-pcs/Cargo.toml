@@ -11,4 +11,4 @@ p3-commit = { path = "../commit" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
-serde = { version = "1.0.196", features = ["derive", "alloc"] }
+serde = "1.0.196"
