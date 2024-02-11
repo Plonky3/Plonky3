@@ -192,7 +192,7 @@ mod tests {
 
     type F = BabyBear;
 
-    type Perm = Poseidon2<F, DiffusionMatrixBabybear, 16, 5>;
+    type Perm = Poseidon2<F, DiffusionMatrixBabybear, 16, 7>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     type MyMmcs = FieldMerkleTreeMmcs<<F as Field>::Packing, MyHash, MyCompress, 8>;
