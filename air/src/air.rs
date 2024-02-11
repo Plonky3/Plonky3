@@ -22,7 +22,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type Expr: AbstractField<F = Self::F>
+    type Expr: AbstractField
         + From<Self::F>
         + Add<Self::Var, Output = Self::Expr>
         + Add<Self::F, Output = Self::Expr>
