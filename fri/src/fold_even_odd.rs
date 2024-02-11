@@ -1,9 +1,10 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::izip;
-use p3_field::{PackedField, TwoAdicField};
-use p3_util::{ceil_div_usize, log2_strict_usize};
+use itertools::Itertools;
+use p3_field::TwoAdicField;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
 
 /// Fold a polynomial
@@ -14,8 +15,9 @@ use tracing::instrument;
 /// ```ignore
 /// p_even(x) + beta p_odd(x)
 /// ```
+/// Expects input to be bit-reversed evaluations.
 #[instrument(skip_all, level = "debug")]
-pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
+pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
     // We use the fact that
     //     p_e(x^2) = (p(x) + p(-x)) / 2
     //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
@@ -26,55 +28,29 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: &[F], beta: F) -> Vec<F> {
     //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
     //                    = (1/2 + beta/2 g_inv^i) p(g^i)
     //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
-
-    let n = poly.len();
-    debug_assert!(n > 1);
-
-    let log_n = log2_strict_usize(n);
-
-    let g_inv = F::two_adic_generator(log_n).inverse();
+    let m = RowMajorMatrix::new(poly, 2);
+    let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
     let one_half = F::two().inverse();
     let half_beta = beta * one_half;
 
+    // TODO: vectorize this (after we have packed extension fields)
+
     // beta/2 times successive powers of g_inv
-    let powers = g_inv.shifted_powers_packed::<F::Packing>(half_beta);
+    let mut powers = g_inv
+        .shifted_powers(half_beta)
+        .take(m.height())
+        .collect_vec();
+    reverse_slice_index_bits(&mut powers);
 
-    // pack first / second polys, rounding up to the nearest multiple of packing width
-    let half_n = n / 2;
-    let cutoff = (half_n / F::Packing::WIDTH) * F::Packing::WIDTH;
-
-    let (first, second) = poly.split_at(n / 2);
-    let first_leftover =
-        F::Packing::from_fn(|i| first.get(cutoff + i).copied().unwrap_or_default());
-    let second_leftover =
-        F::Packing::from_fn(|i| second.get(cutoff + i).copied().unwrap_or_default());
-    let first = F::Packing::pack_slice(&first[..cutoff])
-        .iter()
-        .chain(core::iter::once(&first_leftover));
-    let second = F::Packing::pack_slice(&second[..cutoff])
-        .iter()
-        .chain(core::iter::once(&second_leftover));
-
-    // allocate and pack result, rounding up to the nearest multiple of packing width
-    let nearest_mutliple_of_packing_width =
-        F::Packing::WIDTH * ceil_div_usize(half_n, F::Packing::WIDTH);
-
-    let one_half = F::Packing::from_fn(|_| one_half);
-    let packed_results = izip!(powers, first, second)
-        .map(|(power, &a, &b)| (one_half + power) * a + (one_half - power) * b);
-
-    let mut res = vec![F::zero(); nearest_mutliple_of_packing_width];
-    for (src, dst) in packed_results.zip(F::Packing::pack_slice_mut(&mut res)) {
-        *dst = src;
-    }
-
-    res.truncate(half_n);
-    res
+    m.rows()
+        .zip(powers)
+        .map(|(row, power)| (one_half + power) * row[0] + (one_half - power) * row[1])
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
+    use itertools::{izip, Itertools};
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
     use rand::{thread_rng, Rng};
@@ -91,7 +67,7 @@ mod tests {
         let n = 1 << log_n;
         let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
 
-        let dft = Radix2Dit;
+        let dft = Radix2Dit::default();
         let evals = dft.dft(coeffs.clone());
 
         let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
@@ -104,7 +80,13 @@ mod tests {
         let expected = izip!(even_evals, odd_evals)
             .map(|(even, odd)| even + beta * odd)
             .collect::<Vec<_>>();
-        let got = fold_even_odd(&evals, beta);
-        assert_eq!(expected, got);
+
+        // fold_even_odd takes and returns in bitrev order.
+        let mut folded = evals;
+        reverse_slice_index_bits(&mut folded);
+        folded = fold_even_odd(folded, beta);
+        reverse_slice_index_bits(&mut folded);
+
+        assert_eq!(expected, folded);
     }
 }

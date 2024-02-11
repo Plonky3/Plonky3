@@ -10,11 +10,13 @@ use core::fmt::{Debug, Display, Formatter};
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
 
+pub mod bitrev;
 pub mod dense;
 pub mod mul;
 pub mod sparse;
 pub mod stack;
 pub mod strided;
+pub mod util;
 
 pub trait Matrix<T> {
     fn width(&self) -> usize;

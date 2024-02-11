@@ -13,6 +13,7 @@ mod diffusion;
 mod goldilocks;
 mod matrix;
 use alloc::vec::Vec;
+use core::marker::Sync;
 
 pub use babybear::DiffusionMatrixBabybear;
 pub use diffusion::DiffusionPermutation;
@@ -117,7 +118,7 @@ where
 impl<AF, Diffusion, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]>
     for Poseidon2<AF::F, Diffusion, WIDTH, D>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
     Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
@@ -156,7 +157,7 @@ where
 impl<AF, Diffusion, const WIDTH: usize, const D: u64> CryptographicPermutation<[AF; WIDTH]>
     for Poseidon2<AF::F, Diffusion, WIDTH, D>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
     Diffusion: DiffusionPermutation<AF, WIDTH>,
 {

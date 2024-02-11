@@ -1,4 +1,4 @@
-# Plonky3
+![Plonky3-powered-by-polygon](https://github.com/Plonky3/Plonky3/assets/86010/7ec356ad-b0f3-4c4c-aa1d-3a151c1065e7)
 
 Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown.
 
@@ -11,7 +11,7 @@ Fields:
 - [x] Mersenne31
   - [x] "complex" extension field
   - [x] ~128 bit extension field
-  - [ ] AVX2
+  - [x] AVX2
   - [ ] AVX-512
   - [x] NEON
 - [x] BabyBear
@@ -55,6 +55,14 @@ Hashes
   - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
 - [x] Monolith
+
+
+## Benchmark
+
+We sometimes use a Keccak AIR to compare Plonky3's performance to other libraries like Plonky2. Several variations are possible here, with different fields and so forth, but here is one example:
+```
+RUST_LOG=info cargo run --example prove_baby_bear_keccak --release --features parallel
+```
 
 
 ## License

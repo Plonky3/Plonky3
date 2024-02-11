@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::marker::PhantomData;
+use core::marker::{PhantomData, Sync};
 
 use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::Permutation;
@@ -15,7 +15,7 @@ extern crate alloc;
 #[derive(Clone)]
 pub struct Poseidon2MEMatrix<AF, const WIDTH: usize, const D: u64>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
 {
     _phantom: PhantomData<AF>,
@@ -23,7 +23,7 @@ where
 
 impl<AF, const WIDTH: usize, const D: u64> Poseidon2MEMatrix<AF, WIDTH, D>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
 {
     pub fn new() -> Self {
@@ -57,7 +57,7 @@ where
 impl<AF, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]>
     for Poseidon2MEMatrix<AF, WIDTH, D>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {

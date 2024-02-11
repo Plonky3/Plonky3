@@ -6,6 +6,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use p3_util::log2_ceil_u64;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
@@ -155,6 +157,8 @@ pub trait Field:
     + Send
     + Sync
     + Display
+    + Serialize
+    + DeserializeOwned
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -288,7 +292,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     }
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }

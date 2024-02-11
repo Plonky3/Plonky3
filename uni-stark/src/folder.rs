@@ -1,27 +1,27 @@
 use p3_air::{AirBuilder, TwoRowMatrixView};
 use p3_field::{AbstractField, Field};
 
-use crate::StarkConfig;
+use crate::StarkGenericConfig;
 
-pub struct ProverConstraintFolder<'a, SC: StarkConfig> {
-    pub(crate) main: TwoRowMatrixView<'a, SC::PackedVal>,
-    pub(crate) is_first_row: SC::PackedVal,
-    pub(crate) is_last_row: SC::PackedVal,
-    pub(crate) is_transition: SC::PackedVal,
-    pub(crate) alpha: SC::Challenge,
-    pub(crate) accumulator: SC::PackedChallenge,
+pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
+    pub main: TwoRowMatrixView<'a, SC::PackedVal>,
+    pub is_first_row: SC::PackedVal,
+    pub is_last_row: SC::PackedVal,
+    pub is_transition: SC::PackedVal,
+    pub alpha: SC::Challenge,
+    pub accumulator: SC::PackedChallenge,
 }
 
 pub struct VerifierConstraintFolder<'a, Challenge> {
-    pub(crate) main: TwoRowMatrixView<'a, Challenge>,
-    pub(crate) is_first_row: Challenge,
-    pub(crate) is_last_row: Challenge,
-    pub(crate) is_transition: Challenge,
-    pub(crate) alpha: Challenge,
-    pub(crate) accumulator: Challenge,
+    pub main: TwoRowMatrixView<'a, Challenge>,
+    pub is_first_row: Challenge,
+    pub is_last_row: Challenge,
+    pub is_transition: Challenge,
+    pub alpha: Challenge,
+    pub accumulator: Challenge,
 }
 
-impl<'a, SC: StarkConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
+impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type F = SC::Val;
     type Expr = SC::PackedVal;
     type Var = SC::PackedVal;

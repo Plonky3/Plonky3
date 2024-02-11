@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, AbstractionOf, Field, PackedField};
+use p3_field::{AbstractField, Field, PackedField};
 
 use crate::Mersenne31;
 
@@ -59,7 +59,6 @@ impl PackedMersenne31Neon {
 impl Add for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
@@ -74,7 +73,6 @@ impl Add for PackedMersenne31Neon {
 impl Mul for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
@@ -89,7 +87,6 @@ impl Mul for PackedMersenne31Neon {
 impl Neg for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn neg(self) -> Self {
         let val = self.to_vector();
         let res = neg(val);
@@ -103,7 +100,6 @@ impl Neg for PackedMersenne31Neon {
 impl Sub for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
@@ -196,7 +192,7 @@ fn mul(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     //     = prod_lo32 - prod_hi31 * P                                                   (mod 2^32)
     //
     // t is in 0, ..., 2 P, so we apply reduce_sum to get the result.
-    
+
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let prod_hi31 = mul_31x31_to_hi_31(lhs, rhs);
@@ -255,7 +251,6 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
 
 impl From<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    #[must_use]
     fn from(value: Mersenne31) -> Self {
         Self::broadcast(value)
     }
@@ -263,7 +258,6 @@ impl From<Mersenne31> for PackedMersenne31Neon {
 
 impl Default for PackedMersenne31Neon {
     #[inline]
-    #[must_use]
     fn default() -> Self {
         Mersenne31::default().into()
     }
@@ -292,7 +286,6 @@ impl SubAssign for PackedMersenne31Neon {
 
 impl Sum for PackedMersenne31Neon {
     #[inline]
-    #[must_use]
     fn sum<I>(iter: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -303,7 +296,6 @@ impl Sum for PackedMersenne31Neon {
 
 impl Product for PackedMersenne31Neon {
     #[inline]
-    #[must_use]
     fn product<I>(iter: I) -> Self
     where
         I: Iterator<Item = Self>,
@@ -313,64 +305,76 @@ impl Product for PackedMersenne31Neon {
 }
 
 impl AbstractField for PackedMersenne31Neon {
-    fn zero() -> Self { Self::broadcast(Mersenne31::zero())}
-    fn one() -> Self { Self::broadcast(Mersenne31::one())}
-    fn two() -> Self { Self::broadcast(Mersenne31::two())}
-    fn neg_one() -> Self { Self::broadcast(Mersenne31::neg_one())}
+    type F = Mersenne31;
 
     #[inline]
-    #[must_use]
+    fn zero() -> Self {
+        Mersenne31::zero().into()
+    }
+
+    #[inline]
+    fn one() -> Self {
+        Mersenne31::one().into()
+    }
+
+    #[inline]
+    fn two() -> Self {
+        Mersenne31::two().into()
+    }
+
+    #[inline]
+    fn neg_one() -> Self {
+        Mersenne31::neg_one().into()
+    }
+
+    #[inline]
+    fn from_f(f: Self::F) -> Self {
+        f.into()
+    }
+
+    #[inline]
     fn from_bool(b: bool) -> Self {
         Mersenne31::from_bool(b).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u8(n: u8) -> Self {
         Mersenne31::from_canonical_u8(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u16(n: u16) -> Self {
         Mersenne31::from_canonical_u16(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u32(n: u32) -> Self {
         Mersenne31::from_canonical_u32(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_u64(n: u64) -> Self {
         Mersenne31::from_canonical_u64(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_canonical_usize(n: usize) -> Self {
         Mersenne31::from_canonical_usize(n).into()
     }
 
     #[inline]
-    #[must_use]
     fn from_wrapped_u32(n: u32) -> Self {
         Mersenne31::from_wrapped_u32(n).into()
     }
     #[inline]
-    #[must_use]
     fn from_wrapped_u64(n: u64) -> Self {
         Mersenne31::from_wrapped_u64(n).into()
     }
 
     #[inline]
-    #[must_use]
-    fn multiplicative_group_generator() -> Self {
-        Mersenne31::multiplicative_group_generator().into()
+    fn generator() -> Self {
+        Mersenne31::generator().into()
     }
 }
 
 impl Add<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn add(self, rhs: Mersenne31) -> Self {
         self + Self::from(rhs)
     }
@@ -379,7 +383,6 @@ impl Add<Mersenne31> for PackedMersenne31Neon {
 impl Mul<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn mul(self, rhs: Mersenne31) -> Self {
         self * Self::from(rhs)
     }
@@ -388,7 +391,6 @@ impl Mul<Mersenne31> for PackedMersenne31Neon {
 impl Sub<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    #[must_use]
     fn sub(self, rhs: Mersenne31) -> Self {
         self - Self::from(rhs)
     }
@@ -417,7 +419,6 @@ impl SubAssign<Mersenne31> for PackedMersenne31Neon {
 
 impl Sum<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    #[must_use]
     fn sum<I>(iter: I) -> Self
     where
         I: Iterator<Item = Mersenne31>,
@@ -428,7 +429,6 @@ impl Sum<Mersenne31> for PackedMersenne31Neon {
 
 impl Product<Mersenne31> for PackedMersenne31Neon {
     #[inline]
-    #[must_use]
     fn product<I>(iter: I) -> Self
     where
         I: Iterator<Item = Mersenne31>,
@@ -437,13 +437,10 @@ impl Product<Mersenne31> for PackedMersenne31Neon {
     }
 }
 
-impl AbstractionOf<Mersenne31> for PackedMersenne31Neon {}
-
 impl Div<Mersenne31> for PackedMersenne31Neon {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
-    #[must_use]
     fn div(self, rhs: Mersenne31) -> Self {
         self * rhs.inverse()
     }
@@ -452,7 +449,6 @@ impl Div<Mersenne31> for PackedMersenne31Neon {
 impl Add<PackedMersenne31Neon> for Mersenne31 {
     type Output = PackedMersenne31Neon;
     #[inline]
-    #[must_use]
     fn add(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
         PackedMersenne31Neon::from(self) + rhs
     }
@@ -461,7 +457,6 @@ impl Add<PackedMersenne31Neon> for Mersenne31 {
 impl Mul<PackedMersenne31Neon> for Mersenne31 {
     type Output = PackedMersenne31Neon;
     #[inline]
-    #[must_use]
     fn mul(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
         PackedMersenne31Neon::from(self) * rhs
     }
@@ -470,7 +465,6 @@ impl Mul<PackedMersenne31Neon> for Mersenne31 {
 impl Sub<PackedMersenne31Neon> for Mersenne31 {
     type Output = PackedMersenne31Neon;
     #[inline]
-    #[must_use]
     fn sub(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
         PackedMersenne31Neon::from(self) - rhs
     }
@@ -517,7 +511,6 @@ unsafe impl PackedField for PackedMersenne31Neon {
     const WIDTH: usize = WIDTH;
 
     #[inline]
-    #[must_use]
     fn from_slice(slice: &[Mersenne31]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
@@ -528,7 +521,6 @@ unsafe impl PackedField for PackedMersenne31Neon {
         }
     }
     #[inline]
-    #[must_use]
     fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
@@ -547,18 +539,15 @@ unsafe impl PackedField for PackedMersenne31Neon {
     }
 
     #[inline]
-    #[must_use]
     fn as_slice(&self) -> &[Mersenne31] {
         &self.0[..]
     }
     #[inline]
-    #[must_use]
     fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
         &mut self.0[..]
     }
 
     #[inline]
-    #[must_use]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());
         let (res0, res1) = match block_len {

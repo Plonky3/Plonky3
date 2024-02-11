@@ -9,6 +9,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
+use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
 
@@ -45,6 +46,7 @@ where
     C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
     C: Sync,
+    [P::Scalar; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     type ProverData = FieldMerkleTree<P::Scalar, DIGEST_ELEMS>;
     type Commitment = [P::Scalar; DIGEST_ELEMS];
@@ -140,7 +142,7 @@ where
             }
         }
 
-        if root == *commit {
+        if &root == commit {
             Ok(())
         } else {
             Err(())
@@ -158,6 +160,7 @@ where
     C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
     C: Sync,
+    [P::Scalar; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     fn commit(
         &self,

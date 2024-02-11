@@ -1,5 +1,5 @@
 /// A permutation in the mathematical sense.
-pub trait Permutation<T: Clone>: Clone {
+pub trait Permutation<T: Clone>: Clone + Sync {
     fn permute(&self, mut input: T) -> T {
         self.permute_mut(&mut input);
         input

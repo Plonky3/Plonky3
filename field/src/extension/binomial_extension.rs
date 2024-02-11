@@ -8,15 +8,20 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use itertools::Itertools;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
+use serde::{Deserialize, Serialize};
 
 use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BinomialExtensionField<AF, const D: usize> {
-    value: [AF; D],
+    #[serde(
+        with = "p3_util::array_serialization",
+        bound(serialize = "AF: Serialize", deserialize = "AF: Deserialize<'de>")
+    )]
+    pub(crate) value: [AF; D],
 }
 
 impl<AF: AbstractField, const D: usize> Default for BinomialExtensionField<AF, D> {

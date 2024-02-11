@@ -377,17 +377,24 @@ impl Product for PackedBabyBearNeon {
 impl AbstractField for PackedBabyBearNeon {
     type F = BabyBear;
 
+    #[inline]
     fn zero() -> Self {
-        Self::broadcast(BabyBear::zero())
+        BabyBear::zero().into()
     }
+
+    #[inline]
     fn one() -> Self {
-        Self::broadcast(BabyBear::one())
+        BabyBear::one().into()
     }
+
+    #[inline]
     fn two() -> Self {
-        Self::broadcast(BabyBear::two())
+        BabyBear::two().into()
     }
+
+    #[inline]
     fn neg_one() -> Self {
-        Self::broadcast(BabyBear::neg_one())
+        BabyBear::neg_one().into()
     }
 
     #[inline]

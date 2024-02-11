@@ -6,6 +6,9 @@ use p3_matrix::MatrixRowSlices;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
+    /// The number of columns (a.k.a. registers) in this AIR.
+    fn width(&self) -> usize;
+
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
@@ -103,93 +106,52 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::one()));
     }
-
-    fn assert_zero_ext<ExprExt, I>(&mut self, x: I)
-    where
-        ExprExt: AbstractExtensionField<Self::Expr>,
-        I: Into<ExprExt>,
-    {
-        for xb in x.into().as_base_slice().iter().cloned() {
-            self.assert_zero(xb);
-        }
-    }
-
-    fn assert_eq_ext<ExprExt, I1, I2>(&mut self, x: I1, y: I2)
-    where
-        ExprExt: AbstractExtensionField<Self::Expr>,
-        I1: Into<ExprExt>,
-        I2: Into<ExprExt>,
-    {
-        self.assert_zero_ext::<ExprExt, ExprExt>(x.into() - y.into());
-    }
-
-    fn assert_one_ext<ExprExt, I>(&mut self, x: I)
-    where
-        ExprExt: AbstractExtensionField<Self::Expr>,
-        I: Into<ExprExt>,
-    {
-        let xe: ExprExt = x.into();
-        let parts = xe.as_base_slice();
-        self.assert_one(parts[0].clone());
-        for part in &parts[1..] {
-            self.assert_zero(part.clone());
-        }
-    }
 }
 
 pub trait PairBuilder: AirBuilder {
     fn preprocessed(&self) -> Self::M;
 }
 
-pub trait PermutationAirBuilder: AirBuilder {
+pub trait ExtensionBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
-    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>
-        + From<Self::EF>
-        + Add<Self::EF, Output = Self::ExprEF>
-        + Add<Self::VarEF, Output = Self::ExprEF>
-        + Sub<Self::EF, Output = Self::ExprEF>
-        + Sub<Self::VarEF, Output = Self::ExprEF>
-        + Mul<Self::EF, Output = Self::ExprEF>
-        + Mul<Self::VarEF, Output = Self::ExprEF>;
+    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
 
-    type VarEF: Into<Self::ExprEF>
-        + Copy
-        + Add<Self::EF, Output = Self::ExprEF>
-        + Add<Self::VarEF, Output = Self::ExprEF>
-        + Add<Self::ExprEF, Output = Self::ExprEF>
-        + Sub<Self::EF, Output = Self::ExprEF>
-        + Sub<Self::VarEF, Output = Self::ExprEF>
-        + Sub<Self::ExprEF, Output = Self::ExprEF>
-        + Mul<Self::EF, Output = Self::ExprEF>
-        + Mul<Self::VarEF, Output = Self::ExprEF>
-        + Mul<Self::ExprEF, Output = Self::ExprEF>;
+    type VarEF: Into<Self::ExprEF> + Copy;
 
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>;
+
+    fn assert_eq_ext<I1, I2>(&mut self, x: I1, y: I2)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+    {
+        self.assert_zero_ext(x.into() - y.into());
+    }
+
+    fn assert_one_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.assert_eq_ext(x, Self::ExprEF::one())
+    }
+}
+
+pub trait PermutationAirBuilder: ExtensionBuilder {
     type MP: MatrixRowSlices<Self::VarEF>;
 
     fn permutation(&self) -> Self::MP;
 
+    // TODO: The return type should be some kind of variable to support symbolic evaluation,
+    // but maybe separate from `VarEF` since that might be a `PackedField`?
     fn permutation_randomness(&self) -> &[Self::EF];
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
-    inner: &'a mut AB,
+    pub inner: &'a mut AB,
     condition: AB::Expr,
-}
-
-impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
-    type EF = AB::EF;
-    type VarEF = AB::VarEF;
-    type ExprEF = AB::ExprEF;
-    type MP = AB::MP;
-
-    fn permutation(&self) -> Self::MP {
-        self.inner.permutation()
-    }
-
-    fn permutation_randomness(&self) -> &[Self::EF] {
-        self.inner.permutation_randomness()
-    }
 }
 
 impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
@@ -219,6 +181,32 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     }
 }
 
+impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
+    type EF = AB::EF;
+    type VarEF = AB::VarEF;
+    type ExprEF = AB::ExprEF;
+
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.inner
+            .assert_zero_ext(x.into() * self.condition.clone());
+    }
+}
+
+impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
+    type MP = AB::MP;
+
+    fn permutation(&self) -> Self::MP {
+        self.inner.permutation()
+    }
+
+    fn permutation_randomness(&self) -> &[Self::EF] {
+        self.inner.permutation_randomness()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_matrix::MatrixRowSlices;
@@ -227,7 +215,11 @@ mod tests {
 
     struct FibonacciAir;
 
-    impl<F> BaseAir<F> for FibonacciAir {}
+    impl<F> BaseAir<F> for FibonacciAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
 
     impl<AB: AirBuilder> Air<AB> for FibonacciAir {
         fn eval(&self, builder: &mut AB) {

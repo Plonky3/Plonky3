@@ -1,14 +1,16 @@
 use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
-use p3_maybe_rayon::{IndexedParallelIterator, ParallelIterator};
-use p3_util::log2_strict_usize;
+use p3_maybe_rayon::prelude::*;
+use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 
 use crate::butterflies::dit_butterfly;
-use crate::util::{bit_reversed_zero_pad, reverse_matrix_index_bits};
-use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
+use crate::util::bit_reversed_zero_pad;
+use crate::TwoAdicSubgroupDft;
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -21,7 +23,9 @@ use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
 pub struct Radix2DitParallel;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
+
+    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> Self::Evaluations {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
@@ -38,9 +42,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
-        reverse_matrix_index_bits(&mut mat);
 
-        mat
+        mat.bit_reverse_rows()
     }
 
     fn coset_lde_batch(
@@ -48,7 +51,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-    ) -> RowMajorMatrix<F> {
+    ) -> Self::Evaluations {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
         let mid = log_h / 2;
@@ -99,9 +102,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
-        reverse_matrix_index_bits(&mut mat);
 
-        mat
+        mat.bit_reverse_rows()
     }
 }
 
