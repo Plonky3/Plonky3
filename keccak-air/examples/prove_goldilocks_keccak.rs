@@ -7,7 +7,6 @@ use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixGoldilocks, Poseidon2};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher64};
@@ -36,11 +35,8 @@ fn main() -> Result<(), VerificationError> {
     type Challenge = BinomialExtensionField<Val, 2>;
     type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 2>;
 
-    type MyMds = CosetMds<Val, 8>;
-    let mds = MyMds::default();
-
-    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixGoldilocks, 8, 7>;
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixGoldilocks, &mut thread_rng());
+    type Perm = Poseidon2<Val, DiffusionMatrixGoldilocks, 8, 7>;
+    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixGoldilocks, &mut thread_rng());
 
     type MyHash = SerializingHasher64<Keccak256Hash>;
     let hash = MyHash::new(Keccak256Hash {});
