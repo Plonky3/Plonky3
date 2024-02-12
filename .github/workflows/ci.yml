@@ -77,7 +77,7 @@ jobs:
     - name: Format
       run: cargo +nightly fmt --all -- --check 
 
-  check-crates:
+  check_crates:
     name: Check Crates
     runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
@@ -85,7 +85,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
       id: rs-stable
 
     - uses: actions/cache@v3
@@ -127,6 +131,7 @@ jobs:
           cargo check --verbose --package p3-reed-solomon && \
           cargo check --verbose --package p3-rescue && \
           cargo check --verbose --package p3-symmetric && \
+          cargo check --verbose --package p3-tensor-pcs && \
           cargo check --verbose --package p3-uni-stark && \
           cargo check --verbose --package p3-util
 
