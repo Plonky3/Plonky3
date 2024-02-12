@@ -2,10 +2,10 @@ use core::arch::aarch64::{self, uint32x4_t};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
 
 use p3_field::{AbstractField, Field, PackedField};
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 use crate::Mersenne31;
 
