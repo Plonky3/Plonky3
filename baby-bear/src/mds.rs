@@ -37,7 +37,7 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     ///
     /// Note that the LHS element is in Monty form, while the RHS
     /// element is an "plain integer". This informs the implementation
-    /// of `reduction()` below.
+    /// of `reduce()` below.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
         dot_product(u, v)
@@ -92,6 +92,109 @@ fn barret_red_babybear(input: i128) -> i64 {
     (input - sub) as i64
 }
 
+// Theorem 1:
+// Given |x| < 2^80, barret_red(x) computes an x' such that:
+//       x' = x mod p
+//       x' = x mod 2^10
+//       |x'| < 2**50.
+///////////////////////////////////////////////////////////////////////////////////////
+// PROOF:
+// By construction P, 2**10 | sub and so we immediately see that
+// x' = x mod p
+// x' = x mod 2^10.
+//
+// It remains to prove that |x'| < 2**50.
+//
+// We start by introducing some simple inequalities and relations bewteen our variables:
+//
+// First consider the relationship between bitshift and division.
+// It's easy to check that for all x:
+// 1: (x >> N) <= x / 2**N <= 1 + (x >> N)
+//
+// Similarly, as our mask just 0's the last 10 bits,
+// 2: x + 1 - 2^10 <= x & mask <= x
+//
+// Now if x, y are positive integers then
+// (x / y) - 1 <= x // y <= x / y
+// Where // denotes integer division.
+//
+// From this last inequality we immediately derive:
+// 3: (2**{2N} / P) - 1 <= I <= (2**{2N} / P)
+// 3a: 2**{2N} - P <= PI
+//
+// Finally, note that by definition:
+// input = input_high*(2**N) + input_low
+// Hence a simple rearrangment gets us
+// 4: input_high*(2**N) = input - input_low
+//
+//
+// We now need to split into cases depending on the sign of input.
+// Note that if x = 0 then x' = 0 so that case is trivial.
+///////////////////////////////////////////////////////////////////////////
+// CASE 1: input > 0
+//
+// If input > 0 then:
+// sub = Q*P = ((((input >> N) * I) >> N) & mask) * P <= P * (input / 2**{N}) * (2**{2N} / P) / 2**{N} = input
+// So input - sub >= 0.
+//
+// We need to improve our bound on Q. Observe that:
+// Q = (((input_high * I) >> N) & mask)
+// --(2)   => Q + (2^10 - 1) >= (input_high * I) >> N)
+// --(1)   => Q + 2^10 >= (I*x_high)/(2**N)
+//         => (2**N)*Q + 2^10*(2**N) >= I*x_high
+//
+// Hence we find that:
+// (2**N)*Q*P + 2^10*(2**N)*P >= input_high*I*P
+// --(3a)                     >= input_high*2**{2N} - P*input_high
+// --(4)                      >= (2**N)*input - (2**N)*input_low - (2**N)*input_high   (Assuming P < 2**N)
+//
+// Dividing by 2**N we get
+// Q*P + 2^{10}*P >= input - input_low - input_high
+// which rearranges to
+// x' = input - Q*P <= 2^{10}*P + input_low + input_high
+//
+// Picking N = 40 we see that 2^{10}*P, input_low, input_high are all bounded by 2**40
+// Hence x' < 2**42 < 2**50 as desired.
+//
+//
+//
+///////////////////////////////////////////////////////////////////////////
+// CASE 2: input < 0
+//
+// This case will be similar but all our inequalities will change slightly as negatives complicate things.
+// First observe that:
+// (input >> N) * I   >= (input >> N) * 2**(2N) / P
+//                    >= (1 + (input / 2**N)) * 2**(2N) / P
+//                    >= (2**N + input) * 2**N / P
+//
+// Thus:
+// Q = ((input >> N) * I) >> N >= ((2**N + input) * 2**N / P) >> N
+//                             >= ((2**N + input) / P) - 1
+//
+// And so sub = Q*P >= 2**N - P + input.
+// Hence input - sub < 2**N - P.
+//
+// Thus if input - sub > 0 then |input - sub| < 2**50.
+// Thus we are left with bounding -(input - sub) = (sub - input).
+// Again we will proceed by improving our bound on Q.
+//
+// Q = (((input_high * I) >> N) & mask)
+// --(2)   => Q <= (input_high * I) >> N) <= (I*x_high)/(2**N)
+// --(1)   => Q <= (I*x_high)/(2**N)
+//         => (2**N)*Q <= I*x_high
+//
+// Hence we find that:
+// (2**N)*Q*P <= input_high*I*P
+// --(3a)     <= input_high*2**{2N} - P*input_high
+// --(4)      <= (2**N)*input - (2**N)*input_low - (2**N)*input_high   (Assuming P < 2**N)
+//
+// Dividing by 2**N we get
+// Q*P <= input - input_low - input_high
+// which rearranges to
+// -x' = -input + Q*P <= -input_high - input_low < 2**50
+//
+// This completes the proof.
+
 /// Instantiate convolution for "large" RHS vectors over BabyBear.
 ///
 /// Here "large" means the elements can be as big as the field
@@ -106,9 +209,10 @@ impl Convolve<BabyBear, i64, i64, i64> for LargeConvolveBabyBear {
         input.value as i64
     }
 
-    /// For a convolution of size N, |x|, |y| < N * 2^31, so the product
-    /// could be as much as N^2 * 2^62. This will overflow an i64, so
-    /// we first widen to i128.
+    /// For a convolution of size N, |x|, |y| < N * 2^31, so the
+    /// product could be as much as N^2 * 2^62. This will overflow an
+    /// i64, so we first widen to i128. Note that N^2 * 2^62 < 2^80
+    /// for N <= 64, as required by `barret_red_babybear()`.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
         let mut dp = 0i128;

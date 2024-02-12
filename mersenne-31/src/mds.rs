@@ -83,8 +83,9 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         let low_bits = (dp & LOWMASK) as i64; // low_bits < 2**42
         let high_bits = ((dp & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
 
-        // We quickly prove that low_bits + high_bits is what we want.
-
+        // Proof that low_bits + high_bits is congruent to dp (mod p)
+        // and congruent to dp (mod 2^11):
+        //
         // The individual bounds clearly show that low_bits +
         // high_bits < 2**(n - 30).
         //

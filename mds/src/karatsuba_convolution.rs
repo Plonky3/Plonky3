@@ -115,6 +115,12 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     /// element that will be used in calculations.
     fn read(input: F) -> T;
 
+    /// Given input vectors `lhs` and `rhs`, calculate their dot
+    /// product. The result can be reduced with respect to the modulus
+    /// (of `F`), but it must have the same lower 10 bits as the dot
+    /// product if all inputs are considered integers. See
+    /// `baby-bear/src/mds.rs::barret_red_babybear()` for an example
+    /// of how this can be implemented in practice.
     fn parity_dot<const N: usize>(lhs: [T; N], rhs: [U; N]) -> V;
 
     /// Convert an internal element of type `V` back into an external
@@ -303,20 +309,6 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     fn signed_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
         Self::signed_conv_n::<6, 3, _>(lhs, rhs, output, Self::signed_conv3)
     }
-
-    /* TODO: Verify more thoroughly whether this version or the recursive version above is
-     * faster. Initial tests suggest the recursive one is better by 1-5%
-
-    #[inline(always)]
-    fn signed_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[5], -rhs[4], -rhs[3], -rhs[2], -rhs[1]]);
-        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[5], -rhs[4], -rhs[3], -rhs[2]]);
-        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0], -rhs[5], -rhs[4], -rhs[3]]);
-        output[3] = Self::parity_dot(lhs, [rhs[3], rhs[2], rhs[1], rhs[0], -rhs[5], -rhs[4]]);
-        output[4] = Self::parity_dot(lhs, [rhs[4], rhs[3], rhs[2], rhs[1], rhs[0], -rhs[5]]);
-        output[5] = Self::parity_dot(lhs, [rhs[5], rhs[4], rhs[3], rhs[2], rhs[1], rhs[0]]);
-    }
-    */
 
     #[inline(always)]
     fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
