@@ -39,7 +39,7 @@ name = "prove_baby_bear_poseidon2"
 name = "prove_goldilocks_keccak"
 
 [features]
-# TODO: Consider removing, at least when this gets split off into another crate.
+# TODO: Consider removing, at least when this gets split off into another repository.
 # We should be able to enable p3-maybe-rayon/parallel directly; this just doesn't
 # seem to work when using cargo with the -p or --package option.
 parallel = ["p3-maybe-rayon/parallel"]
