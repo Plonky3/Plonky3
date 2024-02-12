@@ -2,6 +2,8 @@ use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 use p3_field::{AbstractField, Field, PackedField};
 
@@ -497,6 +499,13 @@ impl Sub<PackedBabyBearAVX2> for BabyBear {
     #[inline]
     fn sub(self, rhs: PackedBabyBearAVX2) -> PackedBabyBearAVX2 {
         PackedBabyBearAVX2::from(self) - rhs
+    }
+}
+
+impl Distribution<PackedBabyBearAVX2> for Standard {
+    #[inline]
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedBabyBearAVX2 {
+        PackedBabyBearAVX2(rng.gen())
     }
 }
 
