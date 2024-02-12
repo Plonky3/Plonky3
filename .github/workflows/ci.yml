@@ -127,7 +127,6 @@ jobs:
           cargo check --verbose --package p3-reed-solomon && \
           cargo check --verbose --package p3-rescue && \
           cargo check --verbose --package p3-symmetric && \
-          cargo check --verbose --package p3-tensor-pcs && \
           cargo check --verbose --package p3-uni-stark && \
           cargo check --verbose --package p3-util
 
