@@ -99,4 +99,7 @@ jobs:
         key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
   
     - name: Cargo Check Crates
-      run: cargo check --verbose --package p3-air 
+      run: cargo check --verbose --package p3-air && \
+          cargo check --verbose --package p3-baby-bear && \
+          cargo check --verbose --package p3-blake3
+          
