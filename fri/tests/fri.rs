@@ -9,7 +9,6 @@ use p3_fri::{prover, verifier, FriConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::{Matrix, MatrixRows};
-use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -20,8 +19,7 @@ use rand_chacha::ChaCha20Rng;
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 
-type MyMds = CosetMds<Val, 16>;
-type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 7>;
+type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
@@ -30,8 +28,7 @@ type Challenger = DuplexChallenger<Val, Perm, 16>;
 type MyFriConfig = FriConfig<ChallengeMmcs>;
 
 fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
-    let mds = MyMds::default();
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, rng);
+    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
