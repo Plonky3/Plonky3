@@ -8,6 +8,7 @@ use p3_field::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 
 /// The Baby Bear prime
@@ -34,7 +35,7 @@ const MONTY_MU: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neo
 const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default, Eq, Hash, PartialEq, Deserialize)]
 #[repr(transparent)] // `PackedBabyBearNeon` relies on this!
 pub struct BabyBear {
     // This is `pub(crate)` just for tests. If you're accessing `value` outside of those, you're
@@ -86,6 +87,14 @@ impl Distribution<BabyBear> for Standard {
                 return BabyBear { value: next_u31 };
             }
         }
+    }
+}
+
+impl Serialize for BabyBear {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("BabyBear", 1)?;
+        state.serialize_field("value", &self.as_canonical_u32())?;
+        state.end()
     }
 }
 
