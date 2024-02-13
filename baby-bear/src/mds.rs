@@ -209,12 +209,13 @@ impl Convolve<BabyBear, i64, i64, i64> for LargeConvolveBabyBear {
         input.value as i64
     }
 
-    /// For a convolution of size N, |x|, |y| < N * 2^31, so the
-    /// product could be as much as N^2 * 2^62. This will overflow an
-    /// i64, so we first widen to i128. Note that N^2 * 2^62 < 2^80
-    /// for N <= 64, as required by `barret_red_babybear()`.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        // For a convolution of size N, |x|, |y| < N * 2^31, so the
+        // product could be as much as N^2 * 2^62. This will overflow an
+        // i64, so we first widen to i128. Note that N^2 * 2^62 < 2^80
+        // for N <= 64, as required by `barret_red_babybear()`.
+
         let mut dp = 0i128;
         for i in 0..N {
             dp += u[i] as i128 * v[i] as i128;
@@ -222,17 +223,27 @@ impl Convolve<BabyBear, i64, i64, i64> for LargeConvolveBabyBear {
         barret_red_babybear(dp)
     }
 
-    /// The assumptions above mean z < N^3 * 2^62, which is at most
-    /// 2^80 when N <= 64 (the largest N).
-    ///
-    /// NB: It may be worth specialising the reduction using the
-    /// knowledge that the input is the smaller value.
-    ///
-    /// NB: Even though intermediate values could be negative, the
-    /// output must be non-negative since the inputs were
-    /// non-negative.
     #[inline(always)]
     fn reduce(z: i64) -> BabyBear {
+        // After the barret reduction method, the output z of parity
+        // dot satisfies |z| < 2^50 (See Thm 1 above).
+        //
+        // In the recombining steps, conv_n maps (wo, w1) ->
+        // ((wo + w1)/2, (wo + w1)/2) which has no effect on the maximal
+        // size. (Indeed, it makes sizes almost strictly smaller).
+        //
+        // On the other hand, signed_conv_n (ignoring the re-index)
+        // recombines as: (w0, w1, w2) -> (w0 + w1, w2 - w0 - w1).
+        // Hence if the input is <= K, the output is <= 3K.
+        //
+        // Thus the values appearing at the end are bounded by 3^n 2^50
+        // where n is the maximal number of signed_conv
+        // recombination steps. When N = 64, we need to recombine for
+        // singed_conv_32, singed_conv_16, singed_conv_8 so the
+        // overall bound will be 3^3 2^50 < 32 * 2^50 < 2^55.
+        debug_assert!(z > -(1i64 << 55));
+        debug_assert!(z < (1i64 << 55));
+
         // Note we do NOT move it into MONTY form. We assume it is already
         // in this form.
         let red = (z % (BabyBear::ORDER_U32 as i64)) as u32;

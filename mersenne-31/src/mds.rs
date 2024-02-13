@@ -67,11 +67,12 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         input.value as i64
     }
 
-    /// For a convolution of size N, |x|, |y| < N * 2^31, so the product
-    /// could be as much as N^2 * 2^62. This will overflow an i64, so
-    /// we first widen to i128.
     #[inline]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        // For a convolution of size N, |x|, |y| < N * 2^31, so the product
+        // could be as much as N^2 * 2^62. This will overflow an i64, so
+        // we first widen to i128.
+
         let mut dp = 0i128;
         for i in 0..N {
             dp += u[i] as i128 * v[i] as i128;
@@ -98,15 +99,29 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         low_bits + high_bits
     }
 
-    /// The assumptions above mean z < N^3 * 2^62, which is at most
-    /// 2^80 when N <= 64 (the largest N). Thus we specialise the
-    /// reduction knowing that the input is the smaller value.
-    ///
-    /// NB: Even though intermediate values could be negative, the
-    /// output must be non-negative since the inputs were
-    /// non-negative.
     #[inline]
     fn reduce(z: i64) -> Mersenne31 {
+        // After the dot product, the maximal size is N^2 * 2^62 < 2^74
+        // as N = 64 is the biggest size. So, after the partial
+        // reduction, the output z of parity dot satisfies |z| < 2^44
+        // (Where 44 is 74 - 30).
+        //
+        // In the recombining steps, conv maps (wo, w1) -> ((wo + w1)/2,
+        // (wo + w1)/2) which has no effect on the maximal size. (Indeed,
+        // it makes sizes almost strictly smaller).
+        //
+        // On the other hand, signed_conv (ignoring the re-index)
+        // recombines as: (w0, w1, w2) -> (w0 + w1, w2 - w0 - w1). Hence
+        // if the input is <= K, the output is <= 3K.
+        //
+        // Thus the values appearing at the end are bounded by 3^n 2^44
+        // where n is the maximal number of signed_conv recombination
+        // steps. When N = 64, we need to recombine for singed_conv_32,
+        // singed_conv_16, singed_conv_8 so the overall bound will be 3^3
+        // 2^44 < 32 * 2^44 < 2^49.
+        debug_assert!(z > -(1i64 << 49));
+        debug_assert!(z < (1i64 << 49));
+
         const MASK: i64 = (1 << 31) - 1;
         // Morally, our value is a i62 not a i64 as the top 3 bits are
         // guaranteed to be equal.

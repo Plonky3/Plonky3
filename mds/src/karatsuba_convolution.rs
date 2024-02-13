@@ -1,6 +1,11 @@
 //! Calculate the convolution of two vectors using a Karatsuba-style
 //! decomposition and the CRT.
 //!
+//! This is not a new idea, but we did have the pleasure of
+//! reinventing it independently. Some references:
+//! - https://cr.yp.to/lineartime/multapps-20080515.pdf
+//! - https://2π.com/23/convolution/
+//!
 //! Given a vector v \in F^N, let v(x) \in F[X] denote the polynomial
 //! v_0 + v_1 x + ... + v_{N - 1} x^{N - 1}.  Then w is equal to the
 //! convolution v * u if and only if w(x) = v(x)u(x) mod x^N - 1.
@@ -23,23 +28,11 @@
 //! v_1(x)u_1(x) mod x^{N/2} + 1 using Karatsuba.
 //!
 //! There are 2 possible approaches to applying Karatsuba which mirror
-//! the DIT vs DIF approaches to FFT's.
+//! the DIT vs DIF approaches to FFT's, the left/right decomposition
+//! or the even/odd decomposition. The latter seems to have fewer
+//! operations and so it is the one implemented below, though it does
+//! require a bit more data manipulation. It works as follows:
 //!
-//! Option 1: left/right decomposition.
-//! Write v = (v_l, v_r) so that v(x) = (v_l(x) + x^{N/2}v_r(x)).
-//! Then v(x)u(x) mod x^N + 1
-//!      = (v_l(x)u_l(x) - v_r(x)u_r(x))
-//!        + x^{N/2}((v_l(x) + v_r(x))(u_l(x) + u_r(x))
-//!                   - (v_l(x)u_l(x) + v_r(x)u_r(x)))   (mod X^N + 1)
-//!
-//! As v_l(x), v_r(x), u_l(x), u_r(x) all have degree < N/2 no product
-//! will have degree > N - 1.  The only place we need to deal with the
-//! mod operation is after the multipication by x^{N/2} and this is
-//! easy to do.  Thus this reduces the problem to 3 polynomial
-//! multiplications of size N/2 and we can use standard Karatsuba
-//! for this.
-//!
-//! Option 2: even/odd decomposition.
 //! Define the even v_e and odd v_o parts so that v(x) = (v_e(x^2) + xv_o(x^2)).
 //! Then v(x)u(x)
 //!    = (v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2))
@@ -47,12 +40,6 @@
 //!            - (v_e(x^2)u_e(x^2) + v_o(x^2)u_o(x^2)))
 //! This reduces the problem to 3 signed convolutions of size N/2 which
 //! can be computed recursively.
-//!
-//! Option 2 seems to involve less total operations and so should be
-//! faster hence it is the one implmented below.  The main issue is
-//! that it requires quite a bit of data manipulation (i.e. splitting
-//! vectors into odd and even parts and recombining afterwards).
-//! It might be beneficial to find a way to cut down on this.
 //!
 //! Of course, for small sizes we just explicitly write out the O(n^2)
 //! approach.
@@ -84,13 +71,6 @@ impl RngElt for i128 {}
 /// similarly for `U`. Then multiplication via `Self::mul` should
 /// produce an element of type `V` which will not overflow after about
 /// `N` additions (this is an over-estimate).
-///
-/// NB: Note that the convolution code does some `ShrAssign`s after
-/// calling `mul`, so if `mul` does an intermediate/partial reduction,
-/// then the definition of `ShrAssign` will have to be replaced with
-/// the corresponding field "divide-by-2" function, rather than the
-/// primitive "bit-shift-to-the-right" which relies on the knowledge
-/// that the input is even if no reduction has taken place.
 ///
 /// For example usage, see `{mersenne-31,baby-bear,goldilocks}/src/mds.rs`.
 ///
@@ -163,8 +143,8 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         // NB: The compiler is smart enough not to initialise these arrays.
         let mut lhs_pos = [T::default(); HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
         let mut lhs_neg = [T::default(); HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
-        let mut rhs_pos = [U::default(); HALF_N]; // rhs_pos = lhs(x) mod x^{N/2} - 1
-        let mut rhs_neg = [U::default(); HALF_N]; // rhs_neg = lhs(x) mod x^{N/2} + 1
+        let mut rhs_pos = [U::default(); HALF_N]; // rhs_pos = rhs(x) mod x^{N/2} - 1
+        let mut rhs_neg = [U::default(); HALF_N]; // rhs_neg = rhs(x) mod x^{N/2} + 1
 
         for i in 0..HALF_N {
             let s = lhs[i];
@@ -182,10 +162,10 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
         let (left, right) = output.split_at_mut(HALF_N);
 
-        // left = lhs(x)rhs(x) mod x^{N/2} + 1
+        // left = w1 = lhs(x)rhs(x) mod x^{N/2} + 1
         inner_signed_conv(lhs_neg, rhs_neg, left);
 
-        // right = lhs(x)rhs(x) mod x^{N/2} - 1
+        // right = w0 = lhs(x)rhs(x) mod x^{N/2} - 1
         inner_conv(lhs_pos, rhs_pos, right);
 
         for i in 0..HALF_N {
@@ -235,6 +215,8 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         let mut even_s_conv = [V::default(); HALF_N];
         let (left, right) = output.split_at_mut(HALF_N);
 
+        // Recursively compute the size N/2 negacyclic convolutions of
+        // the even parts, odd parts, and sums.
         inner_signed_conv(lhs_even, rhs_even, &mut even_s_conv);
         inner_signed_conv(lhs_odd, rhs_odd, left);
         inner_signed_conv(lhs_sum, rhs_sum, right);
@@ -272,6 +254,8 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
+        // NB: This is just explicitly implementing
+        // conv_n::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::signed_conv2)
         let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]];
         let u_m = [lhs[0] - lhs[2], lhs[1] - lhs[3]];
         let v_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]];
