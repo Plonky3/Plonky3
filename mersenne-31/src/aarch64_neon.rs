@@ -4,6 +4,8 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{AbstractField, Field, PackedField};
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 use crate::Mersenne31;
 
@@ -471,6 +473,13 @@ impl Sub<PackedMersenne31Neon> for Mersenne31 {
     #[inline]
     fn sub(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
         PackedMersenne31Neon::from(self) - rhs
+    }
+}
+
+impl Distribution<PackedMersenne31Neon> for Standard {
+    #[inline]
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31Neon {
+        PackedMersenne31Neon(rng.gen())
     }
 }
 
