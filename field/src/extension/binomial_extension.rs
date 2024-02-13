@@ -172,10 +172,6 @@ where
         AF::from_wrapped_u64(n).into()
     }
 
-    fn from_wrapped_u128(n: u128) -> Self {
-        AF::from_wrapped_u128(n).into()
-    }
-
     fn generator() -> Self {
         Self {
             value: AF::F::ext_generator().map(AF::from_f),

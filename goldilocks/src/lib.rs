@@ -144,10 +144,6 @@ impl AbstractField for Goldilocks {
         Self::new(n)
     }
 
-    fn from_wrapped_u128(n: u128) -> Self {
-        reduce128(n)
-    }
-
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     fn generator() -> Self {
         Self::new(7)
@@ -354,7 +350,7 @@ fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
-fn reduce128(x: u128) -> Goldilocks {
+pub(crate) fn reduce128(x: u128) -> Goldilocks {
     let (x_lo, x_hi) = split(x); // This is a no-op
     let x_hi_hi = x_hi >> 32;
     let x_hi_lo = x_hi & Goldilocks::NEG_ORDER;

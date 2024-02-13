@@ -7,13 +7,12 @@
 //! database.
 
 use p3_dft::Radix2Bowers;
-use p3_field::AbstractField;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{apply_circulant, apply_circulant_fft, first_row_to_first_col};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::Goldilocks;
+use crate::{reduce128, Goldilocks};
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
@@ -55,7 +54,7 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
     #[inline(always)]
     fn reduce(z: i128) -> Goldilocks {
         debug_assert!(z >= 0);
-        Goldilocks::from_wrapped_u128(z as u128)
+        reduce128(z as u128)
     }
 }
 

@@ -126,10 +126,6 @@ impl<F: Field> AbstractField for SymbolicExpression<F> {
         Self::Constant(F::from_wrapped_u64(n))
     }
 
-    fn from_wrapped_u128(n: u128) -> Self {
-        Self::Constant(F::from_wrapped_u128(n))
-    }
-
     fn generator() -> Self {
         Self::Constant(F::generator())
     }

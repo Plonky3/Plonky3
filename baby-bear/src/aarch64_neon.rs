@@ -435,10 +435,6 @@ impl AbstractField for PackedBabyBearNeon {
     fn from_wrapped_u64(n: u64) -> Self {
         BabyBear::from_wrapped_u64(n).into()
     }
-    #[inline]
-    fn from_wrapped_u128(n: u128) -> Self {
-        BabyBear::from_wrapped_u128(n).into()
-    }
 
     #[inline]
     fn generator() -> Self {

@@ -156,13 +156,6 @@ impl AbstractField for Mersenne31 {
         Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
-    #[inline]
-    fn from_wrapped_u128(n: u128) -> Self {
-        // Currently unoptimised.
-        // It might be faster to break into 4 32-bit chuncks and reduce using 2^32 = 2 (mod Mersenne31).
-        Self::from_canonical_u32((n % (Self::ORDER_U32 as u128)) as u32)
-    }
-
     // Sage: GF(2^31 - 1).multiplicative_generator()
     #[inline]
     fn generator() -> Self {
