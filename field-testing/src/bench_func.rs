@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use alloc::format;
 
 use criterion::{black_box, Criterion};
@@ -50,7 +51,7 @@ where
         input.push(rng.gen::<F>())
     }
 
-    c.bench_function(&format!("{} sum", name), |b| {
+    c.bench_function(&format!("{} sum/{}", name, N), |b| {
         b.iter(|| black_box(input.iter().cloned().sum::<F>()))
     });
 }

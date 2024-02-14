@@ -353,6 +353,12 @@ impl Div for Goldilocks {
 // HELPER FUNCTIONS
 // ================================================================================================
 
+pub fn sum_i128(vec: & [Goldilocks]) -> Goldilocks {
+    Goldilocks {
+        value: (vec.iter().map(|x| (x.value as u128)).sum::<u128>() % (Goldilocks::ORDER_U64 as u128)) as u64,
+    }
+}
+
 /// Squares the base N number of times and multiplies the result by the tail value.
 #[inline(always)]
 fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {

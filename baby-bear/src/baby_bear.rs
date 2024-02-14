@@ -421,6 +421,12 @@ fn monty_reduce(x: u64) -> u32 {
     x_sub_u_hi.wrapping_add(corr)
 }
 
+pub fn sum_i64(vec: & [BabyBear]) -> BabyBear {
+    BabyBear {
+        value: (vec.iter().map(|x| (x.value as u64)).sum::<u64>() % (P as u64)) as u32,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeField64;
