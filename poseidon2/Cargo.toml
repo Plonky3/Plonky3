@@ -5,7 +5,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-field = { path = "../field" }
@@ -13,6 +12,7 @@ p3-symmetric = { path = "../symmetric" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 
 [dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
 ark-ff = { version = "^0.4.0", default-features = false }
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 criterion = "0.5.1"
