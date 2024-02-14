@@ -1,32 +1,32 @@
-use p3_field::AbstractField;
 use p3_symmetric::Permutation;
 use p3_poseidon2::DiffusionPermutation;
 
-use crate::BabyBear;
+use crate::{BabyBear, sum_i64};
 
 // Diffusion matrices for Babybear16 and Babybear24.
 //
 // Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
+// We save them here in their MONTY forms. There true forms can be found in the test section where we test to ensur the MONTY
+// form is correct.
 
-// These are currently saved as their true values. It will be far more efficient to save them in Monty Form.
-const MATRIX_DIAG_16_BABYBEAR: [u32; 16] = [
-    0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
-    0x12029f39, 0x694909ce, 0x6d231724, 0x21c3b222, 0x3c0904a5, 0x01d6acda, 0x27705c83, 0x5231c802,
+const MATRIX_DIAG_16_BABYBEAR_MONTY: [u32; 16] = [
+    0x09d7163c, 0x65f27816, 0x5e6f3a6d, 0x64f91652, 0x323b0ccc, 0x63b5320b, 0x5691d672, 0x47e6031d,
+    0x119401a9, 0x3f642f5c, 0x0f2c9b71, 0x07f81d96, 0x4fecc2e6, 0x4c13e496, 0x13dd1883, 0x70a6dddc,
 ];
 
-const MATRIX_DIAG_24_BABYBEAR: [u32; 24] = [
-    0x409133f0, 0x1667a8a1, 0x06a6c7b6, 0x6f53160e, 0x273b11d1, 0x03176c5d, 0x72f9bbf9, 0x73ceba91,
-    0x5cdef81d, 0x01393285, 0x46daee06, 0x065d7ba6, 0x52d72d6f, 0x05dd05e0, 0x3bab4b63, 0x6ada3842,
-    0x2fc5fbec, 0x770d61b0, 0x5715aae9, 0x03ef0e90, 0x75b6c770, 0x242adf5f, 0x00d0ca4c, 0x36c0e388,
+const MATRIX_DIAG_24_BABYBEAR_MONTY: [u32; 24] = [
+    0x3e41b357, 0x1033ed98, 0x49cf6705, 0x5281f318, 0x3c4ec8ee, 0x1967a15c, 0x3ab8089a, 0x68f1a534,
+    0x11e010d5, 0x0d63d87e, 0x50d79dd3, 0x4a6bc505, 0x6f46057c, 0x437dd156, 0x60b4b484, 0x440c54cb,
+    0x4a155e0a, 0x6a059603, 0x46382d00, 0x1f9b9cab, 0x1ce078ad, 0x12d7bd14, 0x5e4294b4, 0x1b314dce,
 ];
 
 fn matmul_internal<const WIDTH: usize>(
     state: &mut [BabyBear; WIDTH],
     mat_internal_diag_m_1: [u32; WIDTH],
 ) {
-    let sum: BabyBear = state.iter().cloned().sum();
+    let sum = sum_i64(state);
     for i in 0..WIDTH {
-        state[i] *= BabyBear::from_canonical_u32(mat_internal_diag_m_1[i]);
+        state[i] *= BabyBear{ value: mat_internal_diag_m_1[i] };
         state[i] += sum.clone();
     }
 }
@@ -36,7 +36,7 @@ pub struct DiffusionMatrixBabybear;
 
 impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        matmul_internal::<16>(state, MATRIX_DIAG_16_BABYBEAR);
+        matmul_internal::<16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
     }
 }
 
@@ -44,7 +44,7 @@ impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
 
 impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [BabyBear; 24]) {
-        matmul_internal::<24>(state, MATRIX_DIAG_24_BABYBEAR);
+        matmul_internal::<24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
     }
 }
 
@@ -63,8 +63,39 @@ mod tests {
     use zkhash::poseidon2::poseidon2_instance_babybear::{POSEIDON2_BABYBEAR_16_PARAMS, RC16};
 
     use super::{
-        BabyBear, DiffusionMatrixBabybear
+        BabyBear, DiffusionMatrixBabybear, MATRIX_DIAG_16_BABYBEAR_MONTY,
+        MATRIX_DIAG_24_BABYBEAR_MONTY,
     };
+
+    // These are currently saved as their true values. It will be far more efficient to save them in Monty Form.
+    const MATRIX_DIAG_16_BABYBEAR: [u32; 16] = [
+        0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
+        0x12029f39, 0x694909ce, 0x6d231724, 0x21c3b222, 0x3c0904a5, 0x01d6acda, 0x27705c83, 0x5231c802,
+    ];
+
+    const MATRIX_DIAG_24_BABYBEAR: [u32; 24] = [
+        0x409133f0, 0x1667a8a1, 0x06a6c7b6, 0x6f53160e, 0x273b11d1, 0x03176c5d, 0x72f9bbf9, 0x73ceba91,
+        0x5cdef81d, 0x01393285, 0x46daee06, 0x065d7ba6, 0x52d72d6f, 0x05dd05e0, 0x3bab4b63, 0x6ada3842,
+        0x2fc5fbec, 0x770d61b0, 0x5715aae9, 0x03ef0e90, 0x75b6c770, 0x242adf5f, 0x00d0ca4c, 0x36c0e388,
+    ];
+
+    #[test]
+    fn const_16() {
+        let monty_constant = MATRIX_DIAG_16_BABYBEAR
+            .map(BabyBear::from_canonical_u32)
+            .map(|x| x.value);
+
+        assert_eq!(monty_constant, MATRIX_DIAG_16_BABYBEAR_MONTY);
+    }
+
+    #[test]
+    fn const_24() {
+        let monty_constant = MATRIX_DIAG_24_BABYBEAR
+            .map(BabyBear::from_canonical_u32)
+            .map(|x| x.value);
+
+        assert_eq!(monty_constant, MATRIX_DIAG_24_BABYBEAR_MONTY);
+    }
 
     fn babybear_from_ark_ff(input: FpBabyBear) -> BabyBear {
         let as_bigint = input.into_bigint();
