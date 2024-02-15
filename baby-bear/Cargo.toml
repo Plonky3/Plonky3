@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 p3-field = { path = "../field" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
-rand = "0.8.5"
+rand = { version = "0.8.5", features = ["min_const_gen"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
@@ -32,4 +32,8 @@ harness = false
 
 [[bench]]
 name = "sum"
+harness = false
+
+[[bench]]
+name = "multi_mul"
 harness = false

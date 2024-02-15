@@ -1,6 +1,6 @@
 use p3_field_testing::benchmark_sum;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_baby_bear::{BabyBear, sum_i64};
+use p3_baby_bear::{BabyBear, sum_u64};
 use rand::Rng;
 
 type F = BabyBear;
@@ -35,7 +35,7 @@ fn sum_delayed<const N: usize>(c: &mut Criterion) {
     }
     let id = BenchmarkId::new("BabyBear sum_delayed", N);
     c.bench_with_input(id, &input, |b, input| {
-        b.iter(|| sum_i64(&input));
+        b.iter(|| sum_u64(&input));
     });
 }
 

@@ -1,7 +1,7 @@
 use p3_symmetric::Permutation;
 use p3_poseidon2::DiffusionPermutation;
 
-use crate::{BabyBear, sum_i64};
+use crate::{BabyBear, sum_u64};
 
 // Diffusion matrices for Babybear16 and Babybear24.
 //
@@ -24,7 +24,7 @@ fn matmul_internal<const WIDTH: usize>(
     state: &mut [BabyBear; WIDTH],
     mat_internal_diag_m_1: [u32; WIDTH],
 ) {
-    let sum = sum_i64(state);
+    let sum = sum_u64(state);
     for i in 0..WIDTH {
         state[i] *= BabyBear{ value: mat_internal_diag_m_1[i] };
         state[i] += sum.clone();
