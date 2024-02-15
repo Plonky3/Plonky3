@@ -57,7 +57,12 @@ fn exp_seven(c: &mut Criterion) {
     let input = rng.gen::<F>();
     let id = BenchmarkId::new("BabyBear MultiExponential", 7);
     c.bench_with_input(id, &input, |b, input| {
-        b.iter(|| black_box(black_box(input).exp_const_u64::<7>()));
+        b.iter(|| {
+            let square = black_box(black_box(input).square());
+            let triple = black_box(black_box(square) * black_box(*input));
+            let quad = black_box(black_box(square).square());
+            black_box(black_box(triple) * black_box(quad))
+        });
     });
 }
 
