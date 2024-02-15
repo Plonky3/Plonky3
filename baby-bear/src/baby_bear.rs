@@ -445,16 +445,16 @@ pub fn sum_u64(vec: & [BabyBear]) -> BabyBear {
 }
 
 const MONTY_SQUARE_BITS: u32 = 2*MONTY_BITS;
-const MONTY_SQUARE_MU: u128 = 0x383fffff88000001;
+const MONTY_SQUARE_MU: u64 = 0x383fffff88000001;
 // (225 << 54) - (1 << 31) + (1 << 27) - 1
-const MONTY_SQUARE_MASK: u128 = (1u128 << MONTY_SQUARE_BITS) - 1;
+const MONTY_SQUARE_MASK: u64 = ((1u128 << MONTY_SQUARE_BITS) - 1) as u64;
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS^2`.
 #[inline]
 #[must_use]
 fn monty_square_reduce(x: u128) -> u32 {
-    let t = x.wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
-    let u = t * (P as u128);
+    let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
+    let u = (t as u128) * (P as u128);
 
     let (x_sub_u, over) = x.overflowing_sub(u);
     let x_sub_u_hi = (x_sub_u >> MONTY_SQUARE_BITS) as u32;
@@ -496,8 +496,8 @@ pub fn babybear_quad_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear, x3: BabyBear)
 
 #[inline]
 pub fn fast_exp_7(x1: BabyBear) -> BabyBear {
-    let x10 = x1.square();
-    babybear_quad_mul(x10, x10, x10, x1)
+    let x11 = babybear_triple_mul(x1, x1, x1);
+    babybear_triple_mul(x11, x11, x1)
 }
 
 #[cfg(test)]

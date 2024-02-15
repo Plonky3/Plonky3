@@ -1,4 +1,3 @@
-use p3_baby_bear::fast_exp_7;
 use criterion::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, babybear_triple_mul, babybear_quad_mul};
@@ -79,7 +78,10 @@ fn exp_seven_delayed_2(c: &mut Criterion) {
     let input = rng.gen::<F>();
     let id = BenchmarkId::new("BabyBear MultiExponential Delayed 2", 7);
     c.bench_with_input(id, &input, |b, input| {
-        b.iter(|| black_box(fast_exp_7(black_box(*input))));
+        b.iter(|| {
+            let cube = black_box(babybear_triple_mul(black_box(*input), black_box(*input), black_box(*input)));
+            black_box(babybear_triple_mul(black_box(cube), black_box(cube), black_box(*input)))
+        });
     });
 }
 
