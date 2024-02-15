@@ -172,18 +172,12 @@ impl AbstractField for BabyBear {
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         match POWER {
             0 => Self::one(),
-            1 => self.clone(),
+            1 => *self,
             2 => self.square(),
             3 => self.cube(),
             4 => self.square().square(),
-            5 => self.square().square() * self.clone(),
+            5 => self.square().square() * *self,
             6 => self.square().cube(),
-            // 7 => {
-            //     let x2 = self.square();
-            //     let x3 = x2.clone() * self.clone();
-            //     let x4 = x2.square();
-            //     x3 * x4
-            // }
             7 => fast_exp_7(*self),
             _ => self.exp_u64(POWER),
         }
