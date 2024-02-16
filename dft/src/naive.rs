@@ -35,7 +35,6 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
 mod tests {
     use alloc::vec;
 
-    use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
@@ -45,7 +44,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        type F = BabyBear;
+        type F = Goldilocks;
 
         // A few polynomials:
         // 5 + 4x
@@ -91,6 +90,17 @@ mod tests {
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.dft_batch(original.clone());
         let idft = NaiveDft.idft_batch(dft);
+        assert_eq!(original, idft);
+    }
+
+    #[test]
+    fn coset_dft_idft_consistency() {
+        type F = Goldilocks;
+        let generator = F::generator();
+        let mut rng = thread_rng();
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let dft = NaiveDft.coset_dft_batch(original.clone(), generator);
+        let idft = NaiveDft.coset_idft_batch(dft, generator);
         assert_eq!(original, idft);
     }
 }

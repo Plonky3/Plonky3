@@ -69,6 +69,31 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         dft
     }
 
+    /// Compute the "coset iDFT" of `vec`. This can be viewed as an inverse operation of
+    /// "coset DFT", that interpolates over a coset of a multiplicative subgroup, rather than
+    /// subgroup itself.
+    fn coset_idft(&self, vec: Vec<F>, shift: F) -> Vec<F> {
+        self.coset_idft_batch(RowMajorMatrix::new(vec, 1), shift)
+            .values
+    }
+
+    /// Compute the "coset iDFT" of each column in `mat`. This can be viewed as an inverse operation
+    /// of "coset DFT", that interpolates over a coset of a multiplicative subgroup, rather than the
+    /// subgroup itself.
+    fn coset_idft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        mat = self.idft_batch(mat);
+
+        mat.rows_mut()
+            .zip(shift.inverse().powers())
+            .for_each(|(row, weight)| {
+                row.iter_mut().for_each(|coeff| {
+                    *coeff *= weight;
+                })
+            });
+
+        mat
+    }
+
     /// Compute the low-degree extension of `vec` onto a larger subgroup.
     fn lde(&self, vec: Vec<F>, added_bits: usize) -> Vec<F> {
         self.lde_batch(RowMajorMatrix::new(vec, 1), added_bits)
