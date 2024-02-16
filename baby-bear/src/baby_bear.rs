@@ -166,22 +166,6 @@ impl AbstractField for BabyBear {
     fn generator() -> Self {
         Self::from_canonical_u32(0x1f)
     }
-
-    #[must_use]
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        match POWER {
-            0 => Self::one(),
-            1 => self.clone(),
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => self.square().square() * self.clone(),
-            6 => self.square().cube(),
-            7 => fast_exp_7(*self),
-            _ => self.exp_u64(POWER),
-        }
-    }
 }
 
 impl Field for BabyBear {
@@ -462,71 +446,10 @@ pub fn sum_u64(vec: &[BabyBear]) -> BabyBear {
     }
 }
 
-const MONTY_SQUARE_BITS: u32 = 2 * MONTY_BITS;
-const MONTY_SQUARE_MU: u64 = 0x383fffff88000001;
-// (225 << 54) - (1 << 31) + (1 << 27) - 1
-const MONTY_SQUARE_MASK: u64 = ((1u128 << MONTY_SQUARE_BITS) - 1) as u64;
-
-/// Montgomery reduction of a value in `0..P << MONTY_BITS^2`.
-#[inline]
-#[must_use]
-fn monty_square_reduce(x: u128) -> u32 {
-    let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
-    let u = (t as u128) * (P as u128);
-
-    let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> MONTY_SQUARE_BITS) as u32;
-    let corr = if over { P } else { 0 };
-    x_sub_u_hi.wrapping_add(corr)
-}
-
-#[inline]
-pub fn babybear_triple_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear) -> BabyBear {
-    let x01 = x0.value as u64 * x1.value as u64;
-    BabyBear {
-        value: monty_square_reduce(x01 as u128 * x2.value as u128),
-    }
-}
-
-const MONTY_CUBE_TERM: u128 = 0x1a5dffffc7c0000077ffffff;
-// (225 << 85) - (225 << 81) - (225 << 54) + (1 << 31) - (1 << 27) - 1;
-const MONTY_CUBE_BITS: u32 = 3 * MONTY_BITS;
-const MONTY_CUBE_MU: u128 = (1u128 << MONTY_CUBE_BITS) - MONTY_CUBE_TERM;
-const MONTY_CUBE_MASK: u128 = (1u128 << MONTY_CUBE_BITS) - 1;
-
-/// Montgomery reduction of a value in `0..P << MONTY_BITS^3`.
-#[inline]
-#[must_use]
-fn monty_cube_reduce(x: u128) -> u32 {
-    let t = x.wrapping_mul(MONTY_CUBE_MU) & MONTY_CUBE_MASK;
-    let u = t * (P as u128);
-
-    let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> MONTY_CUBE_BITS) as u32;
-    let corr = if over { P } else { 0 };
-    x_sub_u_hi.wrapping_add(corr)
-}
-
-#[inline]
-pub fn babybear_quad_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear, x3: BabyBear) -> BabyBear {
-    let x01 = x0.value as u64 * x1.value as u64;
-    let x23 = x2.value as u64 * x3.value as u64;
-    BabyBear {
-        value: monty_cube_reduce(x01 as u128 * x23 as u128),
-    }
-}
-
-#[inline]
-pub fn fast_exp_7(x1: BabyBear) -> BabyBear {
-    let x11 = babybear_triple_mul(x1, x1, x1);
-    babybear_triple_mul(x11, x11, x1)
-}
-
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeField64;
     use p3_field_testing::{test_field, test_two_adic_field};
-    use rand::Rng;
 
     use super::*;
 
@@ -595,34 +518,6 @@ mod tests {
         assert_eq!(m1.exp_u64(1725656503).exp_const_u64::<7>(), m1);
         assert_eq!(m2.exp_u64(1725656503).exp_const_u64::<7>(), m2);
         assert_eq!(f_2.exp_u64(1725656503).exp_const_u64::<7>(), f_2);
-    }
-
-    #[test]
-    fn test_triple_mul() {
-        // Picked 4 numbers roughly at random.
-        let mut rng = rand::thread_rng();
-        for _ in 0..100 {
-            let input = rng.gen::<[F; 3]>();
-
-            let mul_1 = input[0] * input[1] * input[2];
-            let mul_2 = babybear_triple_mul(input[0], input[1], input[2]);
-
-            assert_eq!(mul_1, mul_2);
-        }
-    }
-
-    #[test]
-    fn test_quad_mul() {
-        // Picked 4 numbers roughly at random.
-        let mut rng = rand::thread_rng();
-        for _ in 0..100 {
-            let input = rng.gen::<[F; 4]>();
-
-            let mul_1 = input[0] * input[1] * input[2] * input[3];
-            let mul_2 = babybear_quad_mul(input[0], input[1], input[2], input[3]);
-
-            assert_eq!(mul_1, mul_2);
-        }
     }
 
     test_field!(crate::BabyBear);

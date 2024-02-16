@@ -33,7 +33,3 @@ harness = false
 [[bench]]
 name = "sum"
 harness = false
-
-[[bench]]
-name = "multi_mul"
-harness = false
