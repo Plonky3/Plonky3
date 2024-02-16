@@ -11,13 +11,13 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 /// The Baby Bear prime
-const P: u32 = 0x78000001;
+pub(crate) const P: u32 = 0x78000001;
 
 // We want a different set of parameters on ARM/NEON than elsewhere. In particular, we want ARM to
 // use 31 bits for the limb size, because that lets us use the SQDMULH instruction to do really fast
 // multiplications in NEON. However, other architectures don't have this instruction, so 32-bit
 // limbs are more convenient, being a nice power of 2.
-const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
+pub(crate) const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
     31
 } else {
     32
@@ -412,6 +412,24 @@ const fn to_monty(x: u32) -> u32 {
     (((x as u64) << MONTY_BITS) % P as u64) as u32
 }
 
+/// Can convert an array of constants into Monty Form
+#[inline]
+#[must_use]
+pub(crate) const fn to_babybear_array<const N: usize>(input: [u32; N]) -> [BabyBear; N] {
+    let mut output = [BabyBear { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i] = BabyBear {
+            value: to_monty(input[i]),
+        };
+        i += 1
+    }
+    output
+}
+
 #[inline]
 #[must_use]
 fn to_monty_64(x: u64) -> u32 {
@@ -438,13 +456,13 @@ fn monty_reduce(x: u64) -> u32 {
 }
 
 #[inline]
-pub fn sum_u64(vec: & [BabyBear]) -> BabyBear {
+pub fn sum_u64(vec: &[BabyBear]) -> BabyBear {
     BabyBear {
         value: (vec.iter().map(|x| (x.value as u64)).sum::<u64>() % (P as u64)) as u32,
     }
 }
 
-const MONTY_SQUARE_BITS: u32 = 2*MONTY_BITS;
+const MONTY_SQUARE_BITS: u32 = 2 * MONTY_BITS;
 const MONTY_SQUARE_MU: u64 = 0x383fffff88000001;
 // (225 << 54) - (1 << 31) + (1 << 27) - 1
 const MONTY_SQUARE_MASK: u64 = ((1u128 << MONTY_SQUARE_BITS) - 1) as u64;
@@ -465,12 +483,14 @@ fn monty_square_reduce(x: u128) -> u32 {
 #[inline]
 pub fn babybear_triple_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear) -> BabyBear {
     let x01 = x0.value as u64 * x1.value as u64;
-    BabyBear { value: monty_square_reduce(x01 as u128 * x2.value as u128) }
+    BabyBear {
+        value: monty_square_reduce(x01 as u128 * x2.value as u128),
+    }
 }
 
 const MONTY_CUBE_TERM: u128 = 0x1a5dffffc7c0000077ffffff;
 // (225 << 85) - (225 << 81) - (225 << 54) + (1 << 31) - (1 << 27) - 1;
-const MONTY_CUBE_BITS: u32 = 3*MONTY_BITS;
+const MONTY_CUBE_BITS: u32 = 3 * MONTY_BITS;
 const MONTY_CUBE_MU: u128 = (1u128 << MONTY_CUBE_BITS) - MONTY_CUBE_TERM;
 const MONTY_CUBE_MASK: u128 = (1u128 << MONTY_CUBE_BITS) - 1;
 
@@ -491,7 +511,9 @@ fn monty_cube_reduce(x: u128) -> u32 {
 pub fn babybear_quad_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear, x3: BabyBear) -> BabyBear {
     let x01 = x0.value as u64 * x1.value as u64;
     let x23 = x2.value as u64 * x3.value as u64;
-    BabyBear { value: monty_cube_reduce(x01 as u128 * x23 as u128) }
+    BabyBear {
+        value: monty_cube_reduce(x01 as u128 * x23 as u128),
+    }
 }
 
 #[inline]
