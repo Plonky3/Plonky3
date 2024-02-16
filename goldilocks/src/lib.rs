@@ -2,7 +2,12 @@
 
 #![no_std]
 
+extern crate alloc;
+
 mod extension;
+mod poseidon2;
+
+pub use poseidon2::DiffusionMatrixGoldilocks;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};

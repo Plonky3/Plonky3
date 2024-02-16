@@ -7,7 +7,7 @@ mod extension;
 mod poseidon2;
 
 pub use baby_bear::*;
-pub use poseidon2::*;
+pub use poseidon2::DiffusionMatrixBabybear;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod aarch64_neon;
