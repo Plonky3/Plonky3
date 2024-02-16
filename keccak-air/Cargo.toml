@@ -19,7 +19,7 @@ p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
-p3-ldt = { path = "../ldt" }
+p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-poseidon2 = { path = "../poseidon2" }
@@ -37,3 +37,9 @@ name = "prove_baby_bear_poseidon2"
 
 [[example]]
 name = "prove_goldilocks_keccak"
+
+[features]
+# TODO: Consider removing, at least when this gets split off into another repository.
+# We should be able to enable p3-maybe-rayon/parallel directly; this just doesn't
+# seem to work when using cargo with the -p or --package option.
+parallel = ["p3-maybe-rayon/parallel"]

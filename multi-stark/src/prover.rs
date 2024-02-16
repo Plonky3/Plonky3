@@ -3,7 +3,7 @@ use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_matrix::dense::RowMajorMatrix;
 
-use crate::{ConstraintFolder, StarkConfig};
+use crate::{ConstraintFolder, StarkGenericConfig};
 
 pub fn prove<SC, A, Challenger>(
     config: &SC,
@@ -11,7 +11,7 @@ pub fn prove<SC, A, Challenger>(
     _challenger: &mut Challenger,
     trace: RowMajorMatrix<SC::Val>,
 ) where
-    SC: StarkConfig,
+    SC: StarkGenericConfig,
     A: for<'a> Air<ConstraintFolder<'a, SC::Val, SC::Challenge, SC::PackedChallenge>>,
     Challenger: FieldChallenger<SC::Val>,
 {

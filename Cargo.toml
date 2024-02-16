@@ -17,7 +17,6 @@ members = [
     "keccak",
     "keccak-air",
     "lde",
-    "ldt",
     "matrix",
     "merkle-tree",
     "maybe-rayon",

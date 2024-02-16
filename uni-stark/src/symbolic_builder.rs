@@ -6,10 +6,12 @@ use p3_air::{Air, AirBuilder};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
+use tracing::instrument;
 
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
 
+#[instrument(name = "infer log of constraint degree", skip_all)]
 pub fn get_log_quotient_degree<F, A>(air: &A) -> usize
 where
     F: Field,
@@ -24,6 +26,7 @@ where
     log2_ceil_usize(constraint_degree - 1)
 }
 
+#[instrument(name = "infer constraint degree", skip_all, level = "debug")]
 pub fn get_max_constraint_degree<F, A>(air: &A) -> usize
 where
     F: Field,
@@ -36,6 +39,7 @@ where
         .unwrap_or(0)
 }
 
+#[instrument(name = "evalute constraints symbolically", skip_all, level = "debug")]
 pub fn get_symbolic_constraints<F, A>(air: &A) -> Vec<SymbolicExpression<F>>
 where
     F: Field,

@@ -7,10 +7,12 @@ use p3_commit::UnivariatePcs;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::reverse_slice_index_bits;
+use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
-use crate::{Proof, StarkConfig, VerifierConstraintFolder};
+use crate::{Proof, StarkGenericConfig, VerifierConstraintFolder};
 
+#[instrument(skip_all)]
 pub fn verify<SC, A>(
     config: &SC,
     air: &A,
@@ -18,7 +20,7 @@ pub fn verify<SC, A>(
     proof: &Proof<SC>,
 ) -> Result<(), VerificationError>
 where
-    SC: StarkConfig,
+    SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
 {
     let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);

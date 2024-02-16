@@ -2,6 +2,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
@@ -25,7 +26,7 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     /// The opening argument.
     type Proof: Serialize + DeserializeOwned;
 
-    type Error;
+    type Error: Debug;
 
     fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData);
 
@@ -88,7 +89,7 @@ where
     fn commit_shifted_batches(
         &self,
         polynomials: Vec<In>,
-        coset_shift: Val,
+        coset_shift: &[Val],
     ) -> (Self::Commitment, Self::ProverData);
 
     fn commit_shifted_batch(
@@ -96,7 +97,7 @@ where
         polynomials: In,
         coset_shift: Val,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(vec![polynomials], coset_shift)
+        self.commit_shifted_batches(vec![polynomials], &[coset_shift])
     }
 }
 
