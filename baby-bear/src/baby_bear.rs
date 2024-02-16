@@ -182,6 +182,25 @@ impl AbstractField for BabyBear {
             _ => self.exp_u64(POWER),
         }
     }
+
+    #[must_use]
+    #[inline]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        let mut res = self.value as i32;
+        for _ in 0..power_log {
+            // Use monty_half_reduce to get a result in (-P, P).
+            // This is fine as x^2 will always be positive.
+            res = monty_half_reduce((res as i64 * res as i64) as u64)
+        }
+
+        if res > 0 {
+            BabyBear { value: res as u32 }
+        } else {
+            BabyBear {
+                value: (P as i32 + res) as u32,
+            }
+        }
+    }
 }
 
 impl Field for BabyBear {
@@ -435,6 +454,17 @@ fn monty_reduce(x: u64) -> u32 {
     let x_sub_u_hi = (x_sub_u >> MONTY_BITS) as u32;
     let corr = if over { P } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
+}
+
+/// Montgomery reduction of a value in `0..P << MONTY_BITS`.
+/// Unlike the full reduction, here we ouput something in (-P, P).
+/// This avoids branching.
+#[inline]
+fn monty_half_reduce(x: u64) -> i32 {
+    let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
+    let u = t * (P as u64);
+
+    ((x as i64 - u as i64) >> MONTY_BITS) as i32
 }
 
 #[inline]
