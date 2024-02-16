@@ -501,7 +501,7 @@ pub fn monty_half_square_reduce(x: u128) -> i32 {
     let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
     let u = (t as u128) * (P as u128);
 
-    ((x as i128 - u as i128) >> MONTY_SQUARE_BITS) as i32
+    (x >> MONTY_SQUARE_BITS) as i32 - (u >> MONTY_SQUARE_BITS) as i32
 }
 
 #[inline]
