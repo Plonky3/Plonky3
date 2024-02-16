@@ -59,7 +59,7 @@ fn mul_three(c: &mut Criterion) {
             black_box(input);
             let mut res = input[0];
             for i in 0..1000 {
-                res = res * input[2*i + 1] * input[2*i + 2];
+                res = res * input[2 * i + 1] * input[2 * i + 2];
             }
             res
         });
@@ -75,10 +75,9 @@ fn mul_three_delayed(c: &mut Criterion) {
             black_box(input);
             let mut res = input[0];
             for i in 0..1000 {
-                res = babybear_triple_mul(res, input[2*i + 1], input[2*i + 2]);
+                res = babybear_triple_mul(res, input[2 * i + 1], input[2 * i + 2]);
             }
             res
-            
         });
     });
 }
@@ -92,7 +91,7 @@ fn mul_four(c: &mut Criterion) {
             black_box(input);
             let mut res = input[0];
             for i in 0..1000 {
-                res = res * input[3*i + 1] * input[3*i + 2] * input[3*i + 3];
+                res = res * input[3 * i + 1] * input[3 * i + 2] * input[3 * i + 3];
             }
             res
         });
@@ -108,7 +107,7 @@ fn mul_four_delayed(c: &mut Criterion) {
             black_box(input);
             let mut res = input[0];
             for i in 0..1000 {
-                res = babybear_quad_mul(res, input[3*i + 1], input[3*i + 2], input[3*i + 3]);
+                res = babybear_quad_mul(res, input[3 * i + 1], input[3 * i + 2], input[3 * i + 3]);
             }
             res
         });
