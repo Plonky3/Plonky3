@@ -158,6 +158,7 @@ fn par_chunks_bowers<F: Field, Fun>(
 
 #[cfg(test)]
 mod tests {
+    use p3_baby_bear::BabyBear;
     use p3_goldilocks::Goldilocks;
 
     use crate::radix_2_bowers::Radix2Bowers;
@@ -165,12 +166,12 @@ mod tests {
 
     #[test]
     fn dft_matches_naive() {
-        test_dft_matches_naive::<Goldilocks, Radix2Bowers>();
+        test_dft_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
     fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<Goldilocks, Radix2Bowers>();
+        test_coset_dft_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
@@ -180,21 +181,22 @@ mod tests {
 
     #[test]
     fn coset_idft_matches_naive() {
+        test_coset_idft_matches_naive::<BabyBear, Radix2Bowers>();
         test_coset_idft_matches_naive::<Goldilocks, Radix2Bowers>();
     }
 
     #[test]
     fn lde_matches_naive() {
-        test_lde_matches_naive::<Goldilocks, Radix2Bowers>();
+        test_lde_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
     fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<Goldilocks, Radix2Bowers>();
+        test_coset_lde_matches_naive::<BabyBear, Radix2Bowers>();
     }
 
     #[test]
     fn dft_idft_consistency() {
-        test_dft_idft_consistency::<Goldilocks, Radix2Bowers>();
+        test_dft_idft_consistency::<BabyBear, Radix2Bowers>();
     }
 }

@@ -72,6 +72,7 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddle
 
 #[cfg(test)]
 mod tests {
+    use p3_baby_bear::BabyBear;
     use p3_goldilocks::Goldilocks;
 
     use crate::testing::*;
@@ -79,12 +80,12 @@ mod tests {
 
     #[test]
     fn dft_matches_naive() {
-        test_dft_matches_naive::<Goldilocks, Radix2Dit<_>>();
+        test_dft_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<Goldilocks, Radix2Dit<_>>();
+        test_coset_dft_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
@@ -94,21 +95,22 @@ mod tests {
 
     #[test]
     fn coset_idft_matches_naive() {
+        test_coset_idft_matches_naive::<BabyBear, Radix2Dit<_>>();
         test_coset_idft_matches_naive::<Goldilocks, Radix2Dit<_>>();
     }
 
     #[test]
     fn lde_matches_naive() {
-        test_lde_matches_naive::<Goldilocks, Radix2Dit<_>>();
+        test_lde_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<Goldilocks, Radix2Dit<_>>();
+        test_coset_lde_matches_naive::<BabyBear, Radix2Dit<_>>();
     }
 
     #[test]
     fn dft_idft_consistency() {
-        test_dft_idft_consistency::<Goldilocks, Radix2Dit<_>>();
+        test_dft_idft_consistency::<BabyBear, Radix2Dit<_>>();
     }
 }
