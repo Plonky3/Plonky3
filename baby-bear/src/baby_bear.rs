@@ -549,7 +549,9 @@ pub fn fast_exp_7(x1: BabyBear) -> BabyBear {
     let x10 = x1u64 * x1u64;
     let x11 = monty_half_square_reduce(x10 as u128 * x1u128);
     let x110 = x11 as i64 * x11 as i64; // Always Positive
-    BabyBear { value: monty_square_reduce(x110 as u128 * x1u128)}
+    BabyBear {
+        value: monty_square_reduce(x110 as u128 * x1u128),
+    }
 }
 
 #[cfg(test)]
