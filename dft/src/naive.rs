@@ -35,6 +35,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
 mod tests {
     use alloc::vec;
 
+    use p3_baby_bear::BabyBear;
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
@@ -44,7 +45,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        type F = Goldilocks;
+        type F = BabyBear;
 
         // A few polynomials:
         // 5 + 4x
