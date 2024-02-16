@@ -480,10 +480,10 @@ const MONTY_SQUARE_MU: u64 = 0x383fffff88000001;
 const MONTY_SQUARE_MASK: u64 = ((1u128 << MONTY_SQUARE_BITS) - 1) as u64;
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS^2`.
-/// Given x, the output is in 0..P and equal to x (1 << MONTY_BITS)^{-2} mod P
+/// Given x, the output is in [0, P) and equal to x (1 << MONTY_BITS)^{-2} mod P
 #[inline]
 #[must_use]
-fn monty_square_reduce(x: u128) -> u32 {
+pub fn monty_square_reduce(x: u128) -> u32 {
     let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
     let u = (t as u128) * (P as u128);
 
@@ -491,6 +491,17 @@ fn monty_square_reduce(x: u128) -> u32 {
     let x_sub_u_hi = (x_sub_u >> MONTY_SQUARE_BITS) as u32;
     let corr = if over { P } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
+}
+
+/// Montgomery reduction of a value in `0..P << MONTY_BITS^2`.
+/// Given x, the output is in (-P, P) and equal to x (1 << MONTY_BITS)^{-2} mod P
+#[inline]
+#[must_use]
+pub fn monty_half_square_reduce(x: u128) -> i32 {
+    let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
+    let u = (t as u128) * (P as u128);
+
+    ((x as i128 - u as i128) >> MONTY_SQUARE_BITS) as i32
 }
 
 #[inline]
@@ -530,10 +541,15 @@ pub fn babybear_quad_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear, x3: BabyBear)
     }
 }
 
+// Using delayed reductions to speed up x -> x^7.
 #[inline]
 pub fn fast_exp_7(x1: BabyBear) -> BabyBear {
-    let x11 = babybear_triple_mul(x1, x1, x1);
-    babybear_triple_mul(x11, x11, x1)
+    let x1u64 = x1.value as u64;
+    let x1u128 = x1.value as u128;
+    let x10 = x1u64 * x1u64;
+    let x11 = monty_half_square_reduce(x10 as u128 * x1u128);
+    let x110 = x11 as i64 * x11 as i64; // Always Positive
+    BabyBear { value: monty_square_reduce(x110 as u128 * x1u128)}
 }
 
 #[cfg(test)]
