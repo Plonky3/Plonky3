@@ -65,7 +65,7 @@ fn main() -> Result<(), VerificationError> {
         TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
 
-    type MyConfig = StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>;
+    type MyConfig = StarkConfig<Val, Challenge, Pcs, Challenger>;
     let config = StarkConfig::new(pcs);
 
     let mut challenger = Challenger::new(perm.clone());

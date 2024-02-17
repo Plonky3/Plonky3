@@ -2,17 +2,20 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcsWithLde};
-use p3_field::{AbstractExtensionField, ExtensionField, PackedField, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+
+pub type PackedVal<SC> = <<SC as StarkGenericConfig>::Val as Field>::Packing;
+pub type PackedChallenge<SC> = <<SC as StarkGenericConfig>::Challenge as ExtensionField<
+    <SC as StarkGenericConfig>::Val,
+>>::ExtensionPacking;
 
 pub trait StarkGenericConfig {
     /// The field over which trace data is encoded.
     type Val: TwoAdicField;
-    type PackedVal: PackedField<Scalar = Self::Val>;
 
     /// The field from which most random challenges are drawn.
     type Challenge: ExtensionField<Self::Val> + TwoAdicField;
-    type PackedChallenge: AbstractExtensionField<Self::PackedVal, F = Self::Challenge>;
 
     /// The PCS used to commit to trace polynomials.
     type Pcs: UnivariatePcsWithLde<
@@ -29,14 +32,12 @@ pub trait StarkGenericConfig {
     fn pcs(&self) -> &Self::Pcs;
 }
 
-pub struct StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger> {
+pub struct StarkConfig<Val, Challenge, Pcs, Challenger> {
     pcs: Pcs,
-    _phantom: PhantomData<(Val, Challenge, PackedChallenge, Challenger)>,
+    _phantom: PhantomData<(Val, Challenge, Challenger)>,
 }
 
-impl<Val, Challenge, PackedChallenge, Pcs, Challenger>
-    StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>
-{
+impl<Val, Challenge, Pcs, Challenger> StarkConfig<Val, Challenge, Pcs, Challenger> {
     pub fn new(pcs: Pcs) -> Self {
         Self {
             pcs,
@@ -45,20 +46,17 @@ impl<Val, Challenge, PackedChallenge, Pcs, Challenger>
     }
 }
 
-impl<Val, Challenge, PackedChallenge, Pcs, Challenger> StarkGenericConfig
-    for StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>
+impl<Val, Challenge, Pcs, Challenger> StarkGenericConfig
+    for StarkConfig<Val, Challenge, Pcs, Challenger>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val> + TwoAdicField,
-    PackedChallenge: AbstractExtensionField<Val::Packing, F = Challenge>,
     Pcs: UnivariatePcsWithLde<Val, Challenge, RowMajorMatrix<Val>, Challenger>,
     Challenger: FieldChallenger<Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Val, RowMajorMatrix<Val>>>::Commitment>,
 {
     type Val = Val;
-    type PackedVal = Val::Packing;
     type Challenge = Challenge;
-    type PackedChallenge = PackedChallenge;
     type Pcs = Pcs;
     type Challenger = Challenger;
 
