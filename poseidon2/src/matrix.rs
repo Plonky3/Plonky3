@@ -33,6 +33,30 @@ where
     x[3] = t4;
 }
 
+// At some point we shoudl switch this martix to:
+// [ 2 3 1 1 ]
+// [ 1 2 3 1 ]
+// [ 1 1 2 3 ]
+// [ 3 1 1 2 ].
+// This is the more efficient than the one above (11 additions vs 16 additions) and leads to a ~5% speed up.
+// Unfortunately it breaks all the tests as we are tesing against the implementation from zkhash.
+// Hence will leave this as a comment for now and implement later.
+// fn apply_m_4<AF>(x: &mut [AF])
+// where
+//     AF: AbstractField,
+//     AF::F: PrimeField,
+// {
+//     let t01 = x[0].clone() + x[1].clone();
+//     let t23 = x[2].clone() + x[3].clone();
+//     let t0123 = t01.clone() + t23.clone();
+//     let t01123 = t0123.clone() + x[1].clone();
+//     let t01233 = t0123.clone() + x[3].clone();
+//     x[3] = t01233.clone() + x[0].clone() + x[0].clone(); // 3*x[0] + x[1] + x[2] + 2*x[3]
+//     x[1] = t01123.clone() + x[2].clone() + x[2].clone(); // x[0] + 2*x[1] + 3*x[2] + x[3]
+//     x[0] = t01123 + t01; // 2*x[0] + 3*x[1] + x[2] + x[3]
+//     x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]   
+// }
+
 impl<AF, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]> for Poseidon2MEMatrix<WIDTH, D>
 where
     AF: AbstractField,

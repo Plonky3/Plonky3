@@ -30,7 +30,7 @@ fn matmul_internal<const WIDTH: usize>(
     let sum = sum_u64(state);
     for i in 0..WIDTH {
         state[i] *= mat_internal_diag_m_1[i];
-        state[i] += sum.clone();
+        state[i] += sum;
     }
 }
 

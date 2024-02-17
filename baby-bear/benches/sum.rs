@@ -1,7 +1,6 @@
-use p3_field::AbstractField;
-use criterion::black_box;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{sum_u64, BabyBear};
+use p3_field::AbstractField;
 use rand::Rng;
 
 type F = BabyBear;
@@ -36,7 +35,7 @@ fn sum<const N: usize>(c: &mut Criterion) {
         }
         input.push(row)
     }
-    
+
     let id = BenchmarkId::new("BabyBear sum", N);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| {
@@ -60,7 +59,7 @@ fn sum_delayed<const N: usize>(c: &mut Criterion) {
         }
         input.push(row)
     }
-    
+
     let id = BenchmarkId::new("BabyBear sum_delayed", N);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| {
