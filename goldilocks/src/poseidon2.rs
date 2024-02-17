@@ -2,11 +2,11 @@
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
 
-
-use p3_poseidon2::{DiffusionPermutation, matmul_internal};
+use p3_field::AbstractField;
+use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
-use crate::{Goldilocks};
+use crate::{sum_u128, Goldilocks};
 
 pub const MATRIX_DIAG_8_GOLDILOCKS: [u64; 8] = [
     0xa98811a1fed4e3a5,
@@ -76,6 +76,20 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [u64; 20] = [
     0x0b3694a940bd2394,
 ];
 
+// For sums of length 8 the usual summation .iter().sum() is faster.
+// For sums of length 12 the two methods are close to equal.
+// For sums of length >= 16 the delayed method (sum_u128) is faster.
+fn matmul_internal_u128<const WIDTH: usize>(
+    state: &mut [Goldilocks; WIDTH],
+    mat_internal_diag_m_1: [u64; WIDTH],
+) {
+    let sum: Goldilocks = sum_u128(state);
+    for i in 0..WIDTH {
+        state[i] *= Goldilocks::from_canonical_u64(mat_internal_diag_m_1[i]);
+        state[i] += sum;
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixGoldilocks;
 
@@ -97,7 +111,7 @@ impl DiffusionPermutation<Goldilocks, 12> for DiffusionMatrixGoldilocks {}
 
 impl Permutation<[Goldilocks; 16]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [Goldilocks; 16]) {
-        matmul_internal::<Goldilocks, 16>(state, MATRIX_DIAG_16_GOLDILOCKS);
+        matmul_internal_u128::<16>(state, MATRIX_DIAG_16_GOLDILOCKS);
     }
 }
 
@@ -105,30 +119,28 @@ impl DiffusionPermutation<Goldilocks, 16> for DiffusionMatrixGoldilocks {}
 
 impl Permutation<[Goldilocks; 20]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [Goldilocks; 20]) {
-        matmul_internal::<Goldilocks, 20>(state, MATRIX_DIAG_20_GOLDILOCKS);
+        matmul_internal_u128::<20>(state, MATRIX_DIAG_20_GOLDILOCKS);
     }
 }
 
 impl DiffusionPermutation<Goldilocks, 20> for DiffusionMatrixGoldilocks {}
 
-
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    
+
     use ark_ff::{BigInteger, PrimeField};
     use p3_field::AbstractField;
-    use crate::Goldilocks;
+    use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
     use rand::Rng;
     use zkhash::fields::goldilocks::FpGoldiLocks;
-    use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;  
+    use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
     use zkhash::poseidon2::poseidon2_instance_goldilocks::{
         POSEIDON2_GOLDILOCKS_12_PARAMS, POSEIDON2_GOLDILOCKS_8_PARAMS, RC12, RC8,
     };
 
-    use crate::DiffusionMatrixGoldilocks;
-    use p3_poseidon2::{Poseidon2};
+    use crate::{DiffusionMatrixGoldilocks, Goldilocks};
 
     fn goldilocks_from_ark_ff(input: FpGoldiLocks) -> Goldilocks {
         let as_bigint = input.into_bigint();

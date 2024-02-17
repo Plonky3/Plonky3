@@ -7,8 +7,6 @@ extern crate alloc;
 mod extension;
 mod poseidon2;
 
-pub use poseidon2::DiffusionMatrixGoldilocks;
-
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
@@ -20,6 +18,7 @@ use p3_field::{
     TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
+pub use poseidon2::DiffusionMatrixGoldilocks;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -358,9 +357,10 @@ impl Div for Goldilocks {
 // HELPER FUNCTIONS
 // ================================================================================================
 
-pub fn sum_i128(vec: & [Goldilocks]) -> Goldilocks {
+pub fn sum_u128(vec: &[Goldilocks]) -> Goldilocks {
     Goldilocks {
-        value: (vec.iter().map(|x| (x.value as u128)).sum::<u128>() % (Goldilocks::ORDER_U64 as u128)) as u64,
+        value: (vec.iter().map(|x| (x.value as u128)).sum::<u128>()
+            % (Goldilocks::ORDER_U64 as u128)) as u64,
     }
 }
 
