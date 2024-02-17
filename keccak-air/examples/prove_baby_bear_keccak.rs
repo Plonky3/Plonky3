@@ -3,7 +3,6 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
@@ -31,9 +30,7 @@ fn main() -> Result<(), VerificationError> {
         .init();
 
     type Val = BabyBear;
-    type Domain = Val;
     type Challenge = BinomialExtensionField<Val, 4>;
-    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
     type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());

@@ -71,9 +71,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
     const HEIGHT: usize = 1 << 6;
 
     type Val = BabyBear;
-    type Domain = Val;
     type Challenge = BinomialExtensionField<Val, 4>;
-    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
     type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
