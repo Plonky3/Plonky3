@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{DiffusionMatrixBabybear, BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -10,7 +10,7 @@ use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
+use p3_poseidon2::{Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
 use rand::distributions::{Distribution, Standard};

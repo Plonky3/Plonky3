@@ -177,12 +177,12 @@ mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
-    use p3_baby_bear::BabyBear;
+    use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
     use p3_commit::{DirectMmcs, Mmcs};
     use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
-    use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
+    use p3_poseidon2::{Poseidon2};
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
