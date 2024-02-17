@@ -1,5 +1,5 @@
-use alloc::vec::Vec;
 use alloc::format;
+use alloc::vec::Vec;
 
 use criterion::{black_box, Criterion};
 use p3_field::Field;

@@ -54,7 +54,7 @@ where
 //     x[3] = t01233.clone() + x[0].clone() + x[0].clone(); // 3*x[0] + x[1] + x[2] + 2*x[3]
 //     x[1] = t01123.clone() + x[2].clone() + x[2].clone(); // x[0] + 2*x[1] + 3*x[2] + x[3]
 //     x[0] = t01123 + t01; // 2*x[0] + 3*x[1] + x[2] + x[3]
-//     x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]   
+//     x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]
 // }
 
 impl<AF, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]> for Poseidon2MEMatrix<WIDTH, D>

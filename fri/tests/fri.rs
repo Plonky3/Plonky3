@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::{Poseidon2};
+use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
 use rand::{Rng, SeedableRng};

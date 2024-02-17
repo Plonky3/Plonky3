@@ -12,8 +12,7 @@ mod diffusion;
 mod matrix;
 use alloc::vec::Vec;
 
-pub use diffusion::{DiffusionPermutation, matmul_internal};
-
+pub use diffusion::{matmul_internal, DiffusionPermutation};
 use matrix::Poseidon2MEMatrix;
 use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::{CryptographicPermutation, Permutation};

@@ -8,7 +8,7 @@ use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::{Poseidon2};
+use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::thread_rng;
 

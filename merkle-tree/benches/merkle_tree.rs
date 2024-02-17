@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::{Poseidon2};
+use p3_poseidon2::Poseidon2;
 use p3_rescue::{BasicSboxLayer, Rescue};
 use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
