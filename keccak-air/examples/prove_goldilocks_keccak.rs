@@ -2,7 +2,6 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
@@ -31,9 +30,7 @@ fn main() -> Result<(), VerificationError> {
         .init();
 
     type Val = Goldilocks;
-    type Domain = Val;
     type Challenge = BinomialExtensionField<Val, 2>;
-    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 2>;
 
     type Perm = Poseidon2<Val, DiffusionMatrixGoldilocks, 8, 7>;
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixGoldilocks, &mut thread_rng());
@@ -64,7 +61,7 @@ fn main() -> Result<(), VerificationError> {
         TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
 
-    type MyConfig = StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>;
+    type MyConfig = StarkConfig<Val, Challenge, Pcs, Challenger>;
     let config = StarkConfig::new(pcs);
 
     let mut challenger = Challenger::new(perm.clone());

@@ -294,6 +294,8 @@ pub trait AbstractExtensionField<Base: AbstractField>:
 }
 
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+    type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>;
+
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
@@ -306,7 +308,9 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     }
 }
 
-impl<F: Field> ExtensionField<F> for F {}
+impl<F: Field> ExtensionField<F> for F {
+    type ExtensionPacking = F::Packing;
+}
 
 impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     const D: usize = 1;

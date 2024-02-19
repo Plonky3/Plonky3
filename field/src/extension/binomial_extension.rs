@@ -43,6 +43,7 @@ impl<AF: AbstractField, const D: usize> From<AF> for BinomialExtensionField<AF, 
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
+    type ExtensionPacking = BinomialExtensionField<F::Packing, D>;
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
