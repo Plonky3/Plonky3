@@ -24,6 +24,8 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
+use std::time::Instant;
+
 /// We group all of our type bounds into this trait to reduce duplication across signatures.
 pub trait TwoAdicFriPcsGenericConfig: Default {
     type Val: TwoAdicField;
@@ -32,10 +34,11 @@ pub trait TwoAdicFriPcsGenericConfig: Default {
         + GrindingChallenger<Witness = Self::Val>
         + CanObserve<<Self::FriMmcs as Mmcs<Self::Challenge>>::Commitment>
         + CanSample<Self::Challenge>;
-    type Dft: TwoAdicSubgroupDft<Self::Val>;
+    type Dft: TwoAdicSubgroupDft<Self::Val> + Sync;
     type InputMmcs: 'static
-        + for<'a> DirectMmcs<Self::Val, Mat<'a> = RowMajorMatrixView<'a, Self::Val>>;
-    type FriMmcs: DirectMmcs<Self::Challenge>;
+        + for<'a> DirectMmcs<Self::Val, Mat<'a> = RowMajorMatrixView<'a, Self::Val>>
+        + Sync;
+    type FriMmcs: DirectMmcs<Self::Challenge> + Sync;
 }
 
 pub struct TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>(
@@ -58,9 +61,9 @@ where
         + GrindingChallenger<Witness = Val>
         + CanObserve<<FriMmcs as Mmcs<Challenge>>::Commitment>
         + CanSample<Challenge>,
-    Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    FriMmcs: DirectMmcs<Challenge>,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
+    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>> + Sync,
+    FriMmcs: DirectMmcs<Challenge> + Sync,
 {
     type Val = Val;
     type Challenge = Challenge;
@@ -112,7 +115,8 @@ pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) opening_proof: <C::InputMmcs as Mmcs<C::Val>>::Proof,
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for TwoAdicFriPcs<C> {
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
+        Pcs<C::Val, In> for TwoAdicFriPcs<C> {
     type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
     type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
     type Proof = TwoAdicFriPcsProof<C>;
@@ -124,7 +128,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for 
     }
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
@@ -154,13 +158,14 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
         polynomials: Vec<In>,
         coset_shifts: &[C::Val],
     ) -> (Self::Commitment, Self::ProverData) {
+        let coset_ldes_begin = Instant::now();
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
-                .into_iter()
+                .into_par_iter()
                 .zip_eq(coset_shifts)
                 .map(|(poly, coset_shift)| {
                     let shift = C::Val::generator() / *coset_shift;
-                    let input = poly.to_row_major_matrix();
+                    let input = ((*poly).clone()).to_row_major_matrix();
                     // Commit to the bit-reversed LDE.
                     self.dft
                         .coset_lde_batch(input, self.fri.log_blowup, shift)
@@ -169,11 +174,15 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
                 })
                 .collect()
         });
-        self.mmcs.commit(ldes)
+        std::println!("fri coset ldes: {:?}", coset_ldes_begin.elapsed());
+        let commit_ldes_begin = Instant::now();
+        let commitment = self.mmcs.commit(ldes);
+        std::println!("fri commit: {:?}", commit_ldes_begin.elapsed());
+        commitment
     }
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
 {
     #[instrument(name = "open_multi_batches", skip_all)]
