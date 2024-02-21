@@ -15,11 +15,7 @@ p3-field-testing = { path = "../field-testing" }
 criterion = "0.5.1"
 
 [[bench]]
-name = "inverse"
-harness = false
-
-[[bench]]
-name = "root_7"
+name = "bench_field"
 harness = false
 
 [[bench]]
