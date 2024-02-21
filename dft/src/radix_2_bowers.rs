@@ -18,6 +18,8 @@ use crate::TwoAdicSubgroupDft;
 #[derive(Default, Clone)]
 pub struct Radix2Bowers;
 
+enum DoParallelly { DoParallelly, DoSerially }
+
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     type Evaluations = RowMajorMatrix<F>;
 
@@ -69,6 +71,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
         bit_reversed_zero_pad(&mut mat, added_bits);
 
+        // TODO: decide whether to do parallelly
         bowers_g(&mut mat.as_view_mut());
 
         mat
@@ -77,7 +80,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
-fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>, dp: DoParallelly) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -87,13 +90,13 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
     let log_h = log2_strict_usize(mat.height());
     for log_half_block_size in 0..log_h {
-        bowers_g_layer(mat, log_half_block_size, &twiddles);
+        bowers_g_layer(mat, log_half_block_size, &twiddles, dp);
     }
 }
 
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// 1/height, and the output is bit-reversed.
-fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>, dp: DoParallelly) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -103,7 +106,7 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
     let log_h = log2_strict_usize(mat.height());
     for log_half_block_size in (0..log_h).rev() {
-        bowers_g_t_layer(mat, log_half_block_size, &twiddles);
+        bowers_g_t_layer(mat, log_half_block_size, &twiddles, dp);
     }
 }
 
@@ -112,10 +115,11 @@ fn bowers_g_layer<F: Field>(
     mat: &mut RowMajorMatrixViewMut<F>,
     log_half_block_size: usize,
     twiddles: &[F],
+    dp: DoParallelly,
 ) {
     let half_block_size = 1 << log_half_block_size;
     let width = mat.width();
-    par_chunks_bowers(mat, width, half_block_size, twiddles, dif_butterfly_on_rows)
+    chunks_bowers(mat, width, half_block_size, twiddles, dif_butterfly_on_rows, dp)
 }
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
@@ -123,10 +127,39 @@ fn bowers_g_t_layer<F: Field>(
     mat: &mut RowMajorMatrixViewMut<F>,
     log_half_block_size: usize,
     twiddles: &[F],
+    dp: DoParallelly,
 ) {
     let half_block_size = 1 << log_half_block_size;
     let width = mat.width();
-    par_chunks_bowers(mat, width, half_block_size, twiddles, dit_butterfly_on_rows)
+    chunks_bowers(mat, width, half_block_size, twiddles, dit_butterfly_on_rows)
+}
+
+fn chunks_bowers<F: Field, Fun>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    width: usize,
+    half_block_size: usize,
+    twiddles: &[F],
+    butterfly_fn: Fun,
+    dp: DoParallelly
+) where
+    Fun: Fn(&mut [F], &mut [F], F)
+{
+    match dp {
+        DoParallelly => par_chunks_bowers(mat, width, half_block_size, twiddles, dit_butterfly_on_rows),
+        DoSerially => serial_chunks_bowers(mat, width, half_block_size, twiddles, dit_butterfly_on_rows)
+    }
+}
+
+fn serial_chunks_bowers<F: Field, Fun>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    width: usize,
+    half_block_size: usize,
+    twiddles: &[F],
+    butterfly_fn: Fun,
+) where
+    Fun: Fn(&mut [F], &mut [F], F)
+{
+    todo!()
 }
 
 fn par_chunks_bowers<F: Field, Fun>(
