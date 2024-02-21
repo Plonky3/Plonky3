@@ -33,7 +33,7 @@ where
     x[3] = t4;
 }
 
-// At some point we shoudl switch this martix to:
+// At some point we should switch this martix to:
 // [ 2 3 1 1 ]
 // [ 1 2 3 1 ]
 // [ 1 1 2 3 ]
