@@ -1,8 +1,7 @@
-use criterion::BatchSize;
-use alloc::vec::Vec;
 use alloc::format;
+use alloc::vec::Vec;
 
-use criterion::{black_box, Criterion};
+use criterion::{black_box, BatchSize, Criterion};
 use p3_field::Field;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -42,8 +41,10 @@ where
     });
 }
 
-pub fn benchmark_iter_sum<F: Field, const REPS: usize, const N: usize>(c: &mut Criterion, name: &str)
-where
+pub fn benchmark_iter_sum<F: Field, const REPS: usize, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
     Standard: Distribution<F>,
 {
     let mut rng = rand::thread_rng();

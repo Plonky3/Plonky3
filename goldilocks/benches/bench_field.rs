@@ -1,6 +1,9 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use p3_field_testing::bench_func::{benchmark_iter_sum, benchmark_inv, benchmark_add_latency, benchmark_add_throughput, benchmark_sub_latency, benchmark_sub_throughput};
-use p3_field::{AbstractField};
+use p3_field::AbstractField;
+use p3_field_testing::bench_func::{
+    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
+    benchmark_sub_latency, benchmark_sub_throughput,
+};
 use p3_goldilocks::Goldilocks;
 
 type F = Goldilocks;
