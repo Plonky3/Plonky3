@@ -138,7 +138,7 @@ fn par_chunks_bowers<F: Field, Fun>(
 ) where
     Fun: Fn(&mut [F], &mut [F], F) + Sync,
 {
-    mat.par_row_chunks_mut(2 * half_block_size)
+    mat.row_chunks_mut(2 * half_block_size)
         .enumerate()
         .for_each(|(block, chunks)| {
             let (hi_chunks, lo_chunks) = chunks.split_at_mut(half_block_size * width);
