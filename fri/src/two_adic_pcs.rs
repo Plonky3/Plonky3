@@ -1,11 +1,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt::{Debug, Formatter};
+use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
-use p3_challenger::{CanObserve, CanSample, FieldChallenger, GrindingChallenger};
-use p3_commit::{DirectMmcs, Mmcs, OpenedValues, Pcs, UnivariatePcs, UnivariatePcsWithLde};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_commit::{
+    DirectMmcs, Mmcs, OpenedValues, Pcs, PolynomialDomain, TwoAdicMultiplicativeCoset,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
@@ -13,7 +15,7 @@ use p3_field::{
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
-use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
@@ -24,167 +26,135 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
-/// We group all of our type bounds into this trait to reduce duplication across signatures.
-pub trait TwoAdicFriPcsGenericConfig: Default {
-    type Val: TwoAdicField;
-    type Challenge: TwoAdicField + ExtensionField<Self::Val>;
-    type Challenger: FieldChallenger<Self::Val>
-        + GrindingChallenger<Witness = Self::Val>
-        + CanObserve<<Self::FriMmcs as Mmcs<Self::Challenge>>::Commitment>
-        + CanSample<Self::Challenge>;
-    type Dft: TwoAdicSubgroupDft<Self::Val>;
-    type InputMmcs: 'static
-        + for<'a> DirectMmcs<Self::Val, Mat<'a> = RowMajorMatrixView<'a, Self::Val>>;
-    type FriMmcs: DirectMmcs<Self::Challenge>;
+pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
+    // degree bound
+    log_n: usize,
+    dft: Dft,
+    mmcs: InputMmcs,
+    fri: FriConfig<FriMmcs>,
+    _phantom: PhantomData<Val>,
 }
 
-pub struct TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>(
-    PhantomData<(Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs)>,
-);
-impl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs> Default
-    for TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
-{
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs> TwoAdicFriPcsGenericConfig
-    for TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>
-where
-    Val: TwoAdicField,
-    Challenge: TwoAdicField + ExtensionField<Val>,
-    Challenger: FieldChallenger<Val>
-        + GrindingChallenger<Witness = Val>
-        + CanObserve<<FriMmcs as Mmcs<Challenge>>::Commitment>
-        + CanSample<Challenge>,
-    Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    FriMmcs: DirectMmcs<Challenge>,
-{
-    type Val = Val;
-    type Challenge = Challenge;
-    type Challenger = Challenger;
-    type Dft = Dft;
-    type InputMmcs = InputMmcs;
-    type FriMmcs = FriMmcs;
-}
-
-pub struct TwoAdicFriPcs<C: TwoAdicFriPcsGenericConfig> {
-    fri: FriConfig<C::FriMmcs>,
-    dft: C::Dft,
-    mmcs: C::InputMmcs,
-}
-
-impl<C: TwoAdicFriPcsGenericConfig> TwoAdicFriPcs<C> {
-    pub fn new(fri: FriConfig<C::FriMmcs>, dft: C::Dft, mmcs: C::InputMmcs) -> Self {
-        Self { fri, dft, mmcs }
-    }
-}
-
-pub enum VerificationError<C: TwoAdicFriPcsGenericConfig> {
-    InputMmcsError(<C::InputMmcs as Mmcs<C::Val>>::Error),
-    FriError(FriError<<C::FriMmcs as Mmcs<C::Challenge>>::Error>),
-}
-
-impl<C: TwoAdicFriPcsGenericConfig> Debug for VerificationError<C> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        match self {
-            VerificationError::InputMmcsError(e) => {
-                f.debug_tuple("InputMmcsError").field(e).finish()
-            }
-            VerificationError::FriError(e) => f.debug_tuple("FriError").field(e).finish(),
+impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
+    pub fn new(log_n: usize, dft: Dft, mmcs: InputMmcs, fri: FriConfig<FriMmcs>) -> Self {
+        Self {
+            log_n,
+            dft,
+            mmcs,
+            fri,
+            _phantom: PhantomData,
         }
     }
 }
 
+#[derive(Debug)]
+pub enum VerificationError<InputMmcsError, FriMmcsError> {
+    InputMmcsError(InputMmcsError),
+    FriError(FriError<FriMmcsError>),
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct TwoAdicFriPcsProof<C: TwoAdicFriPcsGenericConfig> {
-    pub(crate) fri_proof: FriProof<C::Challenge, C::FriMmcs, C::Val>,
+pub struct TwoAdicFriPcsProof<
+    Val: Field,
+    Challenge: Field,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+> {
+    pub(crate) fri_proof: FriProof<Challenge, FriMmcs, Val>,
     /// For each query, for each committed batch, query openings for that batch
-    pub(crate) query_openings: Vec<Vec<BatchOpening<C>>>,
+    pub(crate) query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
-    pub(crate) opened_values: Vec<Vec<C::Val>>,
-    pub(crate) opening_proof: <C::InputMmcs as Mmcs<C::Val>>::Proof,
+#[serde(bound = "")]
+pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
+    pub(crate) opened_values: Vec<Vec<Val>>,
+    pub(crate) opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for TwoAdicFriPcs<C> {
-    type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
-    type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
-    type Proof = TwoAdicFriPcsProof<C>;
-    type Error = VerificationError<C>;
-
-    fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData) {
-        let ones = vec![C::Val::one(); polynomials.len()];
-        self.commit_shifted_batches(polynomials, &ones)
-    }
-}
-
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
-    UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
+impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
+    for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
+where
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
+    FriMmcs: DirectMmcs<Challenge>,
+    Challenge: TwoAdicField + ExtensionField<Val>,
+    Challenger:
+        CanObserve<FriMmcs::Commitment> + CanSample<Challenge> + GrindingChallenger<Witness = Val>,
 {
-    type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
+    type Domain = TwoAdicMultiplicativeCoset<Val>;
+    type Commitment = InputMmcs::Commitment;
+    type ProverData = InputMmcs::ProverData;
+    type Proof = TwoAdicFriPcsProof<Val, Challenge, InputMmcs, FriMmcs>;
+    type Error = VerificationError<InputMmcs::Error, FriMmcs::Error>;
 
-    fn coset_shift(&self) -> C::Val {
-        C::Val::generator()
+    fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
+        let log_n = log2_strict_usize(degree);
+        assert!(log_n <= self.log_n);
+        TwoAdicMultiplicativeCoset {
+            log_n,
+            shift: Val::one(),
+        }
     }
 
-    fn log_blowup(&self) -> usize {
-        self.fri.log_blowup
-    }
-
-    fn get_ldes<'a, 'b>(&'a self, prover_data: &'b Self::ProverData) -> Vec<Self::Lde<'b>>
-    where
-        'a: 'b,
-    {
-        // We committed to the bit-reversed LDE, so now we wrap it to return in natural order.
-        self.mmcs
-            .get_matrices(prover_data)
-            .into_iter()
-            .map(BitReversedMatrixView::new)
-            .collect()
-    }
-
-    fn commit_shifted_batches(
+    fn commit(
         &self,
-        polynomials: Vec<In>,
-        coset_shifts: &[C::Val],
+        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let ldes = info_span!("compute all coset LDEs").in_scope(|| {
-            polynomials
-                .into_iter()
-                .zip_eq(coset_shifts)
-                .map(|(poly, coset_shift)| {
-                    let shift = C::Val::generator() / *coset_shift;
-                    let input = poly.to_row_major_matrix();
-                    // Commit to the bit-reversed LDE.
-                    self.dft
-                        .coset_lde_batch(input, self.fri.log_blowup, shift)
-                        .bit_reverse_rows()
-                        .to_row_major_matrix()
-                })
-                .collect()
-        });
+        let ldes: Vec<RowMajorMatrix<Val>> = evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert_eq!(domain.size(), evals.height());
+                let log_n = log2_strict_usize(domain.size());
+                assert!(log_n <= self.log_n);
+                let shift = Val::generator() / domain.shift;
+                // Commit to the bit-reversed LDE.
+                self.dft
+                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect();
+
         self.mmcs.commit(ldes)
     }
-}
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
-    UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
-{
-    #[instrument(name = "open_multi_batches", skip_all)]
-    fn open_multi_batches(
+    fn get_evaluations_on_domain(
         &self,
-        prover_data_and_points: &[(&Self::ProverData, &[Vec<C::Challenge>])],
-        challenger: &mut C::Challenger,
-    ) -> (OpenedValues<C::Challenge>, Self::Proof) {
-        // Batch combination challenge
-        let alpha = <C::Challenger as CanSample<C::Challenge>>::sample(challenger);
+        prover_data: &Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> RowMajorMatrix<Val> {
+        // todo: handle extrapolation for LDEs we don't have
+        assert_eq!(domain.shift, Val::generator());
+        let lde = self.mmcs.get_matrices(prover_data)[idx];
+        assert!(lde.height() >= domain.size());
+        let extra_bits = log2_strict_usize(lde.height()) - log2_strict_usize(domain.size());
+        // TODO get rid of these 2 copies
+        let strided = lde
+            .to_row_major_matrix()
+            .bit_reverse_rows()
+            .vertically_strided(1 << extra_bits, 0)
+            .to_row_major_matrix();
+        assert_eq!(strided.height(), domain.size());
+        strided
+    }
 
+    fn open(
+        &self,
+        // For each round,
+        rounds: Vec<(
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
         /*
 
         A quick rundown of the optimizations in this function:
@@ -222,35 +192,37 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
 
         */
 
-        let mats_and_points = prover_data_and_points
+        // Batch combination challenge
+        let alpha: Challenge = challenger.sample();
+
+        let mats_and_points = rounds
             .iter()
-            .map(|(data, points)| (self.mmcs.get_matrices(data), *points))
+            .map(|(data, points)| (self.mmcs.get_matrices(data), points))
             .collect_vec();
 
         let max_width = mats_and_points
             .iter()
             .flat_map(|(mats, _)| mats)
-            .map(|mat| mat.width())
+            .map(|m| m.width())
             .max()
             .unwrap();
 
-        let alpha_reducer = PowersReducer::<C::Val, C::Challenge>::new(alpha, max_width);
+        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, max_width);
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, C::Val::generator());
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::generator());
 
-        let mut all_opened_values: OpenedValues<C::Challenge> = vec![];
+        let mut all_opened_values: OpenedValues<Challenge> = vec![];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
-        for (data, points) in prover_data_and_points {
-            let mats = self.mmcs.get_matrices(data);
+        for (mats, points) in mats_and_points {
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
-            for (mat, points_for_mat) in izip!(mats, *points) {
+            for (mat, points_for_mat) in izip!(mats, points) {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
-                    .get_or_insert_with(|| vec![C::Challenge::zero(); mat.height()]);
+                    .get_or_insert_with(|| vec![Challenge::zero(); mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
@@ -265,7 +237,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
                                 mat.split_rows(mat.height() >> self.fri.log_blowup);
                             interpolate_coset(
                                 &BitReversedMatrixView::new(low_coset),
-                                C::Val::generator(),
+                                Val::generator(),
                                 point,
                             )
                         });
@@ -299,9 +271,10 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
         let query_openings = query_indices
             .into_iter()
             .map(|index| {
-                prover_data_and_points
+                rounds
                     .iter()
                     .map(|(data, _)| {
+                        // needs to recombine decomposed openings.. or something...
                         let (opened_values, opening_proof) = self.mmcs.open_batch(index, data);
                         BatchOpening {
                             opened_values,
@@ -321,16 +294,29 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
         )
     }
 
-    fn verify_multi_batches(
+    fn verify(
         &self,
-        commits_and_points: &[(Self::Commitment, &[Vec<C::Challenge>])],
-        dims: &[Vec<Dimensions>],
-        values: OpenedValues<C::Challenge>,
+        // For each round:
+        rounds: Vec<(
+            Self::Commitment,
+            // for each matrix:
+            Vec<(
+                // its domain,
+                Self::Domain,
+                // for each point:
+                Vec<(
+                    // the point,
+                    Challenge,
+                    // values at the point
+                    Vec<Challenge>,
+                )>,
+            )>,
+        )>,
         proof: &Self::Proof,
-        challenger: &mut C::Challenger,
+        challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
-        let alpha = <C::Challenger as CanSample<C::Challenge>>::sample(challenger);
+        let alpha: Challenge = challenger.sample();
 
         let fri_challenges =
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
@@ -338,41 +324,43 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
 
         let log_max_height = proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
 
-        let reduced_openings: Vec<[C::Challenge; 32]> = proof
+        let reduced_openings: Vec<[Challenge; 32]> = proof
             .query_openings
             .iter()
             .zip(&fri_challenges.query_indices)
             .map(|(query_opening, &index)| {
-                let mut ro = [C::Challenge::zero(); 32];
-                let mut alpha_pow = [C::Challenge::one(); 32];
-                for (batch_opening, batch_dims, (batch_commit, batch_points), batch_at_z) in
-                    izip!(query_opening, dims, commits_and_points, &values)
-                {
+                let mut ro = [Challenge::zero(); 32];
+                let mut alpha_pow = [Challenge::one(); 32];
+                for (batch_opening, (batch_commit, mats)) in izip!(query_opening, &rounds) {
+                    let batch_dims: Vec<Dimensions> = mats
+                        .iter()
+                        .map(|(domain, _)| Dimensions {
+                            // todo: mmcs doesn't really need width
+                            width: 0,
+                            height: domain.size(),
+                        })
+                        .collect_vec();
                     self.mmcs.verify_batch(
                         batch_commit,
-                        batch_dims,
+                        &batch_dims,
                         index,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
                     )?;
-                    for (mat_opening, mat_dims, mat_points, mat_at_z) in izip!(
-                        &batch_opening.opened_values,
-                        batch_dims,
-                        *batch_points,
-                        batch_at_z
-                    ) {
-                        let log_height = log2_strict_usize(mat_dims.height) + self.fri.log_blowup;
+                    for (mat_opening, (mat_domain, mat_points_and_values)) in
+                        izip!(&batch_opening.opened_values, mats)
+                    {
+                        let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
 
                         let bits_reduced = log_max_height - log_height;
                         let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
 
-                        let x = C::Val::generator()
-                            * C::Val::two_adic_generator(log_height)
-                                .exp_u64(rev_reduced_index as u64);
+                        let x = Val::generator()
+                            * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
-                        for (&z, ps_at_z) in izip!(mat_points, mat_at_z) {
+                        for (z, ps_at_z) in mat_points_and_values {
                             for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
-                                let quotient = (-p_at_z + p_at_x) / (-z + x);
+                                let quotient = (-p_at_z + p_at_x) / (-*z + x);
                                 ro[log_height] += alpha_pow[log_height] * quotient;
                                 alpha_pow[log_height] *= alpha;
                             }
@@ -381,7 +369,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
                 }
                 Ok(ro)
             })
-            .collect::<Result<Vec<_>, <C::InputMmcs as Mmcs<C::Val>>::Error>>()
+            .collect::<Result<Vec<_>, InputMmcs::Error>>()
             .map_err(VerificationError::InputMmcsError)?;
 
         verifier::verify_challenges(
@@ -398,7 +386,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
 
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
-    mats_and_points: &[(Vec<M>, &[Vec<EF>])],
+    mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset_shift: F,
 ) -> LinearMap<EF, Vec<EF>> {
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();

@@ -1,0 +1,246 @@
+use alloc::vec::Vec;
+
+use itertools::Itertools;
+use p3_field::{
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
+    TwoAdicField,
+};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::MatrixRows;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
+
+pub struct LagrangeSelectors<T> {
+    pub is_first_row: T,
+    pub is_last_row: T,
+    pub is_transition: T,
+    pub inv_zeroifier: T,
+}
+
+pub trait PolynomialDomain: Copy {
+    type Val: Field;
+
+    fn size(&self) -> usize;
+
+    fn first_point(&self) -> Self::Val;
+    fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Ext;
+
+    // There are many choices for this, but we must pick a canonical one
+    // for both prover/verifier determinism and LDE caching.
+    fn create_disjoint_domain(&self, min_size: usize) -> Self;
+
+    // Split this domain into `num_chunks` even chunks.
+    fn split_domains(&self, num_chunks: usize) -> Vec<Self>;
+    // Split the evals into chunks of evals, corresponding to each domain
+    // from `split_domains`.
+    fn split_evals(
+        &self,
+        num_chunks: usize,
+        evals: RowMajorMatrix<Self::Val>,
+    ) -> Vec<RowMajorMatrix<Self::Val>>;
+
+    fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
+
+    // Unnormalized
+    fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
+        &self,
+        point: Ext,
+    ) -> LagrangeSelectors<Ext>;
+
+    // Unnormalized
+    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
+}
+
+#[derive(Copy, Clone)]
+pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
+    pub log_n: usize,
+    pub shift: Val,
+}
+
+impl<Val: TwoAdicField> TwoAdicMultiplicativeCoset<Val> {
+    fn gen(&self) -> Val {
+        Val::two_adic_generator(self.log_n)
+    }
+}
+
+impl<Val: TwoAdicField> PolynomialDomain for TwoAdicMultiplicativeCoset<Val> {
+    type Val = Val;
+
+    fn size(&self) -> usize {
+        1 << self.log_n
+    }
+
+    fn first_point(&self) -> Self::Val {
+        self.shift
+    }
+    fn next_point<Ext: ExtensionField<Val>>(&self, x: Ext) -> Ext {
+        x * self.gen()
+    }
+
+    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+        Self {
+            log_n: log2_ceil_usize(min_size),
+            shift: self.shift * Val::generator(),
+        }
+    }
+    fn zp_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
+        (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::one()
+    }
+
+    fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
+        let log_chunks = log2_strict_usize(num_chunks);
+        (0..num_chunks)
+            .map(|i| Self {
+                log_n: self.log_n - log_chunks,
+                shift: self.shift * self.gen().exp_u64(i as u64),
+            })
+            .collect()
+    }
+    fn split_evals(
+        &self,
+        num_chunks: usize,
+        evals: RowMajorMatrix<Self::Val>,
+    ) -> Vec<RowMajorMatrix<Self::Val>> {
+        let view = evals.as_view();
+        // todo less copy
+        (0..num_chunks)
+            .map(|i| view.vertically_strided(num_chunks, i).to_row_major_matrix())
+            .collect()
+    }
+
+    fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
+        let unshifted_point = point * self.shift.inverse();
+        let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::one();
+        LagrangeSelectors {
+            is_first_row: z_h / (unshifted_point - Ext::one()),
+            is_last_row: z_h / (unshifted_point - self.gen().inverse()),
+            is_transition: unshifted_point - self.gen().inverse(),
+            inv_zeroifier: z_h.inverse(),
+        }
+    }
+
+    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
+        assert_eq!(self.shift, Val::one());
+        assert!(coset.log_n >= self.log_n);
+        let rate_bits = coset.log_n - self.log_n;
+
+        let s_pow_n = coset.shift.exp_power_of_2(self.log_n);
+        // evals of Z_H(X) = X^n - 1
+        let evals = Val::two_adic_generator(rate_bits)
+            .powers()
+            .take(1 << rate_bits)
+            .map(|x| s_pow_n * x - Val::one())
+            .collect_vec();
+
+        let xs = cyclic_subgroup_coset_known_order(coset.gen(), coset.shift, 1 << coset.log_n)
+            .collect_vec();
+
+        let single_point_selector = |i: u64| {
+            let denoms = xs.iter().map(|&x| x - self.gen().exp_u64(i)).collect_vec();
+            let invs = batch_multiplicative_inverse(&denoms);
+            evals
+                .iter()
+                .cycle()
+                .zip(invs)
+                .map(|(&z_h, inv)| z_h * inv)
+                .collect_vec()
+        };
+
+        let subgroup_last = self.gen().inverse();
+
+        LagrangeSelectors {
+            is_first_row: single_point_selector(0),
+            is_last_row: single_point_selector((1 << self.log_n) - 1),
+            is_transition: xs.into_iter().map(|x| x - subgroup_last).collect(),
+            inv_zeroifier: batch_multiplicative_inverse(&evals)
+                .into_iter()
+                .cycle()
+                .take(1 << coset.log_n)
+                .collect(),
+        }
+    }
+}
+
+// For now only implements cfft (standard position) domain.
+/*
+#[derive(Copy, Clone)]
+struct CircleDomain<Val: ComplexExtendable> {
+    log_n: usize,
+    shift: Complex<Val>,
+}
+
+impl<Val: ComplexExtendable> CircleDomain<Val> {
+    fn standard_position(log_n: usize) -> Self {
+        Self {
+            log_n,
+            shift: Val::circle_two_adic_generator(log_n + 1),
+        }
+    }
+    fn gen(&self) -> Complex<Val> {
+        Val::circle_two_adic_generator(self.log_n)
+    }
+}
+
+// Sometimes we are working over C(F), where F is not ComplexExtendable,
+// but we can still work over the circle group
+fn rotate<AF: AbstractField>(lhs: Complex<AF>, rhs: Complex<AF>) -> Complex<AF> {
+    Complex::<AF>::new(
+        lhs.real() * rhs.real() - lhs.imag() * rhs.imag(),
+        lhs.real() * rhs.imag() + lhs.imag() * rhs.real(),
+    )
+}
+
+// # Evaluates the zeroifier for a circle FFT domain of size log_n at pt
+fn circle_zeroifier<F: Field>(log_n: usize, mut pt_x: F) -> F {
+    for _ in 0..(log_n - 1) {
+        pt_x = F::two() * pt_x.square() - F::one();
+    }
+    pt_x
+}
+
+// Zero at t = 0 and pole at t = infinity
+fn v_0<F: Field>(pt: Complex<F>) -> F {
+    pt.imag() / (pt.real() + F::one())
+}
+
+impl<Val: ComplexExtendable> PolynomialDomain<Val> for CircleDomain<Val> {
+    type Point<Ext: ExtensionField<Val>> = Complex<Ext>;
+
+    // todo: handle general twin coset
+    fn points<Ext: ExtensionField<Val>>(&self) -> Vec<Self::Point<Ext>> {
+        self.gen()
+            .shifted_powers(self.shift)
+            .take(1 << (self.log_n))
+            .map(|x| x.to_ext())
+            .collect()
+    }
+
+    fn next_point<Ext: ExtensionField<Val>>(&self, x: Self::Point<Ext>) -> Self::Point<Ext> {
+        rotate(x, self.gen().to_ext())
+    }
+
+    // Since we don't handle general twin cosets yet, we need to make a larger domain
+    // for it to be disjoint
+    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+        Self::standard_position((self.log_n + 1).max(log2_ceil_usize(min_size)))
+    }
+
+    fn selectors_at_point<Ext: ExtensionField<Val>>(
+        &self,
+        point: Self::Point<Ext>,
+    ) -> LagrangeSelectors<Ext> {
+        let v_h = circle_zeroifier(self.log_n, point.real());
+        let first_point = self.shift;
+        let last_point = self.shift * self.gen().square().inverse();
+        LagrangeSelectors {
+            is_first_row: v_h / v_0(rotate(first_point.conjugate().to_ext(), point)),
+            is_last_row: v_h / v_0(rotate(last_point.conjugate().to_ext(), point)),
+            is_transition: todo!(),
+            inv_zeroifier: v_h.inverse(),
+        }
+    }
+
+    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
+        todo!()
+    }
+}
+*/

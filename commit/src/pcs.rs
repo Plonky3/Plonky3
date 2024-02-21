@@ -1,22 +1,25 @@
 //! Traits for polynomial commitment schemes.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
-use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field};
-use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
+use p3_field::ExtensionField;
+use p3_matrix::dense::RowMajorMatrix;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of)
-/// polynomials defined over the field `F`.
-///
-/// This high-level trait is agnostic with respect to the structure of a point; see `UnivariatePCS`
-/// and `MultivariatePcs` for more specific subtraits.
+use crate::PolynomialDomain;
+
+pub type Val<D> = <D as PolynomialDomain>::Val;
+
+/// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of) polynomials
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
+pub trait Pcs<Challenge, Challenger>
+where
+    Challenge: ExtensionField<Val<Self::Domain>>,
+{
+    type Domain: PolynomialDomain;
+
     /// The commitment that's sent to the verifier.
     type Commitment: Clone + Serialize + DeserializeOwned;
 
@@ -28,96 +31,60 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
 
     type Error: Debug;
 
-    fn commit_batches(&self, polynomials: Vec<In>) -> (Self::Commitment, Self::ProverData);
+    fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
-    fn commit_batch(&self, polynomials: In) -> (Self::Commitment, Self::ProverData) {
-        self.commit_batches(vec![polynomials])
-    }
+    #[allow(clippy::type_complexity)]
+    fn commit(
+        &self,
+        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+    ) -> (Self::Commitment, Self::ProverData);
+
+    fn get_evaluations_on_domain(
+        &self,
+        prover_data: &Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> RowMajorMatrix<Val<Self::Domain>>;
+
+    fn open(
+        &self,
+        // For each round,
+        rounds: Vec<(
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof);
+
+    #[allow(clippy::type_complexity)]
+    fn verify(
+        &self,
+        // For each round:
+        rounds: Vec<(
+            Self::Commitment,
+            // for each matrix:
+            Vec<(
+                // its domain,
+                Self::Domain,
+                // for each point:
+                Vec<(
+                    // the point,
+                    Challenge,
+                    // values at the point
+                    Vec<Challenge>,
+                )>,
+            )>,
+        )>,
+        proof: &Self::Proof,
+        challenger: &mut Challenger,
+    ) -> Result<(), Self::Error>;
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
 pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
 pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
 pub type OpenedValuesForPoint<F> = Vec<F>;
-
-pub trait UnivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
-where
-    Val: Field,
-    EF: ExtensionField<Val>,
-    In: MatrixRows<Val>,
-    Challenger: FieldChallenger<Val>,
-{
-    fn open_multi_batches(
-        &self,
-        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
-        challenger: &mut Challenger,
-    ) -> (OpenedValues<EF>, Self::Proof);
-
-    fn verify_multi_batches(
-        &self,
-        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
-        dims: &[Vec<Dimensions>],
-        values: OpenedValues<EF>,
-        proof: &Self::Proof,
-        challenger: &mut Challenger,
-    ) -> Result<(), Self::Error>;
-}
-
-/// A `UnivariatePcs` where the commitment process involves computing a low-degree extension (LDE)
-/// of each polynomial. These LDEs can be reused in other prover work.
-pub trait UnivariatePcsWithLde<Val, EF, In, Challenger>:
-    UnivariatePcs<Val, EF, In, Challenger>
-where
-    Val: Field,
-    EF: ExtensionField<Val>,
-    In: MatrixRows<Val>,
-    Challenger: FieldChallenger<Val>,
-{
-    type Lde<'a>: MatrixRows<Val> + MatrixGet<Val> + Sync
-    where
-        Self: 'a;
-
-    fn coset_shift(&self) -> Val;
-
-    fn log_blowup(&self) -> usize;
-
-    fn get_ldes<'a, 'b>(&'a self, prover_data: &'b Self::ProverData) -> Vec<Self::Lde<'b>>
-    where
-        'a: 'b;
-
-    // Commit to polys that are already defined over a coset.
-    fn commit_shifted_batches(
-        &self,
-        polynomials: Vec<In>,
-        coset_shift: &[Val],
-    ) -> (Self::Commitment, Self::ProverData);
-
-    fn commit_shifted_batch(
-        &self,
-        polynomials: In,
-        coset_shift: Val,
-    ) -> (Self::Commitment, Self::ProverData) {
-        self.commit_shifted_batches(vec![polynomials], &[coset_shift])
-    }
-}
-
-pub trait MultivariatePcs<Val, EF, In, Challenger>: Pcs<Val, In>
-where
-    Val: Field,
-    EF: ExtensionField<Val>,
-    In: MatrixRows<Val>,
-    Challenger: FieldChallenger<Val>,
-{
-    fn open_multi_batches(
-        &self,
-        prover_data_and_points: &[(&Self::ProverData, &[Vec<EF>])],
-        challenger: &mut Challenger,
-    ) -> (OpenedValues<EF>, Self::Proof);
-
-    fn verify_multi_batches(
-        &self,
-        commits_and_points: &[(Self::Commitment, &[Vec<EF>])],
-        values: OpenedValues<EF>,
-        proof: &Self::Proof,
-    ) -> Result<(), Self::Error>;
-}
