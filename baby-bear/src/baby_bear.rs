@@ -17,7 +17,7 @@ const P: u32 = 0x78000001;
 // use 31 bits for the limb size, because that lets us use the SQDMULH instruction to do really fast
 // multiplications in NEON. However, other architectures don't have this instruction, so 32-bit
 // limbs are more convenient, being a nice power of 2.
-pub(crate) const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
+const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
     31
 } else {
     32
