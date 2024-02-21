@@ -18,7 +18,7 @@ fn bench_field(c: &mut Criterion) {
     benchmark_add_latency::<F, 10000>(c, name);
     benchmark_add_throughput::<F, 1000>(c, name);
     benchmark_sub_latency::<F, 10000>(c, name);
-    benchmark_sub_throughput::<F, 10000>(c, name);
+    benchmark_sub_throughput::<F, 1000>(c, name);
 
     c.bench_function("5th_root", |b| {
         b.iter_batched(
