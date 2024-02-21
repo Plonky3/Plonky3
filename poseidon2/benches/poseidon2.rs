@@ -10,8 +10,6 @@ use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
-    // poseidon2::<BabyBear, DiffusionMatrixBabybear, 16, 1>(c);
-    // poseidon2::<BabyBear, DiffusionMatrixBabybear, 16, 3>(c);
     poseidon2::<BabyBear, DiffusionMatrixBabybear, 16, 7>(c);
     poseidon2::<BabyBear, DiffusionMatrixBabybear, 24, 7>(c);
 

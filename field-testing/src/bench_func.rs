@@ -1,5 +1,4 @@
 use alloc::format;
-use alloc::vec::Vec;
 
 use criterion::{black_box, Criterion};
 use p3_field::Field;
@@ -38,20 +37,5 @@ where
     let y = rng.gen::<F>();
     c.bench_function(&format!("{} mul", name), |b| {
         b.iter(|| black_box(black_box(x) * black_box(y)))
-    });
-}
-
-pub fn benchmark_sum<F: Field, const N: usize>(c: &mut Criterion, name: &str)
-where
-    Standard: Distribution<F>,
-{
-    let mut rng = rand::thread_rng();
-    let mut input = Vec::new();
-    for _ in 0..N {
-        input.push(rng.gen::<F>())
-    }
-
-    c.bench_function(&format!("{} sum/{}", name, N), |b| {
-        b.iter(|| black_box(input.iter().cloned().sum::<F>()))
     });
 }

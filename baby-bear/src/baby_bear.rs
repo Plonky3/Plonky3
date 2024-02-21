@@ -437,6 +437,9 @@ fn monty_reduce(x: u64) -> u32 {
     x_sub_u_hi.wrapping_add(corr)
 }
 
+// sum_u64 is slower than .iter().sum() for sums of length < 8
+// sum_u64 and .iter().sum() take essentially identical amount of time for sums of length 8.
+// sum_u64 is faster than .iter().sum() for sums of length > 8
 #[inline]
 pub fn sum_u64(vec: &[BabyBear]) -> BabyBear {
     BabyBear {

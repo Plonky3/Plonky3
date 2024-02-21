@@ -6,9 +6,6 @@ use crate::{sum_u64, to_babybear_array, BabyBear};
 // Diffusion matrices for Babybear16 and Babybear24.
 //
 // Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
-// We save them here in their MONTY forms. There true forms can be found in the test section where we test to ensur the MONTY
-// form is correct.
-
 const MATRIX_DIAG_16_BABYBEAR: [u32; 16] = [
     0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
     0x12029f39, 0x694909ce, 0x6d231724, 0x21c3b222, 0x3c0904a5, 0x01d6acda, 0x27705c83, 0x5231c802,
@@ -20,6 +17,7 @@ const MATRIX_DIAG_24_BABYBEAR: [u32; 24] = [
     0x2fc5fbec, 0x770d61b0, 0x5715aae9, 0x03ef0e90, 0x75b6c770, 0x242adf5f, 0x00d0ca4c, 0x36c0e388,
 ];
 
+// Convert the above vectors of u32's into vectors of BabyBear field elements saved in MONTY form.
 const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array(MATRIX_DIAG_16_BABYBEAR);
 const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array(MATRIX_DIAG_24_BABYBEAR);
 

@@ -76,9 +76,8 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [u64; 20] = [
     0x0b3694a940bd2394,
 ];
 
-// For sums of length 8 the usual summation .iter().sum() is faster.
-// For sums of length 12 the two methods are close to equal.
-// For sums of length >= 16 the delayed method (sum_u128) is faster.
+// For sums of length 8 the usual summation .iter().sum() is roughly identical to the the delayed method (sum_u128).
+// For sums of length >= 12 the delayed method (sum_u128) is faster.
 fn matmul_internal_u128<const WIDTH: usize>(
     state: &mut [Goldilocks; WIDTH],
     mat_internal_diag_m_1: [u64; WIDTH],
@@ -103,7 +102,7 @@ impl DiffusionPermutation<Goldilocks, 8> for DiffusionMatrixGoldilocks {}
 
 impl Permutation<[Goldilocks; 12]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [Goldilocks; 12]) {
-        matmul_internal::<Goldilocks, 12>(state, MATRIX_DIAG_12_GOLDILOCKS);
+        matmul_internal_u128::<12>(state, MATRIX_DIAG_12_GOLDILOCKS);
     }
 }
 

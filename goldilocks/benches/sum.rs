@@ -6,45 +6,32 @@ use rand::Rng;
 type F = Goldilocks;
 
 fn bench_sum(c: &mut Criterion) {
-    sum::<1>(c);
-    sum_delayed::<1>(c);
+    const REPS: usize = 1000;
+    const SIZES: [usize; 6] = [1, 2, 4, 8, 12, 16];
 
-    sum::<2>(c);
-    sum_delayed::<2>(c);
-
-    sum::<4>(c);
-    sum_delayed::<4>(c);
-
-    sum::<8>(c);
-    sum_delayed::<8>(c);
-
-    sum::<12>(c);
-    sum_delayed::<12>(c);
-
-    sum::<16>(c);
-    sum_delayed::<16>(c);
-
-    sum::<32>(c);
-    sum_delayed::<32>(c);
+    SIZES.map(|size| {
+        sum::<REPS>(c, size);
+        sum_delayed::<REPS>(c, size);
+    });
 }
 
-fn sum<const N: usize>(c: &mut Criterion) {
+fn sum<const REPS: usize>(c: &mut Criterion, size: usize) {
     let mut rng = rand::thread_rng();
     let mut input = Vec::new();
-    for _ in 0..1000 {
+    for _ in 0..REPS {
         let mut row = Vec::new();
-        for _ in 0..N {
+        for _ in 0..size {
             row.push(rng.gen::<F>())
         }
         input.push(row)
     }
 
-    let id = BenchmarkId::new("Goldilocks sum", N);
+    let id = BenchmarkId::new("Goldilocks sum", size);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| {
             black_box(input);
-            let mut res = [F::zero(); 1000];
-            for i in 0..1000 {
+            let mut res = [F::zero(); REPS];
+            for i in 0..REPS {
                 res[i] = input[i].iter().fold(F::zero(), |x, y| x + *y);
             }
             res
@@ -52,23 +39,23 @@ fn sum<const N: usize>(c: &mut Criterion) {
     });
 }
 
-fn sum_delayed<const N: usize>(c: &mut Criterion) {
+fn sum_delayed<const REPS: usize>(c: &mut Criterion, size: usize) {
     let mut rng = rand::thread_rng();
     let mut input = Vec::new();
-    for _ in 0..1000 {
+    for _ in 0..REPS {
         let mut row = Vec::new();
-        for _ in 0..N {
+        for _ in 0..size {
             row.push(rng.gen::<F>())
         }
         input.push(row)
     }
 
-    let id = BenchmarkId::new("Goldilocks sum_delayed", N);
+    let id = BenchmarkId::new("Goldilocks sum_delayed", size);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| {
             black_box(input);
-            let mut res = [F::zero(); 1000];
-            for i in 0..1000 {
+            let mut res = [F::zero(); REPS];
+            for i in 0..REPS {
                 res[i] = sum_u128(&input[i]);
             }
             res
