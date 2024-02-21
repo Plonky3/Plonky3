@@ -38,7 +38,7 @@ where
 // [ 1 2 3 1 ]
 // [ 1 1 2 3 ]
 // [ 3 1 1 2 ].
-// This is the more efficient than the one above (11 additions vs 16 additions) and leads to a ~5% speed up.
+// This is more efficient than the one above (11 additions vs 16 additions) and leads to a ~5% speed up.
 // Unfortunately it breaks all the tests as we are tesing against the implementation from zkhash.
 // Hence will leave this as a comment for now and implement later.
 // fn apply_m_4<AF>(x: &mut [AF])
