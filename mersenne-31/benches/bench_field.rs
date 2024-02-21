@@ -10,15 +10,19 @@ type F = Mersenne31;
 
 fn bench_field(c: &mut Criterion) {
     let name = "Mersenne31";
+    const REPS: usize = 1000;
     benchmark_inv::<F>(c, name);
-    benchmark_iter_sum::<F, 1000, 4>(c, name);
-    benchmark_iter_sum::<F, 1000, 8>(c, name);
-    benchmark_iter_sum::<F, 1000, 12>(c, name);
+    benchmark_iter_sum::<F, 4, REPS>(c, name);
+    benchmark_iter_sum::<F, 8, REPS>(c, name);
+    benchmark_iter_sum::<F, 12, REPS>(c, name);
 
-    benchmark_add_latency::<F, 10000>(c, name);
-    benchmark_add_throughput::<F, 1000>(c, name);
-    benchmark_sub_latency::<F, 10000>(c, name);
-    benchmark_sub_throughput::<F, 1000>(c, name);
+    // Note that each round of throughput has 10 operations
+    // So we should have 10 * more repitions for latency tests.
+    const L_REPS: usize = 10 * REPS;
+    benchmark_add_latency::<F, L_REPS>(c, name);
+    benchmark_add_throughput::<F, REPS>(c, name);
+    benchmark_sub_latency::<F, L_REPS>(c, name);
+    benchmark_sub_throughput::<F, REPS>(c, name);
 
     c.bench_function("5th_root", |b| {
         b.iter_batched(

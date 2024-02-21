@@ -41,7 +41,9 @@ where
     });
 }
 
-pub fn benchmark_iter_sum<F: Field, const REPS: usize, const N: usize>(
+/// Benchmark the time taken to sum an array [F; N] using .sum() method.
+/// Repeat the summation REPS times.
+pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
