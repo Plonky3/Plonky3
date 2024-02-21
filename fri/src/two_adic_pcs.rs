@@ -24,8 +24,6 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
-use std::time::Instant;
-
 /// We group all of our type bounds into this trait to reduce duplication across signatures.
 pub trait TwoAdicFriPcsGenericConfig: Default {
     type Val: TwoAdicField;
@@ -158,7 +156,6 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
         polynomials: Vec<In>,
         coset_shifts: &[C::Val],
     ) -> (Self::Commitment, Self::ProverData) {
-        let coset_ldes_begin = Instant::now();
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .into_par_iter()
@@ -174,10 +171,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
                 })
                 .collect()
         });
-        std::println!("fri coset ldes: {:?}", coset_ldes_begin.elapsed());
-        let commit_ldes_begin = Instant::now();
         let commitment = self.mmcs.commit(ldes);
-        std::println!("fri commit: {:?}", commit_ldes_begin.elapsed());
         commitment
     }
 }
