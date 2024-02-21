@@ -30,7 +30,3 @@ harness = false
 [[bench]]
 name = "extension"
 harness = false
-
-[[bench]]
-name = "sum"
-harness = false

@@ -354,16 +354,6 @@ impl Div for Goldilocks {
     }
 }
 
-// HELPER FUNCTIONS
-// ================================================================================================
-
-// sum_u128 is slower than .iter().sum() for sums of length < 8
-// sum_u128 and .iter().sum() take essentially identical amount of time for sums of length 8.
-// sum_u128 is faster than .iter().sum() for sums of length > 8
-pub fn sum_u128(vec: &[Goldilocks]) -> Goldilocks {
-    reduce128(vec.iter().map(|x| (x.value as u128)).sum::<u128>())
-}
-
 /// Squares the base N number of times and multiplies the result by the tail value.
 #[inline(always)]
 fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {

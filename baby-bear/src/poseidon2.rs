@@ -2,7 +2,7 @@ use p3_field::AbstractField;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{sum_u64, to_babybear_array, BabyBear};
+use crate::{to_babybear_array, BabyBear};
 
 // Diffusion matrices for Babybear16 and Babybear24.
 //
