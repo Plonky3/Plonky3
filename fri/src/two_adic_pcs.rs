@@ -263,89 +263,65 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
         let inv_denoms = compute_inverse_denominators(&mats_and_points, C::Val::generator());
         std::println!("inv_denoms: {:?}", inv_denoms_begin.elapsed());
 
+        let mut all_opened_values: OpenedValues<C::Challenge> = vec![vec![]; prover_data_and_points.len()];
+        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
+        let mut num_reduced = [0; 32];
+
         let all_opened_values_begin = Instant::now();
         let zero: usize = 0;
         let prover_data_and_points_vec: Vec<(usize, &(&Self::ProverData, &[Vec<C::Challenge>]))> =
             std::iter::zip(zero.., (*prover_data_and_points).iter()).collect();
-        let foobar: Vec::<(OpenedValuesForRound::<C::Challenge>, _)> =
-            prover_data_and_points_vec.par_iter().map(|(i, &(data, points))| {
-                let mats = self.mmcs.get_matrices(data);
-                let opened_values_for_round: &mut OpenedValuesForRound<C::Challenge> = &mut vec![];
-                let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
-                let mut num_reduced = [0; 32];
-                for (mat, points_for_mat) in izip!(mats, points) {
-                    let log_height = log2_strict_usize(mat.height());
-                    let reduced_opening_for_log_height = reduced_openings[log_height]
-                        .get_or_insert_with(|| vec![C::Challenge::zero(); mat.height()]);
-                    debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
+        prover_data_and_points_vec.into_par_iter().for_each(|(i, &(data, points))| {
+            let mats = self.mmcs.get_matrices(data);
+            let opened_values_for_round: &mut OpenedValuesForRound<C::Challenge> = &mut all_opened_values[i];
+            for (mat, points_for_mat) in izip!(mats, *points) {
+                let log_height = log2_strict_usize(mat.height());
+                let reduced_opening_for_log_height = reduced_openings[log_height]
+                    .get_or_insert_with(|| vec![C::Challenge::zero(); mat.height()]);
+                debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
-                    let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                    for &point in points_for_mat {
-                        let _guard =
-                            info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
+                let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
+                for point in points_for_mat {
+                    let _guard =
+                        info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
-                        // Use Barycentric interpolation to evaluate the matrix at the given point.
-                        let ys = info_span!("compute opened values with Lagrange interpolation")
-                            .in_scope(|| {
-                                let (low_coset, _) =
-                                    mat.split_rows(mat.height() >> self.fri.log_blowup);
-                                interpolate_coset(
-                                    &BitReversedMatrixView::new(low_coset),
-                                    C::Val::generator(),
-                                    point,
-                                )
-                            });
-
-                        let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
-                        let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
-
-                        info_span!("reduce rows").in_scope(|| {
-                            reduced_opening_for_log_height
-                                .par_iter_mut()
-                                .zip_eq(mat.par_rows())
-                                // This might be longer, but zip will truncate to smaller subgroup
-                                // (which is ok because it's bitrev)
-                                .zip(inv_denoms.get(&point).unwrap())
-                                .for_each(|((reduced_opening, row), &inv_denom)| {
-                                    let row_sum = alpha_reducer.reduce_base(row);
-                                    *reduced_opening += inv_denom
-                                        * alpha_pow_offset
-                                        * (row_sum - sum_alpha_pows_times_y);
-                                });
+                    // Use Barycentric interpolation to evaluate the matrix at the given point.
+                    let ys = info_span!("compute opened values with Lagrange interpolation")
+                        .in_scope(|| {
+                            let (low_coset, _) =
+                                mat.split_rows(mat.height() >> self.fri.log_blowup);
+                            interpolate_coset(
+                                &BitReversedMatrixView::new(low_coset),
+                                C::Val::generator(),
+                                point,
+                            )
                         });
 
-                        num_reduced[log_height] += mat.width();
-                        opened_values_for_mat.push(ys);
-                    }
-                }
-                ((*opened_values_for_round).clone(), (num_reduced, reduced_openings))
-            })
-            .collect();
-        let (all_opened_values, reduced): (Vec<OpenedValuesForRound<C::Challenge>>, Vec<_>) =
-            foobar.into_iter().unzip(); 
-        let (num_reduced_partials, reduced_openings_partials): (Vec<_>, Vec<_>) = reduced.into_iter().unzip();
-        let mut reduced_openings = reduced_openings_partials[0].clone();
-        for reduced_opening_partial in reduced_openings_partials.into_iter().skip(1) {
-            for i in 0..reduced_opening_partial.len() {
-                let reduced_opening_partial_elem = reduced_opening_partial[i].clone();
-                match (reduced_opening_partial_elem, reduced_openings[i].clone()) {
-                    (Some(reduced_opening_partial_elem), Some(_)) => {
-                        reduced_openings[i] = reduced_openings[i].clone().map(|reduced_openings_i| {
-                            let mut reduced_openings_i = reduced_openings_i.clone();
-                            for j in 0..reduced_opening_partial_elem.len() {
-                                reduced_openings_i[j] += reduced_opening_partial_elem[j];
-                            }
-                            reduced_openings_i
-                        })
-                    },
-                    (None, _) => {},
-                    (Some(reduced_opening_partial_elem), None) => {
-                        reduced_openings[i] = Some(reduced_opening_partial_elem);
-                    }
+                    let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+                    let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
+
+                    info_span!("reduce rows").in_scope(|| {
+                        reduced_opening_for_log_height
+                            .par_iter_mut()
+                            .zip_eq(mat.par_rows())
+                            // This might be longer, but zip will truncate to smaller subgroup
+                            // (which is ok because it's bitrev)
+                            .zip(inv_denoms.get(&point).unwrap())
+                            .for_each(|((reduced_opening, row), &inv_denom)| {
+                                let row_sum = alpha_reducer.reduce_base(row);
+                                *reduced_opening += inv_denom
+                                    * alpha_pow_offset
+                                    * (row_sum - sum_alpha_pows_times_y);
+                            });
+                    });
+
+                    num_reduced[log_height] += mat.width();
+                    opened_values_for_mat.push(ys);
                 }
             }
-        }
+        });
         std::println!("all_opened_values: {:?}", all_opened_values_begin.elapsed());
+
 
         let (fri_proof, query_indices) = prover::prove(&self.fri, &reduced_openings, challenger);
 
