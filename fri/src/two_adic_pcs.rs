@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger, GrindingChallenger};
-use p3_commit::{DirectMmcs, Mmcs, OpenedValues, Pcs, UnivariatePcs, UnivariatePcsWithLde};
+use p3_commit::{DirectMmcs, Mmcs, OpenedValues, OpenedValuesForRound, Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
@@ -23,6 +23,8 @@ use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
+
+use std::time::Instant;
 
 /// We group all of our type bounds into this trait to reduce duplication across signatures.
 pub trait TwoAdicFriPcsGenericConfig: Default {
@@ -117,7 +119,8 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
     Pcs<C::Val, In> for TwoAdicFriPcs<C> 
     where C::FriMmcs: Send,
           <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync,
 {
     type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
     type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
@@ -134,7 +137,8 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
     where C::FriMmcs: Send,
           <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync,
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
 
@@ -186,8 +190,10 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
     where C::FriMmcs: Send,
+          C::Challenge: Send + Sync + Sized,
           <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync + Sized,
+          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
     #[instrument(name = "open_multi_batches", skip_all)]
     fn open_multi_batches(
@@ -235,6 +241,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
 
         */
 
+        let mats_and_points_begin = Instant::now();
         let mats_and_points = prover_data_and_points
             .iter()
             .map(|(data, points)| (self.mmcs.get_matrices(data), *points))
@@ -246,20 +253,27 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
             .map(|mat| mat.width())
             .max()
             .unwrap();
+        std::println!("mats_and_points: {:?}", mats_and_points_begin.elapsed());
 
         let alpha_reducer = PowersReducer::<C::Val, C::Challenge>::new(alpha, max_width);
 
+        let inv_denoms_begin = Instant::now();
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
         let inv_denoms = compute_inverse_denominators(&mats_and_points, C::Val::generator());
+        std::println!("inv_denoms: {:?}", inv_denoms_begin.elapsed());
 
-        let mut all_opened_values: OpenedValues<C::Challenge> = vec![];
+        let mut all_opened_values: OpenedValues<C::Challenge> = vec![vec![]; prover_data_and_points.len()];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
-        for (data, points) in prover_data_and_points {
+        let all_opened_values_begin = Instant::now();
+        let zero: usize = 0;
+        let prover_data_and_points_vec: Vec<(usize, &(&Self::ProverData, &[Vec<C::Challenge>]))> =
+            std::iter::zip(zero.., (*prover_data_and_points).iter()).collect();
+        prover_data_and_points_vec.into_par_iter().for_each(|(i, &(data, points))| {
             let mats = self.mmcs.get_matrices(data);
-            let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
+            let opened_values_for_round: &mut OpenedValuesForRound<C::Challenge> = &mut all_opened_values[i];
             for (mat, points_for_mat) in izip!(mats, *points) {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
@@ -267,7 +281,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                for &point in points_for_mat {
+                for point in points_for_mat {
                     let _guard =
                         info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
@@ -305,10 +319,13 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
                     opened_values_for_mat.push(ys);
                 }
             }
-        }
+        });
+        std::println!("all_opened_values: {:?}", all_opened_values_begin.elapsed());
+
 
         let (fri_proof, query_indices) = prover::prove(&self.fri, &reduced_openings, challenger);
 
+        let query_openings_begin = Instant::now();
         let query_openings = query_indices
             .into_iter()
             .map(|index| {
@@ -324,6 +341,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
                     .collect()
             })
             .collect();
+        std::println!("query_openings: {:?}", query_openings_begin.elapsed());
 
         (
             all_opened_values,
