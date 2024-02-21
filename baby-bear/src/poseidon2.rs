@@ -1,3 +1,4 @@
+use p3_field::AbstractField;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
@@ -21,35 +22,35 @@ const MATRIX_DIAG_24_BABYBEAR: [u32; 24] = [
 const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array(MATRIX_DIAG_16_BABYBEAR);
 const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array(MATRIX_DIAG_24_BABYBEAR);
 
-fn matmul_internal<const WIDTH: usize>(
-    state: &mut [BabyBear; WIDTH],
+fn matmul_internal<AF: AbstractField<F = BabyBear>, const WIDTH: usize>(
+    state: &mut [AF; WIDTH],
     mat_internal_diag_m_1: [BabyBear; WIDTH],
 ) {
-    let sum = sum_u64(state);
+    let sum: AF = state.iter().cloned().sum();
     for i in 0..WIDTH {
-        state[i] *= mat_internal_diag_m_1[i];
-        state[i] += sum;
+        state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
+        state[i] += sum.clone();
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabybear;
 
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
-    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        matmul_internal::<16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
+impl<AF: AbstractField<F = BabyBear>> Permutation<[AF; 16]> for DiffusionMatrixBabybear {
+    fn permute_mut(&self, state: &mut [AF; 16]) {
+        matmul_internal::<AF, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
     }
 }
 
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
+impl<AF: AbstractField<F = BabyBear>> DiffusionPermutation<AF, 16> for DiffusionMatrixBabybear {}
 
-impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
-    fn permute_mut(&self, state: &mut [BabyBear; 24]) {
-        matmul_internal::<24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
+impl<AF: AbstractField<F = BabyBear>> Permutation<[AF; 24]> for DiffusionMatrixBabybear {
+    fn permute_mut(&self, state: &mut [AF; 24]) {
+        matmul_internal::<AF, 24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
     }
 }
 
-impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}
+impl<AF: AbstractField<F = BabyBear>> DiffusionPermutation<AF, 24> for DiffusionMatrixBabybear {}
 
 #[cfg(test)]
 mod tests {
