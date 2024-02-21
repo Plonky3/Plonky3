@@ -179,6 +179,41 @@ impl AbstractField for BabyBear {
     fn generator() -> Self {
         Self::from_canonical_u32(0x1f)
     }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::one(),
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => self.square().square() * *self,
+            6 => self.square().cube(),
+            7 => fast_exp_7(*self),
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[must_use]
+    #[inline]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        let mut res = self.value as i32;
+        for _ in 0..power_log {
+            // Use monty_half_reduce to get a result in (-P, P).
+            // This is fine as x^2 will always be positive.
+            res = monty_half_reduce((res as i64 * res as i64) as u64)
+        }
+
+        if res > 0 {
+            BabyBear { value: res as u32 }
+        } else {
+            BabyBear {
+                value: (P as i32 + res) as u32,
+            }
+        }
+    }
 }
 
 impl Field for BabyBear {
@@ -434,10 +469,109 @@ fn monty_reduce(x: u64) -> u32 {
     x_sub_u_hi.wrapping_add(corr)
 }
 
+/// Montgomery reduction of a value in `0..P << MONTY_BITS`.
+/// Unlike the full reduction, here we ouput something in (-P, P).
+/// This avoids branching.
+#[inline]
+fn monty_half_reduce(x: u64) -> i32 {
+    let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
+    let u = t * (P as u64);
+
+    ((x as i64 - u as i64) >> MONTY_BITS) as i32
+}
+
+#[inline]
+pub fn sum_u64(vec: &[BabyBear]) -> BabyBear {
+    BabyBear {
+        value: (vec.iter().map(|x| (x.value as u64)).sum::<u64>() % (P as u64)) as u32,
+    }
+}
+
+const MONTY_SQUARE_BITS: u32 = 2 * MONTY_BITS;
+const MONTY_SQUARE_MU: u64 = 0x383fffff88000001;
+// (225 << 54) - (1 << 31) + (1 << 27) - 1
+const MONTY_SQUARE_MASK: u64 = ((1u128 << MONTY_SQUARE_BITS) - 1) as u64;
+
+/// Montgomery reduction of a value in `0..P << MONTY_BITS^2`.
+/// Given x, the output is in [0, P) and equal to x (1 << MONTY_BITS)^{-2} mod P
+#[inline]
+#[must_use]
+pub fn monty_square_reduce(x: u128) -> u32 {
+    let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
+    let u = (t as u128) * (P as u128);
+
+    let (x_sub_u, over) = x.overflowing_sub(u);
+    let x_sub_u_hi = (x_sub_u >> MONTY_SQUARE_BITS) as u32;
+    let corr = if over { P } else { 0 };
+    x_sub_u_hi.wrapping_add(corr)
+}
+
+/// Montgomery reduction of a value in `0..P << MONTY_BITS^2`.
+/// Given x, the output is in (-P, P) and equal to x (1 << MONTY_BITS)^{-2} mod P
+#[inline]
+#[must_use]
+pub fn monty_half_square_reduce(x: u128) -> i32 {
+    let t = (x as u64).wrapping_mul(MONTY_SQUARE_MU) & MONTY_SQUARE_MASK;
+    let u = (t as u128) * (P as u128);
+
+    (x >> MONTY_SQUARE_BITS) as i32 - (u >> MONTY_SQUARE_BITS) as i32
+}
+
+#[inline]
+pub fn babybear_triple_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear) -> BabyBear {
+    let x01 = x0.value as u64 * x1.value as u64;
+    BabyBear {
+        value: monty_square_reduce(x01 as u128 * x2.value as u128),
+    }
+}
+
+const MONTY_CUBE_TERM: u128 = 0x1a5dffffc7c0000077ffffff;
+// (225 << 85) - (225 << 81) - (225 << 54) + (1 << 31) - (1 << 27) - 1;
+const MONTY_CUBE_BITS: u32 = 3 * MONTY_BITS;
+const MONTY_CUBE_MU: u128 = (1u128 << MONTY_CUBE_BITS) - MONTY_CUBE_TERM;
+const MONTY_CUBE_MASK: u128 = (1u128 << MONTY_CUBE_BITS) - 1;
+
+/// Montgomery reduction of a value in `0..P << MONTY_BITS^3`.
+/// Given x, the output is in 0..P and equal to x (1 << MONTY_BITS)^{-3} mod P
+#[inline]
+#[must_use]
+fn monty_cube_reduce(x: u128) -> u32 {
+    let t = x.wrapping_mul(MONTY_CUBE_MU) & MONTY_CUBE_MASK;
+    let u = t * (P as u128);
+
+    let (x_sub_u, over) = x.overflowing_sub(u);
+    let x_sub_u_hi = (x_sub_u >> MONTY_CUBE_BITS) as u32;
+    let corr = if over { P } else { 0 };
+    x_sub_u_hi.wrapping_add(corr)
+}
+
+#[inline]
+pub fn babybear_quad_mul(x0: BabyBear, x1: BabyBear, x2: BabyBear, x3: BabyBear) -> BabyBear {
+    let x01 = x0.value as u64 * x1.value as u64;
+    let x23 = x2.value as u64 * x3.value as u64;
+    BabyBear {
+        value: monty_cube_reduce(x01 as u128 * x23 as u128),
+    }
+}
+
+// Using delayed reductions to speed up x -> x^7.
+#[inline]
+pub fn fast_exp_7(x1: BabyBear) -> BabyBear {
+    let x1u64 = x1.value as u64;
+    let x1u128 = x1.value as u128;
+    let x10 = x1u64 * x1u64;
+    let x11 = monty_half_square_reduce(x10 as u128 * x1u128);
+    let x110 = x11 as i64 * x11 as i64; // Always Positive
+    BabyBear {
+        value: monty_square_reduce(x110 as u128 * x1u128),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeField64;
     use p3_field_testing::{test_field, test_two_adic_field};
+    use rand::Rng;
 
     use super::*;
 
@@ -537,6 +671,34 @@ mod tests {
         let m2_serialized = serde_json::to_string(&m2).unwrap();
         let m2_deserialized: F = serde_json::from_str(&m2_serialized).unwrap();
         assert_eq!(m2, m2_deserialized);
+    }
+
+    #[test]
+    fn test_triple_mul() {
+        // Picked 4 numbers roughly at random.
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let input = rng.gen::<[F; 3]>();
+
+            let mul_1 = input[0] * input[1] * input[2];
+            let mul_2 = babybear_triple_mul(input[0], input[1], input[2]);
+
+            assert_eq!(mul_1, mul_2);
+        }
+    }
+
+    #[test]
+    fn test_quad_mul() {
+        // Picked 4 numbers roughly at random.
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let input = rng.gen::<[F; 4]>();
+
+            let mul_1 = input[0] * input[1] * input[2] * input[3];
+            let mul_2 = babybear_quad_mul(input[0], input[1], input[2], input[3]);
+
+            assert_eq!(mul_1, mul_2);
+        }
     }
 
     test_field!(crate::BabyBear);
