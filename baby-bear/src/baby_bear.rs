@@ -11,7 +11,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 /// The Baby Bear prime
-pub(crate) const P: u32 = 0x78000001;
+const P: u32 = 0x78000001;
 
 // We want a different set of parameters on ARM/NEON than elsewhere. In particular, we want ARM to
 // use 31 bits for the limb size, because that lets us use the SQDMULH instruction to do really fast
