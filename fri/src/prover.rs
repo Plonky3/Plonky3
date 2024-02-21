@@ -6,10 +6,11 @@ use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{DirectMmcs, Mmcs};
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
-use crate::{CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriProof, TwoAdicFriPcsGenericConfig, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<F, M, Challenger>(
@@ -19,8 +20,10 @@ pub fn prove<F, M, Challenger>(
 ) -> (FriProof<F, M, Challenger::Witness>, Vec<usize>)
 where
     F: TwoAdicField,
-    M: DirectMmcs<F>,
+    M: DirectMmcs<F> + Send + Sync,
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+    <M as Mmcs<F>>::Proof: Send,
+    <M as Mmcs<F>>::ProverData: Send + Sync,
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
@@ -34,7 +37,7 @@ where
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
-            .iter()
+            .par_iter()
             .map(|&index| answer_query(config, &commit_phase_result.data, index))
             .collect()
     });

@@ -114,7 +114,11 @@ pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
 }
 
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
-        Pcs<C::Val, In> for TwoAdicFriPcs<C> {
+    Pcs<C::Val, In> for TwoAdicFriPcs<C> 
+    where C::FriMmcs: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync
+{
     type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
     type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
     type Proof = TwoAdicFriPcsProof<C>;
@@ -128,6 +132,9 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
 
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
+    where C::FriMmcs: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
 
@@ -178,6 +185,9 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
 
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
+    where C::FriMmcs: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync
 {
     #[instrument(name = "open_multi_batches", skip_all)]
     fn open_multi_batches(
