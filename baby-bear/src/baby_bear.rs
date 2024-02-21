@@ -406,10 +406,8 @@ pub(crate) const fn to_babybear_array<const N: usize>(input: [u32; N]) -> [BabyB
         if i == N {
             break;
         }
-        output[i] = BabyBear {
-            value: to_monty(input[i]),
-        };
-        i += 1
+        output[i].value = to_monty(input[i]);
+        i += 1;
     }
     output
 }
