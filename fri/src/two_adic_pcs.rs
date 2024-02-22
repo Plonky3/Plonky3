@@ -167,7 +167,7 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
-                .into_par_iter()
+                .par_iter()
                 .zip_eq(coset_shifts)
                 .map(|(poly, coset_shift)| {
                     let shift = C::Val::generator() / *coset_shift;
@@ -267,11 +267,11 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
             .collect();
 
         let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = ys_outer
-            .into_par_iter()
+            .par_iter()
             .map(|(data, points)| {
                 let mats = self.mmcs.get_matrices(data);
-                izip!(mats, Vec::from(points)).into_iter().map(|(mat, points_for_mat)| {
-                        points_for_mat.into_iter().map(|&point| {
+                izip!(mats, (*points).clone()).collect::<Vec<_>>().par_iter().map(|(mat, points_for_mat)| {
+                        points_for_mat.par_iter().map(|&point| {
                                 // Use Barycentric interpolation to evaluate the matrix at the given point.
                                 info_span!("compute opened values with Lagrange interpolation")
                                     .in_scope(|| {
