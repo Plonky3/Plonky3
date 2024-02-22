@@ -4,12 +4,12 @@ use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
-use p3_mersenne_31::Mersenne31;
+use p3_goldilocks::Goldilocks;
 
-type F = Mersenne31;
+type F = Goldilocks;
 
 fn bench_field(c: &mut Criterion) {
-    let name = "Mersenne31";
+    let name = "Goldilocks";
     const REPS: usize = 1000;
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
@@ -24,14 +24,14 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
-    c.bench_function("5th_root", |b| {
+    c.bench_function("7th_root", |b| {
         b.iter_batched(
             rand::random::<F>,
-            |x| x.exp_u64(1717986917),
+            |x| x.exp_u64(10540996611094048183),
             BatchSize::SmallInput,
         )
     });
 }
 
-criterion_group!(mersenne31_arithmetics, bench_field);
-criterion_main!(mersenne31_arithmetics);
+criterion_group!(goldilocks_arithmetic, bench_field);
+criterion_main!(goldilocks_arithmetic);

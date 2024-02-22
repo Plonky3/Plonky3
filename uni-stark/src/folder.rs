@@ -1,15 +1,15 @@
 use p3_air::{AirBuilder, TwoRowMatrixView};
 use p3_field::{AbstractField, Field};
 
-use crate::StarkGenericConfig;
+use crate::{PackedChallenge, PackedVal, StarkGenericConfig};
 
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
-    pub main: TwoRowMatrixView<'a, SC::PackedVal>,
-    pub is_first_row: SC::PackedVal,
-    pub is_last_row: SC::PackedVal,
-    pub is_transition: SC::PackedVal,
+    pub main: TwoRowMatrixView<'a, PackedVal<SC>>,
+    pub is_first_row: PackedVal<SC>,
+    pub is_last_row: PackedVal<SC>,
+    pub is_transition: PackedVal<SC>,
     pub alpha: SC::Challenge,
-    pub accumulator: SC::PackedChallenge,
+    pub accumulator: PackedChallenge<SC>,
 }
 
 pub struct VerifierConstraintFolder<'a, Challenge> {
@@ -23,9 +23,9 @@ pub struct VerifierConstraintFolder<'a, Challenge> {
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type F = SC::Val;
-    type Expr = SC::PackedVal;
-    type Var = SC::PackedVal;
-    type M = TwoRowMatrixView<'a, SC::PackedVal>;
+    type Expr = PackedVal<SC>;
+    type Var = PackedVal<SC>;
+    type M = TwoRowMatrixView<'a, PackedVal<SC>>;
 
     fn main(&self) -> Self::M {
         self.main
@@ -48,8 +48,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x: SC::PackedVal = x.into();
-        self.accumulator *= SC::PackedChallenge::from_f(self.alpha);
+        let x: PackedVal<SC> = x.into();
+        self.accumulator *= PackedChallenge::<SC>::from_f(self.alpha);
         self.accumulator += x;
     }
 }
