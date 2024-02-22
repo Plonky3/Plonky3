@@ -287,18 +287,15 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
                     }).collect()
             }).collect();
 
-        println!("prover_data_and_points.len() = {:?}", prover_data_and_points.len());
         for (i, (data, points)) in prover_data_and_points.into_iter().enumerate() {
             let mats = self.mmcs.get_matrices(data);
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
-            println!("mats.len() (outer) = {:?}", mats.len());
             for (j, (mat, points_for_mat)) in izip!(mats, *points).enumerate() {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![C::Challenge::zero(); mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
-                println!("points_for_mat.len() = {:?}", points_for_mat.len());
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
                 for (k, &point) in points_for_mat.into_iter().enumerate() {
                     let _guard =
