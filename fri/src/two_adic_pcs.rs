@@ -257,10 +257,15 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
-        let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = prover_data_and_points.into_iter().map(|(data, points)| {
+        let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = (*prover_data_and_points)
+            .into_iter()
+            .map(|(pd, cs)| { (*pd, (*cs).into_iter().collect::<Vec<&Vec<C::Challenge>>>()) })
+            .collect::<Vec<(&Self::ProverData, Vec<&Vec<C::Challenge>>)>>()
+            .into_par_iter()
+            .map(|(data, points)| {
                 let mats = self.mmcs.get_matrices(data);
                 izip!(mats, *points).into_iter().map(|(mat, points_for_mat)| {
-                        points_for_mat.into_iter().map(|(&point)| {
+                        points_for_mat.into_iter().map(|&point| {
                                 // Use Barycentric interpolation to evaluate the matrix at the given point.
                                 info_span!("compute opened values with Lagrange interpolation")
                                     .in_scope(|| {
