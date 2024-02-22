@@ -257,31 +257,44 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
-        for (data, points) in prover_data_and_points {
+        let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = prover_data_and_points.into_iter().map(|(data, points)| {
+                let mats = self.mmcs.get_matrices(data);
+                izip!(mats, *points).into_iter().map(|(mat, points_for_mat)| {
+                        points_for_mat.into_iter().map(|(&point)| {
+                                // Use Barycentric interpolation to evaluate the matrix at the given point.
+                                info_span!("compute opened values with Lagrange interpolation")
+                                    .in_scope(|| {
+                                        let (low_coset, _) =
+                                            mat.split_rows(mat.height() >> self.fri.log_blowup);
+                                        interpolate_coset(
+                                            &BitReversedMatrixView::new(low_coset),
+                                            C::Val::generator(),
+                                            point,
+                                        )
+                                    })
+                            }).collect()
+                    }).collect()
+            }).collect();
+
+        println!("prover_data_and_points.len() = {:?}", prover_data_and_points.len());
+        for (i, (data, points)) in prover_data_and_points.into_iter().enumerate() {
             let mats = self.mmcs.get_matrices(data);
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
-            for (mat, points_for_mat) in izip!(mats, *points) {
+            println!("mats.len() (outer) = {:?}", mats.len());
+            for (j, (mat, points_for_mat)) in izip!(mats, *points).enumerate() {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![C::Challenge::zero(); mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                println!("points_for_mat.len() = {:?}", points_for_mat.len());
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                for &point in points_for_mat {
+                for (k, &point) in points_for_mat.into_iter().enumerate() {
                     let _guard =
                         info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
-                    let ys = info_span!("compute opened values with Lagrange interpolation")
-                        .in_scope(|| {
-                            let (low_coset, _) =
-                                mat.split_rows(mat.height() >> self.fri.log_blowup);
-                            interpolate_coset(
-                                &BitReversedMatrixView::new(low_coset),
-                                C::Val::generator(),
-                                point,
-                            )
-                        });
+                    let ys = ys_outer[i][j][k].clone();
 
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
