@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn test_neg_own_inverse() {
         let vec = packed_from_random(0xee4df174b850a35f);
-        let res = --vec;
+        let res = -(-vec);
         assert_eq!(res, vec);
     }
 
@@ -1144,6 +1144,7 @@ mod tests {
         let vec = PackedBabyBearAVX2(arr);
         let vec_res = -vec;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
@@ -1156,6 +1157,7 @@ mod tests {
         let vec = PackedBabyBearAVX2(arr);
         let vec_res = -vec;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }

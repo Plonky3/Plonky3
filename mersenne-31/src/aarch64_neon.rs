@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn test_neg_own_inverse() {
         let vec = packed_from_canonical([0x25335335, 0x32d48910, 0x74468a5f, 0x61906a18]);
-        let res = --vec;
+        let res = -(-vec);
         assert_eq!(res, vec);
     }
 
@@ -1013,6 +1013,7 @@ mod tests {
         let vec = PackedMersenne31Neon(arr);
         let vec_res = -vec;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
@@ -1025,6 +1026,7 @@ mod tests {
         let vec = PackedMersenne31Neon(arr);
         let vec_res = -vec;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
