@@ -1,5 +1,5 @@
 use p3_field::AbstractField;
-use p3_poseidon2::DiffusionPermutation;
+use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
 use crate::{to_babybear_array, BabyBear};
@@ -7,38 +7,29 @@ use crate::{to_babybear_array, BabyBear};
 // Diffusion matrices for Babybear16 and Babybear24.
 //
 // Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
-const MATRIX_DIAG_16_BABYBEAR: [u32; 16] = [
+const MATRIX_DIAG_16_BABYBEAR_U32: [u32; 16] = [
     0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
     0x12029f39, 0x694909ce, 0x6d231724, 0x21c3b222, 0x3c0904a5, 0x01d6acda, 0x27705c83, 0x5231c802,
 ];
 
-const MATRIX_DIAG_24_BABYBEAR: [u32; 24] = [
+const MATRIX_DIAG_24_BABYBEAR_U32: [u32; 24] = [
     0x409133f0, 0x1667a8a1, 0x06a6c7b6, 0x6f53160e, 0x273b11d1, 0x03176c5d, 0x72f9bbf9, 0x73ceba91,
     0x5cdef81d, 0x01393285, 0x46daee06, 0x065d7ba6, 0x52d72d6f, 0x05dd05e0, 0x3bab4b63, 0x6ada3842,
     0x2fc5fbec, 0x770d61b0, 0x5715aae9, 0x03ef0e90, 0x75b6c770, 0x242adf5f, 0x00d0ca4c, 0x36c0e388,
 ];
 
-// Convert the above vectors of u32's into vectors of BabyBear field elements saved in MONTY form.
-const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array(MATRIX_DIAG_16_BABYBEAR);
-const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array(MATRIX_DIAG_24_BABYBEAR);
-
-fn matmul_internal<AF: AbstractField<F = BabyBear>, const WIDTH: usize>(
-    state: &mut [AF; WIDTH],
-    mat_internal_diag_m_1: [BabyBear; WIDTH],
-) {
-    let sum: AF = state.iter().cloned().sum();
-    for i in 0..WIDTH {
-        state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
-        state[i] += sum.clone();
-    }
-}
+// Convert the above arrays of u32's into arrays of BabyBear field elements saved in MONTY form.
+const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] =
+    to_babybear_array(MATRIX_DIAG_16_BABYBEAR_U32);
+const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
+    to_babybear_array(MATRIX_DIAG_24_BABYBEAR_U32);
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabybear;
 
 impl<AF: AbstractField<F = BabyBear>> Permutation<[AF; 16]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [AF; 16]) {
-        matmul_internal::<AF, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
+        matmul_internal::<BabyBear, AF, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
     }
 }
 
@@ -46,7 +37,7 @@ impl<AF: AbstractField<F = BabyBear>> DiffusionPermutation<AF, 16> for Diffusion
 
 impl<AF: AbstractField<F = BabyBear>> Permutation<[AF; 24]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [AF; 24]) {
-        matmul_internal::<AF, 24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
+        matmul_internal::<BabyBear, AF, 24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
     }
 }
 
@@ -65,24 +56,16 @@ mod tests {
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
     use zkhash::poseidon2::poseidon2_instance_babybear::{POSEIDON2_BABYBEAR_16_PARAMS, RC16};
 
-    use super::{
-        BabyBear, DiffusionMatrixBabybear, MATRIX_DIAG_16_BABYBEAR, MATRIX_DIAG_16_BABYBEAR_MONTY,
-        MATRIX_DIAG_24_BABYBEAR, MATRIX_DIAG_24_BABYBEAR_MONTY,
-    };
+    use super::*;
 
     // These are currently saved as their true values. It will be far more efficient to save them in Monty Form.
 
     #[test]
-    fn const_16() {
-        let monty_constant = MATRIX_DIAG_16_BABYBEAR.map(BabyBear::from_canonical_u32);
-
+    fn test_poseidon2_constants() {
+        let monty_constant = MATRIX_DIAG_16_BABYBEAR_U32.map(BabyBear::from_canonical_u32);
         assert_eq!(monty_constant, MATRIX_DIAG_16_BABYBEAR_MONTY);
-    }
 
-    #[test]
-    fn const_24() {
-        let monty_constant = MATRIX_DIAG_24_BABYBEAR.map(BabyBear::from_canonical_u32);
-
+        let monty_constant = MATRIX_DIAG_24_BABYBEAR_U32.map(BabyBear::from_canonical_u32);
         assert_eq!(monty_constant, MATRIX_DIAG_24_BABYBEAR_MONTY);
     }
 

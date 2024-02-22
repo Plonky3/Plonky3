@@ -6,9 +6,9 @@ use p3_field::AbstractField;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
-use crate::Goldilocks;
+use crate::{to_goldilocks_array, Goldilocks};
 
-pub const MATRIX_DIAG_8_GOLDILOCKS: [u64; 8] = [
+pub const MATRIX_DIAG_8_GOLDILOCKS_U64: [u64; 8] = [
     0xa98811a1fed4e3a5,
     0x1cc48b54f377e2a0,
     0xe40cd4f6c5609a26,
@@ -19,7 +19,7 @@ pub const MATRIX_DIAG_8_GOLDILOCKS: [u64; 8] = [
     0x3f7af9125da962fe,
 ];
 
-pub const MATRIX_DIAG_12_GOLDILOCKS: [u64; 12] = [
+pub const MATRIX_DIAG_12_GOLDILOCKS_U64: [u64; 12] = [
     0xc3b6c08e23ba9300,
     0xd84b5de94a324fb6,
     0x0d0c371c5b35b84f,
@@ -34,7 +34,7 @@ pub const MATRIX_DIAG_12_GOLDILOCKS: [u64; 12] = [
     0xd27dbb6944917b60,
 ];
 
-pub const MATRIX_DIAG_16_GOLDILOCKS: [u64; 16] = [
+pub const MATRIX_DIAG_16_GOLDILOCKS_U64: [u64; 16] = [
     0xde9b91a467d6afc0,
     0xc5f16b9c76a9be17,
     0x0ab0fef2d540ac55,
@@ -53,7 +53,7 @@ pub const MATRIX_DIAG_16_GOLDILOCKS: [u64; 16] = [
     0x774487b8c40089bb,
 ];
 
-pub const MATRIX_DIAG_20_GOLDILOCKS: [u64; 20] = [
+pub const MATRIX_DIAG_20_GOLDILOCKS_U64: [u64; 20] = [
     0x95c381fda3b1fa57,
     0xf36fe9eb1288f42c,
     0x89f5dcdfef277944,
@@ -76,12 +76,21 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [u64; 20] = [
     0x0b3694a940bd2394,
 ];
 
+// Convert the above arrays of u64's into arrays of Goldilocks field elements.
+const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array(MATRIX_DIAG_8_GOLDILOCKS_U64);
+const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] =
+    to_goldilocks_array(MATRIX_DIAG_12_GOLDILOCKS_U64);
+const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] =
+    to_goldilocks_array(MATRIX_DIAG_16_GOLDILOCKS_U64);
+const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] =
+    to_goldilocks_array(MATRIX_DIAG_20_GOLDILOCKS_U64);
+
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixGoldilocks;
 
 impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 8]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [AF; 8]) {
-        matmul_internal::<AF, 8>(state, MATRIX_DIAG_8_GOLDILOCKS);
+        matmul_internal::<Goldilocks, AF, 8>(state, MATRIX_DIAG_8_GOLDILOCKS);
     }
 }
 
@@ -89,7 +98,7 @@ impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 8> for Diffusio
 
 impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 12]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [AF; 12]) {
-        matmul_internal::<AF, 12>(state, MATRIX_DIAG_12_GOLDILOCKS);
+        matmul_internal::<Goldilocks, AF, 12>(state, MATRIX_DIAG_12_GOLDILOCKS);
     }
 }
 
@@ -97,7 +106,7 @@ impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 12> for Diffusi
 
 impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 16]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [AF; 16]) {
-        matmul_internal::<AF, 16>(state, MATRIX_DIAG_16_GOLDILOCKS);
+        matmul_internal::<Goldilocks, AF, 16>(state, MATRIX_DIAG_16_GOLDILOCKS);
     }
 }
 
@@ -105,7 +114,7 @@ impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 16> for Diffusi
 
 impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 20]> for DiffusionMatrixGoldilocks {
     fn permute_mut(&self, state: &mut [AF; 20]) {
-        matmul_internal::<AF, 20>(state, MATRIX_DIAG_20_GOLDILOCKS);
+        matmul_internal::<Goldilocks, AF, 20>(state, MATRIX_DIAG_20_GOLDILOCKS);
     }
 }
 
@@ -126,7 +135,22 @@ mod tests {
         POSEIDON2_GOLDILOCKS_12_PARAMS, POSEIDON2_GOLDILOCKS_8_PARAMS, RC12, RC8,
     };
 
-    use crate::{DiffusionMatrixGoldilocks, Goldilocks};
+    use super::*;
+
+    #[test]
+    fn test_poseidon2_constants() {
+        let monty_constant = MATRIX_DIAG_8_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
+        assert_eq!(monty_constant, MATRIX_DIAG_8_GOLDILOCKS);
+
+        let monty_constant = MATRIX_DIAG_12_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
+        assert_eq!(monty_constant, MATRIX_DIAG_12_GOLDILOCKS);
+
+        let monty_constant = MATRIX_DIAG_16_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
+        assert_eq!(monty_constant, MATRIX_DIAG_16_GOLDILOCKS);
+
+        let monty_constant = MATRIX_DIAG_20_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
+        assert_eq!(monty_constant, MATRIX_DIAG_20_GOLDILOCKS);
+    }
 
     fn goldilocks_from_ark_ff(input: FpGoldiLocks) -> Goldilocks {
         let as_bigint = input.into_bigint();

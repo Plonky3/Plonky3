@@ -424,6 +424,22 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
 }
 
+/// Convert a constant u64 array into a constant Goldilocks array.
+#[inline]
+#[must_use]
+pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
+    let mut output = [Goldilocks { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = input[i];
+        i += 1;
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field_testing::{test_field, test_two_adic_field};
