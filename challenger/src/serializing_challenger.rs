@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_util::log2_ceil_u64;
 
 use p3_field::{ExtensionField, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
@@ -10,12 +11,30 @@ use crate::{
     CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger, HashChallenger,
 };
 
+/// Given a challenger that can observe and sample bytes, produces a challenger that is able to
+/// sample and observe field elements of a `PrimeField32`.
+///
+/// **Observing**:
+/// -  Takes a field element will serialize it into a byte array and observe each byte.
+///
+/// **Sampling**:
+/// -  Samples a field element in a prime field of size `p` by sampling unofrmly an element in the
+///    range (0..1 << log_2(p)). This avoids modulo bias.
 #[derive(Clone, Debug)]
 pub struct SerializingChallenger32<F, Inner> {
     inner: Inner,
     _marker: PhantomData<F>,
 }
 
+/// Given a challenger that can observe and sample bytes, produces a challenger that is able to
+/// sample and observe field elements of a `PrimeField64` field.
+///
+/// **Observing**:
+/// -  Takes a field element will serialize it into a byte array and observe each byte.
+///
+/// **Sampling**:
+/// -  Samples a field element in a prime field of size `p` by sampling unofrmly an element in the
+///    range (0..1 << log_2(p)). This avoids modulo bias.
 #[derive(Clone, Debug)]
 pub struct SerializingChallenger64<F, Inner> {
     inner: Inner,
@@ -65,9 +84,11 @@ where
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
+        let log_size = log2_ceil_u64(F::ORDER_U64).saturating_sub(1);
+        let bound = (1 << log_size) - 1;
         let sample_base = |inner: &mut Inner| {
-            let bytes = inner.sample_array::<4>();
-            F::from_wrapped_u32(u32::from_le_bytes(bytes))
+            let value = u32::from_le_bytes(inner.sample_array::<4>());
+            F::from_canonical_u32(value & bound)
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
     }
@@ -156,9 +177,11 @@ where
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
+        let log_size = log2_ceil_u64(F::ORDER_U64).saturating_sub(1);
+        let bound = (1 << log_size) - 1;
         let sample_base = |inner: &mut Inner| {
-            let bytes = inner.sample_array::<8>();
-            F::from_wrapped_u64(u64::from_le_bytes(bytes))
+            let value = u64::from_le_bytes(inner.sample_array::<8>());
+            F::from_canonical_u64(value & bound)
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
     }
