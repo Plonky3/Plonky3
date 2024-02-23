@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// A binary Merkle tree for field data. It has leaves of type `F` and digests of type
-/// `[F; DIGEST_ELEMS]`.
+/// `[W; DIGEST_ELEMS]`.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `FieldMerkleTreeMmcs`.
