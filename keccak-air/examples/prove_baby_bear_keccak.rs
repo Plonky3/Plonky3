@@ -31,14 +31,16 @@ fn main() -> Result<(), VerificationError> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type MyHash = SerializingHasher32<Keccak256Hash>;
-    let hash = MyHash::new(Keccak256Hash {});
+    type ByteHash = Keccak256Hash;
+    type FieldHash = SerializingHasher32<ByteHash>;
+    let byte_hash = ByteHash {};
+    let field_hash = FieldHash::new(Keccak256Hash {});
 
-    type MyCompress = CompressionFunctionFromHasher<u8, Keccak256Hash, 2, 32>;
-    let compress = MyCompress::new(Keccak256Hash {});
+    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+    let compress = MyCompress::new(byte_hash);
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, MyHash, MyCompress, 32>;
-    let val_mmcs = ValMmcs::new(hash, compress);
+    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -46,7 +48,7 @@ fn main() -> Result<(), VerificationError> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, Keccak256Hash, 32>>;
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let fri_config = FriConfig {
         log_blowup: 1,
@@ -61,12 +63,12 @@ fn main() -> Result<(), VerificationError> {
     type MyConfig = StarkConfig<Val, Challenge, Pcs, Challenger>;
     let config = StarkConfig::new(pcs);
 
-    let mut challenger = Challenger::from_hasher(vec![], Keccak256Hash {});
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
     let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
 
-    let mut challenger = Challenger::from_hasher(vec![], Keccak256Hash {});
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
     verify(&config, &KeccakAir {}, &mut challenger, &proof)
 }
