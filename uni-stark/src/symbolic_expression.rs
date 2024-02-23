@@ -38,7 +38,7 @@ pub enum SymbolicExpression<F: Field> {
 
 impl<F: Field> SymbolicExpression<F> {
     /// Returns the multiple of `n` (the trace length) in this expression's degree.
-    pub fn degree_multiple(&self) -> usize {
+    pub(crate) fn degree_multiple(&self) -> usize {
         match self {
             SymbolicExpression::Variable(_) => 1,
             SymbolicExpression::IsFirstRow => 1,

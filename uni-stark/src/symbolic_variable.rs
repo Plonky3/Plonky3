@@ -13,16 +13,6 @@ pub struct SymbolicVariable<F: Field> {
     pub(crate) _phantom: PhantomData<F>,
 }
 
-impl<F: Field> SymbolicVariable<F> {
-    pub fn new(is_next: bool, column: usize) -> Self {
-        Self {
-            is_next,
-            column,
-            _phantom: PhantomData,
-        }
-    }
-}
-
 impl<F: Field> From<SymbolicVariable<F>> for SymbolicExpression<F> {
     fn from(value: SymbolicVariable<F>) -> Self {
         SymbolicExpression::Variable(value)
