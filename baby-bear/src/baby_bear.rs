@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_1725656503, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
+    exp_1725656503, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField, PrimeField32,
     PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
@@ -106,6 +106,8 @@ const MONTY_ZERO: u32 = to_monty(0);
 const MONTY_ONE: u32 = to_monty(1);
 const MONTY_TWO: u32 = to_monty(2);
 const MONTY_NEG_ONE: u32 = to_monty(P - 1);
+
+impl Packable for BabyBear {}
 
 impl AbstractField for BabyBear {
     type F = Self;

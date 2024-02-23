@@ -40,7 +40,7 @@ fn main() -> Result<(), VerificationError> {
     type MyCompress = CompressionFunctionFromHasher<Val, MyHash, 2, 4>;
     let compress = MyCompress::new(hash);
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, MyHash, MyCompress, 4>;
+    type ValMmcs = FieldMerkleTreeMmcs<Val, Val, MyHash, MyCompress, 4>;
     let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;

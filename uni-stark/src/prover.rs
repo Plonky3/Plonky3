@@ -6,7 +6,7 @@ use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
+    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedValue,
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;

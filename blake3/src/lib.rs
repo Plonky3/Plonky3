@@ -27,7 +27,10 @@ impl CryptographicHasher<u8, [u8; 32]> for Blake3 {
     {
         let mut hasher = blake3::Hasher::new();
         for chunk in input.into_iter() {
+            #[cfg(not(feature = "parallel"))]
             hasher.update(chunk);
+            #[cfg(feature = "parallel")]
+            hasher.update_rayon(chunk);
         }
         hasher.finalize().into()
     }

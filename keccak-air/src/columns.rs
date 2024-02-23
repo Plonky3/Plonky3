@@ -14,7 +14,7 @@ use crate::{NUM_ROUNDS, RATE_LIMBS, U64_LIMBS};
 /// convention of `x, y, z` order, but it has the benefit that input lists map to AIR columns in a
 /// nicer way.
 #[repr(C)]
-pub(crate) struct KeccakCols<T> {
+pub struct KeccakCols<T> {
     /// The `i`th value is set to 1 if we are in the `i`th round, otherwise 0.
     pub step_flags: [T; NUM_ROUNDS],
 
@@ -119,7 +119,7 @@ pub fn output_limb(i: usize) -> usize {
     KECCAK_COL_MAP.postimage[y][x][limb_index]
 }
 
-pub(crate) const NUM_KECCAK_COLS: usize = size_of::<KeccakCols<u8>>();
+pub const NUM_KECCAK_COLS: usize = size_of::<KeccakCols<u8>>();
 pub(crate) const KECCAK_COL_MAP: KeccakCols<usize> = make_col_map();
 
 const fn make_col_map() -> KeccakCols<usize> {

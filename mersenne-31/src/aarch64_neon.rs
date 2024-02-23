@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField};
+use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -514,8 +514,8 @@ fn interleave2(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
     }
 }
 
-unsafe impl PackedField for PackedMersenne31Neon {
-    type Scalar = Mersenne31;
+unsafe impl PackedValue for PackedMersenne31Neon {
+    type Value = Mersenne31;
 
     const WIDTH: usize = WIDTH;
 
@@ -555,6 +555,10 @@ unsafe impl PackedField for PackedMersenne31Neon {
     fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
         &mut self.0[..]
     }
+}
+
+unsafe impl PackedField for PackedMersenne31Neon {
+    type Scalar = Mersenne31;
 
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
@@ -580,7 +584,7 @@ mod tests {
     type P = PackedMersenne31Neon;
 
     fn array_from_canonical(vals: [u32; WIDTH]) -> [F; WIDTH] {
-        vals.map(|v| F::from_canonical_u32(v))
+        vals.map(F::from_canonical_u32)
     }
 
     fn packed_from_canonical(vals: [u32; WIDTH]) -> P {

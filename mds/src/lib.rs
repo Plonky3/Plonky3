@@ -11,6 +11,7 @@ mod butterflies;
 pub mod coset_mds;
 pub mod goldilocks;
 pub mod integrated_coset_mds;
+pub mod m4;
 pub mod mersenne31;
 pub mod util;
 

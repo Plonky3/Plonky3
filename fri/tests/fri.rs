@@ -22,7 +22,8 @@ type Challenge = BinomialExtensionField<Val, 4>;
 type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
+type ValMmcs =
+    FieldMerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16>;
 type MyFriConfig = FriConfig<ChallengeMmcs>;

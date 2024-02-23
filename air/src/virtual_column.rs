@@ -5,12 +5,14 @@ use core::ops::Mul;
 use p3_field::{AbstractField, Field};
 
 /// An affine function over columns in a PAIR.
+#[derive(Clone, Debug)]
 pub struct VirtualPairCol<F: Field> {
     column_weights: Vec<(PairCol, F)>,
     constant: F,
 }
 
 /// A column in a PAIR, i.e. either a preprocessed column or a main trace column.
+#[derive(Clone, Copy, Debug)]
 pub enum PairCol {
     Preprocessed(usize),
     Main(usize),

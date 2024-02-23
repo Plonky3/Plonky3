@@ -4,11 +4,12 @@ use core::array;
 use core::cmp::Reverse;
 
 use itertools::Itertools;
-use p3_field::{AbstractField, Field, PackedField};
+use p3_field::{PackedField, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices};
 use p3_maybe_rayon::prelude::*;
-use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// A binary Merkle tree for field data. It has leaves of type `F` and digests of type
@@ -16,27 +17,35 @@ use tracing::instrument;
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `FieldMerkleTreeMmcs`.
-pub struct FieldMerkleTree<F: Field, const DIGEST_ELEMS: usize> {
+#[derive(Serialize, Deserialize)]
+pub struct FieldMerkleTree<F, W, const DIGEST_ELEMS: usize> {
     pub(crate) leaves: Vec<RowMajorMatrix<F>>,
-    pub(crate) digest_layers: Vec<Vec<[F; DIGEST_ELEMS]>>,
+    // Enable serialization for this field whenever the underlying array type supports it (len 1-32).
+    #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
+    // Enable deserialization for this field whenever the underlying array type supports it (len 1-32).
+    #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
+    pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
 }
 
-impl<F: Field, const DIGEST_ELEMS: usize> FieldMerkleTree<F, DIGEST_ELEMS> {
+impl<F: Clone, W: Clone, const DIGEST_ELEMS: usize> FieldMerkleTree<F, W, DIGEST_ELEMS> {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
-    pub fn new<P, H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<F>>) -> Self
+    pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<RowMajorMatrix<F>>) -> Self
     where
         P: PackedField<Scalar = F>,
-        H: CryptographicHasher<F, [F; DIGEST_ELEMS]>,
-        H: CryptographicHasher<P, [P; DIGEST_ELEMS]>,
+        PW: PackedValue<Value = W>,
+        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>,
+        H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
         H: Sync,
-        C: PseudoCompressionFunction<[F; DIGEST_ELEMS], 2>,
-        C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
+        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>,
+        C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
         C: Sync,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
+
+        assert_eq!(P::WIDTH, PW::WIDTH, "Packing widths must match");
 
         // check height property
         assert!(
@@ -60,7 +69,7 @@ impl<F: Field, const DIGEST_ELEMS: usize> FieldMerkleTree<F, DIGEST_ELEMS> {
             .peeking_take_while(|m| m.height() == max_height)
             .collect_vec();
 
-        let mut digest_layers = vec![first_digest_layer::<P, H, DIGEST_ELEMS>(
+        let mut digest_layers = vec![first_digest_layer::<P, PW, H, DIGEST_ELEMS>(
             h,
             tallest_matrices,
         )];
@@ -76,8 +85,12 @@ impl<F: Field, const DIGEST_ELEMS: usize> FieldMerkleTree<F, DIGEST_ELEMS> {
                 .peeking_take_while(|m| m.height().next_power_of_two() == next_layer_len)
                 .collect_vec();
 
-            let next_digests =
-                compress_and_inject::<P, H, C, DIGEST_ELEMS>(prev_layer, matrices_to_inject, h, c);
+            let next_digests = compress_and_inject::<P, PW, H, C, DIGEST_ELEMS>(
+                prev_layer,
+                matrices_to_inject,
+                h,
+                c,
+            );
             digest_layers.push(next_digests);
         }
 
@@ -88,26 +101,30 @@ impl<F: Field, const DIGEST_ELEMS: usize> FieldMerkleTree<F, DIGEST_ELEMS> {
     }
 
     #[must_use]
-    pub fn root(&self) -> [F; DIGEST_ELEMS] {
-        self.digest_layers.last().unwrap()[0]
+    pub fn root(&self) -> Hash<F, W, DIGEST_ELEMS>
+    where
+        W: Copy,
+    {
+        self.digest_layers.last().unwrap()[0].into()
     }
 }
 
-fn first_digest_layer<P, H, const DIGEST_ELEMS: usize>(
+fn first_digest_layer<P, PW, H, const DIGEST_ELEMS: usize>(
     h: &H,
     tallest_matrices: Vec<&RowMajorMatrix<P::Scalar>>,
-) -> Vec<[P::Scalar; DIGEST_ELEMS]>
+) -> Vec<[PW::Value; DIGEST_ELEMS]>
 where
     P: PackedField,
-    H: CryptographicHasher<P::Scalar, [P::Scalar; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [P; DIGEST_ELEMS]>,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
 {
     let width = P::WIDTH;
     let max_height = tallest_matrices[0].height();
     let max_height_padded = max_height.next_power_of_two();
 
-    let default_digest = [P::Scalar::zero(); DIGEST_ELEMS];
+    let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut digests = vec![default_digest; max_height_padded];
 
     digests[0..max_height]
@@ -115,7 +132,7 @@ where
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let packed_digest: [P; DIGEST_ELEMS] = h.hash_iter(
+            let packed_digest: [PW; DIGEST_ELEMS] = h.hash_iter(
                 tallest_matrices
                     .iter()
                     .flat_map(|m| m.packed_row(first_row)),
@@ -132,35 +149,37 @@ where
         digests[i] = h.hash_iter_slices(tallest_matrices.iter().map(|m| m.row_slice(i)));
     }
 
+    // Everything has been initialized so we can safely cast.
     digests
 }
 
 /// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
-fn compress_and_inject<P, H, C, const DIGEST_ELEMS: usize>(
-    prev_layer: &[[P::Scalar; DIGEST_ELEMS]],
+fn compress_and_inject<P, PW, H, C, const DIGEST_ELEMS: usize>(
+    prev_layer: &[[PW::Value; DIGEST_ELEMS]],
     matrices_to_inject: Vec<&RowMajorMatrix<P::Scalar>>,
     h: &H,
     c: &C,
-) -> Vec<[P::Scalar; DIGEST_ELEMS]>
+) -> Vec<[PW::Value; DIGEST_ELEMS]>
 where
+    PW: PackedValue,
     P: PackedField,
-    H: CryptographicHasher<P::Scalar, [P::Scalar; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [P; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
-    C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
 {
     if matrices_to_inject.is_empty() {
-        return compress::<P, C, DIGEST_ELEMS>(prev_layer, c);
+        return compress::<PW, C, DIGEST_ELEMS>(prev_layer, c);
     }
 
-    let width = P::WIDTH;
+    let width = PW::WIDTH;
     let next_len = matrices_to_inject[0].height();
     let next_len_padded = prev_layer.len() / 2;
 
-    let default_digest = [P::Scalar::zero(); DIGEST_ELEMS];
+    let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
 
     next_digests[0..next_len]
@@ -168,8 +187,8 @@ where
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let left = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
-            let right = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
+            let left = array::from_fn(|j| PW::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
+            let right = array::from_fn(|j| PW::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
             let mut packed_digest = c.compress([left, right]);
             let tallest_digest = h.hash_iter(
                 matrices_to_inject
@@ -206,12 +225,12 @@ where
 
 /// Compress `n` digests from the previous layer into `n/2` digests.
 fn compress<P, C, const DIGEST_ELEMS: usize>(
-    prev_layer: &[[P::Scalar; DIGEST_ELEMS]],
+    prev_layer: &[[P::Value; DIGEST_ELEMS]],
     c: &C,
-) -> Vec<[P::Scalar; DIGEST_ELEMS]>
+) -> Vec<[P::Value; DIGEST_ELEMS]>
 where
-    P: PackedField,
-    C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
+    P: PackedValue,
+    C: PseudoCompressionFunction<[P::Value; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
     C: Sync,
 {
@@ -219,7 +238,7 @@ where
     let width = P::WIDTH;
     let next_len = prev_layer.len() / 2;
 
-    let default_digest = [P::Scalar::zero(); DIGEST_ELEMS];
+    let default_digest: [P::Value; DIGEST_ELEMS] = [P::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len];
 
     next_digests[0..next_len]
@@ -244,13 +263,14 @@ where
         next_digests[i] = digest;
     }
 
+    // Everything has been initialized so we can safely cast.
     next_digests
 }
 
 /// Converts a packed array `[P; N]` into its underlying `P::WIDTH` scalar arrays.
 #[inline]
-fn unpack_array<P: PackedField, const N: usize>(
+fn unpack_array<P: PackedValue, const N: usize>(
     packed_digest: [P; N],
-) -> impl Iterator<Item = [P::Scalar; N]> {
+) -> impl Iterator<Item = [P::Value; N]> {
     (0..P::WIDTH).map(move |j| packed_digest.map(|p| p.as_slice()[j]))
 }

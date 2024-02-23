@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
+    exp_1717986917, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField, PrimeField32,
     PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
@@ -35,6 +35,8 @@ impl PartialEq for Mersenne31 {
 }
 
 impl Eq for Mersenne31 {}
+
+impl Packable for Mersenne31 {}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
