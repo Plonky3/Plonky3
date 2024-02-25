@@ -155,7 +155,7 @@ unsafe impl<T: Packable> PackedValue for T {
     }
 }
 
-unsafe impl<F: Field + Packable> PackedField for F {
+unsafe impl<F: Field> PackedField for F {
     type Scalar = Self;
 
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
