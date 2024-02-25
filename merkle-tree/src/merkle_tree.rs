@@ -45,8 +45,6 @@ impl<F: Clone, W: Clone, const DIGEST_ELEMS: usize> FieldMerkleTree<F, W, DIGEST
     {
         assert!(!leaves.is_empty(), "No matrices given?");
 
-        assert_eq!(P::WIDTH, PW::WIDTH, "Packing widths must match");
-
         // check height property
         assert!(
             leaves
@@ -120,7 +118,7 @@ where
     H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
 {
-    let width = P::WIDTH;
+    let width = PW::WIDTH;
     let max_height = tallest_matrices[0].height();
     let max_height_padded = max_height.next_power_of_two();
 
