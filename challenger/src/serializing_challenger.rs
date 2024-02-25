@@ -18,7 +18,7 @@ use crate::{
 /// -  Takes a field element will serialize it into a byte array and observe each byte.
 ///
 /// **Sampling**:
-/// -  Samples a field element in a prime field of size `p` by sampling unofrmly an element in the
+/// -  Samples a field element in a prime field of size `p` by sampling uniformly an element in the
 ///    range (0..1 << log_2(p)). This avoids modulo bias.
 #[derive(Clone, Debug)]
 pub struct SerializingChallenger32<F, Inner> {
