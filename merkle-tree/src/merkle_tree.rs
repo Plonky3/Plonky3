@@ -45,6 +45,8 @@ impl<F: Clone, W: Clone, const DIGEST_ELEMS: usize> FieldMerkleTree<F, W, DIGEST
     {
         assert!(!leaves.is_empty(), "No matrices given?");
 
+        assert_eq!(P::WIDTH, PW::WIDTH, "Packing widths must match");
+
         // check height property
         assert!(
             leaves
