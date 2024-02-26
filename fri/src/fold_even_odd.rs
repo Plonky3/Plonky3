@@ -50,7 +50,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
 
 #[cfg(test)]
 mod tests {
-    use itertools::{izip, Itertools};
+    use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
     use rand::{thread_rng, Rng};
