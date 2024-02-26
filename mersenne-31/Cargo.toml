@@ -5,7 +5,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-criterion = "0.5"
 itertools = "0.12.0"
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
@@ -16,6 +15,7 @@ rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
+criterion = "0.5"
 p3-field-testing = { path = "../field-testing" }
 rand_chacha = "0.3.1"
 

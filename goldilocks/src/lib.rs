@@ -11,8 +11,8 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField64,
-    TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField,
+    PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
@@ -42,6 +42,8 @@ impl PartialEq for Goldilocks {
 }
 
 impl Eq for Goldilocks {}
+
+impl Packable for Goldilocks {}
 
 impl Hash for Goldilocks {
     fn hash<H: Hasher>(&self, state: &mut H) {

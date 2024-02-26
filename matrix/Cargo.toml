@@ -9,6 +9,7 @@ p3-field = { path = "../field" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
 rand = "0.8.5"
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.5.1"

@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
+use crate::{
+    field_to_array, AbstractExtensionField, AbstractField, ExtensionField, Packable, TwoAdicField,
+};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BinomialExtensionField<AF, const D: usize> {
@@ -39,6 +41,8 @@ impl<AF: AbstractField, const D: usize> From<AF> for BinomialExtensionField<AF, 
         }
     }
 }
+
+impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
