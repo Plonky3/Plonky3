@@ -1,4 +1,4 @@
-use p3_field::{PrimeField32, PrimeField64};
+use p3_field::{PackedField, PackedValue, PrimeField32, PrimeField64};
 
 use crate::CryptographicHasher;
 
@@ -43,6 +43,25 @@ where
     }
 }
 
+impl<P, PW, Inner> CryptographicHasher<P, [PW; 8]> for SerializingHasher32<Inner>
+where
+    P: PackedField,
+    P::F: PrimeField32,
+    PW: PackedValue<Value = u32>,
+    Inner: CryptographicHasher<PW, [PW; 8]>,
+{
+    fn hash_iter<I>(&self, input: I) -> [PW; 8]
+    where
+        I: IntoIterator<Item = P>,
+    {
+        self.inner.hash_iter(
+            input
+                .into_iter()
+                .map(|x| PW::from_fn(|i| x.as_slice()[i].as_canonical_u32())),
+        )
+    }
+}
+
 impl<F, Inner> CryptographicHasher<F, [u8; 32]> for SerializingHasher64<Inner>
 where
     F: PrimeField64,
@@ -56,6 +75,25 @@ where
             input
                 .into_iter()
                 .flat_map(|x| x.as_canonical_u64().to_le_bytes()),
+        )
+    }
+}
+
+impl<P, PW, Inner> CryptographicHasher<P, [PW; 4]> for SerializingHasher64<Inner>
+where
+    P: PackedField,
+    P::F: PrimeField64,
+    PW: PackedValue<Value = u64>,
+    Inner: CryptographicHasher<PW, [PW; 4]>,
+{
+    fn hash_iter<I>(&self, input: I) -> [PW; 4]
+    where
+        I: IntoIterator<Item = P>,
+    {
+        self.inner.hash_iter(
+            input
+                .into_iter()
+                .map(|x| PW::from_fn(|i| x.as_slice()[i].as_canonical_u64())),
         )
     }
 }
