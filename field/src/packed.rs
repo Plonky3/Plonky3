@@ -6,7 +6,7 @@ use crate::AbstractField;
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
-/// The `Packable` allows us to specify implementations for potentially conflicting types.
+/// The `Packable` trait allows us to specify implementations for potentially conflicting types.
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
 /// # Safety
