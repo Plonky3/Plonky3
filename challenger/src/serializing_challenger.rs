@@ -84,11 +84,16 @@ where
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
-        let log_size = log2_ceil_u64(F::ORDER_U64).saturating_sub(1);
-        let bound = (1 << log_size) - 1;
-        let sample_base = |inner: &mut Inner| {
+        let modulus = F::ORDER_U64 as u32;
+        let log_size = log2_ceil_u64(F::ORDER_U64);
+        let pow_of_two_bound = (1 << log_size) - 1;
+        // Perform rejection sampling over the uniform range (0..log2_ceil(p))
+        let sample_base = |inner: &mut Inner| loop {
             let value = u32::from_le_bytes(inner.sample_array::<4>());
-            F::from_canonical_u32(value & bound)
+            let value = value & pow_of_two_bound;
+            if value < modulus {
+                return F::from_canonical_u32(value);
+            }
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
     }
