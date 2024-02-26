@@ -283,7 +283,11 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+
+        // This sum will not overflow so long as iter.len() < 2^64.
+        let sum = iter.map(|x| (x.value as u128)).sum::<u128>();
+        reduce128(sum)
     }
 }
 

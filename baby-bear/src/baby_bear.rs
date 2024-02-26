@@ -337,7 +337,14 @@ impl AddAssign for BabyBear {
 impl Sum for BabyBear {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // There might be a faster reduction method possible for lengths <= 16 which avoids %.
+
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
+        BabyBear {
+            value: (sum % P as u64) as u32,
+        }
     }
 }
 
