@@ -210,6 +210,13 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        let sign_bit = self.value % 2;
+        let shift = if sign_bit == 0 {0} else {1 + (Goldilocks::ORDER_U64 >> 1)};
+        Goldilocks::new((self.value >> 1) + shift)
+    }
 }
 
 impl PrimeField for Goldilocks {}

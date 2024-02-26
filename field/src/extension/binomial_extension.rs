@@ -218,6 +218,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             _ => Some(self.frobenius_inv()),
         }
     }
+
+    fn halve(&self) -> Self {
+        Self {
+            value: self.value.map(|x| x.halve())
+        }
+    }
 }
 
 impl<F, const D: usize> Display for BinomialExtensionField<F, D>

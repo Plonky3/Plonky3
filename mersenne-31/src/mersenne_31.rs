@@ -225,6 +225,16 @@ impl Field for Mersenne31 {
             p1111111111111111111111111111.exp_power_of_2(3) * p101;
         Some(p1111111111111111111111111111101)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        // If self.value % 2 = 0, we want self.value / 2.
+        // If self.value % 2 = 1, we want (self.value + P) / 2.
+        // When self.value % 2 = 1:
+        // (self.value + P) / 2 = (self.value + P) >> 2 = (self.value + P + 1) >> 2 = (self.value + 2^31) >> 2
+        let sign_bit = self.value << 31;
+        Mersenne31::new((self.value + sign_bit) >> 1)
+    }   
 }
 
 impl PrimeField for Mersenne31 {}

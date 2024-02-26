@@ -207,6 +207,11 @@ pub trait Field:
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
+
+    #[must_use]
+    fn halve(&self) -> Self {
+        self.clone() * Self::two().try_inverse().expect("Field has Characteristic 2.")
+    }
 }
 
 pub trait PrimeField: Field + Ord {}

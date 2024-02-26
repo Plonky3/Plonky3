@@ -238,6 +238,12 @@ impl Field for BabyBear {
 
         Some(p1110111111111111111111111111111)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        let shift = if self.value % 2 == 0 {0} else {P};
+        BabyBear { value: (self.value + shift) >> 1}
+    }
 }
 
 impl PrimeField for BabyBear {}
