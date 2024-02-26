@@ -32,10 +32,11 @@ pub trait TwoAdicFriPcsGenericConfig: Default {
         + GrindingChallenger<Witness = Self::Val>
         + CanObserve<<Self::FriMmcs as Mmcs<Self::Challenge>>::Commitment>
         + CanSample<Self::Challenge>;
-    type Dft: TwoAdicSubgroupDft<Self::Val>;
+    type Dft: TwoAdicSubgroupDft<Self::Val> + Sync;
     type InputMmcs: 'static
-        + for<'a> DirectMmcs<Self::Val, Mat<'a> = RowMajorMatrixView<'a, Self::Val>>;
-    type FriMmcs: DirectMmcs<Self::Challenge>;
+        + for<'a> DirectMmcs<Self::Val, Mat<'a> = RowMajorMatrixView<'a, Self::Val>>
+        + Sync;
+    type FriMmcs: DirectMmcs<Self::Challenge> + Sync;
 }
 
 pub struct TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, InputMmcs, FriMmcs>(
@@ -58,9 +59,9 @@ where
         + GrindingChallenger<Witness = Val>
         + CanObserve<<FriMmcs as Mmcs<Challenge>>::Commitment>
         + CanSample<Challenge>,
-    Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    FriMmcs: DirectMmcs<Challenge>,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
+    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>> + Sync,
+    FriMmcs: DirectMmcs<Challenge> + Sync,
 {
     type Val = Val;
     type Challenge = Challenge;
@@ -112,7 +113,13 @@ pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) opening_proof: <C::InputMmcs as Mmcs<C::Val>>::Proof,
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for TwoAdicFriPcs<C> {
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
+    Pcs<C::Val, In> for TwoAdicFriPcs<C> 
+    where C::FriMmcs: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
+{
     type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
     type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
     type Proof = TwoAdicFriPcsProof<C>;
@@ -124,8 +131,12 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>> Pcs<C::Val, In> for 
     }
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
+    where C::FriMmcs: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
 
@@ -156,11 +167,11 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
-                .into_iter()
+                .par_iter()
                 .zip_eq(coset_shifts)
                 .map(|(poly, coset_shift)| {
                     let shift = C::Val::generator() / *coset_shift;
-                    let input = poly.to_row_major_matrix();
+                    let input = ((*poly).clone()).to_row_major_matrix();
                     // Commit to the bit-reversed LDE.
                     self.dft
                         .coset_lde_batch(input, self.fri.log_blowup, shift)
@@ -169,12 +180,18 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
                 })
                 .collect()
         });
-        self.mmcs.commit(ldes)
+        let commitment = self.mmcs.commit(ldes);
+        commitment
     }
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
+    where C::FriMmcs: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
+          C::Challenge: Send + Sync + Sized,
 {
     #[instrument(name = "open_multi_batches", skip_all)]
     fn open_multi_batches(
@@ -244,31 +261,48 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val>>
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
-        for (data, points) in prover_data_and_points {
+        let ys_outer: Vec::<(&Self::ProverData, Vec<&Vec<C::Challenge>>)> = (*prover_data_and_points)
+            .into_iter()
+            .map(|(pd, cs)| { (*pd, (*cs).into_iter().collect::<Vec<&Vec<C::Challenge>>>()) })
+            .collect();
+
+        let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = ys_outer
+            .par_iter()
+            .map(|(data, points)| {
+                let mats = self.mmcs.get_matrices(data);
+                izip!(mats, (*points).clone()).collect::<Vec<_>>().par_iter().map(|(mat, points_for_mat)| {
+                        points_for_mat.par_iter().map(|&point| {
+                                // Use Barycentric interpolation to evaluate the matrix at the given point.
+                                info_span!("compute opened values with Lagrange interpolation")
+                                    .in_scope(|| {
+                                        let (low_coset, _) =
+                                            mat.split_rows(mat.height() >> self.fri.log_blowup);
+                                        interpolate_coset(
+                                            &BitReversedMatrixView::new(low_coset),
+                                            C::Val::generator(),
+                                            point,
+                                        )
+                                    })
+                            }).collect()
+                    }).collect()
+            }).collect();
+
+        for (i, (data, points)) in prover_data_and_points.into_iter().enumerate() {
             let mats = self.mmcs.get_matrices(data);
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
-            for (mat, points_for_mat) in izip!(mats, *points) {
+            for (j, (mat, points_for_mat)) in izip!(mats, *points).enumerate() {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![C::Challenge::zero(); mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                for &point in points_for_mat {
+                for (k, &point) in points_for_mat.into_iter().enumerate() {
                     let _guard =
                         info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
-                    let ys = info_span!("compute opened values with Lagrange interpolation")
-                        .in_scope(|| {
-                            let (low_coset, _) =
-                                mat.split_rows(mat.height() >> self.fri.log_blowup);
-                            interpolate_coset(
-                                &BitReversedMatrixView::new(low_coset),
-                                C::Val::generator(),
-                                point,
-                            )
-                        });
+                    let ys = ys_outer[i][j][k].clone();
 
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
