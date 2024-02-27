@@ -31,7 +31,7 @@ impl PairCol {
 impl<'a, F: Field> VirtualPairCol<'a, F> {
     pub const fn new(column_weights: Cow<'a, [(PairCol, F)]>, constant: F) -> Self {
         Self {
-            column_weights: column_weights,
+            column_weights,
             constant,
         }
     }
