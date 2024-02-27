@@ -5,12 +5,15 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField, PrimeField32,
-    PrimeField64,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
+    PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+
+/// The Mersenne31 prime
+const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
@@ -228,19 +231,14 @@ impl Field for Mersenne31 {
 
     #[inline]
     fn halve(&self) -> Self {
-        // If self.value % 2 = 0, we want self.value / 2.
-        // If self.value % 2 = 1, we want (self.value + P) / 2.
-        // When self.value % 2 = 1:
-        // (self.value + P) / 2 = (self.value + P) >> 2 = (self.value + P + 1) >> 2 = (self.value + 2^31) >> 2
-        let sign_bit = self.value << 31;
-        Mersenne31::new((self.value + sign_bit) >> 1)
-    }   
+        Mersenne31::new(halve_u32::<P>(self.value))
+    }
 }
 
 impl PrimeField for Mersenne31 {}
 
 impl PrimeField32 for Mersenne31 {
-    const ORDER_U32: u32 = (1 << 31) - 1;
+    const ORDER_U32: u32 = P;
 
     #[inline]
     fn as_canonical_u32(&self) -> u32 {

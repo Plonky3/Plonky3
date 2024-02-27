@@ -221,7 +221,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
     fn halve(&self) -> Self {
         Self {
-            value: self.value.map(|x| x.halve())
+            value: self.value.map(|x| x.halve()),
         }
     }
 }

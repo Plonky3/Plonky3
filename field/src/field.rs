@@ -210,7 +210,10 @@ pub trait Field:
 
     #[must_use]
     fn halve(&self) -> Self {
-        self.clone() * Self::two().try_inverse().expect("Field has Characteristic 2.")
+        let half = Self::two()
+            .try_inverse()
+            .expect("Cannot divide by 2 in fields with characteristic 2");
+        *self * half
     }
 }
 
