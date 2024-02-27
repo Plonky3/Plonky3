@@ -42,7 +42,13 @@ fn main() -> Result<(), VerificationError> {
     type MyCompress = TruncatedPermutation<Perm, 2, 4, 8>;
     let compress = MyCompress::new(perm.clone());
 
-    type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 4>;
+    type ValMmcs = FieldMerkleTreeMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        4,
+    >;
     let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
