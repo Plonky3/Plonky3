@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
+use crate::Packable;
 
 /// A generalization of `Field` which permits things like
 /// - an actual field element
@@ -149,6 +150,7 @@ pub trait AbstractField:
 /// An element of a finite field.
 pub trait Field:
     AbstractField<F = Self>
+    + Packable
     + 'static
     + Copy
     + Div<Self, Output = Self>
@@ -294,6 +296,12 @@ pub trait AbstractExtensionField<Base: AbstractField>:
 }
 
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+    type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
+        + 'static
+        + Copy
+        + Send
+        + Sync;
+
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
@@ -306,7 +314,9 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     }
 }
 
-impl<F: Field> ExtensionField<F> for F {}
+impl<F: Field> ExtensionField<F> for F {
+    type ExtensionPacking = F::Packing;
+}
 
 impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     const D: usize = 1;

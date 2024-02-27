@@ -1,15 +1,17 @@
-use p3_baby_bear::BabyBear;
-use p3_challenger::{HashChallenger, SerializingChallenger32};
+use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
-use p3_keccak::Keccak256Hash;
+use p3_goldilocks::Goldilocks;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_mds::goldilocks::MdsMatrixGoldilocks;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+use p3_poseidon::Poseidon;
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
-use rand::random;
+use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -28,19 +30,20 @@ fn main() -> Result<(), VerificationError> {
         .with(ForestLayer::default())
         .init();
 
-    type Val = BabyBear;
-    type Challenge = BinomialExtensionField<Val, 4>;
+    type Val = Goldilocks;
+    type Challenge = BinomialExtensionField<Val, 2>;
 
-    type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher32<ByteHash>;
-    let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(Keccak256Hash {});
+    type Perm = Poseidon<Val, MdsMatrixGoldilocks, 8, 7>;
+    let perm = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut thread_rng());
 
-    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
-    let compress = MyCompress::new(byte_hash);
+    type MyHash = PaddingFreeSponge<Perm, 8, 4, 4>;
+    let hash = MyHash::new(perm.clone());
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
-    let val_mmcs = ValMmcs::new(field_hash, compress);
+    type MyCompress = TruncatedPermutation<Perm, 2, 4, 8>;
+    let compress = MyCompress::new(perm.clone());
+
+    type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 4>;
+    let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -48,7 +51,7 @@ fn main() -> Result<(), VerificationError> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    type Challenger = DuplexChallenger<Val, Perm, 8>;
 
     let fri_config = FriConfig {
         log_blowup: 1,
@@ -63,12 +66,12 @@ fn main() -> Result<(), VerificationError> {
     type MyConfig = StarkConfig<Val, Challenge, Pcs, Challenger>;
     let config = StarkConfig::new(pcs);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let mut challenger = Challenger::new(perm.clone());
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
     let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let mut challenger = Challenger::new(perm);
     verify(&config, &KeccakAir {}, &mut challenger, &proof)
 }

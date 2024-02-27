@@ -20,11 +20,7 @@ rand = { version = "0.8.5", features = ["min_const_gen"] }
 criterion = "0.5.1"
 
 [[bench]]
-name = "inverse"
-harness = false
-
-[[bench]]
-name = "root_7"
+name = "bench_field"
 harness = false
 
 [[bench]]

@@ -180,6 +180,12 @@ mod tests {
     }
 
     #[test]
+    fn coset_idft_matches_naive() {
+        test_coset_idft_matches_naive::<BabyBear, Radix2Bowers>();
+        test_coset_idft_matches_naive::<Goldilocks, Radix2Bowers>();
+    }
+
+    #[test]
     fn lde_matches_naive() {
         test_lde_matches_naive::<BabyBear, Radix2Bowers>();
     }

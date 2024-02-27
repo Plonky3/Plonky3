@@ -6,7 +6,7 @@ use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
+    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedValue,
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
@@ -17,8 +17,8 @@ use tracing::{info_span, instrument};
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
-    decompose_and_flatten, Commitments, OpenedValues, Proof, ProverConstraintFolder,
-    StarkGenericConfig, ZerofierOnCoset,
+    decompose_and_flatten, Commitments, OpenedValues, PackedChallenge, PackedVal, Proof,
+    ProverConstraintFolder, StarkGenericConfig, ZerofierOnCoset,
 };
 
 #[instrument(skip_all)]
@@ -150,7 +150,7 @@ where
     // length `WIDTH`. In the edge case where `quotient_size < WIDTH`, we need to pad those vectors
     // in order for the slices to exist. The entries beyond quotient_size will be ignored, so we can
     // just use default values.
-    for _ in quotient_size..SC::PackedVal::WIDTH {
+    for _ in quotient_size..PackedVal::<SC>::WIDTH {
         coset.push(SC::Val::default());
         lagrange_first_evals.push(SC::Val::default());
         lagrange_last_evals.push(SC::Val::default());
@@ -158,20 +158,20 @@ where
 
     (0..quotient_size)
         .into_par_iter()
-        .step_by(SC::PackedVal::WIDTH)
+        .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_local_start| {
             let wrap = |i| i % quotient_size;
             let i_next_start = wrap(i_local_start + next_step);
-            let i_range = i_local_start..i_local_start + SC::PackedVal::WIDTH;
+            let i_range = i_local_start..i_local_start + PackedVal::<SC>::WIDTH;
 
-            let x = *SC::PackedVal::from_slice(&coset[i_range.clone()]);
+            let x = *PackedVal::<SC>::from_slice(&coset[i_range.clone()]);
             let is_transition = x - subgroup_last;
-            let is_first_row = *SC::PackedVal::from_slice(&lagrange_first_evals[i_range.clone()]);
-            let is_last_row = *SC::PackedVal::from_slice(&lagrange_last_evals[i_range]);
+            let is_first_row = *PackedVal::<SC>::from_slice(&lagrange_first_evals[i_range.clone()]);
+            let is_last_row = *PackedVal::<SC>::from_slice(&lagrange_last_evals[i_range]);
 
             let local: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
-                    SC::PackedVal::from_fn(|offset| {
+                    PackedVal::<SC>::from_fn(|offset| {
                         let row = wrap(i_local_start + offset);
                         trace_lde.get(row, col)
                     })
@@ -179,14 +179,14 @@ where
                 .collect();
             let next: Vec<_> = (0..trace_lde.width())
                 .map(|col| {
-                    SC::PackedVal::from_fn(|offset| {
+                    PackedVal::<SC>::from_fn(|offset| {
                         let row = wrap(i_next_start + offset);
                         trace_lde.get(row, col)
                     })
                 })
                 .collect();
 
-            let accumulator = SC::PackedChallenge::zero();
+            let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
@@ -201,11 +201,11 @@ where
             air.eval(&mut folder);
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let zerofier_inv: SC::PackedVal = zerofier_on_coset.eval_inverse_packed(i_local_start);
+            let zerofier_inv: PackedVal<SC> = zerofier_on_coset.eval_inverse_packed(i_local_start);
             let quotient = folder.accumulator * zerofier_inv;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            let limit = SC::PackedVal::WIDTH.min(quotient_size);
+            let limit = PackedVal::<SC>::WIDTH.min(quotient_size);
             (0..limit).map(move |idx_in_packing| {
                 let quotient_value = (0..<SC::Challenge as AbstractExtensionField<SC::Val>>::D)
                     .map(|coeff_idx| quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing])

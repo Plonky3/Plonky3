@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
+    exp_1717986917, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField, PrimeField32,
     PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
@@ -35,6 +35,8 @@ impl PartialEq for Mersenne31 {
 }
 
 impl Eq for Mersenne31 {}
+
+impl Packable for Mersenne31 {}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -294,7 +296,14 @@ impl AddAssign for Mersenne31 {
 impl Sum for Mersenne31 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length >= 6.
+        // It assumes that iter.len() < 2^31.
+
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
+
+        // sum is < 2^62 provided iter.len() < 2^31.
+        from_u62(sum)
     }
 }
 
@@ -337,9 +346,7 @@ impl Mul for Mersenne31 {
     #[allow(clippy::cast_possible_truncation)]
     fn mul(self, rhs: Self) -> Self {
         let prod = u64::from(self.value) * u64::from(rhs.value);
-        let prod_lo = (prod & ((1 << 31) - 1)) as u32;
-        let prod_hi = (prod >> 31) as u32;
-        Self::new(prod_lo) + Self::new(prod_hi)
+        from_u62(prod)
     }
 }
 
@@ -365,6 +372,14 @@ impl Div for Mersenne31 {
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
+}
+
+#[inline(always)]
+fn from_u62(input: u64) -> Mersenne31 {
+    debug_assert!(input < (1 << 62));
+    let input_lo = (input & ((1 << 31) - 1)) as u32;
+    let input_high = (input >> 31) as u32;
+    Mersenne31::new(input_lo) + Mersenne31::new(input_high)
 }
 
 #[cfg(test)]

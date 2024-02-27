@@ -33,6 +33,10 @@ where
     assert_eq!(x - (y + z), (x - y) - z);
     assert_eq!((x + y) - z, x + (y - z));
     assert_eq!(x * (y + z), x * y + x * z);
+    assert_eq!(
+        x + y + z + x + y + z,
+        [x, x, y, y, z, z].iter().cloned().sum()
+    );
 }
 
 pub fn test_inv_div<F: Field>()
@@ -174,7 +178,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
     use p3_field::{binomial_expand, eval_poly, AbstractExtensionField, AbstractField};
-    use rand::{thread_rng, Rng};
+    use rand::thread_rng;
 
     use super::*;
 

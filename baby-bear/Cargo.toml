@@ -18,13 +18,10 @@ zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 criterion = "0.5.1"
 rand_chacha = "0.3.1"
+serde_json = "1.0.113"
 
 [[bench]]
-name = "inverse"
-harness = false
-
-[[bench]]
-name = "root_7"
+name = "bench_field"
 harness = false
 
 [[bench]]

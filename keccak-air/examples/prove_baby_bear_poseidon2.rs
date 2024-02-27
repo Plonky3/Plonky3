@@ -30,9 +30,7 @@ fn main() -> Result<(), VerificationError> {
         .init();
 
     type Val = BabyBear;
-    type Domain = Val;
     type Challenge = BinomialExtensionField<Val, 4>;
-    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
     type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
@@ -43,7 +41,13 @@ fn main() -> Result<(), VerificationError> {
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     let compress = MyCompress::new(perm.clone());
 
-    type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
+    type ValMmcs = FieldMerkleTreeMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        8,
+    >;
     let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
@@ -64,7 +68,7 @@ fn main() -> Result<(), VerificationError> {
         TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
 
-    type MyConfig = StarkConfig<Val, Challenge, PackedChallenge, Pcs, Challenger>;
+    type MyConfig = StarkConfig<Val, Challenge, Pcs, Challenger>;
     let config = StarkConfig::new(pcs);
 
     let mut challenger = Challenger::new(perm.clone());

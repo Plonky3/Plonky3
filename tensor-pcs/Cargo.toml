@@ -11,3 +11,4 @@ p3-commit = { path = "../commit" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
+serde = "1.0.196"

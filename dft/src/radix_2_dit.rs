@@ -94,6 +94,12 @@ mod tests {
     }
 
     #[test]
+    fn coset_idft_matches_naive() {
+        test_coset_idft_matches_naive::<BabyBear, Radix2Dit<_>>();
+        test_coset_idft_matches_naive::<Goldilocks, Radix2Dit<_>>();
+    }
+
+    #[test]
     fn lde_matches_naive() {
         test_lde_matches_naive::<BabyBear, Radix2Dit<_>>();
     }

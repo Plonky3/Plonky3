@@ -14,8 +14,8 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField64,
-    TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField,
+    PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 pub use poseidon2::DiffusionMatrixGoldilocks;
@@ -46,6 +46,8 @@ impl PartialEq for Goldilocks {
 }
 
 impl Eq for Goldilocks {}
+
+impl Packable for Goldilocks {}
 
 impl Hash for Goldilocks {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -285,7 +287,11 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+
+        // This sum will not overflow so long as iter.len() < 2^64.
+        let sum = iter.map(|x| (x.value as u128)).sum::<u128>();
+        reduce128(sum)
     }
 }
 
