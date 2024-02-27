@@ -179,7 +179,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
     use p3_field::{binomial_expand, eval_poly, AbstractExtensionField, AbstractField};
-    use rand::{thread_rng, Rng};
+    use rand::thread_rng;
 
     use super::*;
 

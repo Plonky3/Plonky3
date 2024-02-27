@@ -183,7 +183,7 @@ mod tests {
     use rand::{thread_rng, Rng};
 
     use super::*;
-    use crate::{Mersenne31, Mersenne31ComplexRadix2Dit};
+    use crate::Mersenne31ComplexRadix2Dit;
 
     type Base = Mersenne31;
     type Dft = Mersenne31ComplexRadix2Dit;

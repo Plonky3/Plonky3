@@ -452,7 +452,6 @@ fn monty_reduce(x: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeField64;
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;
