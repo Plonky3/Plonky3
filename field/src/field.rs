@@ -208,6 +208,9 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    /// Computes input/2.
+    /// Should be overwritten by most field implementations to use bitshifts.
+    /// Will error if the field characteristic is 2.
     #[must_use]
     fn halve(&self) -> Self {
         let half = Self::two()
