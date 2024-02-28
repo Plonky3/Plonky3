@@ -3,8 +3,8 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_1725656503, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField, PrimeField32,
-    PrimeField64, TwoAdicField,
+    exp_1725656503, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
+    PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -237,6 +237,13 @@ impl Field for BabyBear {
             p1110000111100001111000011110000 * p111000011110000111100001111;
 
         Some(p1110111111111111111111111111111)
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        BabyBear {
+            value: halve_u32::<P>(self.value),
+        }
     }
 }
 

@@ -207,6 +207,17 @@ pub trait Field:
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
+
+    /// Computes input/2.
+    /// Should be overwritten by most field implementations to use bitshifts.
+    /// Will error if the field characteristic is 2.
+    #[must_use]
+    fn halve(&self) -> Self {
+        let half = Self::two()
+            .try_inverse()
+            .expect("Cannot divide by 2 in fields with characteristic 2");
+        *self * half
+    }
 }
 
 pub trait PrimeField: Field + Ord {}

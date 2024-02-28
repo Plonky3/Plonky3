@@ -53,7 +53,6 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
     let half_n = poly.len() / 2;
     let g_inv = F::two_adic_generator(log_n).inverse();
 
-    let one_half = F::two().inverse();
     let (first, second) = poly.split_at(half_n);
 
     // Note that
@@ -73,7 +72,7 @@ fn decompose<F: TwoAdicField>(poly: Vec<F>, shift: F, log_chunks: usize) -> Vec<
         .map(|((&a, &b), g_inv_power)| {
             let sum = a + b;
             let diff = a - b;
-            (sum * one_half, diff * one_half * *g_inv_power)
+            (sum.halve(), diff.halve() * *g_inv_power)
         })
         .unzip();
 

@@ -11,13 +11,16 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField,
-    PrimeField64, TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
+    PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+
+/// The Goldilocks prime
+const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
@@ -210,12 +213,17 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Goldilocks::new(halve_u64::<P>(self.value))
+    }
 }
 
 impl PrimeField for Goldilocks {}
 
 impl PrimeField64 for Goldilocks {
-    const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
+    const ORDER_U64: u64 = P;
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
