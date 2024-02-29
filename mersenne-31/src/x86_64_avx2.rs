@@ -643,7 +643,7 @@ unsafe impl PackedField for PackedMersenne31AVX2 {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
+    use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
