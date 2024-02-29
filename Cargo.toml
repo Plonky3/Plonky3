@@ -22,13 +22,11 @@ members = [
     "maybe-rayon",
     "mersenne-31",
     "monolith",
-    "multi-stark",
     "poseidon",
     "poseidon2",
     "reed-solomon",
     "rescue",
     "symmetric",
-    "tensor-pcs",
     "util",
     "uni-stark",
 ]

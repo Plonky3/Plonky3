@@ -19,6 +19,7 @@ serde = { version = "1.0", default-features = false, features = ["derive", "allo
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-commit = { path = "../commit", features = ["test-utils"] }
 p3-fri = { path = "../fri" }
 p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }

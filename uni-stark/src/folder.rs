@@ -1,7 +1,7 @@
 use p3_air::{AirBuilder, TwoRowMatrixView};
 use p3_field::{AbstractField, Field};
 
-use crate::{PackedChallenge, PackedVal, StarkGenericConfig};
+use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, PackedVal<SC>>,
@@ -22,7 +22,7 @@ pub struct VerifierConstraintFolder<'a, Challenge> {
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
-    type F = SC::Val;
+    type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
     type M = TwoRowMatrixView<'a, PackedVal<SC>>;
