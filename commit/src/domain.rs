@@ -16,7 +16,7 @@ pub struct LagrangeSelectors<T> {
     pub inv_zeroifier: T,
 }
 
-pub trait PolynomialDomain: Copy {
+pub trait PolynomialSpace: Copy {
     type Val: Field;
 
     fn size(&self) -> usize;
@@ -62,7 +62,7 @@ impl<Val: TwoAdicField> TwoAdicMultiplicativeCoset<Val> {
     }
 }
 
-impl<Val: TwoAdicField> PolynomialDomain for TwoAdicMultiplicativeCoset<Val> {
+impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     type Val = Val;
 
     fn size(&self) -> usize {

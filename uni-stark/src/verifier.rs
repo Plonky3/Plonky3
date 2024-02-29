@@ -3,7 +3,7 @@ use alloc::vec;
 use itertools::Itertools;
 use p3_air::{Air, BaseAir, TwoRowMatrixView};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
-use p3_commit::{Pcs, PolynomialDomain};
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{AbstractExtensionField, AbstractField, Field};
 use tracing::instrument;
 

@@ -8,9 +8,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::PolynomialDomain;
+use crate::PolynomialSpace;
 
-pub type Val<D> = <D as PolynomialDomain>::Val;
+pub type Val<D> = <D as PolynomialSpace>::Val;
 
 /// A (not necessarily hiding) polynomial commitment scheme, for committing to (batches of) polynomials
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
@@ -18,7 +18,7 @@ pub trait Pcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Val<Self::Domain>>,
 {
-    type Domain: PolynomialDomain;
+    type Domain: PolynomialSpace;
 
     /// The commitment that's sent to the verifier.
     type Commitment: Clone + Serialize + DeserializeOwned;

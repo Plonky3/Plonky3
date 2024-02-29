@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
-use p3_commit::{Pcs, PolynomialDomain};
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 
 pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
@@ -12,7 +12,7 @@ pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
 pub type Val<SC> = <<<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
     <SC as StarkGenericConfig>::Challenger,
->>::Domain as PolynomialDomain>::Val;
+>>::Domain as PolynomialSpace>::Val;
 
 pub type PackedVal<SC> = <Val<SC> as Field>::Packing;
 
@@ -50,9 +50,9 @@ impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
 
 impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
 where
-    Challenge: ExtensionField<<Pcs::Domain as PolynomialDomain>::Val> + TwoAdicField,
+    Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val> + TwoAdicField,
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
-    Challenger: FieldChallenger<<Pcs::Domain as PolynomialDomain>::Val>
+    Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
         + CanSample<Challenge>,
 {

@@ -5,9 +5,7 @@ use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
-use p3_commit::{
-    DirectMmcs, Mmcs, OpenedValues, Pcs, PolynomialDomain, TwoAdicMultiplicativeCoset,
-};
+use p3_commit::{DirectMmcs, Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
