@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
+use crate::Packable;
 
 /// A generalization of `Field` which permits things like
 /// - an actual field element
@@ -149,6 +150,7 @@ pub trait AbstractField:
 /// An element of a finite field.
 pub trait Field:
     AbstractField<F = Self>
+    + Packable
     + 'static
     + Copy
     + Div<Self, Output = Self>
@@ -204,6 +206,17 @@ pub trait Field:
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
+    }
+
+    /// Computes input/2.
+    /// Should be overwritten by most field implementations to use bitshifts.
+    /// Will error if the field characteristic is 2.
+    #[must_use]
+    fn halve(&self) -> Self {
+        let half = Self::two()
+            .try_inverse()
+            .expect("Cannot divide by 2 in fields with characteristic 2");
+        *self * half
     }
 }
 
@@ -286,6 +299,12 @@ pub trait AbstractExtensionField<Base: AbstractField>:
 }
 
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+    type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
+        + 'static
+        + Copy
+        + Send
+        + Sync;
+
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
@@ -298,7 +317,9 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     }
 }
 
-impl<F: Field> ExtensionField<F> for F {}
+impl<F: Field> ExtensionField<F> for F {
+    type ExtensionPacking = F::Packing;
+}
 
 impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     const D: usize = 1;

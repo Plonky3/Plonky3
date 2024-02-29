@@ -15,13 +15,10 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 p3-field-testing = { path = "../field-testing" }
 criterion = "0.5.1"
 rand_chacha = "0.3.1"
+serde_json = "1.0.113"
 
 [[bench]]
-name = "inverse"
-harness = false
-
-[[bench]]
-name = "root_7"
+name = "bench_field"
 harness = false
 
 [[bench]]

@@ -13,13 +13,16 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use mds::*;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField64,
-    TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
+    PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+
+/// The Goldilocks prime
+const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
@@ -44,6 +47,8 @@ impl PartialEq for Goldilocks {
 }
 
 impl Eq for Goldilocks {}
+
+impl Packable for Goldilocks {}
 
 impl Hash for Goldilocks {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -210,12 +215,17 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Goldilocks::new(halve_u64::<P>(self.value))
+    }
 }
 
 impl PrimeField for Goldilocks {}
 
 impl PrimeField64 for Goldilocks {
-    const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
+    const ORDER_U64: u64 = P;
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
@@ -269,7 +279,11 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+
+        // This sum will not overflow so long as iter.len() < 2^64.
+        let sum = iter.map(|x| (x.value as u128)).sum::<u128>();
+        reduce128(sum)
     }
 }
 

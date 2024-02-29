@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField};
+use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -582,9 +582,8 @@ fn interleave2(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
     }
 }
 
-unsafe impl PackedField for PackedBabyBearNeon {
-    type Scalar = BabyBear;
-
+unsafe impl PackedValue for PackedBabyBearNeon {
+    type Value = BabyBear;
     const WIDTH: usize = WIDTH;
 
     #[inline]
@@ -623,6 +622,10 @@ unsafe impl PackedField for PackedBabyBearNeon {
     fn as_slice_mut(&mut self) -> &mut [BabyBear] {
         &mut self.0[..]
     }
+}
+
+unsafe impl PackedField for PackedBabyBearNeon {
+    type Scalar = BabyBear;
 
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {

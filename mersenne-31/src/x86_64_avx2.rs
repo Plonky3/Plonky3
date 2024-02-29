@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField};
+use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -578,8 +578,8 @@ fn interleave4(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
     }
 }
 
-unsafe impl PackedField for PackedMersenne31AVX2 {
-    type Scalar = Mersenne31;
+unsafe impl PackedValue for PackedMersenne31AVX2 {
+    type Value = Mersenne31;
 
     const WIDTH: usize = WIDTH;
 
@@ -619,6 +619,10 @@ unsafe impl PackedField for PackedMersenne31AVX2 {
     fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
         &mut self.0[..]
     }
+}
+
+unsafe impl PackedField for PackedMersenne31AVX2 {
+    type Scalar = Mersenne31;
 
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
@@ -811,7 +815,7 @@ mod tests {
     #[test]
     fn test_neg_own_inverse() {
         let vec = packed_from_random(0xee4df174b850a35f);
-        let res = --vec;
+        let res = -(-vec);
         assert_eq!(res, vec);
     }
 
@@ -1124,6 +1128,7 @@ mod tests {
         let vec = PackedMersenne31AVX2(arr);
         let vec_res = -vec;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
@@ -1136,6 +1141,7 @@ mod tests {
         let vec = PackedMersenne31AVX2(arr);
         let vec_res = -vec;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }

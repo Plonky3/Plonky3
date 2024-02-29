@@ -93,4 +93,15 @@ mod tests {
         let idft = NaiveDft.idft_batch(dft);
         assert_eq!(original, idft);
     }
+
+    #[test]
+    fn coset_dft_idft_consistency() {
+        type F = Goldilocks;
+        let generator = F::generator();
+        let mut rng = thread_rng();
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let dft = NaiveDft.coset_dft_batch(original.clone(), generator);
+        let idft = NaiveDft.coset_idft_batch(dft, generator);
+        assert_eq!(original, idft);
+    }
 }

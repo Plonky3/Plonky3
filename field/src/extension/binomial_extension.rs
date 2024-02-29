@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
+use crate::{
+    field_to_array, AbstractExtensionField, AbstractField, ExtensionField, Packable, TwoAdicField,
+};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BinomialExtensionField<AF, const D: usize> {
@@ -40,9 +42,12 @@ impl<AF: AbstractField, const D: usize> From<AF> for BinomialExtensionField<AF, 
     }
 }
 
+impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
+
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
+    type ExtensionPacking = BinomialExtensionField<F::Packing, D>;
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
@@ -211,6 +216,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::w()))),
             3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::w()))),
             _ => Some(self.frobenius_inv()),
+        }
+    }
+
+    fn halve(&self) -> Self {
+        Self {
+            value: self.value.map(|x| x.halve()),
         }
     }
 }

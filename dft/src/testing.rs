@@ -58,6 +58,24 @@ where
     }
 }
 
+pub(crate) fn test_coset_idft_matches_naive<F, Dft>()
+where
+    F: TwoAdicField,
+    Standard: Distribution<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    let dft = Dft::default();
+    let mut rng = thread_rng();
+    for log_h in 0..5 {
+        let h = 1 << log_h;
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+        let shift = F::generator();
+        let idft_naive = NaiveDft.coset_idft_batch(mat.clone(), shift);
+        let idft_result = dft.coset_idft_batch(mat, shift);
+        assert_eq!(idft_naive, idft_result);
+    }
+}
+
 pub(crate) fn test_lde_matches_naive<F, Dft>()
 where
     F: TwoAdicField,

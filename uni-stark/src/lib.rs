@@ -5,7 +5,6 @@
 extern crate alloc;
 
 mod config;
-mod decompose;
 mod folder;
 mod proof;
 mod prover;
@@ -19,7 +18,6 @@ mod zerofier_coset;
 mod check_constraints;
 
 pub use config::*;
-pub use decompose::*;
 pub use folder::*;
 pub use proof::*;
 pub use prover::*;

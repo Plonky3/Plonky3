@@ -1,15 +1,18 @@
 use alloc::vec::Vec;
 
 use p3_commit::Pcs;
-use p3_matrix::dense::RowMajorMatrix;
 use serde::{Deserialize, Serialize};
 
 use crate::StarkGenericConfig;
 
-type Val<SC> = <SC as StarkGenericConfig>::Val;
-type ValMat<SC> = RowMajorMatrix<Val<SC>>;
-type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<Val<SC>, ValMat<SC>>>::Commitment;
-type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<Val<SC>, ValMat<SC>>>::Proof;
+type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
+    <SC as StarkGenericConfig>::Challenge,
+    <SC as StarkGenericConfig>::Challenger,
+>>::Commitment;
+type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
+    <SC as StarkGenericConfig>::Challenge,
+    <SC as StarkGenericConfig>::Challenger,
+>>::Proof;
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -30,5 +33,5 @@ pub struct Commitments<Com> {
 pub struct OpenedValues<Challenge> {
     pub(crate) trace_local: Vec<Challenge>,
     pub(crate) trace_next: Vec<Challenge>,
-    pub(crate) quotient_chunks: Vec<Challenge>,
+    pub(crate) quotient_chunks: Vec<Vec<Challenge>>,
 }

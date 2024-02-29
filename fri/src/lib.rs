@@ -8,7 +8,7 @@ mod config;
 mod fold_even_odd;
 mod proof;
 pub mod prover;
-pub mod two_adic_pcs;
+mod two_adic_pcs;
 pub mod verifier;
 
 pub use config::*;

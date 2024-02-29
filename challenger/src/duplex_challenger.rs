@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field, PrimeField64};
-use p3_symmetric::CryptographicPermutation;
+use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -87,6 +87,34 @@ where
     }
 }
 
+impl<F, P, const N: usize, const WIDTH: usize> CanObserve<Hash<F, F, N>>
+    for DuplexChallenger<F, P, WIDTH>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn observe(&mut self, values: Hash<F, F, N>) {
+        for value in values {
+            self.observe(value);
+        }
+    }
+}
+
+// for TrivialPcs
+impl<F, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for DuplexChallenger<F, P, WIDTH>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn observe(&mut self, valuess: Vec<Vec<F>>) {
+        for values in valuess {
+            for value in values {
+                self.observe(value);
+            }
+        }
+    }
+}
+
 impl<F, EF, P, const WIDTH: usize> CanSample<EF> for DuplexChallenger<F, P, WIDTH>
 where
     F: Field,
@@ -126,7 +154,7 @@ where
 mod tests {
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_symmetric::{CryptographicPermutation, Permutation};
+    use p3_symmetric::Permutation;
 
     use super::*;
 

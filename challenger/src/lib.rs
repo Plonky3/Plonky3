@@ -7,6 +7,7 @@ extern crate alloc;
 mod duplex_challenger;
 mod grinding_challenger;
 mod hash_challenger;
+mod serializing_challenger;
 
 use alloc::vec::Vec;
 use core::array;
@@ -15,6 +16,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 use p3_field::{AbstractExtensionField, Field};
+pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {
     fn observe(&mut self, value: T);

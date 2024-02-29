@@ -1,12 +1,11 @@
 use p3_baby_bear::BabyBear;
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
-use p3_commit::{ExtensionMmcs, Pcs, UnivariatePcs};
+use p3_commit::{ExtensionMmcs, Pcs};
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
+use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -26,7 +25,13 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     let compress = MyCompress::new(perm.clone());
 
-    type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
+    type ValMmcs = FieldMerkleTreeMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        8,
+    >;
     let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
@@ -43,48 +48,48 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };
-    type Pcs =
-        TwoAdicFriPcs<TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>>;
-    let pcs = Pcs::new(fri_config, dft, val_mmcs);
+    type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    let max_log_n = log_degrees.iter().copied().max().unwrap();
+    let pcs: MyPcs = MyPcs::new(max_log_n, dft, val_mmcs, fri_config);
 
     let mut challenger = Challenger::new(perm.clone());
 
-    let polynomials = log_degrees
+    let domains_and_polys = log_degrees
         .iter()
-        .map(|d| RowMajorMatrix::rand(&mut rng, 1 << *d, 10))
+        .map(|&d| {
+            (
+                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << d),
+                RowMajorMatrix::<Val>::rand(&mut rng, 1 << d, 10),
+            )
+        })
         .collect::<Vec<_>>();
 
-    let (commit, data) = pcs.commit_batches(polynomials.clone());
+    let (commit, data) =
+        <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.clone());
 
     challenger.observe(commit);
 
     let zeta = challenger.sample_ext_element::<Challenge>();
 
-    let points = polynomials.iter().map(|_| vec![zeta]).collect::<Vec<_>>();
+    let points = domains_and_polys
+        .iter()
+        .map(|_| vec![zeta])
+        .collect::<Vec<_>>();
 
-    let (opening, proof) = <Pcs as UnivariatePcs<_, _, RowMajorMatrix<Val>, _>>::open_multi_batches(
-        &pcs,
-        &[(&data, &points)],
-        &mut challenger,
-    );
+    let (opening, proof) = pcs.open(vec![(&data, points)], &mut challenger);
 
     // verify the proof.
     let mut challenger = Challenger::new(perm);
     challenger.observe(commit);
     let _ = challenger.sample_ext_element::<Challenge>();
-    let dims = polynomials
+
+    let os = domains_and_polys
         .iter()
-        .map(|p| p.dimensions())
-        .collect::<Vec<_>>();
-    <Pcs as UnivariatePcs<_, _, RowMajorMatrix<Val>, _>>::verify_multi_batches(
-        &pcs,
-        &[(commit, &points)],
-        &[dims],
-        opening,
-        &proof,
-        &mut challenger,
-    )
-    .expect("verification error");
+        .zip(&opening[0])
+        .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
+        .collect();
+    pcs.verify(vec![(commit, os)], &proof, &mut challenger)
+        .unwrap()
 }
 
 #[test]
