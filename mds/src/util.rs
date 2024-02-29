@@ -21,11 +21,13 @@ use p3_field::{AbstractField, TwoAdicField};
 // 1, 1, 51, 52, 11, 63, 1, 2, 1, 2, 15, 67, 2, 22, 13, 3
 // [1, 1, 2, 1, 8, 32, 2, 65, 77, 8, 91, 31, 3, 65, 32, 7];
 
+/// This will throw an error if N = 0 but it's hard to imagine this case coming up.
 #[inline(always)]
 pub fn dot_product<T, const N: usize>(u: [T; N], v: [T; N]) -> T
 where
     T: Copy + AddAssign + Mul<Output = T>,
 {
+    debug_assert_ne!(N, 0);
     let mut dp = u[0] * v[0];
     for i in 1..N {
         dp += u[i] * v[i];
