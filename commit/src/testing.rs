@@ -10,7 +10,7 @@ use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenedValues, Pcs, PolynomialDomain, TwoAdicMultiplicativeCoset};
+use crate::{OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
 pub struct TrivialPcs<Val: TwoAdicField, Dft: TwoAdicSubgroupDft<Val>> {
