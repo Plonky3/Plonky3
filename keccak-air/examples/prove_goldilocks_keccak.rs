@@ -11,7 +11,6 @@ use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher64};
 use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
 use p3_util::log2_ceil_usize;
-use rand::random;
 use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;

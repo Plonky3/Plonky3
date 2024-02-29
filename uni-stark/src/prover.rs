@@ -3,8 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
 use p3_air::{Air, TwoRowMatrixView};
-use p3_challenger::CanSample;
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialDomain};
 use p3_field::{AbstractExtensionField, AbstractField, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
