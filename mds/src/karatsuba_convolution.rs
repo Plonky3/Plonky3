@@ -123,121 +123,6 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         output.map(Self::reduce)
     }
 
-    /// Compute output(x) = lhs(x)rhs(x) mod x^N - 1.
-    ///
-    /// NB: This function should not be called by clients; use `Self::apply()`.
-    #[inline(always)]
-    fn conv_n<
-        const N: usize,
-        const HALF_N: usize,
-        C: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
-        SC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
-    >(
-        lhs: [T; N],
-        rhs: [U; N],
-        output: &mut [V],
-        inner_conv: C,
-        inner_negacyclic_conv: SC,
-    ) {
-        debug_assert_eq!(2 * HALF_N, N);
-        // NB: The compiler is smart enough not to initialise these arrays.
-        let mut lhs_pos = [T::default(); HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
-        let mut lhs_neg = [T::default(); HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
-        let mut rhs_pos = [U::default(); HALF_N]; // rhs_pos = rhs(x) mod x^{N/2} - 1
-        let mut rhs_neg = [U::default(); HALF_N]; // rhs_neg = rhs(x) mod x^{N/2} + 1
-
-        for i in 0..HALF_N {
-            let s = lhs[i];
-            let t = lhs[i + HALF_N];
-
-            lhs_pos[i] = s + t;
-            lhs_neg[i] = s - t;
-
-            let s = rhs[i];
-            let t = rhs[i + HALF_N];
-
-            rhs_pos[i] = s + t;
-            rhs_neg[i] = s - t;
-        }
-
-        let (left, right) = output.split_at_mut(HALF_N);
-
-        // left = w1 = lhs(x)rhs(x) mod x^{N/2} + 1
-        inner_negacyclic_conv(lhs_neg, rhs_neg, left);
-
-        // right = w0 = lhs(x)rhs(x) mod x^{N/2} - 1
-        inner_conv(lhs_pos, rhs_pos, right);
-
-        for i in 0..HALF_N {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] >>= 1; // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
-        }
-    }
-
-    /// Compute output(x) = lhs(x)rhs(x) mod x^N + 1.
-    ///
-    /// NB: This function should not be called by clients.
-    #[inline(always)]
-    fn negacyclic_conv_n<
-        const N: usize,
-        const HALF_N: usize,
-        SC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
-    >(
-        lhs: [T; N],
-        rhs: [U; N],
-        output: &mut [V],
-        inner_negacyclic_conv: SC,
-    ) {
-        debug_assert_eq!(2 * HALF_N, N);
-        // NB: The compiler is smart enough not to initialise these arrays.
-        let mut lhs_even = [T::default(); HALF_N];
-        let mut lhs_odd = [T::default(); HALF_N];
-        let mut lhs_sum = [T::default(); HALF_N];
-        let mut rhs_even = [U::default(); HALF_N];
-        let mut rhs_odd = [U::default(); HALF_N];
-        let mut rhs_sum = [U::default(); HALF_N];
-
-        for i in 0..HALF_N {
-            let s = lhs[2 * i];
-            let t = lhs[2 * i + 1];
-            lhs_even[i] = s;
-            lhs_odd[i] = t;
-            lhs_sum[i] = s + t;
-
-            let s = rhs[2 * i];
-            let t = rhs[2 * i + 1];
-            rhs_even[i] = s;
-            rhs_odd[i] = t;
-            rhs_sum[i] = s + t;
-        }
-
-        let mut even_s_conv = [V::default(); HALF_N];
-        let (left, right) = output.split_at_mut(HALF_N);
-
-        // Recursively compute the size N/2 negacyclic convolutions of
-        // the even parts, odd parts, and sums.
-        inner_negacyclic_conv(lhs_even, rhs_even, &mut even_s_conv);
-        inner_negacyclic_conv(lhs_odd, rhs_odd, left);
-        inner_negacyclic_conv(lhs_sum, rhs_sum, right);
-
-        // Adjust so that the correct values are in right and
-        // even_s_conv respectively:
-        right[0] -= even_s_conv[0] + left[0];
-        even_s_conv[0] -= left[HALF_N - 1];
-
-        for i in 1..HALF_N {
-            right[i] -= even_s_conv[i] + left[i];
-            even_s_conv[i] += left[i - 1];
-        }
-
-        // Interleave even_s_conv and right in the output:
-        for i in 0..HALF_N {
-            output[2 * i] = even_s_conv[i];
-            output[2 * i + 1] = output[i + HALF_N];
-        }
-    }
-
     #[inline(always)]
     fn conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
         output[0] = Self::parity_dot(lhs, [rhs[0], rhs[2], rhs[1]]);
@@ -255,7 +140,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     #[inline(always)]
     fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
         // NB: This is just explicitly implementing
-        // conv_n::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::negacyclic_conv2)
+        // conv_n_recursive::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::negacyclic_conv2)
         let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]];
         let u_m = [lhs[0] - lhs[2], lhs[1] - lhs[3]];
         let v_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]];
@@ -286,61 +171,218 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        Self::conv_n::<6, 3, _, _>(lhs, rhs, output, Self::conv3, Self::negacyclic_conv3)
+        conv_n_recursive::<6, 3, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv3,
+            Self::negacyclic_conv3,
+        )
     }
 
     #[inline(always)]
     fn negacyclic_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        Self::negacyclic_conv_n::<6, 3, _>(lhs, rhs, output, Self::negacyclic_conv3)
+        negacyclic_conv_n_recursive::<6, 3, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv3)
     }
 
     #[inline(always)]
     fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        Self::conv_n::<8, 4, _, _>(lhs, rhs, output, Self::conv4, Self::negacyclic_conv4)
+        conv_n_recursive::<8, 4, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv4,
+            Self::negacyclic_conv4,
+        )
     }
 
     #[inline(always)]
     fn negacyclic_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        Self::negacyclic_conv_n::<8, 4, _>(lhs, rhs, output, Self::negacyclic_conv4)
+        negacyclic_conv_n_recursive::<8, 4, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv4)
     }
 
     #[inline(always)]
     fn conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        Self::conv_n::<12, 6, _, _>(lhs, rhs, output, Self::conv6, Self::negacyclic_conv6)
+        conv_n_recursive::<12, 6, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv6,
+            Self::negacyclic_conv6,
+        )
     }
 
     #[inline(always)]
     fn negacyclic_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        Self::negacyclic_conv_n::<12, 6, _>(lhs, rhs, output, Self::negacyclic_conv6)
+        negacyclic_conv_n_recursive::<12, 6, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv6)
     }
 
     #[inline(always)]
     fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        Self::conv_n::<16, 8, _, _>(lhs, rhs, output, Self::conv8, Self::negacyclic_conv8)
+        conv_n_recursive::<16, 8, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv8,
+            Self::negacyclic_conv8,
+        )
     }
 
     #[inline(always)]
     fn negacyclic_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        Self::negacyclic_conv_n::<16, 8, _>(lhs, rhs, output, Self::negacyclic_conv8)
+        negacyclic_conv_n_recursive::<16, 8, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv8)
     }
 
     #[inline(always)]
     fn conv24(lhs: [T; 24], rhs: [U; 24], output: &mut [V]) {
-        Self::conv_n::<24, 12, _, _>(lhs, rhs, output, Self::conv12, Self::negacyclic_conv12)
+        conv_n_recursive::<24, 12, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv12,
+            Self::negacyclic_conv12,
+        )
     }
 
     #[inline(always)]
     fn conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        Self::conv_n::<32, 16, _, _>(lhs, rhs, output, Self::conv16, Self::negacyclic_conv16)
+        conv_n_recursive::<32, 16, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv16,
+            Self::negacyclic_conv16,
+        )
     }
 
     #[inline(always)]
     fn negacyclic_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        Self::negacyclic_conv_n::<32, 16, _>(lhs, rhs, output, Self::negacyclic_conv16)
+        negacyclic_conv_n_recursive::<32, 16, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv16)
     }
 
     #[inline(always)]
     fn conv64(lhs: [T; 64], rhs: [U; 64], output: &mut [V]) {
-        Self::conv_n::<64, 32, _, _>(lhs, rhs, output, Self::conv32, Self::negacyclic_conv32)
+        conv_n_recursive::<64, 32, T, U, V, _, _>(
+            lhs,
+            rhs,
+            output,
+            Self::conv32,
+            Self::negacyclic_conv32,
+        )
+    }
+}
+
+/// Compute output(x) = lhs(x)rhs(x) mod x^N - 1.
+/// Do this recursively using a convolution and negacyclic convolution of size HALF_N = N/2.
+#[inline(always)]
+fn conv_n_recursive<const N: usize, const HALF_N: usize, T, U, V, C, NC>(
+    lhs: [T; N],
+    rhs: [U; N],
+    output: &mut [V],
+    inner_conv: C,
+    inner_negacyclic_conv: NC,
+) where
+    T: RngElt,
+    U: RngElt,
+    V: RngElt,
+    C: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
+    NC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
+{
+    debug_assert_eq!(2 * HALF_N, N);
+    // NB: The compiler is smart enough not to initialise these arrays.
+    let mut lhs_pos = [T::default(); HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
+    let mut lhs_neg = [T::default(); HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
+    let mut rhs_pos = [U::default(); HALF_N]; // rhs_pos = rhs(x) mod x^{N/2} - 1
+    let mut rhs_neg = [U::default(); HALF_N]; // rhs_neg = rhs(x) mod x^{N/2} + 1
+
+    for i in 0..HALF_N {
+        let s = lhs[i];
+        let t = lhs[i + HALF_N];
+
+        lhs_pos[i] = s + t;
+        lhs_neg[i] = s - t;
+
+        let s = rhs[i];
+        let t = rhs[i + HALF_N];
+
+        rhs_pos[i] = s + t;
+        rhs_neg[i] = s - t;
+    }
+
+    let (left, right) = output.split_at_mut(HALF_N);
+
+    // left = w1 = lhs(x)rhs(x) mod x^{N/2} + 1
+    inner_negacyclic_conv(lhs_neg, rhs_neg, left);
+
+    // right = w0 = lhs(x)rhs(x) mod x^{N/2} - 1
+    inner_conv(lhs_pos, rhs_pos, right);
+
+    for i in 0..HALF_N {
+        left[i] += right[i]; // w_0 + w_1
+        left[i] >>= 1; // (w_0 + w_1)/2
+        right[i] -= left[i]; // (w_0 - w_1)/2
+    }
+}
+
+/// Compute output(x) = lhs(x)rhs(x) mod x^N + 1.
+/// Do this recursively using three negacyclic convolutions of size HALF_N = N/2.
+#[inline(always)]
+fn negacyclic_conv_n_recursive<const N: usize, const HALF_N: usize, T, U, V, NC>(
+    lhs: [T; N],
+    rhs: [U; N],
+    output: &mut [V],
+    inner_negacyclic_conv: NC,
+) where
+    T: RngElt,
+    U: RngElt,
+    V: RngElt,
+    NC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
+{
+    debug_assert_eq!(2 * HALF_N, N);
+    // NB: The compiler is smart enough not to initialise these arrays.
+    let mut lhs_even = [T::default(); HALF_N];
+    let mut lhs_odd = [T::default(); HALF_N];
+    let mut lhs_sum = [T::default(); HALF_N];
+    let mut rhs_even = [U::default(); HALF_N];
+    let mut rhs_odd = [U::default(); HALF_N];
+    let mut rhs_sum = [U::default(); HALF_N];
+
+    for i in 0..HALF_N {
+        let s = lhs[2 * i];
+        let t = lhs[2 * i + 1];
+        lhs_even[i] = s;
+        lhs_odd[i] = t;
+        lhs_sum[i] = s + t;
+
+        let s = rhs[2 * i];
+        let t = rhs[2 * i + 1];
+        rhs_even[i] = s;
+        rhs_odd[i] = t;
+        rhs_sum[i] = s + t;
+    }
+
+    let mut even_s_conv = [V::default(); HALF_N];
+    let (left, right) = output.split_at_mut(HALF_N);
+
+    // Recursively compute the size N/2 negacyclic convolutions of
+    // the even parts, odd parts, and sums.
+    inner_negacyclic_conv(lhs_even, rhs_even, &mut even_s_conv);
+    inner_negacyclic_conv(lhs_odd, rhs_odd, left);
+    inner_negacyclic_conv(lhs_sum, rhs_sum, right);
+
+    // Adjust so that the correct values are in right and
+    // even_s_conv respectively:
+    right[0] -= even_s_conv[0] + left[0];
+    even_s_conv[0] -= left[HALF_N - 1];
+
+    for i in 1..HALF_N {
+        right[i] -= even_s_conv[i] + left[i];
+        even_s_conv[i] += left[i - 1];
+    }
+
+    // Interleave even_s_conv and right in the output:
+    for i in 0..HALF_N {
+        output[2 * i] = even_s_conv[i];
+        output[2 * i + 1] = output[i + HALF_N];
     }
 }
