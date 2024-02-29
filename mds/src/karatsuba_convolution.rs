@@ -33,7 +33,7 @@
 //! operations and so it is the one implemented below, though it does
 //! require a bit more data manipulation. It works as follows:
 //!
-//! Define the even v_e and odd v_o parts so that v(x) = (v_e(x^2) + xv_o(x^2)).
+//! Define the even v_e and odd v_o parts so that v(x) = (v_e(x^2) + x v_o(x^2)).
 //! Then v(x)u(x)
 //!    = (v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2))
 //!      + x ((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2))
