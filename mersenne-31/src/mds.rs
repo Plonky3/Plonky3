@@ -110,12 +110,12 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         // (wo + w1)/2) which has no effect on the maximal size. (Indeed,
         // it makes sizes almost strictly smaller).
         //
-        // On the other hand, signed_conv (ignoring the re-index)
+        // On the other hand, negacyclic_conv (ignoring the re-index)
         // recombines as: (w0, w1, w2) -> (w0 + w1, w2 - w0 - w1). Hence
         // if the input is <= K, the output is <= 3K.
         //
         // Thus the values appearing at the end are bounded by 3^n 2^44
-        // where n is the maximal number of signed_conv recombination
+        // where n is the maximal number of negacyclic_conv recombination
         // steps. When N = 64, we need to recombine for singed_conv_32,
         // singed_conv_16, singed_conv_8 so the overall bound will be 3^3
         // 2^44 < 32 * 2^44 < 2^49.

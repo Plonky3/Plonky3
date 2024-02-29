@@ -9,7 +9,7 @@
 //! Given a vector v \in F^N, let v(x) \in F[X] denote the polynomial
 //! v_0 + v_1 x + ... + v_{N - 1} x^{N - 1}.  Then w is equal to the
 //! convolution v * u if and only if w(x) = v(x)u(x) mod x^N - 1.
-//! Additionally, define the "signed convolution" by w(x) = v(x)u(x)
+//! Additionally, define the negacyclic convolution by w(x) = v(x)u(x)
 //! mod x^N + 1.  Using the Chinese remainder theorem we can compute
 //! w(x) as
 //!     w(x) = 1/2 (w_0(x) + w_1(x)) + x^{N/2}/2 (w_0(x) - w_1(x))
@@ -24,7 +24,7 @@
 //!                  u_1(x) = u(x) mod x^{N/2} + 1
 //!
 //! Now w_0 is the convolution of v_0 and u_0 which we can compute
-//! recursively.  For w_1 we compute the signed convolution
+//! recursively.  For w_1 we compute the negacyclic convolution
 //! v_1(x)u_1(x) mod x^{N/2} + 1 using Karatsuba.
 //!
 //! There are 2 possible approaches to applying Karatsuba which mirror
@@ -38,7 +38,7 @@
 //!    = (v_e(x^2)u_e(x^2) + x^2 v_o(x^2)u_o(x^2))
 //!      + x ((v_e(x^2) + v_o(x^2))(u_e(x^2) + u_o(x^2))
 //!            - (v_e(x^2)u_e(x^2) + v_o(x^2)u_o(x^2)))
-//! This reduces the problem to 3 signed convolutions of size N/2 which
+//! This reduces the problem to 3 negacyclic convolutions of size N/2 which
 //! can be computed recursively.
 //!
 //! Of course, for small sizes we just explicitly write out the O(n^2)
@@ -137,7 +137,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         rhs: [U; N],
         output: &mut [V],
         inner_conv: C,
-        inner_signed_conv: SC,
+        inner_negacyclic_conv: SC,
     ) {
         debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
@@ -163,7 +163,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         let (left, right) = output.split_at_mut(HALF_N);
 
         // left = w1 = lhs(x)rhs(x) mod x^{N/2} + 1
-        inner_signed_conv(lhs_neg, rhs_neg, left);
+        inner_negacyclic_conv(lhs_neg, rhs_neg, left);
 
         // right = w0 = lhs(x)rhs(x) mod x^{N/2} - 1
         inner_conv(lhs_pos, rhs_pos, right);
@@ -179,7 +179,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     ///
     /// NB: This function should not be called by clients.
     #[inline(always)]
-    fn signed_conv_n<
+    fn negacyclic_conv_n<
         const N: usize,
         const HALF_N: usize,
         SC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
@@ -187,7 +187,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         lhs: [T; N],
         rhs: [U; N],
         output: &mut [V],
-        inner_signed_conv: SC,
+        inner_negacyclic_conv: SC,
     ) {
         debug_assert_eq!(2 * HALF_N, N);
         // NB: The compiler is smart enough not to initialise these arrays.
@@ -217,9 +217,9 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
         // Recursively compute the size N/2 negacyclic convolutions of
         // the even parts, odd parts, and sums.
-        inner_signed_conv(lhs_even, rhs_even, &mut even_s_conv);
-        inner_signed_conv(lhs_odd, rhs_odd, left);
-        inner_signed_conv(lhs_sum, rhs_sum, right);
+        inner_negacyclic_conv(lhs_even, rhs_even, &mut even_s_conv);
+        inner_negacyclic_conv(lhs_odd, rhs_odd, left);
+        inner_negacyclic_conv(lhs_sum, rhs_sum, right);
 
         // Adjust so that the correct values are in right and
         // even_s_conv respectively:
@@ -246,7 +246,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     }
 
     #[inline(always)]
-    fn signed_conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
+    fn negacyclic_conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
         output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[2], -rhs[1]]);
         output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[2]]);
         output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
@@ -255,7 +255,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     #[inline(always)]
     fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
         // NB: This is just explicitly implementing
-        // conv_n::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::signed_conv2)
+        // conv_n::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::negacyclic_conv2)
         let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]];
         let u_m = [lhs[0] - lhs[2], lhs[1] - lhs[3]];
         let v_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]];
@@ -277,7 +277,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     }
 
     #[inline(always)]
-    fn signed_conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
+    fn negacyclic_conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
         output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[3], -rhs[2], -rhs[1]]);
         output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[3], -rhs[2]]);
         output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0], -rhs[3]]);
@@ -286,61 +286,61 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        Self::conv_n::<6, 3, _, _>(lhs, rhs, output, Self::conv3, Self::signed_conv3)
+        Self::conv_n::<6, 3, _, _>(lhs, rhs, output, Self::conv3, Self::negacyclic_conv3)
     }
 
     #[inline(always)]
-    fn signed_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        Self::signed_conv_n::<6, 3, _>(lhs, rhs, output, Self::signed_conv3)
+    fn negacyclic_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
+        Self::negacyclic_conv_n::<6, 3, _>(lhs, rhs, output, Self::negacyclic_conv3)
     }
 
     #[inline(always)]
     fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        Self::conv_n::<8, 4, _, _>(lhs, rhs, output, Self::conv4, Self::signed_conv4)
+        Self::conv_n::<8, 4, _, _>(lhs, rhs, output, Self::conv4, Self::negacyclic_conv4)
     }
 
     #[inline(always)]
-    fn signed_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        Self::signed_conv_n::<8, 4, _>(lhs, rhs, output, Self::signed_conv4)
+    fn negacyclic_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
+        Self::negacyclic_conv_n::<8, 4, _>(lhs, rhs, output, Self::negacyclic_conv4)
     }
 
     #[inline(always)]
     fn conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        Self::conv_n::<12, 6, _, _>(lhs, rhs, output, Self::conv6, Self::signed_conv6)
+        Self::conv_n::<12, 6, _, _>(lhs, rhs, output, Self::conv6, Self::negacyclic_conv6)
     }
 
     #[inline(always)]
-    fn signed_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        Self::signed_conv_n::<12, 6, _>(lhs, rhs, output, Self::signed_conv6)
+    fn negacyclic_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
+        Self::negacyclic_conv_n::<12, 6, _>(lhs, rhs, output, Self::negacyclic_conv6)
     }
 
     #[inline(always)]
     fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        Self::conv_n::<16, 8, _, _>(lhs, rhs, output, Self::conv8, Self::signed_conv8)
+        Self::conv_n::<16, 8, _, _>(lhs, rhs, output, Self::conv8, Self::negacyclic_conv8)
     }
 
     #[inline(always)]
-    fn signed_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        Self::signed_conv_n::<16, 8, _>(lhs, rhs, output, Self::signed_conv8)
+    fn negacyclic_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
+        Self::negacyclic_conv_n::<16, 8, _>(lhs, rhs, output, Self::negacyclic_conv8)
     }
 
     #[inline(always)]
     fn conv24(lhs: [T; 24], rhs: [U; 24], output: &mut [V]) {
-        Self::conv_n::<24, 12, _, _>(lhs, rhs, output, Self::conv12, Self::signed_conv12)
+        Self::conv_n::<24, 12, _, _>(lhs, rhs, output, Self::conv12, Self::negacyclic_conv12)
     }
 
     #[inline(always)]
     fn conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        Self::conv_n::<32, 16, _, _>(lhs, rhs, output, Self::conv16, Self::signed_conv16)
+        Self::conv_n::<32, 16, _, _>(lhs, rhs, output, Self::conv16, Self::negacyclic_conv16)
     }
 
     #[inline(always)]
-    fn signed_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        Self::signed_conv_n::<32, 16, _>(lhs, rhs, output, Self::signed_conv16)
+    fn negacyclic_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
+        Self::negacyclic_conv_n::<32, 16, _>(lhs, rhs, output, Self::negacyclic_conv16)
     }
 
     #[inline(always)]
     fn conv64(lhs: [T; 64], rhs: [U; 64], output: &mut [V]) {
-        Self::conv_n::<64, 32, _, _>(lhs, rhs, output, Self::conv32, Self::signed_conv32)
+        Self::conv_n::<64, 32, _, _>(lhs, rhs, output, Self::conv32, Self::negacyclic_conv32)
     }
 }
