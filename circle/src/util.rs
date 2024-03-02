@@ -91,7 +91,8 @@ fn v_n_prime<F: Field>(p_x: F, log_n: usize) -> F {
     F::two().exp_u64((2 * (log_n - 1)) as u64) * (1..log_n).map(|i| v_n(p_x, i)).product()
 }
 
-// dont call with x = -1
+// Simple zero at (1,0), simple pole at (-1,0)
+// panics if called with x = -1
 pub(crate) fn v_0<F: Field>(p: Complex<F>) -> F {
     p.imag() / (p.real() + F::one())
 }

@@ -3,13 +3,13 @@ use core::marker::PhantomData;
 use alloc::vec;
 use alloc::vec::Vec;
 use itertools::Itertools;
-use p3_commit::{LagrangeSelectors, PolynomialDomain};
+use p3_commit::{LagrangeSelectors, PolynomialSpace};
 use p3_field::{
     extension::{Complex, ComplexExtendable},
     AbstractField, ExtensionField, Field,
 };
 use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixRowSlices, MatrixRows};
-use p3_util::log2_strict_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 use crate::{
     util::{point_to_univariate, rotate_univariate, univariate_to_point, v_0, v_n},
@@ -38,121 +38,112 @@ pub(crate) fn cfft_domain<F: ComplexExtendable>(log_n: usize) -> impl Iterator<I
     twin_coset_domain(g, shift, 1 << log_n)
 }
 
-// Only cfft (standard position) domain for now.
+/*
+X is generator, O is the first coset, goes counterclockwise
+  O X .
+ .     .
+.       O <- start = shift
+.   .   - (1,0)
+O       .
+ .     .
+  . . O
+
+For ordering reasons, the other half will start at gen / shift:
+  . X O  <- start = gen/shift
+ .     .
+O       .
+.   .   - (1,0)
+.       O
+ .     .
+  O . .
+
+The full domain is the interleaving of these two cosets
+*/
+
 #[derive(Copy, Clone)]
 pub struct CircleDomain<F> {
+    // log_n corresponds to the size of the WHOLE domain
     pub(crate) log_n: usize,
-    _phantom: PhantomData<F>,
+    pub(crate) shift: Complex<F>,
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
-    pub(crate) fn new(log_n: usize) -> Self {
+    pub(crate) fn standard(log_n: usize) -> Self {
         Self {
             log_n,
-            _phantom: PhantomData,
+            shift: F::circle_two_adic_generator(log_n + 1),
         }
     }
-    fn gen(&self) -> Complex<F> {
-        F::circle_two_adic_generator(self.log_n)
+    fn is_standard(&self) -> bool {
+        self.shift == F::circle_two_adic_generator(self.log_n + 1)
     }
-    fn univariate_gen(&self) -> F {
-        point_to_univariate(self.gen()).expect("generator is never (-1, 0)")
+    fn points(&self) -> impl Iterator<Item = Complex<F>> {
+        let half_gen = F::circle_two_adic_generator(self.log_n - 1);
+        let coset0 = half_gen.shifted_powers(self.shift);
+        let coset1 = half_gen.shifted_powers(half_gen / self.shift);
+        coset0.interleave(coset1).take(1 << self.log_n)
     }
 }
 
-impl<F: ComplexExtendable> PolynomialDomain for CircleDomain<F> {
+impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     type Val = F;
 
     fn size(&self) -> usize {
         1 << self.log_n
     }
 
-    fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Ext {
-        rotate_univariate(x, self.univariate_gen()).expect("rotated point to (-1, 0)")
+    fn first_point(&self) -> Self::Val {
+        point_to_univariate(self.shift).unwrap()
+    }
+
+    fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext> {
+        // Only in standard position do we have an algebraic expression to access the next point.
+        if self.is_standard() {
+            let gen = F::circle_two_adic_generator(self.log_n);
+            Some(point_to_univariate(gen.rotate(univariate_to_point(x))).unwrap())
+        } else {
+            None
+        }
     }
 
     fn create_disjoint_domain(&self, min_size: usize) -> Self {
-        let mut log_n = log2_strict_usize(min_size);
-        // As we only work on standard position domain, we can only give a smaller or larger domain
-        // With general twin cosets, we could give a disjoint domain of the same size
+        let mut log_n = log2_ceil_usize(min_size);
+        // Right now we simply guarantee the domain is disjoint by returning a
+        // larger standard position coset, which is fine because we always ask for a larger
+        // domain. If we wanted good performance for a disjoint domain of the same size,
+        // we could change the shift. Also we could support nonstandard twin cosets.
+        assert!(
+            self.is_standard(),
+            "create_disjoint_domain not currently supported for nonstandard twin cosets"
+        );
         while log_n == self.log_n {
             log_n += 1;
         }
-        Self::new(log_n)
+        Self::standard(log_n)
     }
 
-    // For now we do the naive decomposition: do a full CFFT/ICFFT, taking every nth coefficient
-    fn decomposed_width_factor(&self, max_size: usize) -> usize {
-        let log_max_size = log2_strict_usize(max_size);
-        assert!(self.log_n >= log_max_size);
-        let decomposed_bits = self.log_n - log_max_size;
-        1 << decomposed_bits
-    }
-    fn decomposed_domain(&self, max_size: usize) -> Self {
-        let log_max_size = log2_strict_usize(max_size);
-        assert!(self.log_n >= log_max_size);
-        Self::new(log_max_size)
-    }
-    fn decomposed_point<Ext: ExtensionField<Self::Val>>(
-        &self,
-        point: Ext,
-        _max_size: usize,
-    ) -> Ext {
-        point
-    }
-    fn decompose(
-        &self,
-        evals: RowMajorMatrix<Self::Val>,
-        max_size: usize,
-    ) -> RowMajorMatrix<Self::Val> {
-        let cfft = Cfft::default();
-        let coeffs = cfft.cfft_batch(evals);
-
-        let n_chunks = self.decomposed_width_factor(max_size);
-        let chunks = (0..n_chunks)
-            .map(|i| {
-                let view = coeffs.as_view();
-                cfft.icfft_batch(view.vertically_strided(n_chunks, i).to_row_major_matrix())
-            })
-            .collect_vec();
-
-        let mut hcat = vec![];
-        for i in 0..coeffs.height() {
-            for ch in &chunks {
-                hcat.extend_from_slice(ch.row_slice(i));
-            }
-        }
-        RowMajorMatrix::new(hcat, coeffs.width() * n_chunks)
-    }
-    fn recompose<Ext: ExtensionField<Self::Val>>(
-        &self,
-        evals: &[Ext],
-        max_size: usize,
-        point: Ext,
-    ) -> Vec<Ext> {
-        let n_chunks = self.decomposed_width_factor(max_size);
-        todo!()
+    fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
+        v_n(univariate_to_point(point).real(), self.log_n) - v_n(self.shift.real(), self.log_n)
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
     ) -> LagrangeSelectors<Ext> {
+        let zeroifier = self.zp_at_point(point);
         let p = univariate_to_point(point);
-        let zeroifier = v_n(p.real(), self.log_n);
-        let first_point = F::circle_two_adic_generator(self.log_n + 1);
-        let last_point = first_point.inverse();
         LagrangeSelectors {
-            is_first_row: zeroifier / v_0(first_point.conjugate().rotate(p)),
-            is_last_row: zeroifier / v_0(last_point.conjugate().rotate(p)),
-            is_transition: v_0(last_point.conjugate().rotate(p)),
+            is_first_row: zeroifier / v_0(self.shift.conjugate().rotate(p)),
+            is_last_row: zeroifier / v_0(self.shift.rotate(p)),
+            is_transition: v_0(self.shift.rotate(p)),
             inv_zeroifier: zeroifier.inverse(),
         }
     }
 
     // wow, really slow!
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
-        let sels = cfft_domain::<F>(coset.log_n)
+        let sels = coset
+            .points()
             .map(|p| self.selectors_at_point(point_to_univariate(p).unwrap()))
             .collect_vec();
         LagrangeSelectors {
@@ -161,5 +152,161 @@ impl<F: ComplexExtendable> PolynomialDomain for CircleDomain<F> {
             is_transition: sels.iter().map(|s| s.is_transition).collect(),
             inv_zeroifier: sels.iter().map(|s| s.inv_zeroifier).collect(),
         }
+    }
+
+    fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
+        assert!(self.is_standard());
+        let log_chunks = log2_strict_usize(num_chunks);
+        self.points()
+            .take(num_chunks)
+            .map(|shift| CircleDomain {
+                log_n: self.log_n - log_chunks,
+                shift,
+            })
+            .collect()
+    }
+
+    /*
+    chunks=2:
+
+          1 . 1
+         .     .
+        0       0 <-- start
+        .   .   - (1,0)
+        0       0
+         .     .
+          1 . 1
+
+
+    idx -> which chunk to put it in:
+    chunks=2: 0 1 1 0 0 1 1 0 0 1 1 0 0 1 1 0
+    chunks=4: 0 1 2 3 3 2 1 0 0 1 2 3 3 2 1 0
+    */
+    fn split_evals(
+        &self,
+        num_chunks: usize,
+        evals: RowMajorMatrix<Self::Val>,
+    ) -> Vec<RowMajorMatrix<Self::Val>> {
+        let log_chunks = log2_strict_usize(num_chunks);
+        assert!(evals.height() >> (log_chunks + 1) >= 1);
+        let width = evals.width();
+        let mut values: Vec<Vec<Self::Val>> = vec![vec![]; num_chunks];
+        let mut rows = evals.rows();
+        for _ in 0..(evals.height() >> (log_chunks + 1)) {
+            for chunk in values.iter_mut() {
+                chunk.extend_from_slice(rows.next().unwrap());
+            }
+            for chunk in values.iter_mut().rev() {
+                chunk.extend_from_slice(rows.next().unwrap());
+            }
+        }
+        assert!(rows.next().is_none());
+
+        values
+            .into_iter()
+            .map(|v| RowMajorMatrix::new(v, width))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::collections::HashSet;
+
+    use itertools::izip;
+    use p3_mersenne_31::Mersenne31;
+    use rand::thread_rng;
+
+    use super::*;
+
+    fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
+        let pts = d.points().collect_vec();
+        let half_n = pts.len() >> 1;
+        for (l, r) in izip!(&pts[..half_n], pts[half_n..].iter().rev()) {
+            assert_eq!(*l, r.conjugate());
+        }
+    }
+
+    fn do_test_circle_domain(log_n: usize) {
+        let n = 1 << log_n;
+
+        type F = Mersenne31;
+        let d = CircleDomain::<F>::standard(log_n);
+
+        // we can move around the circle and end up where we started
+        let p0 = d.first_point();
+        let mut p1 = p0;
+        for _ in 0..(n - 1) {
+            p1 = d.next_point(p1).unwrap();
+            assert_ne!(p1, p0);
+        }
+        assert_eq!(d.next_point(p1).unwrap(), p0);
+
+        // .points() is the same as first_point -> next_point
+        let mut uni_point = d.first_point();
+        for p in d.points() {
+            assert_eq!(univariate_to_point(uni_point), p);
+            uni_point = d.next_point(uni_point).unwrap();
+        }
+
+        // disjoint domain is actually disjoint, and large enough
+        let seen: HashSet<Complex<F>> = d.points().collect();
+        for disjoint_size in [10, 100, n - 5, n + 15] {
+            let dd = d.create_disjoint_domain(disjoint_size);
+            assert!(dd.size() >= disjoint_size);
+            for pt in dd.points() {
+                assert!(!seen.contains(&pt));
+            }
+        }
+
+        // zp is zero
+        for p in d.points() {
+            assert_eq!(d.zp_at_point(point_to_univariate(p).unwrap()), F::zero());
+        }
+
+        // split domains
+        let evals = RowMajorMatrix::rand(&mut thread_rng(), n, 32);
+        let orig: Vec<(Complex<F>, Vec<F>)> =
+            d.points().zip(evals.rows().map(|r| r.to_vec())).collect();
+        for num_chunks in [1, 2, 4, 8] {
+            let mut combined = vec![];
+
+            let sds = d.split_domains(num_chunks);
+            assert_eq!(sds.len(), num_chunks);
+            let ses = d.split_evals(num_chunks, evals.clone());
+            assert_eq!(ses.len(), num_chunks);
+            for (sd, se) in izip!(sds, ses) {
+                // Split domains are twin cosets
+                assert_is_twin_coset(sd);
+                // Split domains have correct size wrt original domain
+                assert_eq!(sd.size() * num_chunks, d.size());
+                assert_eq!(se.width(), evals.width());
+                assert_eq!(se.height() * num_chunks, d.size());
+                combined.extend(sd.points().zip(se.rows().map(|r| r.to_vec())));
+            }
+            // Union of split domains and evals is the original domain and evals
+            assert_eq!(
+                orig.iter().map(|x| x.0).collect::<HashSet<_>>(),
+                combined.iter().map(|x| x.0).collect::<HashSet<_>>(),
+                "union of split domains is orig domain"
+            );
+            assert_eq!(
+                orig.iter().map(|x| &x.1).collect::<HashSet<_>>(),
+                combined.iter().map(|x| &x.1).collect::<HashSet<_>>(),
+                "union of split evals is orig evals"
+            );
+            assert_eq!(
+                orig.iter().collect::<HashSet<_>>(),
+                combined.iter().collect::<HashSet<_>>(),
+                "split domains and evals correspond to orig domains and evals"
+            );
+        }
+    }
+
+    #[test]
+    fn test_circle_domain() {
+        do_test_circle_domain(4);
+        do_test_circle_domain(10);
     }
 }

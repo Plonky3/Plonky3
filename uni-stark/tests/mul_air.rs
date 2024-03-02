@@ -3,18 +3,26 @@ use std::marker::PhantomData;
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{
+    DuplexChallenger, HashChallenger, SerializingChallenger32, SerializingChallenger64,
+};
+use p3_circle::{Cfft, CirclePcs};
 use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_mersenne_31::Mersenne31;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_symmetric::{
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, SerializingHasher64,
+    TruncatedPermutation,
+};
 use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val, VerificationError};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
@@ -197,4 +205,65 @@ fn prove_bb_twoadic_deg4() -> Result<(), VerificationError> {
 #[test]
 fn prove_bb_twoadic_deg5() -> Result<(), VerificationError> {
     do_test_bb_twoadic(2, 5, 10)
+}
+
+fn do_test_m31_circle(
+    log_blowup: usize,
+    degree: u64,
+    log_n: usize,
+) -> Result<(), VerificationError> {
+    type Val = Mersenne31;
+    // type Challenge = BinomialExtensionField<Val, 4>;
+    type Challenge = Mersenne31;
+
+    type ByteHash = Keccak256Hash;
+    type FieldHash = SerializingHasher32<ByteHash>;
+    let byte_hash = ByteHash {};
+    let field_hash = FieldHash::new(byte_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+    let compress = MyCompress::new(byte_hash);
+
+    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    let val_mmcs = ValMmcs::new(field_hash, compress);
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+    type Dft = Radix2DitParallel;
+    let dft = Dft {};
+
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+
+    let fri_config = FriConfig {
+        log_blowup,
+        num_queries: 40,
+        proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+
+    type Pcs = CirclePcs<Val, ValMmcs>;
+    let pcs = Pcs {
+        log_blowup: 1,
+        cfft: Cfft::default(),
+        mmcs: val_mmcs,
+    };
+
+    // type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    // let pcs = Pcs::new(log_n, dft, val_mmcs, fri_config);
+
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs);
+
+    do_test(
+        config,
+        degree,
+        1 << log_n,
+        Challenger::from_hasher(vec![], byte_hash),
+    )
+}
+
+#[test]
+fn prove_m31_circle_deg3() -> Result<(), VerificationError> {
+    do_test_m31_circle(1, 3, 10)
 }

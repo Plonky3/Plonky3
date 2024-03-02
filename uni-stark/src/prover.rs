@@ -79,7 +79,7 @@ where
     };
 
     let zeta: SC::Challenge = challenger.sample();
-    let zeta_next = trace_domain.next_point(zeta);
+    let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let (opened_values, opening_proof) = pcs.open(
         vec![

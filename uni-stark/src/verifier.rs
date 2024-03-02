@@ -55,7 +55,7 @@ where
     challenger.observe(commitments.quotient_chunks.clone());
 
     let zeta: SC::Challenge = challenger.sample();
-    let zeta_next = trace_domain.next_point(zeta);
+    let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     pcs.verify(
         vec![

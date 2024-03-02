@@ -1,5 +1,5 @@
 use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use crate::{AbstractField, Field};
+use crate::{AbstractExtensionField, AbstractField, Field};
 
 pub type Complex<AF> = BinomialExtensionField<AF, 2>;
 
@@ -55,6 +55,14 @@ impl<AF: AbstractField> Complex<AF> {
     }
     pub fn to_array(&self) -> [AF; 2] {
         self.value.clone()
+    }
+    // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
+    // but still on the circle.
+    pub fn rotate<Ext: AbstractExtensionField<AF>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
+        Complex::<Ext>::new(
+            rhs.real() * self.real() - rhs.imag() * self.imag(),
+            rhs.imag() * self.real() + rhs.real() * self.imag(),
+        )
     }
 }
 
