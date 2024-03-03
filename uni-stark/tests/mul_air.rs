@@ -28,11 +28,30 @@ use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
-const REPETITIONS: usize = 10;
+const REPETITIONS: usize = 20;
 const TRACE_WIDTH: usize = REPETITIONS * 3;
 
+/*
+In its basic form, asserts a^(self.degree-1) * b = c
+(so that the total constraint degree is self.degree)
+
+
+If `uses_transition_constraints`, checks that on transition rows, the first a = row number
+*/
 pub struct MulAir {
     degree: u64,
+    uses_boundary_constraints: bool,
+    uses_transition_constraints: bool,
+}
+
+impl Default for MulAir {
+    fn default() -> Self {
+        MulAir {
+            degree: 3,
+            uses_boundary_constraints: true,
+            uses_transition_constraints: true,
+        }
+    }
 }
 
 impl MulAir {
@@ -42,10 +61,25 @@ impl MulAir {
     {
         let mut rng = thread_rng();
         let mut trace_values = vec![F::default(); rows * TRACE_WIDTH];
-        for (a, b, c) in trace_values.iter_mut().tuples() {
-            *a = rng.gen();
-            *b = rng.gen();
-            *c = a.exp_u64(self.degree - 1) * *b + if valid { F::zero() } else { F::one() };
+        for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
+            let row = i / REPETITIONS;
+
+            *a = if self.uses_transition_constraints {
+                F::from_canonical_usize(i)
+            } else {
+                rng.gen()
+            };
+            *b = if self.uses_boundary_constraints && row == 0 {
+                a.square() + F::one()
+            } else {
+                rng.gen()
+            };
+            *c = a.exp_u64(self.degree - 1) * *b;
+
+            if !valid {
+                // make it invalid
+                *c *= F::two();
+            }
         }
         RowMajorMatrix::new(trace_values, TRACE_WIDTH)
     }
@@ -61,20 +95,32 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let main_local = main.row_slice(0);
+        let main_next = main.row_slice(1);
 
         for i in 0..REPETITIONS {
             let start = i * 3;
-            let a = main_local[start].into().exp_u64(self.degree - 1);
+            let a = main_local[start];
             let b = main_local[start + 1];
             let c = main_local[start + 2];
-            builder.assert_zero(a * b - c);
+            builder.assert_zero(a.into().exp_u64(self.degree - 1) * b.clone() - c);
+            if self.uses_boundary_constraints {
+                builder
+                    .when_first_row()
+                    .assert_eq(a * a + AB::Expr::one(), b);
+            }
+            if self.uses_transition_constraints {
+                let next_a = main_next[start];
+                builder
+                    .when_transition()
+                    .assert_eq(a + AB::Expr::from_canonical_usize(REPETITIONS), next_a);
+            }
         }
     }
 }
 
 fn do_test<SC: StarkGenericConfig>(
     config: SC,
-    degree: u64,
+    air: MulAir,
     log_height: usize,
     challenger: SC::Challenger,
 ) -> Result<(), VerificationError>
@@ -82,7 +128,6 @@ where
     SC::Challenger: Clone,
     Standard: Distribution<Val<SC>>,
 {
-    let air = MulAir { degree };
     let trace = air.random_valid_trace(log_height, true);
 
     let mut p_challenger = challenger.clone();
@@ -120,7 +165,12 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    do_test(config, degree, 1 << log_n, Challenger::new(perm))
+    let air = MulAir {
+        degree,
+        ..Default::default()
+    };
+
+    do_test(config, air, 1 << log_n, Challenger::new(perm))
 }
 
 #[test]
@@ -184,7 +234,12 @@ fn do_test_bb_twoadic(
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    do_test(config, degree, 1 << log_n, Challenger::new(perm))
+    let air = MulAir {
+        degree,
+        ..Default::default()
+    };
+
+    do_test(config, air, 1 << log_n, Challenger::new(perm))
 }
 
 #[test]
@@ -230,9 +285,6 @@ fn do_test_m31_circle(
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
-
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let fri_config = FriConfig {
@@ -249,21 +301,30 @@ fn do_test_m31_circle(
         mmcs: val_mmcs,
     };
 
-    // type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    // let pcs = Pcs::new(log_n, dft, val_mmcs, fri_config);
-
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
+    let air = MulAir {
+        degree,
+        uses_boundary_constraints: true,
+        uses_transition_constraints: true,
+        ..Default::default()
+    };
+
     do_test(
         config,
-        degree,
+        air,
         1 << log_n,
         Challenger::from_hasher(vec![], byte_hash),
     )
 }
 
 #[test]
+fn prove_m31_circle_deg2() -> Result<(), VerificationError> {
+    do_test_m31_circle(1, 2, 12)
+}
+
+#[test]
 fn prove_m31_circle_deg3() -> Result<(), VerificationError> {
-    do_test_m31_circle(1, 3, 10)
+    do_test_m31_circle(1, 3, 14)
 }

@@ -36,10 +36,14 @@ where
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace);
 
+    #[cfg(debug_assertions)]
+    println!("debug assertions ok");
+
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
+    dbg!(log_quotient_degree);
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
