@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
 use p3_field::{
+    batch_multiplicative_inverse,
     extension::{Complex, ComplexExtendable},
     AbstractField, ExtensionField, Field,
 };
@@ -12,7 +13,9 @@ use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 use crate::{
-    util::{point_to_univariate, rotate_univariate, univariate_to_point, v_0, v_n},
+    util::{
+        gemv_tr, point_to_univariate, rotate_univariate, s_p_at_p, univariate_to_point, v_0, v_n,
+    },
     Cfft,
 };
 
@@ -60,7 +63,7 @@ O       .
 The full domain is the interleaving of these two cosets
 */
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct CircleDomain<F> {
     // log_n corresponds to the size of the WHOLE domain
     pub(crate) log_n: usize,
@@ -77,11 +80,33 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     fn is_standard(&self) -> bool {
         self.shift == F::circle_two_adic_generator(self.log_n + 1)
     }
-    fn points(&self) -> impl Iterator<Item = Complex<F>> {
+    pub(crate) fn points(&self) -> impl Iterator<Item = Complex<F>> {
         let half_gen = F::circle_two_adic_generator(self.log_n - 1);
         let coset0 = half_gen.shifted_powers(self.shift);
         let coset1 = half_gen.shifted_powers(half_gen / self.shift);
         coset0.interleave(coset1).take(1 << self.log_n)
+    }
+
+    pub(crate) fn lagrange_basis<EF: ExtensionField<F>>(&self, point: Complex<EF>) -> Vec<EF> {
+        let domain = self.points().collect_vec();
+
+        // the denominator so that the lagrange basis is normalized to 1
+        // this depends only domain, so should be precomputed
+        let lagrange_normalizer: Vec<F> = domain
+            .iter()
+            .map(|p| s_p_at_p(p.real(), p.imag(), self.log_n))
+            .collect();
+
+        let basis = domain
+            .into_iter()
+            .zip(&lagrange_normalizer)
+            .map(|(p, &ln)| {
+                // ext * base
+                v_0(p.conjugate().rotate(point)) * ln
+            })
+            .collect_vec();
+
+        batch_multiplicative_inverse(&basis)
     }
 }
 
@@ -216,7 +241,9 @@ mod tests {
 
     use itertools::izip;
     use p3_mersenne_31::Mersenne31;
-    use rand::thread_rng;
+    use rand::{thread_rng, Rng};
+
+    use crate::util::eval_circle_polys;
 
     use super::*;
 
@@ -308,5 +335,35 @@ mod tests {
     fn test_circle_domain() {
         do_test_circle_domain(4);
         do_test_circle_domain(10);
+    }
+
+    #[test]
+    fn test_barycentric() {
+        let log_n = 10;
+        let n = 1 << log_n;
+
+        type F = Mersenne31;
+
+        let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 16);
+
+        let cfft = Cfft::default();
+
+        let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+        let d = CircleDomain { shift, log_n };
+
+        let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
+
+        // simple barycentric
+        let zeta: Complex<F> = univariate_to_point(thread_rng().gen());
+
+        let basis = d.lagrange_basis(zeta);
+        let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);
+
+        let ys = gemv_tr(evals.as_view(), basis)
+            .into_iter()
+            .map(|x| x * v_n_at_zeta)
+            .collect_vec();
+
+        assert_eq!(ys, eval_circle_polys(&coeffs, zeta));
     }
 }

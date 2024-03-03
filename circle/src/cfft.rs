@@ -120,6 +120,7 @@ fn butterfly_icfft<F: Field>(low_chunk: &mut [F], high_chunk: &mut [F], twiddle:
     }
 }
 
+#[instrument(skip_all, fields(dims = %coeffs.dimensions(), added_bits))]
 pub(crate) fn pad_coeffs<F: Field>(
     mut coeffs: RowMajorMatrix<F>,
     added_bits: usize,
@@ -127,4 +128,42 @@ pub(crate) fn pad_coeffs<F: Field>(
     coeffs = coeffs.bit_reverse_rows().to_row_major_matrix();
     coeffs.expand_to_height(coeffs.height() << added_bits);
     coeffs.bit_reverse_rows().to_row_major_matrix()
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_mersenne_31::Mersenne31;
+    use rand::{thread_rng, Rng};
+
+    use crate::{
+        domain::CircleDomain,
+        util::{eval_circle_polys, univariate_to_point},
+    };
+
+    use super::*;
+
+    type F = Mersenne31;
+
+    fn do_test_cfft(log_n: usize) {
+        let n = 1 << log_n;
+        let cfft = Cfft::default();
+
+        let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+
+        let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1 << 5);
+        let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
+
+        assert_eq!(evals.clone(), cfft.coset_icfft_batch(coeffs.clone(), shift));
+
+        let d = CircleDomain { shift, log_n };
+        for (pt, ys) in d.points().zip(evals.rows()) {
+            assert_eq!(ys, eval_circle_polys(&coeffs, pt));
+        }
+    }
+
+    #[test]
+    fn test_cfft() {
+        do_test_cfft(5);
+        do_test_cfft(8);
+    }
 }

@@ -97,7 +97,7 @@ pub(crate) fn v_0<F: Field>(p: Complex<F>) -> F {
     p.imag() / (p.real() + F::one())
 }
 
-fn s_p_at_p<F: Field>(p_x: F, p_y: F, log_n: usize) -> F {
+pub(crate) fn s_p_at_p<F: Field>(p_x: F, p_y: F, log_n: usize) -> F {
     -F::two() * v_n_prime(p_x, log_n) * p_y
 }
 

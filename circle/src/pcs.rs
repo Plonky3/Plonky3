@@ -2,9 +2,12 @@ use core::marker::PhantomData;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use p3_commit::{DirectMmcs, OpenedValues, Pcs, PolynomialSpace};
-use p3_field::{extension::ComplexExtendable, ExtensionField};
+use p3_field::{
+    extension::{Complex, ComplexExtendable},
+    ExtensionField,
+};
 use p3_matrix::{
     dense::{RowMajorMatrix, RowMajorMatrixView},
     Matrix, MatrixRows,
@@ -14,6 +17,7 @@ use p3_util::log2_strict_usize;
 use crate::{
     cfft::Cfft,
     domain::CircleDomain,
+    pad_coeffs,
     twiddles::TwiddleCache,
     util::{gemv_tr, lagrange_basis, univariate_to_point, v_n},
 };
@@ -32,7 +36,10 @@ where
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = InputMmcs::ProverData;
+    type ProverData = (
+        Vec</* COMMITTED domain */ CircleDomain<Val>>,
+        InputMmcs::ProverData,
+    );
     type Proof = ();
     type Error = ();
 
@@ -44,25 +51,31 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let ldes = evaluations
+        let (domains, ldes): (Vec<_>, Vec<_>) = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
                 // todo: bitrev?
-                self.cfft.lde_batch(evals, self.log_blowup)
+                let coeffs = self.cfft.coset_cfft_batch(evals, domain.shift);
+                let lde = self.cfft.icfft_batch(pad_coeffs(coeffs, self.log_blowup));
+                let committed_domain = CircleDomain::standard(domain.log_n + self.log_blowup);
+                (committed_domain, lde)
             })
-            .collect_vec();
-        self.mmcs.commit(ldes)
+            .unzip();
+        let (comm, mmcs_data) = self.mmcs.commit(ldes);
+        (comm, (domains, mmcs_data))
     }
 
     fn get_evaluations_on_domain(
         &self,
-        prover_data: &Self::ProverData,
+        (domains, mmcs_data): &Self::ProverData,
         idx: usize,
         domain: Self::Domain,
     ) -> RowMajorMatrix<Val> {
-        let mat = self.mmcs.get_matrices(prover_data)[idx];
+        // TODO do this correctly
+        let mat = self.mmcs.get_matrices(mmcs_data)[idx];
         assert_eq!(mat.height(), 1 << domain.log_n);
+        assert_eq!(domain, domains[idx]);
         mat.to_row_major_matrix()
     }
 
@@ -81,19 +94,18 @@ where
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let values: OpenedValues<Challenge> = rounds
             .into_iter()
-            .map(|(data, points_for_mats)| {
-                let mats = self.mmcs.get_matrices(data);
-                points_for_mats
-                    .into_iter()
-                    .zip(mats)
-                    .map(|(points_for_mat, mat)| {
+            .map(|((domains, mmcs_data), points_for_mats)| {
+                let mats = self.mmcs.get_matrices(mmcs_data);
+                izip!(domains, mats, points_for_mats)
+                    .map(|(domain, mat, points_for_mat)| {
                         let log_n = log2_strict_usize(mat.height());
                         points_for_mat
                             .into_iter()
                             .map(|zeta| {
                                 let zeta_point = univariate_to_point(zeta);
-                                let basis: Vec<Challenge> = lagrange_basis(zeta_point, log_n);
-                                let v_n_at_zeta = v_n(zeta_point.real(), log_n);
+                                let basis: Vec<Challenge> = domain.lagrange_basis(zeta_point);
+                                let v_n_at_zeta =
+                                    v_n(zeta_point.real(), log_n) - v_n(domain.shift.real(), log_n);
                                 gemv_tr(mat, basis)
                                     .into_iter()
                                     .map(|x| x * v_n_at_zeta)
