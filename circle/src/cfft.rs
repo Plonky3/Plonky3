@@ -1,11 +1,16 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::cell::RefCell;
 use itertools::izip;
+use p3_dft::divide_by_height;
 use p3_field::{
     extension::{Complex, ComplexExtendable},
-    Field,
+    AbstractField, Field,
 };
-use p3_matrix::{bitrev::BitReversableMatrix, dense::RowMajorMatrix, Matrix, MatrixRows};
+use p3_matrix::{
+    bitrev::BitReversableMatrix,
+    dense::{RowMajorMatrix, RowMajorMatrixViewMut},
+    Matrix, MatrixRows,
+};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -39,21 +44,20 @@ impl<F: ComplexExtendable> Cfft<F> {
         for (i, twiddle) in twiddles.iter().enumerate() {
             let block_size = 1 << (log_n - i);
             let half_block_size = block_size >> 1;
+            assert_eq!(twiddle.len(), half_block_size);
 
-            for chunks in mat.values.chunks_exact_mut(block_size * width) {
-                let (low_chunks, high_chunks) = chunks.split_at_mut(half_block_size * width);
-
-                for (twiddle, lo, hi) in izip!(
-                    twiddle,
-                    low_chunks.chunks_exact_mut(width),
-                    high_chunks.chunks_exact_mut(width).rev(),
-                ) {
-                    butterfly_cfft(lo, hi, *twiddle)
+            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
+                for (i, &t) in twiddle.iter().enumerate() {
+                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
+                        chunk.packing_aligned_rows(i, block_size - i - 1);
+                    butterfly(pfx_lo, pfx_hi, t);
+                    butterfly(packed_lo, packed_hi, t.into());
+                    butterfly(sfx_lo, sfx_hi, t);
                 }
-            }
+            });
         }
-        let inv_height = F::from_canonical_usize(n).inverse();
-        mat.map(|x| x * inv_height)
+        divide_by_height(&mut mat);
+        mat
     }
 
     pub fn icfft(&self, vec: Vec<F>) -> Vec<F> {
@@ -79,18 +83,17 @@ impl<F: ComplexExtendable> Cfft<F> {
         for (i, twiddle) in twiddles.iter().rev().enumerate() {
             let block_size = 1 << (i + 1);
             let half_block_size = block_size >> 1;
+            assert_eq!(twiddle.len(), half_block_size);
 
-            for chunks in mat.values.chunks_exact_mut(block_size * width) {
-                let (low_chunks, high_chunks) = chunks.split_at_mut(half_block_size * width);
-
-                for (twiddle, lo, hi) in izip!(
-                    twiddle,
-                    low_chunks.chunks_exact_mut(width),
-                    high_chunks.chunks_exact_mut(width).rev(),
-                ) {
-                    butterfly_icfft(lo, hi, *twiddle)
+            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
+                for (i, &t) in twiddle.iter().enumerate() {
+                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
+                        chunk.packing_aligned_rows(i, block_size - i - 1);
+                    ibutterfly(pfx_lo, pfx_hi, t);
+                    ibutterfly(packed_lo, packed_hi, t.into());
+                    ibutterfly(sfx_lo, sfx_hi, t);
                 }
-            }
+            });
         }
 
         mat
@@ -101,22 +104,52 @@ impl<F: ComplexExtendable> Cfft<F> {
     }
 }
 
-fn butterfly_cfft<F: Field>(low_chunk: &mut [F], high_chunk: &mut [F], twiddle: F) {
-    for (low, high) in low_chunk.iter_mut().zip(high_chunk) {
-        let sum = *low + *high;
-        let diff = (*low - *high) * twiddle;
-        *low = sum;
-        *high = diff;
+#[inline(always)]
+fn butterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], twiddle: F) {
+    for (lo, hi) in lo_chunk.iter_mut().zip(hi_chunk) {
+        let sum = *lo + *hi;
+        let diff = (*lo - *hi) * twiddle;
+        *lo = sum;
+        *hi = diff;
     }
 }
 
-fn butterfly_icfft<F: Field>(low_chunk: &mut [F], high_chunk: &mut [F], twiddle: F) {
-    for (low, high) in low_chunk.iter_mut().zip(high_chunk) {
-        let high_twiddle = *high * twiddle;
-        let sum = *low + high_twiddle;
-        let diff = *low - high_twiddle;
-        *low = sum;
-        *high = diff;
+#[inline(always)]
+fn ibutterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], twiddle: F) {
+    for (lo, hi) in lo_chunk.iter_mut().zip(hi_chunk) {
+        let hi_twiddle = *hi * twiddle;
+        let sum = *lo + hi_twiddle;
+        let diff = *lo - hi_twiddle;
+        *lo = sum;
+        *hi = diff;
+    }
+}
+
+fn butterflyfdsads<F: Field>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    idx_lo: usize,
+    idx_hi: usize,
+    twiddle: F,
+) {
+    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
+        mat.packing_aligned_rows(idx_lo, idx_hi);
+    for (lo, hi) in pfx_lo.iter_mut().zip(pfx_hi) {
+        let sum = *lo + *hi;
+        let diff = (*lo - *hi) * twiddle;
+        *lo = sum;
+        *hi = diff;
+    }
+    for (lo, hi) in packed_lo.iter_mut().zip(packed_hi) {
+        let sum = *lo + *hi;
+        let diff = (*lo - *hi) * twiddle;
+        *lo = sum;
+        *hi = diff;
+    }
+    for (lo, hi) in sfx_lo.iter_mut().zip(sfx_hi) {
+        let sum = *lo + *hi;
+        let diff = (*lo - *hi) * twiddle;
+        *lo = sum;
+        *hi = diff;
     }
 }
 

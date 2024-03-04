@@ -6,6 +6,7 @@ use p3_field::{
     extension::{Complex, ComplexExtendable},
 };
 use p3_util::linear_map::LinearMap;
+use tracing::instrument;
 
 use crate::domain::twin_coset_domain;
 
@@ -39,6 +40,7 @@ impl<F: ComplexExtendable> TwiddleCache<F> {
     }
 }
 
+#[instrument(skip(shift))]
 fn compute_twiddles<F: ComplexExtendable>(log_n: usize, shift: Complex<F>) -> Vec<Vec<F>> {
     let size = 1 << (log_n - 1);
     let g = F::circle_two_adic_generator(log_n - 1);

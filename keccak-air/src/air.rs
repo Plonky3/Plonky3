@@ -42,8 +42,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for x in 0..5 {
                 for limb in 0..U64_LIMBS {
                     builder
-                        // .when_transition()
-                        .when_first_row()
+                        .when_transition()
                         .when(not_final_step.clone())
                         .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
                 }
@@ -163,8 +162,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let output = local.a_prime_prime_prime(x, y, limb);
                     let input = next.a[y][x][limb];
                     builder
-                        // .when_transition()
-                        .when_first_row()
+                        .when_transition()
                         .when(not_final_step.clone())
                         .assert_eq(output, input);
                 }

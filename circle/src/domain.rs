@@ -11,6 +11,7 @@ use p3_field::{
 };
 use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixRowSlices, MatrixRows};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
+use tracing::instrument;
 
 use crate::{
     util::{
@@ -87,6 +88,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         coset0.interleave(coset1).take(1 << self.log_n)
     }
 
+    #[instrument(skip_all, fields(log_n = %self.log_n))]
     pub(crate) fn lagrange_basis<EF: ExtensionField<F>>(&self, point: Complex<EF>) -> Vec<EF> {
         let domain = self.points().collect_vec();
 
@@ -160,12 +162,14 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         LagrangeSelectors {
             is_first_row: zeroifier / v_0(self.shift.conjugate().rotate(p)),
             is_last_row: zeroifier / v_0(self.shift.rotate(p)),
-            is_transition: v_0(self.shift.rotate(p)),
+            // is_transition: v_0(self.shift.rotate(p)),
+            is_transition: self.shift.rotate(p).real() - Ext::one(),
             inv_zeroifier: zeroifier.inverse(),
         }
     }
 
     // wow, really slow!
+    #[instrument(skip_all, fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
         let sels = coset
             .points()

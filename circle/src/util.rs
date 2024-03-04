@@ -129,6 +129,7 @@ pub(crate) fn lagrange_basis<F: ComplexExtendable, EF: ExtensionField<F>>(
 }
 
 // tranposed matrix-vector product: Mᵀv
+#[instrument(skip_all, fields(dims = %m.dimensions()))]
 pub(crate) fn gemv_tr<'a, F: Field, EF: ExtensionField<F>>(
     m: RowMajorMatrixView<'a, F>,
     v: Vec<EF>,

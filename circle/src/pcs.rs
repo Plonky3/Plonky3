@@ -4,6 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use itertools::{izip, Itertools};
 use p3_commit::{DirectMmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_dft::bit_reversed_zero_pad;
 use p3_field::{
     extension::{Complex, ComplexExtendable},
     ExtensionField,
@@ -13,13 +14,13 @@ use p3_matrix::{
     Matrix, MatrixRows,
 };
 use p3_util::log2_strict_usize;
+use tracing::instrument;
 
 use crate::{
     cfft::Cfft,
     domain::CircleDomain,
     pad_coeffs,
-    twiddles::TwiddleCache,
-    util::{gemv_tr, lagrange_basis, univariate_to_point, v_n},
+    util::{gemv_tr, univariate_to_point, v_n},
 };
 
 pub struct CirclePcs<Val, InputMmcs> {
@@ -56,8 +57,9 @@ where
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
                 // todo: bitrev?
-                let coeffs = self.cfft.coset_cfft_batch(evals, domain.shift);
-                let lde = self.cfft.icfft_batch(pad_coeffs(coeffs, self.log_blowup));
+                let mut coeffs = self.cfft.coset_cfft_batch(evals, domain.shift);
+                bit_reversed_zero_pad(&mut coeffs, self.log_blowup);
+                let lde = self.cfft.icfft_batch(coeffs);
                 let committed_domain = CircleDomain::standard(domain.log_n + self.log_blowup);
                 (committed_domain, lde)
             })
@@ -79,6 +81,7 @@ where
         mat.to_row_major_matrix()
     }
 
+    #[instrument(skip_all)]
     fn open(
         &self,
         // For each round,
