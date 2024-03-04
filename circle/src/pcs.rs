@@ -55,12 +55,14 @@ where
         let (domains, ldes): (Vec<_>, Vec<_>) = evaluations
             .into_iter()
             .map(|(domain, evals)| {
-                assert_eq!(domain.size(), evals.height());
-                // todo: bitrev?
+                let committed_domain = CircleDomain::standard(domain.log_n + self.log_blowup);
+                // todo: bitrev for fri?
+                let lde = self.cfft.lde(evals, domain, committed_domain);
+                /*
                 let mut coeffs = self.cfft.coset_cfft_batch(evals, domain.shift);
                 bit_reversed_zero_pad(&mut coeffs, self.log_blowup);
                 let lde = self.cfft.icfft_batch(coeffs);
-                let committed_domain = CircleDomain::standard(domain.log_n + self.log_blowup);
+                */
                 (committed_domain, lde)
             })
             .unzip();

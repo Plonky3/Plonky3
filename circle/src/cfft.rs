@@ -1,7 +1,8 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::cell::RefCell;
 use itertools::izip;
-use p3_dft::divide_by_height;
+use p3_commit::PolynomialSpace;
+use p3_dft::{bit_reversed_zero_pad, divide_by_height};
 use p3_field::{
     extension::{Complex, ComplexExtendable},
     AbstractField, Field,
@@ -14,7 +15,7 @@ use p3_matrix::{
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::twiddles::TwiddleCache;
+use crate::{domain::CircleDomain, twiddles::TwiddleCache};
 
 #[derive(Default, Clone)]
 pub struct Cfft<F>(Rc<RefCell<TwiddleCache<F>>>);
@@ -36,7 +37,6 @@ impl<F: ComplexExtendable> Cfft<F> {
     ) -> RowMajorMatrix<F> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
-        let width = mat.width();
 
         let mut cache = self.0.borrow_mut();
         let twiddles = cache.get_twiddles(log_n, shift, true);
@@ -75,12 +75,73 @@ impl<F: ComplexExtendable> Cfft<F> {
     ) -> RowMajorMatrix<F> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
-        let width = mat.width();
 
         let mut cache = self.0.borrow_mut();
         let twiddles = cache.get_twiddles(log_n, shift, false);
 
         for (i, twiddle) in twiddles.iter().rev().enumerate() {
+            let block_size = 1 << (i + 1);
+            let half_block_size = block_size >> 1;
+            assert_eq!(twiddle.len(), half_block_size);
+
+            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
+                for (i, &t) in twiddle.iter().enumerate() {
+                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
+                        chunk.packing_aligned_rows(i, block_size - i - 1);
+                    ibutterfly(pfx_lo, pfx_hi, t);
+                    ibutterfly(packed_lo, packed_hi, t.into());
+                    ibutterfly(sfx_lo, sfx_hi, t);
+                }
+            });
+        }
+
+        mat
+    }
+
+    #[instrument(skip_all, fields(dims = %mat.dimensions()))]
+    pub fn lde(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        src_domain: CircleDomain<F>,
+        target_domain: CircleDomain<F>,
+    ) -> RowMajorMatrix<F> {
+        assert_eq!(mat.height(), src_domain.size());
+
+        // let mut coeffs = self.coset_cfft_batch(evals, src_domain.shift);
+
+        let mut cache = self.0.borrow_mut();
+        let f_twiddles = cache.get_twiddles(src_domain.log_n, src_domain.shift, true);
+
+        for (i, twiddle) in f_twiddles.iter().enumerate() {
+            let block_size = 1 << (src_domain.log_n - i);
+            let half_block_size = block_size >> 1;
+            assert_eq!(twiddle.len(), half_block_size);
+
+            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
+                for (i, &t) in twiddle.iter().enumerate() {
+                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
+                        chunk.packing_aligned_rows(i, block_size - i - 1);
+                    butterfly(pfx_lo, pfx_hi, t);
+                    butterfly(packed_lo, packed_hi, t.into());
+                    butterfly(sfx_lo, sfx_hi, t);
+                }
+            });
+        }
+        divide_by_height(&mut mat);
+
+        assert!(target_domain.size() >= src_domain.size());
+
+        let added_bits = target_domain.log_n - src_domain.log_n;
+        // bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = tile_rows(mat, 1 << added_bits);
+
+        assert_eq!(mat.height(), target_domain.size());
+
+        // self.coset_icfft_batch(mat, target_domain.shift)
+
+        let i_twiddles = cache.get_twiddles(target_domain.log_n, target_domain.shift, false);
+
+        for (i, twiddle) in i_twiddles.iter().rev().enumerate().skip(added_bits) {
             let block_size = 1 << (i + 1);
             let half_block_size = block_size >> 1;
             assert_eq!(twiddle.len(), half_block_size);
@@ -125,34 +186,6 @@ fn ibutterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], t
     }
 }
 
-fn butterflyfdsads<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
-    idx_lo: usize,
-    idx_hi: usize,
-    twiddle: F,
-) {
-    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
-        mat.packing_aligned_rows(idx_lo, idx_hi);
-    for (lo, hi) in pfx_lo.iter_mut().zip(pfx_hi) {
-        let sum = *lo + *hi;
-        let diff = (*lo - *hi) * twiddle;
-        *lo = sum;
-        *hi = diff;
-    }
-    for (lo, hi) in packed_lo.iter_mut().zip(packed_hi) {
-        let sum = *lo + *hi;
-        let diff = (*lo - *hi) * twiddle;
-        *lo = sum;
-        *hi = diff;
-    }
-    for (lo, hi) in sfx_lo.iter_mut().zip(sfx_hi) {
-        let sum = *lo + *hi;
-        let diff = (*lo - *hi) * twiddle;
-        *lo = sum;
-        *hi = diff;
-    }
-}
-
 #[instrument(skip_all, fields(dims = %coeffs.dimensions(), added_bits))]
 pub(crate) fn pad_coeffs<F: Field>(
     mut coeffs: RowMajorMatrix<F>,
@@ -161,6 +194,17 @@ pub(crate) fn pad_coeffs<F: Field>(
     coeffs = coeffs.bit_reverse_rows().to_row_major_matrix();
     coeffs.expand_to_height(coeffs.height() << added_bits);
     coeffs.bit_reverse_rows().to_row_major_matrix()
+}
+
+fn tile_rows<F: Copy>(mut mat: RowMajorMatrix<F>, repetitions: usize) -> RowMajorMatrix<F> {
+    let mut values = Vec::with_capacity(mat.values.len() * repetitions);
+    for r in mat.rows() {
+        for _ in 0..repetitions {
+            values.extend_from_slice(r);
+        }
+    }
+    mat.values = values;
+    mat
 }
 
 #[cfg(test)]
@@ -198,5 +242,28 @@ mod tests {
     fn test_cfft() {
         do_test_cfft(5);
         do_test_cfft(8);
+    }
+
+    fn do_test_lde(log_n: usize, added_bits: usize) {
+        let n = 1 << log_n;
+        let cfft = Cfft::<F>::default();
+
+        // let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+        let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1);
+        let src_domain = CircleDomain::standard(log_n);
+        let target_domain = CircleDomain::standard(log_n + added_bits);
+
+        let mut coeffs = cfft.coset_cfft_batch(evals.clone(), src_domain.shift);
+        bit_reversed_zero_pad(&mut coeffs, added_bits);
+        let expected = cfft.coset_icfft_batch(coeffs, target_domain.shift);
+
+        let actual = cfft.lde(evals, src_domain, target_domain);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_lde() {
+        do_test_lde(3, 1);
     }
 }
