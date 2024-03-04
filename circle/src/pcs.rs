@@ -104,7 +104,7 @@ where
                                 let basis: Vec<Challenge> = domain.lagrange_basis(zeta_point);
                                 let v_n_at_zeta =
                                     v_n(zeta_point.real(), log_n) - v_n(domain.shift.real(), log_n);
-                                gemv_tr(mat, basis)
+                                gemv_tr(mat, basis.into_iter())
                                     .into_iter()
                                     .map(|x| x * v_n_at_zeta)
                                     .collect()

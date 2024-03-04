@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField, Field};
+use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField, Field, PackedValue};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
@@ -97,41 +97,13 @@ pub(crate) fn s_p_at_p<F: Field>(p_x: F, p_y: F, log_n: usize) -> F {
     -F::two() * v_n_prime(p_x, log_n) * p_y
 }
 
-// this can be optimized a TON
-#[instrument(skip(zeta))]
-pub(crate) fn lagrange_basis<F: ComplexExtendable, EF: ExtensionField<F>>(
-    zeta: Complex<EF>,
-    log_n: usize,
-) -> Vec<EF> {
-    let domain = cfft_domain::<F>(log_n).collect_vec();
-
-    // the denominator so that the lagrange basis is normalized to 1
-    // this depends only domain, so should be precomputed
-    let lagrange_normalizer: Vec<F> = domain
-        .iter()
-        .map(|p| s_p_at_p(p.real(), p.imag(), log_n))
-        .collect();
-
-    let basis = domain
-        .into_iter()
-        .zip(&lagrange_normalizer)
-        .map(|(p, &ln)| {
-            // ext * base
-            v_0(p.conjugate().rotate(zeta)) * ln
-        })
-        .collect_vec();
-
-    batch_multiplicative_inverse(&basis)
-}
-
 // tranposed matrix-vector product: Mᵀv
-// can be optimized
+// TODO: pack (currently ~100ms of m31_keccak)
 #[instrument(skip_all, fields(dims = %m.dimensions()))]
 pub(crate) fn gemv_tr<'a, F: Field, EF: ExtensionField<F>>(
     m: RowMajorMatrixView<'a, F>,
-    v: Vec<EF>,
+    v: impl Iterator<Item = EF>,
 ) -> Vec<EF> {
-    assert_eq!(m.height(), v.len());
     let mut accs = vec![EF::zero(); m.width()];
     for (row, vx) in m.rows().zip(v) {
         for (acc, mx) in izip!(&mut accs, row) {

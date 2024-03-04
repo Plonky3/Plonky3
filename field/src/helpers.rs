@@ -58,7 +58,7 @@ where
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
 
-/// Extend a field `AF` element `x` to an arry of length `D`
+/// Extend a field `AF` element `x` to an array of length `D`
 /// by filling zeros.
 pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
     let mut arr = array::from_fn(|_| AF::zero());
