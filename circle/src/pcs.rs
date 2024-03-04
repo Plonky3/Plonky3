@@ -19,7 +19,6 @@ use tracing::instrument;
 use crate::{
     cfft::Cfft,
     domain::CircleDomain,
-    pad_coeffs,
     util::{gemv_tr, univariate_to_point, v_n},
 };
 

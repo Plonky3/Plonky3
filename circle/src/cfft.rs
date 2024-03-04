@@ -107,6 +107,7 @@ impl<F: ComplexExtendable> Cfft<F> {
     ) -> RowMajorMatrix<F> {
         assert_eq!(mat.height(), src_domain.size());
 
+        // CFFT
         // let mut coeffs = self.coset_cfft_batch(evals, src_domain.shift);
 
         let mut cache = self.0.borrow_mut();
@@ -132,11 +133,20 @@ impl<F: ComplexExtendable> Cfft<F> {
         assert!(target_domain.size() >= src_domain.size());
 
         let added_bits = target_domain.log_n - src_domain.log_n;
+
+        /*
+        To do an LDE, we could interleave zeros into the coefficients, but
+        the first `added_bits` layers will simply fill out the zeros with the
+        lower order values. (In `ibutterfly`, `hi` will start as zero, and
+        both `lo` and `hi` are set to `lo`). So instead, we do the tiling directly
+        and skip the first `added_bits` layers.
+        */
         // bit_reversed_zero_pad(&mut mat, added_bits);
         mat = tile_rows(mat, 1 << added_bits);
 
         assert_eq!(mat.height(), target_domain.size());
 
+        // ICFFT
         // self.coset_icfft_batch(mat, target_domain.shift)
 
         let i_twiddles = cache.get_twiddles(target_domain.log_n, target_domain.shift, false);
@@ -158,10 +168,6 @@ impl<F: ComplexExtendable> Cfft<F> {
         }
 
         mat
-    }
-
-    pub fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
-        self.icfft_batch(pad_coeffs(self.cfft_batch(mat), added_bits))
     }
 }
 
@@ -186,16 +192,8 @@ fn ibutterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], t
     }
 }
 
-#[instrument(skip_all, fields(dims = %coeffs.dimensions(), added_bits))]
-pub(crate) fn pad_coeffs<F: Field>(
-    mut coeffs: RowMajorMatrix<F>,
-    added_bits: usize,
-) -> RowMajorMatrix<F> {
-    coeffs = coeffs.bit_reverse_rows().to_row_major_matrix();
-    coeffs.expand_to_height(coeffs.height() << added_bits);
-    coeffs.bit_reverse_rows().to_row_major_matrix()
-}
-
+// Repeats rows
+// this can be micro-optimized
 fn tile_rows<F: Copy>(mut mat: RowMajorMatrix<F>, repetitions: usize) -> RowMajorMatrix<F> {
     let mut values = Vec::with_capacity(mat.values.len() * repetitions);
     for r in mat.rows() {
@@ -248,9 +246,10 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::<F>::default();
 
-        // let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+        let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1);
-        let src_domain = CircleDomain::standard(log_n);
+        let src_domain = CircleDomain { log_n, shift };
         let target_domain = CircleDomain::standard(log_n + added_bits);
 
         let mut coeffs = cfft.coset_cfft_batch(evals.clone(), src_domain.shift);
