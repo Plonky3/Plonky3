@@ -13,6 +13,4 @@ pub use cfft::*;
 pub use pcs::*;
 
 #[cfg(test)]
-mod tests {
-    
-}
+mod tests {}

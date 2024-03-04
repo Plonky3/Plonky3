@@ -1,10 +1,9 @@
 use alloc::vec::Vec;
 use core::mem;
+
 use itertools::Itertools;
-use p3_field::{
-    batch_multiplicative_inverse,
-    extension::{Complex, ComplexExtendable},
-};
+use p3_field::batch_multiplicative_inverse;
+use p3_field::extension::{Complex, ComplexExtendable};
 use p3_util::linear_map::LinearMap;
 use tracing::instrument;
 

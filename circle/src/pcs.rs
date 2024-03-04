@@ -1,26 +1,17 @@
-
-
-
 use alloc::vec::Vec;
-use itertools::{izip};
-use p3_commit::{DirectMmcs, OpenedValues, Pcs};
 
-use p3_field::{
-    extension::{ComplexExtendable},
-    ExtensionField,
-};
-use p3_matrix::{
-    dense::{RowMajorMatrix, RowMajorMatrixView},
-    Matrix, MatrixRows,
-};
+use itertools::izip;
+use p3_commit::{DirectMmcs, OpenedValues, Pcs};
+use p3_field::extension::ComplexExtendable;
+use p3_field::ExtensionField;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::{
-    cfft::Cfft,
-    domain::CircleDomain,
-    util::{gemv_tr, univariate_to_point, v_n},
-};
+use crate::cfft::Cfft;
+use crate::domain::CircleDomain;
+use crate::util::{gemv_tr, univariate_to_point, v_n};
 
 pub struct CirclePcs<Val, InputMmcs> {
     pub log_blowup: usize,
@@ -151,17 +142,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    
 
-    use super::*;
-    
     use p3_challenger::DuplexChallenger;
     use p3_mds::mersenne31::MdsMatrixMersenne31;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
     use p3_poseidon::Poseidon;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use rand::{thread_rng};
+    use rand::thread_rng;
+
+    use super::*;
 
     type Val = Mersenne31;
     type Challenge = Mersenne31;

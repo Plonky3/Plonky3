@@ -1,17 +1,18 @@
-use alloc::{rc::Rc, vec::Vec};
+use alloc::rc::Rc;
+use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use p3_commit::PolynomialSpace;
 use p3_dft::divide_by_height;
-use p3_field::{
-    extension::{Complex, ComplexExtendable},
-    AbstractField,
-};
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::AbstractField;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::{domain::CircleDomain, twiddles::TwiddleCache};
+use crate::domain::CircleDomain;
+use crate::twiddles::TwiddleCache;
 
 #[derive(Default, Clone)]
 pub struct Cfft<F>(Rc<RefCell<TwiddleCache<F>>>);
@@ -207,12 +208,9 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 
-    use crate::{
-        domain::CircleDomain,
-        util::{eval_circle_polys, univariate_to_point},
-    };
-
     use super::*;
+    use crate::domain::CircleDomain;
+    use crate::util::{eval_circle_polys, univariate_to_point};
 
     type F = Mersenne31;
 

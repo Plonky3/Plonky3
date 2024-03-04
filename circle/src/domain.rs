@@ -1,13 +1,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
 use itertools::Itertools;
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
-use p3_field::{
-    batch_multiplicative_inverse,
-    extension::{Complex, ComplexExtendable},
-    AbstractField, ExtensionField, Field,
-};
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -241,12 +240,9 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 
-    use crate::{
-        util::{eval_circle_polys, gemv_tr},
-        Cfft,
-    };
-
     use super::*;
+    use crate::util::{eval_circle_polys, gemv_tr};
+    use crate::Cfft;
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
         let pts = d.points().collect_vec();
