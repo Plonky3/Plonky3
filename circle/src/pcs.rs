@@ -1,12 +1,12 @@
-use core::marker::PhantomData;
 
-use alloc::vec;
+
+
 use alloc::vec::Vec;
-use itertools::{izip, Itertools};
-use p3_commit::{DirectMmcs, OpenedValues, Pcs, PolynomialSpace};
-use p3_dft::bit_reversed_zero_pad;
+use itertools::{izip};
+use p3_commit::{DirectMmcs, OpenedValues, Pcs};
+
 use p3_field::{
-    extension::{Complex, ComplexExtendable},
+    extension::{ComplexExtendable},
     ExtensionField,
 };
 use p3_matrix::{
@@ -94,7 +94,7 @@ where
                 Vec<Challenge>,
             >,
         )>,
-        challenger: &mut Challenger,
+        _challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let values: OpenedValues<Challenge> = rounds
             .into_iter()
@@ -127,7 +127,7 @@ where
     fn verify(
         &self,
         // For each round:
-        rounds: Vec<(
+        _rounds: Vec<(
             Self::Commitment,
             // for each matrix:
             Vec<(
@@ -142,8 +142,8 @@ where
                 )>,
             )>,
         )>,
-        proof: &Self::Proof,
-        challenger: &mut Challenger,
+        _proof: &Self::Proof,
+        _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -151,17 +151,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::util::{eval_circle_polys, univariate_to_point};
+    
 
     use super::*;
-    use alloc::vec;
+    
     use p3_challenger::DuplexChallenger;
     use p3_mds::mersenne31::MdsMatrixMersenne31;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
     use p3_poseidon::Poseidon;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use rand::{thread_rng, Rng};
+    use rand::{thread_rng};
 
     type Val = Mersenne31;
     type Challenge = Mersenne31;
@@ -186,14 +186,14 @@ mod tests {
         let mmcs = ValMmcs::new(hash, compress);
 
         type MyPcs = CirclePcs<Val, ValMmcs>;
-        let pcs = CirclePcs {
+        let _pcs = CirclePcs {
             log_blowup: 1,
             cfft: cfft.clone(),
             mmcs,
         };
 
         let coeffs = RowMajorMatrix::<Val>::rand(&mut rng, n, 1);
-        let evals = cfft.icfft_batch(coeffs.clone());
+        let _evals = cfft.icfft_batch(coeffs.clone());
 
         // let domain = pcs.natural_domain_for_degree(n);
         /*

@@ -4,7 +4,7 @@ use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
 use p3_challenger::{
-    DuplexChallenger, HashChallenger, SerializingChallenger32, SerializingChallenger64,
+    DuplexChallenger, HashChallenger, SerializingChallenger32,
 };
 use p3_circle::{Cfft, CirclePcs};
 use p3_commit::testing::TrivialPcs;
@@ -20,7 +20,7 @@ use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, SerializingHasher64,
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32,
     TruncatedPermutation,
 };
 use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val, VerificationError};
@@ -287,7 +287,7 @@ fn do_test_m31_circle(
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let fri_config = FriConfig {
+    let _fri_config = FriConfig {
         log_blowup,
         num_queries: 40,
         proof_of_work_bits: 8,

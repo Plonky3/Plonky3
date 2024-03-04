@@ -1,5 +1,3 @@
-use core::marker::PhantomData;
-
 use alloc::vec;
 use alloc::vec::Vec;
 use itertools::Itertools;
@@ -9,16 +7,11 @@ use p3_field::{
     extension::{Complex, ComplexExtendable},
     AbstractField, ExtensionField, Field,
 };
-use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixRowSlices, MatrixRows};
+use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
-use crate::{
-    util::{
-        gemv_tr, point_to_univariate, rotate_univariate, s_p_at_p, univariate_to_point, v_0, v_n,
-    },
-    Cfft,
-};
+use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
 
 /// Given a generator h for H and an element k, generate points in the twin coset kH u k^{-1}H.
 /// The ordering is important here, the points will generated in the following interleaved pattern:
@@ -248,7 +241,10 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 
-    use crate::util::eval_circle_polys;
+    use crate::{
+        util::{eval_circle_polys, gemv_tr},
+        Cfft,
+    };
 
     use super::*;
 

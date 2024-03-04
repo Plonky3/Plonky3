@@ -1,17 +1,13 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::cell::RefCell;
-use itertools::izip;
+
 use p3_commit::PolynomialSpace;
-use p3_dft::{bit_reversed_zero_pad, divide_by_height};
+use p3_dft::divide_by_height;
 use p3_field::{
     extension::{Complex, ComplexExtendable},
-    AbstractField, Field,
+    AbstractField,
 };
-use p3_matrix::{
-    bitrev::BitReversableMatrix,
-    dense::{RowMajorMatrix, RowMajorMatrixViewMut},
-    Matrix, MatrixRows,
-};
+use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -207,6 +203,7 @@ fn tile_rows<F: Copy>(mut mat: RowMajorMatrix<F>, repetitions: usize) -> RowMajo
 
 #[cfg(test)]
 mod tests {
+    use p3_dft::bit_reversed_zero_pad;
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 

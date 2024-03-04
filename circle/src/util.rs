@@ -8,12 +8,12 @@ use p3_field::{
 };
 use p3_matrix::{
     dense::{RowMajorMatrix, RowMajorMatrixView},
-    Matrix, MatrixRows,
+    Matrix,
 };
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
 
-use crate::domain::{cfft_domain, twin_coset_domain};
+use crate::domain::{cfft_domain};
 
 pub(crate) fn circle_basis<F: ComplexExtendable>(point: Complex<F>, log_n: usize) -> Vec<F> {
     if log_n == 0 {
