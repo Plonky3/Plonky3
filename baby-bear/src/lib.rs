@@ -4,9 +4,11 @@ extern crate alloc;
 
 mod baby_bear;
 mod extension;
+mod mds;
 mod poseidon2;
 
 pub use baby_bear::*;
+pub use mds::*;
 pub use poseidon2::DiffusionMatrixBabybear;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]

@@ -1,16 +1,14 @@
 use alloc::vec;
-use alloc::vec::Vec;
 
+use itertools::Itertools;
 use p3_air::{Air, BaseAir, TwoRowMatrixView};
-use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::UnivariatePcs;
-use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
-use p3_matrix::Dimensions;
-use p3_util::reverse_slice_index_bits;
+use p3_challenger::{CanObserve, CanSample, FieldChallenger};
+use p3_commit::{Pcs, PolynomialSpace};
+use p3_field::{AbstractExtensionField, AbstractField, Field};
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
-use crate::{Proof, StarkGenericConfig, VerifierConstraintFolder};
+use crate::{Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
@@ -21,11 +19,8 @@ pub fn verify<SC, A>(
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
 {
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
-    let quotient_degree = 1 << log_quotient_degree;
-
     let Proof {
         commitments,
         opened_values,
@@ -33,86 +28,99 @@ where
         degree_bits,
     } = proof;
 
-    let air_width = <A as BaseAir<SC::Val>>::width(air);
-    let quotient_chunks = quotient_degree * <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
+    let degree = 1 << degree_bits;
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
+    let quotient_degree = 1 << log_quotient_degree;
+
+    let pcs = config.pcs();
+    let trace_domain = pcs.natural_domain_for_degree(degree);
+    let quotient_domain =
+        trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
+    let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
+
+    let air_width = <A as BaseAir<Val<SC>>>::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
-        && opened_values.quotient_chunks.len() == quotient_chunks;
+        && opened_values.quotient_chunks.len() == quotient_degree
+        && opened_values
+            .quotient_chunks
+            .iter()
+            .all(|qc| qc.len() == <SC::Challenge as AbstractExtensionField<Val<SC>>>::D);
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }
 
-    let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
-
     challenger.observe(commitments.trace.clone());
     let alpha: SC::Challenge = challenger.sample_ext_element();
     challenger.observe(commitments.quotient_chunks.clone());
-    let zeta: SC::Challenge = challenger.sample_ext_element();
 
-    let local_and_next = [vec![zeta, zeta * g_subgroup]];
-    let commits_and_points = &[
-        (commitments.trace.clone(), local_and_next.as_slice()),
-        (
-            commitments.quotient_chunks.clone(),
-            &[vec![zeta.exp_power_of_2(log_quotient_degree)]],
-        ),
-    ];
-    let values = vec![
-        vec![vec![
-            opened_values.trace_local.clone(),
-            opened_values.trace_next.clone(),
-        ]],
-        vec![vec![opened_values.quotient_chunks.clone()]],
-    ];
-    let dims = &[
-        vec![Dimensions {
-            width: air_width,
-            height: 1 << degree_bits,
-        }],
-        vec![Dimensions {
-            width: quotient_chunks,
-            height: 1 << degree_bits,
-        }],
-    ];
-    config
-        .pcs()
-        .verify_multi_batches(commits_and_points, dims, values, opening_proof, challenger)
-        .map_err(|_| VerificationError::InvalidOpeningArgument)?;
+    let zeta: SC::Challenge = challenger.sample();
+    let zeta_next = trace_domain.next_point(zeta);
 
-    // Derive the opening of the quotient polynomial, which was split into degree n chunks, then
-    // flattened into D base field polynomials. We first undo the flattening.
-    let challenge_ext_degree = <SC::Challenge as AbstractExtensionField<SC::Val>>::D;
-    let mut quotient_parts: Vec<SC::Challenge> = opened_values
-        .quotient_chunks
-        .chunks(challenge_ext_degree)
-        .map(|chunk| {
-            chunk
+    pcs.verify(
+        vec![
+            (
+                commitments.trace.clone(),
+                vec![(
+                    trace_domain,
+                    vec![
+                        (zeta, opened_values.trace_local.clone()),
+                        (zeta_next, opened_values.trace_next.clone()),
+                    ],
+                )],
+            ),
+            (
+                commitments.quotient_chunks.clone(),
+                quotient_chunks_domains
+                    .iter()
+                    .zip(&opened_values.quotient_chunks)
+                    .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+                    .collect_vec(),
+            ),
+        ],
+        opening_proof,
+        challenger,
+    )
+    .map_err(|_| VerificationError::InvalidOpeningArgument)?;
+
+    let zps = quotient_chunks_domains
+        .iter()
+        .enumerate()
+        .map(|(i, domain)| {
+            quotient_chunks_domains
                 .iter()
                 .enumerate()
-                .map(|(i, &c)| <SC::Challenge as AbstractExtensionField<SC::Val>>::monomial(i) * c)
-                .sum()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, other_domain)| {
+                    other_domain.zp_at_point(zeta)
+                        * other_domain.zp_at_point(domain.first_point()).inverse()
+                })
+                .product::<SC::Challenge>()
         })
-        .collect();
-    // Then we reconstruct the larger quotient polynomial from its degree-n parts.
-    reverse_slice_index_bits(&mut quotient_parts);
-    let quotient: SC::Challenge = zeta
-        .powers()
-        .zip(quotient_parts)
-        .map(|(weight, part)| part * weight)
-        .sum();
+        .collect_vec();
 
-    let z_h = zeta.exp_power_of_2(*degree_bits) - SC::Challenge::one();
-    let is_first_row = z_h / (zeta - SC::Val::one());
-    let is_last_row = z_h / (zeta - g_subgroup.inverse());
-    let is_transition = zeta - g_subgroup.inverse();
+    let quotient = opened_values
+        .quotient_chunks
+        .iter()
+        .enumerate()
+        .map(|(ch_i, ch)| {
+            ch.iter()
+                .enumerate()
+                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
+                .sum::<SC::Challenge>()
+        })
+        .sum::<SC::Challenge>();
+
+    let sels = trace_domain.selectors_at_point(zeta);
+
     let mut folder = VerifierConstraintFolder {
         main: TwoRowMatrixView {
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
         },
-        is_first_row,
-        is_last_row,
-        is_transition,
+        is_first_row: sels.is_first_row,
+        is_last_row: sels.is_last_row,
+        is_transition: sels.is_transition,
         alpha,
         accumulator: SC::Challenge::zero(),
     };
@@ -120,8 +128,8 @@ where
     let folded_constraints = folder.accumulator;
 
     // Finally, check that
-    //     folded_constraints(zeta) = Z_H(zeta) * quotient(zeta)
-    if folded_constraints != z_h * quotient {
+    //     folded_constraints(zeta) / Z_H(zeta) = quotient(zeta)
+    if folded_constraints * sels.inv_zeroifier != quotient {
         return Err(VerificationError::OodEvaluationMismatch);
     }
 

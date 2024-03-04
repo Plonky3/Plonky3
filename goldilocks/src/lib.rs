@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod extension;
+mod mds;
 mod poseidon2;
 
 use core::fmt;
@@ -13,15 +14,19 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+pub use mds::*;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, Packable, PrimeField,
-    PrimeField64, TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
+    PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 pub use poseidon2::DiffusionMatrixGoldilocks;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+
+/// The Goldilocks prime
+const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
@@ -214,12 +219,17 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Goldilocks::new(halve_u64::<P>(self.value))
+    }
 }
 
 impl PrimeField for Goldilocks {}
 
 impl PrimeField64 for Goldilocks {
-    const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
+    const ORDER_U64: u64 = P;
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
@@ -229,20 +239,6 @@ impl PrimeField64 for Goldilocks {
             c -= Self::ORDER_U64;
         }
         c
-    }
-
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
-        // In order not to overflow a u128, we must have sum(u) <= 2^64.
-        // However, we enforce the stronger condition sum(u) <= 2^32
-        // to ensure the semantics of this function are consistent
-        // between the implementations.
-        debug_assert!(u.into_iter().map(u128::from).sum::<u128>() <= (1u128 << 32));
-
-        let mut dot = u[0] as u128 * v[0].value as u128;
-        for i in 1..N {
-            dot += u[i] as u128 * v[i].value as u128;
-        }
-        reduce128(dot)
     }
 }
 
@@ -369,7 +365,7 @@ fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
-fn reduce128(x: u128) -> Goldilocks {
+pub(crate) fn reduce128(x: u128) -> Goldilocks {
     let (x_lo, x_hi) = split(x); // This is a no-op
     let x_hi_hi = x_hi >> 32;
     let x_hi_lo = x_hi & Goldilocks::NEG_ORDER;

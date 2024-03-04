@@ -26,6 +26,7 @@ where
     assert_eq!(x + (-x), F::zero());
     assert_eq!(-x, F::zero() - x);
     assert_eq!(x + x, x * F::two());
+    assert_eq!(x, x.halve() * F::two());
     assert_eq!(x * (-x), -x.square());
     assert_eq!(x + y, y + x);
     assert_eq!(x * y, y * x);

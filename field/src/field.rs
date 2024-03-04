@@ -207,6 +207,17 @@ pub trait Field:
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
+
+    /// Computes input/2.
+    /// Should be overwritten by most field implementations to use bitshifts.
+    /// Will error if the field characteristic is 2.
+    #[must_use]
+    fn halve(&self) -> Self {
+        let half = Self::two()
+            .try_inverse()
+            .expect("Cannot divide by 2 in fields with characteristic 2");
+        *self * half
+    }
 }
 
 pub trait PrimeField: Field + Ord {}
@@ -224,14 +235,6 @@ pub trait PrimeField64: PrimeField {
 
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
-
-    /// Return the value \sum_{i=0}^N u[i] * v[i].
-    ///
-    /// NB: Assumes that sum(u) <= 2^32 to allow implementations to avoid
-    /// overflow handling.
-    ///
-    /// TODO: Mark unsafe because of the assumption?
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self;
 }
 
 /// A prime field of order less than `2^32`.

@@ -7,10 +7,12 @@ extern crate alloc;
 mod complex;
 mod dft;
 mod extension;
+mod mds;
 mod mersenne_31;
 mod radix_2_dit;
 
 pub use dft::Mersenne31Dft;
+pub use mds::*;
 pub use mersenne_31::*;
 pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
 
