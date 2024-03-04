@@ -2,20 +2,150 @@
 //!
 //! NB: Not all sizes have fast implementations of their permutations.
 //! Supported sizes: 8, 12, 16, 32, 64.
-//! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
+//! Sizes 8 and 12 are from Plonky2, size 16 was found as part of concurrent
+//! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
+//! database.
 
-use p3_mersenne_31::Mersenne31;
+use p3_field::AbstractField;
+use p3_mds::karatsuba_convolution::Convolve;
+use p3_mds::util::{dot_product, first_row_to_first_col};
+use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::util::{apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml};
-use crate::MdsPermutation;
+use crate::Mersenne31;
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixMersenne31;
 
+/// Instantiate convolution for "small" RHS vectors over Mersenne31.
+///
+/// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
+/// 2^24 (roughly), though in practice the sum will be less than 2^9.
+struct SmallConvolveMersenne31;
+impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
+    /// Return the lift of an (almost) reduced Mersenne31 element.
+    /// The Mersenne31 implementation guarantees that
+    /// 0 <= input.value <= P < 2^31.
+    #[inline(always)]
+    fn read(input: Mersenne31) -> i64 {
+        input.value as i64
+    }
+
+    /// FIXME: Refactor the dot product
+    /// For a convolution of size N, |x| < N * 2^31 and (as per the
+    /// assumption above), |y| < 2^24. So the product is at most N * 2^55
+    /// which will not overflow for N <= 16.
+    #[inline(always)]
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        dot_product(u, v)
+    }
+
+    /// The assumptions above mean z < N^2 * 2^55, which is at most
+    /// 2^63 when N <= 16.
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
+    #[inline(always)]
+    fn reduce(z: i64) -> Mersenne31 {
+        debug_assert!(z >= 0);
+        Mersenne31::from_wrapped_u64(z as u64)
+    }
+}
+
+/// Instantiate convolution for "large" RHS vectors over Mersenne31.
+///
+/// Here "large" means the elements can be as big as the field
+/// characteristic, and the size N of the RHS is <= 64.
+struct LargeConvolveMersenne31;
+impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
+    /// Return the lift of an (almost) reduced Mersenne31 element.
+    /// The Mersenne31 implementation guarantees that
+    /// 0 <= input.value <= P < 2^31.
+    #[inline(always)]
+    fn read(input: Mersenne31) -> i64 {
+        input.value as i64
+    }
+
+    #[inline]
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        // For a convolution of size N, |x|, |y| < N * 2^31, so the product
+        // could be as much as N^2 * 2^62. This will overflow an i64, so
+        // we first widen to i128.
+
+        let mut dp = 0i128;
+        for i in 0..N {
+            dp += u[i] as i128 * v[i] as i128;
+        }
+
+        const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
+        const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
+
+        let low_bits = (dp & LOWMASK) as i64; // low_bits < 2**42
+        let high_bits = ((dp & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
+
+        // Proof that low_bits + high_bits is congruent to dp (mod p)
+        // and congruent to dp (mod 2^11):
+        //
+        // The individual bounds clearly show that low_bits +
+        // high_bits < 2**(n - 30).
+        //
+        // Next observe that low_bits + high_bits = input - (2**31 -
+        // 1) * (high_bits) = input mod P.
+        //
+        // Finally note that 2**11 divides high_bits and so low_bits +
+        // high_bits = low_bits mod 2**11 = input mod 2**11.
+
+        low_bits + high_bits
+    }
+
+    #[inline]
+    fn reduce(z: i64) -> Mersenne31 {
+        // After the dot product, the maximal size is N^2 * 2^62 < 2^74
+        // as N = 64 is the biggest size. So, after the partial
+        // reduction, the output z of parity dot satisfies |z| < 2^44
+        // (Where 44 is 74 - 30).
+        //
+        // In the recombining steps, conv maps (wo, w1) -> ((wo + w1)/2,
+        // (wo + w1)/2) which has no effect on the maximal size. (Indeed,
+        // it makes sizes almost strictly smaller).
+        //
+        // On the other hand, negacyclic_conv (ignoring the re-index)
+        // recombines as: (w0, w1, w2) -> (w0 + w1, w2 - w0 - w1). Hence
+        // if the input is <= K, the output is <= 3K.
+        //
+        // Thus the values appearing at the end are bounded by 3^n 2^44
+        // where n is the maximal number of negacyclic_conv recombination
+        // steps. When N = 64, we need to recombine for singed_conv_32,
+        // singed_conv_16, singed_conv_8 so the overall bound will be 3^3
+        // 2^44 < 32 * 2^44 < 2^49.
+        debug_assert!(z > -(1i64 << 49));
+        debug_assert!(z < (1i64 << 49));
+
+        const MASK: i64 = (1 << 31) - 1;
+        // Morally, our value is a i62 not a i64 as the top 3 bits are
+        // guaranteed to be equal.
+        let low_bits = Mersenne31::from_canonical_u32((z & MASK) as u32);
+        let high_bits = ((z >> 31) & MASK) as i32;
+        let sign_bits = (z >> 62) as i32;
+
+        // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
+        let high = Mersenne31::from_canonical_u32((high_bits + sign_bits) as u32);
+        low_bits + high
+    }
+}
+
+const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
+
 impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 8]) -> [Mersenne31; 8] {
-        apply_circulant_8_sml(input)
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        SmallConvolveMersenne31::apply(
+            input,
+            MATRIX_CIRC_MDS_8_SML_COL,
+            SmallConvolveMersenne31::conv8,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
@@ -24,9 +154,17 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
 }
 impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
+const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
 impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 12]) -> [Mersenne31; 12] {
-        apply_circulant_12_sml(input)
+        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        SmallConvolveMersenne31::apply(
+            input,
+            MATRIX_CIRC_MDS_12_SML_COL,
+            SmallConvolveMersenne31::conv12,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 12]) {
@@ -35,17 +173,18 @@ impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
 }
 impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
 
-#[rustfmt::skip]
-const MATRIX_CIRC_MDS_16_MERSENNE31: [u64; 16] = [
-    0x327ACB92, 0x58C99138, 0x3AC486B5, 0x25123B13,
-    0x2C74BDE9, 0x108BD51A, 0x4E911F9D, 0x19DD8E68,
-    0x06227198, 0x516EE062, 0x0F742AE6, 0x738B4216,
-    0x7AEDC4EC, 0x653B794A, 0x47366EC7, 0x6D85346D
-];
+const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
+    [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
 impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 16]) -> [Mersenne31; 16] {
-        apply_circulant(&MATRIX_CIRC_MDS_16_MERSENNE31, input)
+        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+        SmallConvolveMersenne31::apply(
+            input,
+            MATRIX_CIRC_MDS_16_SML_COL,
+            SmallConvolveMersenne31::conv16,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 16]) {
@@ -55,7 +194,7 @@ impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
 impl MdsPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
+const MATRIX_CIRC_MDS_32_MERSENNE31_ROW: [i64; 32] = [
     0x1896DC78, 0x559D1E29, 0x04EBD732, 0x3FF449D7,
     0x2DB0E2CE, 0x26776B85, 0x76018E57, 0x1025FA13,
     0x06486BAB, 0x37706EBA, 0x25EB966B, 0x113C24E5,
@@ -68,7 +207,13 @@ const MATRIX_CIRC_MDS_32_MERSENNE31: [u64; 32] = [
 
 impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 32]) -> [Mersenne31; 32] {
-        apply_circulant(&MATRIX_CIRC_MDS_32_MERSENNE31, input)
+        const MATRIX_CIRC_MDS_32_MERSENNE31_COL: [i64; 32] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_32_MERSENNE31_ROW);
+        LargeConvolveMersenne31::apply(
+            input,
+            MATRIX_CIRC_MDS_32_MERSENNE31_COL,
+            LargeConvolveMersenne31::conv32,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 32]) {
@@ -78,7 +223,7 @@ impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
 impl MdsPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
+const MATRIX_CIRC_MDS_64_MERSENNE31_ROW: [i64; 64] = [
     0x570227A5, 0x3702983F, 0x4B7B3B0A, 0x74F13DE3,
     0x485314B0, 0x0157E2EC, 0x1AD2E5DE, 0x721515E3,
     0x5452ADA3, 0x0C74B6C1, 0x67DA9450, 0x33A48369,
@@ -99,7 +244,13 @@ const MATRIX_CIRC_MDS_64_MERSENNE31: [u64; 64] = [
 
 impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
     fn permute(&self, input: [Mersenne31; 64]) -> [Mersenne31; 64] {
-        apply_circulant(&MATRIX_CIRC_MDS_64_MERSENNE31, input)
+        const MATRIX_CIRC_MDS_64_MERSENNE31_COL: [i64; 64] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_64_MERSENNE31_ROW);
+        LargeConvolveMersenne31::apply(
+            input,
+            MATRIX_CIRC_MDS_64_MERSENNE31_COL,
+            LargeConvolveMersenne31::conv64,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Mersenne31; 64]) {
@@ -111,10 +262,9 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_mersenne_31::Mersenne31;
     use p3_symmetric::Permutation;
 
-    use super::MdsMatrixMersenne31;
+    use super::{MdsMatrixMersenne31, Mersenne31};
 
     #[test]
     fn mersenne8() {
@@ -146,8 +296,8 @@ mod tests {
         let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 12] = [
-            492952161, 916402585, 1541871876, 799921480, 707671572, 1293088641, 866554196,
-            1471029895, 35362849, 2107961577, 1616107486, 762379007,
+            860812289, 399778981, 1228500858, 798196553, 673507779, 1116345060, 829764188,
+            138346433, 578243475, 553581995, 578183208, 1527769050,
         ]
         .map(Mersenne31::from_canonical_u64);
 
@@ -166,9 +316,9 @@ mod tests {
         let output = MdsMatrixMersenne31.permute(input);
 
         let expected: [Mersenne31; 16] = [
-            1929166367, 1352685756, 1090911983, 379953343, 62410403, 637712268, 1637633936,
-            555902167, 850536312, 913896503, 2070446350, 814495093, 651934716, 419066839,
-            603091570, 1453848863,
+            1858869691, 1607793806, 1200396641, 1400502985, 1511630695, 187938132, 1332411488,
+            2041577083, 2014246632, 802022141, 796807132, 1647212930, 813167618, 1867105010,
+            508596277, 1457551581,
         ]
         .map(Mersenne31::from_canonical_u64);
 

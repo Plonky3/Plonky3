@@ -2,26 +2,75 @@
 //!
 //! NB: Not all sizes have fast implementations of their permutations.
 //! Supported sizes: 8, 12, 16, 24, 32, 64, 68.
-//! Sizes 8 and 12 are from Plonky2. Other sizes are from Ulrich Haböck's database.
+//! Sizes 8 and 12 are from Plonky2, size 16 was found as part of concurrent
+//! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
+//! database.
 
 use p3_dft::Radix2Bowers;
-use p3_goldilocks::Goldilocks;
+use p3_mds::karatsuba_convolution::Convolve;
+use p3_mds::util::{apply_circulant, apply_circulant_fft, first_row_to_first_col};
+use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::util::{
-    apply_circulant, apply_circulant_12_sml, apply_circulant_8_sml, apply_circulant_fft,
-    first_row_to_first_col,
-};
-use crate::MdsPermutation;
+use crate::{reduce128, Goldilocks};
 
 #[derive(Clone, Default)]
 pub struct MdsMatrixGoldilocks;
 
+/// Instantiate convolution for "small" RHS vectors over Goldilocks.
+///
+/// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
+/// 2^51, though in practice the sum will be less than 2^9.
+pub struct SmallConvolveGoldilocks;
+impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
+    /// Return the lift of a Goldilocks element, 0 <= input.value <= P
+    /// < 2^64. We widen immediately, since some valid Goldilocks elements
+    /// don't fit in an i64, and since in any case overflow can occur
+    /// for even the smallest convolutions.
+    #[inline(always)]
+    fn read(input: Goldilocks) -> i128 {
+        input.value as i128
+    }
+
+    /// For a convolution of size N, |x| < N * 2^64 and (as per the
+    /// assumption above), |y| < 2^51. So the product is at most N *
+    /// 2^115 which will not overflow for N <= 16. We widen `y` at
+    /// this point to perform the multiplication.
+    #[inline(always)]
+    fn parity_dot<const N: usize>(u: [i128; N], v: [i64; N]) -> i128 {
+        let mut s = 0i128;
+        for i in 0..N {
+            s += u[i] * v[i] as i128;
+        }
+        s
+    }
+
+    /// The assumptions above mean z < N^2 * 2^115, which is at most
+    /// 2^123 when N <= 16.
+    ///
+    /// NB: Even though intermediate values could be negative, the
+    /// output must be non-negative since the inputs were
+    /// non-negative.
+    #[inline(always)]
+    fn reduce(z: i128) -> Goldilocks {
+        debug_assert!(z >= 0);
+        reduce128(z as u128)
+    }
+}
+
 const FFT_ALGO: Radix2Bowers = Radix2Bowers;
+
+const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
 
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
-        apply_circulant_8_sml(input)
+        const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        SmallConvolveGoldilocks::apply(
+            input,
+            MATRIX_CIRC_MDS_8_SML_COL,
+            SmallConvolveGoldilocks::conv8,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 8]) {
@@ -30,9 +79,17 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
+const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
 impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {
-        apply_circulant_12_sml(input)
+        const MATRIX_CIRC_MDS_12_SML_COL: [i64; 12] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        SmallConvolveGoldilocks::apply(
+            input,
+            MATRIX_CIRC_MDS_12_SML_COL,
+            SmallConvolveGoldilocks::conv12,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 12]) {
@@ -41,18 +98,18 @@ impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 12> for MdsMatrixGoldilocks {}
 
-#[rustfmt::skip]
-const MATRIX_CIRC_MDS_16_GOLDILOCKS: [u64; 16] = [
-    0x0FFFFFFFF0001000, 0xF8FC7C7D47E3E3F3, 0xEC43C780F1D87790, 0xEAFD5FAB0A814029,
-    0x29999FFFCFFFFCCD, 0x4E7D0C1750C5F9D0, 0xF3C5A1E6977E1D30, 0x90DEBDBDF4283830,
-    0x4FFFFFFFAFFFFAAB, 0xE50D7B81579423EF, 0xEC34B87D2E278690, 0xF7011FDB0D7E4039,
-    0x36665FFFCFFFFCCD, 0x8F7CFBE74FC1FE11, 0xF3C1DE178881E0F0, 0x511EC2B933D84731,
-];
+const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
+    [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
 impl Permutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 16]) -> [Goldilocks; 16] {
-        const ENTRIES: [u64; 16] = first_row_to_first_col(&MATRIX_CIRC_MDS_16_GOLDILOCKS);
-        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        const MATRIX_CIRC_MDS_16_SML_COL: [i64; 16] =
+            first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+        SmallConvolveGoldilocks::apply(
+            input,
+            MATRIX_CIRC_MDS_16_SML_COL,
+            SmallConvolveGoldilocks::conv16,
+        )
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 16]) {
@@ -173,10 +230,9 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
-    use super::MdsMatrixGoldilocks;
+    use super::{Goldilocks, MdsMatrixGoldilocks};
 
     #[test]
     fn goldilocks8() {
@@ -230,18 +286,18 @@ mod tests {
         let output = MdsMatrixGoldilocks.permute(input);
 
         let expected: [Goldilocks; 12] = [
-            1843219901452929153,
-            8403333524301862517,
-            6376512008882165421,
-            8955522364079524476,
-            9670564897072663334,
-            3938053462378634031,
-            6601899746530774049,
-            12760892837989840359,
-            18262125928170834728,
-            16489603729927565926,
-            9216989093042288220,
-            14240946967822758312,
+            9322351889214742299,
+            8700136572060418355,
+            4881757876459003977,
+            9899544690241851021,
+            480548822895830465,
+            5445915149371405525,
+            14955363277757168581,
+            6672733082273363313,
+            190938676320003294,
+            1613225933948270736,
+            3549006224849989171,
+            12169032187873197425,
         ]
         .map(Goldilocks::from_canonical_u64);
 
@@ -273,22 +329,22 @@ mod tests {
         let output = MdsMatrixGoldilocks.permute(input);
 
         let expected: [Goldilocks; 16] = [
-            5524669282304516875,
-            17505467846953098022,
-            7505835506215945517,
-            4678037345724403903,
-            10895647714009331453,
-            5085395390658218948,
-            9415955230270042820,
-            612277897076940754,
-            6973621272151388239,
-            3749044944784924855,
-            18059026573819502927,
-            2497516531324297048,
-            4238565225225375968,
-            10076249375516184572,
-            11967060791800253810,
-            6267956432712136737,
+            9484392671298797780,
+            149770626972189150,
+            12125722600598304117,
+            15945232149672903756,
+            13199929870021500593,
+            18443980893262804946,
+            317150800081307627,
+            16910019239751125049,
+            1996802739033818490,
+            11668458913264624237,
+            11078800762167869397,
+            13758408662406282356,
+            11119677412113674380,
+            7344117715971661026,
+            4202436890275702092,
+            681166793519210465,
         ]
         .map(Goldilocks::from_canonical_u64);
 
