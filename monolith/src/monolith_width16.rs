@@ -6,40 +6,38 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, PrimeField32};
-use p3_mds::MdsPermutation;
+use p3_field::{AbstractField, PrimeField32, PrimeField64};
 use p3_mersenne_31::Mersenne31;
+use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
+use crate::monolith_mds_width16::MonolithMdsMatrixM31Width16;
 use crate::util::get_random_u32_le;
+
+pub(crate) fn reduce64(x: &mut u64) {
+    let x_lo = *x & Mersenne31::ORDER_U64;
+    let x_hi = *x >> 31;
+    *x = x_lo + x_hi;
+    let msb = *x & (1 << 31);
+    *x ^= msb;
+    *x += (msb != 0) as u64;
+}
 
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
-pub struct MonolithM31<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
-where
-    Mds: MdsPermutation<Mersenne31, WIDTH>,
-{
-    pub round_constants: [[Mersenne31; WIDTH]; NUM_FULL_ROUNDS],
+pub struct MonolithM31Width16<const NUM_FULL_ROUNDS: usize> {
+    pub round_constants: [[u64; 16]; NUM_FULL_ROUNDS],
     pub lookup1: Vec<u16>,
     pub lookup2: Vec<u16>,
-    pub mds: Mds,
+    pub mds: MonolithMdsMatrixM31Width16,
 }
 
-impl<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize> MonolithM31<Mds, WIDTH, NUM_FULL_ROUNDS>
-where
-    Mds: MdsPermutation<Mersenne31, WIDTH>,
-{
+impl<const NUM_FULL_ROUNDS: usize> MonolithM31Width16<NUM_FULL_ROUNDS> {
     pub const NUM_BARS: usize = 8;
 
-    pub fn new(mds: Mds) -> Self {
-        assert!(WIDTH != 16, "Use MonolithM31Width16 instead");
-
-        assert!(WIDTH >= 8);
-        assert!(WIDTH <= 24);
-        assert_eq!(WIDTH % 4, 0);
-
+    pub fn new(mds: MonolithMdsMatrixM31Width16) -> Self {
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
         let lookup2 = Self::instantiate_lookup2();
@@ -87,13 +85,13 @@ where
             .collect()
     }
 
-    fn random_field_element(shake: &mut Shake128Reader) -> Mersenne31 {
+    fn random_field_element(shake: &mut Shake128Reader) -> u64 {
         let mut val = get_random_u32_le(shake);
         while val >= Mersenne31::ORDER_U32 {
             val = get_random_u32_le(shake);
         }
 
-        Mersenne31::from_canonical_u32(val)
+        val as u64
     }
 
     fn init_shake() -> Shake128Reader {
@@ -101,65 +99,66 @@ where
 
         let mut shake = Shake128::default();
         shake.update("Monolith".as_bytes());
-        shake.update(&[WIDTH as u8, num_rounds]);
+        shake.update(&[16_u8, num_rounds]);
         shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
         shake.update(&[8, 8, 8, 7]);
         shake.finalize_xof()
     }
 
-    fn instantiate_round_constants() -> [[Mersenne31; WIDTH]; NUM_FULL_ROUNDS] {
+    fn instantiate_round_constants() -> [[u64; 16]; NUM_FULL_ROUNDS] {
         let mut shake = Self::init_shake();
 
-        [[Mersenne31::zero(); WIDTH]; NUM_FULL_ROUNDS]
-            .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
+        [[0; 16]; NUM_FULL_ROUNDS].map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
     }
 
-    pub fn concrete(&self, state: &mut [Mersenne31; WIDTH]) {
+    pub fn concrete(&self, state: &mut [u64; 16]) {
         self.mds.permute_mut(state);
     }
 
-    pub fn add_round_constants(
-        &self,
-        state: &mut [Mersenne31; WIDTH],
-        round_constants: &[Mersenne31; WIDTH],
-    ) {
+    pub fn add_round_constants(&self, state: &mut [u64; 16], round_constants: &[u64; 16]) {
         // TODO: vectorize?
         for (x, rc) in state.iter_mut().zip(round_constants) {
             *x += *rc;
         }
     }
 
-    pub fn bricks(state: &mut [Mersenne31; WIDTH]) {
+    pub fn bricks(state: &mut [u64; 16]) {
         // Feistel Type-3
         for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
-            *x_mut += x.square();
+            *x_mut += x * x;
+        }
+
+        for el in state.iter_mut() {
+            reduce64(el);
         }
     }
 
-    pub fn bar(&self, el: Mersenne31) -> Mersenne31 {
-        let val = &mut el.as_canonical_u32();
+    pub fn bar(&self, mut el: u64) -> u64 {
+        // reduce64(&mut el);
+        el %= Mersenne31::ORDER_U64;
+        let val: &mut u32 = &mut el.try_into().unwrap();
 
         unsafe {
             // get_unchecked here is safe because lookup table 1 contains 2^16 elements
             let low = *self.lookup1.get_unchecked(*val as u16 as usize);
 
             // get_unchecked here is safe because lookup table 2 contains 2^15 elements,
-            // and el >> 16 < 2^15 (since el < Mersenne31::ORDER_U32 < 2^31)
+            // and val >> 16 < 2^15 (since val < Mersenne31::ORDER_U32 < 2^31)
             let high = *self.lookup2.get_unchecked((*val >> 16) as u16 as usize);
             *val = (high as u32) << 16 | low as u32
         }
 
-        Mersenne31::from_canonical_u32(*val)
+        *val as u64
     }
 
-    pub fn bars(&self, state: &mut [Mersenne31; WIDTH]) {
+    pub fn bars(&self, state: &mut [u64; 16]) {
         state
             .iter_mut()
             .take(Self::NUM_BARS)
             .for_each(|el| *el = self.bar(*el));
     }
 
-    pub fn permutation(&self, state: &mut [Mersenne31; WIDTH]) {
+    pub fn permutation_u64(&self, state: &mut [u64; 16]) {
         self.concrete(state);
         for rc in self.round_constants {
             self.bars(state);
@@ -170,6 +169,19 @@ where
         self.bars(state);
         Self::bricks(state);
         self.concrete(state);
+    }
+
+    pub fn permutation(&self, state: &mut [Mersenne31; 16]) {
+        let mut state_u64 = [0; 16];
+        for (out, inp) in state_u64.iter_mut().zip(state.iter()) {
+            *out = inp.as_canonical_u64();
+        }
+
+        self.permutation_u64(&mut state_u64);
+
+        for (out, inp) in state.iter_mut().zip(state_u64.iter()) {
+            *out = Mersenne31::from_canonical_u64(*inp);
+        }
     }
 }
 
@@ -182,22 +194,21 @@ mod tests {
     use zkhash::fields::const_f31::ConstF31;
     use zkhash::fields::f31::Field32;
     use zkhash::monolith_31::monolith_31::Monolith31 as MonolithM31Reference;
-    use zkhash::monolith_31::monolith_31_instances::MONOLITH_CONST31_24_PARAMS;
+    use zkhash::monolith_31::monolith_31_instances::MONOLITH_CONST31_16_PARAMS;
 
-    use crate::monolith::MonolithM31;
-    use crate::monolith_mds::MonolithMdsMatrixM31;
+    use crate::{MonolithM31Width16, MonolithMdsMatrixM31Width16};
 
     #[test]
-    fn test_monolith_31() {
-        let mds = MonolithMdsMatrixM31::<6>;
-        let monolith: MonolithM31<_, 24, 5> = MonolithM31::new(mds);
+    fn test_monolith_31_width16() {
+        let mds = MonolithMdsMatrixM31Width16;
+        let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
 
-        let mut state: [Mersenne31; 24] = [Mersenne31::zero(); 24];
+        let mut state: [Mersenne31; 16] = [Mersenne31::zero(); 16];
         for inp in state.iter_mut() {
             *inp = rand::random::<Mersenne31>();
         }
 
-        let state_reference: [ConstF31; 24] = state
+        let state_reference: [ConstF31; 16] = state
             .iter()
             .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
             .collect::<Vec<ConstF31>>()
@@ -210,9 +221,38 @@ mod tests {
             .map(|x| ConstF31::from_u32((*x).as_canonical_u32()))
             .collect::<Vec<ConstF31>>();
 
-        let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_24_PARAMS);
+        let monolith_reference = MonolithM31Reference::new(&MONOLITH_CONST31_16_PARAMS);
         let ref_output = monolith_reference.permutation(&state_reference);
 
         assert_eq!(output_converted, ref_output);
+    }
+
+    #[test]
+    fn test_monolith_31_width16_basic() {
+        let mds = MonolithMdsMatrixM31Width16;
+        let monolith: MonolithM31Width16<5> = MonolithM31Width16::new(mds);
+
+        let mut input: [Mersenne31; 16] = [Mersenne31::zero(); 16];
+        for (i, inp) in input.iter_mut().enumerate() {
+            *inp = Mersenne31::from_canonical_usize(i);
+        }
+        monolith.permutation(&mut input);
+
+        assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
+        assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));
+        assert_eq!(input[2], Mersenne31::from_canonical_u64(1900746598));
+        assert_eq!(input[3], Mersenne31::from_canonical_u64(1734707571));
+        assert_eq!(input[4], Mersenne31::from_canonical_u64(2050994835));
+        assert_eq!(input[5], Mersenne31::from_canonical_u64(1648553244));
+        assert_eq!(input[6], Mersenne31::from_canonical_u64(1307647296));
+        assert_eq!(input[7], Mersenne31::from_canonical_u64(1941164548));
+        assert_eq!(input[8], Mersenne31::from_canonical_u64(1707113065));
+        assert_eq!(input[9], Mersenne31::from_canonical_u64(1477714255));
+        assert_eq!(input[10], Mersenne31::from_canonical_u64(1170160793));
+        assert_eq!(input[11], Mersenne31::from_canonical_u64(93800695));
+        assert_eq!(input[12], Mersenne31::from_canonical_u64(769879348));
+        assert_eq!(input[13], Mersenne31::from_canonical_u64(375548503));
+        assert_eq!(input[14], Mersenne31::from_canonical_u64(1989726444));
+        assert_eq!(input[15], Mersenne31::from_canonical_u64(1349325635));
     }
 }
