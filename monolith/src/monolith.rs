@@ -113,10 +113,12 @@ where
             .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
     }
 
+    #[inline]
     pub fn concrete(&self, state: &mut [Mersenne31; WIDTH]) {
         self.mds.permute_mut(state);
     }
 
+    #[inline]
     pub fn add_round_constants(
         &self,
         state: &mut [Mersenne31; WIDTH],
@@ -128,6 +130,7 @@ where
         }
     }
 
+    #[inline]
     pub fn bricks(state: &mut [Mersenne31; WIDTH]) {
         // Feistel Type-3
         for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
@@ -135,6 +138,7 @@ where
         }
     }
 
+    #[inline]
     pub fn bar(&self, el: Mersenne31) -> Mersenne31 {
         let val = &mut el.as_canonical_u32();
 
@@ -151,6 +155,7 @@ where
         Mersenne31::from_canonical_u32(*val)
     }
 
+    #[inline]
     pub fn bars(&self, state: &mut [Mersenne31; WIDTH]) {
         state
             .iter_mut()
