@@ -19,6 +19,11 @@ pub struct CirclePcs<Val, InputMmcs> {
     pub mmcs: InputMmcs,
 }
 
+pub struct ProverData<Val, MmcsData> {
+    committed_domains: Vec<CircleDomain<Val>>,
+    mmcs_data: MmcsData,
+}
+
 impl<Val, InputMmcs, Challenge, Challenger> Pcs<Challenge, Challenger> for CirclePcs<Val, InputMmcs>
 where
     Val: ComplexExtendable,
@@ -27,10 +32,7 @@ where
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = (
-        Vec</* COMMITTED domain */ CircleDomain<Val>>,
-        InputMmcs::ProverData,
-    );
+    type ProverData = ProverData<Val, InputMmcs::ProverData>;
     type Proof = ();
     type Error = ();
 
@@ -42,34 +44,35 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let (domains, ldes): (Vec<_>, Vec<_>) = evaluations
+        let (committed_domains, ldes): (Vec<_>, Vec<_>) = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 let committed_domain = CircleDomain::standard(domain.log_n + self.log_blowup);
-                // todo: bitrev for fri?
+                // bitrev for fri?
                 let lde = self.cfft.lde(evals, domain, committed_domain);
-                /*
-                let mut coeffs = self.cfft.coset_cfft_batch(evals, domain.shift);
-                bit_reversed_zero_pad(&mut coeffs, self.log_blowup);
-                let lde = self.cfft.icfft_batch(coeffs);
-                */
                 (committed_domain, lde)
             })
             .unzip();
         let (comm, mmcs_data) = self.mmcs.commit(ldes);
-        (comm, (domains, mmcs_data))
+        (
+            comm,
+            ProverData {
+                committed_domains,
+                mmcs_data,
+            },
+        )
     }
 
     fn get_evaluations_on_domain(
         &self,
-        (domains, mmcs_data): &Self::ProverData,
+        data: &Self::ProverData,
         idx: usize,
         domain: Self::Domain,
     ) -> RowMajorMatrix<Val> {
         // TODO do this correctly
-        let mat = self.mmcs.get_matrices(mmcs_data)[idx];
+        let mat = self.mmcs.get_matrices(&data.mmcs_data)[idx];
         assert_eq!(mat.height(), 1 << domain.log_n);
-        assert_eq!(domain, domains[idx]);
+        assert_eq!(domain, data.committed_domains[idx]);
         mat.to_row_major_matrix()
     }
 
@@ -89,9 +92,9 @@ where
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let values: OpenedValues<Challenge> = rounds
             .into_iter()
-            .map(|((domains, mmcs_data), points_for_mats)| {
-                let mats = self.mmcs.get_matrices(mmcs_data);
-                izip!(domains, mats, points_for_mats)
+            .map(|(data, points_for_mats)| {
+                let mats = self.mmcs.get_matrices(&data.mmcs_data);
+                izip!(&data.committed_domains, mats, points_for_mats)
                     .map(|(domain, mat, points_for_mat)| {
                         let log_n = log2_strict_usize(mat.height());
                         points_for_mat
@@ -111,7 +114,7 @@ where
                     .collect()
             })
             .collect();
-        // todo: fri
+        // todo: fri prove
         (values, ())
     }
 
@@ -136,6 +139,7 @@ where
         _proof: &Self::Proof,
         _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
+        // todo: fri verify
         Ok(())
     }
 }

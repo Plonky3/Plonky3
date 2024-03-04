@@ -85,7 +85,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         let domain = self.points().collect_vec();
 
         // the denominator so that the lagrange basis is normalized to 1
-        // this depends only domain, so should be precomputed
+        // this depends only on domain, so should be precomputed
         let lagrange_normalizer: Vec<F> = domain
             .iter()
             .map(|p| s_p_at_p(p.real(), p.imag(), self.log_n))
