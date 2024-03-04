@@ -2,8 +2,11 @@
 
 #![no_std]
 
+extern crate alloc;
+
 mod extension;
 mod mds;
+mod poseidon2;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -17,6 +20,7 @@ use p3_field::{
     PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
+pub use poseidon2::DiffusionMatrixGoldilocks;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -352,9 +356,6 @@ impl Div for Goldilocks {
     }
 }
 
-// HELPER FUNCTIONS
-// ================================================================================================
-
 /// Squares the base N number of times and multiplies the result by the tail value.
 #[inline(always)]
 fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
@@ -423,6 +424,22 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     let (res_wrapped, carry) = x.overflowing_add(y);
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
+}
+
+/// Convert a constant u64 array into a constant Goldilocks array.
+#[inline]
+#[must_use]
+pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
+    let mut output = [Goldilocks { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = input[i];
+        i += 1;
+    }
+    output
 }
 
 #[cfg(test)]

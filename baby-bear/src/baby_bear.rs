@@ -411,6 +411,23 @@ const fn to_monty(x: u32) -> u32 {
     (((x as u64) << MONTY_BITS) % P as u64) as u32
 }
 
+/// Convert a constant u32 array into a constant Babybear array.
+/// Saves every element in Monty Form
+#[inline]
+#[must_use]
+pub(crate) const fn to_babybear_array<const N: usize>(input: [u32; N]) -> [BabyBear; N] {
+    let mut output = [BabyBear { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = to_monty(input[i]);
+        i += 1;
+    }
+    output
+}
+
 #[inline]
 #[must_use]
 fn to_monty_64(x: u64) -> u32 {
