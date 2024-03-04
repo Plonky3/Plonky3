@@ -206,10 +206,10 @@ fn mul(lhs: __m512i, rhs: __m512i) -> __m512i {
         let lhs_odd_dbl = x86_64::_mm512_srli_epi64::<31>(lhs);
 
         // Multiply odd indices; since lhs_odd_dbl is doubled, these products are also doubled.
-        // prod_odd_dbl.quadword[i] = 2 * lsh.doubleword[2 * i + 1] * rhs.doubleword[2 * i + 1]
+        // prod_odd_dbl.quadword[i] = 2 * lhs.doubleword[2 * i + 1] * rhs.doubleword[2 * i + 1]
         let prod_odd_dbl = x86_64::_mm512_mul_epu32(lhs_odd_dbl, rhs_odd);
         // Multiply even indices; these are also doubled.
-        // prod_evn_dbl.quadword[i] = 2 * lsh.doubleword[2 * i] * rhs.doubleword[2 * i]
+        // prod_evn_dbl.quadword[i] = 2 * lhs.doubleword[2 * i] * rhs.doubleword[2 * i]
         let prod_evn_dbl = x86_64::_mm512_mul_epu32(lhs_evn_dbl, rhs_evn);
 
         // Move the low halves of odd products into odd positions; keep the low halves of even
