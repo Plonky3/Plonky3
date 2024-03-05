@@ -125,9 +125,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use ark_ff::{BigInteger, PrimeField};
-    use p3_field::AbstractField;
     use p3_poseidon2::Poseidon2;
-    use p3_symmetric::Permutation;
     use rand::Rng;
     use zkhash::fields::goldilocks::FpGoldiLocks;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
