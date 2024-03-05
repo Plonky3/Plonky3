@@ -60,7 +60,7 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
 
 const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
-const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [4, 1, 2, 9, 10, 5, 1, 1];
+const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
 
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
