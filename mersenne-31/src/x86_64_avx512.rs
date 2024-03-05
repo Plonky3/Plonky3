@@ -1,32 +1,33 @@
-use core::arch::x86_64::{self, __m256i};
+use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{AbstractField, Field, PackedField, PackedValue};
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
 
 use crate::Mersenne31;
 
-const WIDTH: usize = 8;
-const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+const WIDTH: usize = 16;
+const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+const EVENS: __mmask16 = 0b0101010101010101;
+const ODDS: __mmask16 = 0b1010101010101010;
+const EVENS4: __mmask16 = 0x0f0f;
 
-/// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
+/// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedMersenne31AVX2(pub [Mersenne31; WIDTH]);
+pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
 
-impl PackedMersenne31AVX2 {
+impl PackedMersenne31AVX512 {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    fn to_vector(self) -> __m512i {
         unsafe {
             // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
-            // transmuted to `__m256i`, since arrays are guaranteed to be contiguous in memory.
-            // Finally `PackedMersenne31AVX2` is `repr(transparent)` so it can be transmuted to
+            // transmuted to `__m512i`, since arrays are guaranteed to be contiguous in memory.
+            // Finally `PackedMersenne31AVX512` is `repr(transparent)` so it can be transmuted to
             // `[Mersenne31; WIDTH]`.
             transmute(self)
         }
@@ -38,12 +39,12 @@ impl PackedMersenne31AVX2 {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    unsafe fn from_vector(vector: __m512i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `Mersenne31` values. We must only reason about memory representations. `__m256i` can be
+        // `Mersenne31` values. We must only reason about memory representations. `__m512i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
         // be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`), which
-        // in turn can be transmuted to `PackedMersenne31AVX2` (since `PackedMersenne31AVX2` is also
+        // in turn can be transmuted to `PackedMersenne31AVX512` (since `PackedMersenne31AVX512` is also
         // `repr(transparent)`).
         transmute(vector)
     }
@@ -57,7 +58,7 @@ impl PackedMersenne31AVX2 {
     }
 }
 
-impl Add for PackedMersenne31AVX2 {
+impl Add for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -71,7 +72,7 @@ impl Add for PackedMersenne31AVX2 {
     }
 }
 
-impl Mul for PackedMersenne31AVX2 {
+impl Mul for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
@@ -85,7 +86,7 @@ impl Mul for PackedMersenne31AVX2 {
     }
 }
 
-impl Neg for PackedMersenne31AVX2 {
+impl Neg for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
@@ -98,7 +99,7 @@ impl Neg for PackedMersenne31AVX2 {
     }
 }
 
-impl Sub for PackedMersenne31AVX2 {
+impl Sub for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -116,12 +117,12 @@ impl Sub for PackedMersenne31AVX2 {
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
-fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn add(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
     //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
     //   Let t := lhs + rhs. We want to return a value r in {0, ..., P} such that r = t (mod P).
@@ -130,20 +131,44 @@ fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
     // in the correct range.
     //   If t is in {P, ..., 2 P}, then u is in {0, ..., P} and r = u is in the correct range.
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let t = x86_64::_mm512_add_epi32(lhs, rhs);
+        let u = x86_64::_mm512_sub_epi32(t, P);
+        x86_64::_mm512_min_epu32(t, u)
     }
 }
 
 #[inline]
 #[must_use]
-fn movehdup_epi32(x: __m256i) -> __m256i {
+fn movehdup_epi32(a: __m512i) -> __m512i {
     // The instruction is only available in the floating-point flavor; this distinction is only for
-    // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
     unsafe {
-        x86_64::_mm256_castps_si256(x86_64::_mm256_movehdup_ps(x86_64::_mm256_castsi256_ps(x)))
+        x86_64::_mm512_castps_si512(x86_64::_mm512_movehdup_ps(x86_64::_mm512_castsi512_ps(a)))
+    }
+}
+
+#[inline]
+#[must_use]
+fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+    unsafe {
+        let src = x86_64::_mm512_castsi512_ps(src);
+        let a = x86_64::_mm512_castsi512_ps(a);
+        x86_64::_mm512_castps_si512(x86_64::_mm512_mask_movehdup_ps(src, k, a))
+    }
+}
+
+#[inline]
+#[must_use]
+fn mask_moveldup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+    unsafe {
+        let src = x86_64::_mm512_castsi512_ps(src);
+        let a = x86_64::_mm512_castsi512_ps(a);
+        x86_64::_mm512_castps_si512(x86_64::_mm512_mask_moveldup_ps(src, k, a))
     }
 }
 
@@ -151,59 +176,52 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
-fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn mul(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
-    // vpsrlq     lhs_odd_dbl, lhs, 31
+    // vpaddd     lhs_evn_dbl, lhs, lhs
     // vmovshdup  rhs_odd, rhs
+    // vpsrlq     lhs_odd_dbl, lhs, 31
+    // vpmuludq   prod_lo_dbl, lhs_evn_dbl, rhs
     // vpmuludq   prod_odd_dbl, lhs_odd_dbl, rhs_odd
-    // vpmuludq   prod_evn, lhs, rhs
-    // vpsllq     prod_odd_lo_dirty, prod_odd_dbl, 31
-    // vpsrlq     prod_evn_hi, prod_evn, 31
-    // vpblendd   prod_lo_dirty, prod_evn, prod_odd_lo_dirty, aah
-    // vpblendd   prod_hi, prod_evn_hi, prod_odd_dbl, aah
-    // vpand      prod_lo, prod_lo_dirty, P
+    // vmovdqa32  prod_hi, prod_odd_dbl
+    // vmovshdup  prod_hi{EVENS}, prod_lo_dbl
+    // vmovsldup  prod_lo_dbl{ODDS}, prod_odd_dbl
+    // vpsrld     prod_lo, prod_lo_dbl, 1
     // vpaddd     t, prod_lo, prod_hi
     // vpsubd     u, t, P
     // vpminud    res, t, u
-    // throughput: 4 cyc/vec (2 els/cyc)
-    // latency: 13 cyc
+    // throughput: 5.5 cyc/vec (2.91 els/cyc)
+    // latency: (lhs->res) 15 cyc, (rhs->res) 14 cyc
     unsafe {
         // vpmuludq only reads the bottom 32 bits of every 64-bit quadword.
         // The even indices are already in the bottom 32 bits of a quadword, so we can leave them.
-        let lhs_evn = lhs;
         let rhs_evn = rhs;
-        // Right shift by 31 is equivalent to moving the high 32 bits down to the low 32, and then
-        // doubling it. So these are the odd indices in lhs, but doubled.
-        let lhs_odd_dbl = x86_64::_mm256_srli_epi64::<31>(lhs);
+        // Again, vpmuludq only reads the bottom 32 bits so we don't need to clear the top. But we
+        // do want to double the lhs.
+        let lhs_evn_dbl = x86_64::_mm512_add_epi32(lhs, lhs);
         // Copy the high 32 bits in each quadword of rhs down to the low 32.
         let rhs_odd = movehdup_epi32(rhs);
+        // Right shift by 31 is equivalent to moving the high 32 bits down to the low 32, and then
+        // doubling it. So these are the odd indices in lhs, but doubled.
+        let lhs_odd_dbl = x86_64::_mm512_srli_epi64::<31>(lhs);
 
         // Multiply odd indices; since lhs_odd_dbl is doubled, these products are also doubled.
-        // prod_odd_dbl.quadword[i] = 2 * lsh.doubleword[2 * i + 1] * rhs.doubleword[2 * i + 1]
-        let prod_odd_dbl = x86_64::_mm256_mul_epu32(rhs_odd, lhs_odd_dbl);
-        // Multiply even indices.
-        // prod_evn.quadword[i] = lsh.doubleword[2 * i] * rhs.doubleword[2 * i]
-        let prod_evn = x86_64::_mm256_mul_epu32(rhs_evn, lhs_evn);
+        // prod_odd_dbl.quadword[i] = 2 * lhs.doubleword[2 * i + 1] * rhs.doubleword[2 * i + 1]
+        let prod_odd_dbl = x86_64::_mm512_mul_epu32(lhs_odd_dbl, rhs_odd);
+        // Multiply even indices; these are also doubled.
+        // prod_evn_dbl.quadword[i] = 2 * lhs.doubleword[2 * i] * rhs.doubleword[2 * i]
+        let prod_evn_dbl = x86_64::_mm512_mul_epu32(lhs_evn_dbl, rhs_evn);
 
-        // We now need to extract the low 31 bits and the high 31 bits of each 62 bit product and
-        // prepare to add them.
-        // Put the low 31 bits of the product (recall that it is shifted left by 1) in an odd
-        // doubleword. (Notice that the high 31 bits are already in an odd doubleword in
-        // prod_odd_dbl.) We will still need to clear the sign bit, hence we mark it _dirty.
-        let prod_odd_lo_dirty = x86_64::_mm256_slli_epi64::<31>(prod_odd_dbl);
-        // Put the high 31 bits in an even doubleword, again noting that in prod_evn the even
-        // doublewords contain the low 31 bits (with a dirty sign bit).
-        let prod_evn_hi = x86_64::_mm256_srli_epi64::<31>(prod_evn);
-
-        // Put all the low halves of all the products into one vector. Take the even values from
-        // prod_evn and odd values from prod_odd_lo_dirty. Note that the sign bits still need
-        // clearing.
-        let prod_lo_dirty = x86_64::_mm256_blend_epi32::<0b10101010>(prod_evn, prod_odd_lo_dirty);
-        // Now put all the high halves into one vector. The even values come from prod_evn_hi and
-        // the odd values come from prod_odd_dbl.
-        let prod_hi = x86_64::_mm256_blend_epi32::<0b10101010>(prod_evn_hi, prod_odd_dbl);
-        // Clear the most significant bit.
-        let prod_lo = x86_64::_mm256_and_si256(prod_lo_dirty, P);
+        // Move the low halves of odd products into odd positions; keep the low halves of even
+        // products in even positions (where they already are). Note that the products are doubled,
+        // so the result is a vector of all the low halves, but doubled.
+        let prod_lo_dbl = mask_moveldup_epi32(prod_evn_dbl, ODDS, prod_odd_dbl);
+        // Move the high halves of even products into even positions, keeping the high halves of odd
+        // products where they are. The products are doubled, but we are looking at (prod >> 32),
+        // which cancels out the doubling, so this result is _not_ doubled.
+        let prod_hi = mask_movehdup_epi32(prod_odd_dbl, EVENS, prod_evn_dbl);
+        // Right shift to undo the doubling.
+        let prod_lo = x86_64::_mm512_srli_epi32::<1>(prod_lo_dbl);
 
         // Standard addition of two 31-bit values.
         add(prod_lo, prod_hi)
@@ -214,17 +232,17 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// If the input does not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
-fn neg(val: __m256i) -> __m256i {
+fn neg(val: __m512i) -> __m512i {
     // We want this to compile to:
-    //      vpxor  res, val, P
-    // throughput: .33 cyc/vec (24 els/cyc)
+    //      vpxord  res, val, P
+    // throughput: .5 cyc/vec (32 els/cyc)
     // latency: 1 cyc
 
     //   Since val is in {0, ..., P (= 2^31 - 1)}, res = val XOR P = P - val. Then res is in {0,
     // ..., P}.
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        x86_64::_mm256_xor_si256(val, P)
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        x86_64::_mm512_xor_epi32(val, P)
     }
 }
 
@@ -232,12 +250,12 @@ fn neg(val: __m256i) -> __m256i {
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
-fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
     //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
     //   Let d := lhs - rhs and t := d mod 2^32. We want to return a value r in {0, ..., P} such
@@ -248,49 +266,49 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
     //   If d is in {-P, ..., -1}, then t is in {2^32 - P, ..., 2^32 - 1} and u is in
     // {0, ..., P - 1}. r = u is in the correct range.
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
+        let u = x86_64::_mm512_add_epi32(t, P);
+        x86_64::_mm512_min_epu32(t, u)
     }
 }
 
-impl From<Mersenne31> for PackedMersenne31AVX2 {
+impl From<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn from(value: Mersenne31) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl Default for PackedMersenne31AVX2 {
+impl Default for PackedMersenne31AVX512 {
     #[inline]
     fn default() -> Self {
         Mersenne31::default().into()
     }
 }
 
-impl AddAssign for PackedMersenne31AVX2 {
+impl AddAssign for PackedMersenne31AVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl MulAssign for PackedMersenne31AVX2 {
+impl MulAssign for PackedMersenne31AVX512 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl SubAssign for PackedMersenne31AVX2 {
+impl SubAssign for PackedMersenne31AVX512 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl Sum for PackedMersenne31AVX2 {
+impl Sum for PackedMersenne31AVX512 {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -300,7 +318,7 @@ impl Sum for PackedMersenne31AVX2 {
     }
 }
 
-impl Product for PackedMersenne31AVX2 {
+impl Product for PackedMersenne31AVX512 {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -310,7 +328,7 @@ impl Product for PackedMersenne31AVX2 {
     }
 }
 
-impl AbstractField for PackedMersenne31AVX2 {
+impl AbstractField for PackedMersenne31AVX512 {
     type F = Mersenne31;
 
     #[inline]
@@ -378,7 +396,7 @@ impl AbstractField for PackedMersenne31AVX2 {
     }
 }
 
-impl Add<Mersenne31> for PackedMersenne31AVX2 {
+impl Add<Mersenne31> for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Mersenne31) -> Self {
@@ -386,7 +404,7 @@ impl Add<Mersenne31> for PackedMersenne31AVX2 {
     }
 }
 
-impl Mul<Mersenne31> for PackedMersenne31AVX2 {
+impl Mul<Mersenne31> for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Mersenne31) -> Self {
@@ -394,7 +412,7 @@ impl Mul<Mersenne31> for PackedMersenne31AVX2 {
     }
 }
 
-impl Sub<Mersenne31> for PackedMersenne31AVX2 {
+impl Sub<Mersenne31> for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Mersenne31) -> Self {
@@ -402,28 +420,28 @@ impl Sub<Mersenne31> for PackedMersenne31AVX2 {
     }
 }
 
-impl AddAssign<Mersenne31> for PackedMersenne31AVX2 {
+impl AddAssign<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: Mersenne31) {
         *self += Self::from(rhs)
     }
 }
 
-impl MulAssign<Mersenne31> for PackedMersenne31AVX2 {
+impl MulAssign<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn mul_assign(&mut self, rhs: Mersenne31) {
         *self *= Self::from(rhs)
     }
 }
 
-impl SubAssign<Mersenne31> for PackedMersenne31AVX2 {
+impl SubAssign<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn sub_assign(&mut self, rhs: Mersenne31) {
         *self -= Self::from(rhs)
     }
 }
 
-impl Sum<Mersenne31> for PackedMersenne31AVX2 {
+impl Sum<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -433,7 +451,7 @@ impl Sum<Mersenne31> for PackedMersenne31AVX2 {
     }
 }
 
-impl Product<Mersenne31> for PackedMersenne31AVX2 {
+impl Product<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -443,7 +461,7 @@ impl Product<Mersenne31> for PackedMersenne31AVX2 {
     }
 }
 
-impl Div<Mersenne31> for PackedMersenne31AVX2 {
+impl Div<Mersenne31> for PackedMersenne31AVX512 {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
@@ -452,133 +470,206 @@ impl Div<Mersenne31> for PackedMersenne31AVX2 {
     }
 }
 
-impl Add<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
+impl Add<PackedMersenne31AVX512> for Mersenne31 {
+    type Output = PackedMersenne31AVX512;
     #[inline]
-    fn add(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) + rhs
+    fn add(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
+        PackedMersenne31AVX512::from(self) + rhs
     }
 }
 
-impl Mul<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
+impl Mul<PackedMersenne31AVX512> for Mersenne31 {
+    type Output = PackedMersenne31AVX512;
     #[inline]
-    fn mul(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) * rhs
+    fn mul(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
+        PackedMersenne31AVX512::from(self) * rhs
     }
 }
 
-impl Sub<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
+impl Sub<PackedMersenne31AVX512> for Mersenne31 {
+    type Output = PackedMersenne31AVX512;
     #[inline]
-    fn sub(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) - rhs
+    fn sub(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
+        PackedMersenne31AVX512::from(self) - rhs
     }
 }
 
-impl Distribution<PackedMersenne31AVX2> for Standard {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2(rng.gen())
+// vpshrdq requires AVX-512VBMI2.
+#[cfg(target_feature = "avx512vbmi2")]
+#[inline]
+#[must_use]
+fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
+    unsafe {
+        // Safety: If this code got compiled then AVX-512VBMI2 intrinsics are available.
+        x86_64::_mm512_shrdi_epi64::<32>(y, x)
+    }
+}
+
+// If we can't use vpshrdq, then do a vpermi2d, but we waste a register and double the latency.
+#[cfg(not(target_feature = "avx512vbmi2"))]
+#[inline]
+#[must_use]
+fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
+    const INTERLEAVE1_INDICES: __m512i = unsafe {
+        // Safety: `[u32; 16]` is trivially transmutable to `__m512i`.
+        transmute::<[u32; WIDTH], _>([
+            0x01, 0x10, 0x03, 0x12, 0x05, 0x14, 0x07, 0x16, 0x09, 0x18, 0x0b, 0x1a, 0x0d, 0x1c,
+            0x0f, 0x1e,
+        ])
+    };
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        x86_64::_mm512_permutex2var_epi32(x, INTERLEAVE1_INDICES, y)
     }
 }
 
 #[inline]
 #[must_use]
-fn interleave1(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vpsllq    t, a, 32
-    //      vpsrlq    u, b, 32
-    //      vpblendd  res0, a, u, aah
-    //      vpblendd  res1, t, b, aah
-    // throughput: 1.33 cyc/2 vec (12 els/cyc)
-    // latency: (1 -> 1)  1 cyc
-    //          (1 -> 2)  2 cyc
-    //          (2 -> 1)  2 cyc
-    //          (2 -> 2)  1 cyc
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+    // If we have AVX-512VBMI2, we want this to compile to:
+    //      vpshrdq    t, x, y, 32
+    //      vpblendmd  res0 {EVENS}, t, x
+    //      vpblendmd  res1 {EVENS}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
+    // latency: 2 cyc
+    //
+    // Otherwise, we want it to compile to:
+    //      vmovdqa32  t, INTERLEAVE1_INDICES
+    //      vpermi2d   t, x, y
+    //      vpblendmd  res0 {EVENS}, t, x
+    //      vpblendmd  res1 {EVENS}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
+    // latency: 4 cyc
 
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a1   0  a3   0  a5   0  a7   0 ].
-        //   u = [  0  b0   0  b2   0  b4   0  b6 ].
-        let t = x86_64::_mm256_srli_epi64::<32>(a);
-        let u = x86_64::_mm256_slli_epi64::<32>(b);
+    // We currently have:
+    //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+    //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
+    // First form
+    //   t = [ x1  y0  x3  y2  x5  y4  x7  y6  x9  y8  xb  ya  xd  yc  xf  ye ].
+    let t = interleave1_antidiagonal(x, y);
+
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
 
         // Then
-        //   res0 = [ a0  b0  a2  b2  a4  b4  a6  b6 ],
-        //   res1 = [ a1  b1  a3  b3  a5  b5  a7  b7 ].
+        //   res0 = [ x0  y0  x2  y2  x4  y4  x6  y6  x8  y8  xa  ya  xc  yc  xe  ye ],
+        //   res1 = [ x1  y1  x3  y3  x5  y5  x7  y7  x9  y9  xb  yb  xd  yd  xf  yf ].
         (
-            x86_64::_mm256_blend_epi32::<0b10101010>(a, u),
-            x86_64::_mm256_blend_epi32::<0b10101010>(t, b),
+            x86_64::_mm512_mask_blend_epi32(EVENS, t, x),
+            x86_64::_mm512_mask_blend_epi32(EVENS, y, t),
         )
     }
 }
 
 #[inline]
 #[must_use]
-fn interleave2(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
+fn shuffle_epi64<const MASK: i32>(a: __m512i, b: __m512i) -> __m512i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+    unsafe {
+        let a = x86_64::_mm512_castsi512_pd(a);
+        let b = x86_64::_mm512_castsi512_pd(b);
+        x86_64::_mm512_castpd_si512(x86_64::_mm512_shuffle_pd::<MASK>(a, b))
+    }
+}
+
+#[inline]
+#[must_use]
+fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     // We want this to compile to:
-    //      vpalignr  t, b, a, 8
-    //      vpblendd  res0, a, t, cch
-    //      vpblendd  res1, t, b, cch
-    // throughput: 1 cyc/2 vec (16 els/cyc)
+    //      vshufpd    t, x, y, 55h
+    //      vpblendmq  res0 {EVENS}, t, x
+    //      vpblendmq  res1 {EVENS}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
     // latency: 2 cyc
 
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
 
         // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
+        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
         // First form
-        //   t = [ a2  a3  b0  b1  a6  a7  b4  b5 ].
-        let t = x86_64::_mm256_alignr_epi8::<8>(b, a);
+        //   t = [ x2  x3  y0  y1  x6  x7  y4  y5  xa  xb  y8  y9  xe  xf  yc  yd ].
+        let t = shuffle_epi64::<0b01010101>(x, y);
 
         // Then
-        //   res0 = [ a0  a1  b0  b1  a4  a5  b4  b5 ],
-        //   res1 = [ a2  a3  b2  b3  a6  a7  b6  b7 ].
+        //   res0 = [ x0  x1  y0  y1  x4  x5  y4  y5  x8  x9  y8  y9  xc  xd  yc  yd ],
+        //   res1 = [ x2  x3  y2  y3  x6  x7  y6  y7  xa  xb  ya  yb  xe  xf  ye  yf ].
         (
-            x86_64::_mm256_blend_epi32::<0b11001100>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11001100>(t, b),
+            x86_64::_mm512_mask_blend_epi64(EVENS as __mmask8, t, x),
+            x86_64::_mm512_mask_blend_epi64(EVENS as __mmask8, y, t),
         )
     }
 }
 
 #[inline]
 #[must_use]
-fn interleave4(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
+fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     // We want this to compile to:
-    //      vperm2i128  t, a, b, 21h
-    //      vpblendd    res0, a, t, f0h
-    //      vpblendd    res1, t, b, f0h
-    // throughput: 1 cyc/2 vec (16 els/cyc)
+    //      vmovdqa64   t, INTERLEAVE4_INDICES
+    //      vpermi2q    t, x, y
+    //      vpblendmd   res0 {EVENS4}, t, x
+    //      vpblendmd   res1 {EVENS4}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
     // latency: 4 cyc
 
+    const INTERLEAVE4_INDICES: __m512i = unsafe {
+        // Safety: `[u64; 8]` is trivially transmutable to `__m512i`.
+        transmute::<[u64; WIDTH / 2], _>([0o02, 0o03, 0o10, 0o11, 0o06, 0o07, 0o14, 0o15])
+    };
+
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
 
         // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
+        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
         // First form
-        //   t = [ a4  a5  a6  a7  b0  b1  b2  b3 ].
-        let t = x86_64::_mm256_permute2x128_si256::<0x21>(a, b);
+        //   t = [ x4  x5  x6  x7  y0  y1  y2  y3  xc  xd  xe  xf  y8  y9  ya  yb ].
+        let t = x86_64::_mm512_permutex2var_epi64(x, INTERLEAVE4_INDICES, y);
 
         // Then
-        //   res0 = [ a0  a1  a2  a3  b0  b1  b2  b3 ],
-        //   res1 = [ a4  a5  a6  a7  b4  b5  b6  b7 ].
+        //   res0 = [ x0  x1  x2  x3  y0  y1  y2  y3  x8  x9  xa  xb  y8  y9  ya  yb ],
+        //   res1 = [ x4  x5  x6  x7  y4  y5  y6  y7  xc  xd  xe  xf  yc  yd  ye  yf ].
         (
-            x86_64::_mm256_blend_epi32::<0b11110000>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11110000>(t, b),
+            x86_64::_mm512_mask_blend_epi32(EVENS4, t, x),
+            x86_64::_mm512_mask_blend_epi32(EVENS4, y, t),
         )
     }
 }
 
-unsafe impl PackedValue for PackedMersenne31AVX2 {
+#[inline]
+#[must_use]
+fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+    // We want this to compile to:
+    //      vshufi64x2  t, x, b, 4eh
+    //      vpblendmq   res0 {EVENS4}, t, x
+    //      vpblendmq   res1 {EVENS4}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
+    // latency: 4 cyc
+
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+
+        // We currently have:
+        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
+        // First form
+        //   t = [ x8  x9  xa  xb  xc  xd  xe  xf  y0  y1  y2  y3  y4  y5  y6  y7 ].
+        let t = x86_64::_mm512_shuffle_i64x2::<0b01_00_11_10>(x, y);
+
+        // Then
+        //   res0 = [ x0  x1  x2  x3  x4  x5  x6  x7  y0  y1  y2  y3  y4  y5  y6  y7 ],
+        //   res1 = [ x8  x9  xa  xb  xc  xd  xe  xf  y8  y9  ya  yb  yc  yd  ye  yf ].
+        (
+            x86_64::_mm512_mask_blend_epi64(EVENS4 as __mmask8, t, x),
+            x86_64::_mm512_mask_blend_epi64(EVENS4 as __mmask8, y, t),
+        )
+    }
+}
+
+unsafe impl PackedValue for PackedMersenne31AVX512 {
     type Value = Mersenne31;
 
     const WIDTH: usize = WIDTH;
@@ -587,7 +678,7 @@ unsafe impl PackedValue for PackedMersenne31AVX2 {
     fn from_slice(slice: &[Mersenne31]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX2` since the
+            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &*slice.as_ptr().cast()
@@ -597,7 +688,7 @@ unsafe impl PackedValue for PackedMersenne31AVX2 {
     fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX2` since the
+            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &mut *slice.as_mut_ptr().cast()
@@ -621,7 +712,7 @@ unsafe impl PackedValue for PackedMersenne31AVX2 {
     }
 }
 
-unsafe impl PackedField for PackedMersenne31AVX2 {
+unsafe impl PackedField for PackedMersenne31AVX512 {
     type Scalar = Mersenne31;
 
     #[inline]
@@ -631,7 +722,8 @@ unsafe impl PackedField for PackedMersenne31AVX2 {
             1 => interleave1(v0, v1),
             2 => interleave2(v0, v1),
             4 => interleave4(v0, v1),
-            8 => (v0, v1),
+            8 => interleave8(v0, v1),
+            16 => (v0, v1),
             _ => panic!("unsupported block_len"),
         };
         unsafe {
@@ -643,13 +735,13 @@ unsafe impl PackedField for PackedMersenne31AVX2 {
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
+    use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
 
     type F = Mersenne31;
-    type P = PackedMersenne31AVX2;
+    type P = PackedMersenne31AVX512;
 
     const fn array_from_valid_reps(vals: [u32; WIDTH]) -> [F; WIDTH] {
         let mut res = [Mersenne31 { value: 0 }; WIDTH];
@@ -662,7 +754,7 @@ mod tests {
     }
 
     const fn packed_from_valid_reps(vals: [u32; WIDTH]) -> P {
-        PackedMersenne31AVX2(array_from_valid_reps(vals))
+        PackedMersenne31AVX512(array_from_valid_reps(vals))
     }
 
     fn array_from_random(seed: u64) -> [F; WIDTH] {
@@ -671,27 +763,41 @@ mod tests {
     }
 
     fn packed_from_random(seed: u64) -> P {
-        PackedMersenne31AVX2(array_from_random(seed))
+        PackedMersenne31AVX512(array_from_random(seed))
     }
 
     /// Zero has a redundant representation, so let's test both.
     const BOTH_ZEROS: P = packed_from_valid_reps([
         0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
-        0x7fffffff,
+        0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
+        0x00000000, 0x7fffffff,
     ]);
 
     const SPECIAL_VALS: [F; WIDTH] = array_from_valid_reps([
         0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
-        0x3fffffff,
+        0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
+        0x40000000, 0x3fffffff,
     ]);
 
     #[test]
     fn test_interleave_1() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
-        let expected0 = packed_from_valid_reps([0x0, 0x8, 0x2, 0xa, 0x4, 0xc, 0x6, 0xe]);
-        let expected1 = packed_from_valid_reps([0x1, 0x9, 0x3, 0xb, 0x5, 0xd, 0x7, 0xf]);
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x10, 0x02, 0x12, 0x04, 0x14, 0x06, 0x16, 0x08, 0x18, 0x0a, 0x1a, 0x0c, 0x1c,
+            0x0e, 0x1e,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x01, 0x11, 0x03, 0x13, 0x05, 0x15, 0x07, 0x17, 0x09, 0x19, 0x0b, 0x1b, 0x0d, 0x1d,
+            0x0f, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 1);
         assert_eq!(res0, expected0);
@@ -700,11 +806,23 @@ mod tests {
 
     #[test]
     fn test_interleave_2() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
-        let expected0 = packed_from_valid_reps([0x0, 0x1, 0x8, 0x9, 0x4, 0x5, 0xc, 0xd]);
-        let expected1 = packed_from_valid_reps([0x2, 0x3, 0xa, 0xb, 0x6, 0x7, 0xe, 0xf]);
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x01, 0x10, 0x11, 0x04, 0x05, 0x14, 0x15, 0x08, 0x09, 0x18, 0x19, 0x0c, 0x0d,
+            0x1c, 0x1d,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x02, 0x03, 0x12, 0x13, 0x06, 0x07, 0x16, 0x17, 0x0a, 0x0b, 0x1a, 0x1b, 0x0e, 0x0f,
+            0x1e, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 2);
         assert_eq!(res0, expected0);
@@ -713,11 +831,23 @@ mod tests {
 
     #[test]
     fn test_interleave_4() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
-        let expected0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x8, 0x9, 0xa, 0xb]);
-        let expected1 = packed_from_valid_reps([0x4, 0x5, 0x6, 0x7, 0xc, 0xd, 0xe, 0xf]);
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x10, 0x11, 0x12, 0x13, 0x08, 0x09, 0x0a, 0x0b, 0x18, 0x19,
+            0x1a, 0x1b,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x04, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16, 0x17, 0x0c, 0x0d, 0x0e, 0x0f, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 4);
         assert_eq!(res0, expected0);
@@ -726,10 +856,41 @@ mod tests {
 
     #[test]
     fn test_interleave_8() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
+
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+            0x16, 0x17,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 8);
+        assert_eq!(res0, expected0);
+        assert_eq!(res1, expected1);
+    }
+
+    #[test]
+    fn test_interleave_16() {
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
+
+        let (res0, res1) = vec0.interleave(vec1, 16);
         assert_eq!(res0, vec0);
         assert_eq!(res1, vec1);
     }
@@ -815,7 +976,7 @@ mod tests {
     #[test]
     fn test_neg_own_inverse() {
         let vec = packed_from_random(0xee4df174b850a35f);
-        let res = -(-vec);
+        let res = --vec;
         assert_eq!(res, vec);
     }
 
@@ -870,8 +1031,8 @@ mod tests {
         let arr = array_from_random(0xb0c7a5153103c5a8);
         let arr_inv = arr.map(|x| x.inverse());
 
-        let vec = PackedMersenne31AVX2(arr);
-        let vec_inv = PackedMersenne31AVX2(arr_inv);
+        let vec = PackedMersenne31AVX512(arr);
+        let vec_inv = PackedMersenne31AVX512(arr_inv);
 
         let res = vec * vec_inv;
         assert_eq!(res, P::one());
@@ -1000,8 +1161,8 @@ mod tests {
         let arr0 = array_from_random(0xac23b5a694dabf70);
         let arr1 = array_from_random(0xd249ec90e8a6e733);
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -1014,8 +1175,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x1e2b153f07b64cf3);
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -1028,8 +1189,8 @@ mod tests {
         let arr0 = array_from_random(0xfcf974ac7625a260);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -1042,8 +1203,8 @@ mod tests {
         let arr0 = array_from_random(0x167ce9d8e920876e);
         let arr1 = array_from_random(0x52ddcdd3461e046f);
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1056,8 +1217,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x358498640bfe1375);
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1070,8 +1231,8 @@ mod tests {
         let arr0 = array_from_random(0x05d81ebfb8f0005c);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1084,8 +1245,8 @@ mod tests {
         let arr0 = array_from_random(0x4242ebdc09b74d77);
         let arr1 = array_from_random(0x9937b275b3c056cd);
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1098,8 +1259,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x5285448b835458a3);
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1112,8 +1273,8 @@ mod tests {
         let arr0 = array_from_random(0x22508dc80001d865);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedMersenne31AVX2(arr0);
-        let vec1 = PackedMersenne31AVX2(arr1);
+        let vec0 = PackedMersenne31AVX512(arr0);
+        let vec1 = PackedMersenne31AVX512(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1125,10 +1286,9 @@ mod tests {
     fn test_neg_vs_scalar() {
         let arr = array_from_random(0xc3c273a9b334372f);
 
-        let vec = PackedMersenne31AVX2(arr);
+        let vec = PackedMersenne31AVX512(arr);
         let vec_res = -vec;
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
@@ -1138,10 +1298,9 @@ mod tests {
     fn test_neg_vs_scalar_special_vals() {
         let arr = SPECIAL_VALS;
 
-        let vec = PackedMersenne31AVX2(arr);
+        let vec = PackedMersenne31AVX512(arr);
         let vec_res = -vec;
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }

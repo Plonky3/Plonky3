@@ -669,7 +669,7 @@ unsafe impl PackedField for PackedBabyBearAVX2 {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
+    use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
