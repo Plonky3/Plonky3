@@ -13,12 +13,16 @@ use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
 use crate::Packable;
 
+pub trait AbstractionOf<F: Field> {}
+
+// impl<AF: AbstractField> AbstractionOf<AF::F> for AF {}
+
 /// A generalization of `Field` which permits things like
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
 /// - a vector of field elements
-pub trait AbstractField:
-    Sized
+pub trait AbstractField: AbstractionOf<Self::F>
+    + Sized
     + Default
     + Clone
     + Add<Output = Self>
@@ -298,7 +302,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     }
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> + AbstractionOf<Base> {
     type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
         + 'static
         + Copy
@@ -317,9 +321,9 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     }
 }
 
-impl<F: Field> ExtensionField<F> for F {
-    type ExtensionPacking = F::Packing;
-}
+// impl<F: Field> ExtensionField<F> for F {
+//     type ExtensionPacking = F::Packing;
+// }
 
 impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     const D: usize = 1;

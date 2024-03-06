@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{
-    field_to_array, AbstractExtensionField, AbstractField, ExtensionField, Packable, TwoAdicField,
-};
+use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, Packable, TwoAdicField, AbstractionOf};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BinomialExtensionField<AF, const D: usize> {
@@ -44,8 +42,47 @@ impl<AF: AbstractField, const D: usize> From<AF> for BinomialExtensionField<AF, 
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
 
-impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
-    for BinomialExtensionField<F, D>
+// impl<AF, const D: usize> ExtensionField<BinomialExtensionField<AF::F, D>>
+// for BinomialExtensionField<AF, D>
+//     where
+//         AF: AbstractField,
+//         AF::F: BinomiallyExtendable<D>,
+// {
+//     type ExtensionPacking = BinomialExtensionField<F::Packing, D>;
+// }
+
+impl<AF, const D: usize> AbstractExtensionField<AF> for BinomialExtensionField<AF, D>
+    where
+        AF: AbstractField,
+        AF::F: BinomiallyExtendable<D>,
+{
+    const D: usize = D;
+
+    fn from_base(b: AF) -> Self {
+        Self {
+            value: field_to_array(b),
+        }
+    }
+
+    fn from_base_slice(bs: &[AF]) -> Self {
+        Self {
+            value: bs.to_vec().try_into().expect("slice has wrong length"),
+        }
+    }
+
+    #[inline]
+    fn from_base_fn<F: FnMut(usize) -> AF>(f: F) -> Self {
+        Self {
+            value: array::from_fn(f),
+        }
+    }
+
+    fn as_base_slice(&self) -> &[AF] {
+        &self.value
+    }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F> for BinomialExtensionField<F, D>
 {
     type ExtensionPacking = BinomialExtensionField<F::Packing, D>;
 }
@@ -108,6 +145,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         f * g.inverse()
     }
 }
+
+impl<AF, const D: usize> AbstractionOf<BinomialExtensionField<AF::F, D>> for BinomialExtensionField<AF, D>
+    where
+        AF: AbstractField,
+        AF::F: BinomiallyExtendable<D>,
+{}
 
 impl<AF, const D: usize> AbstractField for BinomialExtensionField<AF, D>
 where
@@ -495,37 +538,6 @@ where
 {
     fn mul_assign(&mut self, rhs: AF) {
         *self = self.clone() * rhs;
-    }
-}
-
-impl<AF, const D: usize> AbstractExtensionField<AF> for BinomialExtensionField<AF, D>
-where
-    AF: AbstractField,
-    AF::F: BinomiallyExtendable<D>,
-{
-    const D: usize = D;
-
-    fn from_base(b: AF) -> Self {
-        Self {
-            value: field_to_array(b),
-        }
-    }
-
-    fn from_base_slice(bs: &[AF]) -> Self {
-        Self {
-            value: bs.to_vec().try_into().expect("slice has wrong length"),
-        }
-    }
-
-    #[inline]
-    fn from_base_fn<F: FnMut(usize) -> AF>(f: F) -> Self {
-        Self {
-            value: array::from_fn(f),
-        }
-    }
-
-    fn as_base_slice(&self) -> &[AF] {
-        &self.value
     }
 }
 

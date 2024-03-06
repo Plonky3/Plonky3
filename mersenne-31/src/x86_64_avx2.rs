@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, AbstractionOf, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -309,6 +309,8 @@ impl Product for PackedMersenne31AVX2 {
         iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
     }
 }
+
+impl AbstractionOf<Mersenne31> for PackedMersenne31AVX2 {}
 
 impl AbstractField for PackedMersenne31AVX2 {
     type F = Mersenne31;

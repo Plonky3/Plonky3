@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, AbstractionOf, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -373,6 +373,8 @@ impl Product for PackedBabyBearNeon {
         iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
     }
 }
+
+impl AbstractionOf<BabyBear> for PackedBabyBearNeon {}
 
 impl AbstractField for PackedBabyBearNeon {
     type F = BabyBear;

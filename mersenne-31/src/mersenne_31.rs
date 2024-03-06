@@ -4,10 +4,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
-    PrimeField32, PrimeField64,
-};
+use p3_field::{exp_1717986917, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField, PrimeField32, PrimeField64, AbstractionOf};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -84,6 +81,8 @@ impl Distribution<Mersenne31> for Standard {
         }
     }
 }
+
+impl AbstractionOf<Self> for Mersenne31 {}
 
 impl AbstractField for Mersenne31 {
     type F = Self;
