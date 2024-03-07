@@ -75,7 +75,7 @@ Support for some instructions, such as AVX-512, is still experimental. They are 
 
 ## Nightly-only optimizations
 
-Some optimizations (in particular AVX-512-optimized math) rely on features that are currently available only in the nightly build of Rustc. To use them, you need to enable the `nightly-features` feature. For example, to run the tests:
+Some optimizations (in particular, AVX-512-optimized math) rely on features that are currently available only in the nightly build of Rustc. To use them, you need to enable the `nightly-features` feature. For example, to run the tests:
 ```
 cargo test --features nightly-features
 ```
