@@ -85,7 +85,7 @@ impl RngElt for i128 {}
 /// improvements.
 ///
 /// NB: If primitive multiplications are still the bottleneck, a
-/// futher possibility would be to find an MDS matrix some of whose
+/// further possibility would be to find an MDS matrix some of whose
 /// entries are powers of 2. Then the multiplication can be replaced
 /// with a shift, which on most architectures has better throughput
 /// and latency, and is issued on different ports (1*p06) to
