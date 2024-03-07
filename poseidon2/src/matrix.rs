@@ -63,26 +63,48 @@ where
     AF::F: PrimeField,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        // First, we apply M_4 to each consecutive four elements of the state.
-        // In Appendix B's terminology, this replaces each x_i with x_i'.
-        for i in (0..WIDTH).step_by(4) {
-            apply_m_4(&mut state[i..i + 4]);
-        }
 
-        // Now, we apply the outer circulant matrix (to compute the y_i values).
+        match WIDTH {
+            2 => {
+                let sum = state[0].clone() + state[1].clone();
+                state[0] += sum.clone();
+                state[1] += sum;
+            }
 
-        // We first precompute the four sums of every four elements.
-        let sums: [AF; 4] = core::array::from_fn(|k| {
-            (0..WIDTH)
-                .step_by(4)
-                .map(|j| state[j + k].clone())
-                .sum::<AF>()
-        });
+            3 => {
+                let sum = state[0].clone() + state[1].clone() + state[2].clone();
+                state[0] += sum.clone();
+                state[1] += sum.clone();
+                state[2] += sum;
+            }
 
-        // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
-        // In other words, we can add a single copy of x_i' to the appropriate one of our precomputed sums
-        for i in 0..WIDTH {
-            state[i] += sums[i % 4].clone();
+            4 | 8 | 12 | 16 | 20 | 24  => {
+                // First, we apply M_4 to each consecutive four elements of the state.
+                // In Appendix B's terminology, this replaces each x_i with x_i'.
+                for i in (0..WIDTH).step_by(4) {
+                    apply_m_4(&mut state[i..i + 4]);
+                }
+
+                // Now, we apply the outer circulant matrix (to compute the y_i values).
+
+                // We first precompute the four sums of every four elements.
+                let sums: [AF; 4] = core::array::from_fn(|k| {
+                    (0..WIDTH)
+                        .step_by(4)
+                        .map(|j| state[j + k].clone())
+                        .sum::<AF>()
+                });
+
+                // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
+                // In other words, we can add a single copy of x_i' to the appropriate one of our precomputed sums
+                for i in 0..WIDTH {
+                    state[i] += sums[i % 4].clone();
+                }
+            }
+
+            _ => {
+                panic!("Unsupported width");
+            }
         }
     }
 }

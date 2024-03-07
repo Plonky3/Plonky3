@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for BN254 {
 
 impl PartialEq for BN254 {
     fn eq(&self, other: &Self) -> bool {
-        self == other
+        self.value == other.value
     }
 }
 
