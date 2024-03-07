@@ -147,15 +147,15 @@ fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
 //
 // Constants: P = 2^31 - 2^27 + 1
 //            B = 2^32
-//            mu = P^-1 mod B
+//            μ = P^-1 mod B
 // Input: 0 <= C < P B
 // Output: 0 <= R < P such that R = C B^-1 (mod P)
-//   1. Q := mu C mod B
+//   1. Q := μ C mod B
 //   2. D := (C - Q P) / B
 //   3. R := if D < 0 then D + P else D
 //
 // We first show that the division in step 2. is exact. It suffices to show that C = Q P (mod B). By
-// definition of Q and mu, we have Q P = mu C P = P^-1 C P = C (mod B). We also have
+// definition of Q and μ, we have Q P = μ C P = P^-1 C P = C (mod B). We also have
 // C - Q P = C (mod P), so thus D = C B^-1 (mod P).
 //
 // It remains to show that R is in the correct range. It suffices to show that -P <= D < P. We know
