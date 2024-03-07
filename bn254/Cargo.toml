@@ -1,0 +1,13 @@
+[package]
+name = "p3-bn254"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-field = { path = "../field" }
+p3-poseidon2 = { path = "../poseidon2" }
+
+ark-ff = { version = "^0.4.0", default-features = false }
+ark-serialize = { version = "^0.4.0", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
