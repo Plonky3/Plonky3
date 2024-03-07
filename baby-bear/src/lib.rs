@@ -1,4 +1,12 @@
 #![no_std]
+#![cfg_attr(
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+    feature(stdarch_x86_avx512)
+)]
 
 extern crate alloc;
 
@@ -20,3 +28,16 @@ pub use aarch64_neon::*;
 mod x86_64_avx2;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 pub use x86_64_avx2::*;
+
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+mod x86_64_avx512;
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub use x86_64_avx512::*;

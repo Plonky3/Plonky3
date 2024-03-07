@@ -1,4 +1,4 @@
-use core::arch::x86_64::{self, __m256i};
+use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -9,26 +9,28 @@ use rand::Rng;
 
 use crate::BabyBear;
 
-const WIDTH: usize = 8;
-const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
+const WIDTH: usize = 16;
+const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
 // On x86 MONTY_BITS is always 32, so MU = P^-1 (mod 2^32) = 0x88000001.
-const MU: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x88000001; WIDTH]) };
+const MU: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x88000001; WIDTH]) };
+const EVENS: __mmask16 = 0b0101010101010101;
+const EVENS4: __mmask16 = 0x0f0f;
 
-/// Vectorized AVX2 implementation of `BabyBear` arithmetic.
+/// Vectorized AVX-512F implementation of `BabyBear` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedBabyBearAVX2(pub [BabyBear; WIDTH]);
+pub struct PackedBabyBearAVX512(pub [BabyBear; WIDTH]);
 
-impl PackedBabyBearAVX2 {
+impl PackedBabyBearAVX512 {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    fn to_vector(self) -> __m512i {
         unsafe {
             // Safety: `BabyBear` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[BabyBear; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
-            // transmuted to `__m256i`, since arrays are guaranteed to be contiguous in memory.
-            // Finally `PackedBabyBearAVX2` is `repr(transparent)` so it can be transmuted to
+            // transmuted to `__m512i`, since arrays are guaranteed to be contiguous in memory.
+            // Finally `PackedBabyBearAVX512` is `repr(transparent)` so it can be transmuted to
             // `[BabyBear; WIDTH]`.
             transmute(self)
         }
@@ -38,14 +40,14 @@ impl PackedBabyBearAVX2 {
     #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
-    /// SAFETY: The caller must ensure that each element of `vector` represents a valid `BabyBear`.
-    /// In particular, each element of vector must be in `0..P` (canonical form).
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    /// SAFETY: The caller must ensure that each element of `vector` represents a valid
+    /// `BabyBear`. In particular, each element of vector must be in `0..=P`.
+    unsafe fn from_vector(vector: __m512i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `BabyBear` values. We must only reason about memory representations. `__m256i` can be
+        // `BabyBear` values. We must only reason about memory representations. `__m512i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[BabyBear; WIDTH]` (since `BabyBear` is `repr(transparent)`), which in
-        // turn can be transmuted to `PackedBabyBearAVX2` (since `PackedBabyBearAVX2` is also
+        // be transmuted to `[BabyBear; WIDTH]` (since `BabyBear` is `repr(transparent)`), which
+        // in turn can be transmuted to `PackedBabyBearAVX512` (since `PackedBabyBearAVX512` is also
         // `repr(transparent)`).
         transmute(vector)
     }
@@ -59,7 +61,7 @@ impl PackedBabyBearAVX2 {
     }
 }
 
-impl Add for PackedBabyBearAVX2 {
+impl Add for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -73,7 +75,7 @@ impl Add for PackedBabyBearAVX2 {
     }
 }
 
-impl Mul for PackedBabyBearAVX2 {
+impl Mul for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
@@ -87,7 +89,7 @@ impl Mul for PackedBabyBearAVX2 {
     }
 }
 
-impl Neg for PackedBabyBearAVX2 {
+impl Neg for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
@@ -100,7 +102,7 @@ impl Neg for PackedBabyBearAVX2 {
     }
 }
 
-impl Sub for PackedBabyBearAVX2 {
+impl Sub for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -118,12 +120,12 @@ impl Sub for PackedBabyBearAVX2 {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn add(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
     //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
     //   Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in
@@ -135,10 +137,10 @@ fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
     // t < P and t - P otherwise, as desired.
 
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let t = x86_64::_mm512_add_epi32(lhs, rhs);
+        let u = x86_64::_mm512_sub_epi32(t, P);
+        x86_64::_mm512_min_epu32(t, u)
     }
 }
 
@@ -164,25 +166,34 @@ fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
 // [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
 //     2010, algorithm 2.7.
 
+/// Viewing the input as a vector of 16 `u32`s, copy the odd elements into the even elements below
+/// them. In other words, for all `0 <= i < 8`, set the even elements according to
+/// `res[2 * i] := a[2 * i + 1]`, and the odd elements according to
+/// `res[2 * i + 1] := a[2 * i + 1]`.
 #[inline]
 #[must_use]
-#[allow(non_snake_case)]
-fn monty_d(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn movehdup_epi32(a: __m512i) -> __m512i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
     unsafe {
-        let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
-        let q = x86_64::_mm256_mul_epu32(prod, MU);
-        let q_P = x86_64::_mm256_mul_epu32(q, P);
-        x86_64::_mm256_sub_epi64(prod, q_P)
+        x86_64::_mm512_castps_si512(x86_64::_mm512_movehdup_ps(x86_64::_mm512_castsi512_ps(a)))
     }
 }
 
+/// Viewing `a` as a vector of 16 `u32`s, copy the odd elements into the even elements below them,
+/// then merge with `src` according to the mask provided. In other words, for all `0 <= i < 8`, set
+/// the even elements according to `res[2 * i] := if k[2 * i] { a[2 * i + 1] } else { src[2 * i] }`,
+/// and the odd elements according to
+/// `res[2 * i + 1] := if k[2 * i + 1] { a[2 * i + 1] } else { src[2 * i + 1] }`.
 #[inline]
 #[must_use]
-fn movehdup_epi32(x: __m256i) -> __m256i {
-    // This instruction is only available in the floating-point flavor; this distinction is only for
-    // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
+fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
     unsafe {
-        x86_64::_mm256_castps_si256(x86_64::_mm256_movehdup_ps(x86_64::_mm256_castsi256_ps(x)))
+        let src = x86_64::_mm512_castsi512_ps(src);
+        let a = x86_64::_mm512_castsi512_ps(a);
+        x86_64::_mm512_castps_si512(x86_64::_mm512_mask_movehdup_ps(src, k, a))
     }
 }
 
@@ -190,38 +201,67 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
+#[allow(non_snake_case)]
+fn mul(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vmovshdup  lhs_odd, lhs
     //      vmovshdup  rhs_odd, rhs
     //      vpmuludq   prod_evn, lhs, rhs
-    //      vpmuludq   prod_odd, lhs_odd, rhs_odd
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
     //      vpmuludq   q_evn, prod_evn, MU
-    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
     //      vpmuludq   q_P_evn, q_evn, P
-    //      vpmuludq   q_P_odd, q_odd, P
-    //      vpsubq     d_evn, prod_evn, q_P_evn
-    //      vpsubq     d_odd, prod_odd, q_P_odd
-    //      vmovshdup  d_evn_hi, d_evn
-    //      vpblendd   t, d_evn_hi, d_odd, aah
-    //      vpaddd     u, t, P
-    //      vpminud    res, t, u
-    // throughput: 4.67 cyc/vec (1.71 els/cyc)
+    //      vpmuludq   q_P_hi, q_odd, P
+    //      vmovshdup  q_P_hi{EVENS}, q_P_evn
+    //      vpcmpltud  underflow, prod_hi, q_P_hi
+    //      vpsubd     res, prod_hi, q_P_hi
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 6.5 cyc/vec (2.46 els/cyc)
     // latency: 21 cyc
     unsafe {
+        // `vpmuludq` only reads the even doublewords, so when we pass `lhs` and `rhs` directly we
+        // get the eight products at even positions.
         let lhs_evn = lhs;
         let rhs_evn = rhs;
+
+        // Copy the odd doublewords into even positions to compute the eight products at odd
+        // positions.
+        // NB: The odd doublewords are ignored by `vpmuludq`, so we have a lot of choices for how to
+        // do this; `vmovshdup` is nice because it runs on a memory port if the operand is in
+        // memory, thus improving our throughput.
         let lhs_odd = movehdup_epi32(lhs);
         let rhs_odd = movehdup_epi32(rhs);
 
-        let d_evn = monty_d(lhs_evn, rhs_evn);
-        let d_odd = monty_d(lhs_odd, rhs_odd);
+        let prod_evn = x86_64::_mm512_mul_epu32(lhs_evn, rhs_evn);
+        let prod_odd = x86_64::_mm512_mul_epu32(lhs_odd, rhs_odd);
 
-        let d_evn_hi = movehdup_epi32(d_evn);
-        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
+        let q_evn = x86_64::_mm512_mul_epu32(prod_evn, MU);
+        let q_odd = x86_64::_mm512_mul_epu32(prod_odd, MU);
 
-        let u = x86_64::_mm256_add_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
+        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
+        // latency.
+        let prod_hi = mask_movehdup_epi32(prod_odd, EVENS, prod_evn);
+
+        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+        // low 32 bits anyway.
+        let q_P_evn = x86_64::_mm512_mul_epu32(q_evn, P);
+        let q_P_odd = x86_64::_mm512_mul_epu32(q_odd, P);
+
+        // We can ignore all the low halves of `q_P` as they cancel out. Get all the high halves as
+        // one vector.
+        let q_P_hi = mask_movehdup_epi32(q_P_odd, EVENS, q_P_evn);
+
+        // Subtraction `prod_hi - q_P_hi` modulo `P`.
+        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+        // check runs on port 5, increasing our throughput, although it does cost us an additional
+        // cycle of latency.
+        let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_P_hi);
+        let t = x86_64::_mm512_sub_epi32(prod_hi, q_P_hi);
+        x86_64::_mm512_mask_add_epi32(t, underflow, t, P)
     }
 }
 
@@ -229,28 +269,22 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn neg(val: __m256i) -> __m256i {
+fn neg(val: __m512i) -> __m512i {
     // We want this to compile to:
-    //      vpsubd   t, P, val
-    //      vpsignd  res, t, val
-    // throughput: .67 cyc/vec (12 els/cyc)
-    // latency: 2 cyc
+    //      vptestmd  nonzero, val, val
+    //      vpsubd    res{nonzero}{z}, P, val
+    // throughput: 1 cyc/vec (16 els/cyc)
+    // latency: 4 cyc
 
-    //   The vpsignd instruction is poorly named, because it doesn't _return_ or _copy_ the sign of
-    // anything, but _multiplies_ x by the sign of y (treating both as signed integers). In other
-    // words,
-    //                       { x            if y >s 0,
-    //      vpsignd(x, y) := { 0            if y = 0,
-    //                       { -x mod 2^32  if y <s 0.
-    //   We define t := P - val and note that t = -val (mod P). When val is in {1, ..., P - 1}, t is
-    // similarly in {1, ..., P - 1}, so it's in canonical form. Otherwise, val = 0 and t = P.
-    //   This is where we define res := vpsignd(t, val). The sign bit of val is never set so either
-    // val = 0 or val >s 0. If val = 0, then res = vpsignd(t, 0) = 0, as desired. Otherwise,
-    // res = vpsignd(t, val) = t passes t through.
+    // NB: This routine prioritizes throughput over latency. An alternative method would be to do
+    // sub(0, val), which would result in shorter latency, but also lower throughput.
+
+    //   If val is nonzero, then val is in {1, ..., P - 1} and P - val is in the same range. If val
+    // is zero, then the result is zeroed by masking.
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(P, val);
-        x86_64::_mm256_sign_epi32(t, val)
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let nonzero = x86_64::_mm512_test_epi32_mask(val, val);
+        x86_64::_mm512_maskz_sub_epi32(nonzero, P, val)
     }
 }
 
@@ -258,12 +292,12 @@ fn neg(val: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
     //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
     //   Let t := lhs - rhs. We want to return t mod P. Recall that lhs and rhs are in
@@ -274,49 +308,49 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
     // Otherwise, t is in -P + 1, ..., -1; u is in 1, ..., P - 1 (< P) and r = u. Hence, r is t if
     // t < P and t - P otherwise, as desired.
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
+        let u = x86_64::_mm512_add_epi32(t, P);
+        x86_64::_mm512_min_epu32(t, u)
     }
 }
 
-impl From<BabyBear> for PackedBabyBearAVX2 {
+impl From<BabyBear> for PackedBabyBearAVX512 {
     #[inline]
     fn from(value: BabyBear) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl Default for PackedBabyBearAVX2 {
+impl Default for PackedBabyBearAVX512 {
     #[inline]
     fn default() -> Self {
         BabyBear::default().into()
     }
 }
 
-impl AddAssign for PackedBabyBearAVX2 {
+impl AddAssign for PackedBabyBearAVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl MulAssign for PackedBabyBearAVX2 {
+impl MulAssign for PackedBabyBearAVX512 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl SubAssign for PackedBabyBearAVX2 {
+impl SubAssign for PackedBabyBearAVX512 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl Sum for PackedBabyBearAVX2 {
+impl Sum for PackedBabyBearAVX512 {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -326,7 +360,7 @@ impl Sum for PackedBabyBearAVX2 {
     }
 }
 
-impl Product for PackedBabyBearAVX2 {
+impl Product for PackedBabyBearAVX512 {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -336,7 +370,7 @@ impl Product for PackedBabyBearAVX2 {
     }
 }
 
-impl AbstractField for PackedBabyBearAVX2 {
+impl AbstractField for PackedBabyBearAVX512 {
     type F = BabyBear;
 
     #[inline]
@@ -404,7 +438,7 @@ impl AbstractField for PackedBabyBearAVX2 {
     }
 }
 
-impl Add<BabyBear> for PackedBabyBearAVX2 {
+impl Add<BabyBear> for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: BabyBear) -> Self {
@@ -412,7 +446,7 @@ impl Add<BabyBear> for PackedBabyBearAVX2 {
     }
 }
 
-impl Mul<BabyBear> for PackedBabyBearAVX2 {
+impl Mul<BabyBear> for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: BabyBear) -> Self {
@@ -420,7 +454,7 @@ impl Mul<BabyBear> for PackedBabyBearAVX2 {
     }
 }
 
-impl Sub<BabyBear> for PackedBabyBearAVX2 {
+impl Sub<BabyBear> for PackedBabyBearAVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: BabyBear) -> Self {
@@ -428,28 +462,28 @@ impl Sub<BabyBear> for PackedBabyBearAVX2 {
     }
 }
 
-impl AddAssign<BabyBear> for PackedBabyBearAVX2 {
+impl AddAssign<BabyBear> for PackedBabyBearAVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: BabyBear) {
         *self += Self::from(rhs)
     }
 }
 
-impl MulAssign<BabyBear> for PackedBabyBearAVX2 {
+impl MulAssign<BabyBear> for PackedBabyBearAVX512 {
     #[inline]
     fn mul_assign(&mut self, rhs: BabyBear) {
         *self *= Self::from(rhs)
     }
 }
 
-impl SubAssign<BabyBear> for PackedBabyBearAVX2 {
+impl SubAssign<BabyBear> for PackedBabyBearAVX512 {
     #[inline]
     fn sub_assign(&mut self, rhs: BabyBear) {
         *self -= Self::from(rhs)
     }
 }
 
-impl Sum<BabyBear> for PackedBabyBearAVX2 {
+impl Sum<BabyBear> for PackedBabyBearAVX512 {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -459,7 +493,7 @@ impl Sum<BabyBear> for PackedBabyBearAVX2 {
     }
 }
 
-impl Product<BabyBear> for PackedBabyBearAVX2 {
+impl Product<BabyBear> for PackedBabyBearAVX512 {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -469,7 +503,7 @@ impl Product<BabyBear> for PackedBabyBearAVX2 {
     }
 }
 
-impl Div<BabyBear> for PackedBabyBearAVX2 {
+impl Div<BabyBear> for PackedBabyBearAVX512 {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
@@ -478,133 +512,213 @@ impl Div<BabyBear> for PackedBabyBearAVX2 {
     }
 }
 
-impl Add<PackedBabyBearAVX2> for BabyBear {
-    type Output = PackedBabyBearAVX2;
+impl Add<PackedBabyBearAVX512> for BabyBear {
+    type Output = PackedBabyBearAVX512;
     #[inline]
-    fn add(self, rhs: PackedBabyBearAVX2) -> PackedBabyBearAVX2 {
-        PackedBabyBearAVX2::from(self) + rhs
+    fn add(self, rhs: PackedBabyBearAVX512) -> PackedBabyBearAVX512 {
+        PackedBabyBearAVX512::from(self) + rhs
     }
 }
 
-impl Mul<PackedBabyBearAVX2> for BabyBear {
-    type Output = PackedBabyBearAVX2;
+impl Mul<PackedBabyBearAVX512> for BabyBear {
+    type Output = PackedBabyBearAVX512;
     #[inline]
-    fn mul(self, rhs: PackedBabyBearAVX2) -> PackedBabyBearAVX2 {
-        PackedBabyBearAVX2::from(self) * rhs
+    fn mul(self, rhs: PackedBabyBearAVX512) -> PackedBabyBearAVX512 {
+        PackedBabyBearAVX512::from(self) * rhs
     }
 }
 
-impl Sub<PackedBabyBearAVX2> for BabyBear {
-    type Output = PackedBabyBearAVX2;
+impl Sub<PackedBabyBearAVX512> for BabyBear {
+    type Output = PackedBabyBearAVX512;
     #[inline]
-    fn sub(self, rhs: PackedBabyBearAVX2) -> PackedBabyBearAVX2 {
-        PackedBabyBearAVX2::from(self) - rhs
+    fn sub(self, rhs: PackedBabyBearAVX512) -> PackedBabyBearAVX512 {
+        PackedBabyBearAVX512::from(self) - rhs
     }
 }
 
-impl Distribution<PackedBabyBearAVX2> for Standard {
+impl Distribution<PackedBabyBearAVX512> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedBabyBearAVX2 {
-        PackedBabyBearAVX2(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedBabyBearAVX512 {
+        PackedBabyBearAVX512(rng.gen())
+    }
+}
+
+// vpshrdq requires AVX-512VBMI2.
+#[cfg(target_feature = "avx512vbmi2")]
+#[inline]
+#[must_use]
+fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
+    unsafe {
+        // Safety: If this code got compiled then AVX-512VBMI2 intrinsics are available.
+        x86_64::_mm512_shrdi_epi64::<32>(y, x)
+    }
+}
+
+// If we can't use vpshrdq, then do a vpermi2d, but we waste a register and double the latency.
+#[cfg(not(target_feature = "avx512vbmi2"))]
+#[inline]
+#[must_use]
+fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
+    const INTERLEAVE1_INDICES: __m512i = unsafe {
+        // Safety: `[u32; 16]` is trivially transmutable to `__m512i`.
+        transmute::<[u32; WIDTH], _>([
+            0x01, 0x10, 0x03, 0x12, 0x05, 0x14, 0x07, 0x16, 0x09, 0x18, 0x0b, 0x1a, 0x0d, 0x1c,
+            0x0f, 0x1e,
+        ])
+    };
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        x86_64::_mm512_permutex2var_epi32(x, INTERLEAVE1_INDICES, y)
     }
 }
 
 #[inline]
 #[must_use]
-fn interleave1(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vpsllq    t, a, 32
-    //      vpsrlq    u, b, 32
-    //      vpblendd  res0, a, u, aah
-    //      vpblendd  res1, t, b, aah
-    // throughput: 1.33 cyc/2 vec (12 els/cyc)
-    // latency: (1 -> 1)  1 cyc
-    //          (1 -> 2)  2 cyc
-    //          (2 -> 1)  2 cyc
-    //          (2 -> 2)  1 cyc
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+    // If we have AVX-512VBMI2, we want this to compile to:
+    //      vpshrdq    t, x, y, 32
+    //      vpblendmd  res0 {EVENS}, t, x
+    //      vpblendmd  res1 {EVENS}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
+    // latency: 2 cyc
+    //
+    // Otherwise, we want it to compile to:
+    //      vmovdqa32  t, INTERLEAVE1_INDICES
+    //      vpermi2d   t, x, y
+    //      vpblendmd  res0 {EVENS}, t, x
+    //      vpblendmd  res1 {EVENS}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
+    // latency: 4 cyc
 
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a1   0  a3   0  a5   0  a7   0 ].
-        //   u = [  0  b0   0  b2   0  b4   0  b6 ].
-        let t = x86_64::_mm256_srli_epi64::<32>(a);
-        let u = x86_64::_mm256_slli_epi64::<32>(b);
+    // We currently have:
+    //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+    //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
+    // First form
+    //   t = [ x1  y0  x3  y2  x5  y4  x7  y6  x9  y8  xb  ya  xd  yc  xf  ye ].
+    let t = interleave1_antidiagonal(x, y);
+
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
 
         // Then
-        //   res0 = [ a0  b0  a2  b2  a4  b4  a6  b6 ],
-        //   res1 = [ a1  b1  a3  b3  a5  b5  a7  b7 ].
+        //   res0 = [ x0  y0  x2  y2  x4  y4  x6  y6  x8  y8  xa  ya  xc  yc  xe  ye ],
+        //   res1 = [ x1  y1  x3  y3  x5  y5  x7  y7  x9  y9  xb  yb  xd  yd  xf  yf ].
         (
-            x86_64::_mm256_blend_epi32::<0b10101010>(a, u),
-            x86_64::_mm256_blend_epi32::<0b10101010>(t, b),
+            x86_64::_mm512_mask_blend_epi32(EVENS, t, x),
+            x86_64::_mm512_mask_blend_epi32(EVENS, y, t),
         )
     }
 }
 
 #[inline]
 #[must_use]
-fn interleave2(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
+fn shuffle_epi64<const MASK: i32>(a: __m512i, b: __m512i) -> __m512i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+    unsafe {
+        let a = x86_64::_mm512_castsi512_pd(a);
+        let b = x86_64::_mm512_castsi512_pd(b);
+        x86_64::_mm512_castpd_si512(x86_64::_mm512_shuffle_pd::<MASK>(a, b))
+    }
+}
+
+#[inline]
+#[must_use]
+fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     // We want this to compile to:
-    //      vpalignr  t, b, a, 8
-    //      vpblendd  res0, a, t, cch
-    //      vpblendd  res1, t, b, cch
-    // throughput: 1 cyc/2 vec (16 els/cyc)
+    //      vshufpd    t, x, y, 55h
+    //      vpblendmq  res0 {EVENS}, t, x
+    //      vpblendmq  res1 {EVENS}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
     // latency: 2 cyc
 
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
 
         // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
+        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
         // First form
-        //   t = [ a2  a3  b0  b1  a6  a7  b4  b5 ].
-        let t = x86_64::_mm256_alignr_epi8::<8>(b, a);
+        //   t = [ x2  x3  y0  y1  x6  x7  y4  y5  xa  xb  y8  y9  xe  xf  yc  yd ].
+        let t = shuffle_epi64::<0b01010101>(x, y);
 
         // Then
-        //   res0 = [ a0  a1  b0  b1  a4  a5  b4  b5 ],
-        //   res1 = [ a2  a3  b2  b3  a6  a7  b6  b7 ].
+        //   res0 = [ x0  x1  y0  y1  x4  x5  y4  y5  x8  x9  y8  y9  xc  xd  yc  yd ],
+        //   res1 = [ x2  x3  y2  y3  x6  x7  y6  y7  xa  xb  ya  yb  xe  xf  ye  yf ].
         (
-            x86_64::_mm256_blend_epi32::<0b11001100>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11001100>(t, b),
+            x86_64::_mm512_mask_blend_epi64(EVENS as __mmask8, t, x),
+            x86_64::_mm512_mask_blend_epi64(EVENS as __mmask8, y, t),
         )
     }
 }
 
 #[inline]
 #[must_use]
-fn interleave4(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
+fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     // We want this to compile to:
-    //      vperm2i128  t, a, b, 21h
-    //      vpblendd    res0, a, t, f0h
-    //      vpblendd    res1, t, b, f0h
-    // throughput: 1 cyc/2 vec (16 els/cyc)
+    //      vmovdqa64   t, INTERLEAVE4_INDICES
+    //      vpermi2q    t, x, y
+    //      vpblendmd   res0 {EVENS4}, t, x
+    //      vpblendmd   res1 {EVENS4}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
     // latency: 4 cyc
 
+    const INTERLEAVE4_INDICES: __m512i = unsafe {
+        // Safety: `[u64; 8]` is trivially transmutable to `__m512i`.
+        transmute::<[u64; WIDTH / 2], _>([0o02, 0o03, 0o10, 0o11, 0o06, 0o07, 0o14, 0o15])
+    };
+
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
 
         // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
+        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
         // First form
-        //   t = [ a4  a5  a6  a7  b0  b1  b2  b3 ].
-        let t = x86_64::_mm256_permute2x128_si256::<0x21>(a, b);
+        //   t = [ x4  x5  x6  x7  y0  y1  y2  y3  xc  xd  xe  xf  y8  y9  ya  yb ].
+        let t = x86_64::_mm512_permutex2var_epi64(x, INTERLEAVE4_INDICES, y);
 
         // Then
-        //   res0 = [ a0  a1  a2  a3  b0  b1  b2  b3 ],
-        //   res1 = [ a4  a5  a6  a7  b4  b5  b6  b7 ].
+        //   res0 = [ x0  x1  x2  x3  y0  y1  y2  y3  x8  x9  xa  xb  y8  y9  ya  yb ],
+        //   res1 = [ x4  x5  x6  x7  y4  y5  y6  y7  xc  xd  xe  xf  yc  yd  ye  yf ].
         (
-            x86_64::_mm256_blend_epi32::<0b11110000>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11110000>(t, b),
+            x86_64::_mm512_mask_blend_epi32(EVENS4, t, x),
+            x86_64::_mm512_mask_blend_epi32(EVENS4, y, t),
         )
     }
 }
 
-unsafe impl PackedValue for PackedBabyBearAVX2 {
+#[inline]
+#[must_use]
+fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+    // We want this to compile to:
+    //      vshufi64x2  t, x, b, 4eh
+    //      vpblendmq   res0 {EVENS4}, t, x
+    //      vpblendmq   res1 {EVENS4}, y, t
+    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
+    // latency: 4 cyc
+
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+
+        // We currently have:
+        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
+        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
+        // First form
+        //   t = [ x8  x9  xa  xb  xc  xd  xe  xf  y0  y1  y2  y3  y4  y5  y6  y7 ].
+        let t = x86_64::_mm512_shuffle_i64x2::<0b01_00_11_10>(x, y);
+
+        // Then
+        //   res0 = [ x0  x1  x2  x3  x4  x5  x6  x7  y0  y1  y2  y3  y4  y5  y6  y7 ],
+        //   res1 = [ x8  x9  xa  xb  xc  xd  xe  xf  y8  y9  ya  yb  yc  yd  ye  yf ].
+        (
+            x86_64::_mm512_mask_blend_epi64(EVENS4 as __mmask8, t, x),
+            x86_64::_mm512_mask_blend_epi64(EVENS4 as __mmask8, y, t),
+        )
+    }
+}
+
+unsafe impl PackedValue for PackedBabyBearAVX512 {
     type Value = BabyBear;
 
     const WIDTH: usize = WIDTH;
@@ -613,7 +727,7 @@ unsafe impl PackedValue for PackedBabyBearAVX2 {
     fn from_slice(slice: &[BabyBear]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[BabyBear; WIDTH]` can be transmuted to `PackedBabyBearAVX2` since the
+            // Safety: `[BabyBear; WIDTH]` can be transmuted to `PackedBabyBearAVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &*slice.as_ptr().cast()
@@ -623,7 +737,7 @@ unsafe impl PackedValue for PackedBabyBearAVX2 {
     fn from_slice_mut(slice: &mut [BabyBear]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[BabyBear; WIDTH]` can be transmuted to `PackedBabyBearAVX2` since the
+            // Safety: `[BabyBear; WIDTH]` can be transmuted to `PackedBabyBearAVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &mut *slice.as_mut_ptr().cast()
@@ -647,7 +761,7 @@ unsafe impl PackedValue for PackedBabyBearAVX2 {
     }
 }
 
-unsafe impl PackedField for PackedBabyBearAVX2 {
+unsafe impl PackedField for PackedBabyBearAVX512 {
     type Scalar = BabyBear;
 
     #[inline]
@@ -657,7 +771,8 @@ unsafe impl PackedField for PackedBabyBearAVX2 {
             1 => interleave1(v0, v1),
             2 => interleave2(v0, v1),
             4 => interleave4(v0, v1),
-            8 => (v0, v1),
+            8 => interleave8(v0, v1),
+            16 => (v0, v1),
             _ => panic!("unsupported block_len"),
         };
         unsafe {
@@ -669,13 +784,13 @@ unsafe impl PackedField for PackedBabyBearAVX2 {
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
+    use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
 
     type F = BabyBear;
-    type P = PackedBabyBearAVX2;
+    type P = PackedBabyBearAVX512;
 
     const fn array_from_valid_reps(vals: [u32; WIDTH]) -> [F; WIDTH] {
         let mut res = [BabyBear { value: 0 }; WIDTH];
@@ -688,7 +803,7 @@ mod tests {
     }
 
     const fn packed_from_valid_reps(vals: [u32; WIDTH]) -> P {
-        PackedBabyBearAVX2(array_from_valid_reps(vals))
+        PackedBabyBearAVX512(array_from_valid_reps(vals))
     }
 
     fn array_from_random(seed: u64) -> [F; WIDTH] {
@@ -697,21 +812,34 @@ mod tests {
     }
 
     fn packed_from_random(seed: u64) -> P {
-        PackedBabyBearAVX2(array_from_random(seed))
+        PackedBabyBearAVX512(array_from_random(seed))
     }
 
     const SPECIAL_VALS: [F; WIDTH] = array_from_valid_reps([
         0x00000000, 0x00000001, 0x78000000, 0x77ffffff, 0x3c000000, 0x0ffffffe, 0x68000003,
-        0x70000002,
+        0x70000002, 0x00000000, 0x00000001, 0x78000000, 0x77ffffff, 0x3c000000, 0x0ffffffe,
+        0x68000003, 0x70000002,
     ]);
 
     #[test]
     fn test_interleave_1() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
-        let expected0 = packed_from_valid_reps([0x0, 0x8, 0x2, 0xa, 0x4, 0xc, 0x6, 0xe]);
-        let expected1 = packed_from_valid_reps([0x1, 0x9, 0x3, 0xb, 0x5, 0xd, 0x7, 0xf]);
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x10, 0x02, 0x12, 0x04, 0x14, 0x06, 0x16, 0x08, 0x18, 0x0a, 0x1a, 0x0c, 0x1c,
+            0x0e, 0x1e,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x01, 0x11, 0x03, 0x13, 0x05, 0x15, 0x07, 0x17, 0x09, 0x19, 0x0b, 0x1b, 0x0d, 0x1d,
+            0x0f, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 1);
         assert_eq!(res0, expected0);
@@ -720,11 +848,23 @@ mod tests {
 
     #[test]
     fn test_interleave_2() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
-        let expected0 = packed_from_valid_reps([0x0, 0x1, 0x8, 0x9, 0x4, 0x5, 0xc, 0xd]);
-        let expected1 = packed_from_valid_reps([0x2, 0x3, 0xa, 0xb, 0x6, 0x7, 0xe, 0xf]);
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x01, 0x10, 0x11, 0x04, 0x05, 0x14, 0x15, 0x08, 0x09, 0x18, 0x19, 0x0c, 0x0d,
+            0x1c, 0x1d,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x02, 0x03, 0x12, 0x13, 0x06, 0x07, 0x16, 0x17, 0x0a, 0x0b, 0x1a, 0x1b, 0x0e, 0x0f,
+            0x1e, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 2);
         assert_eq!(res0, expected0);
@@ -733,11 +873,23 @@ mod tests {
 
     #[test]
     fn test_interleave_4() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
-        let expected0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x8, 0x9, 0xa, 0xb]);
-        let expected1 = packed_from_valid_reps([0x4, 0x5, 0x6, 0x7, 0xc, 0xd, 0xe, 0xf]);
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x10, 0x11, 0x12, 0x13, 0x08, 0x09, 0x0a, 0x0b, 0x18, 0x19,
+            0x1a, 0x1b,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x04, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16, 0x17, 0x0c, 0x0d, 0x0e, 0x0f, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 4);
         assert_eq!(res0, expected0);
@@ -746,10 +898,41 @@ mod tests {
 
     #[test]
     fn test_interleave_8() {
-        let vec0 = packed_from_valid_reps([0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
-        let vec1 = packed_from_valid_reps([0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
+
+        let expected0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+            0x16, 0x17,
+        ]);
+        let expected1 = packed_from_valid_reps([
+            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
 
         let (res0, res1) = vec0.interleave(vec1, 8);
+        assert_eq!(res0, expected0);
+        assert_eq!(res1, expected1);
+    }
+
+    #[test]
+    fn test_interleave_16() {
+        let vec0 = packed_from_valid_reps([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]);
+        let vec1 = packed_from_valid_reps([
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ]);
+
+        let (res0, res1) = vec0.interleave(vec1, 16);
         assert_eq!(res0, vec0);
         assert_eq!(res1, vec1);
     }
@@ -835,7 +1018,7 @@ mod tests {
     #[test]
     fn test_neg_own_inverse() {
         let vec = packed_from_random(0xee4df174b850a35f);
-        let res = -(-vec);
+        let res = --vec;
         assert_eq!(res, vec);
     }
 
@@ -890,8 +1073,8 @@ mod tests {
         let arr = array_from_random(0xb0c7a5153103c5a8);
         let arr_inv = arr.map(|x| x.inverse());
 
-        let vec = PackedBabyBearAVX2(arr);
-        let vec_inv = PackedBabyBearAVX2(arr_inv);
+        let vec = PackedBabyBearAVX512(arr);
+        let vec_inv = PackedBabyBearAVX512(arr_inv);
 
         let res = vec * vec_inv;
         assert_eq!(res, P::one());
@@ -1020,8 +1203,8 @@ mod tests {
         let arr0 = array_from_random(0xac23b5a694dabf70);
         let arr1 = array_from_random(0xd249ec90e8a6e733);
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -1034,8 +1217,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x1e2b153f07b64cf3);
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -1048,8 +1231,8 @@ mod tests {
         let arr0 = array_from_random(0xfcf974ac7625a260);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -1062,8 +1245,8 @@ mod tests {
         let arr0 = array_from_random(0x167ce9d8e920876e);
         let arr1 = array_from_random(0x52ddcdd3461e046f);
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1076,8 +1259,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x358498640bfe1375);
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1090,8 +1273,8 @@ mod tests {
         let arr0 = array_from_random(0x05d81ebfb8f0005c);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -1104,8 +1287,8 @@ mod tests {
         let arr0 = array_from_random(0x4242ebdc09b74d77);
         let arr1 = array_from_random(0x9937b275b3c056cd);
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1118,8 +1301,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x5285448b835458a3);
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1132,8 +1315,8 @@ mod tests {
         let arr0 = array_from_random(0x22508dc80001d865);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedBabyBearAVX2(arr0);
-        let vec1 = PackedBabyBearAVX2(arr1);
+        let vec0 = PackedBabyBearAVX512(arr0);
+        let vec1 = PackedBabyBearAVX512(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -1145,10 +1328,9 @@ mod tests {
     fn test_neg_vs_scalar() {
         let arr = array_from_random(0xc3c273a9b334372f);
 
-        let vec = PackedBabyBearAVX2(arr);
+        let vec = PackedBabyBearAVX512(arr);
         let vec_res = -vec;
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
@@ -1158,10 +1340,9 @@ mod tests {
     fn test_neg_vs_scalar_special_vals() {
         let arr = SPECIAL_VALS;
 
-        let vec = PackedBabyBearAVX2(arr);
+        let vec = PackedBabyBearAVX512(arr);
         let vec_res = -vec;
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
         }
