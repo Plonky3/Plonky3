@@ -124,7 +124,7 @@ fn barret_red_babybear(input: i128) -> i64 {
 //
 // Finally, note that by definition:
 // input = input_high*(2**N) + input_low
-// Hence a simple rearrangment gets us
+// Hence a simple rearrangement gets us
 // 4: input_high*(2**N) = input - input_low
 //
 //

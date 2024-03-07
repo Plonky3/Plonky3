@@ -15,8 +15,8 @@ use p3_field::{AbstractField, TwoAdicField};
 // const MATRIX_CIRC_MDS_12_SML: [u64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
 
 // Trying to maximise the # of 1's in the vector.
-// Not clear exatcly what we should be optimising here but that seems reasonable.
-//const MATRIX_CIRC_MDS_16_SML: [u64; 16] =
+// Not clear exactly what we should be optimising here but that seems reasonable.
+// const MATRIX_CIRC_MDS_16_SML: [u64; 16] =
 //   [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 // 1, 1, 51, 52, 11, 63, 1, 2, 1, 2, 15, 67, 2, 22, 13, 3
 // [1, 1, 2, 1, 8, 32, 2, 65, 77, 8, 91, 31, 3, 65, 32, 7];
