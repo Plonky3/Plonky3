@@ -4,7 +4,10 @@
 
 extern crate alloc;
 
+mod poseidon2;
+
 use alloc::vec::Vec;
+use zkhash::fields::bn256::FpBN256;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -14,25 +17,17 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use serde::ser::SerializeSeq;
 
-use ark_ff::{Fp256, Field as af, MontBackend, MontConfig, One, Zero};
+use ark_ff::{Field as af, Zero, One};
 use p3_field::{AbstractField, Field, Packable, PrimeField};
 use serde::{Deserialize, Deserializer, Serialize};
 
-const NUM_BIGINT_LIMBS: usize = 4;
-
-#[derive(MontConfig)]
-#[modulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
-#[generator = "7"]
-struct FqConfig;
-type FpBN256 = Fp256<MontBackend<FqConfig, NUM_BIGINT_LIMBS>>;
-
 /// The BN254 curve base field prime, defined as `F_p` where `p = 21888242871839275222246405745257275088696311157297823662689037894645226208583`.
 #[derive(Copy, Clone, Default)]
-pub struct BN256 {
+pub struct BN254 {
     value: FpBN256,
 }
 
-impl Serialize for BN256 {
+impl Serialize for BN254 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let limbs = self.value.0.0;
 
@@ -44,7 +39,7 @@ impl Serialize for BN256 {
     }
 }
 
-impl<'de> Deserialize<'de> for BN256 {
+impl<'de> Deserialize<'de> for BN254 {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let limbs: Vec<u64> = Deserialize::deserialize(d)?;
         let mut value = FpBN256::zero();
@@ -56,47 +51,47 @@ impl<'de> Deserialize<'de> for BN256 {
 }
 
 
-impl PartialEq for BN256 {
+impl PartialEq for BN254 {
     fn eq(&self, other: &Self) -> bool {
         self == other
     }
 }
 
-impl Eq for BN256 {}
+impl Eq for BN254 {}
 
-impl Packable for BN256 {}
+impl Packable for BN254 {}
 
-impl Hash for BN256 {
+impl Hash for BN254 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.value.hash(state);
     }
 }
 
-impl Ord for BN256 {
+impl Ord for BN254 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.value.cmp(&other.value)
     }
 }
 
-impl PartialOrd for BN256 {
+impl PartialOrd for BN254 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Display for BN256 {
+impl Display for BN254 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.value, f)
     }
 }
 
-impl Debug for BN256 {
+impl Debug for BN254 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Debug::fmt(&self.value, f)
     }
 }
 
-impl AbstractField for BN256 {
+impl AbstractField for BN254 {
     type F = Self;
 
     fn zero() -> Self {
@@ -159,7 +154,7 @@ impl AbstractField for BN256 {
     }
 }
 
-impl Field for BN256 {
+impl Field for BN254 {
     // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
     type Packing = Self;
 
@@ -174,9 +169,9 @@ impl Field for BN256 {
     }
 }
 
-impl PrimeField for BN256 {}
+impl PrimeField for BN254 {}
 
-impl Add for BN256 {
+impl Add for BN254 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -184,19 +179,19 @@ impl Add for BN256 {
     }
 }
 
-impl AddAssign for BN256 {
+impl AddAssign for BN254 {
     fn add_assign(&mut self, rhs: Self) {
         self.value += rhs.value;
     }
 }
 
-impl Sum for BN256 {
+impl Sum for BN254 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
-impl Sub for BN256 {
+impl Sub for BN254 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self {
@@ -204,13 +199,13 @@ impl Sub for BN256 {
     }
 }
 
-impl SubAssign for BN256 {
+impl SubAssign for BN254 {
     fn sub_assign(&mut self, rhs: Self) {
         self.value -= rhs.value;
     }
 }
 
-impl Neg for BN256 {
+impl Neg for BN254 {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
@@ -218,7 +213,7 @@ impl Neg for BN256 {
     }
 }
 
-impl Mul for BN256 {
+impl Mul for BN254 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -226,19 +221,19 @@ impl Mul for BN256 {
     }
 }
 
-impl MulAssign for BN256 {
+impl MulAssign for BN254 {
     fn mul_assign(&mut self, rhs: Self) {
         self.value *= rhs.value;
     }
 }
 
-impl Product for BN256 {
+impl Product for BN254 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
-impl Div for BN256 {
+impl Div for BN254 {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
