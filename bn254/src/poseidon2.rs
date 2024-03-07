@@ -39,9 +39,8 @@ mod tests {
     use p3_poseidon2::Poseidon2;
     use rand::Rng;
     use zkhash::fields::bn256::FpBN256;
-    use zkhash::poseidon::poseidon_instance_bn256::RC3;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-    use zkhash::poseidon2::poseidon2_instance_bn256::POSEIDON2_BN256_PARAMS;
+    use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
 
     use super::*;
 
