@@ -12,16 +12,17 @@ use crate::domain::twin_coset_domain;
 #[derive(Default)]
 pub(crate) struct TwiddleCache<F>(
     // (log_n, shift) -> (twiddles, inverse_twiddles)
+    #[allow(clippy::type_complexity)]
     LinearMap<(usize, Complex<F>), (Vec<Vec<F>>, Option<Vec<Vec<F>>>)>,
 );
 
 impl<F: ComplexExtendable> TwiddleCache<F> {
-    pub(crate) fn get_twiddles<'a>(
-        &'a mut self,
+    pub(crate) fn get_twiddles(
+        &mut self,
         log_n: usize,
         shift: Complex<F>,
         inv: bool,
-    ) -> &'a Vec<Vec<F>> {
+    ) -> &Vec<Vec<F>> {
         let cache = self
             .0
             .get_or_insert_with((log_n, shift), || (compute_twiddles(log_n, shift), None));
@@ -32,7 +33,7 @@ impl<F: ComplexExtendable> TwiddleCache<F> {
                 cache
                     .0
                     .iter()
-                    .map(|xs| batch_multiplicative_inverse(&xs))
+                    .map(|xs| batch_multiplicative_inverse(xs))
                     .collect()
             })
         }

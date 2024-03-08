@@ -28,12 +28,6 @@ pub(crate) fn twin_coset_domain<F: ComplexExtendable>(
         .take(size)
 }
 
-pub(crate) fn cfft_domain<F: ComplexExtendable>(log_n: usize) -> impl Iterator<Item = Complex<F>> {
-    let g = F::circle_two_adic_generator(log_n - 1);
-    let shift = F::circle_two_adic_generator(log_n + 1);
-    twin_coset_domain(g, shift, 1 << log_n)
-}
-
 /*
 X is generator, O is the first coset, goes counterclockwise
   O X .

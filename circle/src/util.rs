@@ -1,16 +1,21 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
-use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField, Field, PackedValue};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use itertools::izip;
+use p3_field::extension::Complex;
+use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::Matrix;
-use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
 
-use crate::domain::cfft_domain;
+#[cfg(test)]
+use p3_field::extension::ComplexExtendable;
+#[cfg(test)]
+use p3_matrix::dense::RowMajorMatrix;
+#[cfg(test)]
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
+#[cfg(test)]
 pub(crate) fn circle_basis<F: ComplexExtendable>(point: Complex<F>, log_n: usize) -> Vec<F> {
     if log_n == 0 {
         return vec![F::one()];
@@ -37,6 +42,7 @@ pub(crate) fn circle_basis<F: ComplexExtendable>(point: Complex<F>, log_n: usize
     basis
 }
 
+#[cfg(test)]
 pub(crate) fn eval_circle_polys<F: ComplexExtendable>(
     coeffs: &RowMajorMatrix<F>,
     point: Complex<F>,
@@ -71,6 +77,7 @@ pub(crate) fn point_to_univariate<F: Field>(p: Complex<F>) -> Option<F> {
 
 // Page 5
 // same as above, this *could* handle point at infinity if we had Field::try_sqrt
+#[cfg(test)]
 pub(crate) fn rotate_univariate<F: Field, EF: ExtensionField<F>>(t1: EF, t2: F) -> Option<EF> {
     Some((t1 + t2) * (EF::one() - t1 * t2).try_inverse()?)
 }
