@@ -186,11 +186,30 @@ impl AbstractField for BabyBear {
 impl Field for BabyBear {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedBabyBearNeon;
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ))]
     type Packing = crate::PackedBabyBearAVX2;
+    #[cfg(all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ))]
+    type Packing = crate::PackedBabyBearAVX512;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
-        all(target_arch = "x86_64", target_feature = "avx2"),
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(all(feature = "nightly-features", target_feature = "avx512f"))
+        ),
+        all(
+            feature = "nightly-features",
+            target_arch = "x86_64",
+            target_feature = "avx512f"
+        ),
     )))]
     type Packing = Self;
 
@@ -255,20 +274,6 @@ impl PrimeField64 for BabyBear {
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
         u64::from(self.as_canonical_u32())
-    }
-
-    #[inline]
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
-        // In order not to overflow a u64, we must have sum(u) <= 2^32.
-        debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
-
-        let mut dot = u[0] * v[0].value as u64;
-        for i in 1..N {
-            dot += u[i] * v[i].value as u64;
-        }
-        Self {
-            value: (dot % (P as u64)) as u32,
-        }
     }
 }
 
@@ -423,6 +428,23 @@ impl Div for BabyBear {
 #[must_use]
 const fn to_monty(x: u32) -> u32 {
     (((x as u64) << MONTY_BITS) % P as u64) as u32
+}
+
+/// Convert a constant u32 array into a constant Babybear array.
+/// Saves every element in Monty Form
+#[inline]
+#[must_use]
+pub(crate) const fn to_babybear_array<const N: usize>(input: [u32; N]) -> [BabyBear; N] {
+    let mut output = [BabyBear { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = to_monty(input[i]);
+        i += 1;
+    }
+    output
 }
 
 #[inline]

@@ -5,6 +5,8 @@ use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::{Cfft, CirclePcs};
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_challenger::DuplexChallenger;
 use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -20,6 +22,8 @@ use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
+use p3_poseidon2::Poseidon2;
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val, VerificationError};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};

@@ -1,12 +1,10 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_field::PrimeField64;
-use p3_goldilocks::Goldilocks;
-use p3_poseidon2::{
-    DiffusionMatrixBabybear, DiffusionMatrixGoldilocks, DiffusionPermutation, Poseidon2,
-};
+use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
+use p3_poseidon2::{DiffusionPermutation, Poseidon2};
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
