@@ -46,11 +46,19 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
         log_blowup: 1,
         num_queries: 10,
         proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
+        mmcs: challenge_mmcs.clone(),
     };
+
+    let other_fri_config = FriConfig {
+        log_blowup: 1,
+        num_queries: 10,
+        proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };    
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let max_log_n = log_degrees.iter().copied().max().unwrap();
-    let pcs: MyPcs = MyPcs::new(max_log_n, dft, val_mmcs, fri_config);
+    let pcs: MyPcs = MyPcs::new(max_log_n, dft.clone(), val_mmcs.clone(), fri_config);
+
 
     let mut challenger = Challenger::new(perm.clone());
 
@@ -64,10 +72,25 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
         })
         .collect::<Vec<_>>();
 
+    let domains_and_other_polys = log_degrees
+        .iter()
+        .map(|&d| {
+            (
+                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << (d-1)),
+                RowMajorMatrix::<Val>::rand(&mut rng, 1 << (d-1), 10),
+            )
+        })
+        .collect::<Vec<_>>();
+
     let (commit, data) =
         <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.clone());
 
+    let (other_commit, other_data) =
+        <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_other_polys.clone());
+
     challenger.observe(commit);
+
+    challenger.observe(other_commit);
 
     let zeta = challenger.sample_ext_element::<Challenge>();
 
@@ -76,11 +99,15 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
         .map(|_| vec![zeta])
         .collect::<Vec<_>>();
 
-    let (opening, proof) = pcs.open(vec![(&data, points)], &mut challenger);
+    let (opening, proof) = pcs.open(
+        vec![(&data, points.clone()), (&other_data, points)],
+        &mut challenger,
+    );
 
     // verify the proof.
     let mut challenger = Challenger::new(perm);
     challenger.observe(commit);
+    challenger.observe(other_commit);
     let _ = challenger.sample_ext_element::<Challenge>();
 
     let os = domains_and_polys
@@ -88,8 +115,19 @@ fn make_test_fri_pcs(log_degrees: &[usize]) {
         .zip(&opening[0])
         .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
         .collect();
-    pcs.verify(vec![(commit, os)], &proof, &mut challenger)
-        .unwrap()
+
+    let other_os = domains_and_polys
+        .iter()
+        .zip(&opening[1])
+        .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
+        .collect();
+
+    pcs.verify(
+        vec![(commit, os), (other_commit, other_os)],
+        &proof,
+        &mut challenger,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -118,4 +156,6 @@ fn test_fri_pcs_many_different_rev() {
         let degrees = (3..3 + i).rev().collect::<Vec<_>>();
         make_test_fri_pcs(&degrees);
     }
+
 }
+

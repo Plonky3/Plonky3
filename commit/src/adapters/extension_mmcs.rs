@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{vec,vec::Vec};
 use core::marker::PhantomData;
 
 use p3_field::{AbstractExtensionField, ExtensionField, Field};
@@ -46,6 +46,15 @@ where
             .collect();
         (opened_ext_values, proof)
     }
+
+    fn open_multi_batches(
+        &self,
+        index: Vec<usize>,
+        prover_data: &Vec<Self::ProverData>,
+    ) -> Vec<(Vec<Vec<EF>>, Self::Proof)> {
+
+	vec![]
+    }    
 
     fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> Vec<Self::Mat<'a>> {
         self.inner
