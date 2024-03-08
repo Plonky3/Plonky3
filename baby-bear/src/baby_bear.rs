@@ -186,11 +186,30 @@ impl AbstractField for BabyBear {
 impl Field for BabyBear {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedBabyBearNeon;
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ))]
     type Packing = crate::PackedBabyBearAVX2;
+    #[cfg(all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ))]
+    type Packing = crate::PackedBabyBearAVX512;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
-        all(target_arch = "x86_64", target_feature = "avx2"),
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(all(feature = "nightly-features", target_feature = "avx512f"))
+        ),
+        all(
+            feature = "nightly-features",
+            target_arch = "x86_64",
+            target_feature = "avx512f"
+        ),
     )))]
     type Packing = Self;
 

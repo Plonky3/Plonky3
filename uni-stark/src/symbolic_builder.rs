@@ -39,7 +39,7 @@ where
         .unwrap_or(0)
 }
 
-#[instrument(name = "evalute constraints symbolically", skip_all, level = "debug")]
+#[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
 pub fn get_symbolic_constraints<F, A>(air: &A) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
