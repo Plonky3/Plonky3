@@ -356,7 +356,7 @@ mod tests {
         let basis = d.lagrange_basis(zeta);
         let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);
 
-        let ys = gemv_tr(evals.as_view(), basis)
+        let ys = gemv_tr(evals.as_view(), basis.into_iter())
             .into_iter()
             .map(|x| x * v_n_at_zeta)
             .collect_vec();

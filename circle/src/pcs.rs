@@ -148,9 +148,8 @@ where
 mod tests {
 
     use p3_challenger::DuplexChallenger;
-    use p3_mds::mersenne31::MdsMatrixMersenne31;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
-    use p3_mersenne_31::Mersenne31;
+    use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
     use p3_poseidon::Poseidon;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::thread_rng;

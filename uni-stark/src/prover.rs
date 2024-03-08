@@ -36,14 +36,10 @@ where
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace);
 
-    #[cfg(debug_assertions)]
-    println!("debug assertions ok");
-
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
-    dbg!(log_quotient_degree);
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -70,8 +66,6 @@ where
     let quotient_flat = RowMajorMatrix::new_col(quotient_values).flatten_to_base();
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
     let qc_domains = quotient_domain.split_domains(quotient_degree);
-
-    // let quotient_chunks = quotient_domain.decompose(quotient_flat, degree);
 
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
         .in_scope(|| pcs.commit(izip!(qc_domains, quotient_chunks).collect_vec()));
