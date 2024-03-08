@@ -10,6 +10,8 @@ use alloc::vec::Vec;
 use num_bigint::BigUint;
 use p3_baby_bear::BabyBear;
 use p3_field::PrimeField32;
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 use zkhash::fields::bn256::FpBN256;
 
 use core::fmt;
@@ -23,6 +25,7 @@ use serde::ser::SerializeSeq;
 use ark_ff::{BigInteger, Field as af, One, Zero};
 use p3_field::{AbstractField, Field, Packable, PrimeField};
 use serde::{Deserialize, Deserializer, Serialize};
+use ark_ff::UniformRand;
 
 pub use poseidon2::DiffusionMatrixBN254;
 
@@ -160,7 +163,6 @@ impl AbstractField for BN254 {
         Self { value: FpBN256::from(n) }
     }
 
-    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     fn generator() -> Self {
         let seven = FpBN256::from(7u32);
         Self { value: seven }
@@ -254,6 +256,16 @@ impl Div for BN254 {
         self * rhs.inverse()
     }
 }
+
+impl Distribution<BN254> for Standard {
+    #[inline]
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BN254 {
+        let value = FpBN256::rand(rng);
+
+        BN254 { value }
+    }
+}
+
 
 pub fn convert_bn254_element_to_babybear_elements(element: BN254) -> [BabyBear; 8] {
     let mut val = BigUint::from_bytes_be(&element.to_bytes_be());

@@ -12,6 +12,7 @@ rand = { version = "0.8.5", features = ["min_const_gen"] }
 [dev-dependencies]
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-baby-bear = { path = "../baby-bear" }
+p3-bn254 = { path = "../bn254" }
 p3-goldilocks = { path = "../goldilocks" }
 criterion = "0.5.1"
 
