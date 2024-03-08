@@ -7,6 +7,9 @@ extern crate alloc;
 mod poseidon2;
 
 use alloc::vec::Vec;
+use num_bigint::BigUint;
+use p3_baby_bear::BabyBear;
+use p3_field::PrimeField32;
 use zkhash::fields::bn256::FpBN256;
 
 use core::fmt;
@@ -17,14 +20,24 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use serde::ser::SerializeSeq;
 
-use ark_ff::{Field as af, Zero, One};
+use ark_ff::{BigInteger, Field as af, One, Zero};
 use p3_field::{AbstractField, Field, Packable, PrimeField};
 use serde::{Deserialize, Deserializer, Serialize};
+
+pub use poseidon2::DiffusionMatrixBN254;
 
 /// The BN254 curve base field prime, defined as `F_p` where `p = 21888242871839275222246405745257275088696311157297823662689037894645226208583`.
 #[derive(Copy, Clone, Default)]
 pub struct BN254 {
-    value: FpBN256,
+    pub value: FpBN256,
+}
+
+impl BN254 {
+    /// Returns the value of the field element.
+    pub fn to_bytes_be(&self) -> Vec<u8> {
+        self.value.0.to_bytes_be()
+    }
+
 }
 
 impl Serialize for BN254 {
@@ -240,4 +253,30 @@ impl Div for BN254 {
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
+}
+
+pub fn convert_bn254_element_to_babybear_elements(element: BN254) -> [BabyBear; 8] {
+    let mut val = BigUint::from_bytes_be(&element.to_bytes_be());
+    let mut ret: [BabyBear; 8] = [BabyBear::zero(); 8];
+    for i in 0..8 {
+        let rem: BigUint = val.clone() % 0x78000001u32;
+        val /= 0x78000001u32;
+        ret[i] = BabyBear::from_canonical_u32(rem.to_u32_digits()[0]);
+    }
+    ret
+}
+
+pub fn convert_babybear_elements_to_bn254_element(elements: &[BabyBear]) -> BN254 {
+    assert!(elements.len() <= 8);
+
+    // TODO: This should be a const
+    let alpha = BN254::from_canonical_u32(0x78000001);
+
+    let mut sum = BN254::zero();
+
+    for &term in elements.iter().rev() {
+        sum = sum * alpha + BN254::from_canonical_u32(term.as_canonical_u32());
+    }
+
+    sum
 }

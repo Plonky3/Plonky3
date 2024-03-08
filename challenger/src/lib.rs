@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod babybear_bn254_challenger;
 mod duplex_challenger;
 mod grinding_challenger;
 mod hash_challenger;
@@ -12,6 +13,7 @@ mod serializing_challenger;
 use alloc::vec::Vec;
 use core::array;
 
+pub use babybear_bn254_challenger::*;
 pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;

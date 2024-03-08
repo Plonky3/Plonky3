@@ -1,4 +1,4 @@
-//! Diffusion matrix for Goldilocks3
+//! Diffusion matrix for BN254
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
 

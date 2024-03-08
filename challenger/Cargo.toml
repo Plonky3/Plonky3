@@ -5,6 +5,8 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-bn254 = { path = "../bn254" }
 p3-field = { path = "../field" }
 p3-util = { path = "../util" }
 p3-maybe-rayon = { path = "../maybe-rayon" }

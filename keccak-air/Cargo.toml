@@ -13,6 +13,7 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-bn254 = { path = "../bn254" }
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
@@ -26,9 +27,11 @@ p3-poseidon = {path = "../poseidon"}
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
+itertools = "0.12.1"
 rand = "0.8.5"
 tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
 tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
+zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
 [[example]]
 name = "prove_baby_bear_keccak"
