@@ -99,7 +99,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let a = main_local[start];
             let b = main_local[start + 1];
             let c = main_local[start + 2];
-            builder.assert_zero(a.into().exp_u64(self.degree - 1) * b.clone() - c);
+            builder.assert_zero(a.into().exp_u64(self.degree - 1) * b - c);
             if self.uses_boundary_constraints {
                 builder
                     .when_first_row()
@@ -305,7 +305,6 @@ fn do_test_m31_circle(
         degree,
         uses_boundary_constraints: true,
         uses_transition_constraints: true,
-        ..Default::default()
     };
 
     do_test(

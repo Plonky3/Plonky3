@@ -76,7 +76,7 @@ pub(crate) fn point_to_univariate<F: Field>(p: Complex<F>) -> Option<F> {
 
 // Page 5
 // same as above, this *could* handle point at infinity if we had Field::try_sqrt
-#[cfg(test)]
+#[allow(unused)]
 pub(crate) fn rotate_univariate<F: Field, EF: ExtensionField<F>>(t1: EF, t2: F) -> Option<EF> {
     Some((t1 + t2) * (EF::one() - t1 * t2).try_inverse()?)
 }
