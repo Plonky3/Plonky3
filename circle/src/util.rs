@@ -3,17 +3,16 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 use p3_field::extension::Complex;
-use p3_field::{ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::Matrix;
-use tracing::instrument;
-
 #[cfg(test)]
 use p3_field::extension::ComplexExtendable;
+use p3_field::{ExtensionField, Field};
 #[cfg(test)]
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::Matrix;
 #[cfg(test)]
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+use tracing::instrument;
 
 #[cfg(test)]
 pub(crate) fn circle_basis<F: ComplexExtendable>(point: Complex<F>, log_n: usize) -> Vec<F> {
