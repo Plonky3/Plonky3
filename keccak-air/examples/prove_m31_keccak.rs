@@ -72,12 +72,6 @@ fn main() -> Result<(), VerificationError> {
     dbg!(trace.height(), log2_strict_usize(trace.height()));
 
     let air = KeccakAir {};
-    /*
-    dbg!(get_symbolic_constraints::<Val, _>(&air)
-        .into_iter()
-        .map(|c| c.degree_multiple())
-        .collect::<Vec<_>>());
-        */
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
 

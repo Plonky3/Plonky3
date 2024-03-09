@@ -8,7 +8,7 @@ mod config;
 mod folder;
 mod proof;
 mod prover;
-pub mod symbolic_builder;
+mod symbolic_builder;
 mod symbolic_expression;
 mod symbolic_variable;
 mod verifier;

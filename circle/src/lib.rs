@@ -1,5 +1,4 @@
-// #![no_std]
-// #![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
@@ -11,6 +10,3 @@ mod util;
 
 pub use cfft::*;
 pub use pcs::*;
-
-#[cfg(test)]
-mod tests {}
