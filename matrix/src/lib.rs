@@ -7,10 +7,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 
+use p3_maybe_rayon::prelude::*;
+
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
-
-use p3_maybe_rayon::prelude::*;
 
 pub mod bitrev;
 pub mod dense;
