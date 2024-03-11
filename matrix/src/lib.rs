@@ -119,15 +119,13 @@ pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
     // these default implementations will be invalid
     // For example, a "tiling" matrix view that repeats its rows
 
-    // unsafe because you must ensure all `rs` are unique
-    unsafe fn disjoint_row_slices_mut<'a, const N: usize>(
-        &'a mut self,
-        rs: [usize; N],
-    ) -> [&'a mut [T]; N] {
+    /// # Safety
+    /// Each row index in `rs` must be unique.
+    unsafe fn disjoint_row_slices_mut<const N: usize>(&mut self, rs: [usize; N]) -> [&mut [T]; N] {
         rs.map(|r| {
             let s = self.row_slice_mut(r);
             // launder the lifetime to 'a instead of being bound to self
-            unsafe { core::slice::from_raw_parts_mut::<'a, T>(s.as_mut_ptr(), s.len()) }
+            unsafe { core::slice::from_raw_parts_mut(s.as_mut_ptr(), s.len()) }
         })
     }
     fn row_pair_slices_mut(&mut self, r0: usize, r1: usize) -> (&mut [T], &mut [T]) {
@@ -142,10 +140,10 @@ pub trait MatrixRowChunksMut<T>: MatrixRowSlicesMut<T> {
     type RowChunkMut<'a>: MatrixRowSlicesMut<T>
     where
         Self: 'a;
-    fn par_row_chunks_mut<'a>(
-        &'a mut self,
+    fn par_row_chunks_mut(
+        &mut self,
         chunk_rows: usize,
-    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'a>>
+    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'_>>
     where
         T: Send;
 }

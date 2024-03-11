@@ -234,10 +234,10 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
 
 impl<T: Clone> MatrixRowChunksMut<T> for RowMajorMatrix<T> {
     type RowChunkMut<'a> = RowMajorMatrixViewMut<'a, T> where T: 'a;
-    fn par_row_chunks_mut<'a>(
-        &'a mut self,
+    fn par_row_chunks_mut(
+        &mut self,
         chunk_rows: usize,
-    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'a>>
+    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'_>>
     where
         T: Send,
     {
