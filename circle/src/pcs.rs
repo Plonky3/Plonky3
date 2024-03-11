@@ -143,3 +143,25 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_mersenne_31::Mersenne31;
+    use rand::thread_rng;
+
+    use super::*;
+
+    #[test]
+    fn test_quotient() {
+        type F = Mersenne31;
+        let log_n = 3;
+        let n = 1 << log_n;
+
+        let cfft = Cfft::<F>::default();
+
+        let mut rng = thread_rng();
+
+        let evals = RowMajorMatrix::<F>::rand(&mut rng, n, 1);
+        let coeffs = cfft.icfft_batch(evals);
+    }
+}

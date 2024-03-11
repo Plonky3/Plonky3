@@ -26,7 +26,6 @@ impl<F: ComplexExtendable> Cfft<F> {
         let log_n = log2_strict_usize(mat.height());
         self.coset_cfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
-
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
     pub fn coset_cfft_batch<M: MatrixRowChunksMut<F>>(&self, mut mat: M, shift: Complex<F>) -> M {
         let n = mat.height();
@@ -57,7 +56,7 @@ impl<F: ComplexExtendable> Cfft<F> {
     pub fn icfft(&self, vec: Vec<F>) -> Vec<F> {
         self.icfft_batch(RowMajorMatrix::new_col(vec)).values
     }
-    pub fn icfft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    pub fn icfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M) -> M {
         let log_n = log2_strict_usize(mat.height());
         self.coset_icfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
