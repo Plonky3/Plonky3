@@ -136,16 +136,14 @@ pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
     }
 }
 
-pub trait MatrixRowChunksMut<T>: MatrixRowSlicesMut<T> {
-    type RowChunkMut<'a>: MatrixRowSlicesMut<T>
+pub trait MatrixRowChunksMut<T: Send>: MatrixRowSlicesMut<T> {
+    type RowChunkMut<'a>: MatrixRowSlicesMut<T> + Send
     where
         Self: 'a;
     fn par_row_chunks_mut(
         &mut self,
         chunk_rows: usize,
-    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'_>>
-    where
-        T: Send;
+    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'_>>;
 }
 
 /// A `TransposeMatrix` which supports transpose logic for matrices
