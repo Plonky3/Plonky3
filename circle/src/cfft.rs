@@ -5,9 +5,9 @@ use core::cell::RefCell;
 use p3_commit::PolynomialSpace;
 use p3_dft::divide_by_height;
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::AbstractField;
+use p3_field::{AbstractField, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::{Matrix, MatrixRowChunksMut, MatrixRowSlicesMut};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
@@ -28,11 +28,7 @@ impl<F: ComplexExtendable> Cfft<F> {
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn coset_cfft_batch(
-        &self,
-        mut mat: RowMajorMatrix<F>,
-        shift: Complex<F>,
-    ) -> RowMajorMatrix<F> {
+    pub fn coset_cfft_batch<M: MatrixRowChunksMut<F>>(&self, mut mat: M, shift: Complex<F>) -> M {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
 
@@ -46,11 +42,11 @@ impl<F: ComplexExtendable> Cfft<F> {
 
             mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
                 for (i, &t) in twiddle.iter().enumerate() {
-                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
-                        chunk.packing_aligned_rows(i, block_size - i - 1);
-                    butterfly(pfx_lo, pfx_hi, t);
-                    butterfly(packed_lo, packed_hi, t.into());
-                    butterfly(sfx_lo, sfx_hi, t);
+                    let (lo, hi) = chunk.row_pair_slices_mut(i, block_size - i - 1);
+                    let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
+                    let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
+                    butterfly(lo_packed, hi_packed, t.into());
+                    butterfly(lo_suffix, hi_suffix, t);
                 }
             });
         }

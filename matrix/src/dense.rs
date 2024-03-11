@@ -9,7 +9,10 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
+use crate::{
+    Matrix, MatrixGet, MatrixRowChunksMut, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows,
+    MatrixTranspose,
+};
 
 /// A default constant for block size matrix transposition. The value was chosen with 32-byte type, in mind.
 const TRANSPOSE_BLOCK_SIZE: usize = 64;
@@ -226,6 +229,21 @@ impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
+    }
+}
+
+impl<T: Clone> MatrixRowChunksMut<T> for RowMajorMatrix<T> {
+    type RowChunkMut<'a> = RowMajorMatrixViewMut<'a, T> where T: 'a;
+    fn par_row_chunks_mut<'a>(
+        &'a mut self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'a>>
+    where
+        T: Send,
+    {
+        self.values
+            .par_chunks_exact_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 }
 

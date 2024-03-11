@@ -10,6 +10,8 @@ use core::fmt::{Debug, Display, Formatter};
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
 
+use p3_maybe_rayon::prelude::*;
+
 pub mod bitrev;
 pub mod dense;
 pub mod mul;
@@ -105,6 +107,40 @@ pub trait MatrixRowSlices<T>: MatrixRows<T> {
 /// A `Matrix` which supports access its rows as mutable slices.
 pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T];
+
+    // BEWARE: if we add a matrix type that has several rows in the same memory location,
+    // these default implementations will be invalid
+    // For example, a "tiling" matrix view that repeats its rows
+
+    // unsafe because you must ensure all `rs` are unique
+    unsafe fn disjoint_row_slices_mut<'a, const N: usize>(
+        &'a mut self,
+        rs: [usize; N],
+    ) -> [&'a mut [T]; N] {
+        rs.map(|r| {
+            let s = self.row_slice_mut(r);
+            // launder the lifetime to 'a instead of being bound to self
+            unsafe { core::slice::from_raw_parts_mut::<'a, T>(s.as_mut_ptr(), s.len()) }
+        })
+    }
+    fn row_pair_slices_mut(&mut self, r0: usize, r1: usize) -> (&mut [T], &mut [T]) {
+        // make it safe by ensuring rs unique
+        assert_ne!(r0, r1);
+        let [s0, s1] = unsafe { self.disjoint_row_slices_mut([r0, r1]) };
+        (s0, s1)
+    }
+}
+
+pub trait MatrixRowChunksMut<T>: MatrixRowSlicesMut<T> {
+    type RowChunkMut<'a>: MatrixRowSlicesMut<T>
+    where
+        Self: 'a;
+    fn par_row_chunks_mut<'a>(
+        &'a mut self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = Self::RowChunkMut<'a>>
+    where
+        T: Send;
 }
 
 /// A `TransposeMatrix` which supports transpose logic for matrices
