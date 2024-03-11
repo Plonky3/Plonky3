@@ -7,7 +7,7 @@ use p3_dft::divide_by_height;
 use p3_field::extension::{Complex, ComplexExtendable};
 use p3_field::{AbstractField, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowChunksMut, MatrixRowSlicesMut};
+use p3_matrix::{Matrix, MatrixRowChunksMut, MatrixRowSlices, MatrixRowSlicesMut};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
@@ -22,7 +22,7 @@ impl<F: ComplexExtendable> Cfft<F> {
     pub fn cfft(&self, vec: Vec<F>) -> Vec<F> {
         self.cfft_batch(RowMajorMatrix::new_col(vec)).values
     }
-    pub fn cfft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    pub fn cfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M) -> M {
         let log_n = log2_strict_usize(mat.height());
         self.coset_cfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
@@ -62,29 +62,34 @@ impl<F: ComplexExtendable> Cfft<F> {
         self.coset_icfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn coset_icfft_batch(
+    pub fn coset_icfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M, shift: Complex<F>) -> M {
+        self.coset_icfft_batch_skipping_first_layers(mat, shift, 0)
+    }
+    #[instrument(skip_all, fields(dims = %mat.dimensions()))]
+    pub fn coset_icfft_batch_skipping_first_layers<M: MatrixRowChunksMut<F>>(
         &self,
-        mut mat: RowMajorMatrix<F>,
+        mut mat: M,
         shift: Complex<F>,
-    ) -> RowMajorMatrix<F> {
+        num_skipped_layers: usize,
+    ) -> M {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
 
         let mut cache = self.0.borrow_mut();
         let twiddles = cache.get_twiddles(log_n, shift, false);
 
-        for (i, twiddle) in twiddles.iter().rev().enumerate() {
+        for (i, twiddle) in twiddles.iter().rev().enumerate().skip(num_skipped_layers) {
             let block_size = 1 << (i + 1);
             let half_block_size = block_size >> 1;
             assert_eq!(twiddle.len(), half_block_size);
 
             mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
                 for (i, &t) in twiddle.iter().enumerate() {
-                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
-                        chunk.packing_aligned_rows(i, block_size - i - 1);
-                    ibutterfly(pfx_lo, pfx_hi, t);
-                    ibutterfly(packed_lo, packed_hi, t.into());
-                    ibutterfly(sfx_lo, sfx_hi, t);
+                    let (lo, hi) = chunk.row_pair_slices_mut(i, block_size - i - 1);
+                    let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
+                    let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
+                    ibutterfly(lo_packed, hi_packed, t.into());
+                    ibutterfly(lo_suffix, hi_suffix, t);
                 }
             });
         }
@@ -93,40 +98,18 @@ impl<F: ComplexExtendable> Cfft<F> {
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn lde(
+    pub fn lde<M: MatrixRowChunksMut<F>>(
         &self,
-        mut mat: RowMajorMatrix<F>,
+        mut mat: M,
         src_domain: CircleDomain<F>,
         target_domain: CircleDomain<F>,
     ) -> RowMajorMatrix<F> {
         assert_eq!(mat.height(), src_domain.size());
+        assert!(target_domain.size() >= src_domain.size());
+        let added_bits = target_domain.log_n - src_domain.log_n;
 
         // CFFT
-        // let mut coeffs = self.coset_cfft_batch(evals, src_domain.shift);
-
-        let mut cache = self.0.borrow_mut();
-        let f_twiddles = cache.get_twiddles(src_domain.log_n, src_domain.shift, true);
-
-        for (i, twiddle) in f_twiddles.iter().enumerate() {
-            let block_size = 1 << (src_domain.log_n - i);
-            let half_block_size = block_size >> 1;
-            assert_eq!(twiddle.len(), half_block_size);
-
-            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
-                for (i, &t) in twiddle.iter().enumerate() {
-                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
-                        chunk.packing_aligned_rows(i, block_size - i - 1);
-                    butterfly(pfx_lo, pfx_hi, t);
-                    butterfly(packed_lo, packed_hi, t.into());
-                    butterfly(sfx_lo, sfx_hi, t);
-                }
-            });
-        }
-        divide_by_height(&mut mat);
-
-        assert!(target_domain.size() >= src_domain.size());
-
-        let added_bits = target_domain.log_n - src_domain.log_n;
+        mat = self.coset_cfft_batch(mat, src_domain.shift);
 
         /*
         To do an LDE, we could interleave zeros into the coefficients, but
@@ -135,33 +118,10 @@ impl<F: ComplexExtendable> Cfft<F> {
         both `lo` and `hi` are set to `lo`). So instead, we do the tiling directly
         and skip the first `added_bits` layers.
         */
-        // bit_reversed_zero_pad(&mut mat, added_bits);
-        mat = tile_rows(mat, 1 << added_bits);
+        let tiled_mat = tile_rows(mat, 1 << added_bits);
+        debug_assert_eq!(tiled_mat.height(), target_domain.size());
 
-        assert_eq!(mat.height(), target_domain.size());
-
-        // ICFFT
-        // self.coset_icfft_batch(mat, target_domain.shift)
-
-        let i_twiddles = cache.get_twiddles(target_domain.log_n, target_domain.shift, false);
-
-        for (i, twiddle) in i_twiddles.iter().rev().enumerate().skip(added_bits) {
-            let block_size = 1 << (i + 1);
-            let half_block_size = block_size >> 1;
-            assert_eq!(twiddle.len(), half_block_size);
-
-            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
-                for (i, &t) in twiddle.iter().enumerate() {
-                    let ((pfx_lo, packed_lo, sfx_lo), (pfx_hi, packed_hi, sfx_hi)) =
-                        chunk.packing_aligned_rows(i, block_size - i - 1);
-                    ibutterfly(pfx_lo, pfx_hi, t);
-                    ibutterfly(packed_lo, packed_hi, t.into());
-                    ibutterfly(sfx_lo, sfx_hi, t);
-                }
-            });
-        }
-
-        mat
+        self.coset_icfft_batch_skipping_first_layers(tiled_mat, target_domain.shift, added_bits)
     }
 }
 
@@ -188,15 +148,14 @@ fn ibutterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], t
 
 // Repeats rows
 // this can be micro-optimized
-fn tile_rows<F: Copy>(mut mat: RowMajorMatrix<F>, repetitions: usize) -> RowMajorMatrix<F> {
-    let mut values = Vec::with_capacity(mat.values.len() * repetitions);
-    for r in mat.rows() {
+fn tile_rows<F: Clone>(mat: impl MatrixRowSlices<F>, repetitions: usize) -> RowMajorMatrix<F> {
+    let mut values = Vec::with_capacity(mat.width() * mat.height() * repetitions);
+    for r in mat.row_slices() {
         for _ in 0..repetitions {
             values.extend_from_slice(r);
         }
     }
-    mat.values = values;
-    mat
+    RowMajorMatrix::new(values, mat.width())
 }
 
 #[cfg(test)]

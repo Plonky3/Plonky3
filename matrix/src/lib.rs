@@ -102,6 +102,13 @@ pub trait MatrixRows<T>: Matrix<T> {
 /// A `Matrix` which supports access its rows as slices.
 pub trait MatrixRowSlices<T>: MatrixRows<T> {
     fn row_slice(&self, r: usize) -> &[T];
+
+    fn row_slices<'a>(&'a self) -> impl Iterator<Item = &'a [T]>
+    where
+        T: 'a,
+    {
+        (0..self.height()).map(|r| self.row_slice(r))
+    }
 }
 
 /// A `Matrix` which supports access its rows as mutable slices.
