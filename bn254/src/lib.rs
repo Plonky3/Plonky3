@@ -1,6 +1,6 @@
 //! The prime field known as BN254, defined as `F_p` where `p = 21888242871839275222246405745257275088696311157297823662689037894645226208583`.
 
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 
@@ -8,7 +8,7 @@ mod poseidon2;
 
 use alloc::vec::Vec;
 use ff::{Field as ff_Field, PrimeField as ff_PrimeField};
-use num::bigint::BigUint;
+use num_bigint::BigUint;
 use p3_baby_bear::BabyBear;
 use p3_field::PrimeField32;
 use rand::distributions::{Distribution, Standard};
