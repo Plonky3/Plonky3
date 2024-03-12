@@ -36,17 +36,35 @@ impl<AF: AbstractField<F = BN254>> DiffusionPermutation<AF, 3> for DiffusionMatr
 mod tests {
     use alloc::vec::Vec;
 
+    use ff::PrimeField;
     use p3_poseidon2::Poseidon2;
     use rand::Rng;
-    use zkhash::fields::bn256::FpBN256;
+    use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
+    use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
     use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
 
+    use crate::FpBN256;
+
     use super::*;
 
+    fn bn254_from_ark_ff(input: ark_FpBN256) -> BN254 {
+        let bytes = input.into_bigint().to_bytes_le();
 
-    fn bn254_from_ark_ff(input: FpBN256) -> BN254 {
-        BN254 { value: input }
+        let mut res = <FpBN256 as ff::PrimeField>::Repr::default();
+
+        for (i, digit) in res.0.as_mut().iter_mut().enumerate() {
+            *digit = bytes[i];
+        }
+
+        let value = FpBN256::from_repr(res);
+
+        if value.is_some().into() {
+            BN254 { value: value.unwrap() }
+        } else {
+            panic!("Invalid field element")
+        }
+
     }
 
     #[test]
@@ -85,14 +103,15 @@ mod tests {
         );
 
         // Generate random input and convert to both Goldilocks field formats.
-        let input_ark_ff: [FpBN256; WIDTH] = rng.gen::<[FpBN256; WIDTH]>();
-        let input = input_ark_ff
+        let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();
+        let input: [BN254; 3] = input_ark_ff
             .iter()
             .cloned()
             .map(bn254_from_ark_ff)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
+
 
         // Run reference implementation.
         let output_ref = poseidon2_ref.permutation(&input_ark_ff);

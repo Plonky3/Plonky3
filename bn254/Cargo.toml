@@ -10,16 +10,13 @@ p3-field = { path = "../field" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 
-ark-ff = { version = "^0.4.0", default-features = false }
-ark-serialize = { version = "^0.4.0", default-features = false }
+ff = { version = "0.13", features = ["derive"] }
 lazy_static = "1.4"
-num-bigint = "0.4.4"
+num = { version = "0.4.1", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
-zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
-
 [dev-dependencies]
-ark-ff = { version = "^0.4.0", default-features = false }
+zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 criterion = "0.5.1"

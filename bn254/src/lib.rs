@@ -1,18 +1,18 @@
 //! The prime field known as BN254, defined as `F_p` where `p = 21888242871839275222246405745257275088696311157297823662689037894645226208583`.
 
-#![no_std]
+// #![no_std]
 
 extern crate alloc;
 
 mod poseidon2;
 
 use alloc::vec::Vec;
-use num_bigint::BigUint;
+use ff::{Field as ff_Field, PrimeField as ff_PrimeField};
+use num::bigint::BigUint;
 use p3_baby_bear::BabyBear;
 use p3_field::PrimeField32;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use zkhash::fields::bn256::FpBN256;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -22,33 +22,37 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use serde::ser::SerializeSeq;
 
-use ark_ff::{BigInteger, Field as af, One, Zero};
 use p3_field::{AbstractField, Field, Packable, PrimeField};
 use serde::{Deserialize, Deserializer, Serialize};
-use ark_ff::UniformRand;
 
 pub use poseidon2::DiffusionMatrixBN254;
 
+#[derive(ff_PrimeField)]
+#[PrimeFieldModulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
+#[PrimeFieldGenerator = "7"]
+#[PrimeFieldReprEndianness = "little"]
+struct FpBN256([u64; 4]);
+
 /// The BN254 curve base field prime, defined as `F_p` where `p = 21888242871839275222246405745257275088696311157297823662689037894645226208583`.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct BN254 {
-    pub value: FpBN256,
+    value: FpBN256,
 }
 
 impl BN254 {
     /// Returns the value of the field element.
-    pub fn to_bytes_be(&self) -> Vec<u8> {
-        self.value.0.to_bytes_be()
+    pub fn to_bytes_le(&self) -> Vec<u8> {
+        self.value.to_repr().as_ref().to_vec()
     }
-
 }
 
 impl Serialize for BN254 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let limbs = self.value.0.0;
+        let repr = self.value.to_repr();
+        let bytes = repr.as_ref();
 
-        let mut seq = serializer.serialize_seq(Some(limbs.len()))?;
-        for e in limbs {
+        let mut seq = serializer.serialize_seq(Some(bytes.len()))?;
+        for e in bytes {
             seq.serialize_element(&e)?;
         }
         seq.end()
@@ -57,29 +61,31 @@ impl Serialize for BN254 {
 
 impl<'de> Deserialize<'de> for BN254 {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let limbs: Vec<u64> = Deserialize::deserialize(d)?;
-        let mut value = FpBN256::zero();
-        for (i, limb) in limbs.iter().enumerate() {
-            value.0.0[i] = *limb;
+        let bytes: Vec<u8> = Deserialize::deserialize(d)?;
+
+        let mut res = <FpBN256 as ff::PrimeField>::Repr::default();
+
+        for (i, digit) in res.0.as_mut().iter_mut().enumerate() {
+            *digit = bytes[i];
         }
-        Ok(Self { value })
+
+        let value = FpBN256::from_repr(res);
+
+        if value.is_some().into() {
+            Ok(Self { value: value.unwrap() })
+        } else {
+            Err(serde::de::Error::custom("Invalid field element"))
+        }
     }
 }
-
-
-impl PartialEq for BN254 {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl Eq for BN254 {}
 
 impl Packable for BN254 {}
 
 impl Hash for BN254 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
+        for byte in self.value.to_repr().as_ref().iter() {
+            state.write_u8(*byte);
+        }
     }
 }
 
@@ -97,7 +103,7 @@ impl PartialOrd for BN254 {
 
 impl Display for BN254 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.value, f)
+        <FpBN256 as Debug>::fmt(&self.value, f)
     }
 }
 
@@ -111,18 +117,18 @@ impl AbstractField for BN254 {
     type F = Self;
 
     fn zero() -> Self {
-        Self { value: FpBN256::zero() }
+        Self { value: FpBN256::ZERO }
     }
     fn one() -> Self {
-        Self { value: FpBN256::one() }
+        Self { value: FpBN256::ONE }
     }
     fn two() -> Self {
-        let two = FpBN256::from(2u32);
+        let two = FpBN256::from(2u64);
         Self { value: two }
     }
 
     fn neg_one() -> Self {
-        let neg_one = FpBN256::from(-1i32);
+        let neg_one = FpBN256::ZERO - FpBN256::ONE;
         Self { value: neg_one }
     }
 
@@ -132,19 +138,19 @@ impl AbstractField for BN254 {
     }
 
     fn from_bool(b: bool) -> Self {
-        Self { value: FpBN256::from(b) }
+        Self { value: FpBN256::from(b as u64) }
     }
 
     fn from_canonical_u8(n: u8) -> Self {
-        Self { value: FpBN256::from(n) }
+        Self { value: FpBN256::from(n as u64) }
     }
 
     fn from_canonical_u16(n: u16) -> Self {
-        Self { value: FpBN256::from(n) }
+        Self { value: FpBN256::from(n as u64) }
     }
 
     fn from_canonical_u32(n: u32) -> Self {
-        Self { value: FpBN256::from(n) }
+        Self { value: FpBN256::from(n as u64) }
     }
 
     fn from_canonical_u64(n: u64) -> Self {
@@ -156,7 +162,7 @@ impl AbstractField for BN254 {
     }
 
     fn from_wrapped_u32(n: u32) -> Self {
-        Self { value: FpBN256::from(n) }
+        Self { value: FpBN256::from(n as u64) }
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
@@ -164,7 +170,7 @@ impl AbstractField for BN254 {
     }
 
     fn generator() -> Self {
-        let seven = FpBN256::from(7u32);
+        let seven = FpBN256::from(7u64);
         Self { value: seven }
     }
 }
@@ -174,13 +180,17 @@ impl Field for BN254 {
     type Packing = Self;
 
     fn is_zero(&self) -> bool {
-        self.value.is_zero()
+        self.value.is_zero().into()
     }
 
     fn try_inverse(&self) -> Option<Self> {
-        let inverse = self.value.inverse();
+        let inverse = self.value.invert();
 
-        inverse.map(|inverse| Self { value: inverse })
+        if inverse.is_some().into() {
+            Some(Self { value: inverse.unwrap() })
+        } else {
+            None
+        }
     }
 }
 
@@ -190,7 +200,7 @@ impl Add for BN254 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
-        Self { value: self.value.add(rhs.value) }
+        Self { value: self.value + rhs.value }
     }
 }
 
@@ -260,7 +270,7 @@ impl Div for BN254 {
 impl Distribution<BN254> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BN254 {
-        let value = FpBN256::rand(rng);
+        let value = FpBN256::random(rng);
 
         BN254 { value }
     }
@@ -268,7 +278,7 @@ impl Distribution<BN254> for Standard {
 
 
 pub fn convert_bn254_element_to_babybear_elements(element: BN254) -> [BabyBear; 8] {
-    let mut val = BigUint::from_bytes_be(&element.to_bytes_be());
+    let mut val = BigUint::from_bytes_le(&element.to_bytes_le());
     let mut ret: [BabyBear; 8] = [BabyBear::zero(); 8];
     for i in 0..8 {
         let rem: BigUint = val.clone() % 0x78000001u32;
