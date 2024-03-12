@@ -13,14 +13,13 @@ use p3_poseidon2::Poseidon2;
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
 use p3_util::log2_ceil_usize;
-use rand::random;
+use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 use itertools::Itertools;
-use zkhash::poseidon2::poseidon2_instance_bn256::RC3;
 
 const NUM_HASHES: usize = 100;
 
@@ -104,19 +103,7 @@ fn main() -> Result<(), VerificationError> {
 
     type Perm = Poseidon2<BN254, DiffusionMatrixBN254, 3, 5>;
 
-    let round_constants: Vec<[BN254; 3]> = RC3
-    .iter()
-    .map(|vec| {
-        vec.iter()
-            .cloned()
-            .map( |x| BN254 { value: x })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap()
-    })
-    .collect();
-
-    let perm = Perm::new(8, 56, round_constants, DiffusionMatrixBN254);
+    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBN254, &mut thread_rng());
 
     type MyHash = PaddingFreeSpongeBabyBearBN254<Perm>;
     let hash = MyHash::new(perm.clone());
