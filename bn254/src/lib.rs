@@ -7,10 +7,8 @@ extern crate alloc;
 mod poseidon2;
 
 use alloc::vec::Vec;
-use ff::{Field as ff_Field, PrimeField as ff_PrimeField};
+use ff::{Field as ff_Field, PrimeField as ff_PrimeField, PrimeFieldBits};
 use num_bigint::BigUint;
-use p3_baby_bear::BabyBear;
-use p3_field::PrimeField32;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -37,13 +35,6 @@ struct FpBN256([u64; 4]);
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct BN254 {
     value: FpBN256,
-}
-
-impl BN254 {
-    /// Returns the value of the field element.
-    pub fn to_bytes_le(&self) -> Vec<u8> {
-        self.value.to_repr().as_ref().to_vec()
-    }
 }
 
 impl Serialize for BN254 {
@@ -192,9 +183,20 @@ impl Field for BN254 {
             None
         }
     }
+
+    fn order() -> BigUint {
+        let bytes = FpBN256::char_le_bits();
+        BigUint::from_bytes_le(bytes.as_raw_slice())
+    }
 }
 
-impl PrimeField for BN254 {}
+impl PrimeField for BN254 {
+    fn as_canonical_biguint(&self) -> BigUint {
+        let repr = self.value.to_repr();
+        let le_bytes = repr.as_ref();
+        BigUint::from_bytes_le(le_bytes)
+    }
+}
 
 impl Add for BN254 {
     type Output = Self;
@@ -274,31 +276,4 @@ impl Distribution<BN254> for Standard {
 
         BN254 { value }
     }
-}
-
-
-pub fn convert_bn254_element_to_babybear_elements(element: BN254) -> [BabyBear; 8] {
-    let mut val = BigUint::from_bytes_le(&element.to_bytes_le());
-    let mut ret: [BabyBear; 8] = [BabyBear::zero(); 8];
-    for i in 0..8 {
-        let rem: BigUint = val.clone() % 0x78000001u32;
-        val /= 0x78000001u32;
-        ret[i] = BabyBear::from_canonical_u32(rem.to_u32_digits()[0]);
-    }
-    ret
-}
-
-pub fn convert_babybear_elements_to_bn254_element(elements: &[BabyBear]) -> BN254 {
-    assert!(elements.len() <= 8);
-
-    // TODO: This should be a const
-    let alpha = BN254::from_canonical_u32(0x78000001);
-
-    let mut sum = BN254::zero();
-
-    for &term in elements.iter().rev() {
-        sum = sum * alpha + BN254::from_canonical_u32(term.as_canonical_u32());
-    }
-
-    sum
 }

@@ -4,6 +4,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use num_bigint::BigUint;
 use p3_field::{
     exp_1717986917, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
     PrimeField32, PrimeField64,
@@ -257,9 +258,17 @@ impl Field for Mersenne31 {
     fn halve(&self) -> Self {
         Mersenne31::new(halve_u32::<P>(self.value))
     }
+
+    fn order() -> BigUint {
+        P.into()
+    }
 }
 
-impl PrimeField for Mersenne31 {}
+impl PrimeField for Mersenne31 {
+    fn as_canonical_biguint(&self) -> BigUint {
+        <Self as PrimeField32>::as_canonical_u32(self).into()
+    }
+}
 
 impl PrimeField32 for Mersenne31 {
     const ORDER_U32: u32 = P;

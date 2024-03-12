@@ -4,20 +4,20 @@
 
 extern crate alloc;
 
-mod babybear_bn254_challenger;
 mod duplex_challenger;
 mod grinding_challenger;
 mod hash_challenger;
+mod multi_field_challenger;
 mod serializing_challenger;
 
 use alloc::vec::Vec;
 use core::array;
 
-pub use babybear_bn254_challenger::*;
 pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 use p3_field::{AbstractExtensionField, Field};
+pub use multi_field_challenger::*;
 pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {

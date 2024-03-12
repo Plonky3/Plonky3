@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-util = { path = "../util" }
+num-bigint = "0.4.3"
 
 itertools = "0.12.0"
 rand = "0.8.5"

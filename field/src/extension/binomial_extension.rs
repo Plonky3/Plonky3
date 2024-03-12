@@ -1,5 +1,6 @@
 use alloc::format;
 use alloc::string::ToString;
+use num_bigint::BigUint;
 use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
@@ -223,6 +224,10 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         Self {
             value: self.value.map(|x| x.halve()),
         }
+    }
+
+    fn order() -> BigUint {
+        F::order().pow(D as u32)
     }
 }
 

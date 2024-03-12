@@ -1,7 +1,7 @@
 //! Monolith-31's default MDS permutation.
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
-use p3_field::PrimeField32;
+use p3_field::{PrimeField32, PrimeField64};
 use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
@@ -56,7 +56,7 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
 ) -> [F; WIDTH] {
     let mut output: [F; WIDTH] = [F::zero(); WIDTH];
 
-    let bits = F::bits();
+    let bits = <F as PrimeField64>::bits();
     let x_mask = (1 << (bits - 9)) - 1;
     let y_mask = ((1 << bits) - 1) >> 2;
 

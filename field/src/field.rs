@@ -1,4 +1,5 @@
 use alloc::vec;
+use num_bigint::BigUint;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
@@ -218,9 +219,17 @@ pub trait Field:
             .expect("Cannot divide by 2 in fields with characteristic 2");
         *self * half
     }
+
+    fn order() -> BigUint;
+
+    fn bits() -> u64 {
+        Self::order().bits()
+    }
 }
 
-pub trait PrimeField: Field + Ord {}
+pub trait PrimeField: Field + Ord {
+    fn as_canonical_biguint(&self) -> BigUint;
+}
 
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {

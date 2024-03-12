@@ -73,7 +73,7 @@ where
         F: PrimeField64,
     {
         let num_constants = 2 * WIDTH * num_rounds;
-        let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
+        let bytes_per_constant = ceil_div_usize(<F as PrimeField64>::bits(), 8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
