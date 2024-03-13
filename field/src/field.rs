@@ -6,7 +6,6 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use p3_util::log2_ceil_u64;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -234,13 +233,6 @@ pub trait PrimeField: Field + Ord {
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
-
-    // TODO: Move to Field itself? Limiting it to `PrimeField64` seems unusual.
-    #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
-    fn bits() -> usize {
-        log2_ceil_u64(Self::ORDER_U64) as usize
-    }
 
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;

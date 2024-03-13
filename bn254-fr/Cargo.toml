@@ -17,5 +17,12 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
+
+criterion = "0.5.1"
 num-traits = "0.2.16"
+serde_json = "1.0.113"
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
+
+[[bench]]
+name = "bench_field"
+harness = false

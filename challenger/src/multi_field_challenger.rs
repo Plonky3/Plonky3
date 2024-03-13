@@ -32,7 +32,7 @@ where
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
-        let num_f_elms = PF::bits() / <F as Field>::bits();
+        let num_f_elms = PF::bits() / F::bits();
         Ok(Self {
             sponge_state: [PF::default(); WIDTH],
             input_buffer: vec![],

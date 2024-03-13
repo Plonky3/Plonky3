@@ -290,7 +290,7 @@ mod tests {
     type F = Bn254Fr;
 
     #[test]
-    fn test_bn254() {
+    fn test_bn254fr() {
         let f = F::new(FFBn254Fr::from_u128(100));
         assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
 
@@ -341,6 +341,29 @@ mod tests {
         // Generator check
         let expected_multiplicative_group_generator = F::new(FFBn254Fr::from_u128(5));
         assert_eq!(F::generator(), expected_multiplicative_group_generator);
+
+        let f_serialized = serde_json::to_string(&f).unwrap();
+        let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
+        assert_eq!(f, f_deserialized);
+
+        let f_1_serialized = serde_json::to_string(&f_1).unwrap();
+        let f_1_deserialized: F = serde_json::from_str(&f_1_serialized).unwrap();
+        let f_1_serialized_again = serde_json::to_string(&f_1_deserialized).unwrap();
+        let f_1_deserialized_again: F = serde_json::from_str(&f_1_serialized_again).unwrap();
+        assert_eq!(f_1, f_1_deserialized);
+        assert_eq!(f_1, f_1_deserialized_again);
+
+        let f_2_serialized = serde_json::to_string(&f_2).unwrap();
+        let f_2_deserialized: F = serde_json::from_str(&f_2_serialized).unwrap();
+        assert_eq!(f_2, f_2_deserialized);
+
+        let f_r_minus_1_serialized = serde_json::to_string(&f_r_minus_1).unwrap();
+        let f_r_minus_1_deserialized: F = serde_json::from_str(&f_r_minus_1_serialized).unwrap();
+        assert_eq!(f_r_minus_1, f_r_minus_1_deserialized);
+
+        let f_r_minus_2_serialized = serde_json::to_string(&f_r_minus_2).unwrap();
+        let f_r_minus_2_deserialized: F = serde_json::from_str(&f_r_minus_2_serialized).unwrap();
+        assert_eq!(f_r_minus_2, f_r_minus_2_deserialized);
     }
 
     test_field!(crate::Bn254Fr);

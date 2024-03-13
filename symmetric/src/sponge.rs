@@ -55,7 +55,7 @@ where
     PF: Field
 {
     pub fn new(permutation: P) -> Self {
-        let num_f_elms = PF::bits() / <F as Field>::bits();
+        let num_f_elms = PF::bits() / F::bits();
         Self { permutation, num_f_elms, _phantom: PhantomData }
     }
 }
