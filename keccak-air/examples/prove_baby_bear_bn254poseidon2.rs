@@ -4,7 +4,6 @@ use p3_challenger::{DuplexChallenger, MultiFieldChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_matrix::Matrix;
@@ -46,8 +45,8 @@ fn main() -> Result<(), VerificationError> {
     let compress = MyCompress::new(perm.clone());
 
     type ValMmcs = FieldMerkleTreeMmcs<
-        <BabyBear as Field>::Packing,
-        <BN254 as Field>::Packing,
+        BabyBear,
+        BN254,
         MyHash,
         MyCompress,
         1,
