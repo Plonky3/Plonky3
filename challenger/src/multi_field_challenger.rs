@@ -4,7 +4,7 @@ use alloc::string::String;
 
 use num_traits::identities::Zero;
 
-use p3_field::{ExtensionField, Field, PrimeField, PrimeField32};
+use p3_field::{ExtensionField, Field, PrimeField, PrimeField64};
 use p3_symmetric::Hash;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -23,7 +23,7 @@ where
 
 impl<F, PF, const WIDTH: usize, Inner> MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: Field,
     Inner: Clone,
 {
@@ -38,14 +38,14 @@ where
             input_buffer: vec![],
             output_buffer: vec![],
             num_f_elms,
-            alpha: PF::from_canonical_u32(F::ORDER_U32),
+            alpha: PF::from_canonical_u64(F::ORDER_U64),
         })
     }
 }
 
 impl<F, PF, const WIDTH: usize, Inner> MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: Field + Clone,
     Inner: CanObserve<PF> + Clone,
 {
@@ -54,7 +54,7 @@ where
 
         let mut sum = PF::zero();
         for &term in self.input_buffer.iter().rev() {
-            sum = sum * self.alpha + PF::from_canonical_u32(term.as_canonical_u32());
+            sum = sum * self.alpha + PF::from_canonical_u64(term.as_canonical_u64());
         }        
 
         self.inner.observe(sum);
@@ -64,7 +64,7 @@ where
 
 impl<F, PF, const WIDTH: usize, Inner> FieldChallenger<F> for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: PrimeField + Clone + Sync,
     Inner: CanObserve<PF> + CanSample<PF> + Clone + Sync,
 {
@@ -72,7 +72,7 @@ where
 
 impl<F, PF, const WIDTH: usize, Inner> CanObserve<F> for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: Field + Clone,
     Inner: CanObserve<PF> + Clone,
 {
@@ -90,7 +90,7 @@ where
 
 impl<F, PF, const N: usize, const WIDTH: usize, Inner> CanObserve<[F; N]> for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: Field + Clone,
     Inner: CanObserve<PF> + Clone,
 {
@@ -104,7 +104,7 @@ where
 impl<F, PF, const N: usize, const WIDTH: usize, Inner> CanObserve<Hash<F, PF, N>>
     for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: Field + Clone,
     Inner: CanObserve<PF> + Clone,
 {
@@ -122,7 +122,7 @@ where
 // for TrivialPcs
 impl<F, PF, const WIDTH: usize, Inner> CanObserve<Vec<Vec<F>>> for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: Field + Clone,
     Inner: CanObserve<PF> + Clone,
 {
@@ -137,7 +137,7 @@ where
 
 impl<F, EF, PF, const WIDTH: usize, Inner> CanSample<EF> for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     EF: ExtensionField<F>,
     PF: PrimeField + Clone,
     Inner: CanObserve<PF> + CanSample<PF> + Clone,
@@ -177,15 +177,15 @@ where
 
 impl<F, PF, const WIDTH: usize, Inner> CanSampleBits<usize> for MultiFieldChallenger<F, PF, WIDTH, Inner>
 where
-    F: PrimeField32,
+    F: PrimeField64,
     PF: PrimeField + Clone,
     Inner: CanSample<PF> + CanObserve<PF> + Clone,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         debug_assert!(bits < (usize::BITS as usize));
-        debug_assert!((1 << bits) < F::ORDER_U32);
+        debug_assert!((1 << bits) < F::ORDER_U64);
         let rand_f: F = self.sample();
-        let rand_usize = rand_f.as_canonical_u32() as usize;
+        let rand_usize = rand_f.as_canonical_u64() as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }

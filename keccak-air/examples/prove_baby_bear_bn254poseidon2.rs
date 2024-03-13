@@ -1,5 +1,5 @@
 use p3_baby_bear::BabyBear;
-use p3_bn254::{DiffusionMatrixBN254, BN254};
+use p3_bn254::{DiffusionMatrixBN254, Bn254Fr};
 use p3_challenger::{DuplexChallenger, MultiFieldChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -34,11 +34,11 @@ fn main() -> Result<(), VerificationError> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<BN254, DiffusionMatrixBN254, 3, 5>;
+    type Perm = Poseidon2<Bn254Fr, DiffusionMatrixBN254, 3, 5>;
 
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBN254, &mut thread_rng());
 
-    type MyHash = PaddingFreeSpongeMultiField<Val, BN254, Perm, 3, 8, 1>;
+    type MyHash = PaddingFreeSpongeMultiField<Val, Bn254Fr, Perm, 3, 8, 1>;
     let hash = MyHash::new(perm.clone());
 
     type MyCompress = TruncatedPermutation<Perm, 2, 1, 3>;
@@ -46,7 +46,7 @@ fn main() -> Result<(), VerificationError> {
 
     type ValMmcs = FieldMerkleTreeMmcs<
         BabyBear,
-        BN254,
+        Bn254Fr,
         MyHash,
         MyCompress,
         1,
@@ -59,9 +59,9 @@ fn main() -> Result<(), VerificationError> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type InnerChallenger = DuplexChallenger<BN254, Perm, 3>;
+    type InnerChallenger = DuplexChallenger<Bn254Fr, Perm, 3>;
 
-    type Challenger = MultiFieldChallenger<Val, BN254, 3, InnerChallenger>;
+    type Challenger = MultiFieldChallenger<Val, Bn254Fr, 3, InnerChallenger>;
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);

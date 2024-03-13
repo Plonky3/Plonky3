@@ -1,5 +1,5 @@
 [package]
-name = "p3-bn254"
+name = "p3-bn254-fr"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -16,6 +16,6 @@ rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
+p3-field-testing = { path = "../field-testing" }
+num-traits = "0.2.16"
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
-rand = { version = "0.8.5", features = ["min_const_gen"] }
-criterion = "0.5.1"
