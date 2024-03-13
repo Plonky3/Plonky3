@@ -52,7 +52,7 @@ where
     fn duplexing(&mut self) {
         assert!(self.input_buffer.len() <= self.num_f_elms * WIDTH);
 
-        for (i, f_chunk) in self.input_buffer.chunks(self.num_f_elms).rev().enumerate() {
+        for (i, f_chunk) in self.input_buffer.chunks(self.num_f_elms).enumerate() {
             self.sponge_state[i] = reduce_64(f_chunk);
         }
         self.input_buffer.clear();

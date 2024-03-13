@@ -133,7 +133,7 @@ pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
     let alpha =  TF::from_canonical_u64(SF::ORDER_U64);
 
     let mut res = TF::zero();
-    for val in vals {
+    for val in vals.iter().rev() {
         res = res * alpha + TF::from_canonical_u64(val.as_canonical_u64());
     }
 
