@@ -1,18 +1,11 @@
-use alloc::vec;
-use alloc::vec::Vec;
-
-use itertools::izip;
 use p3_field::extension::Complex;
 #[cfg(test)]
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 #[cfg(test)]
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::Matrix;
 #[cfg(test)]
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-use tracing::instrument;
 
 /// Get the cfft polynomial basis.
 /// The basis consists off all multi-linear products of: y, x, 2x^2 - 1, 2(2x^2 - 1)^2 - 1, ...
@@ -66,6 +59,9 @@ pub(crate) fn eval_circle_polys<F: ComplexExtendable>(
     coeffs: &RowMajorMatrix<F>,
     point: Complex<F>,
 ) -> Vec<F> {
+    use itertools::izip;
+    use p3_matrix::Matrix;
+
     let log_n = log2_strict_usize(coeffs.height());
     let mut accs = vec![F::zero(); coeffs.width()];
     for (row, basis) in coeffs.rows().zip(circle_basis(point, log_n)) {
