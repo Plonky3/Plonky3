@@ -1,9 +1,9 @@
-use p3_field::{Field, PrimeField, PrimeField32, PrimeField64};
+use p3_field::{Field, PrimeField, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
 
-use crate::{CanObserve, CanSample, CanSampleBits, DuplexChallenger, MultiFieldChallenger};
+use crate::{CanObserve, CanSampleBits, DuplexChallenger, MultiFieldChallenger};
 
 pub trait GrindingChallenger:
     CanObserve<Self::Witness> + CanSampleBits<usize> + Sync + Clone
@@ -38,19 +38,19 @@ where
     }
 }
 
-impl<F, PF, const WIDTH: usize, Inner> GrindingChallenger for MultiFieldChallenger<F, PF, WIDTH, Inner>
+impl<F, PF, P, const WIDTH: usize> GrindingChallenger for MultiFieldChallenger<F, PF, P, WIDTH>
 where
-    F: PrimeField32,
-    PF: PrimeField + Clone,
-    Inner: CanSample<PF> + CanObserve<PF> + Clone + Sync,
+    F: PrimeField64,
+    PF: PrimeField,
+    P: CryptographicPermutation<[PF; WIDTH]>,
 {
     type Witness = F;
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
-        let witness = (0..F::ORDER_U32)
+        let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(F::from_canonical_u32)
+            .map(F::from_canonical_u64)
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));

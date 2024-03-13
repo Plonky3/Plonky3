@@ -31,7 +31,7 @@ pub use poseidon2::DiffusionMatrixBN254;
 #[PrimeFieldReprEndianness = "little"]
 struct FFBn254Fr([u64; 4]);
 
-/// The BN254 curve base field prime, defined as `F_p` where `p = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
+/// The BN254 curve base field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254Fr {
     value: FFBn254Fr,

@@ -1,6 +1,6 @@
 use p3_baby_bear::BabyBear;
-use p3_bn254::{DiffusionMatrixBN254, Bn254Fr};
-use p3_challenger::{DuplexChallenger, MultiFieldChallenger};
+use p3_bn254_fr::{DiffusionMatrixBN254, Bn254Fr};
+use p3_challenger::MultiFieldChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
@@ -59,9 +59,7 @@ fn main() -> Result<(), VerificationError> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type InnerChallenger = DuplexChallenger<Bn254Fr, Perm, 3>;
-
-    type Challenger = MultiFieldChallenger<Val, Bn254Fr, 3, InnerChallenger>;
+    type Challenger = MultiFieldChallenger<Val, Bn254Fr, Perm, 3>;
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
@@ -78,12 +76,10 @@ fn main() -> Result<(), VerificationError> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    let inner_challenger = InnerChallenger::new(perm.clone());
-    let mut challenger = Challenger::new(inner_challenger).unwrap();
+    let mut challenger = Challenger::new(perm.clone()).unwrap();
 
     let proof  = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
     
-    let inner_challenger = InnerChallenger::new(perm.clone());
-    let mut challenger = Challenger::new(inner_challenger).unwrap();
+    let mut challenger = Challenger::new(perm).unwrap();
     verify(&config, &KeccakAir {}, &mut challenger, &proof)
 }

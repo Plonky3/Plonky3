@@ -56,7 +56,7 @@ where
     PF: Field
 {
     pub fn new(permutation: P) -> Self {
-        let num_f_elms = (PF::bits() + <F as Field>::bits() - 1) / <F as Field>::bits();
+        let num_f_elms = PF::bits() / <F as Field>::bits();
         Self { permutation, num_f_elms, alpha: PF::from_canonical_u32(F::ORDER_U32), _phantom: PhantomData }
     }
 }
