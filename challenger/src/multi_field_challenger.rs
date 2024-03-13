@@ -7,11 +7,14 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
+/// Given a cryptographic permutation that operates on [`Field`; WIDTH], produces a challenger
+/// that can observe and sample `PrimeField64` elements.  Can also observe values with 
+/// `Hash<F, PF, N>` type.
 #[derive(Clone)]
 pub struct MultiFieldChallenger<F, PF, P, const WIDTH: usize>
 where
-    F: Clone,
-    PF: Clone,
+    F: PrimeField64,
+    PF: Field,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     sponge_state: [PF; WIDTH],

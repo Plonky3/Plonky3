@@ -129,6 +129,7 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
     }
 }
 
+/// Given a slice of SF elements, reduce them to a TF element.
 pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
     let alpha =  TF::from_canonical_u64(SF::ORDER_U64);
 
@@ -140,8 +141,9 @@ pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
     res
 }
 
-pub fn split_64<SF: PrimeField64, TF: PrimeField>(val: TF) -> Vec<SF> {
-    let alpha =  &TF::from_canonical_u64(SF::ORDER_U64).as_canonical_biguint();
+/// Given a SF elements, split them to a vec of TF elements.
+pub fn split_64<SF: PrimeField, TF: PrimeField64>(val: SF) -> Vec<TF> {
+    let alpha =  &SF::from_canonical_u64(TF::ORDER_U64).as_canonical_biguint();
 
     let mut res = Vec::new();
     let mut val = val.as_canonical_biguint();
@@ -151,7 +153,7 @@ pub fn split_64<SF: PrimeField64, TF: PrimeField>(val: TF) -> Vec<SF> {
         val /= alpha;
 
         // Can assume there is one u64 digit since SF is PrimeField64.
-        res.push(SF::from_canonical_u64(rem.to_u64_digits()[0]));
+        res.push(TF::from_canonical_u64(rem.to_u64_digits()[0]));
     }
 
     res

@@ -226,6 +226,7 @@ impl Field for Goldilocks {
         Goldilocks::new(halve_u64::<P>(self.value))
     }
 
+    #[inline]    
     fn order() -> BigUint {
         P.into()
     }

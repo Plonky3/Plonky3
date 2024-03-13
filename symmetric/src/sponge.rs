@@ -1,3 +1,4 @@
+use alloc::string::String;
 use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_field::{reduce_64, Field, PrimeField, PrimeField64};
@@ -42,6 +43,10 @@ where
 }
 
 
+/// A padding-free, overwrite-mode sponge function.  Accepts `PrimeField64` elements and has a permutation 
+/// using a different `Field` type.
+///
+/// `WIDTH` is the sponge's rate plus the sponge's capacity.
 #[derive(Clone)]
 pub struct PaddingFreeSpongeMultiField<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize> {
     permutation: P,
@@ -54,9 +59,13 @@ where
     F: PrimeField64,
     PF: Field
 {
-    pub fn new(permutation: P) -> Self {
+    pub fn new(permutation: P) -> Result<Self, String> {
+        if F::order() >= PF::order() {
+            return Err(String::from("F::order() must be less than PF::order()"));
+        }
+
         let num_f_elms = PF::bits() / F::bits();
-        Self { permutation, num_f_elms, _phantom: PhantomData }
+        Ok(Self { permutation, num_f_elms, _phantom: PhantomData })
     }
 }
 

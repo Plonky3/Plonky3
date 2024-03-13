@@ -266,6 +266,7 @@ impl Field for BabyBear {
         }
     }
 
+    #[inline]
     fn order() -> BigUint {
         P.into()
     }

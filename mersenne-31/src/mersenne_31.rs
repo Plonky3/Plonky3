@@ -259,6 +259,7 @@ impl Field for Mersenne31 {
         Mersenne31::new(halve_u32::<P>(self.value))
     }
 
+    #[inline]
     fn order() -> BigUint {
         P.into()
     }
