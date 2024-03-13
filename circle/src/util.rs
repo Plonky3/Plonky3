@@ -132,22 +132,6 @@ pub(crate) fn s_p_at_p<F: Field>(p_x: F, p_y: F, log_n: usize) -> F {
     -F::two() * v_n_prime(p_x, log_n) * p_y
 }
 
-// tranposed matrix-vector product: Mᵀv
-// TODO: pack (currently ~100ms of m31_keccak)
-#[instrument(skip_all, fields(dims = %m.dimensions()))]
-pub(crate) fn gemv_tr<'a, F: Field, EF: ExtensionField<F>>(
-    m: RowMajorMatrixView<'a, F>,
-    v: impl Iterator<Item = EF>,
-) -> Vec<EF> {
-    let mut accs = vec![EF::zero(); m.width()];
-    for (row, vx) in m.rows().zip(v) {
-        for (acc, mx) in izip!(&mut accs, row) {
-            *acc += vx * *mx;
-        }
-    }
-    accs
-}
-
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;

@@ -15,6 +15,7 @@ use crate::strided::VerticallyStridedMatrixView;
 pub mod bitrev;
 pub mod dense;
 pub mod mul;
+pub mod routines;
 pub mod sparse;
 pub mod stack;
 pub mod strided;
@@ -63,6 +64,10 @@ pub trait MatrixRows<T>: Matrix<T> {
         Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_>;
+
+    fn rows(&self) -> impl Iterator<Item = Self::Row<'_>> {
+        (0..self.height()).map(|r| self.row(r))
+    }
 
     fn row_vec(&self, r: usize) -> Vec<T> {
         self.row(r).into_iter().collect()

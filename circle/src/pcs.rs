@@ -5,13 +5,14 @@ use p3_commit::{DirectMmcs, OpenedValues, Pcs};
 use p3_field::extension::ComplexExtendable;
 use p3_field::ExtensionField;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::routines::columnwise_dot_product;
 use p3_matrix::{Matrix, MatrixRows};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::cfft::Cfft;
 use crate::domain::CircleDomain;
-use crate::util::{gemv_tr, univariate_to_point, v_n};
+use crate::util::{univariate_to_point, v_n};
 
 pub struct CirclePcs<Val, InputMmcs> {
     pub log_blowup: usize,
@@ -104,7 +105,7 @@ where
                                 let basis: Vec<Challenge> = domain.lagrange_basis(zeta_point);
                                 let v_n_at_zeta =
                                     v_n(zeta_point.real(), log_n) - v_n(domain.shift.real(), log_n);
-                                gemv_tr(mat, basis.into_iter())
+                                columnwise_dot_product(mat, basis.into_iter())
                                     .into_iter()
                                     .map(|x| x * v_n_at_zeta)
                                     .collect()

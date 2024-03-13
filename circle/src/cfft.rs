@@ -1,5 +1,5 @@
 //! The Circle FFT and its inverse, as detailed in
-/// Circle STARKs, Section 4.2 (page 14 of the first revision PDF)
+//! Circle STARKs, Section 4.2 (page 14 of the first revision PDF)
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;

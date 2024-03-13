@@ -225,11 +225,12 @@ mod tests {
     use std::collections::HashSet;
 
     use itertools::izip;
+    use p3_matrix::routines::columnwise_dot_product;
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 
     use super::*;
-    use crate::util::{eval_circle_polys, gemv_tr};
+    use crate::util::eval_circle_polys;
     use crate::Cfft;
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
@@ -344,7 +345,7 @@ mod tests {
         let basis = d.lagrange_basis(zeta);
         let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);
 
-        let ys = gemv_tr(evals.as_view(), basis.into_iter())
+        let ys = columnwise_dot_product(evals, basis.into_iter())
             .into_iter()
             .map(|x| x * v_n_at_zeta)
             .collect_vec();
