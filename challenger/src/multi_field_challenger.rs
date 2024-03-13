@@ -1,6 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use num_traits::identities::Zero;
+
 use p3_field::{ExtensionField, Field, PrimeField, PrimeField32};
 use p3_symmetric::Hash;
 
@@ -14,7 +16,7 @@ where
     inner: Inner,
     input_buffer: Vec<F>,
     output_buffer: Vec<F>,
-    num_f_elms: u32,
+    num_f_elms: usize,
     alpha: PF,
 }
 
@@ -29,16 +31,7 @@ where
         if F::order() >= PF::order() {
             panic!("F::Order must be less than PF::Order");
         }
-
-        let num_f_elms_digits = PF::order().nth_root(F::ORDER_U32).to_u32_digits();
-        debug_assert!(num_f_elms_digits.len() == 1);
-
-        let mut num_f_elms = num_f_elms_digits[0];
-
-        if F::order().pow(num_f_elms) != PF::order() {
-            num_f_elms += 1;
-        }
-
+        let num_f_elms = (PF::bits() + <F as Field>::bits() - 1) / <F as Field>::bits();
         Self {
             inner,
             input_buffer: vec![],
@@ -56,7 +49,7 @@ where
     Inner: CanObserve<PF> + Clone,
 {
     fn inner_observe(&mut self) {
-        assert!(self.input_buffer.len() <= self.num_f_elms as usize);
+        assert!(self.input_buffer.len() <= self.num_f_elms);
 
         let mut sum = PF::zero();
         for &term in self.input_buffer.iter().rev() {
@@ -88,7 +81,7 @@ where
 
         self.input_buffer.push(value);
 
-        if self.input_buffer.len() == self.num_f_elms as usize {
+        if self.input_buffer.len() == self.num_f_elms {
             self.inner_observe();
         }
     }
@@ -163,9 +156,14 @@ where
                 for _ in 0..self.num_f_elms {
                     let rem = val.clone() % alpha.clone();
                     val /= alpha.clone();
-                    let digits = rem.to_u32_digits();
-                    debug_assert!(digits.len() == 1);
-                    self.output_buffer.push(F::from_canonical_u32(rem.to_u32_digits()[0]));
+
+                    if rem.is_zero() {
+                        self.output_buffer.push(F::zero());
+                    } else {
+                        let digits = rem.to_u32_digits();
+                        debug_assert!(digits.len() <= 1);
+                        self.output_buffer.push(F::from_canonical_u32(rem.to_u32_digits()[0]));
+                    }
                 }
             }
 

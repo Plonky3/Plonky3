@@ -45,6 +45,9 @@ name = "prove_goldilocks_keccak"
 [[example]]
 name = "prove_goldilocks_poseidon"
 
+[[example]]
+name = "prove_baby_bear_bn254poseidon2"
+
 [features]
 # TODO: Consider removing, at least when this gets split off into another repository.
 # We should be able to enable p3-maybe-rayon/parallel directly; this just doesn't

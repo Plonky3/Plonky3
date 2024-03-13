@@ -222,8 +222,8 @@ pub trait Field:
 
     fn order() -> BigUint;
 
-    fn bits() -> u64 {
-        Self::order().bits()
+    fn bits() -> usize {
+        Self::order().bits() as usize
     }
 }
 
