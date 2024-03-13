@@ -15,6 +15,8 @@ use crate::Packable;
 
 pub trait AbstractionOf<F: Field> {}
 
+// impl<F: Field> AbstractionOf<F> for F {}
+
 // impl<AF: AbstractField> AbstractionOf<AF::F> for AF {}
 
 /// A generalization of `Field` which permits things like
@@ -303,7 +305,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
 }
 
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> + AbstractionOf<Base> {
-    type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
+    type ExtensionPacking: AbstractExtensionField<Base::Packing>
         + 'static
         + Copy
         + Send
