@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::string::String;
 
 use num_traits::identities::Zero;
 
@@ -26,19 +27,19 @@ where
     PF: Field,
     Inner: Clone,
 {
-    pub fn new(inner: Inner) -> Self
+    pub fn new(inner: Inner) -> Result<Self, String>
     {
         if F::order() >= PF::order() {
-            panic!("F::Order must be less than PF::Order");
+            return Err(String::from("F::order() must be less than PF::order()"));
         }
         let num_f_elms = (PF::bits() + <F as Field>::bits() - 1) / <F as Field>::bits();
-        Self {
+        Ok(Self {
             inner,
             input_buffer: vec![],
             output_buffer: vec![],
             num_f_elms,
             alpha: PF::from_canonical_u32(F::ORDER_U32),
-        }
+        })
     }
 }
 

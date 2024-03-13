@@ -79,11 +79,11 @@ fn main() -> Result<(), VerificationError> {
     let config = MyConfig::new(pcs);
 
     let inner_challenger = InnerChallenger::new(perm.clone());
-    let mut challenger = Challenger::new(inner_challenger);
+    let mut challenger = Challenger::new(inner_challenger).unwrap();
 
     let proof  = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
     
     let inner_challenger = InnerChallenger::new(perm.clone());
-    let mut challenger = Challenger::new(inner_challenger);
+    let mut challenger = Challenger::new(inner_challenger).unwrap();
     verify(&config, &KeccakAir {}, &mut challenger, &proof)
 }
