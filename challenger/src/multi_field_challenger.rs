@@ -7,7 +7,7 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
-/// Given a cryptographic permutation that operates on [`Field`; WIDTH], produces a challenger
+/// Given a cryptographic permutation that operates on `[Field; WIDTH]`, produces a challenger
 /// that can observe and sample `PrimeField64` elements.  Can also observe values with 
 /// `Hash<F, PF, N>` type.
 #[derive(Clone)]
