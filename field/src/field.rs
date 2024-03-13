@@ -145,6 +145,14 @@ pub trait AbstractField:
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
+
+    fn try_div<Rhs>(self, rhs: Rhs) -> Option<<Self as Mul<Rhs>>::Output>
+    where
+        Rhs: Field,
+        Self: Mul<Rhs>,
+    {
+        rhs.try_inverse().map(|inv| self * inv)
+    }
 }
 
 /// An element of a finite field.

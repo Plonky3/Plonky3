@@ -1,3 +1,5 @@
+//! The Circle FFT and its inverse, as detailed in
+/// Circle STARKs, Section 4.2 (page 14 of the first revision PDF)
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -26,6 +28,7 @@ impl<F: ComplexExtendable> Cfft<F> {
         let log_n = log2_strict_usize(mat.height());
         self.coset_cfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
+    /// The cfft: interpolating evaluations over a domain to the monomial basis
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
     pub fn coset_cfft_batch<M: MatrixRowChunksMut<F>>(&self, mut mat: M, shift: Complex<F>) -> M {
         let n = mat.height();
@@ -60,12 +63,13 @@ impl<F: ComplexExtendable> Cfft<F> {
         let log_n = log2_strict_usize(mat.height());
         self.coset_icfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
+    /// The icfft: evaluating a polynomial in monomial basis over a domain
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
     pub fn coset_icfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M, shift: Complex<F>) -> M {
         self.coset_icfft_batch_skipping_first_layers(mat, shift, 0)
     }
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn coset_icfft_batch_skipping_first_layers<M: MatrixRowChunksMut<F>>(
+    fn coset_icfft_batch_skipping_first_layers<M: MatrixRowChunksMut<F>>(
         &self,
         mut mat: M,
         shift: Complex<F>,
@@ -146,7 +150,7 @@ fn ibutterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], t
 }
 
 // Repeats rows
-// this can be micro-optimized
+// TODO this can be micro-optimized
 fn tile_rows<F: Clone>(mat: impl MatrixRowSlices<F>, repetitions: usize) -> RowMajorMatrix<F> {
     let mut values = Vec::with_capacity(mat.width() * mat.height() * repetitions);
     for r in mat.row_slices() {

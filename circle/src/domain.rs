@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField, Field};
+use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -12,52 +12,40 @@ use tracing::instrument;
 
 use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
 
-/// Given a generator h for H and an element k, generate points in the twin coset kH u k^{-1}H.
-/// The ordering is important here, the points will generated in the following interleaved pattern:
-/// {k, k^{-1}h, kh, k^{-1}h^2, kh^2, ..., k^{-1}h^{-1}, kh^{-1}, k^{-1}}.
-/// Size controls how many of these we want to compute. It should either be |H| or |H|/2 depending on if
-/// we want simply the twiddles or the full domain. If k is has order 2|H| this is equal to cfft_domain.
-pub(crate) fn twin_coset_domain<F: ComplexExtendable>(
-    generator: Complex<F>,
-    coset_elem: Complex<F>,
-    size: usize,
-) -> impl Iterator<Item = Complex<F>> {
-    generator
-        .shifted_powers(coset_elem)
-        .interleave(generator.shifted_powers(generator * coset_elem.inverse()))
-        .take(size)
-}
-
-/*
-X is generator, O is the first coset, goes counterclockwise
-  O X .
- .     .
-.       O <- start = shift
-.   .   - (1,0)
-O       .
- .     .
-  . . O
-
-For ordering reasons, the other half will start at gen / shift:
-  . X O  <- start = gen/shift
- .     .
-O       .
-.   .   - (1,0)
-.       O
- .     .
-  O . .
-
-The full domain is the interleaving of these two cosets
-*/
-
+/// X is generator, O is the first coset, goes counterclockwise
+/// ```text
+///   O X .
+///  .     .
+/// .       O <- start = shift
+/// .   .   - (1,0)
+/// O       .
+///  .     .
+///   . . O
+/// ```
+///
+/// For ordering reasons, the other half will start at gen / shift:
+/// ```text
+///   . X O  <- start = gen/shift
+///  .     .
+/// O       .
+/// .   .   - (1,0)
+/// .       O
+///  .     .
+///   O . .
+/// ```
+///
+/// The full domain is the interleaving of these two cosets
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct CircleDomain<F> {
-    // log_n corresponds to the size of the WHOLE domain
+    // log_n corresponds to the log size of the WHOLE domain
     pub(crate) log_n: usize,
     pub(crate) shift: Complex<F>,
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
+    pub(crate) fn new(log_n: usize, shift: Complex<F>) -> Self {
+        Self { log_n, shift }
+    }
     pub(crate) fn standard(log_n: usize) -> Self {
         Self {
             log_n,
@@ -79,7 +67,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         let domain = self.points().collect_vec();
 
         // the denominator so that the lagrange basis is normalized to 1
-        // this depends only on domain, so should be precomputed
+        // TODO: this depends only on domain, so should be precomputed
         let lagrange_normalizer: Vec<F> = domain
             .iter()
             .map(|p| s_p_at_p(p.real(), p.imag(), self.log_n))
@@ -120,7 +108,6 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     }
 
     fn create_disjoint_domain(&self, min_size: usize) -> Self {
-        let mut log_n = log2_ceil_usize(min_size);
         // Right now we simply guarantee the domain is disjoint by returning a
         // larger standard position coset, which is fine because we always ask for a larger
         // domain. If we wanted good performance for a disjoint domain of the same size,
@@ -129,10 +116,13 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             self.is_standard(),
             "create_disjoint_domain not currently supported for nonstandard twin cosets"
         );
-        while log_n == self.log_n {
-            log_n += 1;
-        }
-        Self::standard(log_n)
+        let log_n = log2_ceil_usize(min_size);
+        // Any standard position coset that is not the same size as us will be disjoint.
+        Self::standard(if log_n == self.log_n {
+            log_n + 1
+        } else {
+            log_n
+        })
     }
 
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
@@ -148,7 +138,12 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         LagrangeSelectors {
             is_first_row: zeroifier / v_0(self.shift.conjugate().rotate(p)),
             is_last_row: zeroifier / v_0(self.shift.rotate(p)),
+            // This is the transition selector from the paper, but seems to send
+            // the quotient out of FFT space. It has a simple zero at the last point
+            // and a simple pole at the negation of the last point.
             // is_transition: v_0(self.shift.rotate(p)),
+            // Instead we use this selector which has two zeros at the last point,
+            // which seems to work. TODO: More investigation is needed.
             is_transition: self.shift.rotate(p).real() - Ext::one(),
             inv_zeroifier: zeroifier.inverse(),
         }
@@ -245,7 +240,7 @@ mod tests {
         }
     }
 
-    fn do_test_circle_domain(log_n: usize) {
+    fn do_test_circle_domain(log_n: usize, width: usize) {
         let n = 1 << log_n;
 
         type F = Mersenne31;
@@ -283,7 +278,7 @@ mod tests {
         }
 
         // split domains
-        let evals = RowMajorMatrix::rand(&mut thread_rng(), n, 32);
+        let evals = RowMajorMatrix::rand(&mut thread_rng(), n, width);
         let orig: Vec<(Complex<F>, Vec<F>)> =
             d.points().zip(evals.rows().map(|r| r.to_vec())).collect();
         for num_chunks in [1, 2, 4, 8] {
@@ -323,8 +318,8 @@ mod tests {
 
     #[test]
     fn test_circle_domain() {
-        do_test_circle_domain(4);
-        do_test_circle_domain(10);
+        do_test_circle_domain(4, 32);
+        do_test_circle_domain(10, 32);
     }
 
     #[test]

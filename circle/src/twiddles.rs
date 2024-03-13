@@ -7,7 +7,7 @@ use p3_field::extension::{Complex, ComplexExtendable};
 use p3_util::linear_map::LinearMap;
 use tracing::instrument;
 
-use crate::domain::twin_coset_domain;
+use crate::domain::CircleDomain;
 
 #[derive(Default)]
 pub(crate) struct TwiddleCache<F>(
@@ -43,27 +43,32 @@ impl<F: ComplexExtendable> TwiddleCache<F> {
 #[instrument(skip(shift))]
 fn compute_twiddles<F: ComplexExtendable>(log_n: usize, shift: Complex<F>) -> Vec<Vec<F>> {
     let size = 1 << (log_n - 1);
-    let g = F::circle_two_adic_generator(log_n - 1);
 
-    let init_domain = twin_coset_domain(g, shift, size).collect_vec();
+    let init_domain = CircleDomain::new(log_n, shift)
+        .points()
+        .take(size)
+        .collect_vec();
 
+    // After the first step we only need the real part.
     let mut working_domain: Vec<_> = init_domain
         .iter()
         .take(size / 2)
         .map(|x| x.real())
-        .collect(); // After the first step we only need the real part.
+        .collect();
 
     (0..log_n)
         .map(|i| {
             let size = working_domain.len();
             let output = if i == 0 {
-                init_domain.iter().map(|x| x.imag()).collect_vec() // The twiddles in step one are the inverse imaginary parts.
+                // The twiddles in step one are the inverse imaginary parts.
+                init_domain.iter().map(|x| x.imag()).collect_vec()
             } else {
                 let new_working_domain = working_domain
                     .iter()
                     .take(size / 2)
+                    // When we square a point, the real part changes as x -> 2x^2 - 1.
                     .map(|x| F::two() * x.square() - F::one())
-                    .collect(); // When we square a point, the real part changes as x -> 2x^2 - 1.
+                    .collect();
                 mem::replace(&mut working_domain, new_working_domain)
             };
             output
