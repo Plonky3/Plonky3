@@ -101,7 +101,7 @@ where
                         points_for_mat
                             .into_iter()
                             .map(|zeta| {
-                                let zeta_point = univariate_to_point(zeta);
+                                let zeta_point = univariate_to_point(zeta).unwrap();
                                 let basis: Vec<Challenge> = domain.lagrange_basis(zeta_point);
                                 let v_n_at_zeta =
                                     v_n(zeta_point.real(), log_n) - v_n(domain.shift.real(), log_n);

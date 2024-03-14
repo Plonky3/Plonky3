@@ -74,14 +74,14 @@ pub(crate) fn eval_circle_polys<F: ComplexExtendable>(
 
 /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
 /// (x, y) = ((1-t^2)/(1+t^2), 2t/(1+t^2))
-/// t = ±i goes to (-1, 0)
-pub(crate) fn univariate_to_point<F: Field>(t: F) -> Complex<F> {
+/// Returns None if t^2 = -1 (corresponding to the point at infinity).
+pub(crate) fn univariate_to_point<F: Field>(t: F) -> Option<Complex<F>> {
     let t2 = t.square();
-    if let Some(inv_denom) = (F::one() + t2).try_inverse() {
-        Complex::new((F::one() - t2) * inv_denom, (F::two() * t) * inv_denom)
-    } else {
-        Complex::new_real(F::neg_one())
-    }
+    let inv_denom = (F::one() + t2).try_inverse()?;
+    Some(Complex::new(
+        (F::one() - t2) * inv_denom,
+        t.double() * inv_denom,
+    ))
 }
 
 /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
@@ -104,7 +104,7 @@ pub(crate) fn rotate_univariate<F: Field, EF: ExtensionField<F>>(t1: EF, t2: F) 
 /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)
 pub(crate) fn v_n<F: Field>(mut p_x: F, log_n: usize) -> F {
     for _ in 0..(log_n - 1) {
-        p_x = F::two() * p_x.square() - F::one();
+        p_x = p_x.square().double() - F::one();
     }
     p_x
 }
@@ -141,23 +141,13 @@ mod tests {
     #[test]
     fn test_uni_to_point() {
         // 0 -> (1, 0)
-        assert_eq!(univariate_to_point(F::zero()), C::new_real(F::one()));
+        assert_eq!(univariate_to_point(F::zero()), Some(C::new_real(F::one())));
         // 1 -> (0, 1)
-        assert_eq!(univariate_to_point(F::one()), C::new_imag(F::one()));
+        assert_eq!(univariate_to_point(F::one()), Some(C::new_imag(F::one())));
         // -1 -> (0, -1)
-        assert_eq!(univariate_to_point(F::neg_one()), C::new_imag(F::neg_one()));
-        // to make infinity, we need an extension that includes i
-        // for example, the complex extension itself, although any
-        // even extension of M31 will have p^i = 1 (mod 4)
-        // i -> (-1, 0)
         assert_eq!(
-            univariate_to_point(C::new_imag(F::one())),
-            Complex::new_real(C::neg_one()),
-        );
-        // -i -> (-1, 0)
-        assert_eq!(
-            univariate_to_point(C::new_imag(F::neg_one())),
-            Complex::new_real(C::neg_one()),
+            univariate_to_point(F::neg_one()),
+            Some(C::new_imag(F::neg_one()))
         );
     }
 

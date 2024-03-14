@@ -12,6 +12,8 @@ use tracing::instrument;
 
 use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
 
+/// A twin-coset of the circle group on F. It has a power-of-two size and an arbitrary shift.
+///
 /// X is generator, O is the first coset, goes counterclockwise
 /// ```text
 ///   O X .
@@ -62,6 +64,8 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         coset0.interleave(coset1).take(1 << self.log_n)
     }
 
+    /// Computes the lagrange basis at point, not yet normalized by the value of the domain
+    /// vanishing poly, since that is more efficient to compute after the dot product.
     #[instrument(skip_all, fields(log_n = %self.log_n))]
     pub(crate) fn lagrange_basis<EF: ExtensionField<F>>(&self, point: Complex<EF>) -> Vec<EF> {
         let domain = self.points().collect_vec();
@@ -78,6 +82,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
             .zip(&lagrange_normalizer)
             .map(|(p, &ln)| {
                 // ext * base
+                // TODO: this can be sped up
                 v_0(p.conjugate().rotate(point)) * ln
             })
             .collect_vec();
@@ -101,7 +106,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         // Only in standard position do we have an algebraic expression to access the next point.
         if self.is_standard() {
             let gen = F::circle_two_adic_generator(self.log_n);
-            Some(point_to_univariate(gen.rotate(univariate_to_point(x))).unwrap())
+            Some(point_to_univariate(gen.rotate(univariate_to_point(x).unwrap())).unwrap())
         } else {
             None
         }
@@ -126,7 +131,8 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     }
 
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
-        v_n(univariate_to_point(point).real(), self.log_n) - v_n(self.shift.real(), self.log_n)
+        v_n(univariate_to_point(point).unwrap().real(), self.log_n)
+            - v_n(self.shift.real(), self.log_n)
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
@@ -134,7 +140,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         point: Ext,
     ) -> LagrangeSelectors<Ext> {
         let zeroifier = self.zp_at_point(point);
-        let p = univariate_to_point(point);
+        let p = univariate_to_point(point).unwrap();
         LagrangeSelectors {
             is_first_row: zeroifier / v_0(self.shift.conjugate().rotate(p)),
             is_last_row: zeroifier / v_0(self.shift.rotate(p)),
@@ -164,6 +170,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         }
     }
 
+    /// Decompose a domain into disjoint twin-cosets.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         assert!(self.is_standard());
         let log_chunks = log2_strict_usize(num_chunks);
@@ -259,7 +266,7 @@ mod tests {
         // .points() is the same as first_point -> next_point
         let mut uni_point = d.first_point();
         for p in d.points() {
-            assert_eq!(univariate_to_point(uni_point), p);
+            assert_eq!(univariate_to_point(uni_point), Some(p));
             uni_point = d.next_point(uni_point).unwrap();
         }
 
@@ -334,13 +341,13 @@ mod tests {
 
         let cfft = Cfft::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
         let d = CircleDomain { shift, log_n };
 
         let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
 
         // simple barycentric
-        let zeta: Complex<F> = univariate_to_point(thread_rng().gen());
+        let zeta: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
 
         let basis = d.lagrange_basis(zeta);
         let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);

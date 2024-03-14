@@ -1,5 +1,11 @@
 //! The Circle FFT and its inverse, as detailed in
 //! Circle STARKs, Section 4.2 (page 14 of the first revision PDF)
+//! This code is based on Angus Gruen's implementation, which uses a slightly
+//! different cfft basis than that of the paper. Basically, it continues using the
+//! same twiddles for the second half of the chunk, which only changes the sign of the
+//! resulting basis. For a full explanation see the comments in `util::circle_basis`.
+//! This alternate basis doesn't cause any change to the code apart from our testing functions.
+
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -28,7 +34,7 @@ impl<F: ComplexExtendable> Cfft<F> {
         let log_n = log2_strict_usize(mat.height());
         self.coset_cfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
-    /// The cfft: interpolating evaluations over a domain to the monomial basis
+    /// The cfft: interpolating evaluations over a domain to the (sign-switched) cfft basis
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
     pub fn coset_cfft_batch<M: MatrixRowChunksMut<F>>(&self, mut mat: M, shift: Complex<F>) -> M {
         let n = mat.height();
@@ -47,11 +53,12 @@ impl<F: ComplexExtendable> Cfft<F> {
                     let (lo, hi) = chunk.row_pair_slices_mut(i, block_size - i - 1);
                     let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
                     let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
-                    butterfly(lo_packed, hi_packed, t.into());
-                    butterfly(lo_suffix, hi_suffix, t);
+                    dif_butterfly(lo_packed, hi_packed, t.into());
+                    dif_butterfly(lo_suffix, hi_suffix, t);
                 }
             });
         }
+        // TODO: omit this?
         divide_by_height(&mut mat);
         mat
     }
@@ -91,8 +98,8 @@ impl<F: ComplexExtendable> Cfft<F> {
                     let (lo, hi) = chunk.row_pair_slices_mut(i, block_size - i - 1);
                     let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
                     let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
-                    ibutterfly(lo_packed, hi_packed, t.into());
-                    ibutterfly(lo_suffix, hi_suffix, t);
+                    dit_butterfly(lo_packed, hi_packed, t.into());
+                    dit_butterfly(lo_suffix, hi_suffix, t);
                 }
             });
         }
@@ -128,8 +135,9 @@ impl<F: ComplexExtendable> Cfft<F> {
     }
 }
 
+/// Division-in-frequency
 #[inline(always)]
-fn butterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], twiddle: F) {
+fn dif_butterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], twiddle: F) {
     for (lo, hi) in lo_chunk.iter_mut().zip(hi_chunk) {
         let sum = *lo + *hi;
         let diff = (*lo - *hi) * twiddle;
@@ -138,8 +146,9 @@ fn butterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], tw
     }
 }
 
+/// Division-in-time
 #[inline(always)]
-fn ibutterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], twiddle: F) {
+fn dit_butterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F], twiddle: F) {
     for (lo, hi) in lo_chunk.iter_mut().zip(hi_chunk) {
         let hi_twiddle = *hi * twiddle;
         let sum = *lo + hi_twiddle;
@@ -177,7 +186,7 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
 
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1 << 5);
         let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
@@ -200,7 +209,7 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::<F>::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen());
+        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
 
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1);
         let src_domain = CircleDomain { log_n, shift };
