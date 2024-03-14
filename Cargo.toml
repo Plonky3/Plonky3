@@ -6,6 +6,7 @@ members = [
     "blake3",
     "brakedown",
     "challenger",
+    "circle",
     "code",
     "commit",
     "dft",

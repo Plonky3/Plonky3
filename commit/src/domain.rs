@@ -22,7 +22,9 @@ pub trait PolynomialSpace: Copy {
     fn size(&self) -> usize;
 
     fn first_point(&self) -> Self::Val;
-    fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Ext;
+
+    // This is only defined for cosets.
+    fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext>;
 
     // There are many choices for this, but we must pick a canonical one
     // for both prover/verifier determinism and LDE caching.
@@ -72,8 +74,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     fn first_point(&self) -> Self::Val {
         self.shift
     }
-    fn next_point<Ext: ExtensionField<Val>>(&self, x: Ext) -> Ext {
-        x * self.gen()
+    fn next_point<Ext: ExtensionField<Val>>(&self, x: Ext) -> Option<Ext> {
+        Some(x * self.gen())
     }
 
     fn create_disjoint_domain(&self, min_size: usize) -> Self {

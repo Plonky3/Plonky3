@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 
 pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
@@ -24,7 +24,7 @@ pub trait StarkGenericConfig {
     type Pcs: Pcs<Self::Challenge, Self::Challenger>;
 
     /// The field from which most random challenges are drawn.
-    type Challenge: ExtensionField<Val<Self>> + TwoAdicField;
+    type Challenge: ExtensionField<Val<Self>>;
 
     /// The challenger (Fiat-Shamir) implementation used.
     type Challenger: FieldChallenger<Val<Self>>
@@ -50,7 +50,7 @@ impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
 
 impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
 where
-    Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val> + TwoAdicField,
+    Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val>,
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
