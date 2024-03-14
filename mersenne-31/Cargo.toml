@@ -16,7 +16,7 @@ p3-mds = { path = "../mds" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
-num-bigint = "0.4.3"
+num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
