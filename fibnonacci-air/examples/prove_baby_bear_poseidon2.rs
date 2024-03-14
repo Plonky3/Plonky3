@@ -1,3 +1,6 @@
+use rand::thread_rng;
+
+use fibnonacci_air::FibonacciAir;
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -9,10 +12,8 @@ use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, StarkConfig, VerificationError, verify};
 use p3_util::log2_ceil_usize;
-use rand::{random, thread_rng};
-
 
 const NUM_HASHES: usize = 680;
 
@@ -46,8 +47,7 @@ fn main() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    // let trace = p3_keccak_air::generate_trace_rows::<Val>(inputs);
+    let trace = fibnonacci_air::generate_trace_rows::<Val>(1, 1, 3);
 
     let fri_config = FriConfig {
         log_blowup: 1,
@@ -55,18 +55,16 @@ fn main() -> Result<(), VerificationError> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
-    // type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    // let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
-    //
-    // type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    // let config = MyConfig::new(pcs);
-    //
-    // let mut challenger = Challenger::new(perm.clone());
-    //
-    // let proof = prove::<MyConfig, _>(&config, &p3_keccak_air::KeccakAir {}, &mut challenger, trace);
-    //
-    // let mut challenger = Challenger::new(perm);
-    // verify(&config, &p3_keccak_air::KeccakAir {}, &mut challenger, &proof)
+    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
 
-    Ok(())
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs);
+
+    let mut challenger = Challenger::new(perm.clone());
+
+    let proof = prove::<MyConfig, _>(&config, &FibonacciAir {}, &mut challenger, trace);
+
+    let mut challenger = Challenger::new(perm);
+    verify(&config, &FibonacciAir {}, &mut challenger, &proof)
 }
