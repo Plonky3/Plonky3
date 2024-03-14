@@ -10,6 +10,7 @@ p3-air = { path = "../air" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
+serde_json = "1.0.114"
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

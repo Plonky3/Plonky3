@@ -1,7 +1,7 @@
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{AbstractField, PrimeField64};
+use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 

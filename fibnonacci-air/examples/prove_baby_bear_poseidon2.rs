@@ -1,4 +1,5 @@
 use rand::thread_rng;
+use serde_json;
 
 use fibnonacci_air::FibonacciAir;
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
@@ -14,8 +15,6 @@ use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, StarkConfig, VerificationError, verify};
 use p3_util::log2_ceil_usize;
-
-const NUM_HASHES: usize = 680;
 
 fn main() -> Result<(), VerificationError> {
     type Val = BabyBear;
@@ -47,11 +46,11 @@ fn main() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    let trace = fibnonacci_air::generate_trace_rows::<Val>(1, 1, 3);
+    let trace = fibnonacci_air::generate_trace_rows::<Val>(1, 1, (1 << 20) - 1);
 
     let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 100,
+        log_blowup: 3,
+        num_queries: 28,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
@@ -64,6 +63,8 @@ fn main() -> Result<(), VerificationError> {
     let mut challenger = Challenger::new(perm.clone());
 
     let proof = prove::<MyConfig, _>(&config, &FibonacciAir {}, &mut challenger, trace);
+    let proof_json = serde_json::to_string(&proof).expect("failed to serialize");
+    println!("proof json {} bytes", proof_json.as_bytes().len());
 
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof)
