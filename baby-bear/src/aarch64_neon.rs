@@ -200,6 +200,90 @@ fn add(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
 
 #[inline]
 #[must_use]
+fn mulby_mu(val: int32x4_t) -> int32x4_t {
+    // We want this to compile to:
+    //      mul      res.4s, val.4s, MU.4s
+    // throughput: .25 cyc/vec (16 els/cyc)
+    // latency: 3 cyc
+
+    unsafe {
+        aarch64::vmulq_s32(val, MU)
+    }
+}
+
+#[inline]
+#[must_use]
+fn get_c_hi(lhs: int32x4_t, rhs: int32x4_t) -> int32x4_t {
+    // We want this to compile to:
+    //      sqdmulh  c_hi.4s, lhs.4s, rhs.4s
+    // throughput: .25 cyc/vec (16 els/cyc)
+    // latency: 3 cyc
+
+    unsafe {
+        // Get bits 31, ..., 62 of C. Note that `sqdmulh` saturates when the product doesn't fit in
+        // an `i63`, but this cannot happen here due to our bounds on `lhs` and `rhs`.
+        aarch64::vqdmulhq_s32(lhs, rhs)
+    }
+}
+
+#[inline]
+#[must_use]
+fn get_qp_hi(lhs: int32x4_t, mu_rhs: int32x4_t) -> int32x4_t {
+    // We want this to compile to:
+    //      mul      q.4s, lhs.4s, mu_rhs.4s
+    //      sqdmulh  qp_hi.4s, q.4s, P.4s
+    // throughput: .5 cyc/vec (8 els/cyc)
+    // latency: 6 cyc
+
+    unsafe {
+        // Form `Q`.
+        let q = aarch64::vmulq_s32(lhs, mu_rhs);
+
+        // Gets bits 31, ..., 62 of Q P. Again, saturation is not an issue because `P` is not
+        // -2**31.
+        aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(P))
+    }
+}
+
+#[inline]
+#[must_use]
+fn get_d(c_hi: int32x4_t, qp_hi: int32x4_t) -> int32x4_t {
+    // We want this to compile to:
+    //      shsub    res.4s, c_hi.4s, qp_hi.4s
+    // throughput: .25 cyc/vec (16 els/cyc)
+    // latency: 2 cyc
+
+    unsafe {
+        // Form D. Note that `c_hi` is C >> 31 and `qp_hi` is (Q P) >> 31, whereas we want
+        // (C - Q P) >> 32, so we need to subtract and divide by 2. Luckily NEON has an instruction
+        // for that! The lowest bit of `c_hi` and `qp_hi` is the same, so the division is exact.
+        aarch64::vhsubq_s32(c_hi, qp_hi)
+    }
+}
+
+#[inline]
+#[must_use]
+fn get_reduced_d(c_hi: int32x4_t, qp_hi: int32x4_t) -> uint32x4_t {
+    // We want this to compile to:
+    //      shsub    res.4s, c_hi.4s, qp_hi.4s
+    //      cmgt     underflow.4s, qp_hi.4s, c_hi.4s
+    //      mls      res.4s, underflow.4s, P.4s
+    // throughput: .75 cyc/vec (5.33 els/cyc)
+    // latency: 5 cyc
+
+    unsafe {
+        let d = aarch64::vreinterpretq_u32_s32(get_d(c_hi, qp_hi));
+
+        // Finally, we reduce D to canonical form. D is negative iff `c_hi > qp_hi`, so if that's the
+        // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
+        // _subtract_ `underflow` * P.
+        let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
+        aarch64::vmlsq_u32(d, confuse_compiler(underflow), P)
+    }
+}
+
+#[inline]
+#[must_use]
 fn mul(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      sqdmulh  c_hi.4s, lhs.4s, rhs.4s
@@ -217,28 +301,30 @@ fn mul(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
         let lhs = aarch64::vreinterpretq_s32_u32(lhs);
         let rhs = aarch64::vreinterpretq_s32_u32(rhs);
 
-        // Get bits 31, ..., 62 of C. Note that `sqdmulh` saturates when the product doesn't fit in
-        // an `i63`, but this cannot happen here due to our bounds on `lhs` and `rhs`.
-        let c_hi = aarch64::vqdmulhq_s32(lhs, rhs);
+        let mu_rhs = mulby_mu(rhs);
+        let c_hi = get_c_hi(lhs, rhs);
+        let qp_hi = get_qp_hi(lhs, mu_rhs);
+        get_reduced_d(c_hi, qp_hi)
+    }
+}
 
-        // Form `Q`, but reverse the order of multiplications to lower the latency on `lhs`.
-        let mu_rhs = aarch64::vmulq_s32(rhs, MU);
-        let q = aarch64::vmulq_s32(lhs, mu_rhs);
+#[inline]
+#[must_use]
+fn cube(val: uint32x4_t) -> uint32x4_t {
+    // throughput: 2.75 cyc/vec (1.45 els/cyc)
+    // latency: 22 cyc
 
-        // Gets bits 31, ..., 62 of Q P. Again, saturation is not an issue because `P` is not
-        // -2**31.
-        let qp_hi = aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(P));
+    unsafe {
+        let val = aarch64::vreinterpretq_s32_u32(val);
+        let mu_val = mulby_mu(val);
 
-        // Form D. Note that `c_hi` is C >> 31 and `qp_hi` is (Q P) >> 31, whereas we want
-        // (C - Q P) >> 32, so we need to subtract and divide by 2. Luckily NEON has an instruction
-        // for that! The lowest bit of `c_hi` and `qp_hi` is the same, so the division is exact.
-        let d = aarch64::vreinterpretq_u32_s32(aarch64::vhsubq_s32(c_hi, qp_hi));
+        let c_hi_2 = get_c_hi(val, val);
+        let qp_hi_2 = get_qp_hi(val, mu_val);
+        let val_2 = get_d(c_hi_2, qp_hi_2);
 
-        // Finally we reduce D to canonical form. D is negative iff `c_hi > qp_hi`, so if that's the
-        // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
-        // _subtract_ `underflow` * P.
-        let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
-        aarch64::vmlsq_u32(d, confuse_compiler(underflow), P)
+        let c_hi_3 = get_c_hi(val_2, val);
+        let qp_hi_3 = get_qp_hi(val_2, mu_val);
+        get_reduced_d(c_hi_3, qp_hi_3)
     }
 }
 
@@ -419,6 +505,16 @@ impl AbstractField for PackedBabyBearNeon {
     #[inline]
     fn generator() -> Self {
         BabyBear::generator().into()
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        let val = self.to_vector();
+        let res = cube(val);
+        unsafe {
+            // Safety: `cube` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
     }
 }
 
@@ -1080,6 +1176,40 @@ mod tests {
         #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
             assert_eq!(vec_res.0[i], -arr[i]);
+        }
+    }
+
+    #[test]
+    fn test_cube_vs_mul() {
+        let vec = packed_from_canonical([0x4efd5eaf, 0x311b8e0c, 0x74dd27c1, 0x449613f0]);
+        let res0 = vec * vec.square();
+        let res1 = vec.cube();
+        assert_eq!(res0, res1);
+    }
+
+    #[test]
+    fn test_cube_vs_scalar() {
+        let arr = array_from_canonical([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]);
+
+        let vec = PackedBabyBearNeon(arr);
+        let vec_res = vec.cube();
+
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..WIDTH {
+            assert_eq!(vec_res.0[i], arr[i].cube());
+        }
+    }
+
+    #[test]
+    fn test_cube_vs_scalar_special_vals() {
+        let arr = [F::zero(), F::one(), F::two(), F::neg_one()];
+
+        let vec = PackedBabyBearNeon(arr);
+        let vec_res = vec.cube();
+
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..WIDTH {
+            assert_eq!(vec_res.0[i], arr[i].cube());
         }
     }
 }
