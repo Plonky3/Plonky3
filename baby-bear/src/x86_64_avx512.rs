@@ -11,7 +11,6 @@ use crate::BabyBear;
 
 const WIDTH: usize = 16;
 const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
-// On x86 MONTY_BITS is always 32, so MU = P^-1 (mod 2^32) = 0x88000001.
 const MU: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x88000001; WIDTH]) };
 const EVENS: __mmask16 = 0b0101010101010101;
 const EVENS4: __mmask16 = 0x0f0f;

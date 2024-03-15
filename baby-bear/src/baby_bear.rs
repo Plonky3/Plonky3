@@ -12,23 +12,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Baby Bear prime
 const P: u32 = 0x78000001;
-
-// We want a different set of parameters on ARM/NEON than elsewhere. In particular, we want ARM to
-// use 31 bits for the limb size, because that lets us use the SQDMULH instruction to do really fast
-// multiplications in NEON. However, other architectures don't have this instruction, so 32-bit
-// limbs are more convenient, being a nice power of 2.
-const MONTY_BITS: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
-    31
-} else {
-    32
-};
+const MONTY_BITS: u32 = 32;
 // We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
 // (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
-const MONTY_MU: u32 = if cfg!(all(target_arch = "aarch64", target_feature = "neon")) {
-    0x08000001
-} else {
-    0x88000001
-};
+const MONTY_MU: u32 = 0x88000001;
 
 // This is derived from above.
 const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
