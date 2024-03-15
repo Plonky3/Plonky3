@@ -2,7 +2,7 @@ use core::array;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::{AbstractField, Field};
+use crate::{AbstractField, AbstractionOf, Field};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
@@ -24,6 +24,8 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
         Self(arr)
     }
 }
+
+impl<F: Field, const N: usize> AbstractionOf<F> for FieldArray<F, N> {}
 
 impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
     type F = F;

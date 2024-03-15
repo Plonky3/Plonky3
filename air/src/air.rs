@@ -1,6 +1,6 @@
 use core::ops::{Add, Mul, Sub};
 
-use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
+use p3_field::{AbstractExtensionField, AbstractField, AbstractionOf, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 
@@ -23,6 +23,7 @@ pub trait AirBuilder: Sized {
     type F: Field;
 
     type Expr: AbstractField
+        + AbstractionOf<Self::F>
         + From<Self::F>
         + Add<Self::Var, Output = Self::Expr>
         + Add<Self::F, Output = Self::Expr>

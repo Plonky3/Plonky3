@@ -15,10 +15,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use mds::*;
-use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
-    PrimeField, PrimeField64, TwoAdicField,
-};
+use p3_field::{exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable, PrimeField, PrimeField64, TwoAdicField, AbstractionOf};
 use p3_util::{assume, branch_hint};
 pub use poseidon2::DiffusionMatrixGoldilocks;
 use rand::distributions::{Distribution, Standard};
@@ -95,6 +92,8 @@ impl Distribution<Goldilocks> for Standard {
         }
     }
 }
+
+impl AbstractionOf<Self> for Goldilocks {}
 
 impl AbstractField for Goldilocks {
     type F = Self;
