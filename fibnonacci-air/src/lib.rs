@@ -92,6 +92,7 @@ pub fn generate_trace_rows<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajo
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
+    use p3_field::AbstractField;
     use p3_matrix::MatrixGet;
 
     use super::*;

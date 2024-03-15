@@ -46,7 +46,7 @@ fn main() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    let trace = fibnonacci_air::generate_trace_rows::<Val>(1, 1, (1 << 20) - 1);
+    let trace = fibnonacci_air::generate_trace_rows::<Val>(1, 1, (1 << 5) - 1);
 
     let fri_config = FriConfig {
         log_blowup: 3,
