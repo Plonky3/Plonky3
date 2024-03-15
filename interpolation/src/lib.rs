@@ -65,8 +65,8 @@ where
                 let s = diff_inv * subgroup_i;
                 row_i.into_iter().map(|y_i| s * y_i).collect()
             })
-            .fold_chunks(64, || vec![EF::zero(); width], sum_vecs)
-            .reduce(|| vec![EF::zero(); width], sum_vecs);
+            .reduce(sum_vecs)
+            .expect("Expected nonempty sum");
 
     let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
     let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);
