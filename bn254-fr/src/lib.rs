@@ -7,23 +7,20 @@ extern crate alloc;
 mod poseidon2;
 
 use alloc::vec::Vec;
-use ff::{Field as FFField, PrimeField as FFPrimeField, PrimeFieldBits};
-use num_bigint::BigUint;
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
-
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use serde::ser::SerializeSeq;
-
+use ff::{Field as FFField, PrimeField as FFPrimeField, PrimeFieldBits};
+use num_bigint::BigUint;
 use p3_field::{AbstractField, Field, Packable, PrimeField};
-use serde::{Deserialize, Deserializer, Serialize};
-
 pub use poseidon2::DiffusionMatrixBN254;
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(FFPrimeField)]
 #[PrimeFieldModulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
@@ -69,7 +66,9 @@ impl<'de> Deserialize<'de> for Bn254Fr {
         let value = FFBn254Fr::from_repr(res);
 
         if value.is_some().into() {
-            Ok(Self { value: value.unwrap() })
+            Ok(Self {
+                value: value.unwrap(),
+            })
         } else {
             Err(serde::de::Error::custom("Invalid field element"))
         }
@@ -280,11 +279,11 @@ impl Distribution<Bn254Fr> for Standard {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use num_traits::One;
     use p3_field_testing::test_field;
 
-    use alloc::vec;
-    
     use super::*;
 
     type F = Bn254Fr;
@@ -318,12 +317,20 @@ mod tests {
         let expected_result = F::new(FFBn254Fr::from_u128(5));
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_r_minus_1 =  F::new(FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap());
+        let f_r_minus_1 = F::new(
+            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap(),
+        );
         let expected_result = F::zero();
         assert_eq!(f_1 + f_r_minus_1, expected_result);
 
-        let f_r_minus_2 =  F::new(FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![2])).to_str_radix(10)).unwrap());
-        let expected_result = F::new(FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![3])).to_str_radix(10)).unwrap());
+        let f_r_minus_2 = F::new(
+            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![2])).to_str_radix(10))
+                .unwrap(),
+        );
+        let expected_result = F::new(
+            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![3])).to_str_radix(10))
+                .unwrap(),
+        );
         assert_eq!(f_r_minus_1 + f_r_minus_2, expected_result);
 
         let expected_result = F::new(FFBn254Fr::from_u128(1));

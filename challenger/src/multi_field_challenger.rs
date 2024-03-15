@@ -1,6 +1,6 @@
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use alloc::string::String;
 
 use p3_field::{reduce_64, split_64, ExtensionField, Field, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash};
@@ -8,7 +8,7 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
 /// Given a cryptographic permutation that operates on `[Field; WIDTH]`, produces a challenger
-/// that can observe and sample `PrimeField64` elements.  Can also observe values with 
+/// that can observe and sample `PrimeField64` elements.  Can also observe values with
 /// `Hash<F, PF, N>` type.
 #[derive(Clone)]
 pub struct MultiFieldChallenger<F, PF, P, const WIDTH: usize>
@@ -30,8 +30,7 @@ where
     PF: Field,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
-    pub fn new(permutation: P) -> Result<Self, String>
-    {
+    pub fn new(permutation: P) -> Result<Self, String> {
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
@@ -101,7 +100,8 @@ where
     }
 }
 
-impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<[F; N]> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<[F; N]>
+    for MultiFieldChallenger<F, PF, P, WIDTH>
 where
     F: PrimeField64,
     PF: PrimeField,
@@ -175,7 +175,7 @@ impl<F, PF, P, const WIDTH: usize> CanSampleBits<usize> for MultiFieldChallenger
 where
     F: PrimeField64,
     PF: PrimeField,
-    P: CryptographicPermutation<[PF; WIDTH]>
+    P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         debug_assert!(bits < (usize::BITS as usize));

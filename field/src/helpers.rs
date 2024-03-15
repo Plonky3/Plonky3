@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
+
 use num_traits::identities::Zero;
 
 use crate::field::Field;
@@ -131,7 +132,7 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 
 /// Given a slice of SF elements, reduce them to a TF element.
 pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
-    let alpha =  TF::from_canonical_u64(SF::ORDER_U64);
+    let alpha = TF::from_canonical_u64(SF::ORDER_U64);
 
     let mut res = TF::zero();
     for val in vals.iter().rev() {
@@ -143,7 +144,7 @@ pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
 
 /// Given a SF elements, split them to a vec of TF elements.
 pub fn split_64<SF: PrimeField, TF: PrimeField64>(val: SF) -> Vec<TF> {
-    let alpha =  &SF::from_canonical_u64(TF::ORDER_U64).as_canonical_biguint();
+    let alpha = &SF::from_canonical_u64(TF::ORDER_U64).as_canonical_biguint();
 
     let mut res = Vec::new();
     let mut val = val.as_canonical_biguint();

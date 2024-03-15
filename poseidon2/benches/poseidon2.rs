@@ -2,7 +2,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
-use p3_bn254_fr::{DiffusionMatrixBN254, Bn254Fr};
+use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::PrimeField;
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_poseidon2::{DiffusionPermutation, Poseidon2};

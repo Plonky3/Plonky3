@@ -1,5 +1,6 @@
 use alloc::string::String;
 use core::marker::PhantomData;
+
 use itertools::Itertools;
 use p3_field::{reduce_64, Field, PrimeField, PrimeField64};
 
@@ -42,22 +43,29 @@ where
     }
 }
 
-
-/// A padding-free, overwrite-mode sponge function.  Accepts `PrimeField64` elements and has a permutation 
+/// A padding-free, overwrite-mode sponge function.  Accepts `PrimeField64` elements and has a permutation
 /// using a different `Field` type.
 ///
 /// `WIDTH` is the sponge's rate plus the sponge's capacity.
 #[derive(Clone)]
-pub struct PaddingFreeSpongeMultiField<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize> {
+pub struct PaddingFreeSpongeMultiField<
+    F,
+    PF,
+    P,
+    const WIDTH: usize,
+    const RATE: usize,
+    const OUT: usize,
+> {
     permutation: P,
     num_f_elms: usize,
     _phantom: PhantomData<(F, PF)>,
 }
 
-impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize> PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
+    PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField64,
-    PF: Field
+    PF: Field,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
         if F::order() >= PF::order() {
@@ -65,12 +73,16 @@ where
         }
 
         let num_f_elms = PF::bits() / F::bits();
-        Ok(Self { permutation, num_f_elms, _phantom: PhantomData })
+        Ok(Self {
+            permutation,
+            num_f_elms,
+            _phantom: PhantomData,
+        })
     }
 }
 
-impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize> CryptographicHasher<F, [PF; OUT]>
-    for PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
+    CryptographicHasher<F, [PF; OUT]> for PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField64,
     PF: PrimeField + Default + Copy,
@@ -82,7 +94,10 @@ where
     {
         let mut state = [PF::default(); WIDTH];
         for block_chunk in &input.into_iter().chunks(RATE) {
-            for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms)).into_iter().enumerate() {
+            for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
+                .into_iter()
+                .enumerate()
+            {
                 state[chunk_id] = reduce_64(&chunk.collect_vec());
             }
             state = self.permutation.permute(state);

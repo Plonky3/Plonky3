@@ -2,23 +2,19 @@
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
 
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
 
+use lazy_static::lazy_static;
 use p3_field::AbstractField;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
-use lazy_static::lazy_static;
-
 use crate::Bn254Fr;
 
 lazy_static! {
-    pub static ref MAT_DIAG3_M_1: Vec<Bn254Fr> = vec![
-        Bn254Fr::one(),
-        Bn254Fr::one(),
-        Bn254Fr::two(),
-    ];
+    pub static ref MAT_DIAG3_M_1: Vec<Bn254Fr> =
+        vec![Bn254Fr::one(), Bn254Fr::one(), Bn254Fr::two(),];
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,7 +26,7 @@ impl<AF: AbstractField<F = Bn254Fr>> Permutation<[AF; 3]> for DiffusionMatrixBN2
     }
 }
 
-impl<AF: AbstractField<F = Bn254Fr>> DiffusionPermutation<AF, 3> for DiffusionMatrixBN254{}
+impl<AF: AbstractField<F = Bn254Fr>> DiffusionPermutation<AF, 3> for DiffusionMatrixBN254 {}
 
 #[cfg(test)]
 mod tests {
@@ -44,9 +40,8 @@ mod tests {
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
     use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
 
-    use crate::FFBn254Fr;
-
     use super::*;
+    use crate::FFBn254Fr;
 
     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254Fr {
         let bytes = input.into_bigint().to_bytes_le();
@@ -60,11 +55,12 @@ mod tests {
         let value = FFBn254Fr::from_repr(res);
 
         if value.is_some().into() {
-            Bn254Fr { value: value.unwrap() }
+            Bn254Fr {
+                value: value.unwrap(),
+            }
         } else {
             panic!("Invalid field element")
         }
-
     }
 
     #[test]
@@ -95,12 +91,8 @@ mod tests {
             .collect();
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> = Poseidon2::new(
-            ROUNDS_F,
-            ROUNDS_P,
-            round_constants,
-            DiffusionMatrixBN254,
-        );
+        let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> =
+            Poseidon2::new(ROUNDS_F, ROUNDS_P, round_constants, DiffusionMatrixBN254);
 
         // Generate random input and convert to both Goldilocks field formats.
         let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();
@@ -111,7 +103,6 @@ mod tests {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-
 
         // Run reference implementation.
         let output_ref = poseidon2_ref.permutation(&input_ark_ff);

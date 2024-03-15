@@ -63,7 +63,6 @@ where
     AF::F: PrimeField,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-
         match WIDTH {
             2 => {
                 let sum = state[0].clone() + state[1].clone();
@@ -78,7 +77,7 @@ where
                 state[2] += sum;
             }
 
-            4 | 8 | 12 | 16 | 20 | 24  => {
+            4 | 8 | 12 | 16 | 20 | 24 => {
                 // First, we apply M_4 to each consecutive four elements of the state.
                 // In Appendix B's terminology, this replaces each x_i with x_i'.
                 for i in (0..WIDTH).step_by(4) {

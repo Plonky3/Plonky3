@@ -16,8 +16,8 @@ use core::array;
 pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
-use p3_field::{AbstractExtensionField, Field};
 pub use multi_field_challenger::*;
+use p3_field::{AbstractExtensionField, Field};
 pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {
