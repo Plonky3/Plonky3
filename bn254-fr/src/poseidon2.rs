@@ -2,19 +2,23 @@
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
 
-use alloc::vec;
-use alloc::vec::Vec;
+use std::sync::OnceLock;
 
-use lazy_static::lazy_static;
 use p3_field::AbstractField;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
 use crate::Bn254Fr;
 
-lazy_static! {
-    pub static ref MAT_DIAG3_M_1: Vec<Bn254Fr> =
-        vec![Bn254Fr::one(), Bn254Fr::one(), Bn254Fr::two(),];
+#[inline]
+fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
+    static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; 3]> = OnceLock::new();
+    MAT_DIAG3_M_1.get_or_init(|| {
+        [Bn254Fr::one(),
+         Bn254Fr::one(),
+         Bn254Fr::two()
+        ]
+    })
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,7 +26,7 @@ pub struct DiffusionMatrixBN254;
 
 impl<AF: AbstractField<F = Bn254Fr>> Permutation<[AF; 3]> for DiffusionMatrixBN254 {
     fn permute_mut(&self, state: &mut [AF; 3]) {
-        matmul_internal::<Bn254Fr, AF, 3>(state, MAT_DIAG3_M_1.as_slice().try_into().unwrap());
+        matmul_internal::<Bn254Fr, AF, 3>(state, *get_diffusion_matrix_3());
     }
 }
 
