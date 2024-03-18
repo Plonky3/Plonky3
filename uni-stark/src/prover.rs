@@ -177,7 +177,7 @@ where
             (0..PackedVal::<SC>::WIDTH).map(move |idx_in_packing| {
                 let quotient_value = (0..<SC::Challenge as AbstractExtensionField<Val<SC>>>::D)
                     .map(|coeff_idx| quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing])
-                    .collect_vec();
+                    .collect::<Vec<_>>();
                 SC::Challenge::from_base_slice(&quotient_value)
             })
         })
