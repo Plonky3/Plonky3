@@ -1,4 +1,3 @@
-use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
@@ -7,8 +6,8 @@ use p3_field::{AbstractField, Field};
 
 /// An affine function over columns in a PAIR.
 #[derive(Clone, Debug)]
-pub struct VirtualPairCol<'a, F: Field> {
-    column_weights: Cow<'a, [(PairCol, F)]>,
+pub struct VirtualPairCol<F: Field> {
+    column_weights: Vec<(PairCol, F)>,
     constant: F,
 }
 
@@ -28,24 +27,10 @@ impl PairCol {
     }
 }
 
-impl<'a, F: Field> VirtualPairCol<'a, F> {
-    pub const fn new(column_weights: Cow<'a, [(PairCol, F)]>, constant: F) -> Self {
+impl<F: Field> VirtualPairCol<F> {
+    pub const fn new(column_weights: Vec<(PairCol, F)>, constant: F) -> Self {
         Self {
             column_weights,
-            constant,
-        }
-    }
-
-    pub const fn new_owned(column_weights: Vec<(PairCol, F)>, constant: F) -> Self {
-        Self {
-            column_weights: Cow::Owned(column_weights),
-            constant,
-        }
-    }
-
-    pub const fn new_borrowed(column_weights: &'a [(PairCol, F)], constant: F) -> Self {
-        Self {
-            column_weights: Cow::Borrowed(column_weights),
             constant,
         }
     }
@@ -78,7 +63,7 @@ impl<'a, F: Field> VirtualPairCol<'a, F> {
     #[must_use]
     pub fn constant(x: F) -> Self {
         Self {
-            column_weights: Cow::Owned(vec![]),
+            column_weights: vec![],
             constant: x,
         }
     }
@@ -86,7 +71,7 @@ impl<'a, F: Field> VirtualPairCol<'a, F> {
     #[must_use]
     pub fn single(column: PairCol) -> Self {
         Self {
-            column_weights: Cow::Owned(vec![(column, F::one())]),
+            column_weights: vec![(column, F::one())],
             constant: F::zero(),
         }
     }
