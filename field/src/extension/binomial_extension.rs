@@ -6,6 +6,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
+use num_bigint::BigUint;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
@@ -223,6 +224,10 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         Self {
             value: self.value.map(|x| x.halve()),
         }
+    }
+
+    fn order() -> BigUint {
+        F::order().pow(D as u32)
     }
 }
 

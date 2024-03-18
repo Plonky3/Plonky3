@@ -2,6 +2,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use num_bigint::BigUint;
 use p3_field::{
     exp_1725656503, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
     PrimeField32, PrimeField64, TwoAdicField,
@@ -264,9 +265,18 @@ impl Field for BabyBear {
             value: halve_u32::<P>(self.value),
         }
     }
+
+    #[inline]
+    fn order() -> BigUint {
+        P.into()
+    }
 }
 
-impl PrimeField for BabyBear {}
+impl PrimeField for BabyBear {
+    fn as_canonical_biguint(&self) -> BigUint {
+        <Self as PrimeField32>::as_canonical_u32(self).into()
+    }
+}
 
 impl PrimeField64 for BabyBear {
     const ORDER_U64: u64 = <Self as PrimeField32>::ORDER_U32 as u64;
