@@ -69,8 +69,8 @@ fn main() -> Result<(), VerificationError> {
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
 
-    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
+    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof)
+    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
 }
