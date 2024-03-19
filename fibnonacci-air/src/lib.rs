@@ -41,11 +41,17 @@ impl<F> BaseAir<F> for FibonacciAir {
 impl<AB: AirBuilder> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
+        let pis = builder.public_inputs();
 
         let local: &FibonacciRow<AB::Var> = main.row_slice(0).borrow();
         let next: &FibonacciRow<AB::Var> = main.row_slice(1).borrow();
 
-        builder.when_first_row().assert_zero(local.index);
+        let mut when_first_row = builder.when_first_row();
+
+        when_first_row.assert_eq(local.left, pis[0].clone());
+        when_first_row.assert_eq(local.right, pis[1].clone());
+
+        when_first_row.assert_zero(local.index);
 
         let mut when_transition = builder.when_transition();
 

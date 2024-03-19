@@ -1,4 +1,5 @@
 use alloc::vec;
+use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir, TwoRowMatrixView};
@@ -16,6 +17,7 @@ pub fn verify<SC, A>(
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
+    public_inputs: &Vec<Val<SC>>,
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
@@ -29,7 +31,7 @@ where
     } = proof;
 
     let degree = 1 << degree_bits;
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_inputs.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -113,11 +115,14 @@ where
 
     let sels = trace_domain.selectors_at_point(zeta);
 
+    let pis = public_inputs.iter().map(|v| SC::Challenge::from_base(*v)).collect_vec();
+
     let mut folder = VerifierConstraintFolder {
         main: TwoRowMatrixView {
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
         },
+        public_inputs: &pis,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
         is_transition: sels.is_transition,

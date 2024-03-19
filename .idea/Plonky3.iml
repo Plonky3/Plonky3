@@ -49,6 +49,7 @@
       <sourceFolder url="file://$MODULE_DIR$/util/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/fibnonacci-air/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/fibnonacci-air/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/experiment/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
@@ -46,6 +47,8 @@ pub trait AirBuilder: Sized {
     type M: MatrixRowSlices<Self::Var>;
 
     fn main(&self) -> Self::M;
+
+    fn public_inputs(&self) -> Vec<Self::F>;
 
     fn is_first_row(&self) -> Self::Expr;
     fn is_last_row(&self) -> Self::Expr;
@@ -162,6 +165,10 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
     fn main(&self) -> Self::M {
         self.inner.main()
+    }
+
+    fn public_inputs(&self) -> Vec<Self::F> {
+        self.inner.public_inputs().clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {

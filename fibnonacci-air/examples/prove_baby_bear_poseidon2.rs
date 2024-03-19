@@ -7,7 +7,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::Field;
+use p3_field::{AbstractField, Field};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
@@ -46,7 +46,7 @@ fn main() -> Result<(), VerificationError> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
-    let trace = fibnonacci_air::generate_trace_rows::<Val>(1, 1, (1 << 5) - 1);
+    let trace = fibnonacci_air::generate_trace_rows::<Val>(123, 21, (1 << 5) - 1);
 
     let fri_config = FriConfig {
         log_blowup: 3,
@@ -62,10 +62,9 @@ fn main() -> Result<(), VerificationError> {
 
     let mut challenger = Challenger::new(perm.clone());
 
-    let proof = prove::<MyConfig, _>(&config, &FibonacciAir {}, &mut challenger, trace);
-    let proof_json = serde_json::to_string(&proof).expect("failed to serialize");
-    println!("proof json {} bytes", proof_json.as_bytes().len());
+    let pis = vec![ BabyBear::from_canonical_u64(123), BabyBear::from_canonical_u64(21)];
+    let proof = prove::<MyConfig, _>(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
 
     let mut challenger = Challenger::new(perm);
-    verify(&config, &FibonacciAir {}, &mut challenger, &proof)
+    verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis)
 }

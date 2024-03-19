@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use p3_air::{AirBuilder, TwoRowMatrixView};
 use p3_field::{AbstractField, Field};
 
@@ -5,6 +7,7 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, PackedVal<SC>>,
+    pub public_inputs: &'a Vec<Val<SC>>,
     pub is_first_row: PackedVal<SC>,
     pub is_last_row: PackedVal<SC>,
     pub is_transition: PackedVal<SC>,
@@ -14,6 +17,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
 
 pub struct VerifierConstraintFolder<'a, Challenge> {
     pub main: TwoRowMatrixView<'a, Challenge>,
+    pub public_inputs: &'a Vec<Challenge>,
     pub is_first_row: Challenge,
     pub is_last_row: Challenge,
     pub is_transition: Challenge,
@@ -29,6 +33,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     fn main(&self) -> Self::M {
         self.main
+    }
+
+    fn public_inputs(&self) -> Vec<Self::F> {
+        self.public_inputs.clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -62,6 +70,10 @@ impl<'a, Challenge: Field> AirBuilder for VerifierConstraintFolder<'a, Challenge
 
     fn main(&self) -> Self::M {
         self.main
+    }
+
+    fn public_inputs(&self) -> Vec<Self::F> {
+        self.public_inputs.clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {

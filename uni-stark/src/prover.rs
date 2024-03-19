@@ -1,22 +1,23 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
+use tracing::{info_span, instrument};
+
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{AbstractExtensionField, AbstractField, PackedValue};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
-use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof, ProverConstraintFolder,
     StarkGenericConfig, Val,
 };
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 
 #[instrument(skip_all)]
 pub fn prove<
@@ -28,18 +29,19 @@ pub fn prove<
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<Val<SC>>,
+    public_inputs: &Vec<Val<SC>>,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace);
+    crate::check_constraints::check_constraints(air, &trace, public_inputs);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_inputs.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -58,6 +60,7 @@ where
 
     let quotient_values = quotient_values(
         air,
+        public_inputs,
         trace_domain,
         quotient_domain,
         trace_on_quotient_domain,
@@ -111,6 +114,7 @@ where
 #[instrument(name = "compute quotient polynomial", skip_all)]
 fn quotient_values<SC, A, Mat>(
     air: &A,
+    public_inputs: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: Mat,
@@ -164,6 +168,7 @@ where
                     local: &local,
                     next: &next,
                 },
+                public_inputs,
                 is_first_row,
                 is_last_row,
                 is_transition,
