@@ -17,9 +17,14 @@ mod zerofier_coset;
 #[cfg(debug_assertions)]
 mod check_constraints;
 
+#[cfg(debug_assertions)]
+pub use check_constraints::*;
 pub use config::*;
 pub use folder::*;
 pub use proof::*;
 pub use prover::*;
+pub use symbolic_builder::*;
+pub use symbolic_expression::*;
+pub use symbolic_variable::*;
 pub use verifier::*;
 pub use zerofier_coset::*;

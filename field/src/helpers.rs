@@ -2,8 +2,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
+use num_traits::identities::Zero;
+
 use crate::field::Field;
-use crate::{AbstractField, TwoAdicField};
+use crate::{AbstractField, PrimeField, PrimeField64, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -58,7 +60,7 @@ where
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
 
-/// Extend a field `AF` element `x` to an arry of length `D`
+/// Extend a field `AF` element `x` to an array of length `D`
 /// by filling zeros.
 pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
     let mut arr = array::from_fn(|_| AF::zero());
@@ -126,4 +128,34 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
     } else {
         shr_corr
     }
+}
+
+/// Given a slice of SF elements, reduce them to a TF element.
+pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
+    let alpha = TF::from_canonical_u64(SF::ORDER_U64);
+
+    let mut res = TF::zero();
+    for val in vals.iter().rev() {
+        res = res * alpha + TF::from_canonical_u64(val.as_canonical_u64());
+    }
+
+    res
+}
+
+/// Given a SF elements, split them to a vec of TF elements.
+pub fn split_64<SF: PrimeField, TF: PrimeField64>(val: SF) -> Vec<TF> {
+    let alpha = &SF::from_canonical_u64(TF::ORDER_U64).as_canonical_biguint();
+
+    let mut res = Vec::new();
+    let mut val = val.as_canonical_biguint();
+
+    while !val.is_zero() {
+        let rem = &val % alpha;
+        val /= alpha;
+
+        // Can assume there is one u64 digit since SF is PrimeField64.
+        res.push(TF::from_canonical_u64(rem.to_u64_digits()[0]));
+    }
+
+    res
 }

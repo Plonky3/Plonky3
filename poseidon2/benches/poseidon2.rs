@@ -2,7 +2,8 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
-use p3_field::PrimeField64;
+use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
+use p3_field::PrimeField;
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_poseidon2::{DiffusionPermutation, Poseidon2};
 use p3_symmetric::Permutation;
@@ -16,11 +17,13 @@ fn bench_poseidon2(c: &mut Criterion) {
     poseidon2::<Goldilocks, DiffusionMatrixGoldilocks, 8, 7>(c);
     poseidon2::<Goldilocks, DiffusionMatrixGoldilocks, 12, 7>(c);
     poseidon2::<Goldilocks, DiffusionMatrixGoldilocks, 16, 7>(c);
+
+    poseidon2::<Bn254Fr, DiffusionMatrixBN254, 3, 5>(c);
 }
 
 fn poseidon2<F, Diffusion, const WIDTH: usize, const D: u64>(c: &mut Criterion)
 where
-    F: PrimeField64,
+    F: PrimeField,
     Standard: Distribution<F>,
     Diffusion: DiffusionPermutation<F, WIDTH> + Default,
 {

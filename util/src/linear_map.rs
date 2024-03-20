@@ -4,7 +4,8 @@ use core::mem;
 use crate::VecExt;
 
 /// O(n) Vec-backed map for keys that only implement Eq.
-/// Only use this for a very small number of keys.
+/// Only use this for a very small number of keys, operations
+/// on it can easily become O(n^2).
 pub struct LinearMap<K, V>(Vec<(K, V)>);
 
 impl<K, V> Default for LinearMap<K, V> {
@@ -23,6 +24,7 @@ impl<K: Eq, V> LinearMap<K, V> {
     pub fn get_mut(&mut self, k: &K) -> Option<&mut V> {
         self.0.iter_mut().find(|(kk, _)| kk == k).map(|(_, v)| v)
     }
+    /// This is O(n), because we check for an existing entry.
     pub fn insert(&mut self, k: K, mut v: V) -> Option<V> {
         if let Some(vv) = self.get_mut(&k) {
             mem::swap(&mut v, vv);
@@ -47,6 +49,7 @@ impl<K: Eq, V> LinearMap<K, V> {
 }
 
 impl<K: Eq, V> FromIterator<(K, V)> for LinearMap<K, V> {
+    /// This calls `insert` in a loop, so is O(n^2)!!
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         let mut me = LinearMap::default();
         for (k, v) in iter {

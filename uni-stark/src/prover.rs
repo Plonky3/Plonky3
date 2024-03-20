@@ -70,8 +70,6 @@ where
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
     let qc_domains = quotient_domain.split_domains(quotient_degree);
 
-    // let quotient_chunks = quotient_domain.decompose(quotient_flat, degree);
-
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
         .in_scope(|| pcs.commit(izip!(qc_domains, quotient_chunks).collect_vec()));
     challenger.observe(quotient_commit.clone());
@@ -82,7 +80,7 @@ where
     };
 
     let zeta: SC::Challenge = challenger.sample();
-    let zeta_next = trace_domain.next_point(zeta);
+    let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let (opened_values, opening_proof) = pcs.open(
         vec![
@@ -184,7 +182,7 @@ where
             (0..PackedVal::<SC>::WIDTH).map(move |idx_in_packing| {
                 let quotient_value = (0..<SC::Challenge as AbstractExtensionField<Val<SC>>>::D)
                     .map(|coeff_idx| quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing])
-                    .collect_vec();
+                    .collect::<Vec<_>>();
                 SC::Challenge::from_base_slice(&quotient_value)
             })
         })

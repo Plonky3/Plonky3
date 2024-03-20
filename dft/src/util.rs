@@ -1,23 +1,24 @@
 use alloc::vec;
 
-use p3_field::Field;
+use p3_field::{Field, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::MatrixRowSlicesMut;
 
 /// Divide each coefficient of the given matrix by its height.
-pub(crate) fn divide_by_height<F: Field>(mat: &mut RowMajorMatrix<F>) {
+pub fn divide_by_height<F: Field>(mat: &mut impl MatrixRowSlicesMut<F>) {
     let h = mat.height();
     let h_inv = F::from_canonical_usize(h).inverse();
-    let (prefix, shorts, suffix) = unsafe { mat.values.align_to_mut::<F::Packing>() };
-    prefix.iter_mut().for_each(|x| *x *= h_inv);
-    shorts.iter_mut().for_each(|x| *x *= h_inv);
-    suffix.iter_mut().for_each(|x| *x *= h_inv);
+    for r in 0..h {
+        let (packed, suffix) = F::Packing::pack_slice_with_suffix_mut(mat.row_slice_mut(r));
+        packed.iter_mut().for_each(|x| *x *= h_inv);
+        suffix.iter_mut().for_each(|x| *x *= h_inv);
+    }
 }
 
 /// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,
 /// so in actuality we're interleaving zero rows.
 #[inline]
-pub(crate) fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: usize) {
+pub fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: usize) {
     if added_bits == 0 {
         return;
     }

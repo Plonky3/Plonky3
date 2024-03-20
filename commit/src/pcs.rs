@@ -31,6 +31,7 @@ where
 
     type Error: Debug;
 
+    /// This should return a coset domain (s.t. Domain::next_point returns Some)
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
     #[allow(clippy::type_complexity)]

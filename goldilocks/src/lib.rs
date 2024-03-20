@@ -15,6 +15,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 pub use mds::*;
+use num_bigint::BigUint;
 use p3_field::{
     exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
     PrimeField, PrimeField64, TwoAdicField,
@@ -224,9 +225,18 @@ impl Field for Goldilocks {
     fn halve(&self) -> Self {
         Goldilocks::new(halve_u64::<P>(self.value))
     }
+
+    #[inline]
+    fn order() -> BigUint {
+        P.into()
+    }
 }
 
-impl PrimeField for Goldilocks {}
+impl PrimeField for Goldilocks {
+    fn as_canonical_biguint(&self) -> BigUint {
+        <Self as PrimeField64>::as_canonical_u64(self).into()
+    }
+}
 
 impl PrimeField64 for Goldilocks {
     const ORDER_U64: u64 = P;

@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use p3_util::log2_ceil_u64;
+use num_bigint::BigUint;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -145,6 +145,14 @@ pub trait AbstractField:
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
+
+    fn try_div<Rhs>(self, rhs: Rhs) -> Option<<Self as Mul<Rhs>>::Output>
+    where
+        Rhs: Field,
+        Self: Mul<Rhs>,
+    {
+        rhs.try_inverse().map(|inv| self * inv)
+    }
 }
 
 /// An element of a finite field.
@@ -218,20 +226,22 @@ pub trait Field:
             .expect("Cannot divide by 2 in fields with characteristic 2");
         *self * half
     }
+
+    fn order() -> BigUint;
+
+    #[inline]
+    fn bits() -> usize {
+        Self::order().bits() as usize
+    }
 }
 
-pub trait PrimeField: Field + Ord {}
+pub trait PrimeField: Field + Ord {
+    fn as_canonical_biguint(&self) -> BigUint;
+}
 
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
-
-    // TODO: Move to Field itself? Limiting it to `PrimeField64` seems unusual.
-    #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
-    fn bits() -> usize {
-        log2_ceil_u64(Self::ORDER_U64) as usize
-    }
 
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;

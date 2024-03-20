@@ -63,6 +63,11 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
+        let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
+        (Self::pack_slice_mut(packed), suffix)
+    }
+
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
         assert!(mem::align_of::<Self>() >= mem::align_of::<Self::Value>());
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();

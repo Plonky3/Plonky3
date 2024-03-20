@@ -7,6 +7,7 @@ use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
+use tracing::instrument;
 
 use crate::butterflies::dit_butterfly;
 use crate::util::bit_reversed_zero_pad;
@@ -46,6 +47,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         mat.bit_reverse_rows()
     }
 
+    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
     fn coset_lde_batch(
         &self,
         mut mat: RowMajorMatrix<F>,
