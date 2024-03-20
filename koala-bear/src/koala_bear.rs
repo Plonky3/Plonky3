@@ -290,36 +290,35 @@ impl TwoAdicField for KoalaBear {
     const TWO_ADICITY: usize = 24;
 
     fn two_adic_generator(bits: usize) -> Self {
-        todo!()
-        // assert!(bits <= Self::TWO_ADICITY);
-        // match bits {
-        //     0 => Self::one(),
-        //     1 => Self::from_canonical_u32(0x78000000),
-        //     2 => Self::from_canonical_u32(0x67055c21),
-        //     3 => Self::from_canonical_u32(0x5ee99486),
-        //     4 => Self::from_canonical_u32(0xbb4c4e4),
-        //     5 => Self::from_canonical_u32(0x2d4cc4da),
-        //     6 => Self::from_canonical_u32(0x669d6090),
-        //     7 => Self::from_canonical_u32(0x17b56c64),
-        //     8 => Self::from_canonical_u32(0x67456167),
-        //     9 => Self::from_canonical_u32(0x688442f9),
-        //     10 => Self::from_canonical_u32(0x145e952d),
-        //     11 => Self::from_canonical_u32(0x4fe61226),
-        //     12 => Self::from_canonical_u32(0x4c734715),
-        //     13 => Self::from_canonical_u32(0x11c33e2a),
-        //     14 => Self::from_canonical_u32(0x62c3d2b1),
-        //     15 => Self::from_canonical_u32(0x77cad399),
-        //     16 => Self::from_canonical_u32(0x54c131f4),
-        //     17 => Self::from_canonical_u32(0x4cabd6a6),
-        //     18 => Self::from_canonical_u32(0x5cf5713f),
-        //     19 => Self::from_canonical_u32(0x3e9430e8),
-        //     20 => Self::from_canonical_u32(0xba067a3),
-        //     21 => Self::from_canonical_u32(0x18adc27d),
-        //     22 => Self::from_canonical_u32(0x21fd55bc),
-        //     23 => Self::from_canonical_u32(0x4b859b3d),
-        //     24 => Self::from_canonical_u32(0x3bd57996),
-        //     _ => unreachable!("Already asserted that bits <= Self::TWO_ADICITY"),
-        // }
+        assert!(bits <= Self::TWO_ADICITY);
+        match bits {
+            0 => Self::one(),
+            1 => Self::from_canonical_u32(0x7f000000),
+            2 => Self::from_canonical_u32(0x7e010002),
+            3 => Self::from_canonical_u32(0x6832fe4a),
+            4 => Self::from_canonical_u32(0x8dbd69c),
+            5 => Self::from_canonical_u32(0xa28f031),
+            6 => Self::from_canonical_u32(0x5c4a5b99),
+            7 => Self::from_canonical_u32(0x29b75a80),
+            8 => Self::from_canonical_u32(0x17668b8a),
+            9 => Self::from_canonical_u32(0x27ad539b),
+            10 => Self::from_canonical_u32(0x334d48c7),
+            11 => Self::from_canonical_u32(0x7744959c),
+            12 => Self::from_canonical_u32(0x768fc6fa),
+            13 => Self::from_canonical_u32(0x303964b2),
+            14 => Self::from_canonical_u32(0x3e687d4d),
+            15 => Self::from_canonical_u32(0x45a60e61),
+            16 => Self::from_canonical_u32(0x6e2f4d7a),
+            17 => Self::from_canonical_u32(0x163bd499),
+            18 => Self::from_canonical_u32(0x6c4a8a45),
+            19 => Self::from_canonical_u32(0x143ef899),
+            20 => Self::from_canonical_u32(0x514ddcad),
+            21 => Self::from_canonical_u32(0x484ef19b),
+            22 => Self::from_canonical_u32(0x205d63c3),
+            23 => Self::from_canonical_u32(0x68e7dd49),
+            24 => Self::from_canonical_u32(0x6ac49f88),
+            _ => unreachable!("Already asserted that bits <= Self::TWO_ADICITY"),
+        }
     }
 }
 
@@ -483,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_koala_bear_two_adicity_generators() {
-        let base = KoalaBear::from_canonical_u32(0x1a427a41);
+        let base = KoalaBear::from_canonical_u32(0x6ac49f88);
         for bits in 0..=KoalaBear::TWO_ADICITY {
             assert_eq!(
                 KoalaBear::two_adic_generator(bits),
