@@ -78,7 +78,7 @@ where
     let trace = air.random_valid_trace(log_height, true);
 
     let mut p_challenger = challenger.clone();
-    let proof = prove(&config, &air, &mut p_challenger, trace);
+    let proof = prove(&config, &air, &mut p_challenger, trace, &vec![]);
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -87,7 +87,7 @@ where
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
     let mut v_challenger = challenger.clone();
-    verify(&config, &air, &mut v_challenger, &deserialized_proof)
+    verify(&config, &air, &mut v_challenger, &deserialized_proof, &vec![])
 }
 
 fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError> {
