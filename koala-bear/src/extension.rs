@@ -1,5 +1,5 @@
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use p3_field::{AbstractField, TwoAdicField, PrimeField32};
+use p3_field::{AbstractField, PrimeField32, TwoAdicField};
 
 use crate::KoalaBear;
 
@@ -29,14 +29,8 @@ impl HasTwoAdicBionmialExtension<2> for KoalaBear {
         assert!(bits <= 25);
 
         match bits {
-            25 => [
-                Self::zero(),
-                Self::from_canonical_u32(1759267465),
-            ],
-            _ => [
-                Self::two_adic_generator(bits),
-                Self::zero(),
-            ],
+            25 => [Self::zero(), Self::from_canonical_u32(1759267465)],
+            _ => [Self::two_adic_generator(bits), Self::zero()],
         }
     }
 }
@@ -112,10 +106,7 @@ mod test_quadratic_extension {
         assert_eq!(format!("{}", EF::two()), "2");
 
         assert_eq!(
-            format!(
-                "{}",
-                EF::from_base_slice(&[F::two(), F::one()])
-            ),
+            format!("{}", EF::from_base_slice(&[F::two(), F::one()])),
             "2 + X"
         );
     }

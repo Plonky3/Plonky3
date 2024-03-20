@@ -10,8 +10,8 @@
 
 extern crate alloc;
 
-mod koala_bear;
 mod extension;
+mod koala_bear;
 // mod mds;
 // mod poseidon2;
 

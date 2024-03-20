@@ -20,7 +20,6 @@ const P: u32 = 0x7f000001;
 
 const MONTY_BITS: u32 = 32;
 
-
 // We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
 // (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
 const MONTY_MU: u32 = 0x81000001;
@@ -32,7 +31,7 @@ const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // `PackedKoalaBearNeon` relies on this!
 pub struct KoalaBear {
-    // This is `pub(crate)` just for tests. If you're accessing `value` outside of those, you're
+    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
     pub(crate) value: u32,
 }
@@ -230,9 +229,7 @@ impl Field for KoalaBear {
 
         // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
         // Here p-2 = 2130706431 = 1111110111111111111111111111111_2
-        // Uses 29 Squares + 7 Multiplications => 37 Operations total.
-
-        // 24 - x divisible by 6 + x -- x = 4!!
+        // Uses 29 Squares + 7 Multiplications => 36 Operations total.
 
         let p1 = *self;
         let p10 = p1.square();
@@ -254,7 +251,6 @@ impl Field for KoalaBear {
 
     #[inline]
     fn halve(&self) -> Self {
-        // CHECK THIS.
         KoalaBear {
             value: halve_u32::<P>(self.value),
         }
@@ -331,7 +327,6 @@ impl Add for KoalaBear {
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        // CHECK GODBOLT SAME AS BB.
         let mut sum = self.value + rhs.value;
         let (corr_sum, over) = sum.overflowing_sub(P);
         if !over {
@@ -356,7 +351,7 @@ impl Sum for KoalaBear {
 
         // This sum will not overflow so long as iter.len() < 2^33.
         let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
-        KoalaBear {
+        Self {
             value: (sum % P as u64) as u32,
         }
     }
@@ -367,11 +362,10 @@ impl Sub for KoalaBear {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        // CHECK GODBOLT SAME AS BB.
         let (mut diff, over) = self.value.overflowing_sub(rhs.value);
         let corr = if over { P } else { 0 };
         diff = diff.wrapping_add(corr);
-        KoalaBear { value: diff }
+        Self { value: diff }
     }
 }
 
@@ -466,7 +460,6 @@ fn from_monty(x: u32) -> u32 {
 #[inline]
 #[must_use]
 fn monty_reduce(x: u64) -> u32 {
-    // CHECK GODBOLT SAME AS BB.
     let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
     let u = t * (P as u64);
 
