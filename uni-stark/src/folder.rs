@@ -17,7 +17,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
 
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, SC::Challenge>,
-    pub public_values: &'a Vec<SC::Challenge>,
+    pub public_values: &'a Vec<Val<SC>>,
     pub is_first_row: SC::Challenge,
     pub is_last_row: SC::Challenge,
     pub is_transition: SC::Challenge,

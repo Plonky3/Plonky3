@@ -115,14 +115,12 @@ where
 
     let sels = trace_domain.selectors_at_point(zeta);
 
-    let pis = public_values.iter().map(|v| SC::Challenge::from_base(*v)).collect_vec();
-
     let mut folder = VerifierConstraintFolder {
         main: TwoRowMatrixView {
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
         },
-        public_values: &pis,
+        public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
         is_transition: sels.is_transition,
