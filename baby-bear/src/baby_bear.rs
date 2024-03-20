@@ -12,6 +12,7 @@ use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Baby Bear prime
+/// This is the unqiue 31-bit prime with the highest possible 2 adicity (27). 
 const P: u32 = 0x78000001;
 
 // We want a different set of parameters on ARM/NEON than elsewhere. In particular, we want ARM to

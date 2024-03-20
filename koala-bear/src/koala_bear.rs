@@ -11,7 +11,11 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// The Koala Bear prime
+/// The KoalaBear prime: 2^31 - 2^24 + 1
+/// This is a 31-bit prime with the highest possible two aditicy if we additionally demand that
+/// the cube map (x -> x^3) is an automorphism of the multiplicative group.
+/// Its not unique, as there is one other option with equal 2 adicity: 2^30 + 2^27 + 2^24 + 1.
+/// There is also one 29-bit prime with higher two adicity which might be appropriate for some applications: 2^29 - 2^26 + 1.
 const P: u32 = 0x7f000001;
 
 const MONTY_BITS: u32 = 32;
