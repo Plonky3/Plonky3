@@ -197,15 +197,16 @@ where
             .iter()
             .map(|(data, points)| (self.mmcs.get_matrices(data), points))
             .collect_vec();
-
-        let max_width = mats_and_points
+        let mats = mats_and_points
             .iter()
             .flat_map(|(mats, _)| mats)
-            .map(|m| m.width())
-            .max()
-            .unwrap();
+            .collect_vec();
 
-        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, max_width);
+        let global_max_width = mats.iter().map(|m| m.width()).max().unwrap();
+        let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+        let log_global_max_height = log2_strict_usize(global_max_height);
+
+        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, global_max_width);
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
@@ -272,8 +273,11 @@ where
                 rounds
                     .iter()
                     .map(|(data, _)| {
-                        // needs to recombine decomposed openings.. or something...
-                        let (opened_values, opening_proof) = self.mmcs.open_batch(index, data);
+                        let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                        let bits_reduced = log_global_max_height - log_max_height;
+                        let reduced_index = index >> bits_reduced;
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_batch(reduced_index, data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
