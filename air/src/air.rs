@@ -48,8 +48,6 @@ pub trait AirBuilder: Sized {
 
     fn main(&self) -> Self::M;
 
-    fn public_inputs(&self) -> Vec<Self::F>;
-
     fn is_first_row(&self) -> Self::Expr;
     fn is_last_row(&self) -> Self::Expr;
     fn is_transition(&self) -> Self::Expr {
@@ -111,6 +109,10 @@ pub trait AirBuilder: Sized {
     }
 }
 
+pub trait AirBuilderWithPublicValues: AirBuilder {
+    fn public_values(&self) -> Vec<Self::F>;
+}
+
 pub trait PairBuilder: AirBuilder {
     fn preprocessed(&self) -> Self::M;
 }
@@ -165,10 +167,6 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
     fn main(&self) -> Self::M {
         self.inner.main()
-    }
-
-    fn public_inputs(&self) -> Vec<Self::F> {
-        self.inner.public_inputs().clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {

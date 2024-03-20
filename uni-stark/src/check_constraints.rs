@@ -1,12 +1,12 @@
 use alloc::vec::Vec;
-use p3_air::{Air, AirBuilder, TwoRowMatrixView};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices};
 use tracing::instrument;
 
 #[instrument(name = "check constraints", skip_all)]
-pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_inputs: &Vec<F>)
+pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &Vec<F>)
 where
     F: Field,
     A: for<'a> Air<DebugConstraintBuilder<'a, F>>,
@@ -26,7 +26,7 @@ where
         let mut builder = DebugConstraintBuilder {
             row_index: i,
             main,
-            public_inputs,
+            public_values,
             is_first_row: F::from_bool(i == 0),
             is_last_row: F::from_bool(i == height - 1),
             is_transition: F::from_bool(i != height - 1),
@@ -41,7 +41,7 @@ where
 pub struct DebugConstraintBuilder<'a, F: Field> {
     row_index: usize,
     main: TwoRowMatrixView<'a, F>,
-    public_inputs: &'a Vec<F>,
+    public_values: &'a Vec<F>,
     is_first_row: F,
     is_last_row: F,
     is_transition: F,
@@ -76,10 +76,6 @@ where
         self.main
     }
 
-    fn public_inputs(&self) -> Vec<Self::F> {
-        self.public_inputs.clone()
-    }
-
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         assert_eq!(
             x.into(),
@@ -97,5 +93,11 @@ where
             "values didn't match on row {}: {} != {}",
             self.row_index, x, y
         );
+    }
+}
+
+impl<'a, F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'a, F> {
+    fn public_values(&self) -> Vec<Self::F> {
+        self.public_values.clone()
     }
 }

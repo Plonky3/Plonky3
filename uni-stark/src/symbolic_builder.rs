@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_air::{Air, AirBuilder};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
@@ -12,13 +12,13 @@ use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
-pub fn get_log_quotient_degree<F, A>(air: &A, num_public_inputs: usize) -> usize
+pub fn get_log_quotient_degree<F, A>(air: &A, num_public_values: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree = get_max_constraint_degree(air, num_public_inputs).max(2);
+    let constraint_degree = get_max_constraint_degree(air, num_public_values).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the zerofier.
@@ -27,12 +27,12 @@ where
 }
 
 #[instrument(name = "infer constraint degree", skip_all, level = "debug")]
-pub fn get_max_constraint_degree<F, A>(air: &A, num_public_inputs: usize) -> usize
+pub fn get_max_constraint_degree<F, A>(air: &A, num_public_values: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    get_symbolic_constraints(air, num_public_inputs)
+    get_symbolic_constraints(air, num_public_values)
         .iter()
         .map(|c| c.degree_multiple())
         .max()
@@ -40,12 +40,12 @@ where
 }
 
 #[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
-pub fn get_symbolic_constraints<F, A>(air: &A, num_public_inputs: usize) -> Vec<SymbolicExpression<F>>
+pub fn get_symbolic_constraints<F, A>(air: &A, num_public_values: usize) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder = SymbolicAirBuilder::new(air.width(), num_public_inputs);
+    let mut builder = SymbolicAirBuilder::new(air.width(), num_public_values);
     air.eval(&mut builder);
     builder.constraints()
 }
@@ -53,12 +53,12 @@ where
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
 pub struct SymbolicAirBuilder<F: Field> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
-    public_inputs: Vec<F>,
+    public_values: Vec<F>,
     constraints: Vec<SymbolicExpression<F>>,
 }
 
 impl<F: Field> SymbolicAirBuilder<F> {
-    pub(crate) fn new(width: usize, num_public_inputs: usize) -> Self {
+    pub(crate) fn new(width: usize, num_public_values: usize) -> Self {
         let values = [false, true]
             .into_iter()
             .flat_map(|is_next| {
@@ -71,7 +71,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
             .collect();
         Self {
             main: RowMajorMatrix::new(values, width),
-            public_inputs: vec![F::zero(); num_public_inputs],
+            public_values: vec![F::zero(); num_public_values],
             constraints: vec![],
         }
     }
@@ -89,10 +89,6 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
 
     fn main(&self) -> Self::M {
         self.main.clone()
-    }
-
-    fn public_inputs(&self) -> Vec<Self::F> {
-        self.public_inputs.clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -113,5 +109,11 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.constraints.push(x.into());
+    }
+}
+
+impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
+    fn public_values(&self) -> Vec<Self::F> {
+        self.public_values.clone()
     }
 }

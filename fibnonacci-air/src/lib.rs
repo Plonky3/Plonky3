@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
@@ -38,10 +38,10 @@ impl<F> BaseAir<F> for FibonacciAir {
     }
 }
 
-impl<AB: AirBuilder> Air<AB> for FibonacciAir {
+impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let pis = builder.public_inputs();
+        let pis = builder.public_values();
 
         let local: &FibonacciRow<AB::Var> = main.row_slice(0).borrow();
         let next: &FibonacciRow<AB::Var> = main.row_slice(1).borrow();

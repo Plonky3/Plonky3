@@ -1,13 +1,13 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, TwoRowMatrixView};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
 use p3_field::AbstractField;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, PackedVal<SC>>,
-    pub public_inputs: &'a Vec<Val<SC>>,
+    pub public_values: &'a Vec<Val<SC>>,
     pub is_first_row: PackedVal<SC>,
     pub is_last_row: PackedVal<SC>,
     pub is_transition: PackedVal<SC>,
@@ -17,7 +17,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
 
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, SC::Challenge>,
-    pub public_inputs: &'a Vec<SC::Challenge>,
+    pub public_values: &'a Vec<SC::Challenge>,
     pub is_first_row: SC::Challenge,
     pub is_last_row: SC::Challenge,
     pub is_transition: SC::Challenge,
@@ -33,10 +33,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     fn main(&self) -> Self::M {
         self.main
-    }
-
-    fn public_inputs(&self) -> Vec<Self::F> {
-        self.public_inputs.clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -62,6 +58,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 }
 
+impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
+    fn public_values(&self) -> Vec<Self::F> {
+        self.public_values.clone()
+    }
+}
+
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
@@ -70,10 +72,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
 
     fn main(&self) -> Self::M {
         self.main
-    }
-
-    fn public_inputs(&self) -> Vec<Self::F> {
-        self.public_inputs.clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -96,5 +94,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         let x: SC::Challenge = x.into();
         self.accumulator *= self.alpha;
         self.accumulator += x;
+    }
+}
+impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'a, SC> {
+    fn public_values(&self) -> Vec<Self::F> {
+        self.public_values.clone()
     }
 }
