@@ -15,7 +15,11 @@ pub struct FibonacciRow<F> {
 
 impl<F> FibonacciRow<F> {
     fn new(index: F, left: F, right: F) -> FibonacciRow<F> {
-        FibonacciRow { index, left, right }
+        FibonacciRow {
+            index,
+            left,
+            right,
+        }
     }
 }
 
@@ -43,21 +47,23 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
         let main = builder.main();
         let pis = builder.public_values();
 
+        let a = pis[0];
+        let b = pis[1];
+
         let local: &FibonacciRow<AB::Var> = main.row_slice(0).borrow();
         let next: &FibonacciRow<AB::Var> = main.row_slice(1).borrow();
 
         let mut when_first_row = builder.when_first_row();
 
-        when_first_row.assert_eq(local.left, pis[0].clone());
-        when_first_row.assert_eq(local.right, pis[1].clone());
+        when_first_row.assert_eq(local.left, a);
+        when_first_row.assert_eq(local.right, b);
 
         when_first_row.assert_zero(local.index);
 
         let mut when_transition = builder.when_transition();
 
         // assert index increment by 1 for each row. index is needed because we want to prove that
-        // "the n-th element in fib is x", but I'm still not sure how to constrain public inputs
-        // onto the index and initial a, b values.
+        // "the n-th element in fib is x"
         when_transition.assert_one(next.index - local.index);
 
         // a' <- b
@@ -69,22 +75,26 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
 }
 
 pub fn generate_trace_rows<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajorMatrix<F> {
-    let num_rows = n + 1;
+    let num_rows = n.next_power_of_two();
 
     // the length of the matrix row is num_rows * NUM_FIBONACCI_COLS because later we are going to
     // "window" the trace slice by the number of fields defined in FibonacciRow
-    let mut trace =
-        RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_FIBONACCI_COLS], NUM_FIBONACCI_COLS);
+    let mut trace = RowMajorMatrix::new(
+        vec![F::zero(); num_rows * NUM_FIBONACCI_COLS],
+        NUM_FIBONACCI_COLS,
+    );
 
     // This uses rust's `transmute` to "align" the struct `FibonacciRow` onto a window of trace values
-    let (prefix, rows, suffix) = unsafe {
-        trace.values.align_to_mut::<FibonacciRow<F>>()
-    };
+    let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<FibonacciRow<F>>() };
     assert!(prefix.is_empty(), "Alignment should match");
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
-    rows[0] = FibonacciRow::new(F::zero(), F::from_canonical_u64(a), F::from_canonical_u64(b));
+    rows[0] = FibonacciRow::new(
+        F::zero(),
+        F::from_canonical_u64(a),
+        F::from_canonical_u64(b),
+    );
 
     for i in 1..num_rows {
         rows[i].index = F::from_canonical_usize(i);

@@ -1,5 +1,4 @@
 use rand::thread_rng;
-use serde_json;
 
 use fibnonacci_air::FibonacciAir;
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};

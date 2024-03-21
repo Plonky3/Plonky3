@@ -1,23 +1,23 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{Itertools, izip};
+use itertools::{izip, Itertools};
 use tracing::{info_span, instrument};
 
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{AbstractExtensionField, AbstractField, PackedValue};
-use p3_matrix::{Matrix, MatrixGet};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
+use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof, ProverConstraintFolder,
     StarkGenericConfig, Val,
 };
-use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 
 #[instrument(skip_all)]
 pub fn prove<
@@ -31,9 +31,9 @@ pub fn prove<
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &Vec<Val<SC>>,
 ) -> Proof<SC>
-    where
-        SC: StarkGenericConfig,
-        A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);

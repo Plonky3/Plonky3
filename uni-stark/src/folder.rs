@@ -59,8 +59,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
-    fn public_values(&self) -> Vec<Self::F> {
-        self.public_values.clone()
+    fn public_values(&self) -> &[Self::F] {
+        self.public_values
     }
 }
 
@@ -97,7 +97,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     }
 }
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'a, SC> {
-    fn public_values(&self) -> Vec<Self::F> {
-        self.public_values.clone()
+    fn public_values(&self) -> &[Self::F] {
+        self.public_values
     }
 }

@@ -2,11 +2,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use tracing::instrument;
+
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
-use tracing::instrument;
 
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
@@ -40,7 +41,10 @@ where
 }
 
 #[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
-pub fn get_symbolic_constraints<F, A>(air: &A, num_public_values: usize) -> Vec<SymbolicExpression<F>>
+pub fn get_symbolic_constraints<F, A>(
+    air: &A,
+    num_public_values: usize,
+) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
@@ -71,6 +75,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
             .collect();
         Self {
             main: RowMajorMatrix::new(values, width),
+            // TODO replace zeros once we have SymbolicExpression::PublicValue
             public_values: vec![F::zero(); num_public_values],
             constraints: vec![],
         }
@@ -113,7 +118,7 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
 }
 
 impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
-    fn public_values(&self) -> Vec<Self::F> {
-        self.public_values.clone()
+    fn public_values(&self) -> &[Self::F] {
+        self.public_values.as_slice()
     }
 }

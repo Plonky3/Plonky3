@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
@@ -110,7 +109,7 @@ pub trait AirBuilder: Sized {
 }
 
 pub trait AirBuilderWithPublicValues: AirBuilder {
-    fn public_values(&self) -> Vec<Self::F>;
+    fn public_values(&self) -> &[Self::F];
 }
 
 pub trait PairBuilder: AirBuilder {
