@@ -30,5 +30,5 @@ members = [
     "rescue",
     "symmetric",
     "util",
-    "uni-stark", "fibnonacci-air",
+    "uni-stark",
 ]
