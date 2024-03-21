@@ -502,16 +502,130 @@ fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
-
-    use p3_baby_bear::BabyBear;
+    use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2DitParallel;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::AbstractExtensionField;
+    use p3_merkle_tree::FieldMerkleTreeMmcs;
+    use p3_poseidon2::Poseidon2;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::{thread_rng, Rng};
 
     use super::*;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+
+    fn foo<C: GrindingChallenger<Witness = F>>(chal: &mut C) {}
+
+    /// A test with two rounds of commitments, each involving a single matrix. So overall there are
+    /// two matrices, and their heights differ.
+    #[test]
+    fn test_nonuniform_batches() {
+        type Perm = Poseidon2<F, DiffusionMatrixBabybear, 16, 7>;
+        let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
+
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        let hash = MyHash::new(perm.clone());
+
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        let compress = MyCompress::new(perm.clone());
+
+        type ValMmcs = FieldMerkleTreeMmcs<
+            <F as Field>::Packing,
+            <F as Field>::Packing,
+            MyHash,
+            MyCompress,
+            8,
+        >;
+        let val_mmcs = ValMmcs::new(hash, compress);
+
+        type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        type Dft = Radix2DitParallel;
+        let dft = Dft {};
+
+        type Challenger = DuplexChallenger<F, Perm, 16>;
+        let mut prover_challenger = Challenger::new(perm);
+        let mut verifier_challenger = prover_challenger.clone();
+        foo::<Challenger>(&mut prover_challenger);
+
+        let width_1 = 7;
+        let width_2 = 5;
+        let log_height_1 = 4;
+        let log_height_2 = 6;
+        let height_1 = 1 << log_height_1;
+        let height_2 = 1 << log_height_2;
+        let dom_1 = TwoAdicMultiplicativeCoset {
+            log_n: log_height_1,
+            shift: F::zero(),
+        };
+        let dom_2 = TwoAdicMultiplicativeCoset {
+            log_n: log_height_2,
+            shift: F::zero(),
+        };
+        let trace_1 = RowMajorMatrix::new(vec![F::zero(); width_1 * height_1], width_1);
+        let trace_2 = RowMajorMatrix::new(vec![F::zero(); width_2 * height_2], width_2);
+
+        let fri_config = FriConfig {
+            log_blowup: 1,
+            num_queries: 100,
+            proof_of_work_bits: 16,
+            mmcs: challenge_mmcs,
+        };
+        type Pcs = TwoAdicFriPcs<F, Dft, ValMmcs, ChallengeMmcs>;
+        let pcs = Pcs::new(log_height_1.max(log_height_2), dft, val_mmcs, fri_config);
+        let (com_1, data_1) = pcs.commit(vec![(dom_1, trace_1)]);
+        let (com_2, data_2) = pcs.commit(vec![(dom_2, trace_2)]);
+        let (opened_values, proof) = pcs.open(
+            vec![
+                (&data_1, vec![vec![EF::one()]]),
+                (&data_1, vec![vec![EF::two()]]),
+            ],
+            &mut prover_challenger,
+        );
+
+        assert_eq!(
+            opened_values,
+            vec![
+                // first round
+                vec![
+                    // only matrix
+                    vec![
+                        // only point
+                        vec![EF::zero(); width_1]
+                    ]
+                ],
+                // second round
+                vec![
+                    // only matrix
+                    vec![
+                        // only point
+                        vec![EF::zero(); width_2]
+                    ]
+                ],
+            ]
+        );
+
+        let result = pcs.verify(
+            vec![
+                (
+                    com_1,
+                    vec![(dom_1, vec![(EF::one(), vec![EF::zero(); width_1])])],
+                ),
+                (
+                    com_2,
+                    vec![(dom_2, vec![(EF::one(), vec![EF::zero(); width_2])])],
+                ),
+            ],
+            &proof,
+            &mut verifier_challenger,
+        );
+        result.expect("FRI verification failed");
+    }
 
     #[test]
     fn test_powers_reducer() {
