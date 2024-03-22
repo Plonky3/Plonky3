@@ -204,13 +204,13 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for SymbolicAirBuilder<F,
 
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF> {
     type MP = RowMajorMatrix<SymbolicVariable<EF>>;
-    type RandVar = SymbolicExpressionExt<EF>;
+    type ExprRandEF = SymbolicExpressionExt<EF>;
 
     fn permutation(&self) -> Self::MP {
         self.permutation.clone()
     }
 
-    fn permutation_randomness(&self) -> &[Self::RandVar] {
+    fn permutation_randomness(&self) -> &[Self::ExprRandEF] {
         &self.permutation_challenges
     }
 }
