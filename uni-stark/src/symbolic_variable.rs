@@ -10,7 +10,8 @@ pub enum Entry {
     Preprocessed,
     Main,
     Permutation,
-    PublicValue,
+    Public,
+    Challenge,
 }
 
 /// A variable within the evaluation window, i.e. a column in either the local or next row.
@@ -34,7 +35,8 @@ impl<F: Field> SymbolicVariable<F> {
 
     pub fn degree_multiple(&self) -> usize {
         match self.entry {
-            Entry::PublicValue => 0,
+            Entry::Public => 0,
+            Entry::Challenge => 0,
             Entry::Preprocessed => 1,
             Entry::Main => 1,
             Entry::Permutation => 1,

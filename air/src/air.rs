@@ -147,7 +147,7 @@ pub trait ExtensionBuilder: AirBuilder {
 
 pub trait PermutationAirBuilder: ExtensionBuilder {
     type MP: MatrixRowSlices<Self::VarEF>;
-    type RandVar: Into<Self::ExprEF> + Copy;
+    type RandVar: AbstractField + Into<Self::ExprEF>;
 
     fn permutation(&self) -> Self::MP;
 
@@ -204,12 +204,13 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
 
 impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
     type MP = AB::MP;
+    type RandVar = AB::RandVar;
 
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
-    fn permutation_randomness(&self) -> &[Self::EF] {
+    fn permutation_randomness(&self) -> &[Self::RandVar] {
         self.inner.permutation_randomness()
     }
 }

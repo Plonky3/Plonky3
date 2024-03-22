@@ -63,8 +63,14 @@ where
     let main_width = air.width();
     // TODO: replace zeros with actual permutation width after adding support in `uni-stark`.
     let perm_width = 0;
-    let mut builder =
-        SymbolicAirBuilder::new(prep_width, main_width, perm_width, num_public_values);
+    let num_perm_challenges = 0;
+    let mut builder = SymbolicAirBuilder::new(
+        prep_width,
+        main_width,
+        perm_width,
+        num_public_values,
+        num_perm_challenges,
+    );
     air.eval(&mut builder);
     builder.constraints()
 }
@@ -75,11 +81,25 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F>> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
     permutation: RowMajorMatrix<SymbolicVariable<EF>>,
     public_values: Vec<SymbolicVariable<F>>,
+    permutation_challenges: Vec<SymbolicExpressionExt<EF>>,
     base_constraints: Vec<SymbolicExpression<F>>,
     extension_constraints: Vec<SymbolicExpressionExt<EF>>,
 }
 
+fn new_values<F: Field>(len: usize, entry: Entry) -> Vec<SymbolicVariable<F>> {
+    (0..len)
+        .map(move |column| SymbolicVariable {
+            entry,
+            is_next: false,
+            column,
+            _phantom: PhantomData,
+        })
+        .collect()
+}
+
 fn new_matrix<F: Field>(width: usize, entry: Entry) -> RowMajorMatrix<SymbolicVariable<F>> {
+    // If the width is zero, return 1x2 matrix.
+    let width = width.max(1);
     let values = [false, true]
         .into_iter()
         .flat_map(|is_next| {
@@ -100,21 +120,18 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         main_width: usize,
         permutation_width: usize,
         num_public_values: usize,
+        num_permutation_challenges: usize,
     ) -> Self {
-        let public_values = (0..num_public_values)
-            .map(|i| SymbolicVariable {
-                entry: Entry::PublicValue,
-                is_next: false,
-                column: i,
-                _phantom: PhantomData,
-            })
-            .collect();
         Self {
             preprocessed: new_matrix(preprocessed_width, Entry::Preprocessed),
             main: new_matrix(main_width, Entry::Main),
             permutation: new_matrix(permutation_width, Entry::Permutation),
             // TODO replace zeros once we have SymbolicExpression::PublicValue
-            public_values: public_values,
+            public_values: new_values(num_public_values, Entry::Public),
+            permutation_challenges: new_values::<EF>(num_permutation_challenges, Entry::Challenge)
+                .into_iter()
+                .map(SymbolicExpressionExt::from)
+                .collect(),
             base_constraints: vec![],
             extension_constraints: vec![],
         }
@@ -186,9 +203,14 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for SymbolicAirBuilder<F,
 }
 
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF> {
-    type PermutationVar = SymbolicVariable<EF>;
+    type MP = RowMajorMatrix<SymbolicVariable<EF>>;
+    type RandVar = SymbolicExpressionExt<EF>;
 
-    fn permutation(&self) -> Self::M {
+    fn permutation(&self) -> Self::MP {
         self.permutation.clone()
+    }
+
+    fn permutation_randomness(&self) -> &[Self::RandVar] {
+        &self.permutation_challenges
     }
 }
