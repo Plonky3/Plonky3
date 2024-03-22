@@ -147,7 +147,7 @@ pub trait ExtensionBuilder: AirBuilder {
 
 pub trait PermutationAirBuilder: ExtensionBuilder {
     type MP: MatrixRowSlices<Self::VarEF>;
-    type ExprRandEF: AbstractField + Into<Self::ExprEF>;
+    type ExprRandEF: AbstractField<F = Self::EF>;
 
     fn permutation(&self) -> Self::MP;
 
