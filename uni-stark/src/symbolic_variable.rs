@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 use core::ops::{Add, Mul, Sub};
 
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 
 use crate::symbolic_expression::SymbolicExpression;
 
@@ -38,6 +38,15 @@ impl<F: Field> SymbolicVariable<F> {
             Entry::Preprocessed => 1,
             Entry::Main => 1,
             Entry::Permutation => 1,
+        }
+    }
+
+    pub fn to_extension<EF: ExtensionField<F>>(&self) -> SymbolicVariable<EF> {
+        SymbolicVariable {
+            entry: self.entry,
+            is_next: self.is_next,
+            column: self.column,
+            _phantom: PhantomData,
         }
     }
 }
