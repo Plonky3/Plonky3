@@ -459,7 +459,7 @@ fn from_monty(x: u32) -> u32 {
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 #[inline]
 #[must_use]
-fn monty_reduce(x: u64) -> u32 {
+pub(crate) fn monty_reduce(x: u64) -> u32 {
     let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
     let u = t * (P as u64);
 
