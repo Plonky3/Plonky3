@@ -69,8 +69,8 @@ fn main() -> Result<(), VerificationError> {
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
-    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
+    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::new(perm);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof)
+    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
 }

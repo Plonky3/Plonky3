@@ -31,18 +31,19 @@ pub fn prove<
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
+    public_values: &Vec<SC::Val>,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace);
+    crate::check_constraints::check_constraints(air, &trace, public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.len());
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 
@@ -63,6 +64,7 @@ where
     let quotient_values = quotient_values(
         config,
         air,
+        public_values,
         log_degree,
         log_quotient_degree,
         trace_lde_for_quotient,
@@ -118,6 +120,7 @@ where
 fn quotient_values<SC, A, Mat>(
     config: &SC,
     air: &A,
+    public_values: &Vec<SC::Val>,
     degree_bits: usize,
     quotient_degree_bits: usize,
     trace_lde: Mat,
@@ -192,6 +195,7 @@ where
                     local: &local,
                     next: &next,
                 },
+                public_values,
                 is_first_row,
                 is_last_row,
                 is_transition,

@@ -18,12 +18,13 @@ pub fn verify<SC, A>(
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
+    public_values: &Vec<SC::Val>,
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let Proof {
@@ -110,6 +111,7 @@ where
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
         },
+        public_values,
         is_first_row,
         is_last_row,
         is_transition,
