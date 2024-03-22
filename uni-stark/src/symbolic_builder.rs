@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_matrix::Matrix;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
@@ -10,6 +11,7 @@ use tracing::instrument;
 
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
+use crate::Entry;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
 pub fn get_log_quotient_degree<F, A>(air: &A, num_public_values: usize) -> usize
@@ -48,34 +50,60 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder = SymbolicAirBuilder::new(air.width(), num_public_values);
+    let prep_width = air.preprocessed_trace().map(|t| t.width()).unwrap_or(0);
+    let main_width = air.width();
+    // TODO: replace zeros with actual permutation width after adding support in `uni-stark`.
+    let perm_width = 0;
+    let mut builder =
+        SymbolicAirBuilder::new(prep_width, main_width, perm_width, num_public_values);
     air.eval(&mut builder);
     builder.constraints()
 }
 
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
 pub struct SymbolicAirBuilder<F: Field> {
+    preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
     main: RowMajorMatrix<SymbolicVariable<F>>,
-    public_values: Vec<F>,
+    permutation: RowMajorMatrix<SymbolicVariable<F>>,
+    public_values: Vec<SymbolicVariable<F>>,
     constraints: Vec<SymbolicExpression<F>>,
 }
 
 impl<F: Field> SymbolicAirBuilder<F> {
-    pub(crate) fn new(width: usize, num_public_values: usize) -> Self {
-        let values = [false, true]
-            .into_iter()
-            .flat_map(|is_next| {
-                (0..width).map(move |column| SymbolicVariable {
-                    is_next,
-                    column,
-                    _phantom: PhantomData,
+    pub(crate) fn new(
+        preprocessed_width: usize,
+        main_width: usize,
+        permutation_width: usize,
+        num_public_values: usize,
+    ) -> Self {
+        let new_matrix = |width: usize, entry: Entry| {
+            let values = [false, true]
+                .into_iter()
+                .flat_map(|is_next| {
+                    (0..main_width).map(move |column| SymbolicVariable {
+                        entry,
+                        is_next,
+                        column,
+                        _phantom: PhantomData,
+                    })
                 })
+                .collect();
+            RowMajorMatrix::new(values, width)
+        };
+        let public_values = (0..num_public_values)
+            .map(|i| SymbolicVariable {
+                entry: Entry::PublicValue,
+                is_next: false,
+                column: i,
+                _phantom: PhantomData,
             })
             .collect();
         Self {
-            main: RowMajorMatrix::new(values, width),
+            preprocessed: new_matrix(preprocessed_width, Entry::Preprocessed),
+            main: new_matrix(main_width, Entry::Main),
+            permutation: new_matrix(permutation_width, Entry::Permutation),
             // TODO replace zeros once we have SymbolicExpression::PublicValue
-            public_values: vec![F::zero(); num_public_values],
+            public_values: public_values,
             constraints: vec![],
         }
     }
@@ -117,7 +145,9 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
 }
 
 impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
-    fn public_values(&self) -> &[Self::F] {
+    type PublicVar = SymbolicVariable<F>;
+
+    fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values.as_slice()
     }
 }

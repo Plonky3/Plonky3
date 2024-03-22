@@ -98,6 +98,8 @@ where
 }
 
 impl<'a, F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'a, F> {
+    type PublicVar = Self::F;
+
     fn public_values(&self) -> &[Self::F] {
         self.public_values
     }

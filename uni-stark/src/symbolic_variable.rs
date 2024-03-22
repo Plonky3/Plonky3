@@ -5,20 +5,39 @@ use p3_field::Field;
 
 use crate::symbolic_expression::SymbolicExpression;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Entry {
+    Preprocessed,
+    Main,
+    Permutation,
+    PublicValue,
+}
+
 /// A variable within the evaluation window, i.e. a column in either the local or next row.
 #[derive(Copy, Clone, Debug)]
 pub struct SymbolicVariable<F: Field> {
+    pub entry: Entry,
     pub is_next: bool,
     pub column: usize,
     pub(crate) _phantom: PhantomData<F>,
 }
 
 impl<F: Field> SymbolicVariable<F> {
-    pub fn new(is_next: bool, column: usize) -> Self {
+    pub fn new(entry: Entry, is_next: bool, column: usize) -> Self {
         Self {
+            entry,
             is_next,
             column,
             _phantom: PhantomData,
+        }
+    }
+
+    pub fn degree_multiple(&self) -> usize {
+        match self.entry {
+            Entry::PublicValue => 0,
+            Entry::Preprocessed => 1,
+            Entry::Main => 1,
+            Entry::Permutation => 1,
         }
     }
 }
