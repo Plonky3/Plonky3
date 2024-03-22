@@ -137,7 +137,13 @@ where
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
     let mut v_challenger = challenger.clone();
-    verify(&config, &air, &mut v_challenger, &deserialized_proof, &vec![])
+    verify(
+        &config,
+        &air,
+        &mut v_challenger,
+        &deserialized_proof,
+        &vec![],
+    )
 }
 
 fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError> {

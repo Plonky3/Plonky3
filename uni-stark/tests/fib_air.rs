@@ -1,24 +1,21 @@
 use std::borrow::Borrow;
 
-use rand::thread_rng;
-
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::PrimeField64;
-use p3_field::{AbstractField, Field};
+use p3_field::{AbstractField, Field, PrimeField64};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
-use p3_matrix::MatrixRowSlices;
+use p3_matrix::{Matrix, MatrixRowSlices};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use p3_util::log2_ceil_usize;
+use rand::thread_rng;
 
 /// For testing the public values feature
 

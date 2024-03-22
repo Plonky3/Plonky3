@@ -1,11 +1,10 @@
 use alloc::vec::Vec;
 
-use tracing::instrument;
-
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices};
+use tracing::instrument;
 
 #[instrument(name = "check constraints", skip_all)]
 pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &Vec<F>)

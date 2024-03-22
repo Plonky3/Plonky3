@@ -2,8 +2,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
-use tracing::{info_span, instrument};
-
 use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
@@ -12,6 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixGet};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
+use tracing::{info_span, instrument};
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
