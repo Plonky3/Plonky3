@@ -7,9 +7,9 @@ use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
-use p3_field::{AbstractField, Field};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::PrimeField64;
+use p3_field::{AbstractField, Field};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -17,7 +17,7 @@ use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, StarkConfig, verify};
+use p3_uni_stark::{prove, verify, StarkConfig};
 use p3_util::log2_ceil_usize;
 
 /// For testing the public values feature
@@ -146,7 +146,7 @@ fn test_public_value() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
     let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
     let hash = MyHash::new(perm.clone());
@@ -167,7 +167,7 @@ fn test_incorrect_public_value() {
     let pis = vec![
         BabyBear::from_canonical_u64(0),
         BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(123123), // incorrect result
+        BabyBear::from_canonical_u64(123_123), // incorrect result
     ];
     prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
 }
