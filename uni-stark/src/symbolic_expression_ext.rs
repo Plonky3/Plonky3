@@ -1,9 +1,10 @@
-use crate::SymbolicExpression;
-use crate::SymbolicVariable;
 use alloc::rc::Rc;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
+
+use crate::{SymbolicExpression, SymbolicVariable};
 
 #[derive(Clone, Debug)]
 pub struct SymbolicExpressionExt<EF>(pub SymbolicExpression<EF>)

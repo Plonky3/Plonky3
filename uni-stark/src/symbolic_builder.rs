@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_matrix::Matrix;
 
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
@@ -9,6 +8,7 @@ use p3_air::{
 };
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
