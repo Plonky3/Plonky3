@@ -1,3 +1,10 @@
+use rand::random;
+use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
+use tracing_subscriber::{EnvFilter, Registry};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
 use p3_baby_bear::BabyBear;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
@@ -9,14 +16,8 @@ use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, StarkConfig, VerificationError, verify};
 use p3_util::log2_ceil_usize;
-use rand::random;
-use tracing_forest::util::LevelFilter;
-use tracing_forest::ForestLayer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry};
 
 const NUM_HASHES: usize = 680;
 
@@ -69,7 +70,7 @@ fn main() -> Result<(), VerificationError> {
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
 
-    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
     verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
