@@ -75,10 +75,10 @@ fn main() -> Result<(), VerificationError> {
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
 
-    let proof = prove::<MyConfig, _>(&config, &air, &mut challenger, trace);
+    let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &air, &mut challenger, &proof)?;
+    verify(&config, &air, &mut challenger, &proof, &vec![])?;
 
     println!("OK!!! 👍");
     Ok(())

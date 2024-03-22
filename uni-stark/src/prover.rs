@@ -28,18 +28,19 @@ pub fn prove<
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<Val<SC>>,
+    public_values: &Vec<Val<SC>>,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace);
+    crate::check_constraints::check_constraints(air, &trace, public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -58,6 +59,7 @@ where
 
     let quotient_values = quotient_values(
         air,
+        public_values,
         trace_domain,
         quotient_domain,
         trace_on_quotient_domain,
@@ -109,6 +111,7 @@ where
 #[instrument(name = "compute quotient polynomial", skip_all)]
 fn quotient_values<SC, A, Mat>(
     air: &A,
+    public_values: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: Mat,
@@ -162,6 +165,7 @@ where
                     local: &local,
                     next: &next,
                 },
+                public_values,
                 is_first_row,
                 is_last_row,
                 is_transition,

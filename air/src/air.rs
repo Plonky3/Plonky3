@@ -108,6 +108,10 @@ pub trait AirBuilder: Sized {
     }
 }
 
+pub trait AirBuilderWithPublicValues: AirBuilder {
+    fn public_values(&self) -> &[Self::F];
+}
+
 pub trait PairBuilder: AirBuilder {
     fn preprocessed(&self) -> Self::M;
 }
