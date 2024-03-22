@@ -147,12 +147,13 @@ pub trait ExtensionBuilder: AirBuilder {
 
 pub trait PermutationAirBuilder: ExtensionBuilder {
     type MP: MatrixRowSlices<Self::VarEF>;
+    type RandVar: Into<Self::ExprEF> + Copy;
 
     fn permutation(&self) -> Self::MP;
 
     // TODO: The return type should be some kind of variable to support symbolic evaluation,
     // but maybe separate from `VarEF` since that might be a `PackedField`?
-    fn permutation_randomness(&self) -> &[Self::EF];
+    fn permutation_randomness(&self) -> &[Self::RandVar];
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {

@@ -3,7 +3,10 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 use p3_matrix::Matrix;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder};
+use p3_air::{
+    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
+    PermutationAirBuilder,
+};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
@@ -179,5 +182,13 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for SymbolicAirBuilder<F,
         I: Into<Self::ExprEF>,
     {
         self.extension_constraints.push(x.into());
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF> {
+    type PermutationVar = SymbolicVariable<EF>;
+
+    fn permutation(&self) -> Self::M {
+        self.permutation.clone()
     }
 }
