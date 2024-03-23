@@ -81,7 +81,7 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F>> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
     permutation: RowMajorMatrix<SymbolicVariable<EF>>,
     public_values: Vec<SymbolicVariable<F>>,
-    permutation_challenges: Vec<SymbolicExpressionExt<EF>>,
+    permutation_challenges: Vec<SymbolicVariable<EF>>,
     base_constraints: Vec<SymbolicExpression<F>>,
     extension_constraints: Vec<SymbolicExpressionExt<EF>>,
 }
@@ -128,10 +128,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             permutation: new_matrix(permutation_width, Entry::Permutation),
             // TODO replace zeros once we have SymbolicExpression::PublicValue
             public_values: new_values(num_public_values, Entry::Public),
-            permutation_challenges: new_values::<EF>(num_permutation_challenges, Entry::Challenge)
-                .into_iter()
-                .map(SymbolicExpressionExt::from)
-                .collect(),
+            permutation_challenges: new_values::<EF>(num_permutation_challenges, Entry::Challenge),
             base_constraints: vec![],
             extension_constraints: vec![],
         }
@@ -205,12 +202,13 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for SymbolicAirBuilder<F,
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF> {
     type MP = RowMajorMatrix<SymbolicVariable<EF>>;
     type ExprRandEF = SymbolicExpressionExt<EF>;
+    type VarRandEF = SymbolicVariable<EF>;
 
     fn permutation(&self) -> Self::MP {
         self.permutation.clone()
     }
 
-    fn permutation_randomness(&self) -> &[Self::ExprRandEF] {
+    fn permutation_randomness(&self) -> &[Self::VarRandEF] {
         &self.permutation_challenges
     }
 }
