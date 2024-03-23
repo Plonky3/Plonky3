@@ -147,16 +147,19 @@ pub trait ExtensionBuilder: AirBuilder {
 
 pub trait PermutationAirBuilder: ExtensionBuilder {
     type MP: MatrixRowSlices<Self::VarEF>;
+
     type ExprRandEF: AbstractField<F = Self::EF>
         + Add<Self::ExprEF, Output = Self::ExprEF>
         + Sub<Self::ExprEF, Output = Self::ExprEF>
         + Mul<Self::ExprEF, Output = Self::ExprEF>;
 
+    type VarRandEF: Into<Self::ExprRandEF> + Copy;
+
     fn permutation(&self) -> Self::MP;
 
     // TODO: The return type should be some kind of variable to support symbolic evaluation,
     // but maybe separate from `VarEF` since that might be a `PackedField`?
-    fn permutation_randomness(&self) -> &[Self::ExprRandEF];
+    fn permutation_randomness(&self) -> &[Self::VarRandEF];
 }
 
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
@@ -208,12 +211,13 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
 impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
     type MP = AB::MP;
     type ExprRandEF = AB::ExprRandEF;
+    type VarRandEF = AB::VarRandEF;
 
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
-    fn permutation_randomness(&self) -> &[Self::ExprRandEF] {
+    fn permutation_randomness(&self) -> &[Self::VarRandEF] {
         self.inner.permutation_randomness()
     }
 }
