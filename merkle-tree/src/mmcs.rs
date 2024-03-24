@@ -82,6 +82,38 @@ where
         (openings, proof)
     }
 
+    fn open_multi_batches(
+        &self,
+        index: Vec<usize>,
+        prover_data: &Vec<FieldMerkleTree<P::Scalar, PW::Value, DIGEST_ELEMS>>,
+    ) -> Vec<(Vec<Vec<P::Scalar>>, Vec<[PW::Value; DIGEST_ELEMS]>)> {
+
+
+        let openings_and_proofs = prover_data
+	    .iter()
+	    .zip(index)
+	    .map(|(data,ind)| {
+		let max_height = self.get_max_height(data);
+		let log_max_height = log2_ceil_usize(max_height);
+		let openings = data
+		   .leaves
+		    .iter()
+		    .map(|matrix| {
+			let log2_height = log2_ceil_usize(matrix.height());
+			let bits_reduced = log_max_height - log2_height;
+			let reduced_index = ind >> bits_reduced;
+			matrix.row(reduced_index).collect()
+		    }).collect_vec();
+		    let proof = (0..log_max_height)
+		    .map(|i| data.digest_layers[i][(ind >> i) ^ 1])
+		    .collect();
+		(openings,proof)
+	    })
+            .collect_vec();
+
+	openings_and_proofs
+    }    
+
     fn get_matrices<'a>(
         &'a self,
         prover_data: &'a Self::ProverData,

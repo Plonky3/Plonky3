@@ -1,3 +1,4 @@
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -90,6 +91,7 @@ where
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         let log_n = log2_strict_usize(degree);
+//	assert_ne!(log_n, self.log_n);
         assert!(log_n <= self.log_n);
         TwoAdicMultiplicativeCoset {
             log_n,

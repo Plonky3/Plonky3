@@ -38,6 +38,12 @@ pub trait Mmcs<T>: Clone {
         prover_data: &Self::ProverData,
     ) -> (Vec<Vec<T>>, Self::Proof);
 
+    fn open_multi_batches(
+        &self,
+        indices: Vec<usize>,
+        prover_data: &Vec<Self::ProverData>,
+    ) -> Vec<(Vec<Vec<T>>, Self::Proof)>;    
+
     /// Get the matrices that were committed to.
     fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> Vec<Self::Mat<'a>>;
 
