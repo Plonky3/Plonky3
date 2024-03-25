@@ -206,9 +206,7 @@ fn mulby_mu(val: int32x4_t) -> int32x4_t {
     // throughput: .25 cyc/vec (16 els/cyc)
     // latency: 3 cyc
 
-    unsafe {
-        aarch64::vmulq_s32(val, MU)
-    }
+    unsafe { aarch64::vmulq_s32(val, MU) }
 }
 
 #[inline]
