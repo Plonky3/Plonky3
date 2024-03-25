@@ -197,15 +197,16 @@ where
             .iter()
             .map(|(data, points)| (self.mmcs.get_matrices(data), points))
             .collect_vec();
-
-        let max_width = mats_and_points
+        let mats = mats_and_points
             .iter()
             .flat_map(|(mats, _)| mats)
-            .map(|m| m.width())
-            .max()
-            .unwrap();
+            .collect_vec();
 
-        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, max_width);
+        let global_max_width = mats.iter().map(|m| m.width()).max().unwrap();
+        let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+        let log_global_max_height = log2_strict_usize(global_max_height);
+
+        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, global_max_width);
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
@@ -272,8 +273,11 @@ where
                 rounds
                     .iter()
                     .map(|(data, _)| {
-                        // needs to recombine decomposed openings.. or something...
-                        let (opened_values, opening_proof) = self.mmcs.open_batch(index, data);
+                        let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                        let bits_reduced = log_global_max_height - log_max_height;
+                        let reduced_index = index >> bits_reduced;
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_batch(reduced_index, data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
@@ -320,7 +324,8 @@ where
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
                 .map_err(VerificationError::FriError)?;
 
-        let log_max_height = proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
+        let log_global_max_height =
+            proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
 
         let reduced_openings: Vec<[Challenge; 32]> = proof
             .query_openings
@@ -329,19 +334,27 @@ where
             .map(|(query_opening, &index)| {
                 let mut ro = [Challenge::zero(); 32];
                 let mut alpha_pow = [Challenge::one(); 32];
+
                 for (batch_opening, (batch_commit, mats)) in izip!(query_opening, &rounds) {
-                    let batch_dims: Vec<Dimensions> = mats
+                    let batch_heights = mats
                         .iter()
-                        .map(|(domain, _)| Dimensions {
-                            // todo: mmcs doesn't really need width
-                            width: 0,
-                            height: domain.size(),
-                        })
+                        .map(|(domain, _)| domain.size() << self.fri.log_blowup)
                         .collect_vec();
+                    let batch_dims = batch_heights
+                        .iter()
+                        // TODO: MMCS doesn't really need width; we put 0 for now.
+                        .map(|&height| Dimensions { width: 0, height })
+                        .collect_vec();
+
+                    let batch_max_height = batch_heights.iter().max().expect("Empty batch?");
+                    let log_batch_max_height = log2_strict_usize(*batch_max_height);
+                    let bits_reduced = log_global_max_height - log_batch_max_height;
+                    let reduced_index = index >> bits_reduced;
+
                     self.mmcs.verify_batch(
                         batch_commit,
                         &batch_dims,
-                        index,
+                        reduced_index,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
                     )?;
@@ -350,7 +363,7 @@ where
                     {
                         let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
 
-                        let bits_reduced = log_max_height - log_height;
+                        let bits_reduced = log_global_max_height - log_height;
                         let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
 
                         let x = Val::generator()
