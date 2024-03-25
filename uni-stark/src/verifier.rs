@@ -1,4 +1,5 @@
 use alloc::vec;
+use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir, TwoRowMatrixView};
@@ -16,6 +17,7 @@ pub fn verify<SC, A>(
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
+    public_values: &Vec<Val<SC>>,
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
@@ -29,7 +31,7 @@ where
     } = proof;
 
     let degree = 1 << degree_bits;
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -118,6 +120,7 @@ where
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
         },
+        public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
         is_transition: sels.is_transition,
