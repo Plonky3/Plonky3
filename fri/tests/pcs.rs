@@ -30,7 +30,7 @@ type Challenger = DuplexChallenger<Val, Perm, 16>;
 
 type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
-fn single_round_fri_test(log_degrees_by_round: &[&[usize]]) {
+fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
     let num_rounds = log_degrees_by_round.len();
     let mut rng = thread_rng();
 
@@ -122,13 +122,13 @@ fn single_round_fri_test(log_degrees_by_round: &[&[usize]]) {
 
 #[test]
 fn test_fri_pcs_single() {
-    single_round_fri_test(&[&[3]]);
+    make_test_fri_pcs(&[&[3]]);
 }
 
 #[test]
 fn test_fri_pcs_many_equal() {
     for i in 1..4 {
-        single_round_fri_test(&[&[i; 5]]);
+        make_test_fri_pcs(&[&[i; 5]]);
     }
 }
 
@@ -136,7 +136,7 @@ fn test_fri_pcs_many_equal() {
 fn test_fri_pcs_many_different() {
     for i in 2..4 {
         let degrees = (3..3 + i).collect::<Vec<_>>();
-        single_round_fri_test(&[&degrees]);
+        make_test_fri_pcs(&[&degrees]);
     }
 }
 
@@ -144,19 +144,19 @@ fn test_fri_pcs_many_different() {
 fn test_fri_pcs_many_different_rev() {
     for i in 2..4 {
         let degrees = (3..3 + i).rev().collect::<Vec<_>>();
-        single_round_fri_test(&[&degrees]);
+        make_test_fri_pcs(&[&degrees]);
     }
 }
 
 #[test]
 fn test_fri_pcs_multiple_rounds() {
-    single_round_fri_test(&[&[3]]);
-    single_round_fri_test(&[&[3], &[3]]);
-    single_round_fri_test(&[&[3], &[2]]);
-    single_round_fri_test(&[&[2], &[3]]);
-    single_round_fri_test(&[&[3, 4], &[3, 4]]);
-    single_round_fri_test(&[&[4, 2], &[4, 2]]);
-    single_round_fri_test(&[&[2, 2], &[3, 3]]);
-    single_round_fri_test(&[&[3, 3], &[2, 2]]);
-    single_round_fri_test(&[&[2], &[3, 3]]);
+    make_test_fri_pcs(&[&[3]]);
+    make_test_fri_pcs(&[&[3], &[3]]);
+    make_test_fri_pcs(&[&[3], &[2]]);
+    make_test_fri_pcs(&[&[2], &[3]]);
+    make_test_fri_pcs(&[&[3, 4], &[3, 4]]);
+    make_test_fri_pcs(&[&[4, 2], &[4, 2]]);
+    make_test_fri_pcs(&[&[2, 2], &[3, 3]]);
+    make_test_fri_pcs(&[&[3, 3], &[2, 2]]);
+    make_test_fri_pcs(&[&[2], &[3, 3]]);
 }
