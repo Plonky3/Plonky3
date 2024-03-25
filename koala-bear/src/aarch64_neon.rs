@@ -808,7 +808,7 @@ mod tests {
     #[test]
     fn test_multiplicative_inverse() {
         let vec = packed_from_canonical([0x1b288c21, 0x600c50af, 0x3ea44d7a, 0x62209fc9]);
-        let inverses = packed_from_canonical([0x654400cb, 0x060e1058, 0x2b9a681f, 0x4fea4617]);
+        let inverses = packed_from_canonical([0x4c2a9dbd, 0x6a8fef49, 0x61816d95, 0x0dddd700]);
         let res = vec * inverses;
         assert_eq!(res, P::one());
     }
