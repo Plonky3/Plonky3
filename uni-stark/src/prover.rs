@@ -32,7 +32,8 @@ pub fn prove<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);
@@ -40,7 +41,8 @@ where
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_values.len());
+    let log_quotient_degree =
+        get_log_quotient_degree::<Val<SC>, SC::Challenge, A>(air, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
