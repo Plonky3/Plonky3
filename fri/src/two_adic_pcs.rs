@@ -59,16 +59,16 @@ pub struct TwoAdicFriPcsProof<
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
 > {
-    pub(crate) fri_proof: FriProof<Challenge, FriMmcs, Val>,
+    pub fri_proof: FriProof<Challenge, FriMmcs, Val>,
     /// For each query, for each committed batch, query openings for that batch
-    pub(crate) query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
+    pub query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
-    pub(crate) opened_values: Vec<Vec<Val>>,
-    pub(crate) opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
+    pub opened_values: Vec<Vec<Val>>,
+    pub opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
