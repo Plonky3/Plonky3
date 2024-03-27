@@ -12,10 +12,10 @@ where
     F: Clone,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    sponge_state: [F; WIDTH],
-    input_buffer: Vec<F>,
-    output_buffer: Vec<F>,
-    permutation: P,
+    pub sponge_state: [F; WIDTH],
+    pub input_buffer: Vec<F>,
+    pub output_buffer: Vec<F>,
+    pub permutation: P,
 }
 
 impl<F, P, const WIDTH: usize> DuplexChallenger<F, P, WIDTH>
