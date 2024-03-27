@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{reduce_64, Field, PrimeField, PrimeField64};
+use p3_field::{reduce_32, Field, PrimeField, PrimeField32};
 
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
@@ -64,7 +64,7 @@ pub struct PaddingFreeSpongeMultiField<
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: Field,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
@@ -84,7 +84,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     CryptographicHasher<F, [PF; OUT]> for PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField + Default + Copy,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -98,7 +98,7 @@ where
                 .into_iter()
                 .enumerate()
             {
-                state[chunk_id] = reduce_64(&chunk.collect_vec());
+                state[chunk_id] = reduce_32(&chunk.collect_vec());
             }
             state = self.permutation.permute(state);
         }

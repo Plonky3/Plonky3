@@ -39,7 +39,9 @@ where
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            challenger.sample()
+            let beta = challenger.sample();
+            println!("beta={:?}", beta);
+            beta
         })
         .collect();
 

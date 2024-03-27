@@ -36,6 +36,8 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, PW, H, C, DI
     }
 }
 
+use core::fmt::Debug;
+
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Scalar>
     for FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
 where
@@ -47,7 +49,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
-    PW::Value: Eq,
+    PW::Value: Eq + Debug,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     type ProverData = FieldMerkleTree<P::Scalar, PW::Value, DIGEST_ELEMS>;
@@ -115,8 +117,11 @@ where
                 .peeking_take_while(|(_, dims)| {
                     dims.height.next_power_of_two() == curr_height_padded
                 })
-                .map(|(i, _)| opened_values[i].as_slice()),
+                .map(|(i, _)| {
+                    opened_values[i].as_slice()
+    }),
         );
+     
 
         for &sibling in proof.iter() {
             let (left, right) = if index & 1 == 0 {
@@ -129,20 +134,28 @@ where
             index >>= 1;
             curr_height_padded >>= 1;
 
+ 
+          
+            
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
+
             if let Some(next_height) = next_height {
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
-                        .map(|(i, _)| opened_values[i].as_slice()),
-                );
+                        .map(|(i, _)| {
+                            opened_values[i].as_slice()
+            }),
+                ); 
 
                 root = self.compress.compress([root, next_height_openings_digest]);
             }
         }
+
+
 
         if commit == &root {
             Ok(())
@@ -163,7 +176,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
-    PW::Value: Eq,
+    PW::Value: Eq + Debug,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     fn commit(

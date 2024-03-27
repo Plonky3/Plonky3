@@ -1,4 +1,4 @@
-use p3_field::{Field, PrimeField, PrimeField64};
+use p3_field::{Field, PrimeField, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
@@ -40,7 +40,7 @@ where
 
 impl<F, PF, P, const WIDTH: usize> GrindingChallenger for MultiFieldChallenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
