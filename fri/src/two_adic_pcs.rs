@@ -319,6 +319,7 @@ where
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
+        println!("alpha: {alpha}");
 
         let fri_challenges =
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)

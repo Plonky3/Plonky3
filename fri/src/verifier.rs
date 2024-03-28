@@ -21,7 +21,7 @@ pub enum FriError<CommitMmcsErr> {
 #[derive(Debug)]
 pub struct FriChallenges<F> {
     pub query_indices: Vec<usize>,
-    betas: Vec<F>,
+    pub betas: Vec<F>,
 }
 
 pub fn verify_shape_and_sample_challenges<F, M, Challenger>(
@@ -59,6 +59,8 @@ where
     let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
+
+    println!("query_indices: {query_indices:?}");
 
     Ok(FriChallenges {
         query_indices,

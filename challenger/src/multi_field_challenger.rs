@@ -87,6 +87,7 @@ where
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn observe(&mut self, value: F) {
+        println!("observe: {value}");
         // Any buffered output is now invalid.
         self.output_buffer.clear();
 
@@ -160,9 +161,11 @@ where
                 self.duplexing();
             }
 
-            self.output_buffer
+            let s = self.output_buffer
                 .pop()
-                .expect("Output buffer should be non-empty")
+                .expect("Output buffer should be non-empty");
+            println!("sample: {s}");
+            s
         })
     }
 }
