@@ -130,7 +130,7 @@ where
 }
 
 // for TrivialPcs
-impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> 
+impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>>
     for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
