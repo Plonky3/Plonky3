@@ -327,7 +327,8 @@ where
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
 
-        let reduced_openings: Vec<[Challenge; 32]> = proof.query_openings
+        let reduced_openings: Vec<[Challenge; 32]> = proof
+            .query_openings
             .iter()
             .zip(&fri_challenges.query_indices)
             .map(|(query_opening, &index)| {
