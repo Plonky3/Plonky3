@@ -376,7 +376,7 @@ where
                             }
                         }
                     }
-                } 
+                }
                 Ok(ro)
             })
             .collect::<Result<Vec<_>, InputMmcs::Error>>()

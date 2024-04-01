@@ -117,7 +117,6 @@ where
                 })
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
-     
 
         for &sibling in proof.iter() {
             let (left, right) = if index & 1 == 0 {
@@ -129,7 +128,7 @@ where
             root = self.compress.compress([left, right]);
             index >>= 1;
             curr_height_padded >>= 1;
-            
+
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
