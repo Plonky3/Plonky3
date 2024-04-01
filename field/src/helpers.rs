@@ -131,24 +131,19 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let num_bits_per_tf = 32;
-    let po2 = TF::from_canonical_usize((1usize << num_bits_per_tf) as usize);
-
+    let po2 = TF::from_canonical_usize((1usize << 32) as usize);
     let mut power = TF::one();
     let mut result = TF::zero();
     for i in 0..vals.len() {
         result += TF::from_canonical_u32(vals[i].as_canonical_u32()) * power;
         power *= po2;
     }
-
     result
 }
 
 /// Given an SF element, split it to a vector of TF elements using a 2^32-base decomposition.
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
-    let num_bits_per_tf = 32;
-    let po2 = BigUint::from((1usize << num_bits_per_tf) as usize);
-
+    let po2 = BigUint::from((1usize << 32) as usize);
     let mut val = val.as_canonical_biguint();
     let mut result = Vec::new();
     for _ in 0..n {
@@ -162,6 +157,5 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         }
         val /= po2.clone();
     }
-
     result
 }

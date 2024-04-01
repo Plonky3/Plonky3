@@ -43,12 +43,12 @@ where
     }
 }
 
-/// A padding-free, overwrite-mode sponge function.  Accepts `PrimeField64` elements and has a permutation
-/// using a different `Field` type.
-///
+/// A padding-free, overwrite-mode sponge function that operates natively over PF but accepts elements 
+/// of F: PrimeField32.
+/// 
 /// `WIDTH` is the sponge's rate plus the sponge's capacity.
 #[derive(Clone)]
-pub struct PaddingFreeSpongeMultiField<
+pub struct PaddingFreeSpongeMultiField32<
     F,
     PF,
     P,
@@ -62,7 +62,7 @@ pub struct PaddingFreeSpongeMultiField<
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
-    PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
+    PaddingFreeSpongeMultiField32<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
     PF: Field,
@@ -82,7 +82,7 @@ where
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
-    CryptographicHasher<F, [PF; OUT]> for PaddingFreeSpongeMultiField<F, PF, P, WIDTH, RATE, OUT>
+    CryptographicHasher<F, [PF; OUT]> for PaddingFreeSpongeMultiField32<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
     PF: PrimeField + Default + Copy,
