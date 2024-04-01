@@ -40,7 +40,7 @@ impl TwoAdicSubgroupDft<C> for Mersenne31ComplexRadix2Dit {
 // (in `dit_butterfly_inner()` below) into the existing structure.
 
 /// One layer of a DIT butterfly network.
-fn dit_layer(mat: &mut RowMajorMatrixViewMut<C>, layer: usize, twiddles: &[C]) {
+fn dit_layer(mat: &mut RowMajorMatrixViewMut<'_, C>, layer: usize, twiddles: &[C]) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
     let layer_rev = log_h - 1 - layer;
@@ -64,7 +64,7 @@ fn dit_layer(mat: &mut RowMajorMatrixViewMut<C>, layer: usize, twiddles: &[C]) {
 }
 
 #[inline]
-fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_2: usize) {
+fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<'_, C>, row_1: usize, row_2: usize) {
     let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
         mat.packing_aligned_rows(row_1, row_2);
 
@@ -83,7 +83,7 @@ fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_
 }
 
 #[inline]
-fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<C>, row_1: usize, row_2: usize, twiddle: C) {
+fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<'_, C>, row_1: usize, row_2: usize, twiddle: C) {
     let ((prefix_1, shorts_1, suffix_1), (prefix_2, shorts_2, suffix_2)) =
         mat.packing_aligned_rows(row_1, row_2);
 

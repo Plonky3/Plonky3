@@ -43,7 +43,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddles: &[F]) {
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: &[F]) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
     let layer_rev = log_h - 1 - layer;

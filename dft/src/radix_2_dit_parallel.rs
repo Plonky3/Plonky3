@@ -138,7 +138,7 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
 
 /// One layer of a DIT butterfly network.
 fn dit_layer<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<F>,
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
     twiddles: &[F],
@@ -162,7 +162,7 @@ fn dit_layer<F: Field>(
 /// Like `dit_layer`, except the matrix and twiddles are encoded in bit-reversed order.
 /// This can also be viewed as a layer of the Bowers G^T network.
 fn dit_layer_rev<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<F>,
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
     twiddles_rev: &[F],
