@@ -13,7 +13,7 @@ use crate::butterflies::{dit_butterfly_on_rows, twiddle_free_butterfly_on_rows};
 use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2Dit<F: TwoAdicField> {
     /// Memoized twiddle factors for each length log_n.
     twiddles: RefCell<BTreeMap<usize, Vec<F>>>,

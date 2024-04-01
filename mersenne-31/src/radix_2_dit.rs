@@ -13,7 +13,7 @@ use crate::Mersenne31;
 type F = Mersenne31;
 type C = Complex<F>;
 
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Mersenne31ComplexRadix2Dit;
 
 impl TwoAdicSubgroupDft<C> for Mersenne31ComplexRadix2Dit {

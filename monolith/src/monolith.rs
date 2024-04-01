@@ -17,6 +17,7 @@ use crate::util::get_random_u32;
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
+#[derive(Debug)]
 pub struct MonolithMersenne31<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,

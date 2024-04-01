@@ -6,7 +6,7 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DuplexChallenger<F, P, const WIDTH: usize>
 where
     F: Clone,

@@ -34,6 +34,7 @@ pub trait StarkGenericConfig {
     fn pcs(&self) -> &Self::Pcs;
 }
 
+#[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
     pcs: Pcs,
     _phantom: PhantomData<(Challenge, Challenger)>,

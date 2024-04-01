@@ -153,6 +153,7 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     fn permutation_randomness(&self) -> &[Self::EF];
 }
 
+#[derive(Debug)]
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     pub inner: &'a mut AB,
     condition: AB::Expr,

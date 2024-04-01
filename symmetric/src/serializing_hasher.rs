@@ -3,13 +3,13 @@ use p3_field::{PackedField, PackedValue, PrimeField32, PrimeField64};
 use crate::CryptographicHasher;
 
 /// Maps input field elements to their 4-byte little-endian encodings, outputs `[u8; 32]`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct SerializingHasher32<Inner> {
     inner: Inner,
 }
 
 /// Maps input field elements to their 8-byte little-endian encodings, outputs `[u8; 32]`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct SerializingHasher64<Inner> {
     inner: Inner,
 }

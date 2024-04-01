@@ -20,7 +20,7 @@ use crate::TwoAdicSubgroupDft;
 /// the same network but in bit-reversed order. This way we're always working with small blocks,
 /// so within each half, we can have a certain amount of parallelism with no cross-thread
 /// communication.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2DitParallel;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {

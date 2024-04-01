@@ -15,7 +15,7 @@ use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2Bowers;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {

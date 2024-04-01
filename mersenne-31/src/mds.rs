@@ -14,7 +14,7 @@ use p3_symmetric::Permutation;
 
 use crate::Mersenne31;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MdsMatrixMersenne31;
 
 /// Instantiate convolution for "small" RHS vectors over Mersenne31.

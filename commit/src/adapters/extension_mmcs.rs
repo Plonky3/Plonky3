@@ -7,7 +7,7 @@ use p3_matrix::{Dimensions, Matrix, MatrixRows};
 
 use crate::{DirectMmcs, Mmcs};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
     inner: InnerMmcs,
     _phantom: PhantomData<(F, EF)>,
@@ -103,6 +103,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct ExtensionMatrix<F, EF, InnerMat> {
     inner: InnerMat,
     _phantom: PhantomData<(F, EF)>,
@@ -141,6 +142,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct ExtensionRow<F, EF, InnerRowIter> {
     inner: InnerRowIter,
     _phantom: PhantomData<(F, EF)>,

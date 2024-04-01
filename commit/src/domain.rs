@@ -9,6 +9,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRows;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
+#[derive(Debug)]
 pub struct LagrangeSelectors<T> {
     pub is_first_row: T,
     pub is_last_row: T,
@@ -52,7 +53,7 @@ pub trait PolynomialSpace: Copy {
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
     pub log_n: usize,
     pub shift: Val,

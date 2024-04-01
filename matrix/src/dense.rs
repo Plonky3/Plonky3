@@ -244,7 +244,7 @@ impl<T: Clone + Send> MatrixRowChunksMut<T> for RowMajorMatrix<T> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct RowMajorMatrixView<'a, T> {
     pub values: &'a [T],
     pub width: usize,
@@ -321,6 +321,7 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct RowMajorMatrixViewMut<'a, T> {
     pub values: &'a mut [T],
     pub width: usize,

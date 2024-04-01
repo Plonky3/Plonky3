@@ -9,7 +9,7 @@ use tracing::instrument;
 
 use crate::domain::CircleDomain;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct TwiddleCache<F>(
     // (log_n, shift) -> (twiddles, inverse_twiddles)
     #[allow(clippy::type_complexity)]

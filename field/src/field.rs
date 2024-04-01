@@ -378,7 +378,7 @@ pub trait TwoAdicField: Field {
 }
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Powers<F> {
     pub base: F,
     pub current: F,
@@ -395,7 +395,7 @@ impl<AF: AbstractField> Iterator for Powers<AF> {
 }
 
 /// like `Powers`, but packed into `PackedField` elements
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
     // base ** P::WIDTH
     pub multiplier: P,

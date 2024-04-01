@@ -54,6 +54,7 @@ where
 }
 
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
+#[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
     public_values: Vec<F>,
