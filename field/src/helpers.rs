@@ -4,7 +4,7 @@ use core::array;
 use num_bigint::BigUint;
 
 use crate::field::Field;
-use crate::{AbstractField, PrimeField, PrimeField32, PrimeField64, TwoAdicField};
+use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -131,7 +131,7 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let po2 = TF::from_canonical_usize((1usize << 32) as usize);
+    let po2 = TF::from_canonical_usize(1usize << 32);
     let mut power = TF::one();
     let mut result = TF::zero();
     for i in 0..vals.len() {
@@ -143,14 +143,14 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
 
 /// Given an SF element, split it to a vector of TF elements using a 2^32-base decomposition.
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
-    let po2 = BigUint::from((1usize << 32) as usize);
+    let po2 = BigUint::from(1usize << 32);
     let mut val = val.as_canonical_biguint();
     let mut result = Vec::new();
     for _ in 0..n {
         let mask: BigUint = po2.clone() - BigUint::from(1usize);
         let digit: BigUint = val.clone() & mask;
         let digit_u32s = digit.to_u32_digits();
-        if digit_u32s.len() > 0 {
+        if !digit_u32s.is_empty() {
             result.push(TF::from_wrapped_u32(digit.to_u32_digits()[0]));
         } else {
             result.push(TF::zero())
