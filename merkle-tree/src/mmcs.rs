@@ -36,8 +36,6 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, PW, H, C, DI
     }
 }
 
-use core::fmt::Debug;
-
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Scalar>
     for FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
 where
@@ -143,9 +141,7 @@ where
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
-                        .map(|(i, _)| {
-                            opened_values[i].as_slice()
-                    }),
+                        .map(|(i, _)| opened_values[i].as_slice()),
                 ); 
 
                 root = self.compress.compress([root, next_height_openings_digest]);
@@ -171,7 +167,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
-    PW::Value: Eq + Debug,
+    PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     fn commit(
