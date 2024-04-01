@@ -7,11 +7,11 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
-/// Given a cryptographic permutation that operates on `[Field; WIDTH]`, produces a challenger
-/// that can observe and sample `PrimeField64` elements.  Can also observe values with
-/// `Hash<F, PF, N>` type.
+/// A challenger that operates natively on PF but produces challenges of F: PrimeField32.
+/// 
+/// Used for optimizing the cost of recursive proof verification of STARKs in SNARKs.
 #[derive(Clone)]
-pub struct MultiFieldChallenger<F, PF, P, const WIDTH: usize>
+pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize>
 where
     F: PrimeField32,
     PF: Field,
@@ -24,7 +24,7 @@ where
     num_f_elms: usize,
 }
 
-impl<F, PF, P, const WIDTH: usize> MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: Field,
@@ -45,7 +45,7 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -72,7 +72,7 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> FieldChallenger<F> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> FieldChallenger<F> for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -80,7 +80,7 @@ where
 {
 }
 
-impl<F, PF, P, const WIDTH: usize> CanObserve<F> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanObserve<F> for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -99,7 +99,7 @@ where
 }
 
 impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<[F; N]>
-    for MultiFieldChallenger<F, PF, P, WIDTH>
+    for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -113,7 +113,7 @@ where
 }
 
 impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<Hash<F, PF, N>>
-    for MultiFieldChallenger<F, PF, P, WIDTH>
+    for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -130,7 +130,7 @@ where
 }
 
 // for TrivialPcs
-impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -145,7 +145,7 @@ where
     }
 }
 
-impl<F, EF, PF, P, const WIDTH: usize> CanSample<EF> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, EF, PF, P, const WIDTH: usize> CanSample<EF> for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     EF: ExtensionField<F>,
@@ -168,7 +168,7 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> CanSampleBits<usize> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanSampleBits<usize> for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,

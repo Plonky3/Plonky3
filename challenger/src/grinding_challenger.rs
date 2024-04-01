@@ -3,7 +3,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
 
-use crate::{CanObserve, CanSampleBits, DuplexChallenger, MultiFieldChallenger};
+use crate::{CanObserve, CanSampleBits, DuplexChallenger, MultiField32Challenger};
 
 pub trait GrindingChallenger:
     CanObserve<Self::Witness> + CanSampleBits<usize> + Sync + Clone
@@ -38,7 +38,7 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> GrindingChallenger for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> GrindingChallenger for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
