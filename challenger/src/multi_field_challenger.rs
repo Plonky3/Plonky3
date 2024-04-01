@@ -8,7 +8,7 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
 /// A challenger that operates natively on PF but produces challenges of F: PrimeField32.
-/// 
+///
 /// Used for optimizing the cost of recursive proof verification of STARKs in SNARKs.
 #[derive(Clone)]
 pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize>
@@ -130,7 +130,8 @@ where
 }
 
 // for TrivialPcs
-impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> 
+    for MultiField32Challenger<F, PF, P, WIDTH>
 where
     F: PrimeField32,
     PF: PrimeField,
