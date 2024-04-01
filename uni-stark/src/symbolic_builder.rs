@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
@@ -10,6 +9,7 @@ use tracing::instrument;
 
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
+use crate::Entry;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
 pub fn get_log_quotient_degree<F, A>(air: &A, num_public_values: usize) -> usize
@@ -56,26 +56,25 @@ where
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
 pub struct SymbolicAirBuilder<F: Field> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
-    public_values: Vec<F>,
+    public_values: Vec<SymbolicVariable<F>>,
     constraints: Vec<SymbolicExpression<F>>,
 }
 
 impl<F: Field> SymbolicAirBuilder<F> {
     pub(crate) fn new(width: usize, num_public_values: usize) -> Self {
-        let values = [false, true]
+        let main_values = [0, 1]
             .into_iter()
-            .flat_map(|is_next| {
-                (0..width).map(move |column| SymbolicVariable {
-                    is_next,
-                    column,
-                    _phantom: PhantomData,
-                })
+            .flat_map(|offset| {
+                (0..width).map(move |index| SymbolicVariable::new(Entry::Main { offset }, index))
             })
             .collect();
+        let public_values = (0..num_public_values)
+            .map(move |index| SymbolicVariable::new(Entry::Public, index))
+            .collect();
         Self {
-            main: RowMajorMatrix::new(values, width),
+            main: RowMajorMatrix::new(main_values, width),
             // TODO replace zeros once we have SymbolicExpression::PublicValue
-            public_values: vec![F::zero(); num_public_values],
+            public_values,
             constraints: vec![],
         }
     }
@@ -117,7 +116,8 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
 }
 
 impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values.as_slice()
+    type PublicVar = SymbolicVariable<F>;
+    fn public_values(&self) -> &[Self::PublicVar] {
+        &self.public_values
     }
 }

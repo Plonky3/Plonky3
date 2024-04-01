@@ -59,6 +59,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
+    type PublicVar = Self::F;
+
     fn public_values(&self) -> &[Self::F] {
         self.public_values
     }
@@ -97,6 +99,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     }
 }
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'a, SC> {
+    type PublicVar = Self::F;
+
     fn public_values(&self) -> &[Self::F] {
         self.public_values
     }
