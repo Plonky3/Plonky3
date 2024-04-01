@@ -43,9 +43,9 @@ where
     }
 }
 
-/// A padding-free, overwrite-mode sponge function that operates natively over PF but accepts elements 
+/// A padding-free, overwrite-mode sponge function that operates natively over PF but accepts elements
 /// of F: PrimeField32.
-/// 
+///
 /// `WIDTH` is the sponge's rate plus the sponge's capacity.
 #[derive(Clone)]
 pub struct PaddingFreeSpongeMultiField32<
