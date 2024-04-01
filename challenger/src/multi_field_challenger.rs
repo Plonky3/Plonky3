@@ -160,10 +160,9 @@ where
                 self.duplexing();
             }
 
-            let s = self.output_buffer
+            self.output_buffer
                 .pop()
-                .expect("Output buffer should be non-empty");
-            s
+                .expect("Output buffer should be non-empty")
         })
     }
 }
