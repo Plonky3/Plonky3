@@ -48,7 +48,7 @@ where
 ///
 /// `WIDTH` is the sponge's rate plus the sponge's capacity.
 #[derive(Clone)]
-pub struct PaddingFreeSpongeMultiField32<
+pub struct MultiField32PaddingFreeSponge<
     F,
     PF,
     P,
@@ -62,7 +62,7 @@ pub struct PaddingFreeSpongeMultiField32<
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
-    PaddingFreeSpongeMultiField32<F, PF, P, WIDTH, RATE, OUT>
+    MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
     PF: Field,
@@ -82,7 +82,7 @@ where
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
-    CryptographicHasher<F, [PF; OUT]> for PaddingFreeSpongeMultiField32<F, PF, P, WIDTH, RATE, OUT>
+    CryptographicHasher<F, [PF; OUT]> for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
     PF: PrimeField + Default + Copy,
