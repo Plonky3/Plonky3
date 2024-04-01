@@ -115,9 +115,7 @@ where
                 .peeking_take_while(|(_, dims)| {
                     dims.height.next_power_of_two() == curr_height_padded
                 })
-                .map(|(i, _)| {
-                    opened_values[i].as_slice()
-    }),
+                .map(|(i, _)| opened_values[i].as_slice()),
         );
      
 
@@ -136,13 +134,12 @@ where
                 .peek()
                 .map(|(_, dims)| dims.height)
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
-
             if let Some(next_height) = next_height {
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
                         .map(|(i, _)| opened_values[i].as_slice()),
-                ); 
+                );
 
                 root = self.compress.compress([root, next_height_openings_digest]);
             }
