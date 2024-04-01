@@ -11,16 +11,16 @@ extern crate alloc;
 
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::Matrix;
 
 /// Performs low-degree extensions, where both the original domain and the extended domain are
 /// undefined, but must be consistent between calls with the same input height.
 pub trait UndefinedLde<Val, In>
 where
     Val: Field,
-    In: MatrixRows<Val>,
+    In: Matrix<Val>,
 {
-    type Out: MatrixRows<Val>;
+    type Out: Matrix<Val>;
 
     fn lde_batch(&self, polys: In, extended_height: usize) -> Self::Out;
 }

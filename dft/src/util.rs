@@ -1,18 +1,18 @@
+use core::borrow::BorrowMut;
+
 use alloc::vec;
 
-use p3_field::{Field, PackedValue};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRowSlicesMut;
+use p3_field::Field;
+use p3_matrix::{
+    dense::{DenseMatrix, DenseStorage, RowMajorMatrix},
+    Matrix,
+};
 
 /// Divide each coefficient of the given matrix by its height.
-pub fn divide_by_height<F: Field>(mat: &mut impl MatrixRowSlicesMut<F>) {
-    let h = mat.height();
-    let h_inv = F::from_canonical_usize(h).inverse();
-    for r in 0..h {
-        let (packed, suffix) = F::Packing::pack_slice_with_suffix_mut(mat.row_slice_mut(r));
-        packed.iter_mut().for_each(|x| *x *= h_inv);
-        suffix.iter_mut().for_each(|x| *x *= h_inv);
-    }
+pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
+    mat: &mut DenseMatrix<F, S>,
+) {
+    mat.scale(F::from_canonical_usize(mat.height()).inverse())
 }
 
 /// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,

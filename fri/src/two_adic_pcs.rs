@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
-use p3_commit::{DirectMmcs, Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
@@ -13,8 +13,8 @@ use p3_field::{
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
@@ -76,15 +76,15 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challen
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    FriMmcs: DirectMmcs<Challenge>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
         CanObserve<FriMmcs::Commitment> + CanSample<Challenge> + GrindingChallenger<Witness = Val>,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = InputMmcs::ProverData;
+    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = TwoAdicFriPcsProof<Val, Challenge, InputMmcs, FriMmcs>;
     type Error = VerificationError<InputMmcs::Error, FriMmcs::Error>;
 
@@ -132,7 +132,7 @@ where
         let extra_bits = log2_strict_usize(lde.height()) - log2_strict_usize(domain.size());
         // TODO get rid of these 2 copies
         let strided = lde
-            .to_row_major_matrix()
+            .as_view()
             .bit_reverse_rows()
             .vertically_strided(1 << extra_bits, 0)
             .to_row_major_matrix();
@@ -195,7 +195,16 @@ where
 
         let mats_and_points = rounds
             .iter()
-            .map(|(data, points)| (self.mmcs.get_matrices(data), points))
+            .map(|(data, points)| {
+                (
+                    self.mmcs
+                        .get_matrices(data)
+                        .into_iter()
+                        .map(|m| m.as_view())
+                        .collect_vec(),
+                    points,
+                )
+            })
             .collect_vec();
         let mats = mats_and_points
             .iter()
@@ -247,7 +256,7 @@ where
                     info_span!("reduce rows").in_scope(|| {
                         reduced_opening_for_log_height
                             .par_iter_mut()
-                            .zip_eq(mat.par_rows())
+                            .zip_eq(mat.par_row_slices())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap())

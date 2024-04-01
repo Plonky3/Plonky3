@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 use core::ops::Range;
@@ -19,18 +20,18 @@ pub struct CsrMatrix<T> {
     row_indices: Vec<usize>,
 }
 
-impl<T> CsrMatrix<T> {
+impl<T: Clone + Default + Send + Sync> CsrMatrix<T> {
     fn row_index_range(&self, r: usize) -> Range<usize> {
         debug_assert!(r < self.height());
         self.row_indices[r]..self.row_indices[r + 1]
     }
 
     #[must_use]
-    pub fn row(&self, r: usize) -> &[(usize, T)] {
+    pub fn sparse_row(&self, r: usize) -> &[(usize, T)] {
         &self.nonzero_values[self.row_index_range(r)]
     }
 
-    pub fn row_mut(&mut self, r: usize) -> &mut [(usize, T)] {
+    pub fn sparse_row_mut(&mut self, r: usize) -> &mut [(usize, T)] {
         let range = self.row_index_range(r);
         &mut self.nonzero_values[range]
     }
@@ -42,6 +43,7 @@ impl<T> CsrMatrix<T> {
         row_weight: usize,
     ) -> Self
     where
+        T: Default,
         Standard: Distribution<T>,
     {
         let nonzero_values = iter::repeat_with(|| (rng.gen_range(0..cols), rng.gen()))
@@ -56,12 +58,30 @@ impl<T> CsrMatrix<T> {
     }
 }
 
-impl<T> Matrix<T> for CsrMatrix<T> {
+impl<T: Clone + Default + Send + Sync> Matrix<T> for CsrMatrix<T> {
     fn width(&self) -> usize {
         self.width
     }
 
     fn height(&self) -> usize {
         self.row_indices.len() - 1
+    }
+
+    type Row<'a> = <Vec<T> as IntoIterator>::IntoIter where Self: 'a;
+
+    fn get(&self, r: usize, c: usize) -> T {
+        self.sparse_row(r)
+            .iter()
+            .find(|(col, _)| *col == c)
+            .map(|(_, val)| val.clone())
+            .unwrap_or_default()
+    }
+
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        let mut row = vec![T::default(); self.width()];
+        for (c, v) in self.sparse_row(r) {
+            row[*c] = v.clone();
+        }
+        row.into_iter()
     }
 }

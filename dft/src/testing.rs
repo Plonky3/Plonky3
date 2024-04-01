@@ -1,6 +1,6 @@
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::Matrix;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 

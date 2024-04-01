@@ -6,7 +6,7 @@ use p3_challenger::CanSample;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     let mut acc = vec![EF::zero(); coeffs.width()];
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r);
-        for (acc_c, row_c) in acc.iter_mut().zip(row) {
+        for (acc_c, row_c) in acc.iter_mut().zip(row.as_ref().iter()) {
             *acc_c *= x;
             *acc_c += *row_c;
         }

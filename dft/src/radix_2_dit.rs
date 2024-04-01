@@ -9,7 +9,7 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::butterflies::{dit_butterfly_on_rows, twiddle_free_butterfly_on_rows};
+use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
 use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
@@ -51,23 +51,23 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddle
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
 
-    let width = mat.width();
+    let _width = mat.width();
 
-    mat.par_row_chunks_mut(block_size).for_each(|block_chunks| {
-        let (hi_chunks, lo_chunks) = block_chunks.split_at_mut(half_block_size * width);
-        hi_chunks
-            .par_chunks_exact_mut(width)
-            .zip(lo_chunks.par_chunks_exact_mut(width))
-            .enumerate()
-            .for_each(|(ind, (hi_chunk, lo_chunk))| {
-                if ind == 0 {
-                    twiddle_free_butterfly_on_rows(hi_chunk, lo_chunk)
-                } else {
-                    let twiddle = twiddles[ind << layer_rev];
-                    dit_butterfly_on_rows(hi_chunk, lo_chunk, twiddle)
-                }
-            });
-    });
+    mat.par_row_chunks_mut(block_size)
+        .for_each(|mut block_chunks| {
+            let (mut hi_chunks, mut lo_chunks) = block_chunks.split_rows_mut(half_block_size);
+            hi_chunks
+                .par_rows_mut()
+                .zip(lo_chunks.par_rows_mut())
+                .enumerate()
+                .for_each(|(ind, (hi_chunk, lo_chunk))| {
+                    if ind == 0 {
+                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk)
+                    } else {
+                        DitButterfly(twiddles[ind << layer_rev]).apply_to_rows(hi_chunk, lo_chunk)
+                    }
+                });
+        });
 }
 
 #[cfg(test)]

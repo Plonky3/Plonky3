@@ -70,8 +70,8 @@ mod tests {
         // 0, 0
         assert_eq!(
             dft,
-            RowMajorMatrix {
-                values: vec![
+            RowMajorMatrix::new(
+                vec![
                     F::from_canonical_u8(9),
                     F::from_canonical_u8(5),
                     F::zero(),
@@ -79,8 +79,8 @@ mod tests {
                     F::neg_one(),
                     F::zero(),
                 ],
-                width: 3,
-            }
+                3,
+            )
         )
     }
 

@@ -5,8 +5,7 @@ use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
     TwoAdicField,
 };
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 pub struct LagrangeSelectors<T> {
@@ -102,10 +101,14 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         num_chunks: usize,
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>> {
-        let view = evals.as_view();
         // todo less copy
         (0..num_chunks)
-            .map(|i| view.vertically_strided(num_chunks, i).to_row_major_matrix())
+            .map(|i| {
+                evals
+                    .as_view()
+                    .vertically_strided(num_chunks, i)
+                    .to_row_major_matrix()
+            })
             .collect()
     }
 

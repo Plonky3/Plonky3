@@ -8,7 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::mul::mul_csr_dense;
 use p3_matrix::sparse::CsrMatrix;
 use p3_matrix::stack::VerticalPair;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::Matrix;
 
 /// The Spielman-based code described in the Brakedown paper.
 pub struct BrakedownCode<F, IC>
@@ -44,9 +44,9 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: MatrixRows<F> + Sync,
+    In: Matrix<F> + Sync,
 {
-    type Out = VerticalPair<F, In, VerticalPair<F, IC::Out, RowMajorMatrix<F>>>;
+    type Out = VerticalPair<In, VerticalPair<IC::Out, RowMajorMatrix<F>>>;
 
     fn encode_batch(&self, x: In) -> Self::Out {
         let y = mul_csr_dense(&self.a, &x);
@@ -63,7 +63,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: MatrixRows<F> + Sync,
+    In: Matrix<F> + Sync,
 {
     fn message_len(&self) -> usize {
         self.a.width()
@@ -80,7 +80,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: MatrixRows<F> + Sync,
+    In: Matrix<F> + Sync,
 {
 }
 
@@ -89,7 +89,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: MatrixRows<F> + Sync,
+    In: Matrix<F> + Sync,
 {
     fn parity_len(&self) -> usize {
         self.y_len() + self.z_parity_len() + self.v_len()
@@ -101,7 +101,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: MatrixRows<F> + Sync,
+    In: Matrix<F> + Sync,
 {
 }
 
@@ -110,7 +110,7 @@ where
     F: Field,
     IC: SystematicCode<F, RowMajorMatrix<F>>,
     IC::Out: Sync,
-    In: MatrixRows<F> + Sync,
+    In: Matrix<F> + Sync,
 {
 }
 

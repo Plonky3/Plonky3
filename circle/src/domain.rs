@@ -211,10 +211,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let mut rows = evals.rows();
         for _ in 0..(evals.height() >> (log_chunks + 1)) {
             for chunk in values.iter_mut() {
-                chunk.extend_from_slice(rows.next().unwrap());
+                chunk.extend(rows.next().unwrap());
             }
             for chunk in values.iter_mut().rev() {
-                chunk.extend_from_slice(rows.next().unwrap());
+                chunk.extend(rows.next().unwrap());
             }
         }
         assert!(rows.next().is_none());

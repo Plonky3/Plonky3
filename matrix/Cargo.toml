@@ -15,6 +15,7 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 criterion = "0.5.1"
+p3-mersenne-31 = { path = "../mersenne-31" }
 
 [[bench]]
 name = "transpose_benchmark"

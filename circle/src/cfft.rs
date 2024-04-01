@@ -13,9 +13,9 @@ use core::cell::RefCell;
 use p3_commit::PolynomialSpace;
 use p3_dft::divide_by_height;
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{AbstractField, PackedValue};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowChunksMut, MatrixRowSlices, MatrixRowSlicesMut};
+use p3_field::{AbstractField, Field, PackedValue};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
@@ -28,15 +28,15 @@ pub struct Cfft<F>(Rc<RefCell<TwiddleCache<F>>>);
 
 impl<F: ComplexExtendable> Cfft<F> {
     pub fn cfft(&self, vec: Vec<F>) -> Vec<F> {
-        self.cfft_batch(RowMajorMatrix::new_col(vec)).values
+        self.cfft_batch(DenseMatrix::new_col(vec)).values
     }
-    pub fn cfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M) -> M {
+    pub fn cfft_batch(&self, mat: DenseMatrix<F>) -> DenseMatrix<F> {
         let log_n = log2_strict_usize(mat.height());
         self.coset_cfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
     /// The cfft: interpolating evaluations over a domain to the (sign-switched) cfft basis
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn coset_cfft_batch<M: MatrixRowChunksMut<F>>(&self, mut mat: M, shift: Complex<F>) -> M {
+    pub fn coset_cfft_batch(&self, mut mat: DenseMatrix<F>, shift: Complex<F>) -> DenseMatrix<F> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
 
@@ -50,7 +50,7 @@ impl<F: ComplexExtendable> Cfft<F> {
 
             mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
                 for (i, &t) in twiddle.iter().enumerate() {
-                    let (lo, hi) = chunk.row_pair_slices_mut(i, block_size - i - 1);
+                    let (lo, hi) = chunk.row_pair_mut(i, block_size - i - 1);
                     let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
                     let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
                     dif_butterfly(lo_packed, hi_packed, t.into());
@@ -66,22 +66,22 @@ impl<F: ComplexExtendable> Cfft<F> {
     pub fn icfft(&self, vec: Vec<F>) -> Vec<F> {
         self.icfft_batch(RowMajorMatrix::new_col(vec)).values
     }
-    pub fn icfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M) -> M {
+    pub fn icfft_batch(&self, mat: DenseMatrix<F>) -> DenseMatrix<F> {
         let log_n = log2_strict_usize(mat.height());
         self.coset_icfft_batch(mat, F::circle_two_adic_generator(log_n + 1))
     }
     /// The icfft: evaluating a polynomial in monomial basis over a domain
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn coset_icfft_batch<M: MatrixRowChunksMut<F>>(&self, mat: M, shift: Complex<F>) -> M {
+    pub fn coset_icfft_batch(&self, mat: DenseMatrix<F>, shift: Complex<F>) -> DenseMatrix<F> {
         self.coset_icfft_batch_skipping_first_layers(mat, shift, 0)
     }
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    fn coset_icfft_batch_skipping_first_layers<M: MatrixRowChunksMut<F>>(
+    fn coset_icfft_batch_skipping_first_layers(
         &self,
-        mut mat: M,
+        mut mat: DenseMatrix<F>,
         shift: Complex<F>,
         num_skipped_layers: usize,
-    ) -> M {
+    ) -> DenseMatrix<F> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
 
@@ -95,7 +95,7 @@ impl<F: ComplexExtendable> Cfft<F> {
 
             mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
                 for (i, &t) in twiddle.iter().enumerate() {
-                    let (lo, hi) = chunk.row_pair_slices_mut(i, block_size - i - 1);
+                    let (lo, hi) = chunk.row_pair_mut(i, block_size - i - 1);
                     let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
                     let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
                     dit_butterfly(lo_packed, hi_packed, t.into());
@@ -108,12 +108,12 @@ impl<F: ComplexExtendable> Cfft<F> {
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions()))]
-    pub fn lde<M: MatrixRowChunksMut<F>>(
+    pub fn lde(
         &self,
-        mut mat: M,
+        mut mat: DenseMatrix<F>,
         src_domain: CircleDomain<F>,
         target_domain: CircleDomain<F>,
-    ) -> RowMajorMatrix<F> {
+    ) -> DenseMatrix<F> {
         assert_eq!(mat.height(), src_domain.size());
         assert!(target_domain.size() >= src_domain.size());
         let added_bits = target_domain.log_n - src_domain.log_n;
@@ -160,11 +160,12 @@ fn dit_butterfly<F: AbstractField + Copy>(lo_chunk: &mut [F], hi_chunk: &mut [F]
 
 // Repeats rows
 // TODO this can be micro-optimized
-fn tile_rows<F: Clone>(mat: impl MatrixRowSlices<F>, repetitions: usize) -> RowMajorMatrix<F> {
+fn tile_rows<F: Field>(mat: impl Matrix<F>, repetitions: usize) -> RowMajorMatrix<F> {
     let mut values = Vec::with_capacity(mat.width() * mat.height() * repetitions);
-    for r in mat.row_slices() {
+    for r in 0..mat.height() {
+        let s = mat.row_slice(r);
         for _ in 0..repetitions {
-            values.extend_from_slice(r);
+            values.extend_from_slice(s.as_ref());
         }
     }
     RowMajorMatrix::new(values, mat.width())

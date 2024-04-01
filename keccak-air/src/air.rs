@@ -2,7 +2,7 @@ use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
-use p3_matrix::MatrixRowSlices;
+use p3_matrix::Matrix;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
@@ -24,8 +24,9 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let local: &KeccakCols<AB::Var> = main.row_slice(0).borrow();
-        let next: &KeccakCols<AB::Var> = main.row_slice(1).borrow();
+        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let local: &KeccakCols<AB::Var> = local.as_ref().borrow();
+        let next: &KeccakCols<AB::Var> = next.as_ref().borrow();
 
         // The export flag must be 0 or 1.
         builder.assert_bool(local.export);

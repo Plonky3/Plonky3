@@ -4,7 +4,7 @@ use p3_field::TwoAdicField;
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::swap_rows;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::Matrix;
 
 use crate::util::divide_by_height;
 

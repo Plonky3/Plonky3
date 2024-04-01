@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
-use p3_commit::{DirectMmcs, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
@@ -19,7 +19,7 @@ pub fn prove<F, M, Challenger>(
 ) -> (FriProof<F, M, Challenger::Witness>, Vec<usize>)
 where
     F: TwoAdicField,
-    M: DirectMmcs<F>,
+    M: Mmcs<F>,
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
@@ -52,7 +52,7 @@ where
 
 fn answer_query<F, M>(
     config: &FriConfig<M>,
-    commit_phase_commits: &[M::ProverData],
+    commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>],
     index: usize,
 ) -> QueryProof<F, M>
 where
@@ -94,7 +94,7 @@ fn commit_phase<F, M, Challenger>(
 ) -> CommitPhaseResult<F, M>
 where
     F: TwoAdicField,
-    M: DirectMmcs<F>,
+    M: Mmcs<F>,
     Challenger: CanObserve<M::Commitment> + CanSample<F>,
 {
     let mut current = input[log_max_height].as_ref().unwrap().clone();
@@ -131,8 +131,8 @@ where
     }
 }
 
-struct CommitPhaseResult<F, M: Mmcs<F>> {
+struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
-    data: Vec<M::ProverData>,
+    data: Vec<M::ProverData<RowMajorMatrix<F>>>,
     final_poly: F,
 }

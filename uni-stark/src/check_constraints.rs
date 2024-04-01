@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowSlices};
+use p3_matrix::{Matrix};
 use tracing::instrument;
 
 #[instrument(name = "check constraints", skip_all)]
@@ -20,8 +20,8 @@ where
         let main_local = main.row_slice(i);
         let main_next = main.row_slice(i_next);
         let main = TwoRowMatrixView {
-            local: main_local,
-            next: main_next,
+            local: main_local.as_ref(),
+            next: main_next.as_ref(),
         };
 
         let mut builder = DebugConstraintBuilder {

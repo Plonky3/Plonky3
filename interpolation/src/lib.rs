@@ -4,14 +4,13 @@
 
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, scale_vec,
     two_adic_coset_zerofier, ExtensionField, Field, TwoAdicField,
 };
-use p3_matrix::MatrixRows;
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
@@ -20,7 +19,7 @@ pub fn interpolate_subgroup<F, EF, Mat>(subgroup_evals: &Mat, point: EF) -> Vec<
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    Mat: MatrixRows<F>,
+    Mat: Matrix<F>,
 {
     interpolate_coset(subgroup_evals, F::one(), point)
 }
@@ -31,11 +30,10 @@ pub fn interpolate_coset<F, EF, Mat>(coset_evals: &Mat, shift: F, point: EF) -> 
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    Mat: MatrixRows<F>,
+    Mat: Matrix<F>,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
 
-    let width = coset_evals.width();
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
     let g = F::two_adic_generator(log_height);
@@ -45,11 +43,21 @@ where
         .collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
+    /*
     let mut sum = vec![EF::zero(); width];
     for (i, (subgroup_i, diff_inv)) in g.powers().zip(diff_invs).enumerate() {
         let row = coset_evals.row(i).into_iter();
         add_scaled_base_slice_in_place(&mut sum, row, diff_inv * subgroup_i);
     }
+    */
+
+    let col_scale: Vec<_> = g
+        .powers()
+        .zip(diff_invs)
+        .map(|(sg, diff_inv)| diff_inv * sg)
+        .collect();
+
+    let sum = coset_evals.columnwise_dot_product(&col_scale);
 
     let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
     let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);

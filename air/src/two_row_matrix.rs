@@ -1,7 +1,5 @@
-use core::iter::Cloned;
-use core::slice;
-
-use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
+use core::{iter, slice};
+use p3_matrix::Matrix;
 
 #[derive(Copy, Clone)]
 pub struct TwoRowMatrixView<'a, T> {
@@ -15,7 +13,7 @@ impl<'a, T> TwoRowMatrixView<'a, T> {
     }
 }
 
-impl<'a, T> Matrix<T> for TwoRowMatrixView<'a, T> {
+impl<'a, T: Clone + Send + Sync> Matrix<T> for TwoRowMatrixView<'a, T> {
     fn width(&self) -> usize {
         self.local.len()
     }
@@ -23,10 +21,16 @@ impl<'a, T> Matrix<T> for TwoRowMatrixView<'a, T> {
     fn height(&self) -> usize {
         2
     }
-}
 
-impl<T: Clone> MatrixRows<T> for TwoRowMatrixView<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
+    fn get(&self, r: usize, c: usize) -> T {
+        match r {
+            0 => self.local[c].clone(),
+            1 => self.next[c].clone(),
+            _ => panic!("Only two rows available"),
+        }
+    }
+
+    type Row<'b> = iter::Cloned<slice::Iter<'b, T>> where Self: 'b;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         let slice = match r {
@@ -35,15 +39,5 @@ impl<T: Clone> MatrixRows<T> for TwoRowMatrixView<'_, T> {
             _ => panic!("Only two rows available"),
         };
         slice.iter().cloned()
-    }
-}
-
-impl<T: Clone> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
-    fn row_slice(&self, r: usize) -> &[T] {
-        match r {
-            0 => self.local,
-            1 => self.next,
-            _ => panic!("Only two rows available"),
-        }
     }
 }
