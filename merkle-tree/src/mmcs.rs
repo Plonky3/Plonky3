@@ -49,7 +49,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
-    PW::Value: Eq + Debug,
+    PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     type ProverData = FieldMerkleTree<P::Scalar, PW::Value, DIGEST_ELEMS>;
@@ -133,9 +133,6 @@ where
             root = self.compress.compress([left, right]);
             index >>= 1;
             curr_height_padded >>= 1;
-
- 
-          
             
             let next_height = heights_tallest_first
                 .peek()
@@ -148,14 +145,12 @@ where
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
                         .map(|(i, _)| {
                             opened_values[i].as_slice()
-            }),
+                    }),
                 ); 
 
                 root = self.compress.compress([root, next_height_openings_digest]);
             }
         }
-
-
 
         if commit == &root {
             Ok(())

@@ -1,5 +1,6 @@
 //! Utilities for generating Fiat-Shamir challenges based on an IOP's transcript.
 
+#![no_std]
 
 extern crate alloc;
 

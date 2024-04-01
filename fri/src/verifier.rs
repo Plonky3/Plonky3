@@ -39,9 +39,7 @@ where
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            let beta = challenger.sample();
-            println!("beta={:?}", beta);
-            beta
+            challenger.sample()
         })
         .collect();
 
@@ -59,8 +57,6 @@ where
     let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
-
-    println!("query_indices: {query_indices:?}");
 
     Ok(FriChallenges {
         query_indices,
@@ -118,7 +114,6 @@ where
     let mut folded_eval = F::zero();
     let mut x = F::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
-    println!("x: {x}");
 
     for (log_folded_height, commit, step, &beta) in izip!(
         (0..log_max_height).rev(),

@@ -319,7 +319,6 @@ where
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
-        println!("alpha: {alpha}");
 
         let fri_challenges =
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
@@ -377,10 +376,7 @@ where
                             }
                         }
                     }
-                }
-                // for i in 0..32 {
-                //     println!("PRINTF={:?}", ro[i]);
-                // }
+                } 
                 Ok(ro)
             })
             .collect::<Result<Vec<_>, InputMmcs::Error>>()

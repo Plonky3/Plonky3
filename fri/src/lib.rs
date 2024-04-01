@@ -1,5 +1,6 @@
 //! An implementation of the FRI low-degree test (LDT).
 
+#![no_std]
 
 extern crate alloc;
 
