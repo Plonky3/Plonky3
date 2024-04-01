@@ -134,8 +134,8 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
     let po2 = TF::from_canonical_usize(1usize << 32);
     let mut power = TF::one();
     let mut result = TF::zero();
-    for i in 0..vals.len() {
-        result += TF::from_canonical_u32(vals[i].as_canonical_u32()) * power;
+    for val in vals {
+        result += TF::from_canonical_u32(val.as_canonical_u32()) * power;
         power *= po2;
     }
     result
