@@ -9,7 +9,7 @@ use tracing::instrument;
 
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
-use crate::{Entry, Row};
+use crate::Entry;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
 pub fn get_log_quotient_degree<F, A>(air: &A, num_public_values: usize) -> usize
@@ -62,10 +62,10 @@ pub struct SymbolicAirBuilder<F: Field> {
 
 impl<F: Field> SymbolicAirBuilder<F> {
     pub(crate) fn new(width: usize, num_public_values: usize) -> Self {
-        let main_values = [Row::Local, Row::Next]
+        let main_values = [0, 1]
             .into_iter()
-            .flat_map(|row| {
-                (0..width).map(move |index| SymbolicVariable::new(Entry::Main(row), index))
+            .flat_map(|offset| {
+                (0..width).map(move |index| SymbolicVariable::new(Entry::Main { offset }, index))
             })
             .collect();
         let public_values = (0..num_public_values)
