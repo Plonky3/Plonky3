@@ -328,7 +328,7 @@ where
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
 
-        let reduced_openings: Vec<[Challenge; 32]> = proof.query_openings[0..3]
+        let reduced_openings: Vec<[Challenge; 32]> = proof.query_openings
             .iter()
             .zip(&fri_challenges.query_indices)
             .map(|(query_opening, &index)| {
@@ -386,13 +386,13 @@ where
             .collect::<Result<Vec<_>, InputMmcs::Error>>()
             .map_err(VerificationError::InputMmcsError)?;
 
-        // verifier::verify_challenges(
-        //     &self.fri,
-        //     &proof.fri_proof,
-        //     &fri_challenges,
-        //     &reduced_openings,
-        // )
-        // .map_err(VerificationError::FriError)?;
+        verifier::verify_challenges(
+            &self.fri,
+            &proof.fri_proof,
+            &fri_challenges,
+            &reduced_openings,
+        )
+        .map_err(VerificationError::FriError)?;
 
         Ok(())
     }

@@ -118,6 +118,7 @@ where
     let mut folded_eval = F::zero();
     let mut x = F::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
+    println!("x: {x}");
 
     for (log_folded_height, commit, step, &beta) in izip!(
         (0..log_max_height).rev(),

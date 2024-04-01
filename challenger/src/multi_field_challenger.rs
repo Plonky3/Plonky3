@@ -87,7 +87,6 @@ where
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn observe(&mut self, value: F) {
-        println!("observe: {value}");
         // Any buffered output is now invalid.
         self.output_buffer.clear();
 
@@ -164,7 +163,6 @@ where
             let s = self.output_buffer
                 .pop()
                 .expect("Output buffer should be non-empty");
-            println!("sample: {s}");
             s
         })
     }
