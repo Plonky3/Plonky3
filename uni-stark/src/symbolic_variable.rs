@@ -5,20 +5,42 @@ use p3_field::Field;
 
 use crate::symbolic_expression::SymbolicExpression;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Row {
+    Local,
+    Next,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Entry {
+    Preprocessed(Row),
+    Main(Row),
+    Permutation(Row),
+    Public,
+    Challenge,
+}
+
 /// A variable within the evaluation window, i.e. a column in either the local or next row.
 #[derive(Copy, Clone, Debug)]
 pub struct SymbolicVariable<F: Field> {
-    pub is_next: bool,
-    pub column: usize,
+    pub entry: Entry,
+    pub index: usize,
     pub(crate) _phantom: PhantomData<F>,
 }
 
 impl<F: Field> SymbolicVariable<F> {
-    pub fn new(is_next: bool, column: usize) -> Self {
+    pub fn new(entry: Entry, index: usize) -> Self {
         Self {
-            is_next,
-            column,
+            entry,
+            index,
             _phantom: PhantomData,
+        }
+    }
+
+    pub fn degree_multiple(&self) -> usize {
+        match self.entry {
+            Entry::Preprocessed(_) | Entry::Main(_) | Entry::Permutation(_) => 1,
+            Entry::Public | Entry::Challenge => 0,
         }
     }
 }
