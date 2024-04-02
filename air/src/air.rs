@@ -55,7 +55,7 @@ pub trait AirBuilder: Sized {
     fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
-    fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
+    fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<'_, Self> {
         FilteredAirBuilder {
             inner: self,
             condition: condition.into(),
@@ -67,27 +67,27 @@ pub trait AirBuilder: Sized {
         &mut self,
         x: I1,
         y: I2,
-    ) -> FilteredAirBuilder<Self> {
+    ) -> FilteredAirBuilder<'_, Self> {
         self.when(x.into() - y.into())
     }
 
     /// Returns a sub-builder whose constraints are enforced only on the first row.
-    fn when_first_row(&mut self) -> FilteredAirBuilder<Self> {
+    fn when_first_row(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_first_row())
     }
 
     /// Returns a sub-builder whose constraints are enforced only on the last row.
-    fn when_last_row(&mut self) -> FilteredAirBuilder<Self> {
+    fn when_last_row(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_last_row())
     }
 
     /// Returns a sub-builder whose constraints are enforced on all rows except the last.
-    fn when_transition(&mut self) -> FilteredAirBuilder<Self> {
+    fn when_transition(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition())
     }
 
     /// Returns a sub-builder whose constraints are enforced on all rows except the last `size - 1`.
-    fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<Self> {
+    fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition_window(size))
     }
 
@@ -155,6 +155,7 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     fn permutation_randomness(&self) -> &[Self::EF];
 }
 
+#[derive(Debug)]
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     pub inner: &'a mut AB,
     condition: AB::Expr,

@@ -3,6 +3,7 @@ use core::marker::PhantomData;
 use crate::{Matrix, MatrixRows};
 
 /// A combination of two matrices, stacked together vertically.
+#[derive(Debug)]
 pub struct VerticalPair<T, First: Matrix<T>, Second: Matrix<T>> {
     first: First,
     second: Second,
@@ -46,11 +47,13 @@ where
     }
 }
 
+#[derive(Debug)]
 pub enum EitherIterable<L, R> {
     Left(L),
     Right(R),
 }
 
+#[derive(Debug)]
 pub enum EitherIterator<L, R> {
     Left(L),
     Right(R),

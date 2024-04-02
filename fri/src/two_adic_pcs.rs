@@ -24,6 +24,7 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
+#[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     // degree bound
     log_n: usize,

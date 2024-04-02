@@ -26,7 +26,7 @@ pub struct QueryProof<F: Field, M: Mmcs<F>> {
     pub commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 // #[serde(bound(serialize = "F: Serialize"))]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {

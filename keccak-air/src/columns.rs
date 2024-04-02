@@ -13,6 +13,7 @@ use crate::{NUM_ROUNDS, RATE_LIMBS, U64_LIMBS};
 /// Thus, for example, `a_prime` is stored in `y, x, z` order. This departs from the more common
 /// convention of `x, y, z` order, but it has the benefit that input lists map to AIR columns in a
 /// nicer way.
+#[derive(Debug)]
 #[repr(C)]
 pub struct KeccakCols<T> {
     /// The `i`th value is set to 1 if we are in the `i`th round, otherwise 0.

@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use p3_symmetric::CryptographicHasher;
 
 /// The blake3 hash function.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Blake3;
 
 impl CryptographicHasher<u8, [u8; 32]> for Blake3 {

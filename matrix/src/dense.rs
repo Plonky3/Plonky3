@@ -60,7 +60,7 @@ impl<T> RowMajorMatrix<T> {
     pub fn par_row_chunks_mut(
         &mut self,
         chunk_rows: usize,
-    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<'_, T>>
     where
         T: Send,
     {
@@ -72,7 +72,7 @@ impl<T> RowMajorMatrix<T> {
     pub fn par_row_chunks(
         &self,
         chunk_rows: usize,
-    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<T>>
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<'_, T>>
     where
         T: Sync,
     {
@@ -82,14 +82,14 @@ impl<T> RowMajorMatrix<T> {
     }
 
     #[must_use]
-    pub fn as_view(&self) -> RowMajorMatrixView<T> {
+    pub fn as_view(&self) -> RowMajorMatrixView<'_, T> {
         RowMajorMatrixView {
             values: &self.values,
             width: self.width,
         }
     }
 
-    pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<T> {
+    pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<'_, T> {
         RowMajorMatrixViewMut {
             values: &mut self.values,
             width: self.width,
@@ -244,7 +244,7 @@ impl<T: Clone + Send> MatrixRowChunksMut<T> for RowMajorMatrix<T> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct RowMajorMatrixView<'a, T> {
     pub values: &'a [T],
     pub width: usize,
@@ -268,7 +268,7 @@ impl<'a, T> RowMajorMatrixView<'a, T> {
         self.values.par_chunks_exact(self.width)
     }
 
-    pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
+    pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<'_, T>, RowMajorMatrixView<'_, T>) {
         let (upper_values, lower_values) = self.values.split_at(r * self.width);
         let upper = RowMajorMatrixView {
             values: upper_values,
@@ -321,6 +321,7 @@ impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct RowMajorMatrixViewMut<'a, T> {
     pub values: &'a mut [T],
     pub width: usize,
@@ -364,14 +365,17 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
     }
 
     #[must_use]
-    pub fn as_view(&self) -> RowMajorMatrixView<T> {
+    pub fn as_view(&self) -> RowMajorMatrixView<'_, T> {
         RowMajorMatrixView {
             values: self.values,
             width: self.width,
         }
     }
 
-    pub fn split_rows(&mut self, r: usize) -> (RowMajorMatrixViewMut<T>, RowMajorMatrixViewMut<T>) {
+    pub fn split_rows(
+        &mut self,
+        r: usize,
+    ) -> (RowMajorMatrixViewMut<'_, T>, RowMajorMatrixViewMut<'_, T>) {
         let (upper_values, lower_values) = self.values.split_at_mut(r * self.width);
         let upper = RowMajorMatrixViewMut {
             values: upper_values,

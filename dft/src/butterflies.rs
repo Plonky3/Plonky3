@@ -78,7 +78,7 @@ pub(crate) fn dit_butterfly_on_rows<F: Field>(row_1: &mut [F], row_2: &mut [F], 
 /// DIT butterfly.
 #[inline]
 pub(crate) fn dit_butterfly<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     row_1: usize,
     row_2: usize,
     twiddle: F,

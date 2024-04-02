@@ -6,6 +6,7 @@ use crate::{
 };
 
 /// The trivial code whose encoder is the identity function.
+#[derive(Debug)]
 pub struct IdentityCode {
     pub len: usize,
 }

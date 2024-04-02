@@ -15,7 +15,7 @@ use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2Bowers;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
@@ -77,7 +77,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
-fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -93,7 +93,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// 1/height, and the output is bit-reversed.
-fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -109,7 +109,7 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
 fn bowers_g_layer<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
@@ -120,7 +120,7 @@ fn bowers_g_layer<F: Field>(
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
 fn bowers_g_t_layer<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
@@ -130,7 +130,7 @@ fn bowers_g_t_layer<F: Field>(
 }
 
 fn par_chunks_bowers<F: Field, Fun>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     width: usize,
     half_block_size: usize,
     twiddles: &[F],

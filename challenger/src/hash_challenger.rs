@@ -5,7 +5,7 @@ use p3_symmetric::CryptographicHasher;
 
 use crate::{CanObserve, CanSample};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HashChallenger<T, H, const OUT_LEN: usize>
 where
     T: Clone,

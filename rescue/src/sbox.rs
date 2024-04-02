@@ -14,7 +14,7 @@ where
     fn inverse_sbox_layer(&self, state: &mut [AF; WIDTH]);
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct BasicSboxLayer<F: PrimeField> {
     alpha: u64,
     alpha_inv: u64,
