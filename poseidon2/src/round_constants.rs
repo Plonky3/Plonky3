@@ -1,4 +1,4 @@
-// We save the constants used by the Poseidon2 implementation by Horizon Labs:
+// We save the constants used by the Poseidon2 implementation by Horizen Labs:
 // https://github.com/HorizenLabs/poseidon2
 // This lets us test that our implementations match theirs.
 
