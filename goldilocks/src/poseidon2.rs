@@ -122,18 +122,16 @@ impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 20> for Diffusi
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
+    use core::array;
 
-    use ark_ff::{BigInteger, PrimeField};
-    use p3_poseidon2::Poseidon2;
-    use rand::Rng;
-    use zkhash::fields::goldilocks::FpGoldiLocks;
-    use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-    use zkhash::poseidon2::poseidon2_instance_goldilocks::{
-        POSEIDON2_GOLDILOCKS_12_PARAMS, POSEIDON2_GOLDILOCKS_8_PARAMS, RC12, RC8,
+    use p3_poseidon2::{
+        Poseidon2, HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS,
+        HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS,
     };
 
     use super::*;
+
+    type F = Goldilocks;
 
     #[test]
     fn test_poseidon2_constants() {
@@ -150,145 +148,99 @@ mod tests {
         assert_eq!(monty_constant, MATRIX_DIAG_20_GOLDILOCKS);
     }
 
-    fn goldilocks_from_ark_ff(input: FpGoldiLocks) -> Goldilocks {
-        let as_bigint = input.into_bigint();
-        let mut as_bytes = as_bigint.to_bytes_le();
-        as_bytes.resize(8, 0);
-        let as_u64 = u64::from_le_bytes(as_bytes[0..8].try_into().unwrap());
-        Goldilocks::from_wrapped_u64(as_u64)
-    }
-
-    #[test]
-    fn test_poseidon2_goldilocks_width_8() {
+    // A function which recreates the poseidon2 implementation in
+    // https://github.com/HorizenLabs/poseidon2
+    fn hl_poseidon2_goldilocks_width_8(input: &mut [F; 8]) {
         const WIDTH: usize = 8;
         const D: u64 = 7;
         const ROUNDS_F: usize = 8;
         const ROUNDS_P: usize = 22;
 
-        type F = Goldilocks;
-
-        let mut rng = rand::thread_rng();
-
-        // Poiseidon2 reference implementation from zkhash repo.
-        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_8_PARAMS);
-
-        // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC8
-            .iter()
-            .map(|vec| {
-                vec.iter()
-                    .cloned()
-                    .map(goldilocks_from_ark_ff)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap()
-            })
-            .collect();
-
         // Our Poseidon2 implementation.
         let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
             ROUNDS_F,
+            HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS
+                .map(to_goldilocks_array)
+                .to_vec(),
             ROUNDS_P,
-            round_constants,
+            to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
             DiffusionMatrixGoldilocks,
         );
 
-        // Generate random input and convert to both Goldilocks field formats.
-        let input_u64 = rng.gen::<[u64; WIDTH]>();
-        let input_ref = input_u64
-            .iter()
-            .cloned()
-            .map(FpGoldiLocks::from)
-            .collect::<Vec<_>>();
-        let input = input_u64.map(F::from_wrapped_u64);
-
-        // Check that the conversion is correct.
-        assert!(input_ref
-            .iter()
-            .zip(input.iter())
-            .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
-
-        // Run reference implementation.
-        let output_ref = poseidon2_ref.permutation(&input_ref);
-        let expected: [F; WIDTH] = output_ref
-            .iter()
-            .cloned()
-            .map(goldilocks_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        // Run our implementation.
-        let mut output = input;
-        poseidon2.permute_mut(&mut output);
-
-        assert_eq!(output, expected);
+        poseidon2.permute_mut(input);
     }
 
+    /// Test on the constant 0 input.
     #[test]
-    fn test_poseidon2_goldilocks_width_12() {
-        const WIDTH: usize = 12;
-        const D: u64 = 7;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 22;
+    fn test_poseidon2_width_8_zeroes() {
+        let mut input: [F; 8] = [0_u64; 8].map(F::from_wrapped_u64);
 
-        type F = Goldilocks;
+        let expected: [F; 8] = [
+            4214787979728720400,
+            12324939279576102560,
+            10353596058419792404,
+            15456793487362310586,
+            10065219879212154722,
+            16227496357546636742,
+            2959271128466640042,
+            14285409611125725709,
+        ]
+        .map(F::from_canonical_u64);
+        hl_poseidon2_goldilocks_width_8(&mut input);
+        assert_eq!(input, expected);
+    }
 
-        let mut rng = rand::thread_rng();
+    /// Test on the input 0..16.
+    #[test]
+    fn test_poseidon2_width_8_range() {
+        let mut input: [F; 8] = array::from_fn(|i| F::from_wrapped_u64(i as u64));
 
-        // Poiseidon2 reference implementation from zkhash repo.
-        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_12_PARAMS);
+        let expected: [F; 8] = [
+            14266028122062624699,
+            5353147180106052723,
+            15203350112844181434,
+            17630919042639565165,
+            16601551015858213987,
+            10184091939013874068,
+            16774100645754596496,
+            12047415603622314780,
+        ]
+        .map(F::from_canonical_u64);
+        hl_poseidon2_goldilocks_width_8(&mut input);
+        assert_eq!(input, expected);
+    }
 
-        // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC12
-            .iter()
-            .map(|vec| {
-                vec.iter()
-                    .cloned()
-                    .map(goldilocks_from_ark_ff)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap()
-            })
-            .collect();
+    /// Test on a roughly random input.
+    /// This random input is generated by the following sage code:
+    /// set_random_seed(2468)
+    /// vector([ZZ.random_element(2**31) for t in range(16)])
+    #[test]
+    fn test_poseidon2_width_8_random() {
+        let mut input: [F; 8] = [
+            5116996373749832116,
+            8931548647907683339,
+            17132360229780760684,
+            11280040044015983889,
+            11957737519043010992,
+            15695650327991256125,
+            17604752143022812942,
+            543194415197607509,
+        ]
+        .map(F::from_wrapped_u64);
 
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
-            ROUNDS_F,
-            ROUNDS_P,
-            round_constants,
-            DiffusionMatrixGoldilocks,
-        );
+        let expected: [F; 8] = [
+            1831346684315917658,
+            13497752062035433374,
+            12149460647271516589,
+            15656333994315312197,
+            4671534937670455565,
+            3140092508031220630,
+            4251208148861706881,
+            6973971209430822232,
+        ]
+        .map(F::from_canonical_u64);
 
-        // Generate random input and convert to both Goldilocks field formats.
-        let input_u64 = rng.gen::<[u64; WIDTH]>();
-        let input_ref = input_u64
-            .iter()
-            .cloned()
-            .map(FpGoldiLocks::from)
-            .collect::<Vec<_>>();
-        let input = input_u64.map(F::from_wrapped_u64);
-
-        // Check that the conversion is correct.
-        assert!(input_ref
-            .iter()
-            .zip(input.iter())
-            .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
-
-        // Run reference implementation.
-        let output_ref = poseidon2_ref.permutation(&input_ref);
-        let expected: [F; WIDTH] = output_ref
-            .iter()
-            .cloned()
-            .map(goldilocks_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        // Run our implementation.
-        let mut output = input;
-        poseidon2.permute_mut(&mut output);
-
-        assert_eq!(output, expected);
+        hl_poseidon2_goldilocks_width_8(&mut input);
+        assert_eq!(input, expected);
     }
 }

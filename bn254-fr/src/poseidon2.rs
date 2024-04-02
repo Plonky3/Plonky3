@@ -89,9 +89,27 @@ mod tests {
             })
             .collect();
 
+        let external_round_constants: Vec<[F; WIDTH]> = round_constants
+            .iter()
+            .enumerate()
+            .filter_map(|(i, val)| {
+                if ((ROUNDS_F / 2)..((ROUNDS_F / 2) + ROUNDS_P)).contains(&i) {
+                    None
+                } else {
+                    Some(*val)
+                }
+            })
+            .collect();
+        let internal_round_constants: Vec<F> = round_constants
+            .iter()
+            .skip(ROUNDS_F / 2)
+            .take(ROUNDS_P)
+            .map(|vec| vec[0])
+            .collect();
+
         // Our Poseidon2 implementation.
         let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> =
-            Poseidon2::new(ROUNDS_F, ROUNDS_P, round_constants, DiffusionMatrixBN254);
+            Poseidon2::new(ROUNDS_F, external_round_constants, ROUNDS_P, internal_round_constants, DiffusionMatrixBN254);
 
         // Generate random input and convert to both Goldilocks field formats.
         let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();

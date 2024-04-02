@@ -45,16 +45,16 @@ impl<AF: AbstractField<F = BabyBear>> DiffusionPermutation<AF, 24> for Diffusion
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
+    use core::array;
 
-    use ark_ff::{BigInteger, PrimeField};
-    use p3_poseidon2::Poseidon2;
-    use rand::Rng;
-    use zkhash::fields::babybear::FpBabyBear;
-    use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-    use zkhash::poseidon2::poseidon2_instance_babybear::{POSEIDON2_BABYBEAR_16_PARAMS, RC16};
+    use p3_field::AbstractField;
+    use p3_poseidon2::{
+        Poseidon2, HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS, HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS,
+    };
 
     use super::*;
+
+    type F = BabyBear;
 
     // These are currently saved as their true values. It will be far more efficient to save them in Monty Form.
 
@@ -67,74 +67,78 @@ mod tests {
         assert_eq!(monty_constant, MATRIX_DIAG_24_BABYBEAR_MONTY);
     }
 
-    fn babybear_from_ark_ff(input: FpBabyBear) -> BabyBear {
-        let as_bigint = input.into_bigint();
-        let mut as_bytes = as_bigint.to_bytes_le();
-        as_bytes.resize(4, 0);
-        let as_u32 = u32::from_le_bytes(as_bytes[0..4].try_into().unwrap());
-        BabyBear::from_wrapped_u32(as_u32)
-    }
-
-    #[test]
-    fn test_poseidon2_babybear_width_16() {
+    // A function which recreates the poseidon2 implementation in
+    // https://github.com/HorizenLabs/poseidon2
+    fn hl_poseidon2_babybear_width_16(input: &mut [F; 16]) {
         const WIDTH: usize = 16;
         const D: u64 = 7;
         const ROUNDS_F: usize = 8;
         const ROUNDS_P: usize = 13;
 
-        type F = BabyBear;
-
-        let mut rng = rand::thread_rng();
-
-        // Poiseidon2 reference implementation from zkhash repo.
-        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BABYBEAR_16_PARAMS);
-
-        // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC16
-            .iter()
-            .map(|vec| {
-                vec.iter()
-                    .cloned()
-                    .map(babybear_from_ark_ff)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap()
-            })
-            .collect();
-
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<BabyBear, DiffusionMatrixBabybear, WIDTH, D> =
-            Poseidon2::new(ROUNDS_F, ROUNDS_P, round_constants, DiffusionMatrixBabybear);
+        let poseidon2: Poseidon2<BabyBear, DiffusionMatrixBabybear, WIDTH, D> = Poseidon2::new(
+            ROUNDS_F,
+            HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS
+                .map(to_babybear_array)
+                .to_vec(),
+            ROUNDS_P,
+            to_babybear_array(HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS).to_vec(),
+            DiffusionMatrixBabybear,
+        );
+        poseidon2.permute_mut(input);
+    }
 
-        // Generate random input and convert to both BabyBear field formats.
-        let input_u32 = rng.gen::<[u32; WIDTH]>();
-        let input_ref = input_u32
-            .iter()
-            .cloned()
-            .map(FpBabyBear::from)
-            .collect::<Vec<_>>();
-        let input = input_u32.map(F::from_wrapped_u32);
+    /// Test on the constant 0 input.
+    #[test]
+    fn test_poseidon2_width_16_zeroes() {
+        let mut input: [F; 16] = [0_u32; 16].map(F::from_wrapped_u32);
 
-        // Check that the conversion is correct.
-        assert!(input_ref
-            .iter()
-            .zip(input.iter())
-            .all(|(a, b)| babybear_from_ark_ff(*a) == *b));
+        let expected: [F; 16] = [
+            1337856655, 1843094405, 328115114, 964209316, 1365212758, 1431554563, 210126733,
+            1214932203, 1929553766, 1647595522, 1496863878, 324695999, 1569728319, 1634598391,
+            597968641, 679989771,
+        ]
+        .map(F::from_canonical_u32);
+        hl_poseidon2_babybear_width_16(&mut input);
+        assert_eq!(input, expected);
+    }
 
-        // Run reference implementation.
-        let output_ref = poseidon2_ref.permutation(&input_ref);
-        let expected: [F; WIDTH] = output_ref
-            .iter()
-            .cloned()
-            .map(babybear_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+    /// Test on the input 0..16.
+    #[test]
+    fn test_poseidon2_width_16_range() {
+        let mut input: [F; 16] = array::from_fn(|i| F::from_wrapped_u32(i as u32));
 
-        // Run our implementation.
-        let mut output = input;
-        poseidon2.permute_mut(&mut output);
+        let expected: [F; 16] = [
+            896560466, 771677727, 128113032, 1378976435, 160019712, 1452738514, 682850273,
+            223500421, 501450187, 1804685789, 1671399593, 1788755219, 1736880027, 1352180784,
+            1928489698, 1128802977,
+        ]
+        .map(F::from_canonical_u32);
+        hl_poseidon2_babybear_width_16(&mut input);
+        assert_eq!(input, expected);
+    }
 
-        assert_eq!(output, expected);
+    /// Test on a roughly random input.
+    /// This random input is generated by the following sage code:
+    /// set_random_seed(2468)
+    /// vector([ZZ.random_element(2**31) for t in range(16)])
+    #[test]
+    fn test_poseidon2_width_16_random() {
+        let mut input: [F; 16] = [
+            1179785652, 1291567559, 66272299, 471640172, 653876821, 478855335, 871063984,
+            540251327, 1506944720, 1403776782, 770420443, 126472305, 1535928603, 1017977016,
+            818646757, 359411429,
+        ]
+        .map(F::from_wrapped_u32);
+
+        let expected: [F; 16] = [
+            1736862924, 1950079822, 952072292, 1965704005, 236226362, 1113998185, 1624488077,
+            391891139, 1194078311, 1040746778, 1898067001, 774167026, 193702242, 859952892,
+            732204701, 1744970965,
+        ]
+        .map(F::from_canonical_u32);
+
+        hl_poseidon2_babybear_width_16(&mut input);
+        assert_eq!(input, expected);
     }
 }
