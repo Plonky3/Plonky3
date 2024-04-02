@@ -108,8 +108,13 @@ mod tests {
             .collect();
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> =
-            Poseidon2::new(ROUNDS_F, external_round_constants, ROUNDS_P, internal_round_constants, DiffusionMatrixBN254);
+        let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> = Poseidon2::new(
+            ROUNDS_F,
+            external_round_constants,
+            ROUNDS_P,
+            internal_round_constants,
+            DiffusionMatrixBN254,
+        );
 
         // Generate random input and convert to both Goldilocks field formats.
         let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();
