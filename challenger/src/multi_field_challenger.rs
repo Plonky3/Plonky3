@@ -12,8 +12,7 @@ use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 /// Used for optimizing the cost of recursive proof verification of STARKs in SNARKs.
 /// 
 /// SAFETY: There are some bias complications with using this challenger. In particular, 
-/// samples are actually random in [0, 2^32) and then reduced to be in F. This means that
-/// elements of F have two possible values they map from, instead of just one.
+/// samples are actually random in [0, 2^64) and then reduced to be in F.
 #[derive(Clone, Debug)]
 pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize>
 where
@@ -38,7 +37,7 @@ where
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
-        let num_f_elms = PF::bits() / F::bits();
+        let num_f_elms = PF::bits() / 64;
         Ok(Self {
             sponge_state: [PF::default(); WIDTH],
             input_buffer: vec![],

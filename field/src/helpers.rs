@@ -140,17 +140,20 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
     result
 }
 
-/// Given an SF element, split it to a vector of TF elements using a 2^32-base decomposition.
+/// Given an SF element, split it to a vector of TF elements using a 2^64-base decomposition.
+/// 
+/// We use a 2^64-base decomposition for a field of size ~2^32 because then the bias will be
+/// at most ~1/2^32 for each element after the reduction.
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
-    let po2 = BigUint::from(1u64 << 32);
+    let po2 = BigUint::from(1u128 << 64);
     let mut val = val.as_canonical_biguint();
     let mut result = Vec::new();
     for _ in 0..n {
-        let mask: BigUint = po2.clone() - BigUint::from(1u64);
+        let mask: BigUint = po2.clone() - BigUint::from(1u128);
         let digit: BigUint = val.clone() & mask;
-        let digit_u32s = digit.to_u32_digits();
-        if !digit_u32s.is_empty() {
-            result.push(TF::from_wrapped_u32(digit_u32s[0]));
+        let digit_u64s = digit.to_u64_digits();
+        if !digit_u64s.is_empty() {
+            result.push(TF::from_wrapped_u64(digit_u64s[0]));
         } else {
             result.push(TF::zero())
         }
