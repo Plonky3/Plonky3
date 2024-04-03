@@ -98,7 +98,8 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     buf
 }
 
-/// An implementation of `batch_multiplicative_inverse` that operates in place.
+/// An implementation of `batch_multiplicative_inverse` that operates in place. Zero values are left
+/// unchanged.
 pub fn batch_multiplicative_inverse_inplace<F: Field>(values: &mut [F]) {
     // Check if values are zero and construct a new vector with only nonzero values.
     let mut nonzero_values = Vec::with_capacity(values.len());
