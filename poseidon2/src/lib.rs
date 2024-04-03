@@ -10,14 +10,16 @@ extern crate alloc;
 
 mod diffusion;
 mod matrix;
+mod round_numbers;
 use alloc::vec::Vec;
 
 pub use diffusion::{matmul_internal, DiffusionPermutation};
 use matrix::Poseidon2MEMatrix;
-use p3_field::{AbstractField, PrimeField};
+use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+pub use round_numbers::poseidon2_round_numbers_128;
 
 const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
@@ -112,6 +114,33 @@ where
         AF: AbstractField<F = F>,
     {
         state.iter_mut().for_each(|a| *a = self.sbox_p(a));
+    }
+}
+
+impl<F, Diffusion, const WIDTH: usize, const D: u64> Poseidon2<F, Diffusion, WIDTH, D>
+where
+    F: PrimeField64,
+{
+    /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
+    pub fn new_from_rng_128<R: Rng>(internal_linear_layer: Diffusion, rng: &mut R) -> Self
+    where
+        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+    {
+        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
+
+        let external_constants = rng
+            .sample_iter(Standard)
+            .take(rounds_f)
+            .collect::<Vec<[F; WIDTH]>>();
+        let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
+
+        Self {
+            rounds_f,
+            external_constants,
+            rounds_p,
+            internal_constants,
+            internal_linear_layer,
+        }
     }
 }
 
