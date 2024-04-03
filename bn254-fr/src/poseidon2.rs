@@ -91,12 +91,10 @@ mod tests {
 
         let internal_start = ROUNDS_F / 2;
         let internal_end = (ROUNDS_F / 2) + ROUNDS_P;
-        // need to make `round_constants` mutable above for this to work
         let internal_round_constants = round_constants
             .drain(internal_start..internal_end)
             .map(|vec| vec[0])
             .collect::<Vec<_>>();
-        // optional rename; probably simpler to just to call the original variable `external_round_constants`
         let external_round_constants = round_constants;
         // Our Poseidon2 implementation.
         let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> = Poseidon2::new(
