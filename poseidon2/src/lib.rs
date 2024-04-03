@@ -74,15 +74,8 @@ where
     where
         Standard: Distribution<F>,
     {
-        let mut external_constants = Vec::new();
-        for _ in 0..rounds_f {
-            external_constants.push(rng.gen::<[F; WIDTH]>());
-        }
-
-        let mut internal_constants = Vec::new();
-        for _ in 0..rounds_p {
-            internal_constants.push(rng.gen::<F>());
-        }
+        let external_constants = rng.sample_iter(Standard).take(rounds_f).collect::<Vec<[F; WIDTH]>>();
+        let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
 
         Self {
             rounds_f,
