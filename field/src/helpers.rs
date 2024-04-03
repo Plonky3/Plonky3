@@ -141,7 +141,7 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
 }
 
 /// Given an SF element, split it to a vector of TF elements using a 2^64-base decomposition.
-/// 
+///
 /// We use a 2^64-base decomposition for a field of size ~2^32 because then the bias will be
 /// at most ~1/2^32 for each element after the reduction.
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
