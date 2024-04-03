@@ -21,7 +21,7 @@ use p3_field::{
     PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
-pub use poseidon2::DiffusionMatrixGoldilocks;
+pub use poseidon2::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};

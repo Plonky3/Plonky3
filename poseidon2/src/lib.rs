@@ -10,7 +10,6 @@ extern crate alloc;
 
 mod diffusion;
 mod matrix;
-mod round_constants;
 use alloc::vec::Vec;
 
 pub use diffusion::{matmul_internal, DiffusionPermutation};
@@ -19,7 +18,6 @@ use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-pub use round_constants::*;
 
 const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
