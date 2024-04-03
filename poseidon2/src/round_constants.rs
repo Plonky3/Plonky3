@@ -1,6 +1,6 @@
 // We save the constants used by the Poseidon2 implementation by Horizen Labs:
 // https://github.com/HorizenLabs/poseidon2
-// This lets us test that our implementations match theirs.
+// This lets us test that our implementations matches theirs.
 
 // Note that for the external (full) rounds, their implementation uses the matrix:
 // [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
