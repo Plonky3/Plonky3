@@ -14,7 +14,7 @@ pub struct ExtensionMmcs<F, EF, InnerMmcs> {
 }
 
 impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs> {
-    pub fn new(inner: InnerMmcs) -> Self {
+    pub const fn new(inner: InnerMmcs) -> Self {
         Self {
             inner,
             _phantom: PhantomData,

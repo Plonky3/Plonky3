@@ -41,7 +41,7 @@ pub struct StarkConfig<Pcs, Challenge, Challenger> {
 }
 
 impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
-    pub fn new(pcs: Pcs) -> Self {
+    pub const fn new(pcs: Pcs) -> Self {
         Self {
             pcs,
             _phantom: PhantomData,

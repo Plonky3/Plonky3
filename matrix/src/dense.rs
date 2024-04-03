@@ -268,7 +268,10 @@ impl<'a, T> RowMajorMatrixView<'a, T> {
         self.values.par_chunks_exact(self.width)
     }
 
-    pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<'_, T>, RowMajorMatrixView<'_, T>) {
+    pub const fn split_rows(
+        &self,
+        r: usize,
+    ) -> (RowMajorMatrixView<'_, T>, RowMajorMatrixView<'_, T>) {
         let (upper_values, lower_values) = self.values.split_at(r * self.width);
         let upper = RowMajorMatrixView {
             values: upper_values,

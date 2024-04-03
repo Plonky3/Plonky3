@@ -23,7 +23,7 @@ pub struct SymbolicVariable<F: Field> {
 }
 
 impl<F: Field> SymbolicVariable<F> {
-    pub fn new(entry: Entry, index: usize) -> Self {
+    pub const fn new(entry: Entry, index: usize) -> Self {
         Self {
             entry,
             index,
@@ -31,7 +31,7 @@ impl<F: Field> SymbolicVariable<F> {
         }
     }
 
-    pub fn degree_multiple(&self) -> usize {
+    pub const fn degree_multiple(&self) -> usize {
         match self.entry {
             Entry::Preprocessed { .. } | Entry::Main { .. } | Entry::Permutation { .. } => 1,
             Entry::Public | Entry::Challenge => 0,

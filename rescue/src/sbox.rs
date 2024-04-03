@@ -22,7 +22,7 @@ pub struct BasicSboxLayer<F: PrimeField> {
 }
 
 impl<F: PrimeField> BasicSboxLayer<F> {
-    pub fn new(alpha: u64, alpha_inv: u64) -> Self {
+    pub const fn new(alpha: u64, alpha_inv: u64) -> Self {
         Self {
             alpha,
             alpha_inv,

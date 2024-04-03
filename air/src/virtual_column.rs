@@ -61,7 +61,7 @@ impl<F: Field> VirtualPairCol<F> {
     }
 
     #[must_use]
-    pub fn constant(x: F) -> Self {
+    pub const fn constant(x: F) -> Self {
         Self {
             column_weights: vec![],
             constant: x,

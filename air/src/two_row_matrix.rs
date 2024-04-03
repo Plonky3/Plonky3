@@ -10,7 +10,7 @@ pub struct TwoRowMatrixView<'a, T> {
 }
 
 impl<'a, T> TwoRowMatrixView<'a, T> {
-    pub fn new(local: &'a [T], next: &'a [T]) -> Self {
+    pub const fn new(local: &'a [T], next: &'a [T]) -> Self {
         Self { local, next }
     }
 }

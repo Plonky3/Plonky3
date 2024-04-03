@@ -392,7 +392,7 @@ pub(crate) fn reduce128(x: u128) -> Goldilocks {
 
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
-fn split(x: u128) -> (u64, u64) {
+const fn split(x: u128) -> (u64, u64) {
     (x as u64, (x >> 64) as u64)
 }
 

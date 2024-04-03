@@ -17,7 +17,7 @@ pub const fn ceil_div_usize(a: usize, b: usize) -> usize {
 
 /// Computes `ceil(log_2(n))`.
 #[must_use]
-pub fn log2_ceil_usize(n: usize) -> usize {
+pub const fn log2_ceil_usize(n: usize) -> usize {
     (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
 }
 
