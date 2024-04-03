@@ -72,9 +72,12 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<F>,
+        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
-        let external_constants = rng.sample_iter(Standard).take(rounds_f).collect::<Vec<[F; WIDTH]>>();
+        let external_constants = rng
+            .sample_iter(Standard)
+            .take(rounds_f)
+            .collect::<Vec<[F; WIDTH]>>();
         let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
 
         Self {

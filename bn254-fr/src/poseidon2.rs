@@ -77,7 +77,7 @@ mod tests {
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
 
         // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC3
+        let mut round_constants: Vec<[F; WIDTH]> = RC3
             .iter()
             .map(|vec| {
                 vec.iter()
