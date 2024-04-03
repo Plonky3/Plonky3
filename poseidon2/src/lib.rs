@@ -27,11 +27,14 @@ pub struct Poseidon2<F, Diffusion, const WIDTH: usize, const D: u64> {
     /// The number of external rounds.
     rounds_f: usize,
 
+    /// The external round constants.
+    external_constants: Vec<[F; WIDTH]>,
+
     /// The number of internal rounds.
     rounds_p: usize,
 
-    /// The round constants.
-    constants: Vec<[F; WIDTH]>,
+    /// The internal round constants.
+    internal_constants: Vec<F>,
 
     /// The linear layer used in internal rounds (only needs diffusion property, not MDS).
     internal_linear_layer: Diffusion,
@@ -44,15 +47,17 @@ where
     /// Create a new Poseidon2 configuration.
     pub fn new(
         rounds_f: usize,
+        external_constants: Vec<[F; WIDTH]>,
         rounds_p: usize,
-        constants: Vec<[F; WIDTH]>,
+        internal_constants: Vec<F>,
         internal_linear_layer: Diffusion,
     ) -> Self {
         assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
         Self {
             rounds_f,
+            external_constants,
             rounds_p,
-            constants,
+            internal_constants,
             internal_linear_layer,
         }
     }
@@ -65,18 +70,19 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<F>,
+        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
-        let mut constants = Vec::new();
-        let rounds = rounds_f + rounds_p;
-        for _ in 0..rounds {
-            constants.push(rng.gen::<[F; WIDTH]>());
-        }
+        let external_constants = rng
+            .sample_iter(Standard)
+            .take(rounds_f)
+            .collect::<Vec<[F; WIDTH]>>();
+        let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
 
         Self {
             rounds_f,
+            external_constants,
             rounds_p,
-            constants,
+            internal_constants,
             internal_linear_layer: internal_mds,
         }
     }
@@ -123,25 +129,23 @@ where
         external_linear_layer.permute_mut(state);
 
         // The first half of the external rounds.
-        let rounds = self.rounds_f + self.rounds_p;
         let rounds_f_beginning = self.rounds_f / 2;
         for r in 0..rounds_f_beginning {
-            self.add_rc(state, &self.constants[r]);
+            self.add_rc(state, &self.external_constants[r]);
             self.sbox(state);
             external_linear_layer.permute_mut(state);
         }
 
         // The internal rounds.
-        let p_end = rounds_f_beginning + self.rounds_p;
-        for r in rounds_f_beginning..p_end {
-            state[0] += AF::from_f(self.constants[r][0]);
+        for r in 0..self.rounds_p {
+            state[0] += AF::from_f(self.internal_constants[r]);
             state[0] = self.sbox_p(&state[0]);
             self.internal_linear_layer.permute_mut(state);
         }
 
         // The second half of the external rounds.
-        for r in p_end..rounds {
-            self.add_rc(state, &self.constants[r]);
+        for r in rounds_f_beginning..self.rounds_f {
+            self.add_rc(state, &self.external_constants[r]);
             self.sbox(state);
             external_linear_layer.permute_mut(state);
         }
