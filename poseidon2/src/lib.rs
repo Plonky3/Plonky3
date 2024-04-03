@@ -13,7 +13,7 @@ mod matrix;
 use alloc::vec::Vec;
 
 pub use diffusion::{matmul_internal, DiffusionPermutation};
-use matrix::Poseidon2MEMatrix;
+use matrix::Poseidon2ExternalMatrixHL;
 use p3_field::{AbstractField, PrimeField};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
@@ -123,7 +123,7 @@ where
     Diffusion: DiffusionPermutation<AF, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        let external_linear_layer = Poseidon2MEMatrix::<WIDTH, D>;
+        let external_linear_layer = Poseidon2ExternalMatrixHL;
 
         // The initial linear layer.
         external_linear_layer.permute_mut(state);
