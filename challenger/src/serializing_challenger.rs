@@ -42,7 +42,7 @@ pub struct SerializingChallenger64<F, Inner> {
 }
 
 impl<F: PrimeField32, Inner: CanObserve<u8>> SerializingChallenger32<F, Inner> {
-    pub fn new(inner: Inner) -> Self {
+    pub const fn new(inner: Inner) -> Self {
         Self {
             inner,
             _marker: PhantomData,
@@ -140,7 +140,7 @@ where
 }
 
 impl<F: PrimeField64, Inner: CanObserve<u8>> SerializingChallenger64<F, Inner> {
-    pub fn new(inner: Inner) -> Self {
+    pub const fn new(inner: Inner) -> Self {
         Self {
             inner,
             _marker: PhantomData,

@@ -15,13 +15,13 @@ pub struct SerializingHasher64<Inner> {
 }
 
 impl<Inner> SerializingHasher32<Inner> {
-    pub fn new(inner: Inner) -> Self {
+    pub const fn new(inner: Inner) -> Self {
         Self { inner }
     }
 }
 
 impl<Inner> SerializingHasher64<Inner> {
-    pub fn new(inner: Inner) -> Self {
+    pub const fn new(inner: Inner) -> Self {
         Self { inner }
     }
 }

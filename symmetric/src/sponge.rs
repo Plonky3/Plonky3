@@ -18,7 +18,7 @@ pub struct PaddingFreeSponge<P, const WIDTH: usize, const RATE: usize, const OUT
 impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     PaddingFreeSponge<P, WIDTH, RATE, OUT>
 {
-    pub fn new(permutation: P) -> Self {
+    pub const fn new(permutation: P) -> Self {
         Self { permutation }
     }
 }

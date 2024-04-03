@@ -31,7 +31,7 @@ where
     L: UndefinedLde<F, In>,
     In: MatrixRows<F>,
 {
-    pub fn new(lde: L, n: usize, k: usize) -> Self {
+    pub const fn new(lde: L, n: usize, k: usize) -> Self {
         Self {
             lde,
             n,

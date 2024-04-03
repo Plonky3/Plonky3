@@ -45,7 +45,7 @@ pub struct CircleDomain<F> {
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
-    pub(crate) fn new(log_n: usize, shift: Complex<F>) -> Self {
+    pub(crate) const fn new(log_n: usize, shift: Complex<F>) -> Self {
         Self { log_n, shift }
     }
     pub(crate) fn standard(log_n: usize) -> Self {

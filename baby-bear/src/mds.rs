@@ -68,7 +68,7 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
 /// x' = x mod 2^10
 /// See Thm 1 (Below function) for a proof that this function is correct.
 #[inline(always)]
-fn barret_red_babybear(input: i128) -> i64 {
+const fn barret_red_babybear(input: i128) -> i64 {
     const N: usize = 40; // beta = 2^N, fixing N = 40 here
     const P: i128 = BabyBear::ORDER_U32 as i128;
     const I: i64 = (((1_i128) << (2 * N)) / P) as i64; // I = 2^80 / P => I < 2**50

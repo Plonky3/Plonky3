@@ -21,7 +21,7 @@ pub struct TruncatedPermutation<InnerP, const N: usize, const CHUNK: usize, cons
 impl<InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
     TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
 {
-    pub fn new(inner_permutation: InnerP) -> Self {
+    pub const fn new(inner_permutation: InnerP) -> Self {
         Self { inner_permutation }
     }
 }
@@ -58,7 +58,7 @@ where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
 {
-    pub fn new(hasher: H) -> Self {
+    pub const fn new(hasher: H) -> Self {
         Self {
             hasher,
             _phantom: PhantomData,
