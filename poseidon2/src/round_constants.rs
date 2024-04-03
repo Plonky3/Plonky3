@@ -2,8 +2,9 @@
 // https://github.com/HorizenLabs/poseidon2
 // This lets us test that our implementations matches theirs.
 
-// Note that for the external (full) rounds, their implementation uses the matrix:
+// Note that the Horizen Labs implementation uses the 4x4 matrix:
 // [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
+// to build the 4t x 4t matrix used for the external (full) rounds).
 
 pub const HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS: [[u32; 16]; 8] = [
     [
