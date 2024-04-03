@@ -12,12 +12,15 @@ use p3_util::log2_strict_usize;
 use crate::{TwoAdicCosetLde, TwoAdicLde, TwoAdicSubgroupLde, UndefinedLde};
 
 /// A naive quadratic-time implementation of `Lde`, intended for testing.
+#[derive(Debug)]
 pub struct NaiveUndefinedLde;
 
 /// A naive quadratic-time implementation of `TwoAdicSubgroupLde`, intended for testing.
+#[derive(Debug)]
 pub struct NaiveSubgroupLde;
 
 /// A naive quadratic-time implementation of `TwoAdicCosetLde`, intended for testing.
+#[derive(Debug)]
 pub struct NaiveCosetLde;
 
 impl<F, In> UndefinedLde<F, In> for NaiveUndefinedLde

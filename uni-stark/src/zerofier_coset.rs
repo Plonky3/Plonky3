@@ -7,6 +7,7 @@ use p3_field::{
 };
 
 /// Precomputations of the evaluation of `Z_H(X) = X^n - 1` on a coset `s K` with `H <= K`.
+#[derive(Debug)]
 pub struct ZerofierOnCoset<F: Field> {
     /// `n = |H|`.
     log_n: usize,

@@ -6,6 +6,7 @@ use crate::VecExt;
 /// O(n) Vec-backed map for keys that only implement Eq.
 /// Only use this for a very small number of keys, operations
 /// on it can easily become O(n^2).
+#[derive(Debug)]
 pub struct LinearMap<K, V>(Vec<(K, V)>);
 
 impl<K, V> Default for LinearMap<K, V> {

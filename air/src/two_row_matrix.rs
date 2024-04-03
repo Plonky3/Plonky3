@@ -3,7 +3,7 @@ use core::slice;
 
 use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct TwoRowMatrixView<'a, T> {
     pub local: &'a [T],
     pub next: &'a [T],

@@ -14,7 +14,7 @@ use p3_symmetric::Permutation;
 
 use crate::BabyBear;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MdsMatrixBabyBear;
 
 /// Instantiate convolution for "small" RHS vectors over BabyBear.

@@ -14,13 +14,14 @@ use p3_symmetric::Permutation;
 
 use crate::{reduce128, Goldilocks};
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MdsMatrixGoldilocks;
 
 /// Instantiate convolution for "small" RHS vectors over Goldilocks.
 ///
 /// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
 /// 2^51, though in practice the sum will be less than 2^9.
+#[derive(Debug)]
 pub struct SmallConvolveGoldilocks;
 impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
     /// Return the lift of a Goldilocks element, 0 <= input.value <= P

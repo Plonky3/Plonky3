@@ -5,6 +5,7 @@ use p3_field::AbstractField;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
+#[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, PackedVal<SC>>,
     pub public_values: &'a Vec<Val<SC>>,
@@ -15,6 +16,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub accumulator: PackedChallenge<SC>,
 }
 
+#[derive(Debug)]
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, SC::Challenge>,
     pub public_values: &'a Vec<Val<SC>>,
@@ -59,6 +61,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
+    type PublicVar = Self::F;
+
     fn public_values(&self) -> &[Self::F] {
         self.public_values
     }
@@ -97,6 +101,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     }
 }
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'a, SC> {
+    type PublicVar = Self::F;
+
     fn public_values(&self) -> &[Self::F] {
         self.public_values
     }

@@ -13,7 +13,7 @@ use crate::butterflies::{dit_butterfly_on_rows, twiddle_free_butterfly_on_rows};
 use crate::TwoAdicSubgroupDft;
 
 /// The DIT FFT algorithm.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2Dit<F: TwoAdicField> {
     /// Memoized twiddle factors for each length log_n.
     twiddles: RefCell<BTreeMap<usize, Vec<F>>>,
@@ -43,7 +43,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, layer: usize, twiddles: &[F]) {
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: &[F]) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
     let layer_rev = log_h - 1 - layer;

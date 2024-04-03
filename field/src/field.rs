@@ -300,8 +300,21 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// different f might have been used.
     fn as_base_slice(&self) -> &[Base];
 
-    /// Returns the monomial `X^exponent`.
+    /// Suppose this field extension is represented by the quotient
+    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// polynomial of degree `D`. This function returns the field
+    /// element `X^exponent` if `exponent < D` and panics otherwise.
+    /// (The fact that f is not known at the point that this function
+    /// is defined prevents implementing exponentiation of higher
+    /// powers since the reduction cannot be performed.)
+    ///
+    /// NB: The value produced by this function fundamentally depends
+    /// on the choice of irreducible polynomial f. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different f might have been used.
     fn monomial(exponent: usize) -> Self {
+        assert!(exponent < Self::D, "requested monomial of too high degree");
         let mut vec = vec![Base::zero(); Self::D];
         vec[exponent] = Base::one();
         Self::from_base_slice(&vec)
@@ -365,7 +378,7 @@ pub trait TwoAdicField: Field {
 }
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Powers<F> {
     pub base: F,
     pub current: F,
@@ -382,7 +395,7 @@ impl<AF: AbstractField> Iterator for Powers<AF> {
 }
 
 /// like `Powers`, but packed into `PackedField` elements
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
     // base ** P::WIDTH
     pub multiplier: P,
