@@ -4,9 +4,9 @@ use p3_symmetric::Permutation;
 
 extern crate alloc;
 
-// For the external layers we use a matrix of the form circ(2M_4, M_4, ..., M_4)
-// Where M_4 is a 4 x 4 MDS matrix. This leads to a permutation which has slightly weaker properties to MDS
-pub trait MDSLightPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
+/// For the external layers we use a matrix of the form circ(2M_4, M_4, ..., M_4)
+/// Where M_4 is a 4 x 4 MDS matrix. This leads to a permutation which has slightly weaker properties to MDS
+pub trait MdsLightPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
 
 // Multiply a 4-element vector x by
 // [ 5 7 1 3 ]
@@ -146,7 +146,7 @@ where
     }
 }
 
-impl<AF, const WIDTH: usize> MDSLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixHL
+impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixHL
 where
     AF: AbstractField,
     AF::F: PrimeField,
