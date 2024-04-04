@@ -74,11 +74,7 @@ impl<AF: AbstractField> Permutation<[AF; 4]> for HLMDSMat4 {
 }
 impl<AF: AbstractField> MdsPermutation<AF, 4> for HLMDSMat4 {}
 
-fn mds_light_permutation<
-    AF: AbstractField,
-    MdsPerm4: MdsPermutation<AF, 4>,
-    const WIDTH: usize,
->(
+fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
     mdsmat: MdsPerm4,
 ) {
