@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field = { path = "../field" }
+gcd = "2.3.0"
 p3-symmetric = { path = "../symmetric" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 
