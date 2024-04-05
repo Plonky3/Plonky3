@@ -141,10 +141,3 @@ where
         mds_light_permutation::<AF, HLMDSMat4, WIDTH>(state, HLMDSMat4)
     }
 }
-
-impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixHL
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
-}
