@@ -20,7 +20,7 @@
 // they will also be optimal for (M, r, WIDTH, D) for any q < r < p.
 
 // We compute the optimal required number of external (full) and internal (partial) rounds using:
-// https://github.com/0xPolygonZero/hash-constants
+// https://github.com/0xPolygonZero/hash-constants/blob/master/calc_round_numbers.py
 // Using the above analysis we can conclude that the round numbers are equal
 // for all 31 bit primes and 64 bit primes respectively.
 
