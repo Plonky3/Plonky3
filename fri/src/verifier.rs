@@ -100,6 +100,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_query<F, M, Folder>(
     config: &FriConfig<M>,
     folder: &Folder,
