@@ -11,7 +11,7 @@ use sha3::{Shake128, Shake128Reader};
 
 use crate::util::get_random_u32;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
 
 const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [

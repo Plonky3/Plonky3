@@ -39,6 +39,7 @@ where
 
 /// An `AirBuilder` which asserts that each constraint is zero, allowing any failed constraints to
 /// be detected early.
+#[derive(Debug)]
 pub struct DebugConstraintBuilder<'a, F: Field> {
     row_index: usize,
     main: TwoRowMatrixView<'a, F>,

@@ -13,12 +13,14 @@ use crate::cfft::Cfft;
 use crate::domain::CircleDomain;
 use crate::util::{univariate_to_point, v_n};
 
+#[derive(Debug)]
 pub struct CirclePcs<Val, InputMmcs> {
     pub log_blowup: usize,
     pub cfft: Cfft<Val>,
     pub mmcs: InputMmcs,
 }
 
+#[derive(Debug)]
 pub struct ProverData<Val, MmcsData> {
     committed_domains: Vec<CircleDomain<Val>>,
     mmcs_data: MmcsData,

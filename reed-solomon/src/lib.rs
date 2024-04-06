@@ -12,6 +12,7 @@ use p3_lde::UndefinedLde;
 use p3_matrix::Matrix;
 
 /// A Reed-Solomon code based on an `UndefinedLde`.
+#[derive(Debug)]
 pub struct UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
@@ -30,7 +31,7 @@ where
     L: UndefinedLde<F, In>,
     In: Matrix<F>,
 {
-    pub fn new(lde: L, n: usize, k: usize) -> Self {
+    pub const fn new(lde: L, n: usize, k: usize) -> Self {
         Self {
             lde,
             n,

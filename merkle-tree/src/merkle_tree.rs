@@ -16,7 +16,7 @@ use tracing::instrument;
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `FieldMerkleTreeMmcs`.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FieldMerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     pub(crate) leaves: Vec<M>,
     // Enable serialization for this field whenever the underlying array type supports it (len 1-32).

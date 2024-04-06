@@ -1,14 +1,14 @@
 use core::{iter, slice};
 use p3_matrix::Matrix;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct TwoRowMatrixView<'a, T> {
     pub local: &'a [T],
     pub next: &'a [T],
 }
 
 impl<'a, T> TwoRowMatrixView<'a, T> {
-    pub fn new(local: &'a [T], next: &'a [T]) -> Self {
+    pub const fn new(local: &'a [T], next: &'a [T]) -> Self {
         Self { local, next }
     }
 }

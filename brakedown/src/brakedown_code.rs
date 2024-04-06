@@ -11,6 +11,7 @@ use p3_matrix::stack::VerticalPair;
 use p3_matrix::Matrix;
 
 /// The Spielman-based code described in the Brakedown paper.
+#[derive(Debug)]
 pub struct BrakedownCode<F, IC>
 where
     F: Field,

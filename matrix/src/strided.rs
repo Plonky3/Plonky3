@@ -1,5 +1,6 @@
 use crate::Matrix;
 
+#[derive(Debug)]
 pub struct VerticallyStridedMatrixView<Inner> {
     pub(crate) inner: Inner,
     pub(crate) stride: usize,

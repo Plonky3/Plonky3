@@ -9,6 +9,7 @@ use rand::Rng;
 use crate::Matrix;
 
 /// A sparse matrix stored in the compressed sparse row format.
+#[derive(Debug)]
 pub struct CsrMatrix<T> {
     width: usize,
 

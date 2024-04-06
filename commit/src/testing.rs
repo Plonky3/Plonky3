@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
+#[derive(Debug)]
 pub struct TrivialPcs<Val: TwoAdicField, Dft: TwoAdicSubgroupDft<Val>> {
     pub dft: Dft,
     // degree bound

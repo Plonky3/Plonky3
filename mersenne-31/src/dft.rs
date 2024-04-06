@@ -147,7 +147,7 @@ fn idft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<F> {
 }
 
 /// The DFT for Mersenne31
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Mersenne31Dft;
 
 impl Mersenne31Dft {

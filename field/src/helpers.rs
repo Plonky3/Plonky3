@@ -2,10 +2,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
-use num_traits::identities::Zero;
+use num_bigint::BigUint;
 
 use crate::field::Field;
-use crate::{AbstractField, PrimeField, PrimeField64, TwoAdicField};
+use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -130,32 +130,34 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
     }
 }
 
-/// Given a slice of SF elements, reduce them to a TF element.
-pub fn reduce_64<SF: PrimeField64, TF: PrimeField>(vals: &[SF]) -> TF {
-    let alpha = TF::from_canonical_u64(SF::ORDER_U64);
-
-    let mut res = TF::zero();
+/// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
+pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
+    let po2 = TF::from_canonical_u64(1u64 << 32);
+    let mut result = TF::zero();
     for val in vals.iter().rev() {
-        res = res * alpha + TF::from_canonical_u64(val.as_canonical_u64());
+        result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());
     }
-
-    res
+    result
 }
 
-/// Given a SF elements, split them to a vec of TF elements.
-pub fn split_64<SF: PrimeField, TF: PrimeField64>(val: SF) -> Vec<TF> {
-    let alpha = &SF::from_canonical_u64(TF::ORDER_U64).as_canonical_biguint();
-
-    let mut res = Vec::new();
+/// Given an SF element, split it to a vector of TF elements using a 2^64-base decomposition.
+///
+/// We use a 2^64-base decomposition for a field of size ~2^32 because then the bias will be
+/// at most ~1/2^32 for each element after the reduction.
+pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
+    let po2 = BigUint::from(1u128 << 64);
     let mut val = val.as_canonical_biguint();
-
-    while !val.is_zero() {
-        let rem = &val % alpha;
-        val /= alpha;
-
-        // Can assume there is one u64 digit since SF is PrimeField64.
-        res.push(TF::from_canonical_u64(rem.to_u64_digits()[0]));
+    let mut result = Vec::new();
+    for _ in 0..n {
+        let mask: BigUint = po2.clone() - BigUint::from(1u128);
+        let digit: BigUint = val.clone() & mask;
+        let digit_u64s = digit.to_u64_digits();
+        if !digit_u64s.is_empty() {
+            result.push(TF::from_wrapped_u64(digit_u64s[0]));
+        } else {
+            result.push(TF::zero())
+        }
+        val /= po2.clone();
     }
-
-    res
+    result
 }

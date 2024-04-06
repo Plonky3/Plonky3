@@ -1,6 +1,7 @@
 use crate::Matrix;
 
 /// A combination of two matrices, stacked together vertically.
+#[derive(Debug)]
 pub struct VerticalPair<First, Second> {
     first: First,
     second: Second,
@@ -48,6 +49,7 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     }
 }
 
+#[derive(Debug)]
 pub enum EitherIterator<L, R> {
     Left(L),
     Right(R),

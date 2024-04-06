@@ -11,6 +11,7 @@ use crate::round_flags::eval_round_flags;
 use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 /// Assumes the field size is at least 16 bits.
+#[derive(Debug)]
 pub struct KeccakAir {}
 
 impl<F> BaseAir<F> for KeccakAir {

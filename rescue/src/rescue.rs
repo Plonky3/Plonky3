@@ -16,7 +16,7 @@ use crate::sbox::SboxLayers;
 use crate::util::shake256_hash;
 
 /// The Rescue-XLIX permutation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Rescue<F, Mds, Sbox, const WIDTH: usize> {
     num_rounds: usize,
     mds: Mds,

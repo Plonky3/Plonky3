@@ -6,14 +6,14 @@ use p3_matrix::{extension::FlatMatrixView, Dimensions, Matrix};
 
 use crate::Mmcs;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
     inner: InnerMmcs,
     _phantom: PhantomData<(F, EF)>,
 }
 
 impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs> {
-    pub fn new(inner: InnerMmcs) -> Self {
+    pub const fn new(inner: InnerMmcs) -> Self {
         Self {
             inner,
             _phantom: PhantomData,

@@ -33,7 +33,7 @@ pub struct Bn254Fr {
 }
 
 impl Bn254Fr {
-    pub(crate) fn new(value: FFBn254Fr) -> Self {
+    pub(crate) const fn new(value: FFBn254Fr) -> Self {
         Self { value }
     }
 }

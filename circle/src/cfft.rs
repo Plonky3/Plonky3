@@ -23,7 +23,7 @@ use tracing::instrument;
 use crate::domain::CircleDomain;
 use crate::twiddles::TwiddleCache;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Cfft<F>(Rc<RefCell<TwiddleCache<F>>>);
 
 impl<F: ComplexExtendable> Cfft<F> {

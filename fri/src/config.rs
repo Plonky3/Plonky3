@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct FriConfig<M> {
     pub log_blowup: usize,
     pub num_queries: usize,
@@ -6,7 +7,7 @@ pub struct FriConfig<M> {
 }
 
 impl<M> FriConfig<M> {
-    pub fn blowup(&self) -> usize {
+    pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
     }
 }

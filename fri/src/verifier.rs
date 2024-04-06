@@ -21,7 +21,7 @@ pub enum FriError<CommitMmcsErr> {
 #[derive(Debug)]
 pub struct FriChallenges<F> {
     pub query_indices: Vec<usize>,
-    betas: Vec<F>,
+    pub betas: Vec<F>,
 }
 
 pub fn verify_shape_and_sample_challenges<F, M, Challenger>(

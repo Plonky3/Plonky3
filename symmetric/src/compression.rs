@@ -13,7 +13,7 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
 /// An `N`-to-1 compression function.
 pub trait CompressionFunction<T, const N: usize>: PseudoCompressionFunction<T, N> {}
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TruncatedPermutation<InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize> {
     inner_permutation: InnerP,
 }
@@ -21,7 +21,7 @@ pub struct TruncatedPermutation<InnerP, const N: usize, const CHUNK: usize, cons
 impl<InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
     TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
 {
-    pub fn new(inner_permutation: InnerP) -> Self {
+    pub const fn new(inner_permutation: InnerP) -> Self {
         Self { inner_permutation }
     }
 }
@@ -43,7 +43,7 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CompressionFunctionFromHasher<T, H, const N: usize, const CHUNK: usize>
 where
     T: Clone,
@@ -58,7 +58,7 @@ where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
 {
-    pub fn new(hasher: H) -> Self {
+    pub const fn new(hasher: H) -> Self {
         Self {
             hasher,
             _phantom: PhantomData,
