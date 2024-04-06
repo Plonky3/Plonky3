@@ -55,7 +55,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     fn get(&self, r: usize, c: usize) -> T {
-        self.row(r).into_iter().nth(c).unwrap()
+        self.row(r).nth(c).unwrap()
     }
 
     type Row<'a>: Iterator<Item = T> + Send + Sync
@@ -74,7 +74,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
     // Opaque return type implicitly captures &'_ self
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        self.row(r).into_iter().collect_vec()
+        self.row(r).collect_vec()
     }
 
     fn first_row(&self) -> Self::Row<'_> {
@@ -110,7 +110,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (packed, sfx)
     }
 
-    fn vertically_packed_row<'a, P>(&'a self, r: usize) -> impl Iterator<Item = P>
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
         P: PackedValue<Value = T>,
     {

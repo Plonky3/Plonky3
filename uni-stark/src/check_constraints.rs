@@ -20,8 +20,8 @@ where
         let main_local = main.row_slice(i);
         let main_next = main.row_slice(i_next);
         let main = TwoRowMatrixView {
-            local: &*main_local,
-            next: &*main_next,
+            local: &main_local,
+            next: &main_next,
         };
 
         let mut builder = DebugConstraintBuilder {

@@ -24,7 +24,7 @@ where
         .flat_map(|a_row_idx| {
             let mut c_row = vec![F::zero(); c_width];
             for &(a_col_idx, a_val) in a.sparse_row(a_row_idx) {
-                add_scaled_slice_in_place(&mut c_row, b.row(a_col_idx).into_iter(), a_val);
+                add_scaled_slice_in_place(&mut c_row, b.row(a_col_idx), a_val);
             }
             c_row
         })

@@ -125,7 +125,7 @@ fn interpolate<F: Field, Mat: Matrix<F>>(
     // If x is in the list of points, the Lagrange formula would divide by zero.
     for (i, &x_i) in points.iter().enumerate() {
         if x_i == x {
-            return values.row(i).into_iter().collect();
+            return values.row(i).collect();
         }
     }
 
@@ -133,7 +133,7 @@ fn interpolate<F: Field, Mat: Matrix<F>>(
 
     let sum = sum_vecs((0..points.len()).map(|i| {
         let x_i = points[i];
-        let y_i = values.row(i).into_iter().collect();
+        let y_i = values.row(i).collect();
         let w_i = barycentric_weights[i];
         scale_vec(w_i / (x - x_i), y_i)
     }));

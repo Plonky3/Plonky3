@@ -185,6 +185,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         (&mut lo[start_1..][..self.width], &mut hi[..self.width])
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn packed_row_pair_mut<P>(
         &mut self,
         row_1: usize,
