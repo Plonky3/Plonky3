@@ -42,7 +42,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
         .collect_vec();
     reverse_slice_index_bits(&mut powers);
 
-    m.rows()
+    m.par_rows()
         .zip(powers)
         .map(|(mut row, power)| {
             let (r0, r1) = row.next_tuple().unwrap();
