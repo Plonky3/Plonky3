@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::{ExtensionField, Field};
-use p3_matrix::{extension::FlatMatrixView, Dimensions, Matrix};
+use p3_matrix::extension::FlatMatrixView;
+use p3_matrix::{Dimensions, Matrix};
 
 use crate::Mmcs;
 

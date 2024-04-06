@@ -1,16 +1,13 @@
-use core::borrow::{Borrow, BorrowMut};
-use core::iter;
-use core::marker::PhantomData;
-use core::ops::Deref;
-use core::slice;
-
 use alloc::vec;
 use alloc::vec::Vec;
+use core::borrow::{Borrow, BorrowMut};
+use core::marker::PhantomData;
+use core::ops::Deref;
+use core::{iter, slice};
 
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
-
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 

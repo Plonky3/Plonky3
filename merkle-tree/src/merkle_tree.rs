@@ -1,7 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::array;
 use core::cmp::Reverse;
-use core::{array, marker::PhantomData};
+use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_field::{PackedField, PackedValue};

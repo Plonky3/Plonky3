@@ -8,8 +8,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-use itertools::{izip, Itertools};
 
+use itertools::{izip, Itertools};
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 

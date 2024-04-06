@@ -1,12 +1,9 @@
+use alloc::vec;
 use core::borrow::BorrowMut;
 
-use alloc::vec;
-
 use p3_field::Field;
-use p3_matrix::{
-    dense::{DenseMatrix, DenseStorage, RowMajorMatrix},
-    Matrix,
-};
+use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
+use p3_matrix::Matrix;
 
 /// Divide each coefficient of the given matrix by its height.
 pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(

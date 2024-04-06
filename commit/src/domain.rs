@@ -5,7 +5,8 @@ use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
     TwoAdicField,
 };
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 #[derive(Debug)]

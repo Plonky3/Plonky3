@@ -1,4 +1,5 @@
 use core::{iter, slice};
+
 use p3_matrix::Matrix;
 
 #[derive(Copy, Clone, Debug)]

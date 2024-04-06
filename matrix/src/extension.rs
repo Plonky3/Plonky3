@@ -71,12 +71,13 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
-    use p3_field::{extension::Complex, AbstractExtensionField, AbstractField};
+
+    use p3_field::extension::Complex;
+    use p3_field::{AbstractExtensionField, AbstractField};
     use p3_mersenne_31::Mersenne31;
 
-    use crate::dense::RowMajorMatrix;
-
     use super::*;
+    use crate::dense::RowMajorMatrix;
     type F = Mersenne31;
     type EF = Complex<Mersenne31>;
 
