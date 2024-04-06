@@ -7,6 +7,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
+use core::ops::Deref;
 use itertools::{izip, Itertools};
 
 use p3_field::{ExtensionField, Field, PackedValue};
@@ -71,7 +72,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (0..self.height()).into_par_iter().map(move |r| self.row(r))
     }
 
-    fn row_slice(&self, r: usize) -> impl AsRef<[T]> {
+    // Opaque return type implicitly captures &'_ self
+    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.row(r).into_iter().collect_vec()
     }
 

@@ -218,7 +218,7 @@ impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder
 
 #[cfg(test)]
 mod tests {
-    use p3_matrix::MatrixRowSlices;
+    use p3_matrix::Matrix;
 
     use crate::{Air, AirBuilder, BaseAir};
 

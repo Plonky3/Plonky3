@@ -8,7 +8,7 @@ use p3_field::{AbstractField, Field};
 use p3_fri::{prover, verifier, FriConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
-use p3_matrix::{Matrix, Matrix};
+use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};

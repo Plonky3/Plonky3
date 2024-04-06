@@ -1,4 +1,5 @@
 use core::fmt::Debug;
+use core::ops::Deref;
 
 use p3_field::PackedValue;
 use p3_util::{log2_strict_usize, reverse_bits_len};
@@ -51,7 +52,7 @@ impl<T: Send + Sync, Inner: Matrix<T>> Matrix<T> for BitReversedMatrixView<Inner
         self.inner.row(reverse_bits_len(r, self.log_height))
     }
 
-    fn row_slice(&self, r: usize) -> impl AsRef<[T]> {
+    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.inner.row_slice(reverse_bits_len(r, self.log_height))
     }
 

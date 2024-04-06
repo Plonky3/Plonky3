@@ -59,17 +59,9 @@ pub(crate) fn eval_circle_polys<F: ComplexExtendable>(
     coeffs: &RowMajorMatrix<F>,
     point: Complex<F>,
 ) -> Vec<F> {
-    use itertools::izip;
     use p3_matrix::Matrix;
-
     let log_n = log2_strict_usize(coeffs.height());
-    let mut accs = vec![F::zero(); coeffs.width()];
-    for (row, basis) in coeffs.rows().zip(circle_basis(point, log_n)) {
-        for (acc, coeff) in izip!(&mut accs, row) {
-            *acc += *coeff * basis;
-        }
-    }
-    accs
+    coeffs.columnwise_dot_product(&circle_basis(point, log_n))
 }
 
 /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)

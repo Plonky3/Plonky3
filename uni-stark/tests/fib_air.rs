@@ -9,7 +9,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field, PrimeField64};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowSlices};
+use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::Poseidon2;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -36,8 +36,9 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
         let b = pis[1];
         let x = pis[2];
 
-        let local: &FibonacciRow<AB::Var> = main.row_slice(0).borrow();
-        let next: &FibonacciRow<AB::Var> = main.row_slice(1).borrow();
+        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let local: &FibonacciRow<AB::Var> = (*local).borrow();
+        let next: &FibonacciRow<AB::Var> = (*next).borrow();
 
         let mut when_first_row = builder.when_first_row();
 

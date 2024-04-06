@@ -1,6 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixTranspose;
 
 fn transpose_benchmark(c: &mut Criterion) {
     const WIDTH_10: usize = 10;

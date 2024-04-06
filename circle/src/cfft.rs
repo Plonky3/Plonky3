@@ -24,7 +24,7 @@ use crate::domain::CircleDomain;
 use crate::twiddles::TwiddleCache;
 
 #[derive(Default, Clone, Debug)]
-pub struct Cfft<F>(Rc<RefCell<TwiddleCache<F>>>);
+pub struct Cfft<F: Field>(Rc<RefCell<TwiddleCache<F>>>);
 
 impl<F: ComplexExtendable> Cfft<F> {
     pub fn cfft(&self, vec: Vec<F>) -> Vec<F> {
@@ -173,6 +173,7 @@ fn tile_rows<F: Field>(mat: impl Matrix<F>, repetitions: usize) -> RowMajorMatri
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use p3_dft::bit_reversed_zero_pad;
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
@@ -196,7 +197,7 @@ mod tests {
 
         let d = CircleDomain { shift, log_n };
         for (pt, ys) in d.points().zip(evals.rows()) {
-            assert_eq!(ys, eval_circle_polys(&coeffs, pt));
+            assert_eq!(ys.collect_vec(), eval_circle_polys(&coeffs, pt));
         }
     }
 

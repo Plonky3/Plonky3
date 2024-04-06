@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use itertools::izip;
 use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_field::extension::ComplexExtendable;
-use p3_field::ExtensionField;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
@@ -14,7 +14,7 @@ use crate::domain::CircleDomain;
 use crate::util::{univariate_to_point, v_n};
 
 #[derive(Debug)]
-pub struct CirclePcs<Val, InputMmcs> {
+pub struct CirclePcs<Val: Field, InputMmcs> {
     pub log_blowup: usize,
     pub cfft: Cfft<Val>,
     pub mmcs: InputMmcs,

@@ -1,6 +1,7 @@
 use core::borrow::{Borrow, BorrowMut};
 use core::iter;
 use core::marker::PhantomData;
+use core::ops::Deref;
 use core::slice;
 
 use alloc::vec;
@@ -250,7 +251,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
             .iter()
             .cloned()
     }
-    fn row_slice(&self, r: usize) -> impl AsRef<[T]> {
+    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         &self.values.borrow()[r * self.width..(r + 1) * self.width]
     }
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>

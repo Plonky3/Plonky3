@@ -91,11 +91,11 @@ mod tests {
         let ext = RowMajorMatrix::<EF>::new(values, 2);
         let flat = FlatMatrixView::<F, EF, _>::new(ext);
         assert_eq!(
-            flat.row_slice(0).as_ref(),
+            &*flat.row_slice(0),
             &[0, 1, 10, 11].map(|i| F::from_canonical_usize(i))
         );
         assert_eq!(
-            flat.row_slice(1).as_ref(),
+            &*flat.row_slice(1),
             &[20, 21, 30, 31].map(|i| F::from_canonical_usize(i))
         );
     }
