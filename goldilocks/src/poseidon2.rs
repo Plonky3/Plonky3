@@ -237,7 +237,7 @@ pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
 mod tests {
     use core::array;
 
-    use p3_poseidon2::Poseidon2;
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 
     use super::*;
 
@@ -267,11 +267,18 @@ mod tests {
         const ROUNDS_P: usize = 22;
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
+        let poseidon2: Poseidon2<
+            Goldilocks,
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixGoldilocks,
+            WIDTH,
+            D,
+        > = Poseidon2::new(
             ROUNDS_F,
             HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS
                 .map(to_goldilocks_array)
                 .to_vec(),
+            Poseidon2ExternalMatrixGeneral,
             ROUNDS_P,
             to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
             DiffusionMatrixGoldilocks,
