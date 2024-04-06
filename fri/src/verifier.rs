@@ -4,11 +4,10 @@ use alloc::vec::Vec;
 use itertools::izip;
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{Field, TwoAdicField};
+use p3_field::Field;
 use p3_matrix::Dimensions;
-use p3_util::reverse_bits_len;
 
-use crate::{FriConfig, FriProof, QueryProof};
+use crate::{FriConfig, FriFolder, FriProof, QueryProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr> {
@@ -64,15 +63,17 @@ where
     })
 }
 
-pub fn verify_challenges<F, M, Witness>(
+pub fn verify_challenges<F, M, Folder, Witness>(
     config: &FriConfig<M>,
+    folder: &Folder,
     proof: &FriProof<F, M, Witness>,
     challenges: &FriChallenges<F>,
     reduced_openings: &[[F; 32]],
 ) -> Result<(), FriError<M::Error>>
 where
-    F: TwoAdicField,
+    F: Field,
     M: Mmcs<F>,
+    Folder: FriFolder<F>,
 {
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
     for (&index, query_proof, ro) in izip!(
@@ -82,6 +83,7 @@ where
     ) {
         let folded_eval = verify_query(
             config,
+            folder,
             &proof.commit_phase_commits,
             index,
             query_proof,
@@ -98,8 +100,9 @@ where
     Ok(())
 }
 
-fn verify_query<F, M>(
+fn verify_query<F, M, Folder>(
     config: &FriConfig<M>,
+    folder: &Folder,
     commit_phase_commits: &[M::Commitment],
     mut index: usize,
     proof: &QueryProof<F, M>,
@@ -108,12 +111,11 @@ fn verify_query<F, M>(
     log_max_height: usize,
 ) -> Result<F, FriError<M::Error>>
 where
-    F: TwoAdicField,
+    F: Field,
     M: Mmcs<F>,
+    Folder: FriFolder<F>,
 {
     let mut folded_eval = F::zero();
-    let mut x = F::two_adic_generator(log_max_height)
-        .exp_u64(reverse_bits_len(index, log_max_height) as u64);
 
     for (log_folded_height, commit, step, &beta) in izip!(
         (0..log_max_height).rev(),
@@ -121,7 +123,12 @@ where
         &proof.commit_phase_openings,
         betas,
     ) {
-        folded_eval += reduced_openings[log_folded_height + 1];
+        folder.mix_in(
+            index,
+            log_folded_height + 1,
+            &mut folded_eval,
+            reduced_openings[log_folded_height + 1],
+        );
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
@@ -144,17 +151,14 @@ where
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        let mut xs = [x; 2];
-        xs[index_sibling % 2] *= F::two_adic_generator(1);
-        // interpolate and evaluate at beta
-        folded_eval = evals[0] + (beta - xs[0]) * (evals[1] - evals[0]) / (xs[1] - xs[0]);
-
         index = index_pair;
-        x = x.square();
+
+        // If verification is extremely performance-critical (such as in recursive setting),
+        // this can be changed to a stateful API to save intermediate computations.
+        folded_eval = Folder::fold_row(index, log_folded_height, beta, evals.into_iter());
     }
 
     debug_assert!(index < config.blowup(), "index was {}", index);
-    debug_assert_eq!(x.exp_power_of_2(config.log_blowup), F::one());
 
     Ok(folded_eval)
 }

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
-use crate::{prover, FriConfig, FriProof};
+use crate::{prover, FriConfig, FriFolder, FriProof};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
@@ -70,6 +70,68 @@ pub struct TwoAdicFriPcsProof<
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
     pub opened_values: Vec<Vec<Val>>,
     pub opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
+}
+
+pub struct TwoAdicFriFolder;
+
+impl<F: TwoAdicField> FriFolder<F> for TwoAdicFriFolder {
+    fn fold_row(index: usize, log_height: usize, beta: F, evals: impl Iterator<Item = F>) -> F {
+        let arity = 2;
+        let log_arity = 1;
+        let (e0, e1) = evals
+            .collect_tuple()
+            .expect("TwoAdicFriFolder only supports arity=2");
+        // If performance critical, make this API stateful to avoid this
+        // This is a bit more math than is necessary, but leaving it here
+        // in case we want higher arity in the future
+        let subgroup_start = F::two_adic_generator(log_height + log_arity)
+            .exp_u64(reverse_bits_len(index, log_height) as u64);
+        let mut xs = F::two_adic_generator(log_arity)
+            .shifted_powers(subgroup_start)
+            .take(arity)
+            .collect_vec();
+        reverse_slice_index_bits(&mut xs);
+        assert_eq!(log_arity, 1, "can only interpolate two points for now");
+        // interpolate and evaluate at beta
+        e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
+    }
+    fn fold_matrix<M: Matrix<F>>(beta: F, m: M) -> Vec<F> {
+        // We use the fact that
+        //     p_e(x^2) = (p(x) + p(-x)) / 2
+        //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
+        // that is,
+        //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
+        //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
+        // so
+        //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
+        //                    = (1/2 + beta/2 g_inv^i) p(g^i)
+        //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
+        let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
+        let one_half = F::two().inverse();
+        let half_beta = beta * one_half;
+
+        // TODO: vectorize this (after we have packed extension fields)
+
+        // beta/2 times successive powers of g_inv
+        let mut powers = g_inv
+            .shifted_powers(half_beta)
+            .take(m.height())
+            .collect_vec();
+        reverse_slice_index_bits(&mut powers);
+
+        m.par_rows()
+            .zip(powers)
+            .map(|(mut row, power)| {
+                let (lo, hi) = row.next_tuple().unwrap();
+                (one_half + power) * lo + (one_half - power) * hi
+            })
+            .collect()
+    }
+
+    fn mix_in(&self, _index: usize, _log_height: usize, current: &mut F, new: F) {
+        // Simply add.
+        *current += new;
+    }
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -267,7 +329,8 @@ where
             }
         }
 
-        let (fri_proof, query_indices) = prover::prove(&self.fri, &reduced_openings, challenger);
+        let (fri_proof, query_indices) =
+            prover::prove(&self.fri, &TwoAdicFriFolder, &reduced_openings, challenger);
 
         let query_openings = query_indices
             .into_iter()
@@ -387,6 +450,7 @@ where
 
         verifier::verify_challenges(
             &self.fri,
+            &TwoAdicFriFolder,
             &proof.fri_proof,
             &fri_challenges,
             &reduced_openings,

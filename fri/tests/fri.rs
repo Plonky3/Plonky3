@@ -5,7 +5,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
-use p3_fri::{prover, verifier, FriConfig};
+use p3_fri::{prover, verifier, FriConfig, TwoAdicFriFolder};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -83,7 +83,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             }
         });
 
-        let (proof, idxs) = prover::prove(&fc, &input, &mut chal);
+        let (proof, idxs) = prover::prove(&fc, &TwoAdicFriFolder, &input, &mut chal);
 
         let log_max_height = input.iter().rposition(Option::is_some).unwrap();
         let reduced_openings: Vec<[Challenge; 32]> = idxs
@@ -113,8 +113,14 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let fri_challenges =
         verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
             .expect("failed verify shape and sample");
-    verifier::verify_challenges(&fc, &proof, &fri_challenges, &reduced_openings)
-        .expect("failed verify challenges");
+    verifier::verify_challenges(
+        &fc,
+        &TwoAdicFriFolder,
+        &proof,
+        &fri_challenges,
+        &reduced_openings,
+    )
+    .expect("failed verify challenges");
 
     assert_eq!(
         p_sample,
