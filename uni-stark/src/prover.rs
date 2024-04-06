@@ -124,12 +124,19 @@ where
 {
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
-    let sels = trace_domain.selectors_on_coset(quotient_domain);
+    let mut sels = trace_domain.selectors_on_coset(quotient_domain);
 
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    assert!(quotient_size >= PackedVal::<SC>::WIDTH);
+    // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
+    // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
+    for _ in quotient_size..PackedVal::<SC>::WIDTH {
+        sels.is_first_row.push(Val::<SC>::default());
+        sels.is_last_row.push(Val::<SC>::default());
+        sels.is_transition.push(Val::<SC>::default());
+        sels.inv_zeroifier.push(Val::<SC>::default());
+    }
 
     (0..quotient_size)
         .into_par_iter()
@@ -178,7 +185,7 @@ where
             let quotient = folder.accumulator * inv_zeroifier;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            (0..PackedVal::<SC>::WIDTH).map(move |idx_in_packing| {
+            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
                 let quotient_value = (0..<SC::Challenge as AbstractExtensionField<Val<SC>>>::D)
                     .map(|coeff_idx| quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing])
                     .collect::<Vec<_>>();
