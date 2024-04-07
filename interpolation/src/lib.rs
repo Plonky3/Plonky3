@@ -43,14 +43,6 @@ where
         .collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
-    /*
-    let mut sum = vec![EF::zero(); width];
-    for (i, (subgroup_i, diff_inv)) in g.powers().zip(diff_invs).enumerate() {
-        let row = coset_evals.row(i).into_iter();
-        add_scaled_base_slice_in_place(&mut sum, row, diff_inv * subgroup_i);
-    }
-    */
-
     let col_scale: Vec<_> = g
         .powers()
         .zip(diff_invs)
