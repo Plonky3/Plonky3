@@ -1,7 +1,8 @@
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
-use crate::dense::{DenseMatrix, DenseStorage};
+use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use crate::permuted::{PermutedMatrix, RowPermutation};
+use crate::util::reverse_matrix_index_bits;
 use crate::Matrix;
 
 /// A matrix that is possibly bit-reversed, and can easily switch
@@ -28,6 +29,16 @@ impl RowPermutation for BitrevPerm {
     }
     fn permute_row_index(&self, r: usize) -> usize {
         reverse_bits_len(r, self.log_height)
+    }
+    // This might not be more efficient than the lazy generic impl
+    // if we have a nested view.
+    fn to_row_major_matrix<T: Clone + Send + Sync, Inner: Matrix<T>>(
+        &self,
+        inner: Inner,
+    ) -> RowMajorMatrix<T> {
+        let mut inner = inner.to_row_major_matrix();
+        reverse_matrix_index_bits(&mut inner);
+        inner
     }
 }
 
