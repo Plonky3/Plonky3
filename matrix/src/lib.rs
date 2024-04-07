@@ -8,11 +8,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-use strided::{VerticallyStridedMatrixView, VerticallyStridedPerm};
 
 use itertools::{izip, Itertools};
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
+use strided::{VerticallyStridedMatrixView, VerticallyStridedPerm};
 
 use crate::dense::RowMajorMatrix;
 

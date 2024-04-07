@@ -1,7 +1,5 @@
-use crate::{
-    permuted::{PermutedMatrix, RowPermutation},
-    Matrix,
-};
+use crate::permuted::{PermutedMatrix, RowPermutation};
+use crate::Matrix;
 
 #[derive(Debug)]
 pub struct VerticallyStridedPerm {
