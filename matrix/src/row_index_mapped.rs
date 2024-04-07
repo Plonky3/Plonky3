@@ -5,10 +5,10 @@ use p3_field::PackedValue;
 use crate::dense::RowMajorMatrix;
 use crate::Matrix;
 
-/// A RowPermutation remaps row indices, and can change the height.
-pub trait RowPermutation: Send + Sync {
+/// A RowIndexMap remaps row indices, and can change the height.
+pub trait RowIndexMap: Send + Sync {
     fn height(&self) -> usize;
-    fn permute_row_index(&self, r: usize) -> usize;
+    fn map_row_index(&self, r: usize) -> usize;
 
     /// Permutations can optionally provide an optimized method to
     /// convert to dense form.
@@ -18,7 +18,7 @@ pub trait RowPermutation: Send + Sync {
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
             (0..self.height())
-                .flat_map(|r| inner.row(self.permute_row_index(r)))
+                .flat_map(|r| inner.row(self.map_row_index(r)))
                 .collect(),
             inner.width(),
         )
@@ -26,19 +26,19 @@ pub trait RowPermutation: Send + Sync {
 }
 
 #[derive(Debug)]
-pub struct PermutedMatrix<Perm, Inner> {
-    pub perm: Perm,
+pub struct RowIndexMappedView<IndexMap, Inner> {
+    pub index_map: IndexMap,
     pub inner: Inner,
 }
 
-impl<T: Send + Sync, Perm: RowPermutation, Inner: Matrix<T>> Matrix<T>
-    for PermutedMatrix<Perm, Inner>
+impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
+    for RowIndexMappedView<IndexMap, Inner>
 {
     fn width(&self) -> usize {
         self.inner.width()
     }
     fn height(&self) -> usize {
-        self.perm.height()
+        self.index_map.height()
     }
 
     type Row<'a> = Inner::Row<'a>
@@ -46,17 +46,17 @@ impl<T: Send + Sync, Perm: RowPermutation, Inner: Matrix<T>> Matrix<T>
         Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
-        self.inner.row(self.perm.permute_row_index(r))
+        self.inner.row(self.index_map.map_row_index(r))
     }
 
     // Override these methods so we use the potentially optimized inner methods instead of defaults.
 
     fn get(&self, r: usize, c: usize) -> T {
-        self.inner.get(self.perm.permute_row_index(r), c)
+        self.inner.get(self.index_map.map_row_index(r), c)
     }
 
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        self.inner.row_slice(self.perm.permute_row_index(r))
+        self.inner.row_slice(self.index_map.map_row_index(r))
     }
 
     fn horizontally_packed_row<'a, P>(
@@ -68,7 +68,7 @@ impl<T: Send + Sync, Perm: RowPermutation, Inner: Matrix<T>> Matrix<T>
         T: Clone + 'a,
     {
         self.inner
-            .horizontally_packed_row(self.perm.permute_row_index(r))
+            .horizontally_packed_row(self.index_map.map_row_index(r))
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -77,6 +77,6 @@ impl<T: Send + Sync, Perm: RowPermutation, Inner: Matrix<T>> Matrix<T>
         T: Clone,
     {
         // Use Perm's optimized permutation routine, if it has one.
-        self.perm.to_row_major_matrix(self.inner)
+        self.index_map.to_row_major_matrix(self.inner)
     }
 }

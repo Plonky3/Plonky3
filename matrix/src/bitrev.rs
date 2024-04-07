@@ -1,7 +1,7 @@
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
-use crate::permuted::{PermutedMatrix, RowPermutation};
+use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use crate::util::reverse_matrix_index_bits;
 use crate::Matrix;
 
@@ -22,8 +22,8 @@ impl BitReversalPerm {
     pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
         inner: Inner,
     ) -> BitReversedMatrixView<Inner> {
-        PermutedMatrix {
-            perm: Self {
+        RowIndexMappedView {
+            index_map: Self {
                 log_height: log2_strict_usize(inner.height()),
             },
             inner,
@@ -31,11 +31,11 @@ impl BitReversalPerm {
     }
 }
 
-impl RowPermutation for BitReversalPerm {
+impl RowIndexMap for BitReversalPerm {
     fn height(&self) -> usize {
         1 << self.log_height
     }
-    fn permute_row_index(&self, r: usize) -> usize {
+    fn map_row_index(&self, r: usize) -> usize {
         reverse_bits_len(r, self.log_height)
     }
     // This might not be more efficient than the lazy generic impl
@@ -50,7 +50,7 @@ impl RowPermutation for BitReversalPerm {
     }
 }
 
-pub type BitReversedMatrixView<Inner> = PermutedMatrix<BitReversalPerm, Inner>;
+pub type BitReversedMatrixView<Inner> = RowIndexMappedView<BitReversalPerm, Inner>;
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T>
     for BitReversedMatrixView<DenseMatrix<T, S>>

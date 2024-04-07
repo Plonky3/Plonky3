@@ -1,7 +1,9 @@
+use core::ops::Deref;
+
 use crate::Matrix;
 
 /// A combination of two matrices, stacked together vertically.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct VerticalPair<First, Second> {
     first: First,
     second: Second,
@@ -30,7 +32,7 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         self.first.height() + self.second.height()
     }
 
-    type Row<'a> = EitherIterator<First::Row<'a>, Second::Row<'a>> where Self: 'a;
+    type Row<'a> = EitherRow<First::Row<'a>, Second::Row<'a>> where Self: 'a;
 
     fn get(&self, r: usize, c: usize) -> T {
         if r < self.first.height() {
@@ -42,20 +44,29 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         if r < self.first.height() {
-            EitherIterator::Left(self.first.row(r))
+            EitherRow::Left(self.first.row(r))
         } else {
-            EitherIterator::Right(self.second.row(r - self.first.height()))
+            EitherRow::Right(self.second.row(r - self.first.height()))
+        }
+    }
+
+    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
+        if r < self.first.height() {
+            EitherRow::Left(self.first.row_slice(r))
+        } else {
+            EitherRow::Right(self.second.row_slice(r - self.first.height()))
         }
     }
 }
 
+/// We use this to wrap both the row iterator and the row slice.
 #[derive(Debug)]
-pub enum EitherIterator<L, R> {
+pub enum EitherRow<L, R> {
     Left(L),
     Right(R),
 }
 
-impl<T, L, R> Iterator for EitherIterator<L, R>
+impl<T, L, R> Iterator for EitherRow<L, R>
 where
     L: Iterator<Item = T>,
     R: Iterator<Item = T>,
@@ -64,8 +75,22 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            EitherIterator::Left(l) => l.next(),
-            EitherIterator::Right(r) => r.next(),
+            EitherRow::Left(l) => l.next(),
+            EitherRow::Right(r) => r.next(),
+        }
+    }
+}
+
+impl<T, L, R> Deref for EitherRow<L, R>
+where
+    L: Deref<Target = [T]>,
+    R: Deref<Target = [T]>,
+{
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            EitherRow::Left(l) => l,
+            EitherRow::Right(r) => r,
         }
     }
 }

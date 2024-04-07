@@ -1,8 +1,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use itertools::{izip, Itertools};
-use p3_air::{Air, TwoRowMatrixView};
+use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{AbstractExtensionField, AbstractField, PackedValue};
@@ -142,7 +143,6 @@ where
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_start| {
-            let wrap = |i| i % quotient_size;
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -150,28 +150,17 @@ where
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
-            let local = (0..width)
-                .map(|col| {
-                    PackedVal::<SC>::from_fn(|offset| {
-                        trace_on_quotient_domain.get(wrap(i_start + offset), col)
-                    })
-                })
-                .collect_vec();
-
-            let next = (0..width)
-                .map(|col| {
-                    PackedVal::<SC>::from_fn(|offset| {
-                        trace_on_quotient_domain.get(wrap(i_start + next_step + offset), col)
-                    })
-                })
-                .collect_vec();
+            let main = RowMajorMatrix::new(
+                iter::empty()
+                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start))
+                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start + next_step))
+                    .collect_vec(),
+                width,
+            );
 
             let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {
-                main: TwoRowMatrixView {
-                    local: &local,
-                    next: &next,
-                },
+                main,
                 public_values,
                 is_first_row,
                 is_last_row,

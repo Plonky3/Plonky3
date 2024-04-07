@@ -12,7 +12,7 @@ use core::ops::Deref;
 use itertools::{izip, Itertools};
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
-use strided::{VerticallyStridedMatrixView, VerticallyStridedPerm};
+use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 
 use crate::dense::RowMajorMatrix;
 
@@ -20,7 +20,7 @@ pub mod bitrev;
 pub mod dense;
 pub mod extension;
 pub mod mul;
-pub mod permuted;
+pub mod row_index_mapped;
 pub mod sparse;
 pub mod stack;
 pub mod strided;
@@ -111,18 +111,19 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (packed, sfx)
     }
 
+    /// Wraps at the end.
     fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
         P: PackedValue<Value = T>,
     {
-        (0..self.width()).map(move |c| P::from_fn(|i| self.get(r + i, c)))
+        (0..self.width()).map(move |c| P::from_fn(|i| self.get((r + i) % self.height(), c)))
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
     where
         Self: Sized,
     {
-        VerticallyStridedPerm::new_view(self, stride, offset)
+        VerticallyStridedRowIndexMap::new_view(self, stride, offset)
     }
 
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>

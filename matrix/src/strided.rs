@@ -1,17 +1,18 @@
-use crate::permuted::{PermutedMatrix, RowPermutation};
+use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use crate::Matrix;
 
 #[derive(Debug)]
-pub struct VerticallyStridedPerm {
+pub struct VerticallyStridedRowIndexMap {
     // Store our height
     height: usize,
     stride: usize,
     offset: usize,
 }
 
-pub type VerticallyStridedMatrixView<Inner> = PermutedMatrix<VerticallyStridedPerm, Inner>;
+pub type VerticallyStridedMatrixView<Inner> =
+    RowIndexMappedView<VerticallyStridedRowIndexMap, Inner>;
 
-impl VerticallyStridedPerm {
+impl VerticallyStridedRowIndexMap {
     pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
         inner: Inner,
         stride: usize,
@@ -22,8 +23,8 @@ impl VerticallyStridedPerm {
         let remainder = h % stride;
         let final_stride = offset < remainder;
         let height = full_strides + final_stride as usize;
-        PermutedMatrix {
-            perm: Self {
+        RowIndexMappedView {
+            index_map: Self {
                 height,
                 stride,
                 offset,
@@ -33,11 +34,11 @@ impl VerticallyStridedPerm {
     }
 }
 
-impl RowPermutation for VerticallyStridedPerm {
+impl RowIndexMap for VerticallyStridedRowIndexMap {
     fn height(&self) -> usize {
         self.height
     }
-    fn permute_row_index(&self, r: usize) -> usize {
+    fn map_row_index(&self, r: usize) -> usize {
         r * self.stride + self.offset
     }
 }

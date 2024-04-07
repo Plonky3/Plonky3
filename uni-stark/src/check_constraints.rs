@@ -1,8 +1,9 @@
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::stack::VerticalPair;
 use p3_matrix::Matrix;
 use tracing::instrument;
 
@@ -17,12 +18,12 @@ where
     (0..height).for_each(|i| {
         let i_next = (i + 1) % height;
 
-        let main_local = main.row_slice(i);
-        let main_next = main.row_slice(i_next);
-        let main = TwoRowMatrixView {
-            local: &main_local,
-            next: &main_next,
-        };
+        let local = main.row_slice(i);
+        let next = main.row_slice(i_next);
+        let main = VerticalPair::new(
+            RowMajorMatrixView::new_row(&*local),
+            RowMajorMatrixView::new_row(&*next),
+        );
 
         let mut builder = DebugConstraintBuilder {
             row_index: i,
@@ -42,7 +43,7 @@ where
 #[derive(Debug)]
 pub struct DebugConstraintBuilder<'a, F: Field> {
     row_index: usize,
-    main: TwoRowMatrixView<'a, F>,
+    main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
     public_values: &'a [F],
     is_first_row: F,
     is_last_row: F,
@@ -56,7 +57,7 @@ where
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = TwoRowMatrixView<'a, F>;
+    type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
 
     fn is_first_row(&self) -> Self::Expr {
         self.is_first_row
