@@ -120,24 +120,17 @@ where
         self.mmcs.commit(ldes)
     }
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        prover_data: &Self::ProverData,
+        prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val> {
+    ) -> impl Matrix<Val> + 'a {
         // todo: handle extrapolation for LDEs we don't have
         assert_eq!(domain.shift, Val::generator());
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
-        // todo: return generic Matrix<T> ?
-        let strided = lde
-            .split_rows(domain.size())
-            .0
-            .bit_reverse_rows()
-            .to_row_major_matrix();
-        assert_eq!(strided.height(), domain.size());
-        strided
+        lde.split_rows(domain.size()).0.bit_reverse_rows()
     }
 
     fn open(

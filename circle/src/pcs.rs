@@ -65,17 +65,17 @@ where
         )
     }
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        data: &Self::ProverData,
+        data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val> {
+    ) -> impl Matrix<Val> + 'a {
         // TODO do this correctly
         let mat = self.mmcs.get_matrices(&data.mmcs_data)[idx];
         assert_eq!(mat.height(), 1 << domain.log_n);
         assert_eq!(domain, data.committed_domains[idx]);
-        mat.clone()
+        mat.as_view()
     }
 
     #[instrument(skip_all)]

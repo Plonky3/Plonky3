@@ -49,8 +49,7 @@ pub trait Mmcs<T: Send + Sync>: Clone {
     ) -> (Vec<Vec<T>>, Self::Proof);
 
     /// Get the matrices that were committed to.
-    fn get_matrices<'a, M: Matrix<T>>(&'a self, prover_data: &'a Self::ProverData<M>)
-        -> Vec<&'a M>;
+    fn get_matrices<'a, M: Matrix<T>>(&self, prover_data: &'a Self::ProverData<M>) -> Vec<&'a M>;
 
     fn get_matrix_heights<M: Matrix<T>>(&self, prover_data: &Self::ProverData<M>) -> Vec<usize> {
         self.get_matrices(prover_data)

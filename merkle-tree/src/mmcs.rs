@@ -90,7 +90,7 @@ where
     }
 
     fn get_matrices<'a, M: Matrix<P::Scalar>>(
-        &'a self,
+        &self,
         prover_data: &'a Self::ProverData<M>,
     ) -> Vec<&'a M> {
         prover_data.leaves.iter().collect()

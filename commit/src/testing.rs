@@ -89,21 +89,19 @@ where
         )
     }
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        prover_data: &Self::ProverData,
+        prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val> {
+    ) -> impl Matrix<Val> + 'a {
         let mut coeffs = prover_data[idx].clone();
         assert!(domain.log_n >= self.log_n);
         coeffs.values.resize(
             coeffs.values.len() << (domain.log_n - self.log_n),
             Val::zero(),
         );
-        self.dft
-            .coset_dft_batch(coeffs, domain.shift)
-            .to_row_major_matrix()
+        self.dft.coset_dft_batch(coeffs, domain.shift)
     }
 
     fn open(
