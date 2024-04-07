@@ -14,16 +14,24 @@ pub trait BitReversableMatrix<T: Send + Sync>: Matrix<T> {
 }
 
 #[derive(Debug)]
-pub struct BitrevPerm {
+pub struct BitReversalPerm {
     log_height: usize,
 }
 
-impl RowPermutation for BitrevPerm {
-    fn new<T: Send + Sync, Inner: Matrix<T>>(inner: &Inner) -> Self {
-        Self {
-            log_height: log2_strict_usize(inner.height()),
+impl BitReversalPerm {
+    pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
+        inner: Inner,
+    ) -> BitReversedMatrixView<Inner> {
+        PermutedMatrix {
+            perm: Self {
+                log_height: log2_strict_usize(inner.height()),
+            },
+            inner,
         }
     }
+}
+
+impl RowPermutation for BitReversalPerm {
     fn height(&self) -> usize {
         1 << self.log_height
     }
@@ -42,20 +50,20 @@ impl RowPermutation for BitrevPerm {
     }
 }
 
-pub type BitReversedMatrixView<Inner> = PermutedMatrix<BitrevPerm, Inner>;
+pub type BitReversedMatrixView<Inner> = PermutedMatrix<BitReversalPerm, Inner>;
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T>
     for BitReversedMatrixView<DenseMatrix<T, S>>
 {
     type BitRev = DenseMatrix<T, S>;
     fn bit_reverse_rows(self) -> Self::BitRev {
-        self.inner()
+        self.inner
     }
 }
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T> for DenseMatrix<T, S> {
     type BitRev = BitReversedMatrixView<DenseMatrix<T, S>>;
     fn bit_reverse_rows(self) -> Self::BitRev {
-        BitReversedMatrixView::new(self)
+        BitReversalPerm::new_view(self)
     }
 }

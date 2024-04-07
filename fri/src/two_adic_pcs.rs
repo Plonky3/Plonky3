@@ -12,7 +12,7 @@ use p3_field::{
     Field, PackedValue, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -245,7 +245,7 @@ where
                             let (low_coset, _) =
                                 mat.split_rows(mat.height() >> self.fri.log_blowup);
                             interpolate_coset(
-                                &BitReversedMatrixView::new(low_coset),
+                                &BitReversalPerm::new_view(low_coset),
                                 Val::generator(),
                                 point,
                             )

@@ -8,13 +8,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
+use strided::{VerticallyStridedMatrixView, VerticallyStridedPerm};
 
 use itertools::{izip, Itertools};
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 
 use crate::dense::RowMajorMatrix;
-use crate::strided::VerticallyStridedMatrixView;
 
 pub mod bitrev;
 pub mod dense;
@@ -122,11 +122,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     where
         Self: Sized,
     {
-        VerticallyStridedMatrixView {
-            inner: self,
-            stride,
-            offset,
-        }
+        VerticallyStridedPerm::new_view(self, stride, offset)
     }
 
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>

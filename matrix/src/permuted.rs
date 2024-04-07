@@ -8,10 +8,6 @@ use crate::Matrix;
 
 /// A RowPermutation remaps row indices, and can change the height.
 pub trait RowPermutation: Send + Sync {
-    /// Provide the inner matrix at construction in case the permutation
-    /// needs to store information about it, such as the height.
-    fn new<T: Send + Sync, Inner: Matrix<T>>(inner: &Inner) -> Self;
-
     fn height(&self) -> usize;
     fn permute_row_index(&self, r: usize) -> usize;
 
@@ -32,27 +28,8 @@ pub trait RowPermutation: Send + Sync {
 
 #[derive(Debug)]
 pub struct PermutedMatrix<Perm, Inner> {
-    perm: Perm,
-    inner: Inner,
-}
-
-impl<Perm: RowPermutation, Inner> PermutedMatrix<Perm, Inner> {
-    pub fn new<T>(inner: Inner) -> Self
-    where
-        T: Send + Sync,
-        Inner: Matrix<T>,
-    {
-        Self {
-            perm: Perm::new(&inner),
-            inner,
-        }
-    }
-    pub fn inner(self) -> Inner {
-        self.inner
-    }
-    pub fn inner_ref(&self) -> &Inner {
-        &self.inner
-    }
+    pub perm: Perm,
+    pub inner: Inner,
 }
 
 impl<T: Send + Sync, Perm: RowPermutation, Inner: Matrix<T>> Matrix<T>
