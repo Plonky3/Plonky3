@@ -123,6 +123,13 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         Self: Sized,
     {
         VerticallyStridedPerm::new_view(self, stride, offset)
+        /*
+        VerticallyStridedMatrixView {
+            inner: self,
+            stride,
+            offset,
+        }
+        */
     }
 
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>

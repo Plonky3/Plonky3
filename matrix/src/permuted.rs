@@ -1,7 +1,6 @@
 use core::ops::Deref;
 
 use p3_field::PackedValue;
-use p3_maybe_rayon::prelude::*;
 
 use crate::dense::RowMajorMatrix;
 use crate::Matrix;
@@ -18,7 +17,7 @@ pub trait RowPermutation: Send + Sync {
         inner: Inner,
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
-            (0..inner.height())
+            (0..self.height())
                 .flat_map(|r| inner.row(self.permute_row_index(r)))
                 .collect(),
             inner.width(),
@@ -51,6 +50,10 @@ impl<T: Send + Sync, Perm: RowPermutation, Inner: Matrix<T>> Matrix<T>
     }
 
     // Override these methods so we use the potentially optimized inner methods instead of defaults.
+
+    fn get(&self, r: usize, c: usize) -> T {
+        self.inner.get(self.perm.permute_row_index(r), c)
+    }
 
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.inner.row_slice(self.perm.permute_row_index(r))

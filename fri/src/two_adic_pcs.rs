@@ -12,7 +12,7 @@ use p3_field::{
     Field, PackedValue, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -130,12 +130,11 @@ where
         assert_eq!(domain.shift, Val::generator());
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
-        let extra_bits = log2_strict_usize(lde.height()) - log2_strict_usize(domain.size());
         // todo: return generic Matrix<T> ?
         let strided = lde
-            .as_view()
+            .split_rows(domain.size())
+            .0
             .bit_reverse_rows()
-            .vertically_strided(1 << extra_bits, 0)
             .to_row_major_matrix();
         assert_eq!(strided.height(), domain.size());
         strided
