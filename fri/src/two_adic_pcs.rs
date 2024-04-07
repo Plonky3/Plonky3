@@ -12,7 +12,7 @@ use p3_field::{
     Field, PackedValue, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -102,7 +102,7 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let ldes: Vec<RowMajorMatrix<Val>> = evaluations
+        let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
@@ -131,7 +131,7 @@ where
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
         let extra_bits = log2_strict_usize(lde.height()) - log2_strict_usize(domain.size());
-        // TODO get rid of these 2 copies
+        // todo: return generic Matrix<T> ?
         let strided = lde
             .as_view()
             .bit_reverse_rows()
