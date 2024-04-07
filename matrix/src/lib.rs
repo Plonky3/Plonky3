@@ -20,6 +20,7 @@ pub mod bitrev;
 pub mod dense;
 pub mod extension;
 pub mod mul;
+pub mod permuted;
 pub mod sparse;
 pub mod stack;
 pub mod strided;
@@ -133,16 +134,25 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        self.par_rows().zip(v).par_fold_reduce(
-            || vec![EF::zero(); self.width()],
-            |mut acc, (row, &scale)| {
-                izip!(&mut acc, row).for_each(|(a, x)| *a += scale * x);
-                acc
-            },
-            |mut acc_l, acc_r| {
-                izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
-                acc_l
-            },
-        )
+        generic_columnwise_dot_product(self, v)
     }
+}
+
+fn generic_columnwise_dot_product<F, EF, M>(m: &M, v: &[EF]) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    M: Matrix<F> + ?Sized,
+{
+    m.par_rows().zip(v).par_fold_reduce(
+        || vec![EF::zero(); m.width()],
+        |mut acc, (row, &scale)| {
+            izip!(&mut acc, row).for_each(|(a, x)| *a += scale * x);
+            acc
+        },
+        |mut acc_l, acc_r| {
+            izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
+            acc_l
+        },
+    )
 }
