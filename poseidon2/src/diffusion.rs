@@ -6,6 +6,10 @@
 //! > arbitrarily long subspace trails, and ensuring that the polynomial representation
 //! > of the scheme is dense." (Section 5.2)
 //!
+//! > These properties can be ensured by checking the following two conditions:
+//! > Every entry of the Matrix is non 0.
+//! > The characteristic polynomial of the matrix is irreducible.
+//!
 //! This file implements a trait for linear layers that satisfy these three properties.
 
 use p3_field::{AbstractField, Field};

@@ -15,7 +15,7 @@ pub trait MdsLightPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WID
 // [ 1 1 4 6 ].
 // This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
 // It is also the matrix used by the Horizon Labs implementation.
-fn apply_hl_mat4<AF>(x: &mut [AF])
+fn apply_hl_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
 {
@@ -130,9 +130,9 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
 }
 
 #[derive(Default, Clone)]
-pub struct Poseidon2ExternalMatrixHL;
+pub struct Poseidon2ExternalMatrixGeneral;
 
-impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixHL
+impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixGeneral
 where
     AF: AbstractField,
     AF::F: PrimeField,
@@ -140,4 +140,11 @@ where
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
         mds_light_permutation::<AF, HLMDSMat4, WIDTH>(state, HLMDSMat4)
     }
+}
+
+impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixGeneral
+where
+    AF: AbstractField,
+    AF::F: PrimeField,
+{
 }
