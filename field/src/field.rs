@@ -184,14 +184,23 @@ pub trait Field:
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::two().exp_u64(exp)
+        match exp {
+            0 => *self,
+            1 => self.double(),
+            _ => *self * Self::two().exp_u64(exp),
+        }
     }
 
     /// self / 2^exp
     #[must_use]
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::two().exp_u64(exp)
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            _ => *self / Self::two().exp_u64(exp),
+        }
+        
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
