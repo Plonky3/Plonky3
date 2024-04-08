@@ -29,8 +29,6 @@ impl<AF: AbstractField<F = Bn254Fr>> DiffusionPermutation<AF, 3> for DiffusionMa
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
     use ff::PrimeField;
     use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
     use rand::Rng;

@@ -23,4 +23,5 @@ p3-merkle-tree = { path = "../merkle-tree" }
 p3-poseidon = { path = "../poseidon" }
 p3-symmetric = { path = "../symmetric" }
 
+hashbrown = "0.14.3"
 rand = "0.8.5"

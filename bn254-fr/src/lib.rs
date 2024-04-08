@@ -1,10 +1,7 @@
 //! The scalar field of the BN254 curve, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 
-extern crate alloc;
-
 mod poseidon2;
 
-use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
@@ -277,8 +274,6 @@ impl Distribution<Bn254Fr> for Standard {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use num_traits::One;
     use p3_field_testing::test_field;
 
