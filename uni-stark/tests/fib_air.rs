@@ -146,6 +146,7 @@ fn test_public_value() {
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
