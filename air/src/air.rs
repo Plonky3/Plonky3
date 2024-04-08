@@ -215,32 +215,3 @@ impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder
         self.inner.permutation_randomness()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use p3_matrix::MatrixRowSlices;
-
-    use crate::{Air, AirBuilder, BaseAir};
-
-    struct FibonacciAir;
-
-    impl<F> BaseAir<F> for FibonacciAir {
-        fn width(&self) -> usize {
-            1
-        }
-    }
-
-    impl<AB: AirBuilder> Air<AB> for FibonacciAir {
-        fn eval(&self, builder: &mut AB) {
-            let main = builder.main();
-
-            let x_0 = main.row_slice(0)[0];
-            let x_1 = main.row_slice(1)[0];
-            let x_2 = main.row_slice(2)[0];
-
-            builder.when_first_row().assert_zero(x_0);
-            builder.when_first_row().assert_one(x_1);
-            builder.when_transition().assert_eq(x_0 + x_1, x_2);
-        }
-    }
-}
