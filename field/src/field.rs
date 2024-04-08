@@ -200,7 +200,6 @@ pub trait Field:
             1 => self.halve(),
             _ => *self / Self::two().exp_u64(exp),
         }
-        
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
