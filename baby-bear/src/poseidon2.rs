@@ -102,7 +102,7 @@ mod tests {
     use core::array;
 
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
 
     use super::*;
 
@@ -130,7 +130,7 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2: Poseidon2<
             BabyBear,
-            Poseidon2ExternalMatrixGeneral,
+            Poseidon2ExternalMatrixHL,
             DiffusionMatrixBabybear,
             WIDTH,
             D,
@@ -139,7 +139,7 @@ mod tests {
             HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS
                 .map(to_babybear_array)
                 .to_vec(),
-            Poseidon2ExternalMatrixGeneral,
+            Poseidon2ExternalMatrixHL,
             ROUNDS_P,
             to_babybear_array(HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS).to_vec(),
             DiffusionMatrixBabybear,
