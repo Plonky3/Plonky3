@@ -11,7 +11,7 @@ use crate::{to_mersenne31_array, Mersenne31};
 // Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536]
 //                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
 
-const MATRIX_DIAG_16_MERSENNE31_U32: [u32; 16] = [
+pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] = to_mersenne31_array([
     Mersenne31::ORDER_U32 - 2,
     1,
     2,
@@ -28,19 +28,17 @@ const MATRIX_DIAG_16_MERSENNE31_U32: [u32; 16] = [
     16384,
     32768,
     65536,
-];
-
-pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] =
-    to_mersenne31_array(MATRIX_DIAG_16_MERSENNE31_U32);
+]);
 
 // We make use of the fact that most entries are a power of 2.
 // Note that this array is 1 element shorter than MATRIX_DIAG_16_MERSENNE31 as we do not include the first element.
-const MATRIX_DIAG_16_MONTY_SHIFTS: [i32; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
+const MATRIX_DIAG_16_MONTY_SHIFTS: [u64; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixMersenne31;
 
 impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
+    #[inline]
     fn permute_mut(&self, state: &mut [Mersenne31; 16]) {
         let sum: Mersenne31 = state.iter().cloned().sum();
         state[0] = sum - state[0].double();
@@ -52,6 +50,35 @@ impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
 }
 
 impl DiffusionPermutation<Mersenne31, 16> for DiffusionMatrixMersenne31 {}
+
+// Two optimised diffusion matrices for Mersenne31/24:
+
+// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24]
+// Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304]
+//                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
+
+
+pub const MATRIX_DIAG_24_MERSENNE31: [Mersenne31; 24] = to_mersenne31_array([
+    Mersenne31::ORDER_U32 - 2,
+    1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304]);
+
+// We make use of the fact that most entries are a power of 2.
+// Note that this array is 1 element shorter than MATRIX_DIAG_24_MERSENNE31 as we do not include the first element.
+const MATRIX_DIAG_24_MONTY_SHIFTS: [u64; 23] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+
+impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
+    #[inline]
+    fn permute_mut(&self, state: &mut [Mersenne31; 24]) {
+        let sum: Mersenne31 = state.iter().cloned().sum();
+        state[0] = sum - state[0].double();
+        for i in 1..24 {
+            state[i] = state[i].mul_2exp_u64(MATRIX_DIAG_24_MONTY_SHIFTS[i - 1] as u64);
+            state[i] += sum;
+        }
+    }
+}
+
+impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
@@ -68,7 +95,7 @@ mod tests {
     // set_random_seed(246810)
     // print([vector([ZZ.random_element(2**31) for _ in range(16)]) for _ in range(8)])
     // print(vector([ZZ.random_element(2**31) for _ in range(14)]))
-    const EXTRNAL_POSEIDON2_CONSTANTS: [[u32; 16]; 8] = [
+    const EXTRNAL_POSEIDON2_CONSTANTS_WIDTH_16: [[u32; 16]; 8] = [
         [
             1777708182, 1721401758, 2112139575, 970766477, 1003159146, 2109481055, 1591645666,
             1253081731, 147790673, 1795993607, 418185859, 1354578103, 1652934702, 1108743982,
@@ -110,7 +137,7 @@ mod tests {
             422038674, 1593677019,
         ],
     ];
-    const INTERNAL_POSEIDON2_CONSTANTS: [u32; 14] = [
+    const INTERNAL_POSEIDON2_CONSTANTS_WIDTH_16: [u32; 14] = [
         439688492, 778564230, 1348784034, 28869688, 674449982, 1063896158, 215562190, 693226089,
         1852238031, 569836680, 995240347, 978793598, 1217858362, 357939656,
     ];
@@ -131,12 +158,12 @@ mod tests {
             D,
         > = Poseidon2::new(
             ROUNDS_F,
-            EXTRNAL_POSEIDON2_CONSTANTS
+            EXTRNAL_POSEIDON2_CONSTANTS_WIDTH_16
                 .map(to_mersenne31_array)
                 .to_vec(),
             Poseidon2ExternalMatrixGeneral,
             ROUNDS_P,
-            to_mersenne31_array(INTERNAL_POSEIDON2_CONSTANTS).to_vec(),
+            to_mersenne31_array(INTERNAL_POSEIDON2_CONSTANTS_WIDTH_16).to_vec(),
             DiffusionMatrixMersenne31,
         );
 
