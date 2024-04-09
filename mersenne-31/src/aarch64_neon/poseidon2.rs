@@ -27,7 +27,7 @@ mod tests {
     const D: u64 = 5;
     type Perm16 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, WIDTH, D>;
 
-    /// Test that the output is tha same as the scalar version on a random input.
+    /// Test that the output is the same as the scalar version on a random input.
     #[test]
     fn test_avx2_poseidon2_width_16() {
         let mut rng = rand::thread_rng();
