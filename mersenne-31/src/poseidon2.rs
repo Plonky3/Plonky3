@@ -148,7 +148,7 @@ mod tests {
     /// Test on the constant 0 input.
     #[test]
     fn test_poseidon2_width_16_zeroes() {
-        let mut input: [F; 16] = [0_u32; 16].map(F::from_wrapped_u32);
+        let mut input: [F; 16] = [F::zero(); 16];
 
         let expected: [F; 16] = [
             1040993253, 2058700579, 511363496, 489533323, 208503827, 675841613, 904681360,
