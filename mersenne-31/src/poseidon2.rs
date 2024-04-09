@@ -33,10 +33,10 @@ const MATRIX_DIAG_16_MERSENNE31_U32: [u32; 16] = [
 pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] =
     to_mersenne31_array(MATRIX_DIAG_16_MERSENNE31_U32);
 
-// We should do some sort of delayed reduction strategy using the shifts.
+// We make use of the fact that most entries are a power of 2.
+// Note that this array is 1 element shorter than MATRIX_DIAG_16_MERSENNE31 as we do not include the first element.
 const MATRIX_DIAG_16_MONTY_SHIFTS: [i32; 15] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
-// Note that the first entry of this constant should never be accessed.
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixMersenne31;
@@ -58,7 +58,6 @@ impl DiffusionPermutation<Mersenne31, 16> for DiffusionMatrixMersenne31 {}
 mod tests {
     use core::array;
 
-    use p3_field::AbstractField;
     use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 
     use super::*;
