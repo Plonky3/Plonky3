@@ -34,8 +34,8 @@ pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] =
     to_mersenne31_array(MATRIX_DIAG_16_MERSENNE31_U32);
 
 // We should do some sort of delayed reduction strategy using the shifts.
-const MATRIX_DIAG_16_MONTY_SHIFTS: [i32; 16] =
-    [-64, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
+const MATRIX_DIAG_16_MONTY_SHIFTS: [i32; 15] =
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
 // Note that the first entry of this constant should never be accessed.
 
 #[derive(Debug, Clone, Default)]
@@ -46,7 +46,7 @@ impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
         let sum: Mersenne31 = state.iter().cloned().sum();
         state[0] = sum - state[0].double();
         for i in 1..16 {
-            state[i] = state[i].mul_2exp_u64(MATRIX_DIAG_16_MONTY_SHIFTS[i] as u64);
+            state[i] = state[i].mul_2exp_u64(MATRIX_DIAG_16_MONTY_SHIFTS[i-1] as u64);
             state[i] += sum;
         }
     }
