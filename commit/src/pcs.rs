@@ -5,6 +5,7 @@ use core::fmt::Debug;
 
 use p3_field::ExtensionField;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -40,12 +41,12 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        prover_data: &Self::ProverData,
+        prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val<Self::Domain>>;
+    ) -> impl Matrix<Val<Self::Domain>> + 'a;
 
     fn open(
         &self,

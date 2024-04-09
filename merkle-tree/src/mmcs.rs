@@ -3,10 +3,9 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::{DirectMmcs, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::{PackedField, PackedValue};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
@@ -50,16 +49,24 @@ where
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
-    type ProverData = FieldMerkleTree<P::Scalar, PW::Value, DIGEST_ELEMS>;
     type Commitment = Hash<P::Scalar, PW::Value, DIGEST_ELEMS>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
     type Error = ();
-    type Mat<'a> = RowMajorMatrixView<'a, P::Scalar> where H: 'a, C: 'a;
+    type ProverData<M> = FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>;
 
-    fn open_batch(
+    fn commit<M: Matrix<P::Scalar>>(
+        &self,
+        inputs: Vec<M>,
+    ) -> (Self::Commitment, Self::ProverData<M>) {
+        let tree = FieldMerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
+        let root = tree.root();
+        (root, tree)
+    }
+
+    fn open_batch<M: Matrix<P::Scalar>>(
         &self,
         index: usize,
-        prover_data: &FieldMerkleTree<P::Scalar, PW::Value, DIGEST_ELEMS>,
+        prover_data: &FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>,
     ) -> (Vec<Vec<P::Scalar>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
@@ -82,11 +89,11 @@ where
         (openings, proof)
     }
 
-    fn get_matrices<'a>(
-        &'a self,
-        prover_data: &'a Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'a, P::Scalar>> {
-        prover_data.leaves.iter().map(|mat| mat.as_view()).collect()
+    fn get_matrices<'a, M: Matrix<P::Scalar>>(
+        &self,
+        prover_data: &'a Self::ProverData<M>,
+    ) -> Vec<&'a M> {
+        prover_data.leaves.iter().collect()
     }
 
     fn verify_batch(
@@ -152,37 +159,13 @@ where
     }
 }
 
-impl<P, PW, H, C, const DIGEST_ELEMS: usize> DirectMmcs<P::Scalar>
-    for FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
-where
-    P: PackedField,
-    PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
-    PW::Value: Eq,
-    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
-{
-    fn commit(
-        &self,
-        inputs: Vec<RowMajorMatrix<P::Scalar>>,
-    ) -> (Self::Commitment, Self::ProverData) {
-        let tree = FieldMerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
-        let root = tree.root();
-        (root, tree)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
-    use p3_commit::{DirectMmcs, Mmcs};
+    use p3_commit::Mmcs;
     use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};

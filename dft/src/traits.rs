@@ -4,13 +4,14 @@ use p3_field::TwoAdicField;
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::swap_rows;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::Matrix;
 
 use crate::util::divide_by_height;
 
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     // Effectively this is either RowMajorMatrix or BitReversedMatrixView<RowMajorMatrix>.
-    type Evaluations: BitReversableMatrix<F>;
+    // Always owned.
+    type Evaluations: BitReversableMatrix<F> + 'static;
 
     /// Compute the discrete Fourier transform (DFT) `vec`.
     fn dft(&self, vec: Vec<F>) -> Vec<F> {

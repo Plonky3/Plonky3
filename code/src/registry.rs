@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use p3_field::Field;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_matrix::Matrix;
 
 use crate::{
     CodeFamily, CodeOrFamily, LinearCodeFamily, SystematicCodeFamily, SystematicCodeOrFamily,
@@ -18,8 +18,8 @@ pub struct SLCodeRegistry<F: Field, In: Matrix<F>, Out: Matrix<F>> {
 impl<F, In, Out> SLCodeRegistry<F, In, Out>
 where
     F: Field,
-    In: MatrixRows<F>,
-    Out: MatrixRows<F>,
+    In: Matrix<F>,
+    Out: Matrix<F>,
 {
     pub fn new(mut codes: Vec<Box<dyn SystematicLinearCode<F, In, Out = Out>>>) -> Self {
         codes.sort_by_key(|c| c.message_len());
@@ -42,8 +42,8 @@ where
 impl<F, In, Out> CodeOrFamily<F, In> for SLCodeRegistry<F, In, Out>
 where
     F: Field,
-    In: MatrixRows<F>,
-    Out: MatrixRows<F>,
+    In: Matrix<F>,
+    Out: Matrix<F>,
 {
     type Out = Out;
 
@@ -56,8 +56,8 @@ where
 impl<F, In, Out> CodeFamily<F, In> for SLCodeRegistry<F, In, Out>
 where
     F: Field,
-    In: MatrixRows<F>,
-    Out: MatrixRows<F>,
+    In: Matrix<F>,
+    Out: Matrix<F>,
 {
     /// The next supported message length that is at least `min`.
     fn next_message_len(&self, min: usize) -> Option<usize> {
@@ -82,24 +82,24 @@ where
 impl<F, In, Out> SystematicCodeOrFamily<F, In> for SLCodeRegistry<F, In, Out>
 where
     F: Field,
-    In: MatrixRows<F>,
-    Out: MatrixRows<F>,
+    In: Matrix<F>,
+    Out: Matrix<F>,
 {
 }
 
 impl<F, In, Out> SystematicCodeFamily<F, In> for SLCodeRegistry<F, In, Out>
 where
     F: Field,
-    In: MatrixRows<F>,
-    Out: MatrixRows<F>,
+    In: Matrix<F>,
+    Out: Matrix<F>,
 {
 }
 
 impl<F, In, Out> LinearCodeFamily<F, In> for SLCodeRegistry<F, In, Out>
 where
     F: Field,
-    In: MatrixRows<F>,
-    Out: MatrixRows<F>,
+    In: Matrix<F>,
+    Out: Matrix<F>,
 {
 }
 
