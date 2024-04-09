@@ -5,6 +5,7 @@ use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{PrimeField, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
+use p3_mersenne_31::{DiffusionMatrixMersenne31, Mersenne31};
 use p3_poseidon2::{
     DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral,
 };
@@ -15,6 +16,10 @@ use rand::thread_rng;
 fn bench_poseidon2(c: &mut Criterion) {
     poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>(c);
     poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 24, 7>(c);
+
+    poseidon2_p64::<Mersenne31, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 16, 5>(
+        c,
+    );
 
     poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>(c);
     poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 12, 7>(
