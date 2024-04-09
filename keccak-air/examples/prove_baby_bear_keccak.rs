@@ -18,7 +18,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-const NUM_HASHES: usize = 680;
+const NUM_HASHES: usize = 1365;
 
 fn main() -> Result<(), VerificationError> {
     let env_filter = EnvFilter::builder()
