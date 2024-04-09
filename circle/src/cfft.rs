@@ -179,7 +179,6 @@ mod tests {
     use rand::{thread_rng, Rng};
 
     use super::*;
-    use crate::domain::CircleDomain;
     use crate::util::{eval_circle_polys, univariate_to_point};
 
     type F = Mersenne31;

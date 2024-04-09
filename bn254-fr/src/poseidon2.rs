@@ -29,10 +29,8 @@ impl<AF: AbstractField<F = Bn254Fr>> DiffusionPermutation<AF, 3> for DiffusionMa
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
     use ff::PrimeField;
-    use p3_poseidon2::Poseidon2;
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
     use rand::Rng;
     use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
     use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
@@ -97,9 +95,16 @@ mod tests {
             .collect::<Vec<_>>();
         let external_round_constants = round_constants;
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> = Poseidon2::new(
+        let poseidon2: Poseidon2<
+            Bn254Fr,
+            Poseidon2ExternalMatrixHL,
+            DiffusionMatrixBN254,
+            WIDTH,
+            D,
+        > = Poseidon2::new(
             ROUNDS_F,
             external_round_constants,
+            Poseidon2ExternalMatrixHL,
             ROUNDS_P,
             internal_round_constants,
             DiffusionMatrixBN254,

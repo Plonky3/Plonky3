@@ -15,7 +15,7 @@ pub trait MdsLightPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WID
 // [ 1 1 4 6 ].
 // This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
 // It is also the matrix used by the Horizon Labs implementation.
-fn apply_hl_mat4<AF>(x: &mut [AF])
+fn apply_hl_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
 {
@@ -23,8 +23,8 @@ where
     let t1 = x[2].clone() + x[3].clone();
     let t2 = x[1].clone() + x[1].clone() + t1.clone();
     let t3 = x[3].clone() + x[3].clone() + t0.clone();
-    let t4 = t1.clone() + t1.clone() + t1.clone() + t1 + t3.clone();
-    let t5 = t0.clone() + t0.clone() + t0.clone() + t0 + t2.clone();
+    let t4 = t1.double().double() + t3.clone();
+    let t5 = t0.double().double() + t2.clone();
     let t6 = t3 + t5.clone();
     let t7 = t2 + t4.clone();
     x[0] = t6;
@@ -33,29 +33,27 @@ where
     x[3] = t4;
 }
 
-// At some point we should switch this matrix to:
+// Multiply a 4-element vector x by:
 // [ 2 3 1 1 ]
 // [ 1 2 3 1 ]
 // [ 1 1 2 3 ]
 // [ 3 1 1 2 ].
-// This is more efficient than the one above (11 additions vs 16 additions) and leads to a ~5% speed up.
-// Unfortunately it breaks all the tests as we are testing against the implementation from zkhash.
-// Hence will leave this as a comment for now and implement later.
-// fn apply_m_4<AF>(x: &mut [AF])
-// where
-//     AF: AbstractField,
-//     AF::F: PrimeField,
-// {
-//     let t01 = x[0].clone() + x[1].clone();
-//     let t23 = x[2].clone() + x[3].clone();
-//     let t0123 = t01.clone() + t23.clone();
-//     let t01123 = t0123.clone() + x[1].clone();
-//     let t01233 = t0123.clone() + x[3].clone();
-//     x[3] = t01233.clone() + x[0].clone() + x[0].clone(); // 3*x[0] + x[1] + x[2] + 2*x[3]
-//     x[1] = t01123.clone() + x[2].clone() + x[2].clone(); // x[0] + 2*x[1] + 3*x[2] + x[3]
-//     x[0] = t01123 + t01; // 2*x[0] + 3*x[1] + x[2] + x[3]
-//     x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]
-// }
+// This is more efficient than the previous matrix.
+fn apply_mat4<AF>(x: &mut [AF; 4])
+where
+    AF: AbstractField,
+{
+    let t01 = x[0].clone() + x[1].clone();
+    let t23 = x[2].clone() + x[3].clone();
+    let t0123 = t01.clone() + t23.clone();
+    let t01123 = t0123.clone() + x[1].clone();
+    let t01233 = t0123.clone() + x[3].clone();
+    // The order here is important. Need to overwrite x[0] and x[2] after x[1] and x[3].
+    x[3] = t01233.clone() + x[0].double(); // 3*x[0] + x[1] + x[2] + 2*x[3]
+    x[1] = t01123.clone() + x[2].double(); // x[0] + 2*x[1] + 3*x[2] + x[3]
+    x[0] = t01123 + t01; // 2*x[0] + 3*x[1] + x[2] + x[3]
+    x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]
+}
 
 // The 4x4 MDS matrix used by the Horizon Labs implementation of Poseidon2.
 #[derive(Clone, Default)]
@@ -73,6 +71,22 @@ impl<AF: AbstractField> Permutation<[AF; 4]> for HLMDSMat4 {
     }
 }
 impl<AF: AbstractField> MdsPermutation<AF, 4> for HLMDSMat4 {}
+
+#[derive(Clone, Default)]
+pub struct MDSMat4;
+
+impl<AF: AbstractField> Permutation<[AF; 4]> for MDSMat4 {
+    fn permute(&self, input: [AF; 4]) -> [AF; 4] {
+        let mut output = input.clone();
+        self.permute_mut(&mut output);
+        output
+    }
+
+    fn permute_mut(&self, input: &mut [AF; 4]) {
+        apply_mat4(input)
+    }
+}
+impl<AF: AbstractField> MdsPermutation<AF, 4> for MDSMat4 {}
 
 fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
@@ -130,6 +144,26 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
 }
 
 #[derive(Default, Clone)]
+pub struct Poseidon2ExternalMatrixGeneral;
+
+impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixGeneral
+where
+    AF: AbstractField,
+    AF::F: PrimeField,
+{
+    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
+        mds_light_permutation::<AF, MDSMat4, WIDTH>(state, MDSMat4)
+    }
+}
+
+impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixGeneral
+where
+    AF: AbstractField,
+    AF::F: PrimeField,
+{
+}
+
+#[derive(Default, Clone)]
 pub struct Poseidon2ExternalMatrixHL;
 
 impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixHL
@@ -140,4 +174,11 @@ where
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
         mds_light_permutation::<AF, HLMDSMat4, WIDTH>(state, HLMDSMat4)
     }
+}
+
+impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixHL
+where
+    AF: AbstractField,
+    AF::F: PrimeField,
+{
 }

@@ -150,11 +150,11 @@ pub trait ExtensionBuilder: AirBuilder {
 pub trait PermutationAirBuilder: ExtensionBuilder {
     type MP: Matrix<Self::VarEF>;
 
+    type RandomVar: Into<Self::ExprEF> + Copy;
+
     fn permutation(&self) -> Self::MP;
 
-    // TODO: The return type should be some kind of variable to support symbolic evaluation,
-    // but maybe separate from `VarEF` since that might be a `PackedField`?
-    fn permutation_randomness(&self) -> &[Self::EF];
+    fn permutation_randomness(&self) -> &[Self::RandomVar];
 }
 
 #[derive(Debug)]
@@ -207,40 +207,13 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
 impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
     type MP = AB::MP;
 
+    type RandomVar = AB::RandomVar;
+
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
-    fn permutation_randomness(&self) -> &[Self::EF] {
+    fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_matrix::Matrix;
-
-    use crate::{Air, AirBuilder, BaseAir};
-
-    struct FibonacciAir;
-
-    impl<F> BaseAir<F> for FibonacciAir {
-        fn width(&self) -> usize {
-            1
-        }
-    }
-
-    impl<AB: AirBuilder> Air<AB> for FibonacciAir {
-        fn eval(&self, builder: &mut AB) {
-            let main = builder.main();
-
-            let x_0 = main.row_slice(0)[0];
-            let x_1 = main.row_slice(1)[0];
-            let x_2 = main.row_slice(2)[0];
-
-            builder.when_first_row().assert_zero(x_0);
-            builder.when_first_row().assert_one(x_1);
-            builder.when_transition().assert_eq(x_0 + x_1, x_2);
-        }
     }
 }

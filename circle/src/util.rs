@@ -1,3 +1,8 @@
+#[cfg(test)]
+use alloc::vec;
+#[cfg(test)]
+use alloc::vec::Vec;
+
 use p3_field::extension::Complex;
 #[cfg(test)]
 use p3_field::extension::ComplexExtendable;

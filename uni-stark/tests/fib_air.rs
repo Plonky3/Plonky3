@@ -11,7 +11,7 @@ use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::Poseidon2;
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use p3_util::log2_ceil_usize;
@@ -103,7 +103,7 @@ impl<F> Borrow<FibonacciRow<F>> for [F] {
 }
 
 type Val = BabyBear;
-type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
+type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
@@ -117,7 +117,11 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 #[test]
 fn test_public_value() {
-    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabybear,
+        &mut thread_rng(),
+    );
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
@@ -143,10 +147,15 @@ fn test_public_value() {
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
-    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabybear,
+        &mut thread_rng(),
+    );
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);

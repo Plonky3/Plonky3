@@ -228,9 +228,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 
 #[cfg(test)]
 mod tests {
-
-    use std::collections::HashSet;
-
+    use hashbrown::HashSet;
     use itertools::izip;
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};

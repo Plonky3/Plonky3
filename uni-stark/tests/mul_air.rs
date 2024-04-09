@@ -16,7 +16,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
-use p3_poseidon2::Poseidon2;
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
@@ -150,8 +150,12 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
-    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabybear,
+        &mut thread_rng(),
+    );
 
     type Dft = Radix2DitParallel;
     let dft = Dft {};
@@ -199,8 +203,12 @@ fn do_test_bb_twoadic(
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
-    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut thread_rng());
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabybear,
+        &mut thread_rng(),
+    );
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
