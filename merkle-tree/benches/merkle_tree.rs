@@ -3,7 +3,7 @@ use std::any::type_name;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_blake3::Blake3;
-use p3_commit::DirectMmcs;
+use p3_commit::Mmcs;
 use p3_field::{Field, PackedField, PackedValue};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;

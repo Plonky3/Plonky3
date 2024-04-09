@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{AbstractExtensionField, ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use p3_field::{ExtensionField, Field};
+use p3_matrix::extension::FlatMatrixView;
+use p3_matrix::{Dimensions, Matrix};
 
-use crate::{DirectMmcs, Mmcs};
+use crate::Mmcs;
 
 #[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
@@ -28,16 +28,20 @@ where
     EF: ExtensionField<F>,
     InnerMmcs: Mmcs<F>,
 {
-    type ProverData = InnerMmcs::ProverData;
+    type ProverData<M> = InnerMmcs::ProverData<FlatMatrixView<F, EF, M>>;
     type Commitment = InnerMmcs::Commitment;
     type Proof = InnerMmcs::Proof;
     type Error = InnerMmcs::Error;
-    type Mat<'a> = ExtensionMatrix<F, EF, InnerMmcs::Mat<'a>> where Self: 'a;
 
-    fn open_batch(
+    fn commit<M: Matrix<EF>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>) {
+        self.inner
+            .commit(inputs.into_iter().map(FlatMatrixView::new).collect())
+    }
+
+    fn open_batch<M: Matrix<EF>>(
         &self,
         index: usize,
-        prover_data: &Self::ProverData,
+        prover_data: &Self::ProverData<M>,
     ) -> (Vec<Vec<EF>>, Self::Proof) {
         let (opened_base_values, proof) = self.inner.open_batch(index, prover_data);
         let opened_ext_values = opened_base_values
@@ -47,14 +51,11 @@ where
         (opened_ext_values, proof)
     }
 
-    fn get_matrices<'a>(&'a self, prover_data: &'a Self::ProverData) -> Vec<Self::Mat<'a>> {
+    fn get_matrices<'a, M: Matrix<EF>>(&self, prover_data: &'a Self::ProverData<M>) -> Vec<&'a M> {
         self.inner
             .get_matrices(prover_data)
             .into_iter()
-            .map(|mat| ExtensionMatrix {
-                inner: mat,
-                _phantom: PhantomData,
-            })
+            .map(|mat| mat.inner_ref())
             .collect()
     }
 
@@ -84,86 +85,5 @@ where
             .collect::<Vec<_>>();
         self.inner
             .verify_batch(commit, &base_dimensions, index, &opened_base_values, proof)
-    }
-}
-
-impl<F, EF, InnerMmcs> DirectMmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    InnerMmcs: DirectMmcs<F>,
-{
-    fn commit(&self, inputs: Vec<RowMajorMatrix<EF>>) -> (Self::Commitment, Self::ProverData) {
-        self.inner.commit(
-            inputs
-                .into_iter()
-                .map(|mat| mat.flatten_to_base())
-                .collect(),
-        )
-    }
-}
-
-#[derive(Debug)]
-pub struct ExtensionMatrix<F, EF, InnerMat> {
-    inner: InnerMat,
-    _phantom: PhantomData<(F, EF)>,
-}
-
-impl<F, EF, InnerMat> Matrix<EF> for ExtensionMatrix<F, EF, InnerMat>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    InnerMat: Matrix<F>,
-{
-    fn width(&self) -> usize {
-        let d = <EF as AbstractExtensionField<F>>::D;
-        debug_assert!(self.inner.width() % d == 0);
-        self.inner.width() / d
-    }
-
-    fn height(&self) -> usize {
-        self.inner.height()
-    }
-}
-
-impl<F, EF, InnerMat> MatrixRows<EF> for ExtensionMatrix<F, EF, InnerMat>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    InnerMat: MatrixRows<F>,
-{
-    type Row<'a> = ExtensionRow<F, EF, <<InnerMat as MatrixRows<F>>::Row<'a> as IntoIterator>::IntoIter> where Self: 'a;
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        ExtensionRow {
-            inner: self.inner.row(r).into_iter(),
-            _phantom: PhantomData,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ExtensionRow<F, EF, InnerRowIter> {
-    inner: InnerRowIter,
-    _phantom: PhantomData<(F, EF)>,
-}
-
-impl<F, EF, InnerRowIter> Iterator for ExtensionRow<F, EF, InnerRowIter>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    InnerRowIter: Iterator<Item = F>,
-{
-    type Item = EF;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let bs: Vec<_> = (&mut self.inner).take(EF::D).collect();
-        if bs.is_empty() {
-            return None;
-        }
-        if bs.len() == EF::D {
-            return Some(EF::from_base_slice(&bs));
-        }
-        panic!("Row length does not divide EF::D");
     }
 }

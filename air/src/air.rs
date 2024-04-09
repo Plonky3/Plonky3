@@ -2,7 +2,7 @@ use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRowSlices;
+use p3_matrix::Matrix;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
@@ -33,6 +33,8 @@ pub trait AirBuilder: Sized {
 
     type Var: Into<Self::Expr>
         + Copy
+        + Send
+        + Sync
         + Add<Self::F, Output = Self::Expr>
         + Add<Self::Var, Output = Self::Expr>
         + Add<Self::Expr, Output = Self::Expr>
@@ -43,7 +45,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
-    type M: MatrixRowSlices<Self::Var>;
+    type M: Matrix<Self::Var>;
 
     fn main(&self) -> Self::M;
 
@@ -123,7 +125,7 @@ pub trait ExtensionBuilder: AirBuilder {
 
     type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
 
-    type VarEF: Into<Self::ExprEF> + Copy;
+    type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
 
     fn assert_zero_ext<I>(&mut self, x: I)
     where
@@ -146,7 +148,7 @@ pub trait ExtensionBuilder: AirBuilder {
 }
 
 pub trait PermutationAirBuilder: ExtensionBuilder {
-    type MP: MatrixRowSlices<Self::VarEF>;
+    type MP: Matrix<Self::VarEF>;
 
     type RandomVar: Into<Self::ExprEF> + Copy;
 

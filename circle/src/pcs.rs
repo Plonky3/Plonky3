@@ -1,12 +1,11 @@
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_commit::{DirectMmcs, OpenedValues, Pcs};
+use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_field::extension::ComplexExtendable;
-use p3_field::ExtensionField;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::routines::columnwise_dot_product;
-use p3_matrix::{Matrix, MatrixRows};
+use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -15,7 +14,7 @@ use crate::domain::CircleDomain;
 use crate::util::{univariate_to_point, v_n};
 
 #[derive(Debug)]
-pub struct CirclePcs<Val, InputMmcs> {
+pub struct CirclePcs<Val: Field, InputMmcs> {
     pub log_blowup: usize,
     pub cfft: Cfft<Val>,
     pub mmcs: InputMmcs,
@@ -31,11 +30,11 @@ impl<Val, InputMmcs, Challenge, Challenger> Pcs<Challenge, Challenger> for Circl
 where
     Val: ComplexExtendable,
     Challenge: ExtensionField<Val>,
-    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
+    InputMmcs: Mmcs<Val>,
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = ProverData<Val, InputMmcs::ProverData>;
+    type ProverData = ProverData<Val, InputMmcs::ProverData<RowMajorMatrix<Val>>>;
     type Proof = ();
     type Error = ();
 
@@ -66,17 +65,17 @@ where
         )
     }
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        data: &Self::ProverData,
+        data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val> {
+    ) -> impl Matrix<Val> + 'a {
         // TODO do this correctly
         let mat = self.mmcs.get_matrices(&data.mmcs_data)[idx];
         assert_eq!(mat.height(), 1 << domain.log_n);
         assert_eq!(domain, data.committed_domains[idx]);
-        mat.to_row_major_matrix()
+        mat.as_view()
     }
 
     #[instrument(skip_all)]
@@ -107,7 +106,7 @@ where
                                 let basis: Vec<Challenge> = domain.lagrange_basis(zeta_point);
                                 let v_n_at_zeta =
                                     v_n(zeta_point.real(), log_n) - v_n(domain.shift.real(), log_n);
-                                columnwise_dot_product(mat, basis.into_iter())
+                                mat.columnwise_dot_product(&basis)
                                     .into_iter()
                                     .map(|x| x * v_n_at_zeta)
                                     .collect()

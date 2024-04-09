@@ -211,10 +211,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let mut rows = evals.rows();
         for _ in 0..(evals.height() >> (log_chunks + 1)) {
             for chunk in values.iter_mut() {
-                chunk.extend_from_slice(rows.next().unwrap());
+                chunk.extend(rows.next().unwrap());
             }
             for chunk in values.iter_mut().rev() {
-                chunk.extend_from_slice(rows.next().unwrap());
+                chunk.extend(rows.next().unwrap());
             }
         }
         assert!(rows.next().is_none());
@@ -230,7 +230,6 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 mod tests {
     use hashbrown::HashSet;
     use itertools::izip;
-    use p3_matrix::routines::columnwise_dot_product;
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 
@@ -285,8 +284,10 @@ mod tests {
 
         // split domains
         let evals = RowMajorMatrix::rand(&mut thread_rng(), n, width);
-        let orig: Vec<(Complex<F>, Vec<F>)> =
-            d.points().zip(evals.rows().map(|r| r.to_vec())).collect();
+        let orig: Vec<(Complex<F>, Vec<F>)> = d
+            .points()
+            .zip(evals.rows().map(|r| r.collect_vec()))
+            .collect();
         for num_chunks in [1, 2, 4, 8] {
             let mut combined = vec![];
 
@@ -301,7 +302,7 @@ mod tests {
                 assert_eq!(sd.size() * num_chunks, d.size());
                 assert_eq!(se.width(), evals.width());
                 assert_eq!(se.height() * num_chunks, d.size());
-                combined.extend(sd.points().zip(se.rows().map(|r| r.to_vec())));
+                combined.extend(sd.points().zip(se.rows().map(|r| r.collect_vec())));
             }
             // Union of split domains and evals is the original domain and evals
             assert_eq!(
@@ -350,7 +351,8 @@ mod tests {
         let basis = d.lagrange_basis(zeta);
         let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);
 
-        let ys = columnwise_dot_product(evals, basis.into_iter())
+        let ys = evals
+            .columnwise_dot_product(&basis)
             .into_iter()
             .map(|x| x * v_n_at_zeta)
             .collect_vec();

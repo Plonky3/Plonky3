@@ -9,8 +9,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 use tracing::instrument;
 
-use crate::butterflies::dit_butterfly;
-use crate::util::bit_reversed_zero_pad;
+use crate::butterflies::{Butterfly, DitButterfly};
 use crate::TwoAdicSubgroupDft;
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
@@ -87,7 +86,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
 
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -154,7 +153,9 @@ fn dit_layer<F: Field>(
             let hi = block_start + i;
             let lo = hi + half_block_size;
             let twiddle = twiddles[i << layer_rev];
-            dit_butterfly(submat, hi, lo, twiddle);
+
+            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
+            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }
@@ -178,7 +179,8 @@ fn dit_layer_rev<F: Field>(
         for i in 0..half_block_size {
             let hi = block_start + i;
             let lo = hi + half_block_size;
-            dit_butterfly(submat, hi, lo, twiddle);
+            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
+            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }
