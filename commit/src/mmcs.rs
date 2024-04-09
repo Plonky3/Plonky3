@@ -15,10 +15,6 @@ use serde::Serialize;
 /// with the largest height. For matrices with smaller heights, some bits of the row index are
 /// removed (from the least-significant side) to get the effective row index. These semantics are
 /// useful in the FRI protocol. See the documentation for `open_batch` for more details.
-///
-/// The `DirectMmcs` sub-trait represents an MMS which can be directly constructed from a set of
-/// matrices. Other MMCSs may be virtual combinations of child MMCSs, or may be constructed in a
-/// streaming manner.
 pub trait Mmcs<T: Send + Sync>: Clone {
     type ProverData<M>;
     type Commitment: Clone + Serialize + DeserializeOwned;

@@ -85,8 +85,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
     let log_h = log2_strict_usize(mat.height());
     for log_half_block_size in 0..log_h {
-        // bowers_g_layer(mat, log_half_block_size, &twiddles);
-        par_chunks_bowers(mat, 1 << log_half_block_size, &twiddles)
+        butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
     }
 }
 
@@ -102,11 +101,11 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
     let log_h = log2_strict_usize(mat.height());
     for log_half_block_size in (0..log_h).rev() {
-        par_chunks_bowers(mat, 1 << log_half_block_size, &twiddles)
+        butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
     }
 }
 
-fn par_chunks_bowers<F: Field, B: Butterfly<F>>(
+fn butterfly_layer<F: Field, B: Butterfly<F>>(
     mat: &mut RowMajorMatrixViewMut<F>,
     half_block_size: usize,
     twiddles: &[B],

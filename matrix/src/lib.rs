@@ -126,6 +126,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         VerticallyStridedRowIndexMap::new_view(self, stride, offset)
     }
 
+    /// Compute Mᵀv, aka premultiply this matrix by the given vector,
+    /// aka scale each row by the corresponding entry in `v` and take the row-wise sum.
+    /// `v` can be a vector of extension elements.
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>
     where
         T: Field,

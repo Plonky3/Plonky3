@@ -43,6 +43,8 @@ where
         .collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
+    // TODO: Make this faster
+
     let col_scale: Vec<_> = g
         .powers()
         .zip(diff_invs)
