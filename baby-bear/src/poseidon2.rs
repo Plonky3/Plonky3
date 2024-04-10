@@ -4,7 +4,7 @@ use p3_field::PrimeField32;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
-use crate::{to_babybear_array, BabyBear, monty_reduce};
+use crate::{monty_reduce, to_babybear_array, BabyBear};
 
 pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY_HL: [BabyBear; 16] = to_babybear_array([
     0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
@@ -32,18 +32,57 @@ pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY_HL: [BabyBear; 16] = to_babybear_
 pub const MONTY_INVERSE: BabyBear = BabyBear { value: 1 };
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
-    BabyBear::ORDER_U32 - 2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768
+    BabyBear::ORDER_U32 - 2,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    32768,
 ]);
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u8; 15] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
-    BabyBear::ORDER_U32 - 2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 262144, 524288, 1048576, 2097152, 4194304, 8388608
+    BabyBear::ORDER_U32 - 2,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    262144,
+    524288,
+    1048576,
+    2097152,
+    4194304,
+    8388608,
 ]);
 
-const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] =
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23];
+const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
+];
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabybear;
@@ -54,10 +93,16 @@ impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
         let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = BabyBear{ value: monty_reduce(s0)};
+        state[0] = BabyBear {
+            value: monty_reduce(s0),
+        };
         for i in 1..16 {
-            let si = full_sum + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
-            state[i] = BabyBear{ value: monty_reduce(si) };
+            let si = full_sum
+                + ((state[i].value as u64)
+                    << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
+            state[i] = BabyBear {
+                value: monty_reduce(si),
+            };
         }
     }
 }
@@ -70,10 +115,16 @@ impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
         let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = BabyBear{ value: monty_reduce(s0)};
+        state[0] = BabyBear {
+            value: monty_reduce(s0),
+        };
         for i in 1..24 {
-            let si = full_sum + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
-            state[i] = BabyBear{ value: monty_reduce(si) };
+            let si = full_sum
+                + ((state[i].value as u64)
+                    << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
+            state[i] = BabyBear {
+                value: monty_reduce(si),
+            };
         }
     }
 }
