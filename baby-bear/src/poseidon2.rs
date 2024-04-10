@@ -1,47 +1,95 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
-//! For now we recreate the implementation given in:
-//! https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
-//! This uses the constants below along with using the 4x4 matrix:
-//! [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
-//! to build the 4t x 4t matrix used for the external (full) rounds).
-
-//! Long term we will use more optimised internal and external linear layers.
-
+use p3_field::PrimeField32;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
-use crate::{to_babybear_array, BabyBear};
+use crate::{to_babybear_array, BabyBear, monty_reduce};
 
-pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
+pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY_HL: [BabyBear; 16] = to_babybear_array([
     0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
     0x12029f39, 0x694909ce, 0x6d231724, 0x21c3b222, 0x3c0904a5, 0x01d6acda, 0x27705c83, 0x5231c802,
 ]);
 
-pub(crate) const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
-    0x409133f0, 0x1667a8a1, 0x06a6c7b6, 0x6f53160e, 0x273b11d1, 0x03176c5d, 0x72f9bbf9, 0x73ceba91,
-    0x5cdef81d, 0x01393285, 0x46daee06, 0x065d7ba6, 0x52d72d6f, 0x05dd05e0, 0x3bab4b63, 0x6ada3842,
-    0x2fc5fbec, 0x770d61b0, 0x5715aae9, 0x03ef0e90, 0x75b6c770, 0x242adf5f, 0x00d0ca4c, 0x36c0e388,
+// With some more work we can find more optimal choices for v:
+// Two optimised diffusion matrices for Babybear16:
+// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]
+// Power of 2 entries: [-2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
+//                   = [ ?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^15]
+//
+// Two optimised diffusion matrices for Babybear24:
+// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24]
+// Power of 2 entries: [-2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 262144, 524288, 1048576, 2097152, 4194304, 8388608]
+//                   = [ ?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^18,   2^19,    2^20,    2^21,    2^22,    2^23]
+
+// In order to use these to their fullest potential we need to slightly reimage what the matrix looks like.
+// Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
+// such that (1 + D(v)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
+
+// Long term, MONTY_INVERSE, MATRIX_DIAG_16_BABYBEAR_MONTY, MATRIX_DIAG_24_BABYBEAR_MONTY can all be removed.
+// Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
+// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
+pub const MONTY_INVERSE: BabyBear = BabyBear { value: 1 };
+
+pub const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
+    BabyBear::ORDER_U32 - 2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768
 ]);
+
+const MATRIX_DIAG_16_MONTY_SHIFTS: [u64; 15] =
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+
+pub const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
+    BabyBear::ORDER_U32 - 2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 262144, 524288, 1048576, 2097152, 4194304, 8388608
+]);
+
+const MATRIX_DIAG_24_MONTY_SHIFTS: [u64; 23] =
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23];
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabybear;
 
 impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
+    #[inline]
     fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        matmul_internal::<BabyBear, BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
+        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+        let full_sum = part_sum + (state[0].value as u64);
+        let s0 = part_sum + (BabyBear::ORDER_U32 - state[0].value) as u64;
+        state[0] = BabyBear{ value: monty_reduce(s0)};
+        for i in 1..16 {
+            let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
+            state[i] = BabyBear{ value: monty_reduce(si) };
+        }
     }
 }
 
 impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
 
 impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
+    #[inline]
     fn permute_mut(&self, state: &mut [BabyBear; 24]) {
-        matmul_internal::<BabyBear, BabyBear, 24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
+        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+        let full_sum = part_sum + (state[0].value as u64);
+        let s0 = part_sum + (BabyBear::ORDER_U32 - state[0].value) as u64;
+        state[0] = BabyBear{ value: monty_reduce(s0)};
+        for i in 1..24 {
+            let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
+            state[i] = BabyBear{ value: monty_reduce(si) };
+        }
     }
 }
 
 impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}
+
+#[derive(Debug, Clone, Default)]
+pub struct DiffusionMatrixBabybearHL;
+
+impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybearHL {
+    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
+        matmul_internal::<BabyBear, BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY_HL);
+    }
+}
+
+impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybearHL {}
 
 pub const HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS: [[BabyBear; 16]; 8] = [
     to_babybear_array([
@@ -114,7 +162,7 @@ mod tests {
         let poseidon2: Poseidon2<
             BabyBear,
             Poseidon2ExternalMatrixHL,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabybearHL,
             WIDTH,
             D,
         > = Poseidon2::new(
@@ -123,14 +171,14 @@ mod tests {
             Poseidon2ExternalMatrixHL,
             ROUNDS_P,
             HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS.to_vec(),
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabybearHL,
         );
         poseidon2.permute_mut(input);
     }
 
     /// Test on the constant 0 input.
     #[test]
-    fn test_poseidon2_width_16_zeroes() {
+    fn test_poseidon2_hl_width_16_zeroes() {
         let mut input: [F; 16] = [0_u32; 16].map(F::from_wrapped_u32);
 
         let expected: [F; 16] = [
@@ -145,7 +193,7 @@ mod tests {
 
     /// Test on the input 0..16.
     #[test]
-    fn test_poseidon2_width_16_range() {
+    fn test_poseidon2_hl_width_16_range() {
         let mut input: [F; 16] = array::from_fn(|i| F::from_wrapped_u32(i as u32));
 
         let expected: [F; 16] = [
@@ -163,7 +211,7 @@ mod tests {
     /// set_random_seed(2468)
     /// vector([ZZ.random_element(2**31) for t in range(16)])
     #[test]
-    fn test_poseidon2_width_16_random() {
+    fn test_poseidon2_hl_width_16_random() {
         let mut input: [F; 16] = [
             1179785652, 1291567559, 66272299, 471640172, 653876821, 478855335, 871063984,
             540251327, 1506944720, 1403776782, 770420443, 126472305, 1535928603, 1017977016,
