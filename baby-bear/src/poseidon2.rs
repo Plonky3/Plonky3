@@ -53,7 +53,7 @@ impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [BabyBear; 16]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (BabyBear::ORDER_U32 - state[0].value) as u64;
+        let s0 = part_sum + (-state[0]).value as u64;
         state[0] = BabyBear{ value: monty_reduce(s0)};
         for i in 1..16 {
             let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
@@ -69,7 +69,7 @@ impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [BabyBear; 24]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (BabyBear::ORDER_U32 - state[0].value) as u64;
+        let s0 = part_sum + (-state[0]).value as u64;
         state[0] = BabyBear{ value: monty_reduce(s0)};
         for i in 1..24 {
             let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
