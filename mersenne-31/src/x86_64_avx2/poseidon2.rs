@@ -7,7 +7,10 @@ use crate::{
 
 impl Permutation<[PackedMersenne31AVX2; 16]> for DiffusionMatrixMersenne31 {
     fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 16]) {
-        matmul_internal::<Mersenne31, PackedMersenne31AVX2, 16>(state, POSEIDON2_INTERNAL_MATRIX_DIAG_16);
+        matmul_internal::<Mersenne31, PackedMersenne31AVX2, 16>(
+            state,
+            POSEIDON2_INTERNAL_MATRIX_DIAG_16,
+        );
     }
 }
 

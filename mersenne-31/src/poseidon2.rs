@@ -30,13 +30,16 @@ const MATRIX_DIAG_16_MERSENNE31_U32: [u32; 16] = [
     65536,
 ];
 
-// This constant is used by each of the packed field implementations.
+// Long term, POSEIDON2_INTERNAL_MATRIX_DIAG_16 can be removed.
+// Currently it is needed for each Packed field implementation so it is given here to prevent code duplication.
+// It needs to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16: [Mersenne31; 16] =
     to_mersenne31_array(MATRIX_DIAG_16_MERSENNE31_U32);
 
 // We make use of the fact that most entries are a power of 2.
 // Note that this array is 1 element shorter than MATRIX_DIAG_16_MERSENNE31 as we do not include the first element.
-const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
+const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u8; 15] =
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixMersenne31;
@@ -49,7 +52,8 @@ impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
         let s0 = part_sum + (-state[0]).value as u64;
         state[0] = from_u62(s0);
         for i in 1..16 {
-            let si = full_sum + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS[i - 1]);
+            let si = full_sum
+                + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS[i - 1]);
             state[i] = from_u62(si);
         }
     }
