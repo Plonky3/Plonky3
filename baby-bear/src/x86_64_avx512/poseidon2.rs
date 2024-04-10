@@ -2,8 +2,8 @@ use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
 use crate::{
-    BabyBear, DiffusionMatrixBabybear, PackedBabyBearAVX512, MATRIX_DIAG_16_BABYBEAR_MONTY,
-    MATRIX_DIAG_24_BABYBEAR_MONTY, MONTY_INVERSE,
+    BabyBear, DiffusionMatrixBabybear, PackedBabyBearAVX512, POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY,
+    POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY, MONTY_INVERSE,
 };
 
 // We need to change from the standard implementation as we are interpreting the matrix (1 + D(v)) as the monty form of the matrix not the raw form.
@@ -12,7 +12,7 @@ use crate::{
 
 impl Permutation<[PackedBabyBearAVX512; 16]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [PackedBabyBearAVX512; 16]) {
-        matmul_internal::<BabyBear, PackedBabyBearAVX512, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY);
+        matmul_internal::<BabyBear, PackedBabyBearAVX512, 16>(state, POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY);
         state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
     }
 }
@@ -21,7 +21,7 @@ impl DiffusionPermutation<PackedBabyBearAVX512, 16> for DiffusionMatrixBabybear 
 
 impl Permutation<[PackedBabyBearAVX512; 24]> for DiffusionMatrixBabybear {
     fn permute_mut(&self, state: &mut [PackedBabyBearAVX512; 24]) {
-        matmul_internal::<BabyBear, PackedBabyBearAVX512, 24>(state, MATRIX_DIAG_24_BABYBEAR_MONTY);
+        matmul_internal::<BabyBear, PackedBabyBearAVX512, 24>(state, POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY);
         state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
     }
 }

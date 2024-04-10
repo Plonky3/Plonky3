@@ -26,23 +26,23 @@ pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY_HL: [BabyBear; 16] = to_babybear_
 // Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
 // such that (1 + D(v)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
 
-// Long term, MONTY_INVERSE, MATRIX_DIAG_16_BABYBEAR_MONTY, MATRIX_DIAG_24_BABYBEAR_MONTY can all be removed.
+// Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY can all be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
 // They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
 pub const MONTY_INVERSE: BabyBear = BabyBear { value: 1 };
 
-pub const MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
     BabyBear::ORDER_U32 - 2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768
 ]);
 
-const MATRIX_DIAG_16_MONTY_SHIFTS: [u64; 15] =
+const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u8; 15] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
-pub const MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
     BabyBear::ORDER_U32 - 2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 262144, 524288, 1048576, 2097152, 4194304, 8388608
 ]);
 
-const MATRIX_DIAG_24_MONTY_SHIFTS: [u64; 23] =
+const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23];
 
 #[derive(Debug, Clone, Default)]
@@ -56,7 +56,7 @@ impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
         let s0 = part_sum + (-state[0]).value as u64;
         state[0] = BabyBear{ value: monty_reduce(s0)};
         for i in 1..16 {
-            let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
+            let si = full_sum + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
             state[i] = BabyBear{ value: monty_reduce(si) };
         }
     }
@@ -72,7 +72,7 @@ impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
         let s0 = part_sum + (-state[0]).value as u64;
         state[0] = BabyBear{ value: monty_reduce(s0)};
         for i in 1..24 {
-            let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
+            let si = full_sum + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
             state[i] = BabyBear{ value: monty_reduce(si) };
         }
     }
