@@ -77,7 +77,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             tallest_matrices,
         )];
         loop {
-            let prev_layer = digest_layers.last().map(Vec::as_slice).unwrap_or_default();
+            let prev_layer = digest_layers.last().unwrap().as_slice();
             if prev_layer.len() == 1 {
                 break;
             }
