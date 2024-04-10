@@ -30,12 +30,13 @@ const MATRIX_DIAG_16_MERSENNE31_U32: [u32; 16] = [
     65536,
 ];
 
-pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] =
+// This constant is used by each of the packed field implementations.
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16: [Mersenne31; 16] =
     to_mersenne31_array(MATRIX_DIAG_16_MERSENNE31_U32);
 
 // We make use of the fact that most entries are a power of 2.
 // Note that this array is 1 element shorter than MATRIX_DIAG_16_MERSENNE31 as we do not include the first element.
-const MATRIX_DIAG_16_MONTY_SHIFTS: [u64; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
+const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixMersenne31;
@@ -45,10 +46,10 @@ impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
     fn permute_mut(&self, state: &mut [Mersenne31; 16]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (Mersenne31::ORDER_U32 - state[0].value) as u64;
+        let s0 = part_sum + (-state[0]).value as u64;
         state[0] = from_u62(s0);
         for i in 1..16 {
-            let si = full_sum + ((state[i].value as u64) << MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
+            let si = full_sum + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS[i - 1]);
             state[i] = from_u62(si);
         }
     }
