@@ -12,7 +12,7 @@ use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Baby Bear prime
-/// This is the unqiue 31-bit prime with the highest possible 2 adicity (27). 
+/// This is the unqiue 31-bit prime with the highest possible 2 adicity (27).
 const P: u32 = 0x78000001;
 const MONTY_BITS: u32 = 32;
 // We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention

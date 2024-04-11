@@ -5,7 +5,7 @@ use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{PrimeField, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
-use p3_koala_bear::{KoalaBear, DiffusionMatrixKoalaBear};
+use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{DiffusionMatrixMersenne31, Mersenne31};
 use p3_poseidon2::{
     DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral,
