@@ -25,6 +25,11 @@ pub mod prelude {
     }
 }
 
+#[cfg(feature = "parallel")]
+pub mod iter {
+    pub use rayon::iter::repeat;
+}
+
 #[cfg(not(feature = "parallel"))]
 mod serial;
 
@@ -56,4 +61,9 @@ pub mod prelude {
             self.fold(identity(), fold_op)
         }
     }
+}
+
+#[cfg(not(feature = "parallel"))]
+pub mod iter {
+    pub use core::iter::repeat;
 }
