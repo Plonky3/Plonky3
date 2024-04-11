@@ -1,3 +1,4 @@
+#[cfg(not(feature = "multi_thread"))]
 use alloc::vec::Vec;
 use core::mem;
 
