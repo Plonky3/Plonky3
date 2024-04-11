@@ -238,9 +238,7 @@ mod tests {
         // ZZ.random_element(2**31);
         const SIMPLE_SEED: u32 = 899088431;
         let external_round_constants: [[BabyBear; 16]; 8] = array::from_fn(|j| {
-            array::from_fn(|i| {
-                F::from_wrapped_u32((i + 16 * j) as u32 + SIMPLE_SEED).exp_u64(11)
-            })
+            array::from_fn(|i| F::from_wrapped_u32((i + 16 * j) as u32 + SIMPLE_SEED).exp_u64(11))
         });
         let internal_round_constants: [BabyBear; 13] =
             array::from_fn(|i| F::from_wrapped_u32(i as u32 + SIMPLE_SEED).exp_u64(7));
@@ -274,9 +272,7 @@ mod tests {
         // ZZ.random_element(2**31);
         const SIMPLE_SEED: u32 = 899088431;
         let external_round_constants: [[BabyBear; 24]; 8] = array::from_fn(|j| {
-            array::from_fn(|i| {
-                F::from_wrapped_u32((i + 24 * j) as u32 + SIMPLE_SEED).exp_u64(11)
-            })
+            array::from_fn(|i| F::from_wrapped_u32((i + 24 * j) as u32 + SIMPLE_SEED).exp_u64(11))
         });
         let internal_round_constants: [BabyBear; 21] =
             array::from_fn(|i| F::from_wrapped_u32(i as u32 + SIMPLE_SEED).exp_u64(7));
