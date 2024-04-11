@@ -14,7 +14,7 @@ use rand::prelude::Distribution;
 use rand::Rng;
 
 /// The Poseidon permutation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Poseidon<F, Mds, const WIDTH: usize, const ALPHA: u64> {
     half_num_full_rounds: usize,
     num_partial_rounds: usize,

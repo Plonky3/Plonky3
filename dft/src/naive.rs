@@ -7,7 +7,7 @@ use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct NaiveDft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
@@ -70,8 +70,8 @@ mod tests {
         // 0, 0
         assert_eq!(
             dft,
-            RowMajorMatrix {
-                values: vec![
+            RowMajorMatrix::new(
+                vec![
                     F::from_canonical_u8(9),
                     F::from_canonical_u8(5),
                     F::zero(),
@@ -79,8 +79,8 @@ mod tests {
                     F::neg_one(),
                     F::zero(),
                 ],
-                width: 3,
-            }
+                3,
+            )
         )
     }
 

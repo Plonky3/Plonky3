@@ -6,9 +6,10 @@ use p3_field::{
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRows;
+use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
+#[derive(Debug)]
 pub struct LagrangeSelectors<T> {
     pub is_first_row: T,
     pub is_last_row: T,
@@ -52,7 +53,7 @@ pub trait PolynomialSpace: Copy {
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
     pub log_n: usize,
     pub shift: Val,
@@ -102,10 +103,14 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         num_chunks: usize,
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>> {
-        let view = evals.as_view();
         // todo less copy
         (0..num_chunks)
-            .map(|i| view.vertically_strided(num_chunks, i).to_row_major_matrix())
+            .map(|i| {
+                evals
+                    .as_view()
+                    .vertically_strided(num_chunks, i)
+                    .to_row_major_matrix()
+            })
             .collect()
     }
 

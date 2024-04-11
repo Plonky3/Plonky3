@@ -5,16 +5,16 @@ use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
-use p3_commit::{DirectMmcs, Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
     Field, PackedValue, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Dimensions, Matrix, MatrixRows};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
@@ -24,6 +24,7 @@ use tracing::{info_span, instrument};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriProof};
 
+#[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     // degree bound
     log_n: usize,
@@ -34,7 +35,7 @@ pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    pub fn new(log_n: usize, dft: Dft, mmcs: InputMmcs, fri: FriConfig<FriMmcs>) -> Self {
+    pub const fn new(log_n: usize, dft: Dft, mmcs: InputMmcs, fri: FriConfig<FriMmcs>) -> Self {
         Self {
             log_n,
             dft,
@@ -59,16 +60,16 @@ pub struct TwoAdicFriPcsProof<
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
 > {
-    pub(crate) fri_proof: FriProof<Challenge, FriMmcs, Val>,
+    pub fri_proof: FriProof<Challenge, FriMmcs, Val>,
     /// For each query, for each committed batch, query openings for that batch
-    pub(crate) query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
+    pub query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
-    pub(crate) opened_values: Vec<Vec<Val>>,
-    pub(crate) opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
+    pub opened_values: Vec<Vec<Val>>,
+    pub opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -76,15 +77,15 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challen
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: 'static + for<'a> DirectMmcs<Val, Mat<'a> = RowMajorMatrixView<'a, Val>>,
-    FriMmcs: DirectMmcs<Challenge>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
         CanObserve<FriMmcs::Commitment> + CanSample<Challenge> + GrindingChallenger<Witness = Val>,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = InputMmcs::ProverData;
+    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = TwoAdicFriPcsProof<Val, Challenge, InputMmcs, FriMmcs>;
     type Error = VerificationError<InputMmcs::Error, FriMmcs::Error>;
 
@@ -101,7 +102,7 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let ldes: Vec<RowMajorMatrix<Val>> = evaluations
+        let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
@@ -119,25 +120,17 @@ where
         self.mmcs.commit(ldes)
     }
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        prover_data: &Self::ProverData,
+        prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val> {
+    ) -> impl Matrix<Val> + 'a {
         // todo: handle extrapolation for LDEs we don't have
         assert_eq!(domain.shift, Val::generator());
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
-        let extra_bits = log2_strict_usize(lde.height()) - log2_strict_usize(domain.size());
-        // TODO get rid of these 2 copies
-        let strided = lde
-            .to_row_major_matrix()
-            .bit_reverse_rows()
-            .vertically_strided(1 << extra_bits, 0)
-            .to_row_major_matrix();
-        assert_eq!(strided.height(), domain.size());
-        strided
+        lde.split_rows(domain.size()).0.bit_reverse_rows()
     }
 
     fn open(
@@ -195,7 +188,16 @@ where
 
         let mats_and_points = rounds
             .iter()
-            .map(|(data, points)| (self.mmcs.get_matrices(data), points))
+            .map(|(data, points)| {
+                (
+                    self.mmcs
+                        .get_matrices(data)
+                        .into_iter()
+                        .map(|m| m.as_view())
+                        .collect_vec(),
+                    points,
+                )
+            })
             .collect_vec();
         let mats = mats_and_points
             .iter()
@@ -235,7 +237,7 @@ where
                             let (low_coset, _) =
                                 mat.split_rows(mat.height() >> self.fri.log_blowup);
                             interpolate_coset(
-                                &BitReversedMatrixView::new(low_coset),
+                                &BitReversalPerm::new_view(low_coset),
                                 Val::generator(),
                                 point,
                             )
@@ -247,7 +249,7 @@ where
                     info_span!("reduce rows").in_scope(|| {
                         reduced_opening_for_log_height
                             .par_iter_mut()
-                            .zip_eq(mat.par_rows())
+                            .zip_eq(mat.par_row_slices())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap())

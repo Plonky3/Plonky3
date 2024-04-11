@@ -9,8 +9,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 use tracing::instrument;
 
-use crate::butterflies::dit_butterfly;
-use crate::util::bit_reversed_zero_pad;
+use crate::butterflies::{Butterfly, DitButterfly};
 use crate::TwoAdicSubgroupDft;
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
@@ -20,7 +19,7 @@ use crate::TwoAdicSubgroupDft;
 /// the same network but in bit-reversed order. This way we're always working with small blocks,
 /// so within each half, we can have a certain amount of parallelism with no cross-thread
 /// communication.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2DitParallel;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
@@ -87,7 +86,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
 
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -138,7 +137,7 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
 
 /// One layer of a DIT butterfly network.
 fn dit_layer<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<F>,
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
     twiddles: &[F],
@@ -154,7 +153,9 @@ fn dit_layer<F: Field>(
             let hi = block_start + i;
             let lo = hi + half_block_size;
             let twiddle = twiddles[i << layer_rev];
-            dit_butterfly(submat, hi, lo, twiddle);
+
+            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
+            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }
@@ -162,7 +163,7 @@ fn dit_layer<F: Field>(
 /// Like `dit_layer`, except the matrix and twiddles are encoded in bit-reversed order.
 /// This can also be viewed as a layer of the Bowers G^T network.
 fn dit_layer_rev<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<F>,
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
     twiddles_rev: &[F],
@@ -178,7 +179,8 @@ fn dit_layer_rev<F: Field>(
         for i in 0..half_block_size {
             let hi = block_start + i;
             let lo = hi + half_block_size;
-            dit_butterfly(submat, hi, lo, twiddle);
+            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
+            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }

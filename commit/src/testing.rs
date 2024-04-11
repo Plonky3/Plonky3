@@ -6,13 +6,14 @@ use p3_challenger::CanSample;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::{OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
+#[derive(Debug)]
 pub struct TrivialPcs<Val: TwoAdicField, Dft: TwoAdicSubgroupDft<Val>> {
     pub dft: Dft,
     // degree bound
@@ -27,7 +28,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     let mut acc = vec![EF::zero(); coeffs.width()];
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r);
-        for (acc_c, row_c) in acc.iter_mut().zip(row) {
+        for (acc_c, row_c) in acc.iter_mut().zip(row.as_ref().iter()) {
             *acc_c *= x;
             *acc_c += *row_c;
         }
@@ -88,21 +89,19 @@ where
         )
     }
 
-    fn get_evaluations_on_domain(
+    fn get_evaluations_on_domain<'a>(
         &self,
-        prover_data: &Self::ProverData,
+        prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> RowMajorMatrix<Val> {
+    ) -> impl Matrix<Val> + 'a {
         let mut coeffs = prover_data[idx].clone();
         assert!(domain.log_n >= self.log_n);
         coeffs.values.resize(
             coeffs.values.len() << (domain.log_n - self.log_n),
             Val::zero(),
         );
-        self.dft
-            .coset_dft_batch(coeffs, domain.shift)
-            .to_row_major_matrix()
+        self.dft.coset_dft_batch(coeffs, domain.shift)
     }
 
     fn open(

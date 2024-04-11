@@ -2,7 +2,7 @@ use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::MatrixRowSlices;
+use p3_matrix::Matrix;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
@@ -33,6 +33,8 @@ pub trait AirBuilder: Sized {
 
     type Var: Into<Self::Expr>
         + Copy
+        + Send
+        + Sync
         + Add<Self::F, Output = Self::Expr>
         + Add<Self::Var, Output = Self::Expr>
         + Add<Self::Expr, Output = Self::Expr>
@@ -43,7 +45,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
-    type M: MatrixRowSlices<Self::Var>;
+    type M: Matrix<Self::Var>;
 
     fn main(&self) -> Self::M;
 
@@ -55,7 +57,7 @@ pub trait AirBuilder: Sized {
     fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
-    fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<Self> {
+    fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<'_, Self> {
         FilteredAirBuilder {
             inner: self,
             condition: condition.into(),
@@ -67,27 +69,27 @@ pub trait AirBuilder: Sized {
         &mut self,
         x: I1,
         y: I2,
-    ) -> FilteredAirBuilder<Self> {
+    ) -> FilteredAirBuilder<'_, Self> {
         self.when(x.into() - y.into())
     }
 
     /// Returns a sub-builder whose constraints are enforced only on the first row.
-    fn when_first_row(&mut self) -> FilteredAirBuilder<Self> {
+    fn when_first_row(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_first_row())
     }
 
     /// Returns a sub-builder whose constraints are enforced only on the last row.
-    fn when_last_row(&mut self) -> FilteredAirBuilder<Self> {
+    fn when_last_row(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_last_row())
     }
 
     /// Returns a sub-builder whose constraints are enforced on all rows except the last.
-    fn when_transition(&mut self) -> FilteredAirBuilder<Self> {
+    fn when_transition(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition())
     }
 
     /// Returns a sub-builder whose constraints are enforced on all rows except the last `size - 1`.
-    fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<Self> {
+    fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition_window(size))
     }
 
@@ -109,7 +111,9 @@ pub trait AirBuilder: Sized {
 }
 
 pub trait AirBuilderWithPublicValues: AirBuilder {
-    fn public_values(&self) -> &[Self::F];
+    type PublicVar: Into<Self::Expr> + Copy;
+
+    fn public_values(&self) -> &[Self::PublicVar];
 }
 
 pub trait PairBuilder: AirBuilder {
@@ -121,7 +125,7 @@ pub trait ExtensionBuilder: AirBuilder {
 
     type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
 
-    type VarEF: Into<Self::ExprEF> + Copy;
+    type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
 
     fn assert_zero_ext<I>(&mut self, x: I)
     where
@@ -144,15 +148,16 @@ pub trait ExtensionBuilder: AirBuilder {
 }
 
 pub trait PermutationAirBuilder: ExtensionBuilder {
-    type MP: MatrixRowSlices<Self::VarEF>;
+    type MP: Matrix<Self::VarEF>;
+
+    type RandomVar: Into<Self::ExprEF> + Copy;
 
     fn permutation(&self) -> Self::MP;
 
-    // TODO: The return type should be some kind of variable to support symbolic evaluation,
-    // but maybe separate from `VarEF` since that might be a `PackedField`?
-    fn permutation_randomness(&self) -> &[Self::EF];
+    fn permutation_randomness(&self) -> &[Self::RandomVar];
 }
 
+#[derive(Debug)]
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     pub inner: &'a mut AB,
     condition: AB::Expr,
@@ -202,40 +207,13 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
 impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
     type MP = AB::MP;
 
+    type RandomVar = AB::RandomVar;
+
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
-    fn permutation_randomness(&self) -> &[Self::EF] {
+    fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_matrix::MatrixRowSlices;
-
-    use crate::{Air, AirBuilder, BaseAir};
-
-    struct FibonacciAir;
-
-    impl<F> BaseAir<F> for FibonacciAir {
-        fn width(&self) -> usize {
-            1
-        }
-    }
-
-    impl<AB: AirBuilder> Air<AB> for FibonacciAir {
-        fn eval(&self, builder: &mut AB) {
-            let main = builder.main();
-
-            let x_0 = main.row_slice(0)[0];
-            let x_1 = main.row_slice(1)[0];
-            let x_2 = main.row_slice(2)[0];
-
-            builder.when_first_row().assert_zero(x_0);
-            builder.when_first_row().assert_one(x_1);
-            builder.when_transition().assert_eq(x_0 + x_1, x_2);
-        }
     }
 }

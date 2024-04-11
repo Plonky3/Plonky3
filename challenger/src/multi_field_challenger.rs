@@ -2,18 +2,21 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_64, split_64, ExtensionField, Field, PrimeField, PrimeField64};
+use p3_field::{reduce_32, split_32, ExtensionField, Field, PrimeField, PrimeField32};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
-/// Given a cryptographic permutation that operates on `[Field; WIDTH]`, produces a challenger
-/// that can observe and sample `PrimeField64` elements.  Can also observe values with
-/// `Hash<F, PF, N>` type.
-#[derive(Clone)]
-pub struct MultiFieldChallenger<F, PF, P, const WIDTH: usize>
+/// A challenger that operates natively on PF but produces challenges of F: PrimeField32.
+///
+/// Used for optimizing the cost of recursive proof verification of STARKs in SNARKs.
+///
+/// SAFETY: There are some bias complications with using this challenger. In particular,
+/// samples are actually random in [0, 2^64) and then reduced to be in F.
+#[derive(Clone, Debug)]
+pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: Field,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -24,9 +27,9 @@ where
     num_f_elms: usize,
 }
 
-impl<F, PF, P, const WIDTH: usize> MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: Field,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -34,7 +37,7 @@ where
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
-        let num_f_elms = PF::bits() / F::bits();
+        let num_f_elms = PF::bits() / 64;
         Ok(Self {
             sponge_state: [PF::default(); WIDTH],
             input_buffer: vec![],
@@ -45,9 +48,9 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -55,7 +58,7 @@ where
         assert!(self.input_buffer.len() <= self.num_f_elms * WIDTH);
 
         for (i, f_chunk) in self.input_buffer.chunks(self.num_f_elms).enumerate() {
-            self.sponge_state[i] = reduce_64(f_chunk);
+            self.sponge_state[i] = reduce_32(f_chunk);
         }
         self.input_buffer.clear();
 
@@ -64,9 +67,7 @@ where
 
         self.output_buffer.clear();
         for &pf_val in self.sponge_state.iter() {
-            let mut f_vals = split_64(pf_val);
-            f_vals.resize(self.num_f_elms, F::zero());
-
+            let f_vals = split_32(pf_val, self.num_f_elms);
             for f_val in f_vals {
                 self.output_buffer.push(f_val);
             }
@@ -74,17 +75,17 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> FieldChallenger<F> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> FieldChallenger<F> for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
 }
 
-impl<F, PF, P, const WIDTH: usize> CanObserve<F> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanObserve<F> for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -101,9 +102,9 @@ where
 }
 
 impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<[F; N]>
-    for MultiFieldChallenger<F, PF, P, WIDTH>
+    for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -115,17 +116,15 @@ where
 }
 
 impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<Hash<F, PF, N>>
-    for MultiFieldChallenger<F, PF, P, WIDTH>
+    for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn observe(&mut self, values: Hash<F, PF, N>) {
         for pf_val in values {
-            let mut f_vals = split_64(pf_val);
-            f_vals.resize(self.num_f_elms, F::zero());
-
+            let f_vals: Vec<F> = split_32(pf_val, self.num_f_elms);
             for f_val in f_vals {
                 self.observe(f_val);
             }
@@ -134,9 +133,10 @@ where
 }
 
 // for TrivialPcs
-impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>>
+    for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -149,9 +149,9 @@ where
     }
 }
 
-impl<F, EF, PF, P, const WIDTH: usize> CanSample<EF> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, EF, PF, P, const WIDTH: usize> CanSample<EF> for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     EF: ExtensionField<F>,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
@@ -171,9 +171,9 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> CanSampleBits<usize> for MultiFieldChallenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize> CanSampleBits<usize> for MultiField32Challenger<F, PF, P, WIDTH>
 where
-    F: PrimeField64,
+    F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {

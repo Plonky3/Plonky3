@@ -2,10 +2,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::{Air, BaseAir, TwoRowMatrixView};
+use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{AbstractExtensionField, AbstractField, Field};
+use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
@@ -115,11 +117,13 @@ where
 
     let sels = trace_domain.selectors_at_point(zeta);
 
+    let main = VerticalPair::new(
+        RowMajorMatrixView::new_row(&opened_values.trace_local),
+        RowMajorMatrixView::new_row(&opened_values.trace_next),
+    );
+
     let mut folder = VerifierConstraintFolder {
-        main: TwoRowMatrixView {
-            local: &opened_values.trace_local,
-            next: &opened_values.trace_next,
-        },
+        main,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,

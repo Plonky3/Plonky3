@@ -1,6 +1,12 @@
-//! Diffusion matrices for Goldilocks8, Goldilocks12, Goldilocks16, and Goldilocks20.
-//!
-//! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
+//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+
+//! For now we recreate the implementation given in:
+//! https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_goldilocks.rs
+//! This uses the constants below along with using the 4x4 matrix:
+//! [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
+//! to build the 4t x 4t matrix used for the external (full) rounds).
+
+//! Long term we will use more optimised internal and external linear layers.
 
 use p3_field::AbstractField;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
@@ -120,20 +126,122 @@ impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 20]> for DiffusionMatri
 
 impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 20> for DiffusionMatrixGoldilocks {}
 
+pub const HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS: [[u64; 8]; 8] = [
+    [
+        0xdd5743e7f2a5a5d9,
+        0xcb3a864e58ada44b,
+        0xffa2449ed32f8cdc,
+        0x42025f65d6bd13ee,
+        0x7889175e25506323,
+        0x34b98bb03d24b737,
+        0xbdcc535ecc4faa2a,
+        0x5b20ad869fc0d033,
+    ],
+    [
+        0xf1dda5b9259dfcb4,
+        0x27515210be112d59,
+        0x4227d1718c766c3f,
+        0x26d333161a5bd794,
+        0x49b938957bf4b026,
+        0x4a56b5938b213669,
+        0x1120426b48c8353d,
+        0x6b323c3f10a56cad,
+    ],
+    [
+        0xce57d6245ddca6b2,
+        0xb1fc8d402bba1eb1,
+        0xb5c5096ca959bd04,
+        0x6db55cd306d31f7f,
+        0xc49d293a81cb9641,
+        0x1ce55a4fe979719f,
+        0xa92e60a9d178a4d1,
+        0x002cc64973bcfd8c,
+    ],
+    [
+        0xcea721cce82fb11b,
+        0xe5b55eb8098ece81,
+        0x4e30525c6f1ddd66,
+        0x43c6702827070987,
+        0xaca68430a7b5762a,
+        0x3674238634df9c93,
+        0x88cee1c825e33433,
+        0xde99ae8d74b57176,
+    ],
+    [
+        0x014ef1197d341346,
+        0x9725e20825d07394,
+        0xfdb25aef2c5bae3b,
+        0xbe5402dc598c971e,
+        0x93a5711f04cdca3d,
+        0xc45a9a5b2f8fb97b,
+        0xfe8946a924933545,
+        0x2af997a27369091c,
+    ],
+    [
+        0xaa62c88e0b294011,
+        0x058eb9d810ce9f74,
+        0xb3cb23eced349ae4,
+        0xa3648177a77b4a84,
+        0x43153d905992d95d,
+        0xf4e2a97cda44aa4b,
+        0x5baa2702b908682f,
+        0x082923bdf4f750d1,
+    ],
+    [
+        0x98ae09a325893803,
+        0xf8a6475077968838,
+        0xceb0735bf00b2c5f,
+        0x0a1a5d953888e072,
+        0x2fcb190489f94475,
+        0xb5be06270dec69fc,
+        0x739cb934b09acf8b,
+        0x537750b75ec7f25b,
+    ],
+    [
+        0xe9dd318bae1f3961,
+        0xf7462137299efe1a,
+        0xb1f6b8eee9adb940,
+        0xbdebcc8a809dfe6b,
+        0x40fc1f791b178113,
+        0x3ac1c3362d014864,
+        0x9a016184bdb8aeba,
+        0x95f2394459fbc25e,
+    ],
+];
+pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
+    0x488897d85ff51f56,
+    0x1140737ccb162218,
+    0xa7eeb9215866ed35,
+    0x9bd2976fee49fcc9,
+    0xc0c8f0de580a3fcc,
+    0x4fb2dae6ee8fc793,
+    0x343a89f35f37395b,
+    0x223b525a77ca72c8,
+    0x56ccb62574aaa918,
+    0xc4d507d8027af9ed,
+    0xa080673cf0b7e95c,
+    0xf0184884eb70dcf8,
+    0x044f10b0cb3d5c69,
+    0xe9e3f7993938f186,
+    0x1b761c80e772f459,
+    0x606cec607a1b5fac,
+    0x14a0c2e1d45f03cd,
+    0x4eace8855398574f,
+    0xf905ca7103eff3e6,
+    0xf8c8f8d20862c059,
+    0xb524fe8bdd678e5a,
+    0xfbb7865901a1ec41,
+];
+
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
+    use core::array;
 
-    use ark_ff::{BigInteger, PrimeField};
-    use p3_poseidon2::Poseidon2;
-    use rand::Rng;
-    use zkhash::fields::goldilocks::FpGoldiLocks;
-    use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-    use zkhash::poseidon2::poseidon2_instance_goldilocks::{
-        POSEIDON2_GOLDILOCKS_12_PARAMS, POSEIDON2_GOLDILOCKS_8_PARAMS, RC12, RC8,
-    };
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
 
     use super::*;
+
+    type F = Goldilocks;
 
     #[test]
     fn test_poseidon2_constants() {
@@ -150,145 +258,106 @@ mod tests {
         assert_eq!(monty_constant, MATRIX_DIAG_20_GOLDILOCKS);
     }
 
-    fn goldilocks_from_ark_ff(input: FpGoldiLocks) -> Goldilocks {
-        let as_bigint = input.into_bigint();
-        let mut as_bytes = as_bigint.to_bytes_le();
-        as_bytes.resize(8, 0);
-        let as_u64 = u64::from_le_bytes(as_bytes[0..8].try_into().unwrap());
-        Goldilocks::from_wrapped_u64(as_u64)
-    }
-
-    #[test]
-    fn test_poseidon2_goldilocks_width_8() {
+    // A function which recreates the poseidon2 implementation in
+    // https://github.com/HorizenLabs/poseidon2
+    fn hl_poseidon2_goldilocks_width_8(input: &mut [F; 8]) {
         const WIDTH: usize = 8;
         const D: u64 = 7;
         const ROUNDS_F: usize = 8;
         const ROUNDS_P: usize = 22;
 
-        type F = Goldilocks;
-
-        let mut rng = rand::thread_rng();
-
-        // Poiseidon2 reference implementation from zkhash repo.
-        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_8_PARAMS);
-
-        // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC8
-            .iter()
-            .map(|vec| {
-                vec.iter()
-                    .cloned()
-                    .map(goldilocks_from_ark_ff)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap()
-            })
-            .collect();
-
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
+        let poseidon2: Poseidon2<
+            Goldilocks,
+            Poseidon2ExternalMatrixHL,
+            DiffusionMatrixGoldilocks,
+            WIDTH,
+            D,
+        > = Poseidon2::new(
             ROUNDS_F,
+            HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS
+                .map(to_goldilocks_array)
+                .to_vec(),
+            Poseidon2ExternalMatrixHL,
             ROUNDS_P,
-            round_constants,
+            to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
             DiffusionMatrixGoldilocks,
         );
 
-        // Generate random input and convert to both Goldilocks field formats.
-        let input_u64 = rng.gen::<[u64; WIDTH]>();
-        let input_ref = input_u64
-            .iter()
-            .cloned()
-            .map(FpGoldiLocks::from)
-            .collect::<Vec<_>>();
-        let input = input_u64.map(F::from_wrapped_u64);
-
-        // Check that the conversion is correct.
-        assert!(input_ref
-            .iter()
-            .zip(input.iter())
-            .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
-
-        // Run reference implementation.
-        let output_ref = poseidon2_ref.permutation(&input_ref);
-        let expected: [F; WIDTH] = output_ref
-            .iter()
-            .cloned()
-            .map(goldilocks_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        // Run our implementation.
-        let mut output = input;
-        poseidon2.permute_mut(&mut output);
-
-        assert_eq!(output, expected);
+        poseidon2.permute_mut(input);
     }
 
+    /// Test on the constant 0 input.
     #[test]
-    fn test_poseidon2_goldilocks_width_12() {
-        const WIDTH: usize = 12;
-        const D: u64 = 7;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 22;
+    fn test_poseidon2_width_8_zeroes() {
+        let mut input: [F; 8] = [0_u64; 8].map(F::from_wrapped_u64);
 
-        type F = Goldilocks;
+        let expected: [F; 8] = [
+            4214787979728720400,
+            12324939279576102560,
+            10353596058419792404,
+            15456793487362310586,
+            10065219879212154722,
+            16227496357546636742,
+            2959271128466640042,
+            14285409611125725709,
+        ]
+        .map(F::from_canonical_u64);
+        hl_poseidon2_goldilocks_width_8(&mut input);
+        assert_eq!(input, expected);
+    }
 
-        let mut rng = rand::thread_rng();
+    /// Test on the input 0..16.
+    #[test]
+    fn test_poseidon2_width_8_range() {
+        let mut input: [F; 8] = array::from_fn(|i| F::from_wrapped_u64(i as u64));
 
-        // Poiseidon2 reference implementation from zkhash repo.
-        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_GOLDILOCKS_12_PARAMS);
+        let expected: [F; 8] = [
+            14266028122062624699,
+            5353147180106052723,
+            15203350112844181434,
+            17630919042639565165,
+            16601551015858213987,
+            10184091939013874068,
+            16774100645754596496,
+            12047415603622314780,
+        ]
+        .map(F::from_canonical_u64);
+        hl_poseidon2_goldilocks_width_8(&mut input);
+        assert_eq!(input, expected);
+    }
 
-        // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC12
-            .iter()
-            .map(|vec| {
-                vec.iter()
-                    .cloned()
-                    .map(goldilocks_from_ark_ff)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap()
-            })
-            .collect();
+    /// Test on a roughly random input.
+    /// This random input is generated by the following sage code:
+    /// set_random_seed(2468)
+    /// vector([ZZ.random_element(2**31) for t in range(16)])
+    #[test]
+    fn test_poseidon2_width_8_random() {
+        let mut input: [F; 8] = [
+            5116996373749832116,
+            8931548647907683339,
+            17132360229780760684,
+            11280040044015983889,
+            11957737519043010992,
+            15695650327991256125,
+            17604752143022812942,
+            543194415197607509,
+        ]
+        .map(F::from_wrapped_u64);
 
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Goldilocks, DiffusionMatrixGoldilocks, WIDTH, D> = Poseidon2::new(
-            ROUNDS_F,
-            ROUNDS_P,
-            round_constants,
-            DiffusionMatrixGoldilocks,
-        );
+        let expected: [F; 8] = [
+            1831346684315917658,
+            13497752062035433374,
+            12149460647271516589,
+            15656333994315312197,
+            4671534937670455565,
+            3140092508031220630,
+            4251208148861706881,
+            6973971209430822232,
+        ]
+        .map(F::from_canonical_u64);
 
-        // Generate random input and convert to both Goldilocks field formats.
-        let input_u64 = rng.gen::<[u64; WIDTH]>();
-        let input_ref = input_u64
-            .iter()
-            .cloned()
-            .map(FpGoldiLocks::from)
-            .collect::<Vec<_>>();
-        let input = input_u64.map(F::from_wrapped_u64);
-
-        // Check that the conversion is correct.
-        assert!(input_ref
-            .iter()
-            .zip(input.iter())
-            .all(|(a, b)| goldilocks_from_ark_ff(*a) == *b));
-
-        // Run reference implementation.
-        let output_ref = poseidon2_ref.permutation(&input_ref);
-        let expected: [F; WIDTH] = output_ref
-            .iter()
-            .cloned()
-            .map(goldilocks_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        // Run our implementation.
-        let mut output = input;
-        poseidon2.permute_mut(&mut output);
-
-        assert_eq!(output, expected);
+        hl_poseidon2_goldilocks_width_8(&mut input);
+        assert_eq!(input, expected);
     }
 }

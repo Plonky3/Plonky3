@@ -29,10 +29,8 @@ impl<AF: AbstractField<F = Bn254Fr>> DiffusionPermutation<AF, 3> for DiffusionMa
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
     use ff::PrimeField;
-    use p3_poseidon2::Poseidon2;
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
     use rand::Rng;
     use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
     use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
@@ -45,7 +43,7 @@ mod tests {
     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254Fr {
         let bytes = input.into_bigint().to_bytes_le();
 
-        let mut res = <FFBn254Fr as ff::PrimeField>::Repr::default();
+        let mut res = <FFBn254Fr as PrimeField>::Repr::default();
 
         for (i, digit) in res.0.as_mut().iter_mut().enumerate() {
             *digit = bytes[i];
@@ -77,7 +75,7 @@ mod tests {
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
 
         // Copy over round constants from zkhash.
-        let round_constants: Vec<[F; WIDTH]> = RC3
+        let mut round_constants: Vec<[F; WIDTH]> = RC3
             .iter()
             .map(|vec| {
                 vec.iter()
@@ -89,9 +87,28 @@ mod tests {
             })
             .collect();
 
+        let internal_start = ROUNDS_F / 2;
+        let internal_end = (ROUNDS_F / 2) + ROUNDS_P;
+        let internal_round_constants = round_constants
+            .drain(internal_start..internal_end)
+            .map(|vec| vec[0])
+            .collect::<Vec<_>>();
+        let external_round_constants = round_constants;
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<Bn254Fr, DiffusionMatrixBN254, WIDTH, D> =
-            Poseidon2::new(ROUNDS_F, ROUNDS_P, round_constants, DiffusionMatrixBN254);
+        let poseidon2: Poseidon2<
+            Bn254Fr,
+            Poseidon2ExternalMatrixHL,
+            DiffusionMatrixBN254,
+            WIDTH,
+            D,
+        > = Poseidon2::new(
+            ROUNDS_F,
+            external_round_constants,
+            Poseidon2ExternalMatrixHL,
+            ROUNDS_P,
+            internal_round_constants,
+            DiffusionMatrixBN254,
+        );
 
         // Generate random input and convert to both Goldilocks field formats.
         let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();

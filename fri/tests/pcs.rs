@@ -8,14 +8,14 @@ use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::Poseidon2;
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::thread_rng;
 
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 
-type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
+type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 
@@ -34,7 +34,11 @@ fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
     let num_rounds = log_degrees_by_round.len();
     let mut rng = thread_rng();
 
-    let perm = Perm::new_from_rng(8, 22, DiffusionMatrixBabybear, &mut rng);
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabybear,
+        &mut rng,
+    );
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
 

@@ -12,12 +12,12 @@
 
 use alloc::vec::Vec;
 
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::Complex;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
+use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::Mersenne31;
@@ -47,7 +47,7 @@ fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
                 // two-element column into a Mersenne31Complex
                 // treating the first row as the real part and the
                 // second row as the imaginary part.
-                row_0.iter().zip(row_1).map(|(&x, &y)| C::new(x, y))
+                row_0.zip(row_1).map(|(x, y)| C::new(x, y))
             })
             .collect(),
         input.width(),
@@ -73,10 +73,7 @@ fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
     output.extend(input.first_row().map(|x| C::new_real(x.real() + x.imag())));
 
     for j in 1..h {
-        let row_x = input.row_slice(j);
-        let row_y = input.row_slice(h - j);
-
-        let row = row_x.iter().zip(row_y).map(|(&x, y)| {
+        let row = izip!(input.row(j), input.row(h - j)).map(|(x, y)| {
             let even = x + y.conjugate();
             // odd = (x - y.conjugate()) * -i
             let odd = C::new(x.imag() + y.imag(), y.real() - x.real());
@@ -109,10 +106,7 @@ fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
     let mut output = Vec::with_capacity(h * input.width());
     // TODO: Specialise j = 0 and j = n (which we know must be real)?
     for j in 0..h {
-        let row_x = input.row_slice(j);
-        let row_y = input.row_slice(h - j);
-
-        let row = row_x.iter().zip(row_y).map(|(&x, y)| {
+        let row = izip!(input.row(j), input.row(h - j)).map(|(x, y)| {
             let even = x + y.conjugate();
             // odd = (x - y.conjugate()) * -i
             let odd = C::new(x.imag() + y.imag(), y.real() - x.real());
@@ -153,7 +147,7 @@ fn idft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<F> {
 }
 
 /// The DFT for Mersenne31
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Mersenne31Dft;
 
 impl Mersenne31Dft {

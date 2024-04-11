@@ -1,10 +1,7 @@
 //! The scalar field of the BN254 curve, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 
-extern crate alloc;
-
 mod poseidon2;
 
-use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
@@ -24,16 +21,16 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[PrimeFieldModulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
 #[PrimeFieldGenerator = "5"]
 #[PrimeFieldReprEndianness = "little"]
-struct FFBn254Fr([u64; 4]);
+pub struct FFBn254Fr([u64; 4]);
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254Fr {
-    value: FFBn254Fr,
+    pub value: FFBn254Fr,
 }
 
 impl Bn254Fr {
-    pub(crate) fn new(value: FFBn254Fr) -> Self {
+    pub(crate) const fn new(value: FFBn254Fr) -> Self {
         Self { value }
     }
 }
@@ -277,8 +274,6 @@ impl Distribution<Bn254Fr> for Standard {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use num_traits::One;
     use p3_field_testing::test_field;
 

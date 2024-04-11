@@ -9,14 +9,15 @@ use p3_code::{
 };
 use p3_field::Field;
 use p3_lde::UndefinedLde;
-use p3_matrix::MatrixRows;
+use p3_matrix::Matrix;
 
 /// A Reed-Solomon code based on an `UndefinedLde`.
+#[derive(Debug)]
 pub struct UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
     lde: L,
     n: usize,
@@ -28,9 +29,9 @@ impl<F, L, In> UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
-    pub fn new(lde: L, n: usize, k: usize) -> Self {
+    pub const fn new(lde: L, n: usize, k: usize) -> Self {
         Self {
             lde,
             n,
@@ -43,7 +44,7 @@ where
 impl<F, L, In> CodeOrFamily<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
     L: UndefinedLde<F, In>,
 {
     type Out = L::Out;
@@ -57,7 +58,7 @@ impl<F, L, In> Code<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
     fn message_len(&self) -> usize {
         self.k
@@ -72,7 +73,7 @@ impl<F, L, In> LinearCode<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
 }
 
@@ -80,7 +81,7 @@ impl<F, L, In> SystematicCodeOrFamily<F, In> for UndefinedReedSolomonCode<F, L, 
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
 }
 
@@ -88,7 +89,7 @@ impl<F, L, In> SystematicCode<F, In> for UndefinedReedSolomonCode<F, L, In>
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
 }
 
@@ -96,6 +97,6 @@ impl<F, L, In> SystematicLinearCode<F, In> for UndefinedReedSolomonCode<F, L, In
 where
     F: Field,
     L: UndefinedLde<F, In>,
-    In: MatrixRows<F>,
+    In: Matrix<F>,
 {
 }

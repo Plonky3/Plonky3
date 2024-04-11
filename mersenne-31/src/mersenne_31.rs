@@ -405,11 +405,27 @@ impl Div for Mersenne31 {
 }
 
 #[inline(always)]
-fn from_u62(input: u64) -> Mersenne31 {
+pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     debug_assert!(input < (1 << 62));
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;
     Mersenne31::new(input_lo) + Mersenne31::new(input_high)
+}
+
+/// Convert a constant u32 array into a constant Mersenne31 array.
+#[inline]
+#[must_use]
+pub(crate) const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
+    let mut output = [Mersenne31 { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = input[i] % P;
+        i += 1;
+    }
+    output
 }
 
 #[cfg(test)]

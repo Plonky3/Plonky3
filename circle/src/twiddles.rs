@@ -2,15 +2,15 @@ use alloc::vec::Vec;
 use core::mem;
 
 use itertools::Itertools;
-use p3_field::batch_multiplicative_inverse;
 use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::{batch_multiplicative_inverse, Field};
 use p3_util::linear_map::LinearMap;
 use tracing::instrument;
 
 use crate::domain::CircleDomain;
 
-#[derive(Default)]
-pub(crate) struct TwiddleCache<F>(
+#[derive(Debug, Default)]
+pub(crate) struct TwiddleCache<F: Field>(
     // (log_n, shift) -> (twiddles, inverse_twiddles)
     #[allow(clippy::type_complexity)]
     LinearMap<(usize, Complex<F>), (Vec<Vec<F>>, Option<Vec<Vec<F>>>)>,
