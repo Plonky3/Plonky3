@@ -31,6 +31,15 @@ pub type RowMajorMatrixViewMut<'a, T> = DenseMatrix<T, &'a mut [T]>;
 pub trait DenseStorage<T>: Borrow<[T]> + Into<Vec<T>> + Send + Sync {}
 impl<T, S: Borrow<[T]> + Into<Vec<T>> + Send + Sync> DenseStorage<T> for S {}
 
+impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
+    /// Create a new dense matrix of the given dimensions, backed by a `Vec`, and filled with
+    /// default values.
+    #[must_use]
+    pub fn default(width: usize, height: usize) -> Self {
+        Self::new(vec![T::default(); width * height], width)
+    }
+}
+
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
