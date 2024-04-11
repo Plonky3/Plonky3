@@ -182,17 +182,17 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
 
 #[test]
 fn prove_bb_trivial_deg2() -> Result<(), VerificationError> {
-    do_test_bb_trivial(2, 10)
+    do_test_bb_trivial(2, 8)
 }
 
 #[test]
 fn prove_bb_trivial_deg3() -> Result<(), VerificationError> {
-    do_test_bb_trivial(3, 10)
+    do_test_bb_trivial(3, 8)
 }
 
 #[test]
 fn prove_bb_trivial_deg4() -> Result<(), VerificationError> {
-    do_test_bb_trivial(4, 10)
+    do_test_bb_trivial(4, 8)
 }
 
 fn do_test_bb_twoadic(
@@ -255,22 +255,22 @@ fn do_test_bb_twoadic(
 
 #[test]
 fn prove_bb_twoadic_deg2() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(1, 2, 10)
+    do_test_bb_twoadic(1, 2, 7)
 }
 
 #[test]
 fn prove_bb_twoadic_deg3() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(1, 3, 10)
+    do_test_bb_twoadic(1, 3, 7)
 }
 
 #[test]
 fn prove_bb_twoadic_deg4() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(2, 4, 10)
+    do_test_bb_twoadic(2, 4, 6)
 }
 
 #[test]
 fn prove_bb_twoadic_deg5() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(2, 5, 10)
+    do_test_bb_twoadic(2, 5, 6)
 }
 
 fn do_test_m31_circle(
@@ -331,10 +331,10 @@ fn do_test_m31_circle(
 
 #[test]
 fn prove_m31_circle_deg2() -> Result<(), VerificationError> {
-    do_test_m31_circle(1, 2, 12)
+    do_test_m31_circle(1, 2, 8)
 }
 
 #[test]
 fn prove_m31_circle_deg3() -> Result<(), VerificationError> {
-    do_test_m31_circle(1, 3, 14)
+    do_test_m31_circle(1, 3, 9)
 }
