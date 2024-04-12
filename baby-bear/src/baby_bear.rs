@@ -459,7 +459,7 @@ const fn from_monty(x: u32) -> u32 {
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 #[inline]
 #[must_use]
-const fn monty_reduce(x: u64) -> u32 {
+pub(crate) const fn monty_reduce(x: u64) -> u32 {
     let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
     let u = t * (P as u64);
 
@@ -471,6 +471,8 @@ const fn monty_reduce(x: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use core::array;
+
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;
@@ -486,6 +488,15 @@ mod tests {
                 base.exp_power_of_2(BabyBear::TWO_ADICITY - bits)
             );
         }
+    }
+
+    #[test]
+    fn test_to_babybear_array() {
+        let range_array: [u32; 32] = array::from_fn(|i| i as u32);
+        assert_eq!(
+            to_babybear_array(range_array),
+            range_array.map(F::from_canonical_u32)
+        )
     }
 
     #[test]
