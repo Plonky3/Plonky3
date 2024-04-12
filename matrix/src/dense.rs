@@ -238,7 +238,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         self.width
     }
     fn height(&self) -> usize {
-        self.values.borrow().len() / self.width
+        if self.width == 0 {
+            0
+        } else {
+            self.values.borrow().len() / self.width
+        }
     }
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
