@@ -86,7 +86,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow().par_chunks_exact(self.width)
     }
 
-    fn row_mut(&mut self, r: usize) -> &mut [T]
+    pub fn row_mut(&mut self, r: usize) -> &mut [T]
     where
         S: BorrowMut<[T]>,
     {
