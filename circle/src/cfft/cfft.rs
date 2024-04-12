@@ -1,14 +1,4 @@
-//! The Circle FFT and its inverse, as detailed in
-//! Circle STARKs, Section 4.2 (page 14 of the first revision PDF)
-//! This code is based on Angus Gruen's implementation, which uses a slightly
-//! different cfft basis than that of the paper. Basically, it continues using the
-//! same twiddles for the second half of the chunk, which only changes the sign of the
-//! resulting basis. For a full explanation see the comments in `util::circle_basis`.
-//! This alternate basis doesn't cause any change to the code apart from our testing functions.
-
-use alloc::rc::Rc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
 use p3_commit::PolynomialSpace;
 use p3_dft::divide_by_height;
@@ -24,7 +14,7 @@ use crate::domain::CircleDomain;
 use crate::twiddles::TwiddleCache;
 
 #[derive(Default, Clone, Debug)]
-pub struct Cfft<F: Field>(Rc<RefCell<TwiddleCache<F>>>);
+pub struct Cfft<F: Field>(Arc<RwLock<TwiddleCache<F>>>);
 
 impl<F: ComplexExtendable> Cfft<F> {
     pub fn cfft(&self, vec: Vec<F>) -> Vec<F> {
@@ -40,7 +30,7 @@ impl<F: ComplexExtendable> Cfft<F> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
 
-        let mut cache = self.0.borrow_mut();
+        let mut cache = self.0.write().unwrap();
         let twiddles = cache.get_twiddles(log_n, shift, true);
 
         for (i, twiddle) in twiddles.iter().enumerate() {
@@ -85,7 +75,7 @@ impl<F: ComplexExtendable> Cfft<F> {
         let n = mat.height();
         let log_n = log2_strict_usize(n);
 
-        let mut cache = self.0.borrow_mut();
+        let mut cache = self.0.write().unwrap();
         let twiddles = cache.get_twiddles(log_n, shift, false);
 
         for (i, twiddle) in twiddles.iter().rev().enumerate().skip(num_skipped_layers) {

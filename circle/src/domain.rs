@@ -1,4 +1,5 @@
 use alloc::vec;
+#[cfg(not(feature = "multi_thread"))]
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -8,6 +9,7 @@ use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
@@ -37,7 +39,7 @@ use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
 /// ```
 ///
 /// The full domain is the interleaving of these two cosets
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct CircleDomain<F> {
     // log_n corresponds to the log size of the WHOLE domain
     pub(crate) log_n: usize,

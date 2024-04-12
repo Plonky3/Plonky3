@@ -1,3 +1,4 @@
+#[cfg(not(feature = "multi_thread"))]
 use alloc::vec::Vec;
 
 use itertools::izip;
@@ -7,6 +8,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::cfft::Cfft;
@@ -20,7 +22,7 @@ pub struct CirclePcs<Val: Field, InputMmcs> {
     pub mmcs: InputMmcs,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProverData<Val, MmcsData> {
     committed_domains: Vec<CircleDomain<Val>>,
     mmcs_data: MmcsData,

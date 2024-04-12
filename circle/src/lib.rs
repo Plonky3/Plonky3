@@ -1,7 +1,7 @@
 //! A framework for operating over the unit circle of a finite field,
 //! following the [Circle STARKs paper](https://eprint.iacr.org/2024/278) by Haböck, Levit and Papini.
 
-#![no_std]
+#![cfg_attr(not(feature = "multi_thread"), no_std)]
 
 extern crate alloc;
 
