@@ -52,7 +52,7 @@ pub enum VerificationError<InputMmcsError, FriMmcsError> {
     FriError(FriError<FriMmcsError>),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct TwoAdicFriPcsProof<
     Val: Field,
@@ -65,7 +65,7 @@ pub struct TwoAdicFriPcsProof<
     pub query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
     pub opened_values: Vec<Vec<Val>>,
