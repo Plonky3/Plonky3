@@ -179,6 +179,20 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     {
         self.values
             .borrow_mut()
+            .par_chunks_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
+    }
+
+    pub fn par_row_chunks_exact_mut(
+        &mut self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
+    where
+        T: Send,
+        S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow_mut()
             .par_chunks_exact_mut(self.width * chunk_rows)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
@@ -234,7 +248,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             w,
         );
         padded
-            .par_row_chunks_mut(1 << added_bits)
+            .par_row_chunks_exact_mut(1 << added_bits)
             .zip(self.par_row_slices())
             .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
 
