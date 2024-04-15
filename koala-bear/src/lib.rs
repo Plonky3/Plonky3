@@ -12,11 +12,9 @@ extern crate alloc;
 
 mod extension;
 mod koala_bear;
-// mod mds;
 mod poseidon2;
 
 pub use koala_bear::*;
-// pub use mds::*;
 pub use poseidon2::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
