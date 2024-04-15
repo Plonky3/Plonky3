@@ -85,9 +85,9 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
 ];
 
 #[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixBabybear;
+pub struct DiffusionMatrixBabyBear;
 
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
+impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBear {
     #[inline]
     fn permute_mut(&self, state: &mut [BabyBear; 16]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
@@ -107,9 +107,9 @@ impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybear {
     }
 }
 
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybear {}
+impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabyBear {}
 
-impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
+impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabyBear {
     #[inline]
     fn permute_mut(&self, state: &mut [BabyBear; 24]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
@@ -129,18 +129,18 @@ impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabybear {
     }
 }
 
-impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabybear {}
+impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabyBear {}
 
 #[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixBabybearHL;
+pub struct DiffusionMatrixBabyBearHL;
 
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabybearHL {
+impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBearHL {
     fn permute_mut(&self, state: &mut [BabyBear; 16]) {
         matmul_internal::<BabyBear, BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY_HL);
     }
 }
 
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabybearHL {}
+impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabyBearHL {}
 
 pub const HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS: [[BabyBear; 16]; 8] = [
     to_babybear_array([
@@ -213,7 +213,7 @@ mod tests {
         let poseidon2: Poseidon2<
             BabyBear,
             Poseidon2ExternalMatrixHL,
-            DiffusionMatrixBabybearHL,
+            DiffusionMatrixBabyBearHL,
             WIDTH,
             D,
         > = Poseidon2::new(
@@ -222,7 +222,7 @@ mod tests {
             Poseidon2ExternalMatrixHL,
             ROUNDS_P,
             HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS.to_vec(),
-            DiffusionMatrixBabybearHL,
+            DiffusionMatrixBabyBearHL,
         );
         poseidon2.permute_mut(input);
     }
@@ -247,7 +247,7 @@ mod tests {
         let poseidon2: Poseidon2<
             BabyBear,
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             WIDTH,
             D,
         > = Poseidon2::new(
@@ -256,7 +256,7 @@ mod tests {
             Poseidon2ExternalMatrixGeneral,
             ROUNDS_P,
             internal_round_constants.to_vec(),
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
         );
         poseidon2.permute_mut(input);
     }
@@ -281,7 +281,7 @@ mod tests {
         let poseidon2: Poseidon2<
             BabyBear,
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             WIDTH,
             D,
         > = Poseidon2::new(
@@ -290,7 +290,7 @@ mod tests {
             Poseidon2ExternalMatrixGeneral,
             ROUNDS_P,
             internal_round_constants.to_vec(),
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
         );
         poseidon2.permute_mut(input);
     }
