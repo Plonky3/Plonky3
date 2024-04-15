@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -103,7 +103,7 @@ impl<F> Borrow<FibonacciRow<F>> for [F] {
 }
 
 type Val = BabyBear;
-type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
@@ -119,7 +119,7 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 fn test_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabybear,
+        DiffusionMatrixBabyBear,
         &mut thread_rng(),
     );
     let hash = MyHash::new(perm.clone());
@@ -153,7 +153,7 @@ fn test_public_value() {
 fn test_incorrect_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabybear,
+        DiffusionMatrixBabyBear,
         &mut thread_rng(),
     );
     let hash = MyHash::new(perm.clone());

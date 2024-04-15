@@ -1,5 +1,5 @@
 use itertools::{izip, Itertools};
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
 use p3_commit::{ExtensionMmcs, Pcs};
 use p3_dft::Radix2DitParallel;
@@ -15,7 +15,7 @@ use rand::thread_rng;
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 
-type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 
@@ -36,7 +36,7 @@ fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
 
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabybear,
+        DiffusionMatrixBabyBear,
         &mut rng,
     );
     let hash = MyHash::new(perm.clone());

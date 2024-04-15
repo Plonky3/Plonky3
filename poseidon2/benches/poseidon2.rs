@@ -1,7 +1,7 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{PrimeField, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
@@ -15,8 +15,8 @@ use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
-    poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>(c);
-    poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 24, 7>(c);
+    poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>(c);
+    poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, 7>(c);
 
     poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>(c);
     poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 5>(c);
