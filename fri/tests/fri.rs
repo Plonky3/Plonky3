@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
@@ -19,7 +19,7 @@ use rand_chacha::ChaCha20Rng;
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 
-type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
@@ -29,7 +29,7 @@ type Challenger = DuplexChallenger<Val, Perm, 16>;
 type MyFriConfig = FriConfig<ChallengeMmcs>;
 
 fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
-    let perm = Perm::new_from_rng_128(Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, rng);
+    let perm = Perm::new_from_rng_128(Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
