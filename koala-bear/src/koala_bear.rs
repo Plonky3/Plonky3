@@ -446,20 +446,20 @@ pub(crate) const fn to_koalabear_array<const N: usize>(input: [u32; N]) -> [Koal
 
 #[inline]
 #[must_use]
-fn to_monty_64(x: u64) -> u32 {
+const fn to_monty_64(x: u64) -> u32 {
     (((x as u128) << MONTY_BITS) % P as u128) as u32
 }
 
 #[inline]
 #[must_use]
-fn from_monty(x: u32) -> u32 {
+const fn from_monty(x: u32) -> u32 {
     monty_reduce(x as u64)
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 #[inline]
 #[must_use]
-pub(crate) fn monty_reduce(x: u64) -> u32 {
+pub(crate) const fn monty_reduce(x: u64) -> u32 {
     let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
     let u = t * (P as u64);
 
