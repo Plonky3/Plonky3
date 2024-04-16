@@ -1194,7 +1194,7 @@ mod tests {
 
         #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
-                assert_eq!(vec_res.0[i], arr[i].cube());
+            assert_eq!(vec_res.0[i], arr[i].cube());
         }
     }
 
