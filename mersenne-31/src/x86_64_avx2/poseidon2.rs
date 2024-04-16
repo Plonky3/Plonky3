@@ -2,7 +2,8 @@ use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
 use crate::{
-    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, POSEIDON2_INTERNAL_MATRIX_DIAG_16, POSEIDON2_INTERNAL_MATRIX_DIAG_24,
+    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, POSEIDON2_INTERNAL_MATRIX_DIAG_16,
+    POSEIDON2_INTERNAL_MATRIX_DIAG_24,
 };
 
 impl Permutation<[PackedMersenne31AVX2; 16]> for DiffusionMatrixMersenne31 {
@@ -18,7 +19,10 @@ impl DiffusionPermutation<PackedMersenne31AVX2, 16> for DiffusionMatrixMersenne3
 
 impl Permutation<[PackedMersenne31AVX2; 24]> for DiffusionMatrixMersenne31 {
     fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 24]) {
-        matmul_internal::<Mersenne31, PackedMersenne31AVX2, 24>(state, MATRIX_DIAG_24_MERSENNE31);
+        matmul_internal::<Mersenne31, PackedMersenne31AVX2, 24>(
+            state,
+            POSEIDON2_INTERNAL_MATRIX_DIAG_24,
+        );
     }
 }
 
