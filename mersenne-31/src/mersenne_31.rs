@@ -405,7 +405,7 @@ impl Div for Mersenne31 {
 }
 
 #[inline(always)]
-fn from_u62(input: u64) -> Mersenne31 {
+pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     debug_assert!(input < (1 << 62));
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;

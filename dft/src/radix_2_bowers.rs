@@ -110,7 +110,7 @@ fn butterfly_layer<F: Field, B: Butterfly<F>>(
     half_block_size: usize,
     twiddles: &[B],
 ) {
-    mat.par_row_chunks_mut(2 * half_block_size)
+    mat.par_row_chunks_exact_mut(2 * half_block_size)
         .enumerate()
         .for_each(|(block, mut chunks)| {
             let (mut hi_chunks, mut lo_chunks) = chunks.split_rows_mut(half_block_size);

@@ -31,6 +31,15 @@ pub type RowMajorMatrixViewMut<'a, T> = DenseMatrix<T, &'a mut [T]>;
 pub trait DenseStorage<T>: Borrow<[T]> + Into<Vec<T>> + Send + Sync {}
 impl<T, S: Borrow<[T]> + Into<Vec<T>> + Send + Sync> DenseStorage<T> for S {}
 
+impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
+    /// Create a new dense matrix of the given dimensions, backed by a `Vec`, and filled with
+    /// default values.
+    #[must_use]
+    pub fn default(width: usize, height: usize) -> Self {
+        Self::new(vec![T::default(); width * height], width)
+    }
+}
+
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
@@ -86,7 +95,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow().par_chunks_exact(self.width)
     }
 
-    fn row_mut(&mut self, r: usize) -> &mut [T]
+    pub fn row_mut(&mut self, r: usize) -> &mut [T]
     where
         S: BorrowMut<[T]>,
     {
@@ -170,6 +179,20 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     {
         self.values
             .borrow_mut()
+            .par_chunks_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
+    }
+
+    pub fn par_row_chunks_exact_mut(
+        &mut self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
+    where
+        T: Send,
+        S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow_mut()
             .par_chunks_exact_mut(self.width * chunk_rows)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
@@ -225,7 +248,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             w,
         );
         padded
-            .par_row_chunks_mut(1 << added_bits)
+            .par_row_chunks_exact_mut(1 << added_bits)
             .zip(self.par_row_slices())
             .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
 

@@ -1,8 +1,10 @@
-use p3_field::{AbstractField, Field, PrimeField32};
+use p3_field::Field;
+use p3_field::AbstractField;
+use p3_field::PrimeField32;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{to_mersenne31_array, Mersenne31};
+use crate::{from_u62, to_mersenne31_array, Mersenne31};
 
 // Two optimised diffusion matrices for Mersenne31/16:
 
@@ -11,7 +13,10 @@ use crate::{to_mersenne31_array, Mersenne31};
 // Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536]
 //                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
 
-pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] = to_mersenne31_array([
+// Long term, POSEIDON2_INTERNAL_MATRIX_DIAG_16 can be removed.
+// Currently it is needed for each Packed field implementation so it is given here to prevent code duplication.
+// It needs to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16: [Mersenne31; 16] = to_mersenne31_array([
     Mersenne31::ORDER_U32 - 2,
     1,
     2,
@@ -32,7 +37,8 @@ pub const MATRIX_DIAG_16_MERSENNE31: [Mersenne31; 16] = to_mersenne31_array([
 
 // We make use of the fact that most entries are a power of 2.
 // Note that this array is 1 element shorter than MATRIX_DIAG_16_MERSENNE31 as we do not include the first element.
-const MATRIX_DIAG_16_MONTY_SHIFTS: [u64; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
+const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u8; 15] =
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixMersenne31;
@@ -40,11 +46,14 @@ pub struct DiffusionMatrixMersenne31;
 impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
     #[inline]
     fn permute_mut(&self, state: &mut [Mersenne31; 16]) {
-        let sum: Mersenne31 = state.iter().cloned().sum();
-        state[0] = sum - state[0].double();
+        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+        let full_sum = part_sum + (state[0].value as u64);
+        let s0 = part_sum + (-state[0]).value as u64;
+        state[0] = from_u62(s0);
         for i in 1..16 {
-            state[i] = state[i].mul_2exp_u64(MATRIX_DIAG_16_MONTY_SHIFTS[i - 1] as u64);
-            state[i] += sum;
+            let si = full_sum
+                + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS[i - 1]);
+            state[i] = from_u62(si);
         }
     }
 }
@@ -58,13 +67,13 @@ impl DiffusionPermutation<Mersenne31, 16> for DiffusionMatrixMersenne31 {}
 //                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
 
 
-pub const MATRIX_DIAG_24_MERSENNE31: [Mersenne31; 24] = to_mersenne31_array([
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24: [Mersenne31; 24] = to_mersenne31_array([
     Mersenne31::ORDER_U32 - 2,
     1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304]);
 
 // We make use of the fact that most entries are a power of 2.
 // Note that this array is 1 element shorter than MATRIX_DIAG_24_MERSENNE31 as we do not include the first element.
-const MATRIX_DIAG_24_MONTY_SHIFTS: [u64; 23] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u64; 23] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 
 impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
     #[inline]
@@ -72,7 +81,7 @@ impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
         let sum: Mersenne31 = state.iter().cloned().sum();
         state[0] = sum - state[0].double();
         for i in 1..24 {
-            state[i] = state[i].mul_2exp_u64(MATRIX_DIAG_24_MONTY_SHIFTS[i - 1] as u64);
+            state[i] = state[i].mul_2exp_u64(POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[i - 1] as u64);
             state[i] += sum;
         }
     }
@@ -84,6 +93,7 @@ impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
 mod tests {
     use core::array;
 
+    use p3_field::AbstractField;
     use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 
     use super::*;
