@@ -2,7 +2,7 @@ use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
 
 use crate::{
-    DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearAVX2, MONTY_INVERSE,
+    DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearAVX512, MONTY_INVERSE,
     POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY,
     POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY,
 };
@@ -11,9 +11,9 @@ use crate::{
 // matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
 // These will be removed once we have architecture specific implementations.
 
-impl Permutation<[PackedKoalaBearAVX2; 16]> for DiffusionMatrixKoalaBear {
-    fn permute_mut(&self, state: &mut [PackedKoalaBearAVX2; 16]) {
-        matmul_internal::<KoalaBear, PackedKoalaBearAVX2, 16>(
+impl Permutation<[PackedKoalaBearAVX512; 16]> for DiffusionMatrixKoalaBear {
+    fn permute_mut(&self, state: &mut [PackedKoalaBearAVX512; 16]) {
+        matmul_internal::<KoalaBear, PackedKoalaBearAVX512, 16>(
             state,
             POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY,
         );
@@ -21,11 +21,11 @@ impl Permutation<[PackedKoalaBearAVX2; 16]> for DiffusionMatrixKoalaBear {
     }
 }
 
-impl DiffusionPermutation<PackedKoalaBearAVX2, 16> for DiffusionMatrixKoalaBear {}
+impl DiffusionPermutation<PackedKoalaBearAVX512, 16> for DiffusionMatrixKoalaBear {}
 
-impl Permutation<[PackedKoalaBearAVX2; 24]> for DiffusionMatrixKoalaBear {
-    fn permute_mut(&self, state: &mut [PackedKoalaBearAVX2; 24]) {
-        matmul_internal::<KoalaBear, PackedKoalaBearAVX2, 24>(
+impl Permutation<[PackedKoalaBearAVX512; 24]> for DiffusionMatrixKoalaBear {
+    fn permute_mut(&self, state: &mut [PackedKoalaBearAVX512; 24]) {
+        matmul_internal::<KoalaBear, PackedKoalaBearAVX512, 24>(
             state,
             POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY,
         );
@@ -33,7 +33,7 @@ impl Permutation<[PackedKoalaBearAVX2; 24]> for DiffusionMatrixKoalaBear {
     }
 }
 
-impl DiffusionPermutation<PackedKoalaBearAVX2, 24> for DiffusionMatrixKoalaBear {}
+impl DiffusionPermutation<PackedKoalaBearAVX512, 24> for DiffusionMatrixKoalaBear {}
 
 #[cfg(test)]
 mod tests {
@@ -42,7 +42,7 @@ mod tests {
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearAVX2};
+    use crate::{DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearAVX512};
 
     type F = KoalaBear;
     const D: u64 = 7;
@@ -51,7 +51,7 @@ mod tests {
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
-    fn test_avx2_poseidon2_width_16() {
+    fn test_avx512_poseidon2_width_16() {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
@@ -66,17 +66,17 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedKoalaBearAVX2::from_f);
-        poseidon2.permute_mut(&mut avx2_input);
+        let mut avx512_input = input.map(PackedKoalaBearAVX512::from_f);
+        poseidon2.permute_mut(&mut avx512_input);
 
-        let avx2_output = avx2_input.map(|x| x.0[0]);
+        let avx512_output = avx512_input.map(|x| x.0[0]);
 
-        assert_eq!(avx2_output, expected);
+        assert_eq!(avx512_output, expected);
     }
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
-    fn test_avx2_poseidon2_width_24() {
+    fn test_avx512_poseidon2_width_24() {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
@@ -91,11 +91,11 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedKoalaBearAVX2::from_f);
-        poseidon2.permute_mut(&mut avx2_input);
+        let mut avx512_input = input.map(PackedKoalaBearAVX512::from_f);
+        poseidon2.permute_mut(&mut avx512_input);
 
-        let avx2_output = avx2_input.map(|x| x.0[0]);
+        let avx512_output = avx512_input.map(|x| x.0[0]);
 
-        assert_eq!(avx2_output, expected);
+        assert_eq!(avx512_output, expected);
     }
 }

@@ -1189,7 +1189,7 @@ mod tests {
     fn test_cube_vs_scalar() {
         let arr = array_from_canonical([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]);
 
-        let vec = PackedBabyBearNeon(arr);
+        let vec = PackedKoalaBearNeon(arr);
         let vec_res = vec.cube();
 
         #[allow(clippy::needless_range_loop)]
@@ -1202,7 +1202,7 @@ mod tests {
     fn test_cube_vs_scalar_special_vals() {
         let arr = [F::zero(), F::one(), F::two(), F::neg_one()];
 
-        let vec = PackedBabyBearNeon(arr);
+        let vec = PackedKoalaBearNeon(arr);
         let vec_res = vec.cube();
 
         #[allow(clippy::needless_range_loop)]
