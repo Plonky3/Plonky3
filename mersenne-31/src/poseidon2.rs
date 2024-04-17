@@ -93,7 +93,7 @@ impl DiffusionPermutation<Mersenne31, 16> for DiffusionMatrixMersenne31 {}
 impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
     #[inline]
     fn permute_mut(&self, state: &mut [Mersenne31; 24]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+        let part_sum: u64 = state[1..].iter().map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
         let s0 = part_sum + (-state[0]).value as u64;
         state[0] = from_u62(s0);
