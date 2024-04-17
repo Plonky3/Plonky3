@@ -350,7 +350,7 @@ impl Sum for BabyBear {
         // There might be a faster reduction method possible for lengths <= 16 which avoids %.
 
         // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
         BabyBear {
             value: (sum % P as u64) as u32,
         }

@@ -231,7 +231,7 @@ mod tests {
     use hashbrown::HashSet;
     use itertools::izip;
     use p3_mersenne_31::Mersenne31;
-    use rand::{thread_rng, Rng};
+    use rand::{random, thread_rng};
 
     use super::*;
     use crate::util::eval_circle_polys;
@@ -340,13 +340,13 @@ mod tests {
 
         let cfft = Cfft::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
+        let shift: Complex<F> = univariate_to_point(random()).unwrap();
         let d = CircleDomain { shift, log_n };
 
         let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
 
         // simple barycentric
-        let zeta: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
+        let zeta: Complex<F> = univariate_to_point(random()).unwrap();
 
         let basis = d.lagrange_basis(zeta);
         let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);

@@ -79,7 +79,7 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         }
 
         const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
-        const HIGHMASK: i128 = !(LOWMASK); // Gets all bits higher than 42.
+        const HIGHMASK: i128 = !LOWMASK; // Gets all bits higher than 42.
 
         let low_bits = (dp & LOWMASK) as i64; // low_bits < 2**42
         let high_bits = ((dp & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
