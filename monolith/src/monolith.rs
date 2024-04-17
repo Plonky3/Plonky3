@@ -134,7 +134,7 @@ where
     #[inline]
     pub fn bricks(state: &mut [Mersenne31; WIDTH]) {
         // Feistel Type-3
-        for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
+        for (x, x_mut) in state.to_owned().iter().zip(state.iter_mut().skip(1)) {
             *x_mut += x.square();
         }
     }

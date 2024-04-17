@@ -192,8 +192,8 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
 
 impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
     type EF = AB::EF;
-    type VarEF = AB::VarEF;
     type ExprEF = AB::ExprEF;
+    type VarEF = AB::VarEF;
 
     fn assert_zero_ext<I>(&mut self, x: I)
     where

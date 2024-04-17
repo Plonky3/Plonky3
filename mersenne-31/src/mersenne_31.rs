@@ -330,7 +330,7 @@ impl Sum for Mersenne31 {
         // It assumes that iter.len() < 2^31.
 
         // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
 
         // sum is < 2^62 provided iter.len() < 2^31.
         from_u62(sum)

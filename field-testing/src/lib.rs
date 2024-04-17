@@ -179,7 +179,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
     use p3_field::{binomial_expand, eval_poly, AbstractExtensionField, AbstractField};
-    use rand::thread_rng;
+    use rand::random;
 
     use super::*;
 
@@ -188,7 +188,7 @@ mod tests {
         type F = BabyBear;
         type EF = BinomialExtensionField<F, 4>;
         for _ in 0..1024 {
-            let x: EF = thread_rng().gen();
+            let x: EF = random();
             let m: Vec<EF> = x.minimal_poly().into_iter().map(EF::from_base).collect();
             assert!(eval_poly(&m, x).is_zero());
         }

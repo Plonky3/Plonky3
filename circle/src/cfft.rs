@@ -178,7 +178,7 @@ mod tests {
     use itertools::Itertools;
     use p3_dft::bit_reversed_zero_pad;
     use p3_mersenne_31::Mersenne31;
-    use rand::{thread_rng, Rng};
+    use rand::{random, thread_rng};
 
     use super::*;
     use crate::util::{eval_circle_polys, univariate_to_point};
@@ -189,7 +189,7 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
+        let shift: Complex<F> = univariate_to_point(random()).unwrap();
 
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1 << 5);
         let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
@@ -212,7 +212,7 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::<F>::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
+        let shift: Complex<F> = univariate_to_point(random()).unwrap();
 
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1);
         let src_domain = CircleDomain { log_n, shift };

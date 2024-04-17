@@ -163,7 +163,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
     type Pcs = TrivialPcs<Val, Radix2DitParallel>;
-    let pcs = p3_commit::testing::TrivialPcs {
+    let pcs = TrivialPcs {
         dft,
         log_n,
         _phantom: PhantomData,
