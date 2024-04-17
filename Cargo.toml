@@ -16,6 +16,7 @@ members = [
     "fri",
     "goldilocks",
     "interpolation",
+    "koala-bear",
     "keccak",
     "keccak-air",
     "lde",

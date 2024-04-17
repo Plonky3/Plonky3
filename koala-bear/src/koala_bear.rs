@@ -4,90 +4,95 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_1725656503, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
+    exp_1420470955, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
     PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// The Baby Bear prime
-/// This is the unqiue 31-bit prime with the highest possible 2 adicity (27).
-const P: u32 = 0x78000001;
+/// The KoalaBear prime: 2^31 - 2^24 + 1
+/// This is a 31-bit prime with the highest possible two adicity if we additionally demand that
+/// the cube map (x -> x^3) is an automorphism of the multiplicative group.
+/// Its not unique, as there is one other option with equal 2 adicity: 2^30 + 2^27 + 2^24 + 1.
+/// There is also one 29-bit prime with higher two adicity which might be appropriate for some applications: 2^29 - 2^26 + 1.
+const P: u32 = 0x7f000001;
+
 const MONTY_BITS: u32 = 32;
+
 // We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
 // (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
-const MONTY_MU: u32 = 0x88000001;
+const MONTY_MU: u32 = 0x81000001;
 
 // This is derived from above.
 const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
 
-/// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
+/// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
-#[repr(transparent)] // `PackedBabyBearNeon` relies on this!
-pub struct BabyBear {
-    // This is `pub(crate)` just for tests. If you're accessing `value` outside of those, you're
+#[repr(transparent)] // `PackedKoalaBearNeon` relies on this!
+pub struct KoalaBear {
+    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
     pub(crate) value: u32,
 }
 
-impl BabyBear {
-    /// create a new `BabyBear` from a canonical `u32`.
+impl KoalaBear {
+    /// create a new `KoalaBear` from a canonical `u32`.
     #[inline]
     pub(crate) const fn new(n: u32) -> Self {
         Self { value: to_monty(n) }
     }
 }
 
-impl Ord for BabyBear {
+impl Ord for KoalaBear {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.as_canonical_u32().cmp(&other.as_canonical_u32())
     }
 }
 
-impl PartialOrd for BabyBear {
+impl PartialOrd for KoalaBear {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Display for BabyBear {
+impl Display for KoalaBear {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.as_canonical_u32(), f)
     }
 }
 
-impl Debug for BabyBear {
+impl Debug for KoalaBear {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Debug::fmt(&self.as_canonical_u32(), f)
     }
 }
 
-impl Distribution<BabyBear> for Standard {
+impl Distribution<KoalaBear> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BabyBear {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> KoalaBear {
         loop {
             let next_u31 = rng.next_u32() & 0x7ffffff;
             let is_canonical = next_u31 < P;
             if is_canonical {
-                return BabyBear { value: next_u31 };
+                return KoalaBear { value: next_u31 };
             }
         }
     }
 }
 
-impl Serialize for BabyBear {
+impl Serialize for KoalaBear {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_u32(self.as_canonical_u32())
     }
 }
 
-impl<'de> Deserialize<'de> for BabyBear {
+impl<'de> Deserialize<'de> for KoalaBear {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        Ok(BabyBear::from_canonical_u32(val))
+        Ok(KoalaBear::from_canonical_u32(val))
     }
 }
 
@@ -96,9 +101,9 @@ const MONTY_ONE: u32 = to_monty(1);
 const MONTY_TWO: u32 = to_monty(2);
 const MONTY_NEG_ONE: u32 = to_monty(P - 1);
 
-impl Packable for BabyBear {}
+impl Packable for KoalaBear {}
 
-impl AbstractField for BabyBear {
+impl AbstractField for KoalaBear {
     type F = Self;
 
     fn zero() -> Self {
@@ -172,21 +177,21 @@ impl AbstractField for BabyBear {
     }
 }
 
-impl Field for BabyBear {
+impl Field for KoalaBear {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-    type Packing = crate::PackedBabyBearNeon;
+    type Packing = crate::PackedKoalaBearNeon;
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",
         not(all(feature = "nightly-features", target_feature = "avx512f"))
     ))]
-    type Packing = crate::PackedBabyBearAVX2;
+    type Packing = crate::PackedKoalaBearAVX2;
     #[cfg(all(
         feature = "nightly-features",
         target_arch = "x86_64",
         target_feature = "avx512f"
     ))]
-    type Packing = crate::PackedBabyBearAVX512;
+    type Packing = crate::PackedKoalaBearAVX512;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
         all(
@@ -212,7 +217,7 @@ impl Field for BabyBear {
     #[inline]
     fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
         match power {
-            1725656503 => exp_1725656503(val), // used to compute x^{1/7}
+            1420470955 => exp_1420470955(val), // used to compute x^{1/3}
             _ => exp_u64_by_squaring(val, power),
         }
     }
@@ -223,33 +228,30 @@ impl Field for BabyBear {
         }
 
         // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2013265919 = 1110111111111111111111111111111_2.
-        // Uses 30 Squares + 7 Multiplications => 37 Operations total.
+        // Here p-2 = 2130706431 = 1111110111111111111111111111111_2
+        // Uses 29 Squares + 7 Multiplications => 36 Operations total.
 
         let p1 = *self;
-        let p100000000 = p1.exp_power_of_2(8);
-        let p100000001 = p100000000 * p1;
-        let p10000000000000000 = p100000000.exp_power_of_2(8);
-        let p10000000100000001 = p10000000000000000 * p100000001;
-        let p10000000100000001000 = p10000000100000001.exp_power_of_2(3);
-        let p1000000010000000100000000 = p10000000100000001000.exp_power_of_2(5);
-        let p1000000010000000100000001 = p1000000010000000100000000 * p1;
-        let p1000010010000100100001001 = p1000000010000000100000001 * p10000000100000001000;
-        let p10000000100000001000000010 = p1000000010000000100000001.square();
-        let p11000010110000101100001011 = p10000000100000001000000010 * p1000010010000100100001001;
-        let p100000001000000010000000100 = p10000000100000001000000010.square();
-        let p111000011110000111100001111 =
-            p100000001000000010000000100 * p11000010110000101100001011;
-        let p1110000111100001111000011110000 = p111000011110000111100001111.exp_power_of_2(4);
-        let p1110111111111111111111111111111 =
-            p1110000111100001111000011110000 * p111000011110000111100001111;
+        let p10 = p1.square();
+        let p11 = p10 * p1;
+        let p1100 = p11.exp_power_of_2(2);
+        let p1111 = p1100 * p11;
+        let p110000 = p1100.exp_power_of_2(2);
+        let p111111 = p110000 * p1111;
+        let p1111110000 = p111111.exp_power_of_2(4);
+        let p1111111111 = p1111110000 * p1111;
+        let p11111101111 = p1111111111 * p1111110000;
+        let p111111011110000000000 = p11111101111.exp_power_of_2(10);
+        let p111111011111111111111 = p111111011110000000000 * p1111111111;
+        let p1111110111111111111110000000000 = p111111011111111111111.exp_power_of_2(10);
+        let p1111110111111111111111111111111 = p1111110111111111111110000000000 * p1111111111;
 
-        Some(p1110111111111111111111111111111)
+        Some(p1111110111111111111111111111111)
     }
 
     #[inline]
     fn halve(&self) -> Self {
-        BabyBear {
+        KoalaBear {
             value: halve_u32::<P>(self.value),
         }
     }
@@ -260,13 +262,13 @@ impl Field for BabyBear {
     }
 }
 
-impl PrimeField for BabyBear {
+impl PrimeField for KoalaBear {
     fn as_canonical_biguint(&self) -> BigUint {
         <Self as PrimeField32>::as_canonical_u32(self).into()
     }
 }
 
-impl PrimeField64 for BabyBear {
+impl PrimeField64 for KoalaBear {
     const ORDER_U64: u64 = <Self as PrimeField32>::ORDER_U32 as u64;
 
     #[inline]
@@ -275,7 +277,7 @@ impl PrimeField64 for BabyBear {
     }
 }
 
-impl PrimeField32 for BabyBear {
+impl PrimeField32 for KoalaBear {
     const ORDER_U32: u32 = P;
 
     #[inline]
@@ -284,46 +286,43 @@ impl PrimeField32 for BabyBear {
     }
 }
 
-impl TwoAdicField for BabyBear {
-    const TWO_ADICITY: usize = 27;
+impl TwoAdicField for KoalaBear {
+    const TWO_ADICITY: usize = 24;
 
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
         match bits {
             0 => Self::one(),
-            1 => Self::from_canonical_u32(0x78000000),
-            2 => Self::from_canonical_u32(0x67055c21),
-            3 => Self::from_canonical_u32(0x5ee99486),
-            4 => Self::from_canonical_u32(0xbb4c4e4),
-            5 => Self::from_canonical_u32(0x2d4cc4da),
-            6 => Self::from_canonical_u32(0x669d6090),
-            7 => Self::from_canonical_u32(0x17b56c64),
-            8 => Self::from_canonical_u32(0x67456167),
-            9 => Self::from_canonical_u32(0x688442f9),
-            10 => Self::from_canonical_u32(0x145e952d),
-            11 => Self::from_canonical_u32(0x4fe61226),
-            12 => Self::from_canonical_u32(0x4c734715),
-            13 => Self::from_canonical_u32(0x11c33e2a),
-            14 => Self::from_canonical_u32(0x62c3d2b1),
-            15 => Self::from_canonical_u32(0x77cad399),
-            16 => Self::from_canonical_u32(0x54c131f4),
-            17 => Self::from_canonical_u32(0x4cabd6a6),
-            18 => Self::from_canonical_u32(0x5cf5713f),
-            19 => Self::from_canonical_u32(0x3e9430e8),
-            20 => Self::from_canonical_u32(0xba067a3),
-            21 => Self::from_canonical_u32(0x18adc27d),
-            22 => Self::from_canonical_u32(0x21fd55bc),
-            23 => Self::from_canonical_u32(0x4b859b3d),
-            24 => Self::from_canonical_u32(0x3bd57996),
-            25 => Self::from_canonical_u32(0x4483d85a),
-            26 => Self::from_canonical_u32(0x3a26eef8),
-            27 => Self::from_canonical_u32(0x1a427a41),
+            1 => Self::from_canonical_u32(0x7f000000),
+            2 => Self::from_canonical_u32(0x7e010002),
+            3 => Self::from_canonical_u32(0x6832fe4a),
+            4 => Self::from_canonical_u32(0x8dbd69c),
+            5 => Self::from_canonical_u32(0xa28f031),
+            6 => Self::from_canonical_u32(0x5c4a5b99),
+            7 => Self::from_canonical_u32(0x29b75a80),
+            8 => Self::from_canonical_u32(0x17668b8a),
+            9 => Self::from_canonical_u32(0x27ad539b),
+            10 => Self::from_canonical_u32(0x334d48c7),
+            11 => Self::from_canonical_u32(0x7744959c),
+            12 => Self::from_canonical_u32(0x768fc6fa),
+            13 => Self::from_canonical_u32(0x303964b2),
+            14 => Self::from_canonical_u32(0x3e687d4d),
+            15 => Self::from_canonical_u32(0x45a60e61),
+            16 => Self::from_canonical_u32(0x6e2f4d7a),
+            17 => Self::from_canonical_u32(0x163bd499),
+            18 => Self::from_canonical_u32(0x6c4a8a45),
+            19 => Self::from_canonical_u32(0x143ef899),
+            20 => Self::from_canonical_u32(0x514ddcad),
+            21 => Self::from_canonical_u32(0x484ef19b),
+            22 => Self::from_canonical_u32(0x205d63c3),
+            23 => Self::from_canonical_u32(0x68e7dd49),
+            24 => Self::from_canonical_u32(0x6ac49f88),
             _ => unreachable!("Already asserted that bits <= Self::TWO_ADICITY"),
         }
     }
 }
 
-impl Add for BabyBear {
+impl Add for KoalaBear {
     type Output = Self;
 
     #[inline]
@@ -337,28 +336,28 @@ impl Add for BabyBear {
     }
 }
 
-impl AddAssign for BabyBear {
+impl AddAssign for KoalaBear {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl Sum for BabyBear {
+impl Sum for KoalaBear {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
         // There might be a faster reduction method possible for lengths <= 16 which avoids %.
 
         // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| x.value as u64).sum::<u64>();
-        BabyBear {
+        let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
+        Self {
             value: (sum % P as u64) as u32,
         }
     }
 }
 
-impl Sub for BabyBear {
+impl Sub for KoalaBear {
     type Output = Self;
 
     #[inline]
@@ -366,18 +365,18 @@ impl Sub for BabyBear {
         let (mut diff, over) = self.value.overflowing_sub(rhs.value);
         let corr = if over { P } else { 0 };
         diff = diff.wrapping_add(corr);
-        BabyBear { value: diff }
+        Self { value: diff }
     }
 }
 
-impl SubAssign for BabyBear {
+impl SubAssign for KoalaBear {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl Neg for BabyBear {
+impl Neg for KoalaBear {
     type Output = Self;
 
     #[inline]
@@ -386,7 +385,7 @@ impl Neg for BabyBear {
     }
 }
 
-impl Mul for BabyBear {
+impl Mul for KoalaBear {
     type Output = Self;
 
     #[inline]
@@ -398,21 +397,21 @@ impl Mul for BabyBear {
     }
 }
 
-impl MulAssign for BabyBear {
+impl MulAssign for KoalaBear {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl Product for BabyBear {
+impl Product for KoalaBear {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
-impl Div for BabyBear {
+impl Div for KoalaBear {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
@@ -428,12 +427,12 @@ const fn to_monty(x: u32) -> u32 {
     (((x as u64) << MONTY_BITS) % P as u64) as u32
 }
 
-/// Convert a constant u32 array into a constant Babybear array.
+/// Convert a constant u32 array into a constant KoalaBear array.
 /// Saves every element in Monty Form
 #[inline]
 #[must_use]
-pub(crate) const fn to_babybear_array<const N: usize>(input: [u32; N]) -> [BabyBear; N] {
-    let mut output = [BabyBear { value: 0 }; N];
+pub(crate) const fn to_koalabear_array<const N: usize>(input: [u32; N]) -> [KoalaBear; N] {
+    let mut output = [KoalaBear { value: 0 }; N];
     let mut i = 0;
     loop {
         if i == N {
@@ -472,36 +471,25 @@ pub(crate) const fn monty_reduce(x: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use core::array;
-
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;
 
-    type F = BabyBear;
+    type F = KoalaBear;
 
     #[test]
-    fn test_baby_bear_two_adicity_generators() {
-        let base = BabyBear::from_canonical_u32(0x1a427a41);
-        for bits in 0..=BabyBear::TWO_ADICITY {
+    fn test_koala_bear_two_adicity_generators() {
+        let base = KoalaBear::from_canonical_u32(0x6ac49f88);
+        for bits in 0..=KoalaBear::TWO_ADICITY {
             assert_eq!(
-                BabyBear::two_adic_generator(bits),
-                base.exp_power_of_2(BabyBear::TWO_ADICITY - bits)
+                KoalaBear::two_adic_generator(bits),
+                base.exp_power_of_2(KoalaBear::TWO_ADICITY - bits)
             );
         }
     }
 
     #[test]
-    fn test_to_babybear_array() {
-        let range_array: [u32; 32] = array::from_fn(|i| i as u32);
-        assert_eq!(
-            to_babybear_array(range_array),
-            range_array.map(F::from_canonical_u32)
-        )
-    }
-
-    #[test]
-    fn test_baby_bear() {
+    fn test_koala_bear() {
         let f = F::from_canonical_u32(100);
         assert_eq!(f.as_canonical_u64(), 100);
 
@@ -546,12 +534,12 @@ mod tests {
 
         let m1 = F::from_canonical_u32(0x34167c58);
         let m2 = F::from_canonical_u32(0x61f3207b);
-        let expected_prod = F::from_canonical_u32(0x1b5c8046);
+        let expected_prod = F::from_canonical_u32(0x54b46b81);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(m1.exp_u64(1725656503).exp_const_u64::<7>(), m1);
-        assert_eq!(m2.exp_u64(1725656503).exp_const_u64::<7>(), m2);
-        assert_eq!(f_2.exp_u64(1725656503).exp_const_u64::<7>(), f_2);
+        assert_eq!(m1.exp_u64(1420470955).exp_const_u64::<3>(), m1);
+        assert_eq!(m2.exp_u64(1420470955).exp_const_u64::<3>(), m2);
+        assert_eq!(f_2.exp_u64(1420470955).exp_const_u64::<3>(), f_2);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
@@ -585,6 +573,6 @@ mod tests {
         assert_eq!(m2, m2_deserialized);
     }
 
-    test_field!(crate::BabyBear);
-    test_two_adic_field!(crate::BabyBear);
+    test_field!(crate::KoalaBear);
+    test_two_adic_field!(crate::KoalaBear);
 }
