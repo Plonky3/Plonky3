@@ -272,6 +272,7 @@ where
         let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::generator());
 
         let mut all_opened_values: OpenedValues<Challenge> = vec![];
+
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
@@ -324,8 +325,10 @@ where
             }
         }
 
+        let fri_input = reduced_openings.into_iter().filter_map(|x| x).collect_vec();
+
         let (fri_proof, query_indices) =
-            prover::prove(&self.fri, &TwoAdicFriFolder, &reduced_openings, challenger);
+            prover::prove::<_, _, TwoAdicFriFolder, _>(&self.fri, fri_input, challenger);
 
         let query_openings = query_indices
             .into_iter()
@@ -443,9 +446,8 @@ where
             .collect::<Result<Vec<_>, InputMmcs::Error>>()
             .map_err(VerificationError::InputMmcsError)?;
 
-        verifier::verify_challenges(
+        verifier::verify_challenges::<_, _, TwoAdicFriFolder, _>(
             &self.fri,
-            &TwoAdicFriFolder,
             &proof.fri_proof,
             &fri_challenges,
             &reduced_openings,

@@ -65,7 +65,6 @@ where
 
 pub fn verify_challenges<F, M, Folder, Witness>(
     config: &FriConfig<M>,
-    folder: &Folder,
     proof: &FriProof<F, M, Witness>,
     challenges: &FriChallenges<F>,
     reduced_openings: &[[F; 32]],
@@ -81,9 +80,8 @@ where
         &proof.query_proofs,
         reduced_openings
     ) {
-        let folded_eval = verify_query(
+        let folded_eval = verify_query::<_, _, Folder>(
             config,
-            folder,
             &proof.commit_phase_commits,
             index,
             query_proof,
@@ -103,7 +101,6 @@ where
 #[allow(clippy::too_many_arguments)]
 fn verify_query<F, M, Folder>(
     config: &FriConfig<M>,
-    folder: &Folder,
     commit_phase_commits: &[M::Commitment],
     mut index: usize,
     proof: &QueryProof<F, M>,
@@ -124,14 +121,6 @@ where
         &proof.commit_phase_openings,
         betas,
     ) {
-        /*
-        folder.mix_in(
-            index,
-            log_folded_height + 1,
-            &mut folded_eval,
-            reduced_openings[log_folded_height + 1],
-        );
-        */
         folded_eval += reduced_openings[log_folded_height + 1];
 
         let index_sibling = index ^ 1;

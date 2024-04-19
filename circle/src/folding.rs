@@ -15,8 +15,8 @@ use p3_util::{log2_strict_usize, reverse_bits_len};
 use crate::domain::CircleDomain;
 
 pub(crate) fn fold_bivariate<F: ComplexExtendable, EF: ExtensionField<F>>(
-    evals: impl Matrix<EF>,
     beta: EF,
+    evals: impl Matrix<EF>,
 ) -> Vec<EF> {
     assert_eq!(evals.width(), 2);
     let domain = CircleDomain::standard(log2_strict_usize(evals.height()) + 1);
@@ -48,6 +48,23 @@ pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     let sum = evals[0] + evals[1];
     let diff = (evals[0] - evals[1]) * t;
     (sum + beta * diff).halve()
+}
+
+pub(crate) fn fold_univariate<F: ComplexExtendable, EF: ExtensionField<F>>(
+    beta: EF,
+    m: impl Matrix<EF>,
+) -> Vec<EF> {
+    assert_eq!(m.width(), 2);
+    let domain = CircleDomain::standard(log2_strict_usize(m.height()) + 2);
+    let mut twiddles = batch_multiplicative_inverse(
+        &domain
+            .points()
+            .take(m.height())
+            .map(|p| p.real())
+            .collect_vec(),
+    );
+    twiddles = circle_bitrev_permute(&twiddles);
+    fold(m, beta, &twiddles)
 }
 
 pub(crate) struct CircleFriFolder<F, EF> {
@@ -261,7 +278,7 @@ mod tests {
 
         evals = circle_bitrev_permute(&evals);
 
-        evals = fold_bivariate::<F, _>(RowMajorMatrix::new(evals, 2), rng.gen());
+        evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
         for _ in log_blowup..(log_n + log_blowup - 1) {
             evals = CircleFriFolder::<F, EF>::fold_matrix(rng.gen(), RowMajorMatrix::new(evals, 2));
         }

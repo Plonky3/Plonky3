@@ -2,10 +2,13 @@ use alloc::vec::Vec;
 use itertools::{izip, Itertools};
 use p3_commit::PolynomialSpace;
 use p3_field::{
+    batch_multiplicative_inverse,
     extension::{Complex, ComplexExtendable},
     ExtensionField,
 };
+use p3_fri::PowersReducer;
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -30,6 +33,62 @@ fn reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
             lhs * izip!(row, ps_at_zeta, mu.powers())
                 .map(|(p_at_x, &p_at_zeta, mu_pow)| mu_pow * (-p_at_zeta + p_at_x))
                 .sum::<EF>()
+        })
+        .collect()
+}
+
+pub(crate) fn deep_quotient_lhs<F: ComplexExtendable, EF: ExtensionField<F>>(
+    x: Complex<F>,
+    zeta: Complex<EF>,
+    alpha_pow_width: EF,
+) -> (EF, EF) {
+    let x_rotate_zeta: Complex<EF> = x.rotate(zeta.conjugate());
+
+    let v_gamma_re: EF = EF::one() - x_rotate_zeta.real();
+    let v_gamma_im: EF = x_rotate_zeta.imag();
+
+    (
+        v_gamma_re - alpha_pow_width * v_gamma_im,
+        v_gamma_re.square() + v_gamma_im.square(),
+    )
+}
+
+pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
+    alpha_reducer: &PowersReducer<F, EF>,
+    lhs_num: EF,
+    lhs_denom_inv: EF,
+    ps_at_x: &[F],
+    alpha_reduced_ps_at_zeta: EF,
+) -> EF {
+    lhs_num * lhs_denom_inv * (alpha_reducer.reduce_base(&ps_at_x) - alpha_reduced_ps_at_zeta)
+}
+
+#[instrument(skip_all, fields(log_n = domain.log_n))]
+pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
+    domain: &CircleDomain<F>,
+    mat: &RowMajorMatrix<F>,
+    zeta: Complex<EF>,
+    ps_at_zeta: &[EF],
+    alpha_reducer: &PowersReducer<F, EF>,
+    alpha_pow_width: EF,
+) -> Vec<EF> {
+    let (lhs_nums, lhs_denoms): (Vec<_>, Vec<_>) = domain
+        .points()
+        .map(|x| deep_quotient_lhs(x, zeta, alpha_pow_width))
+        .unzip();
+    let lhs_denom_invs = batch_multiplicative_inverse(&lhs_denoms);
+    let alpha_reduced_ps_at_zeta = alpha_reducer.reduce_ext(&ps_at_zeta);
+    mat.par_row_slices()
+        .zip(lhs_nums)
+        .zip(lhs_denom_invs)
+        .map(|((ps_at_x, lhs_num), lhs_denom_inv)| {
+            deep_quotient_reduce_row(
+                alpha_reducer,
+                lhs_num,
+                lhs_denom_inv,
+                ps_at_x,
+                alpha_reduced_ps_at_zeta,
+            )
         })
         .collect()
 }
