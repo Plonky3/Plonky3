@@ -83,25 +83,21 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             }
         });
 
-        let (proof, idxs) = prover::prove(&fc, &TwoAdicFriFolder, &input, &mut chal);
+        let input: Vec<Vec<Challenge>> = input.into_iter().rev().filter_map(|v| v).collect();
 
-        let log_max_height = input.iter().rposition(Option::is_some).unwrap();
+        let (proof, idxs) =
+            prover::prove::<_, _, TwoAdicFriFolder, _>(&fc, input.clone(), &mut chal);
+
+        let log_max_height = log2_strict_usize(input[0].len());
         let reduced_openings: Vec<[Challenge; 32]> = idxs
             .into_iter()
             .map(|idx| {
-                input
-                    .iter()
-                    .enumerate()
-                    .map(|(log_height, v)| {
-                        if let Some(v) = v {
-                            v[idx >> (log_max_height - log_height)]
-                        } else {
-                            Challenge::zero()
-                        }
-                    })
-                    .collect_vec()
-                    .try_into()
-                    .unwrap()
+                let mut ro = [Challenge::zero(); 32];
+                for v in &input {
+                    let log_height = log2_strict_usize(v.len());
+                    ro[log_height] = v[idx >> (log_max_height - log_height)];
+                }
+                ro
             })
             .collect();
 
@@ -113,9 +109,8 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let fri_challenges =
         verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
             .expect("failed verify shape and sample");
-    verifier::verify_challenges(
+    verifier::verify_challenges::<_, _, TwoAdicFriFolder, _>(
         &fc,
-        &TwoAdicFriFolder,
         &proof,
         &fri_challenges,
         &reduced_openings,

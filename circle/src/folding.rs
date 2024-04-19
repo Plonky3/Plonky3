@@ -170,8 +170,6 @@ mod tests {
     }
 
     fn do_test_folding(log_n: usize, log_blowup: usize) {
-        // dbg!(log_n, log_blowup);
-
         let mut rng = thread_rng();
 
         type F = Mersenne31;

@@ -142,37 +142,4 @@ mod tests {
             .map(|x| x * v_n_at_zeta)
             .collect()
     }
-
-    #[test]
-    fn test_quotienting() {
-        let mut rng = thread_rng();
-        let log_n = 2;
-        let cfft = Cfft::<F>::default();
-
-        let trace_domain = CircleDomain::<F>::standard(log_n);
-        let lde_domain = CircleDomain::<F>::standard(log_n + 1);
-
-        let trace = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1);
-        let lde = cfft.lde(trace.clone(), trace_domain, lde_domain);
-        let zeta: EF = rng.gen();
-        let zeta_pt: Complex<EF> = univariate_to_point(zeta).unwrap();
-        let trace_at_zeta = open_mat_at_point(trace_domain, trace, zeta_pt);
-        assert_eq!(
-            trace_at_zeta,
-            open_mat_at_point(lde_domain, lde.clone(), zeta_pt)
-        );
-
-        assert!(is_low_degree(&lde));
-
-        let mu: EF = rng.gen();
-        let q = reduce_matrix(lde_domain, lde.clone(), zeta_pt, &trace_at_zeta, mu);
-
-        // dbg!(cfft.cfft_batch(RowMajorMatrix::new_col(q.clone()).flatten_to_base()));
-
-        let mut q_corr = q.clone();
-        let lambda = extract_lambda(trace_domain, lde_domain, &mut q_corr);
-        // dbg!(&lambda);
-
-        // dbg!(cfft.cfft_batch(RowMajorMatrix::new_col(q_corr.clone()).flatten_to_base()));
-    }
 }

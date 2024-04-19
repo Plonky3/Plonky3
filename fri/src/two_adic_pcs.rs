@@ -325,7 +325,11 @@ where
             }
         }
 
-        let fri_input = reduced_openings.into_iter().filter_map(|x| x).collect_vec();
+        let fri_input = reduced_openings
+            .into_iter()
+            .rev()
+            .filter_map(|x| x)
+            .collect_vec();
 
         let (fri_proof, query_indices) =
             prover::prove::<_, _, TwoAdicFriFolder, _>(&self.fri, fri_input, challenger);
