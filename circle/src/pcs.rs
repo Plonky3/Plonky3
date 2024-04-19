@@ -50,6 +50,7 @@ pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
+#[allow(clippy::type_complexity)]
 pub struct CirclePcsProof<
     Val: Field,
     Challenge: Field,
