@@ -42,7 +42,7 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
     ps_at_x: &[F],
     alpha_reduced_ps_at_zeta: EF,
 ) -> EF {
-    lhs_num * lhs_denom_inv * (alpha_reducer.reduce_base(&ps_at_x) - alpha_reduced_ps_at_zeta)
+    lhs_num * lhs_denom_inv * (alpha_reducer.reduce_base(ps_at_x) - alpha_reduced_ps_at_zeta)
 }
 
 #[instrument(skip_all, fields(log_n = domain.log_n))]
@@ -59,7 +59,7 @@ pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionFie
         .map(|x| deep_quotient_lhs(x, zeta, alpha_pow_width))
         .unzip();
     let lhs_denom_invs = batch_multiplicative_inverse(&lhs_denoms);
-    let alpha_reduced_ps_at_zeta = alpha_reducer.reduce_ext(&ps_at_zeta);
+    let alpha_reduced_ps_at_zeta = alpha_reducer.reduce_ext(ps_at_zeta);
     mat.par_row_slices()
         .zip(lhs_nums)
         .zip(lhs_denom_invs)

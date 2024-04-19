@@ -82,7 +82,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             }
         });
 
-        let input: Vec<Vec<Challenge>> = input.into_iter().rev().filter_map(|v| v).collect();
+        let input: Vec<Vec<Challenge>> = input.into_iter().rev().flatten().collect();
 
         let (proof, idxs) =
             prover::prove::<_, _, TwoAdicFriFolder, _>(&fc, input.clone(), &mut chal);

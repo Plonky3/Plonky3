@@ -174,7 +174,7 @@ where
                             .entry(log_height)
                             .or_insert_with(|| vec![Challenge::zero(); mat.height()]);
                         points_for_mat
-                            .into_iter()
+                            .iter()
                             .map(|&zeta| {
                                 let zeta_point = univariate_to_point(zeta).unwrap();
 
@@ -316,7 +316,7 @@ where
 
         let fri_challenges = p3_fri::verifier::verify_shape_and_sample_challenges(
             &self.fri_config,
-            &fri_proof,
+            fri_proof,
             challenger,
         )
         .unwrap();
@@ -456,7 +456,7 @@ where
 
         p3_fri::verifier::verify_challenges::<_, _, CircleFriFolder<Val>, _>(
             &self.fri_config,
-            &fri_proof,
+            fri_proof,
             &fri_challenges,
             &reduced_openings,
         )
