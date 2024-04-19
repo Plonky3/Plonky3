@@ -1,9 +1,10 @@
+use core::iter::repeat;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::iter::repeat;
 use p3_maybe_rayon::prelude::*;
 use p3_util::ceil_div_usize;
 use tracing::instrument;
