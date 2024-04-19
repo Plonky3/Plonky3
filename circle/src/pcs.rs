@@ -249,12 +249,11 @@ where
             .map(|m| fold_bivariate(bivariate_beta, m.as_view()))
             .collect();
 
-        let (fri_proof, query_indices) = p3_fri::prover::prove::<
-            _,
-            _,
-            CircleFriFolder<Val, Challenge>,
-            _,
-        >(&self.fri_config, fri_input, challenger);
+        let (fri_proof, query_indices) = p3_fri::prover::prove::<_, _, CircleFriFolder<Val>, _>(
+            &self.fri_config,
+            fri_input,
+            challenger,
+        );
 
         let query_openings = query_indices
             .into_iter()
@@ -455,7 +454,7 @@ where
             .collect::<Result<Vec<_>, InputMmcs::Error>>()
             .unwrap();
 
-        p3_fri::verifier::verify_challenges::<_, _, CircleFriFolder<Val, Challenge>, _>(
+        p3_fri::verifier::verify_challenges::<_, _, CircleFriFolder<Val>, _>(
             &self.fri_config,
             &fri_proof,
             &fri_challenges,

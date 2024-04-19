@@ -14,29 +14,10 @@ use tracing::instrument;
 
 use crate::{domain::CircleDomain, util::v_n, Cfft};
 
-fn reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
-    domain: CircleDomain<F>,
-    p: RowMajorMatrix<F>,
-    zeta: Complex<EF>,
-    ps_at_zeta: &[EF],
-    mu: EF,
-) -> Vec<EF> {
-    let mu_pow_width = mu.exp_u64(p.width() as u64);
-    p.rows()
-        .zip(domain.points())
-        .map(|(row, x)| {
-            let x_rotate_zeta: Complex<EF> = x.rotate(zeta.conjugate());
-            let v_gamma_re: EF = EF::one() - x_rotate_zeta.real();
-            let v_gamma_im: EF = x_rotate_zeta.imag();
-            let lhs: EF = (v_gamma_re - mu_pow_width * v_gamma_im)
-                / (v_gamma_re.square() + v_gamma_im.square());
-            lhs * izip!(row, ps_at_zeta, mu.powers())
-                .map(|(p_at_x, &p_at_zeta, mu_pow)| mu_pow * (-p_at_zeta + p_at_x))
-                .sum::<EF>()
-        })
-        .collect()
-}
-
+/// Compute numerator and denominator of the left hand side of the DEEP quotient
+/// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
+/// Re(1/v_gamma) + alpha^L Im(1/v_gamma)
+/// ("right hand side" is \bar g - \bar v_gamma)
 pub(crate) fn deep_quotient_lhs<F: ComplexExtendable, EF: ExtensionField<F>>(
     x: Complex<F>,
     zeta: Complex<EF>,
@@ -93,6 +74,8 @@ pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionFie
         .collect()
 }
 
+/// Given evaluations over lde_domain, extract the multiple of the vanishing poly of orig_domain
+/// |lde_domain| > |orig_domain|
 #[instrument(skip_all, fields(bits = log2_strict_usize(lde.len())))]
 pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     orig_domain: CircleDomain<F>,
