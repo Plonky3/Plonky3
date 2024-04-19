@@ -1,7 +1,6 @@
-use core::iter::repeat;
-
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter::repeat;
 
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
