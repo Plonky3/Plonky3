@@ -32,6 +32,7 @@ pub trait FriFolder<F: Field>: Send + Sync {
             .collect()
     }
 
+    /*
     /// Mix in evaluations from an input at this log_height.
     fn mix_in(&self, index: usize, log_height: usize, current: &mut F, new: F);
     fn mix_in_column(&self, current: &mut [F], new: &[F]) {
@@ -42,4 +43,5 @@ pub trait FriFolder<F: Field>: Send + Sync {
             .enumerate()
             .for_each(|(i, (c, n))| self.mix_in(i, log_height, c, *n));
     }
+    */
 }

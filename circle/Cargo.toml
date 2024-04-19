@@ -19,6 +19,7 @@ itertools = "0.12.0"
 serde = "1"
 
 [dev-dependencies]
+p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-merkle-tree = { path = "../merkle-tree" }
@@ -27,3 +28,4 @@ p3-symmetric = { path = "../symmetric" }
 
 hashbrown = "0.14.3"
 rand = "0.8.5"
+rand_chacha = "0.3.1"

@@ -7,8 +7,8 @@ use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
-use p3_fri::{FriConfig, FriProof, PowersReducer};
+use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField, Field};
+use p3_fri::{FriConfig, FriFolder, FriProof, PowersReducer};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -17,10 +17,11 @@ use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
 use crate::cfft::Cfft;
-use crate::deep_quotient::extract_lambda;
+use crate::deep_quotient::{extract_lambda, is_low_degree};
 use crate::domain::CircleDomain;
 use crate::folding::{
-    circle_bitrev_permute, fold_bivariate, CircleBitrevPerm, CircleBitrevView, CircleFriFolder,
+    circle_bitrev_idx, circle_bitrev_idx_inv, circle_bitrev_permute, circle_bitrev_permute_inv,
+    fold_bivariate, fold_bivariate_row, CircleBitrevPerm, CircleBitrevView, CircleFriFolder,
 };
 use crate::util::{univariate_to_point, v_n};
 
@@ -59,7 +60,17 @@ where
     type ProverData = ProverData<Val, InputMmcs::ProverData<CircleBitrevView<RowMajorMatrix<Val>>>>;
     type Proof = (
         FriProof<Challenge, FriMmcs, Challenger::Witness>,
-        Vec<Vec<BatchOpening<Val, InputMmcs>>>,
+        // first layer commitment
+        FriMmcs::Commitment,
+        // lambdas
+        Vec<Challenge>,
+        // for each index
+        Vec<(
+            // for each round, input openings
+            Vec<BatchOpening<Val, InputMmcs>>,
+            // first layer opening
+            BatchOpening<Challenge, FriMmcs>,
+        )>,
     );
     type Error = ();
 
@@ -229,60 +240,85 @@ where
         // Do the first circle fold for all polys with the same beta
 
         let mut first_layer_mats = vec![];
+        let mut lambdas = vec![];
         for i in 0..31 {
             if let Some(ro) = reduced_openings.get(i + 1).unwrap() {
                 let mut ro = ro.clone();
                 // todo send this
-                let _lambda = extract_lambda(
+                let lambda = extract_lambda(
                     CircleDomain::standard(i + 1 - self.log_blowup),
                     CircleDomain::standard(i + 1),
                     &mut ro,
                 );
+                println!("orig domain size: {}", i + 1 - self.log_blowup);
+                println!("lde domain size: {}", i + 1);
+                lambdas.push(lambda);
+                debug_assert!(is_low_degree(
+                    &RowMajorMatrix::new_col(ro.clone()).flatten_to_base()
+                ));
                 // since we unpermuted above (.inner()) we need to permute ROs
                 let ro_permuted = RowMajorMatrix::new(circle_bitrev_permute(&ro), 2);
                 first_layer_mats.push(ro_permuted);
             }
         }
-        let (fl_comm, fl_data) = self.fri_config.mmcs.commit(first_layer_mats);
+        let (first_layer_comm, first_layer_data) = self.fri_config.mmcs.commit(first_layer_mats);
+
+        challenger.observe(first_layer_comm.clone());
 
         let bivariate_beta: Challenge = challenger.sample();
-
-        let fri_input: [Option<Vec<Challenge>>; 32] = core::array::from_fn(|i| {
-            let mut ro: Vec<Challenge> = reduced_openings.get(i + 1)?.as_ref()?.clone();
-            // todo send this
-            let _lambda = extract_lambda(
-                CircleDomain::standard(i + 1 - self.log_blowup),
-                CircleDomain::standard(i + 1),
-                &mut ro,
-            );
-            // since we unpermuted above (.inner()) we need to permute ROs
-            let ro_permuted = RowMajorMatrix::new(circle_bitrev_permute(&ro), 2);
-            Some(fold_bivariate(ro_permuted, bivariate_beta))
-        });
-
         let folder = CircleFriFolder::new(bivariate_beta);
+
+        let mut fri_input: [Option<Vec<Challenge>>; 32] = core::array::from_fn(|_| None);
+
+        for mat in self.fri_config.mmcs.get_matrices(&first_layer_data) {
+            let v = fold_bivariate(mat.as_view(), bivariate_beta);
+            let log_height = log2_strict_usize(v.len());
+            fri_input[log_height] = Some(v);
+        }
 
         let (fri_proof, query_indices) =
             p3_fri::prover::prove(&self.fri_config, &folder, &fri_input, challenger);
 
+        println!("=== PROVE: query index {} ===", query_indices[0]);
+        let idx = query_indices[0];
+        for (i, ro) in reduced_openings.iter().enumerate() {
+            if let Some(ro) = ro {
+                let orig_idx = circle_bitrev_idx(idx << 1, log2_strict_usize(ro.len()));
+                println!("ro[i={i}][orig_idx={orig_idx}] = {}", ro[orig_idx]);
+            }
+            if let Some(fi) = &fri_input[i] {
+                println!("fri_input[i={i}][idx={idx}] = {}", fi[idx]);
+            }
+        }
+
         let query_openings = query_indices
             .into_iter()
             .map(|index| {
-                rounds
+                let input_opening = rounds
                     .iter()
                     .map(|(data, _)| {
                         let (opened_values, opening_proof) =
-                            self.mmcs.open_batch(index, &data.mmcs_data);
+                            self.mmcs.open_batch(index << 1, &data.mmcs_data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
                         }
                     })
-                    .collect()
+                    .collect();
+                let (first_layer_values, first_layer_proof) =
+                    self.fri_config.mmcs.open_batch(index, &first_layer_data);
+                let first_layer_opening = BatchOpening {
+                    opened_values: first_layer_values,
+                    opening_proof: first_layer_proof,
+                };
+                (input_opening, first_layer_opening)
             })
             .collect();
 
-        (values, (fri_proof, query_openings))
+        (
+            values,
+            (fri_proof, first_layer_comm, lambdas, query_openings),
+        )
     }
 
     fn verify(
@@ -306,9 +342,10 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        let (fri_proof, query_openings) = proof;
+        let (fri_proof, first_layer_comm, lambdas, query_openings) = proof;
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
+        challenger.observe(first_layer_comm.clone());
         let bivariate_beta: Challenge = challenger.sample();
 
         let fri_challenges = p3_fri::verifier::verify_shape_and_sample_challenges(
@@ -318,14 +355,21 @@ where
         )
         .unwrap();
 
-        let log_max_height = fri_proof.commit_phase_commits.len() + self.fri_config.log_blowup;
+        // let log_global_max_height = fri_proof.commit_phase_commits.len() + self.fri_config.log_blowup + 1;
+
+        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, 1024);
+
+        // TODO: FRI MUST sample 1 more bit!! query must be one bit higher!!
 
         let reduced_openings: Vec<[Challenge; 32]> = query_openings
             .iter()
             .zip(&fri_challenges.query_indices)
-            .map(|(query_opening, &index)| {
+            .map(|((input_openings, first_layer_opening), &index)| {
+                println!("=== VERIFY: query index = {}: ===", index);
+
                 let mut ro = [Challenge::zero(); 32];
-                for (batch_opening, (batch_commit, mats)) in izip!(query_opening, &rounds) {
+                let mut num_reduced = [0; 32];
+                for (batch_opening, (batch_commit, mats)) in izip!(input_openings, &rounds) {
                     let batch_dims: Vec<Dimensions> = mats
                         .iter()
                         .map(|(domain, _)| Dimensions {
@@ -334,15 +378,113 @@ where
                             height: domain.size(),
                         })
                         .collect_vec();
+
                     self.mmcs.verify_batch(
                         batch_commit,
                         &batch_dims,
-                        index,
+                        index << 1,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
                     )?;
+                    for (ps_at_x, (mat_domain, mat_points_and_values)) in
+                        izip!(&batch_opening.opened_values, mats)
+                    {
+                        let log_orig_domain_size = log2_strict_usize(mat_domain.size());
+                        let log_height = log_orig_domain_size + self.fri_config.log_blowup;
+                        let orig_idx = circle_bitrev_idx(index << 1, log_height);
+
+                        let shift = Val::circle_two_adic_generator(log_orig_domain_size + 2);
+                        let g = Val::circle_two_adic_generator(log_orig_domain_size + 1);
+                        let x = shift * g.exp_u64(orig_idx as u64);
+
+                        for (zeta, ps_at_zeta) in mat_points_and_values {
+                            let zeta_point = univariate_to_point(*zeta).unwrap();
+
+                            let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+                            let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
+                            num_reduced[log_height] += 2 * ps_at_x.len();
+
+                            let x_rotate_zeta: Complex<Challenge> =
+                                x.rotate(zeta_point.conjugate());
+
+                            let v_gamma_re: Challenge = Challenge::one() - x_rotate_zeta.real();
+                            let v_gamma_im: Challenge = x_rotate_zeta.imag();
+
+                            let lhs_num = v_gamma_re - alpha_pow_width * v_gamma_im;
+                            let lhs_denom = v_gamma_re.square() + v_gamma_im.square();
+                            let inv_lhs_denom = lhs_denom.inverse();
+
+                            let alpha_pow_ps_at_zeta = alpha_reducer.reduce_ext(&ps_at_zeta);
+
+                            ro[log_height] += lhs_num
+                                * inv_lhs_denom
+                                * alpha_pow_offset
+                                * (alpha_reducer.reduce_base(&ps_at_x) - alpha_pow_ps_at_zeta);
+                        }
+                    }
                 }
-                Ok(ro)
+
+                let first_layer_dims = num_reduced
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &nr)| {
+                        if nr != 0 {
+                            Some(Dimensions {
+                                width: 0,
+                                height: 1 << i,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect_vec();
+
+                self.fri_config
+                    .mmcs
+                    .verify_batch(
+                        first_layer_comm,
+                        &first_layer_dims,
+                        index,
+                        &first_layer_opening.opened_values,
+                        &first_layer_opening.opening_proof,
+                    )
+                    .expect("first layer verify");
+
+                let mut fri_input = [Challenge::zero(); 32];
+
+                let mut first_layer_value_iter =
+                    first_layer_opening.opened_values.iter().zip_eq(lambdas);
+                for (log_height, &nr) in num_reduced.iter().enumerate() {
+                    if nr != 0 {
+                        assert!(log_height > 0);
+
+                        let lde_size = log_height;
+                        let orig_size = log_height - self.fri_config.log_blowup;
+
+                        let (fl_values, &lambda) = first_layer_value_iter.next().unwrap();
+
+                        let shift = Val::circle_two_adic_generator(lde_size + 1);
+                        let g = Val::circle_two_adic_generator(lde_size);
+                        let orig_idx = circle_bitrev_idx(index << 1, lde_size);
+                        let x = shift * g.exp_u64(orig_idx as u64);
+
+                        let v_n_at_x = v_n(x.real(), orig_size);
+
+                        let lambda_corrected = ro[log_height] - lambda * v_n_at_x;
+
+                        dbg!(ro[log_height], fl_values, v_n_at_x, lambda);
+                        assert_eq!(lambda_corrected, fl_values[0]);
+
+                        fri_input[log_height - 1] = fold_bivariate_row(
+                            index >> 1,
+                            orig_size - 1,
+                            bivariate_beta,
+                            fl_values.iter().cloned(),
+                        );
+                    }
+                }
+
+                Ok(fri_input)
             })
             .collect::<Result<Vec<_>, InputMmcs::Error>>()
             .unwrap();
@@ -359,5 +501,85 @@ where
         .unwrap();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_challenger::{HashChallenger, SerializingChallenger32};
+    use p3_commit::{ExtensionMmcs, Pcs};
+    use p3_keccak::Keccak256Hash;
+    use p3_merkle_tree::FieldMerkleTreeMmcs;
+    use p3_mersenne_31::Mersenne31;
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
+    use super::*;
+
+    #[test]
+    fn circle_pcs() {
+        let mut rng = ChaCha8Rng::from_seed([0; 32]);
+
+        type Val = Mersenne31;
+        type Challenge = Mersenne31;
+        // type Challenge = BinomialExtensionField<Mersenne31, 3>;
+
+        type ByteHash = Keccak256Hash;
+        type FieldHash = SerializingHasher32<ByteHash>;
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+
+        type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+        let compress = MyCompress::new(byte_hash);
+
+        type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+        let val_mmcs = ValMmcs::new(field_hash, compress);
+
+        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+
+        let fri_config = FriConfig {
+            log_blowup: 1,
+            num_queries: 2,
+            proof_of_work_bits: 1,
+            mmcs: challenge_mmcs,
+        };
+
+        type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+        let pcs = Pcs {
+            log_blowup: 1,
+            cfft: Cfft::default(),
+            mmcs: val_mmcs,
+            fri_config,
+        };
+
+        let log_n = 10;
+
+        let d = <Pcs as p3_commit::Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+            &pcs,
+            1 << log_n,
+        );
+
+        // let d = pcs.natural_domain_for_degree(1 << log_n);
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+
+        let (comm, data) =
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, vec![(d, evals)]);
+
+        let zeta: Challenge = rng.gen();
+
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
+
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        pcs.verify(
+            vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])])],
+            &proof,
+            &mut chal,
+        )
+        .expect("verify err");
     }
 }

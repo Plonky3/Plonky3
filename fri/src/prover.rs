@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use itertools::izip;
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::Field;
@@ -118,7 +119,7 @@ where
         data.push(prover_data);
 
         if let Some(v) = &input[log_folded_height] {
-            folder.mix_in_column(&mut current, v);
+            izip!(&mut current, v).for_each(|(c, x)| *c += *x);
         }
     }
 

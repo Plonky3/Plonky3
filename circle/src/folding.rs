@@ -31,6 +31,25 @@ pub(crate) fn fold_bivariate<F: ComplexExtendable, EF: ExtensionField<F>>(
     fold(evals, beta, &twiddles)
 }
 
+pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
+    index: usize,
+    log_height: usize,
+    beta: EF,
+    evals: impl Iterator<Item = EF>,
+) -> EF {
+    let evals = evals.collect_vec();
+    assert_eq!(evals.len(), 2);
+
+    let shift = F::circle_two_adic_generator(log_height + 3);
+    let g = F::circle_two_adic_generator(log_height + 2);
+    let orig_idx = circle_bitrev_idx(index, log_height);
+    let t = (shift * g.exp_u64(orig_idx as u64)).imag().inverse();
+
+    let sum = evals[0] + evals[1];
+    let diff = (evals[0] - evals[1]) * t;
+    (sum + beta * diff).halve()
+}
+
 pub(crate) struct CircleFriFolder<F, EF> {
     bivariate_beta: EF,
     _phantom: PhantomData<F>,
@@ -73,10 +92,10 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>> FriFolder<EF> for CircleFriFol
         fold(m, beta, &twiddles)
     }
     // todo: remove from trait
+    /*
     fn mix_in(&self, _index: usize, _log_height: usize, current: &mut EF, new: EF) {
         *current += new;
     }
-    /*
     fn m(&self, current: &mut [EF], new: &[EF]) {
         let new = RowMajorMatrix::new(new.to_vec(), 2);
         let domain = CircleDomain::standard(log2_strict_usize(new.height()) + 1);
@@ -113,7 +132,7 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
 // circlebitrev -> natural
 // can make faster with:
 // https://lemire.me/blog/2018/02/21/iterating-over-set-bits-quickly/
-fn circle_bitrev_idx(mut idx: usize, bits: usize) -> usize {
+pub fn circle_bitrev_idx(mut idx: usize, bits: usize) -> usize {
     idx = reverse_bits_len(idx, bits);
     for i in 0..bits {
         if idx & (1 << i) != 0 {
@@ -123,7 +142,7 @@ fn circle_bitrev_idx(mut idx: usize, bits: usize) -> usize {
     idx
 }
 
-fn circle_bitrev_idx_inv(mut idx: usize, bits: usize) -> usize {
+pub fn circle_bitrev_idx_inv(mut idx: usize, bits: usize) -> usize {
     for i in (0..bits).rev() {
         if idx & (1 << i) != 0 {
             idx ^= (1 << i) - 1;
@@ -137,6 +156,13 @@ pub(crate) fn circle_bitrev_permute<T: Clone>(xs: &[T]) -> Vec<T> {
     let bits = log2_strict_usize(xs.len());
     (0..xs.len())
         .map(|i| xs[circle_bitrev_idx(i, bits)].clone())
+        .collect()
+}
+
+pub(crate) fn circle_bitrev_permute_inv<T: Clone>(xs: &[T]) -> Vec<T> {
+    let bits = log2_strict_usize(xs.len());
+    (0..xs.len())
+        .map(|i| xs[circle_bitrev_idx_inv(i, bits)].clone())
         .collect()
 }
 
@@ -166,15 +192,20 @@ impl RowIndexMap for CircleBitrevPerm {
     }
 }
 
-/*
-pub(crate) struct CircleBitrevInvPermutation;
-impl RowPermutation for CircleBitrevInvPermutation {
-    fn permute_index(r: usize, height: usize) -> usize {
-        let bits = log2_strict_usize(height);
-        circle_bitrev_idx_inv(r, bits)
+pub(crate) struct CircleBitrevInvPerm {
+    log_height: usize,
+}
+
+pub type CircleBitrevInvView<M> = RowIndexMappedView<CircleBitrevInvPerm, M>;
+
+impl RowIndexMap for CircleBitrevInvPerm {
+    fn height(&self) -> usize {
+        1 << self.log_height
+    }
+    fn map_row_index(&self, r: usize) -> usize {
+        circle_bitrev_idx_inv(r, self.log_height)
     }
 }
-*/
 
 #[cfg(test)]
 mod tests {
@@ -197,6 +228,10 @@ mod tests {
         assert_eq!(
             circle_bitrev_permute(&[0, 1, 2, 3, 4, 5, 6, 7]),
             &[0, 7, 3, 4, 1, 6, 2, 5]
+        );
+        assert_eq!(
+            circle_bitrev_permute_inv(&circle_bitrev_permute(&[0, 1, 2, 3, 4, 5, 6, 7])),
+            &[0, 1, 2, 3, 4, 5, 6, 7],
         );
     }
 

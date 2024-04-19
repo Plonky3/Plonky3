@@ -124,12 +124,15 @@ where
         &proof.commit_phase_openings,
         betas,
     ) {
+        /*
         folder.mix_in(
             index,
             log_folded_height + 1,
             &mut folded_eval,
             reduced_openings[log_folded_height + 1],
         );
+        */
+        folded_eval += reduced_openings[log_folded_height + 1];
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;

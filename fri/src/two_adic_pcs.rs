@@ -127,11 +127,6 @@ impl<F: TwoAdicField> FriFolder<F> for TwoAdicFriFolder {
             })
             .collect()
     }
-
-    fn mix_in(&self, _index: usize, _log_height: usize, current: &mut F, new: F) {
-        // Simply add.
-        *current += new;
-    }
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
