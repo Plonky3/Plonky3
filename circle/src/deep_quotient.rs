@@ -1,18 +1,19 @@
 use alloc::vec::Vec;
+
 use itertools::{izip, Itertools};
 use p3_commit::PolynomialSpace;
-use p3_field::{
-    batch_multiplicative_inverse,
-    extension::{Complex, ComplexExtendable},
-    ExtensionField,
-};
+use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::{batch_multiplicative_inverse, ExtensionField};
 use p3_fri::PowersReducer;
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::{domain::CircleDomain, util::v_n, Cfft};
+use crate::domain::CircleDomain;
+use crate::util::v_n;
+use crate::Cfft;
 
 /// Compute numerator and denominator of the left hand side of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
@@ -107,39 +108,4 @@ pub fn is_low_degree<F: ComplexExtendable>(evals: &RowMajorMatrix<F>) -> bool {
         .skip(1)
         .step_by(2)
         .all(|row| row.into_iter().all(|col| col.is_zero()))
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_field::extension::{BinomialExtensionField, Complex};
-    use p3_matrix::{dense::RowMajorMatrix, Matrix};
-    use p3_mersenne_31::Mersenne31;
-    use p3_util::log2_strict_usize;
-    use rand::{thread_rng, Rng};
-
-    use crate::{
-        domain::CircleDomain,
-        util::{univariate_to_point, v_n},
-        Cfft,
-    };
-
-    use super::*;
-
-    type F = Mersenne31;
-    type EF = BinomialExtensionField<Mersenne31, 2>;
-    // type EF = Complex<Complex<Mersenne31>>;
-
-    fn open_mat_at_point(
-        domain: CircleDomain<F>,
-        p: RowMajorMatrix<F>,
-        pt: Complex<EF>,
-    ) -> Vec<EF> {
-        let log_n = log2_strict_usize(p.height());
-        let basis: Vec<_> = domain.lagrange_basis(pt);
-        let v_n_at_zeta = v_n(pt.real(), log_n) - v_n(domain.shift.real(), log_n);
-        p.columnwise_dot_product(&basis)
-            .into_iter()
-            .map(|x| x * v_n_at_zeta)
-            .collect()
-    }
 }

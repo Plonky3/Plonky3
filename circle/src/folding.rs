@@ -1,15 +1,12 @@
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use alloc::vec::Vec;
 use itertools::Itertools;
-use p3_field::{
-    batch_multiplicative_inverse, extension::ComplexExtendable, AbstractField, ExtensionField,
-};
+use p3_field::extension::ComplexExtendable;
+use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
 use p3_fri::FriFolder;
-use p3_matrix::{
-    row_index_mapped::{RowIndexMap, RowIndexMappedView},
-    Matrix,
-};
+use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
+use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
@@ -149,14 +146,15 @@ impl RowIndexMap for CircleBitrevPerm {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{extension::BinomialExtensionField, AbstractExtensionField};
-    use p3_matrix::{dense::RowMajorMatrix, Matrix};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::AbstractExtensionField;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{thread_rng, Rng};
 
-    use crate::Cfft;
-
     use super::*;
+    use crate::Cfft;
 
     #[test]
     fn test_circle_bitrev() {

@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
 use p3_commit::ExtensionMmcs;
