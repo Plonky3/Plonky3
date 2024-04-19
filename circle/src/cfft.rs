@@ -48,15 +48,16 @@ impl<F: ComplexExtendable> Cfft<F> {
             let half_block_size = block_size >> 1;
             assert_eq!(twiddle.len(), half_block_size);
 
-            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
-                for (i, &t) in twiddle.iter().enumerate() {
-                    let (lo, hi) = chunk.row_pair_mut(i, block_size - i - 1);
-                    let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
-                    let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
-                    dif_butterfly(lo_packed, hi_packed, t.into());
-                    dif_butterfly(lo_suffix, hi_suffix, t);
-                }
-            });
+            mat.par_row_chunks_exact_mut(block_size)
+                .for_each(|mut chunk| {
+                    for (i, &t) in twiddle.iter().enumerate() {
+                        let (lo, hi) = chunk.row_pair_mut(i, block_size - i - 1);
+                        let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
+                        let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
+                        dif_butterfly(lo_packed, hi_packed, t.into());
+                        dif_butterfly(lo_suffix, hi_suffix, t);
+                    }
+                });
         }
         // TODO: omit this?
         divide_by_height(&mut mat);
@@ -93,15 +94,16 @@ impl<F: ComplexExtendable> Cfft<F> {
             let half_block_size = block_size >> 1;
             assert_eq!(twiddle.len(), half_block_size);
 
-            mat.par_row_chunks_mut(block_size).for_each(|mut chunk| {
-                for (i, &t) in twiddle.iter().enumerate() {
-                    let (lo, hi) = chunk.row_pair_mut(i, block_size - i - 1);
-                    let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
-                    let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
-                    dit_butterfly(lo_packed, hi_packed, t.into());
-                    dit_butterfly(lo_suffix, hi_suffix, t);
-                }
-            });
+            mat.par_row_chunks_exact_mut(block_size)
+                .for_each(|mut chunk| {
+                    for (i, &t) in twiddle.iter().enumerate() {
+                        let (lo, hi) = chunk.row_pair_mut(i, block_size - i - 1);
+                        let (lo_packed, lo_suffix) = F::Packing::pack_slice_with_suffix_mut(lo);
+                        let (hi_packed, hi_suffix) = F::Packing::pack_slice_with_suffix_mut(hi);
+                        dit_butterfly(lo_packed, hi_packed, t.into());
+                        dit_butterfly(lo_suffix, hi_suffix, t);
+                    }
+                });
         }
 
         mat
@@ -176,7 +178,7 @@ mod tests {
     use itertools::Itertools;
     use p3_dft::bit_reversed_zero_pad;
     use p3_mersenne_31::Mersenne31;
-    use rand::{thread_rng, Rng};
+    use rand::{random, thread_rng};
 
     use super::*;
     use crate::util::{eval_circle_polys, univariate_to_point};
@@ -187,7 +189,7 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
+        let shift: Complex<F> = univariate_to_point(random()).unwrap();
 
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1 << 5);
         let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
@@ -210,7 +212,7 @@ mod tests {
         let n = 1 << log_n;
         let cfft = Cfft::<F>::default();
 
-        let shift: Complex<F> = univariate_to_point(thread_rng().gen()).unwrap();
+        let shift: Complex<F> = univariate_to_point(random()).unwrap();
 
         let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 1);
         let src_domain = CircleDomain { log_n, shift };

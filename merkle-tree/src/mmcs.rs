@@ -164,7 +164,7 @@ mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
-    use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+    use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
     use p3_commit::Mmcs;
     use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
@@ -179,7 +179,7 @@ mod tests {
 
     type F = BabyBear;
 
-    type Perm = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+    type Perm = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     type MyMmcs =
@@ -189,7 +189,7 @@ mod tests {
     fn commit_single_1x8() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -226,7 +226,7 @@ mod tests {
     fn commit_single_2x2() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -252,7 +252,7 @@ mod tests {
     fn commit_single_2x3() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -286,7 +286,7 @@ mod tests {
     fn commit_mixed() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -351,7 +351,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -372,7 +372,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -394,7 +394,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -433,7 +433,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -488,7 +488,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabybear,
+            DiffusionMatrixBabyBear,
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());

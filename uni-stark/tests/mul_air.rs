@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::{Cfft, CirclePcs};
 use p3_commit::testing::TrivialPcs;
@@ -150,10 +150,10 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabybear,
+        DiffusionMatrixBabyBear,
         &mut thread_rng(),
     );
 
@@ -163,7 +163,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
     type Pcs = TrivialPcs<Val, Radix2DitParallel>;
-    let pcs = p3_commit::testing::TrivialPcs {
+    let pcs = TrivialPcs {
         dft,
         log_n,
         _phantom: PhantomData,
@@ -182,17 +182,17 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
 
 #[test]
 fn prove_bb_trivial_deg2() -> Result<(), VerificationError> {
-    do_test_bb_trivial(2, 10)
+    do_test_bb_trivial(2, 8)
 }
 
 #[test]
 fn prove_bb_trivial_deg3() -> Result<(), VerificationError> {
-    do_test_bb_trivial(3, 10)
+    do_test_bb_trivial(3, 8)
 }
 
 #[test]
 fn prove_bb_trivial_deg4() -> Result<(), VerificationError> {
-    do_test_bb_trivial(4, 10)
+    do_test_bb_trivial(4, 8)
 }
 
 fn do_test_bb_twoadic(
@@ -203,10 +203,10 @@ fn do_test_bb_twoadic(
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabybear, 16, 7>;
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabybear,
+        DiffusionMatrixBabyBear,
         &mut thread_rng(),
     );
 
@@ -255,22 +255,22 @@ fn do_test_bb_twoadic(
 
 #[test]
 fn prove_bb_twoadic_deg2() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(1, 2, 10)
+    do_test_bb_twoadic(1, 2, 7)
 }
 
 #[test]
 fn prove_bb_twoadic_deg3() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(1, 3, 10)
+    do_test_bb_twoadic(1, 3, 7)
 }
 
 #[test]
 fn prove_bb_twoadic_deg4() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(2, 4, 10)
+    do_test_bb_twoadic(2, 4, 6)
 }
 
 #[test]
 fn prove_bb_twoadic_deg5() -> Result<(), VerificationError> {
-    do_test_bb_twoadic(2, 5, 10)
+    do_test_bb_twoadic(2, 5, 6)
 }
 
 fn do_test_m31_circle(
@@ -332,10 +332,10 @@ fn do_test_m31_circle(
 
 #[test]
 fn prove_m31_circle_deg2() -> Result<(), VerificationError> {
-    do_test_m31_circle(1, 2, 12)
+    do_test_m31_circle(1, 2, 8)
 }
 
 #[test]
 fn prove_m31_circle_deg3() -> Result<(), VerificationError> {
-    do_test_m31_circle(1, 3, 14)
+    do_test_m31_circle(1, 3, 9)
 }

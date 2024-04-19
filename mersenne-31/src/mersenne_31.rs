@@ -330,7 +330,7 @@ impl Sum for Mersenne31 {
         // It assumes that iter.len() < 2^31.
 
         // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| (x.value as u64)).sum::<u64>();
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
 
         // sum is < 2^62 provided iter.len() < 2^31.
         from_u62(sum)
@@ -405,7 +405,7 @@ impl Div for Mersenne31 {
 }
 
 #[inline(always)]
-fn from_u62(input: u64) -> Mersenne31 {
+pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     debug_assert!(input < (1 << 62));
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;

@@ -131,7 +131,7 @@ where
 
         let dims = &[Dimensions {
             width: 2,
-            height: (1 << log_folded_height),
+            height: 1 << log_folded_height,
         }];
         config
             .mmcs
