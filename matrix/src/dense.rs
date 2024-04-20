@@ -34,7 +34,7 @@ impl<T, S: Borrow<[T]> + Into<Vec<T>> + Send + Sync> DenseStorage<T> for S {}
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
-        debug_assert!(width == 0 || values.borrow().len() % width == 0)
+        debug_assert!(width == 0 || values.borrow().len() % width == 0);
         Self {
             values,
             width,
