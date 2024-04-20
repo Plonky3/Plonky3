@@ -103,9 +103,7 @@ jobs:
         cargo check --verbose --package p3-air
         cargo check --verbose --package p3-baby-bear
         cargo check --verbose --package p3-blake3
-        cargo check --verbose --package p3-brakedown
         cargo check --verbose --package p3-challenger
-        cargo check --verbose --package p3-code
         cargo check --verbose --package p3-commit
         cargo check --verbose --package p3-dft
         cargo check --verbose --package p3-field
@@ -124,7 +122,6 @@ jobs:
         cargo check --verbose --package p3-monolith
         cargo check --verbose --package p3-poseidon
         cargo check --verbose --package p3-poseidon2
-        cargo check --verbose --package p3-reed-solomon
         cargo check --verbose --package p3-rescue
         cargo check --verbose --package p3-symmetric
         cargo check --verbose --package p3-uni-stark
