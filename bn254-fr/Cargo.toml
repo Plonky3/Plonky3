@@ -13,6 +13,10 @@ ff = { version = "0.13", features = ["derive", "derive_bits"] }
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
+ark-bn254 = "0.4.0"
+ark-ff = "0.4.2"
+ark-serialize = "0.4.2"
+num-traits = "0.2.16"
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }

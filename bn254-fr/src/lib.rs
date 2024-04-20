@@ -8,38 +8,37 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use ff::{Field as FFField, PrimeField as FFPrimeField, PrimeFieldBits};
+use ark_ff::PrimeField as ArkPrimeField;
+use ark_ff::fields::Field as ArkField;
+use num_traits::{Zero, One};
+use ark_ff::UniformRand;
+use ark_serialize::CanonicalDeserialize;
+use ark_serialize::CanonicalSerialize;
 use num_bigint::BigUint;
 use p3_field::{AbstractField, Field, Packable, PrimeField};
 pub use poseidon2::DiffusionMatrixBN254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::ser::SerializeSeq;
+use ark_bn254::fr::Fr as ArkBn254Fr;
 use serde::{Deserialize, Deserializer, Serialize};
-
-#[derive(FFPrimeField)]
-#[PrimeFieldModulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
-#[PrimeFieldGenerator = "5"]
-#[PrimeFieldReprEndianness = "little"]
-pub struct FFBn254Fr([u64; 4]);
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254Fr {
-    pub value: FFBn254Fr,
+    pub value: ArkBn254Fr,
 }
 
 impl Bn254Fr {
-    pub(crate) const fn new(value: FFBn254Fr) -> Self {
+    pub(crate) const fn new(value: ArkBn254Fr) -> Self {
         Self { value }
     }
 }
 
 impl Serialize for Bn254Fr {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let repr = self.value.to_repr();
-        let bytes = repr.as_ref();
-
+        let mut bytes = Vec::new();
+        self.value.serialize_uncompressed(&mut bytes).unwrap();
         let mut seq = serializer.serialize_seq(Some(bytes.len()))?;
         for e in bytes {
             seq.serialize_element(&e)?;
@@ -51,22 +50,13 @@ impl Serialize for Bn254Fr {
 impl<'de> Deserialize<'de> for Bn254Fr {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
+        let value = ArkBn254Fr::deserialize_uncompressed(&*bytes);
 
-        let mut res = <FFBn254Fr as FFPrimeField>::Repr::default();
-
-        for (i, digit) in res.0.as_mut().iter_mut().enumerate() {
-            *digit = bytes[i];
+        if let Ok(value) = value {
+            return Ok(Self::new(value));
         }
 
-        let value = FFBn254Fr::from_repr(res);
-
-        if value.is_some().into() {
-            Ok(Self {
-                value: value.unwrap(),
-            })
-        } else {
-            Err(serde::de::Error::custom("Invalid field element"))
-        }
+        Err(serde::de::Error::custom("invalid field element"))
     }
 }
 
@@ -74,8 +64,10 @@ impl Packable for Bn254Fr {}
 
 impl Hash for Bn254Fr {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        for byte in self.value.to_repr().as_ref().iter() {
-            state.write_u8(*byte);
+        let mut bytes = Vec::new();
+        self.value.serialize_uncompressed(&mut bytes).unwrap();
+        for byte in bytes {
+            state.write_u8(byte);
         }
     }
 }
@@ -94,7 +86,7 @@ impl PartialOrd for Bn254Fr {
 
 impl Display for Bn254Fr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        <FFBn254Fr as Debug>::fmt(&self.value, f)
+        <ArkBn254Fr as Debug>::fmt(&self.value, f)
     }
 }
 
@@ -108,17 +100,18 @@ impl AbstractField for Bn254Fr {
     type F = Self;
 
     fn zero() -> Self {
-        Self::new(FFBn254Fr::ZERO)
+        Self::new(ArkBn254Fr::zero())
     }
+
     fn one() -> Self {
-        Self::new(FFBn254Fr::ONE)
+        Self::new(ArkBn254Fr::one())
     }
     fn two() -> Self {
-        Self::new(FFBn254Fr::from(2u64))
+        Self::new(ArkBn254Fr::from(2))
     }
 
     fn neg_one() -> Self {
-        Self::new(FFBn254Fr::ZERO - FFBn254Fr::ONE)
+        Self::new(ArkBn254Fr::zero() - ArkBn254Fr::one())
     }
 
     #[inline]
@@ -127,39 +120,39 @@ impl AbstractField for Bn254Fr {
     }
 
     fn from_bool(b: bool) -> Self {
-        Self::new(FFBn254Fr::from(b as u64))
+        Self::new(ArkBn254Fr::from(b as u64))
     }
 
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
+        Self::new(ArkBn254Fr::from(n as u64))
     }
 
     fn from_canonical_u16(n: u16) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
+        Self::new(ArkBn254Fr::from(n as u64))
     }
 
     fn from_canonical_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
+        Self::new(ArkBn254Fr::from(n as u64))
     }
 
     fn from_canonical_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
+        Self::new(ArkBn254Fr::from(n))
     }
 
     fn from_canonical_usize(n: usize) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
+        Self::new(ArkBn254Fr::from(n as u64))
     }
 
     fn from_wrapped_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
+        Self::new(ArkBn254Fr::from(n as u64))
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
+        Self::new(ArkBn254Fr::from(n))
     }
 
     fn generator() -> Self {
-        Self::new(FFBn254Fr::from(5u64))
+        Self::new(ArkBn254Fr::from(5u64))
     }
 }
 
@@ -167,30 +160,27 @@ impl Field for Bn254Fr {
     type Packing = Self;
 
     fn is_zero(&self) -> bool {
-        self.value.is_zero().into()
+        self.value.is_zero()
     }
 
     fn try_inverse(&self) -> Option<Self> {
-        let inverse = self.value.invert();
+        let inverse = self.value.inverse();
 
-        if inverse.is_some().into() {
-            Some(Self::new(inverse.unwrap()))
-        } else {
-            None
+        if let Some(inverse) = inverse {
+            return Some(Self::new(inverse));
         }
+
+        None
     }
 
     fn order() -> BigUint {
-        let bytes = FFBn254Fr::char_le_bits();
-        BigUint::from_bytes_le(bytes.as_raw_slice())
+        ArkBn254Fr::MODULUS.into()
     }
 }
 
 impl PrimeField for Bn254Fr {
     fn as_canonical_biguint(&self) -> BigUint {
-        let repr = self.value.to_repr();
-        let le_bytes = repr.as_ref();
-        BigUint::from_bytes_le(le_bytes)
+        self.value.into_bigint().into()
     }
 }
 
@@ -268,7 +258,7 @@ impl Div for Bn254Fr {
 impl Distribution<Bn254Fr> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
-        Bn254Fr::new(FFBn254Fr::random(rng))
+        Bn254Fr::new(ArkBn254Fr::rand(rng))
     }
 }
 
@@ -283,50 +273,48 @@ mod tests {
 
     #[test]
     fn test_bn254fr() {
-        let f = F::new(FFBn254Fr::from_u128(100));
+        let f = F::new(ArkBn254Fr::from(100));
         assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
 
         let f = F::from_canonical_u64(0);
         assert!(f.is_zero());
 
-        let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());
+        let f = F::new(ArkBn254Fr::from(F::order()));
         assert!(f.is_zero());
 
         assert_eq!(F::generator().as_canonical_biguint(), BigUint::new(vec![5]));
 
-        let f_1 = F::new(FFBn254Fr::from_u128(1));
-        let f_1_copy = F::new(FFBn254Fr::from_u128(1));
+        let f_1 = F::new(ArkBn254Fr::from(1));
+        let f_1_copy = F::new(ArkBn254Fr::from(1));
 
         let expected_result = F::zero();
         assert_eq!(f_1 - f_1_copy, expected_result);
 
-        let expected_result = F::new(FFBn254Fr::from_u128(2));
+        let expected_result = F::new(ArkBn254Fr::from(2));
         assert_eq!(f_1 + f_1_copy, expected_result);
 
-        let f_2 = F::new(FFBn254Fr::from_u128(2));
-        let expected_result = F::new(FFBn254Fr::from_u128(3));
+        let f_2 = F::new(ArkBn254Fr::from(2));
+        let expected_result = F::new(ArkBn254Fr::from(3));
         assert_eq!(f_1 + f_1_copy * f_2, expected_result);
 
-        let expected_result = F::new(FFBn254Fr::from_u128(5));
+        let expected_result = F::new(ArkBn254Fr::from(5));
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
         let f_r_minus_1 = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap(),
+            ArkBn254Fr::from(F::order() - BigUint::one()),
         );
         let expected_result = F::zero();
         assert_eq!(f_1 + f_r_minus_1, expected_result);
 
         let f_r_minus_2 = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![2])).to_str_radix(10))
-                .unwrap(),
+            ArkBn254Fr::from(F::order() - BigUint::new(vec![2]))
         );
         let expected_result = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![3])).to_str_radix(10))
-                .unwrap(),
+            ArkBn254Fr::from(F::order() - BigUint::new(vec![3]))
         );
         assert_eq!(f_r_minus_1 + f_r_minus_2, expected_result);
 
-        let expected_result = F::new(FFBn254Fr::from_u128(1));
+        let expected_result = F::new(ArkBn254Fr::from(1));
         assert_eq!(f_r_minus_1 - f_r_minus_2, expected_result);
 
         let expected_result = f_r_minus_1;
@@ -335,11 +323,11 @@ mod tests {
         let expected_result = f_r_minus_2;
         assert_eq!(f_r_minus_1 - f_1, expected_result);
 
-        let expected_result = F::new(FFBn254Fr::from_u128(3));
+        let expected_result = F::new(ArkBn254Fr::from(3));
         assert_eq!(f_2 * f_2 - f_1, expected_result);
 
         // Generator check
-        let expected_multiplicative_group_generator = F::new(FFBn254Fr::from_u128(5));
+        let expected_multiplicative_group_generator = F::new(ArkBn254Fr::from(5));
         assert_eq!(F::generator(), expected_multiplicative_group_generator);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
