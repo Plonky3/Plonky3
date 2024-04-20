@@ -30,7 +30,7 @@ use crate::{monty_reduce, to_koalabear_array, KoalaBear};
 
 // Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY can all be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
+// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
 pub const MONTY_INVERSE: KoalaBear = KoalaBear { value: 1 };
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
