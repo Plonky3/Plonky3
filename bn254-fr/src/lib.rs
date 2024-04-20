@@ -8,19 +8,17 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use ark_ff::PrimeField as ArkPrimeField;
+use ark_bn254::fr::Fr as ArkBn254Fr;
 use ark_ff::fields::Field as ArkField;
-use num_traits::{Zero, One};
-use ark_ff::UniformRand;
-use ark_serialize::CanonicalDeserialize;
-use ark_serialize::CanonicalSerialize;
+use ark_ff::{PrimeField as ArkPrimeField, UniformRand};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use num_bigint::BigUint;
+use num_traits::{One, Zero};
 use p3_field::{AbstractField, Field, Packable, PrimeField};
 pub use poseidon2::DiffusionMatrixBN254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::ser::SerializeSeq;
-use ark_bn254::fr::Fr as ArkBn254Fr;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
@@ -300,18 +298,12 @@ mod tests {
         let expected_result = F::new(ArkBn254Fr::from(5));
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_r_minus_1 = F::new(
-            ArkBn254Fr::from(F::order() - BigUint::one()),
-        );
+        let f_r_minus_1 = F::new(ArkBn254Fr::from(F::order() - BigUint::one()));
         let expected_result = F::zero();
         assert_eq!(f_1 + f_r_minus_1, expected_result);
 
-        let f_r_minus_2 = F::new(
-            ArkBn254Fr::from(F::order() - BigUint::new(vec![2]))
-        );
-        let expected_result = F::new(
-            ArkBn254Fr::from(F::order() - BigUint::new(vec![3]))
-        );
+        let f_r_minus_2 = F::new(ArkBn254Fr::from(F::order() - BigUint::new(vec![2])));
+        let expected_result = F::new(ArkBn254Fr::from(F::order() - BigUint::new(vec![3])));
         assert_eq!(f_r_minus_1 + f_r_minus_2, expected_result);
 
         let expected_result = F::new(ArkBn254Fr::from(1));

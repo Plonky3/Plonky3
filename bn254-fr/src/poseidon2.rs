@@ -29,8 +29,8 @@ impl<AF: AbstractField<F = Bn254Fr>> DiffusionPermutation<AF, 3> for DiffusionMa
 
 #[cfg(test)]
 mod tests {
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
     use ark_ff::PrimeField as ArkPrimeField;
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
     use rand::Rng;
     use zkhash::fields::bn256::FpBN256 as ArkFpBN256;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
@@ -40,8 +40,8 @@ mod tests {
 
     fn bn254_from_ark_ff(input: ArkFpBN256) -> Bn254Fr {
         Bn254Fr {
-            value: input.into_bigint().into()
-        } 
+            value: input.into_bigint().into(),
+        }
     }
 
     #[test]
