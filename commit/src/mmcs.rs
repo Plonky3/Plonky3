@@ -22,7 +22,7 @@ use serde::Serialize;
 pub trait Mmcs<T>: Clone {
     type ProverData;
     type Commitment: Clone + Serialize + DeserializeOwned;
-    type Proof: Serialize + DeserializeOwned;
+    type Proof: Clone + Serialize + DeserializeOwned;
     type Error: Debug;
     type Mat<'a>: MatrixRows<T> + Sync
     where

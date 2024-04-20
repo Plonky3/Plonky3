@@ -4,7 +4,7 @@ use p3_commit::Mmcs;
 use p3_field::Field;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "Witness: Serialize",
     deserialize = "Witness: Deserialize<'de>"
@@ -18,7 +18,7 @@ pub struct FriProof<F: Field, M: Mmcs<F>, Witness> {
     pub(crate) pow_witness: Witness,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct QueryProof<F: Field, M: Mmcs<F>> {
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
@@ -26,7 +26,7 @@ pub struct QueryProof<F: Field, M: Mmcs<F>> {
     pub(crate) commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 // #[serde(bound(serialize = "F: Serialize"))]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {

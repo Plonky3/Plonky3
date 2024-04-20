@@ -24,8 +24,7 @@ pub struct RowMajorMatrix<T> {
 impl<T> RowMajorMatrix<T> {
     #[must_use]
     pub fn new(values: Vec<T>, width: usize) -> Self {
-        debug_assert!(width >= 1);
-        debug_assert_eq!(values.len() % width, 0);
+        debug_assert!(width == 0 || values.len() % width == 0);
         Self { values, width }
     }
 

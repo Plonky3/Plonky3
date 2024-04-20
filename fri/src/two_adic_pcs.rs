@@ -99,7 +99,7 @@ impl<C: TwoAdicFriPcsGenericConfig> Debug for VerificationError<C> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct TwoAdicFriPcsProof<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) fri_proof: FriProof<C::Challenge, C::FriMmcs, C::Val>,
@@ -107,7 +107,7 @@ pub struct TwoAdicFriPcsProof<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) query_openings: Vec<Vec<BatchOpening<C>>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) opened_values: Vec<Vec<C::Val>>,
     pub(crate) opening_proof: <C::InputMmcs as Mmcs<C::Val>>::Proof,

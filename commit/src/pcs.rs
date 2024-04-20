@@ -25,7 +25,7 @@ pub trait Pcs<Val: Field, In: MatrixRows<Val>> {
     type ProverData;
 
     /// The opening argument.
-    type Proof: Serialize + DeserializeOwned;
+    type Proof: Clone + Serialize + DeserializeOwned;
 
     type Error: Debug;
 
