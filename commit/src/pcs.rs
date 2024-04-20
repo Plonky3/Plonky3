@@ -28,7 +28,7 @@ where
     type ProverData;
 
     /// The opening argument.
-    type Proof: Serialize + DeserializeOwned;
+    type Proof: Clone + Serialize + DeserializeOwned;
 
     type Error: Debug;
 
