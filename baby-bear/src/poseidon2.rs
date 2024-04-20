@@ -28,7 +28,7 @@ pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY_HL: [BabyBear; 16] = to_babybear_
 
 // Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY can all be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
+// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
 pub const MONTY_INVERSE: BabyBear = BabyBear { value: 1 };
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([

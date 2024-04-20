@@ -16,7 +16,7 @@ use crate::{from_u62, to_mersenne31_array, Mersenne31};
 
 // Long term, POSEIDON2_INTERNAL_MATRIX_DIAG_16, POSEIDON2_INTERNAL_MATRIX_DIAG_24 can be removed.
 // Currently they are needed for packed field implementations.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are avaliable.
+// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16: [Mersenne31; 16] = to_mersenne31_array([
     Mersenne31::ORDER_U32 - 2,
     1,

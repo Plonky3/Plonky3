@@ -105,7 +105,7 @@ const fn barret_red_babybear(input: i128) -> i64 {
 //
 // It remains to prove that |x'| < 2**50.
 //
-// We start by introducing some simple inequalities and relations bewteen our variables:
+// We start by introducing some simple inequalities and relations between our variables:
 //
 // First consider the relationship between bitshift and division.
 // It's easy to check that for all x:
