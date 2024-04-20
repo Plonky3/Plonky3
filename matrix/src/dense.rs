@@ -43,8 +43,7 @@ impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
-        debug_assert!(width >= 1);
-        debug_assert_eq!(values.borrow().len() % width, 0);
+        debug_assert!(width == 0 || values.borrow().len() % width == 0);
         Self {
             values,
             width,
@@ -261,7 +260,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         self.width
     }
     fn height(&self) -> usize {
-        self.values.borrow().len() / self.width
+        if self.width == 0 {
+            0
+        } else {
+            self.values.borrow().len() / self.width
+        }
     }
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
