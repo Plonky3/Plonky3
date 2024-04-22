@@ -19,6 +19,11 @@ Fields:
   - [x] AVX2
   - [x] AVX-512
   - [x] NEON
+- [x] KoalaBear
+  - [x] ~128 bit extension field
+  - [x] AVX2
+  - [x] AVX-512
+  - [x] NEON    
 - [x] Goldilocks
   - [x] ~128 bit extension field
 
