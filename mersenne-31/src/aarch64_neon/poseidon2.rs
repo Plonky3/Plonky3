@@ -73,7 +73,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
+        let poseidon2 = Perm24::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
             DiffusionMatrixMersenne31,
             &mut rng,
