@@ -118,7 +118,7 @@ mod tests {
 
     type F = Mersenne31;
 
-    // We need to make some round constants. We do this is a pseudo random way using sage code.
+    // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for Mersenne31
