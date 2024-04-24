@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
@@ -9,19 +10,21 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriConfig, FriFolder, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<F, M, Folder, Challenger>(
+pub fn prove<G, F, M, Challenger>(
+    g: &G,
     config: &FriConfig<M>,
     inputs: Vec<Vec<F>>,
     challenger: &mut Challenger,
-) -> (FriProof<F, M, Challenger::Witness>, Vec<usize>)
+    open_input: impl Fn(usize) -> G::InputProof,
+) -> FriProof<F, M, Challenger::Witness, G::InputProof>
 where
     F: Field,
     M: Mmcs<F>,
-    Folder: FriFolder<F>,
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+    G: FriGenericConfig<F>,
 {
     // check sorted descending
     assert!(inputs
@@ -31,30 +34,30 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
 
-    let commit_phase_result = commit_phase::<_, _, Folder, _>(config, inputs, challenger);
+    let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
-    let query_indices: Vec<usize> = (0..config.num_queries)
-        .map(|_| challenger.sample_bits(log_max_height))
-        .collect();
-
     let query_proofs = info_span!("query phase").in_scope(|| {
-        query_indices
-            .iter()
-            .map(|&index| answer_query(config, &commit_phase_result.data, index))
+        iter::repeat_with(|| challenger.sample_bits(log_max_height + g.extra_query_index_bits()))
+            .take(config.num_queries)
+            .map(|index| QueryProof {
+                input_proof: open_input(index),
+                commit_phase_openings: answer_query(
+                    config,
+                    &commit_phase_result.data,
+                    index >> g.extra_query_index_bits(),
+                ),
+            })
             .collect()
     });
 
-    (
-        FriProof {
-            commit_phase_commits: commit_phase_result.commits,
-            query_proofs,
-            final_poly: commit_phase_result.final_poly,
-            pow_witness,
-        },
-        query_indices,
-    )
+    FriProof {
+        commit_phase_commits: commit_phase_result.commits,
+        query_proofs,
+        final_poly: commit_phase_result.final_poly,
+        pow_witness,
+    }
 }
 
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
@@ -64,7 +67,8 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 }
 
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<F, M, Folder, Challenger>(
+fn commit_phase<G, F, M, Challenger>(
+    g: &G,
     config: &FriConfig<M>,
     inputs: Vec<Vec<F>>,
     challenger: &mut Challenger,
@@ -72,8 +76,8 @@ fn commit_phase<F, M, Folder, Challenger>(
 where
     F: Field,
     M: Mmcs<F>,
-    Folder: FriFolder<F>,
     Challenger: CanObserve<M::Commitment> + CanSample<F>,
+    G: FriGenericConfig<F>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
@@ -88,7 +92,7 @@ where
         let beta: F = challenger.sample();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
-        folded = Folder::fold_matrix(beta, leaves.as_view());
+        folded = g.fold_matrix(beta, leaves.as_view());
 
         commits.push(commit);
         data.push(prover_data);
@@ -116,12 +120,12 @@ fn answer_query<F, M>(
     config: &FriConfig<M>,
     commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>],
     index: usize,
-) -> QueryProof<F, M>
+) -> Vec<CommitPhaseProofStep<F, M>>
 where
     F: Field,
     M: Mmcs<F>,
 {
-    let commit_phase_openings = commit_phase_commits
+    commit_phase_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
@@ -140,9 +144,5 @@ where
                 opening_proof,
             }
         })
-        .collect();
-
-    QueryProof {
-        commit_phase_openings,
-    }
+        .collect()
 }

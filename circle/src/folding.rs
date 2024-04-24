@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_fri::FriGenericConfig;
 
 use itertools::Itertools;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
-use p3_fri::FriFolder;
 use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
@@ -47,12 +47,24 @@ pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     (sum + beta * diff).halve()
 }
 
-pub(crate) struct CircleFriFolder<F> {
-    _phantom: PhantomData<F>,
-}
+pub(crate) struct CircleFriFolder<F, InputProof>(pub(crate) PhantomData<(F, InputProof)>);
 
-impl<F: ComplexExtendable, EF: ExtensionField<F>> FriFolder<EF> for CircleFriFolder<F> {
-    fn fold_row(index: usize, log_height: usize, beta: EF, evals: impl Iterator<Item = EF>) -> EF {
+impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof> FriGenericConfig<EF>
+    for CircleFriFolder<F, InputProof>
+{
+    type InputProof = InputProof;
+
+    fn extra_query_index_bits(&self) -> usize {
+        1
+    }
+
+    fn fold_row(
+        &self,
+        index: usize,
+        log_height: usize,
+        beta: EF,
+        evals: impl Iterator<Item = EF>,
+    ) -> EF {
         let evals = evals.collect_vec();
         assert_eq!(evals.len(), 2);
 
@@ -65,7 +77,8 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>> FriFolder<EF> for CircleFriFol
         let diff = (evals[0] - evals[1]) * t;
         (sum + beta * diff).halve()
     }
-    fn fold_matrix<M: Matrix<EF>>(beta: EF, m: M) -> Vec<EF> {
+
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
         assert_eq!(m.width(), 2);
         let domain = CircleDomain::standard(log2_strict_usize(m.height()) + 2);
         let mut twiddles = batch_multiplicative_inverse(
@@ -191,9 +204,11 @@ mod tests {
 
         evals = circle_bitrev_permute(&evals);
 
+        let g: CircleFriFolder<F, ()> = CircleFriFolder(PhantomData);
+
         evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
         for _ in log_blowup..(log_n + log_blowup - 1) {
-            evals = CircleFriFolder::<F>::fold_matrix(rng.gen(), RowMajorMatrix::new(evals, 2));
+            evals = g.fold_matrix(rng.gen(), RowMajorMatrix::new(evals, 2));
         }
         assert_eq!(evals.len(), 1 << log_blowup);
         assert_eq!(

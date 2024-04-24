@@ -7,7 +7,7 @@ use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_matrix::Dimensions;
 
-use crate::{FriConfig, FriFolder, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr> {
@@ -23,15 +23,18 @@ pub struct FriChallenges<F> {
     pub betas: Vec<F>,
 }
 
-pub fn verify_shape_and_sample_challenges<F, M, Challenger>(
+pub fn verify<G, F, M, Challenger>(
+    g: &G,
     config: &FriConfig<M>,
-    proof: &FriProof<F, M, Challenger::Witness>,
+    proof: &FriProof<F, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
-) -> Result<FriChallenges<F>, FriError<M::Error>>
+    open_input: impl Fn(usize, &G::InputProof) -> [F; 32],
+) -> Result<(), FriError<M::Error>>
 where
     F: Field,
     M: Mmcs<F>,
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+    G: FriGenericConfig<F>,
 {
     let betas: Vec<F> = proof
         .commit_phase_commits
@@ -53,40 +56,18 @@ where
 
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
 
-    let query_indices: Vec<usize> = (0..config.num_queries)
-        .map(|_| challenger.sample_bits(log_max_height))
-        .collect();
+    for qp in &proof.query_proofs {
+        let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
+        let ro = open_input(index, &qp.input_proof);
 
-    Ok(FriChallenges {
-        query_indices,
-        betas,
-    })
-}
-
-pub fn verify_challenges<F, M, Folder, Witness>(
-    config: &FriConfig<M>,
-    proof: &FriProof<F, M, Witness>,
-    challenges: &FriChallenges<F>,
-    reduced_openings: &[[F; 32]],
-) -> Result<(), FriError<M::Error>>
-where
-    F: Field,
-    M: Mmcs<F>,
-    Folder: FriFolder<F>,
-{
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
-    for (&index, query_proof, ro) in izip!(
-        &challenges.query_indices,
-        &proof.query_proofs,
-        reduced_openings
-    ) {
-        let folded_eval = verify_query::<_, _, Folder>(
+        let folded_eval = verify_query(
+            g,
             config,
             &proof.commit_phase_commits,
-            index,
-            query_proof,
-            &challenges.betas,
-            ro,
+            index >> g.extra_query_index_bits(),
+            &qp.commit_phase_openings,
+            &betas,
+            &ro,
             log_max_height,
         )?;
 
@@ -99,11 +80,12 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn verify_query<F, M, Folder>(
+fn verify_query<G, F, M>(
+    g: &G,
     config: &FriConfig<M>,
     commit_phase_commits: &[M::Commitment],
     mut index: usize,
-    proof: &QueryProof<F, M>,
+    commit_phase_openings: &[CommitPhaseProofStep<F, M>],
     betas: &[F],
     reduced_openings: &[F; 32],
     log_max_height: usize,
@@ -111,14 +93,14 @@ fn verify_query<F, M, Folder>(
 where
     F: Field,
     M: Mmcs<F>,
-    Folder: FriFolder<F>,
+    G: FriGenericConfig<F>,
 {
     let mut folded_eval = F::zero();
 
     for (log_folded_height, commit, step, &beta) in izip!(
         (0..log_max_height).rev(),
         commit_phase_commits,
-        &proof.commit_phase_openings,
+        commit_phase_openings,
         betas,
     ) {
         folded_eval += reduced_openings[log_folded_height + 1];
@@ -148,7 +130,7 @@ where
 
         // If verification is extremely performance-critical (such as in recursive setting),
         // this can be changed to a stateful API to save intermediate computations.
-        folded_eval = Folder::fold_row(index, log_folded_height, beta, evals.into_iter());
+        folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
     }
 
     debug_assert!(index < config.blowup(), "index was {}", index);

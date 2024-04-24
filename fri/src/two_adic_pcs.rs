@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
-use crate::{prover, FriConfig, FriFolder, FriProof};
+use crate::{prover, FriConfig, FriGenericConfig, FriProof};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
@@ -54,28 +54,33 @@ pub enum VerificationError<InputMmcsError, FriMmcsError> {
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct TwoAdicFriPcsProof<
-    Val: Field,
-    Challenge: Field,
-    InputMmcs: Mmcs<Val>,
-    FriMmcs: Mmcs<Challenge>,
-> {
-    pub fri_proof: FriProof<Challenge, FriMmcs, Val>,
-    /// For each query, for each committed batch, query openings for that batch
-    pub query_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
     pub opened_values: Vec<Vec<Val>>,
     pub opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
-pub struct TwoAdicFriFolder;
+pub struct TwoAdicFriFolder<InputProof>(PhantomData<InputProof>);
 
-impl<F: TwoAdicField> FriFolder<F> for TwoAdicFriFolder {
-    fn fold_row(index: usize, log_height: usize, beta: F, evals: impl Iterator<Item = F>) -> F {
+impl<InputProof> TwoAdicFriFolder<InputProof> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<F: TwoAdicField, InputProof> FriGenericConfig<F> for TwoAdicFriFolder<InputProof> {
+    type InputProof = InputProof;
+
+    fn extra_query_index_bits(&self) -> usize {
+        0
+    }
+
+    fn fold_row(
+        &self,
+        index: usize,
+        log_height: usize,
+        beta: F,
+        evals: impl Iterator<Item = F>,
+    ) -> F {
         let arity = 2;
         let log_arity = 1;
         let (e0, e1) = evals
@@ -95,7 +100,8 @@ impl<F: TwoAdicField> FriFolder<F> for TwoAdicFriFolder {
         // interpolate and evaluate at beta
         e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
     }
-    fn fold_matrix<M: Matrix<F>>(beta: F, m: M) -> Vec<F> {
+
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
         // We use the fact that
         //     p_e(x^2) = (p(x) + p(-x)) / 2
         //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
@@ -143,7 +149,7 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type Proof = TwoAdicFriPcsProof<Val, Challenge, InputMmcs, FriMmcs>;
+    type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = VerificationError<InputMmcs::Error, FriMmcs::Error>;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
@@ -327,36 +333,25 @@ where
 
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
-        let (fri_proof, query_indices) =
-            prover::prove::<_, _, TwoAdicFriFolder, _>(&self.fri, fri_input, challenger);
+        let g: TwoAdicFriFolder<Vec<BatchOpening<Val, InputMmcs>>> = TwoAdicFriFolder(PhantomData);
 
-        let query_openings = query_indices
-            .into_iter()
-            .map(|index| {
-                rounds
-                    .iter()
-                    .map(|(data, _)| {
-                        let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
-                        let bits_reduced = log_global_max_height - log_max_height;
-                        let reduced_index = index >> bits_reduced;
-                        let (opened_values, opening_proof) =
-                            self.mmcs.open_batch(reduced_index, data);
-                        BatchOpening {
-                            opened_values,
-                            opening_proof,
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
+        let fri_proof = prover::prove(&g, &self.fri, fri_input, challenger, |index| {
+            rounds
+                .iter()
+                .map(|(data, _)| {
+                    let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                    let bits_reduced = log_global_max_height - log_max_height;
+                    let reduced_index = index >> bits_reduced;
+                    let (opened_values, opening_proof) = self.mmcs.open_batch(reduced_index, data);
+                    BatchOpening {
+                        opened_values,
+                        opening_proof,
+                    }
+                })
+                .collect()
+        });
 
-        (
-            all_opened_values,
-            TwoAdicFriPcsProof {
-                fri_proof,
-                query_openings,
-            },
-        )
+        (all_opened_values, fri_proof)
     }
 
     fn verify(
@@ -383,76 +378,66 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
-        let fri_challenges =
-            verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
-                .map_err(VerificationError::FriError)?;
+        let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
 
-        let log_global_max_height =
-            proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
+        let g: TwoAdicFriFolder<Vec<BatchOpening<Val, InputMmcs>>> = TwoAdicFriFolder(PhantomData);
 
-        let reduced_openings: Vec<[Challenge; 32]> = proof
-            .query_openings
-            .iter()
-            .zip(&fri_challenges.query_indices)
-            .map(|(query_opening, &index)| {
-                let mut ro = [Challenge::zero(); 32];
-                let mut alpha_pow = [Challenge::one(); 32];
+        verifier::verify(&g, &self.fri, proof, challenger, |index, input_proof| {
+            let mut ro = [Challenge::zero(); 32];
+            let mut alpha_pow = [Challenge::one(); 32];
 
-                for (batch_opening, (batch_commit, mats)) in izip!(query_opening, &rounds) {
-                    let batch_heights = mats
-                        .iter()
-                        .map(|(domain, _)| domain.size() << self.fri.log_blowup)
-                        .collect_vec();
-                    let batch_dims = batch_heights
-                        .iter()
-                        // TODO: MMCS doesn't really need width; we put 0 for now.
-                        .map(|&height| Dimensions { width: 0, height })
-                        .collect_vec();
+            // TODO: separate this out into functions
 
-                    let batch_max_height = batch_heights.iter().max().expect("Empty batch?");
-                    let log_batch_max_height = log2_strict_usize(*batch_max_height);
-                    let bits_reduced = log_global_max_height - log_batch_max_height;
-                    let reduced_index = index >> bits_reduced;
+            for (batch_opening, (batch_commit, mats)) in izip!(input_proof, &rounds) {
+                let batch_heights = mats
+                    .iter()
+                    .map(|(domain, _)| domain.size() << self.fri.log_blowup)
+                    .collect_vec();
+                let batch_dims = batch_heights
+                    .iter()
+                    // TODO: MMCS doesn't really need width; we put 0 for now.
+                    .map(|&height| Dimensions { width: 0, height })
+                    .collect_vec();
 
-                    self.mmcs.verify_batch(
+                let batch_max_height = batch_heights.iter().max().expect("Empty batch?");
+                let log_batch_max_height = log2_strict_usize(*batch_max_height);
+                let bits_reduced = log_global_max_height - log_batch_max_height;
+                let reduced_index = index >> bits_reduced;
+
+                self.mmcs
+                    .verify_batch(
                         batch_commit,
                         &batch_dims,
                         reduced_index,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
-                    )?;
-                    for (mat_opening, (mat_domain, mat_points_and_values)) in
-                        izip!(&batch_opening.opened_values, mats)
-                    {
-                        let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
+                    )
+                    .expect("input err");
+                for (mat_opening, (mat_domain, mat_points_and_values)) in
+                    izip!(&batch_opening.opened_values, mats)
+                {
+                    let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
 
-                        let bits_reduced = log_global_max_height - log_height;
-                        let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
+                    let bits_reduced = log_global_max_height - log_height;
+                    let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
 
-                        let x = Val::generator()
-                            * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
+                    // todo: this can be nicer with domain methods?
 
-                        for (z, ps_at_z) in mat_points_and_values {
-                            for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
-                                let quotient = (-p_at_z + p_at_x) / (-*z + x);
-                                ro[log_height] += alpha_pow[log_height] * quotient;
-                                alpha_pow[log_height] *= alpha;
-                            }
+                    let x = Val::generator()
+                        * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
+
+                    for (z, ps_at_z) in mat_points_and_values {
+                        for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
+                            let quotient = (-p_at_z + p_at_x) / (-*z + x);
+                            ro[log_height] += alpha_pow[log_height] * quotient;
+                            alpha_pow[log_height] *= alpha;
                         }
                     }
                 }
-                Ok(ro)
-            })
-            .collect::<Result<Vec<_>, InputMmcs::Error>>()
-            .map_err(VerificationError::InputMmcsError)?;
-
-        verifier::verify_challenges::<_, _, TwoAdicFriFolder, _>(
-            &self.fri,
-            &proof.fri_proof,
-            &fri_challenges,
-            &reduced_openings,
-        )
-        .map_err(VerificationError::FriError)?;
+            }
+            ro
+        })
+        .expect("fri err");
 
         Ok(())
     }

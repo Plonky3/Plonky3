@@ -4,7 +4,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
-use p3_fri::{prover, verifier, FriConfig, TwoAdicFriFolder};
+use p3_fri::{prover, verifier, BatchOpening, FriConfig, TwoAdicFriFolder};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -56,7 +56,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         })
         .collect();
 
-    let (proof, reduced_openings, p_sample) = {
+    let (proof, p_sample) = {
         // Prover world
         let mut chal = Challenger::new(perm.clone());
         let alpha: Challenge = chal.sample_ext_element();
@@ -84,37 +84,37 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 
         let input: Vec<Vec<Challenge>> = input.into_iter().rev().flatten().collect();
 
-        let (proof, idxs) =
-            prover::prove::<_, _, TwoAdicFriFolder, _>(&fc, input.clone(), &mut chal);
-
         let log_max_height = log2_strict_usize(input[0].len());
-        let reduced_openings: Vec<[Challenge; 32]> = idxs
-            .into_iter()
-            .map(|idx| {
+
+        let proof = prover::prove(
+            &TwoAdicFriFolder::<[Challenge; 32]>::new(),
+            &fc,
+            input.clone(),
+            &mut chal,
+            |idx| {
+                // As our "input opening proof", just pass through the literal reduced openings.
                 let mut ro = [Challenge::zero(); 32];
                 for v in &input {
                     let log_height = log2_strict_usize(v.len());
                     ro[log_height] = v[idx >> (log_max_height - log_height)];
                 }
                 ro
-            })
-            .collect();
+            },
+        );
 
-        (proof, reduced_openings, chal.sample_bits(8))
+        (proof, chal.sample_bits(8))
     };
 
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_ext_element();
-    let fri_challenges =
-        verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
-            .expect("failed verify shape and sample");
-    verifier::verify_challenges::<_, _, TwoAdicFriFolder, _>(
+    verifier::verify(
+        &TwoAdicFriFolder::<[Challenge; 32]>::new(),
         &fc,
         &proof,
-        &fri_challenges,
-        &reduced_openings,
+        &mut v_challenger,
+        |_index, proof| *proof,
     )
-    .expect("failed verify challenges");
+    .unwrap();
 
     assert_eq!(
         p_sample,

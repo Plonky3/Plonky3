@@ -1,3 +1,5 @@
+use core::marker::PhantomData;
+
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -50,26 +52,29 @@ pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-#[allow(clippy::type_complexity)]
+pub struct InputProof<Val: Field, Challenge: Field, InputMmcs: Mmcs<Val>, FriMmcs: Mmcs<Challenge>>
+{
+    input_openings: Vec<BatchOpening<Val, InputMmcs>>,
+    first_layer_siblings: Vec<Challenge>,
+    first_layer_proof: FriMmcs::Proof,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Witness: Serialize",
+    deserialize = "Witness: Deserialize<'de>"
+))]
 pub struct CirclePcsProof<
     Val: Field,
     Challenge: Field,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Witness: Serialize + for<'de2> Deserialize<'de2>,
+    Witness,
 > {
-    fri_proof: FriProof<Challenge, FriMmcs, Witness>,
     first_layer_commitment: FriMmcs::Commitment,
     lambdas: Vec<Challenge>,
-    // for each query index
-    query_openings: Vec<(
-        // for each round, input openings
-        Vec<BatchOpening<Val, InputMmcs>>,
-        // first layer siblings
-        Vec<Challenge>,
-        // first layer proof
-        FriMmcs::Proof,
-    )>,
+    fri_proof:
+        FriProof<Challenge, FriMmcs, Witness, InputProof<Val, Challenge, InputMmcs, FriMmcs>>,
 }
 
 impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -261,45 +266,43 @@ where
             .map(|m| fold_bivariate(bivariate_beta, m.as_view()))
             .collect();
 
-        let (fri_proof, query_indices) = p3_fri::prover::prove::<_, _, CircleFriFolder<Val>, _>(
-            &self.fri_config,
-            fri_input,
-            challenger,
-        );
+        let g: CircleFriFolder<Val, InputProof<Val, Challenge, InputMmcs, FriMmcs>> =
+            CircleFriFolder(PhantomData);
 
-        let query_openings = query_indices
-            .into_iter()
-            .map(|index| {
-                let first_layer_index = challenger.sample_bits(1);
-                let input_opening = rounds
+        let fri_proof =
+            p3_fri::prover::prove(&g, &self.fri_config, fri_input, challenger, |index| {
+                let input_openings = rounds
                     .iter()
                     .map(|(data, _)| {
-                        let (opened_values, opening_proof) = self
-                            .mmcs
-                            .open_batch((index << 1) | first_layer_index, &data.mmcs_data);
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_batch(index, &data.mmcs_data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
                         }
                     })
                     .collect();
-                let (first_layer_values, first_layer_proof) =
-                    self.fri_config.mmcs.open_batch(index, &first_layer_data);
+                let (first_layer_values, first_layer_proof) = self
+                    .fri_config
+                    .mmcs
+                    .open_batch(index >> 1, &first_layer_data);
                 let first_layer_siblings = first_layer_values
                     .iter()
-                    .map(|v| v[first_layer_index ^ 1])
+                    .map(|v| v[(index ^ 1) & 1])
                     .collect();
-                (input_opening, first_layer_siblings, first_layer_proof)
-            })
-            .collect();
+                InputProof {
+                    input_openings,
+                    first_layer_siblings,
+                    first_layer_proof,
+                }
+            });
 
         (
             values,
             CirclePcsProof {
-                fri_proof,
                 first_layer_commitment,
                 lambdas,
-                query_openings,
+                fri_proof,
             },
         )
     }
@@ -330,13 +333,6 @@ where
         challenger.observe(proof.first_layer_commitment.clone());
         let bivariate_beta: Challenge = challenger.sample();
 
-        let fri_challenges = p3_fri::verifier::verify_shape_and_sample_challenges(
-            &self.fri_config,
-            &proof.fri_proof,
-            challenger,
-        )
-        .unwrap();
-
         let max_width = rounds
             .iter()
             .flat_map(|(_comm, mats)| {
@@ -345,144 +341,150 @@ where
             })
             .max()
             .unwrap();
-
         let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, max_width);
 
-        let reduced_openings: Vec<[Challenge; 32]> = proof
-            .query_openings
-            .iter()
-            .zip(&fri_challenges.query_indices)
-            .map(
-                |((input_openings, first_layer_siblings, first_layer_proof), &index)| {
-                    let first_layer_index = challenger.sample_bits(1);
-                    let full_index = (index << 1) | first_layer_index;
+        let g: CircleFriFolder<Val, InputProof<Val, Challenge, InputMmcs, FriMmcs>> =
+            CircleFriFolder(PhantomData);
 
-                    let mut ro = [Challenge::zero(); 32];
-                    let mut num_reduced = [0; 32];
+        p3_fri::verifier::verify(
+            &g,
+            &self.fri_config,
+            &proof.fri_proof,
+            challenger,
+            |index, input_proof| {
+                let full_index = index;
+                let first_layer_index = index & 1;
+                let rest_layers_index = index >> 1;
 
-                    for (batch_opening, (batch_commit, mats)) in izip!(input_openings, &rounds) {
-                        let batch_dims: Vec<Dimensions> = mats
-                            .iter()
-                            .map(|(domain, _)| Dimensions {
-                                // todo: mmcs doesn't really need width
-                                width: 0,
-                                height: domain.size(),
-                            })
-                            .collect_vec();
+                let mut ro = [Challenge::zero(); 32];
+                let mut num_reduced = [0; 32];
 
-                        self.mmcs.verify_batch(
+                let InputProof {
+                    input_openings,
+                    first_layer_siblings,
+                    first_layer_proof,
+                } = input_proof;
+
+                // TODO: refactor this!!
+
+                for (batch_opening, (batch_commit, mats)) in izip!(input_openings, &rounds) {
+                    let batch_dims: Vec<Dimensions> = mats
+                        .iter()
+                        .map(|(domain, _)| Dimensions {
+                            // todo: mmcs doesn't really need width
+                            width: 0,
+                            height: domain.size(),
+                        })
+                        .collect_vec();
+
+                    self.mmcs
+                        .verify_batch(
                             batch_commit,
                             &batch_dims,
                             full_index,
                             &batch_opening.opened_values,
                             &batch_opening.opening_proof,
-                        )?;
-                        for (ps_at_x, (mat_domain, mat_points_and_values)) in
-                            izip!(&batch_opening.opened_values, mats)
-                        {
-                            let log_orig_domain_size = log2_strict_usize(mat_domain.size());
-                            let log_height = log_orig_domain_size + self.fri_config.log_blowup;
-                            let orig_idx = circle_bitrev_idx(full_index, log_height);
-
-                            let lde_domain = CircleDomain::standard(mat_domain.log_n + 1);
-                            let x = lde_domain.nth_point(orig_idx);
-
-                            for (zeta, ps_at_zeta) in mat_points_and_values {
-                                let zeta_point = univariate_to_point(*zeta).unwrap();
-
-                                let alpha_pow_offset =
-                                    alpha.exp_u64(num_reduced[log_height] as u64);
-                                let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
-                                num_reduced[log_height] += 2 * ps_at_x.len();
-
-                                let (lhs_num, lhs_denom) =
-                                    deep_quotient_lhs(x, zeta_point, alpha_pow_width);
-                                ro[log_height] += alpha_pow_offset
-                                    * deep_quotient_reduce_row(
-                                        &alpha_reducer,
-                                        lhs_num,
-                                        lhs_denom.inverse(),
-                                        ps_at_x,
-                                        alpha_reducer.reduce_ext(ps_at_zeta),
-                                    );
-                            }
-                        }
-                    }
-
-                    let first_layer_dims = num_reduced
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, &nr)| {
-                            if nr != 0 {
-                                Some(Dimensions {
-                                    width: 0,
-                                    height: 1 << i,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect_vec();
-
-                    let mut fri_input = [Challenge::zero(); 32];
-                    let mut fl_value_pairs = vec![];
-
-                    let mut first_layer_iter = first_layer_siblings.iter().zip_eq(&proof.lambdas);
-                    for (log_height, &nr) in num_reduced.iter().enumerate() {
-                        if nr != 0 {
-                            assert!(log_height > 0);
-
-                            let lde_size = log_height;
-                            let orig_size = log_height - self.fri_config.log_blowup;
-
-                            let (&fl_sib, &lambda) = first_layer_iter.next().unwrap();
-
-                            let orig_idx = circle_bitrev_idx(full_index, lde_size);
-
-                            let lde_domain = CircleDomain::standard(log_height);
-                            let x: Complex<Val> = lde_domain.nth_point(orig_idx);
-
-                            let v_n_at_x = v_n(x.real(), orig_size);
-
-                            let lambda_corrected = ro[log_height] - lambda * v_n_at_x;
-
-                            let mut fl_values = vec![lambda_corrected; 2];
-                            fl_values[first_layer_index ^ 1] = fl_sib;
-                            fl_value_pairs.push(fl_values.clone());
-
-                            fri_input[log_height - 1] = fold_bivariate_row(
-                                index >> 1,
-                                orig_size - 1,
-                                bivariate_beta,
-                                fl_values.iter().cloned(),
-                            );
-                        }
-                    }
-
-                    self.fri_config
-                        .mmcs
-                        .verify_batch(
-                            &proof.first_layer_commitment,
-                            &first_layer_dims,
-                            index,
-                            &fl_value_pairs,
-                            first_layer_proof,
                         )
-                        .expect("first layer verify");
+                        .expect("input mmcs");
 
-                    Ok(fri_input)
-                },
-            )
-            .collect::<Result<Vec<_>, InputMmcs::Error>>()
-            .unwrap();
+                    for (ps_at_x, (mat_domain, mat_points_and_values)) in
+                        izip!(&batch_opening.opened_values, mats)
+                    {
+                        let log_orig_domain_size = log2_strict_usize(mat_domain.size());
+                        let log_height = log_orig_domain_size + self.fri_config.log_blowup;
+                        let orig_idx = circle_bitrev_idx(full_index, log_height);
 
-        p3_fri::verifier::verify_challenges::<_, _, CircleFriFolder<Val>, _>(
-            &self.fri_config,
-            &proof.fri_proof,
-            &fri_challenges,
-            &reduced_openings,
+                        let lde_domain = CircleDomain::standard(mat_domain.log_n + 1);
+                        let x = lde_domain.nth_point(orig_idx);
+
+                        for (zeta, ps_at_zeta) in mat_points_and_values {
+                            let zeta_point = univariate_to_point(*zeta).unwrap();
+
+                            let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+                            let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
+                            num_reduced[log_height] += 2 * ps_at_x.len();
+
+                            let (lhs_num, lhs_denom) =
+                                deep_quotient_lhs(x, zeta_point, alpha_pow_width);
+                            ro[log_height] += alpha_pow_offset
+                                * deep_quotient_reduce_row(
+                                    &alpha_reducer,
+                                    lhs_num,
+                                    lhs_denom.inverse(),
+                                    ps_at_x,
+                                    alpha_reducer.reduce_ext(ps_at_zeta),
+                                );
+                        }
+                    }
+                }
+
+                let first_layer_dims = num_reduced
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &nr)| {
+                        if nr != 0 {
+                            Some(Dimensions {
+                                width: 0,
+                                height: 1 << i,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect_vec();
+
+                let mut fri_input = [Challenge::zero(); 32];
+                let mut fl_value_pairs = vec![];
+
+                let mut first_layer_iter = first_layer_siblings.iter().zip_eq(&proof.lambdas);
+                for (log_height, &nr) in num_reduced.iter().enumerate() {
+                    if nr != 0 {
+                        assert!(log_height > 0);
+
+                        let lde_size = log_height;
+                        let orig_size = log_height - self.fri_config.log_blowup;
+
+                        let (&fl_sib, &lambda) = first_layer_iter.next().unwrap();
+
+                        let orig_idx = circle_bitrev_idx(full_index, lde_size);
+
+                        let lde_domain = CircleDomain::standard(log_height);
+                        let x: Complex<Val> = lde_domain.nth_point(orig_idx);
+
+                        let v_n_at_x = v_n(x.real(), orig_size);
+
+                        let lambda_corrected = ro[log_height] - lambda * v_n_at_x;
+
+                        let mut fl_values = vec![lambda_corrected; 2];
+                        fl_values[first_layer_index ^ 1] = fl_sib;
+                        fl_value_pairs.push(fl_values.clone());
+
+                        fri_input[log_height - 1] = fold_bivariate_row(
+                            // index >> 1,
+                            // wtf?
+                            index >> 2,
+                            orig_size - 1,
+                            bivariate_beta,
+                            fl_values.iter().cloned(),
+                        );
+                    }
+                }
+
+                self.fri_config
+                    .mmcs
+                    .verify_batch(
+                        &proof.first_layer_commitment,
+                        &first_layer_dims,
+                        rest_layers_index,
+                        &fl_value_pairs,
+                        first_layer_proof,
+                    )
+                    .expect("first layer verify");
+
+                fri_input
+            },
         )
-        .unwrap();
+        .expect("fri verify");
 
         Ok(())
     }
