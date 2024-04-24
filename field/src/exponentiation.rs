@@ -41,7 +41,7 @@ pub fn exp_1717986917<AF: AbstractField>(val: AF) -> AF {
 
 pub fn exp_1420470955<AF: AbstractField>(val: AF) -> AF {
     // Note that 3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1).
-    // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1420470955})^7 = a.
+    // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1420470955})^3 = a.
     // Note the binary expansion: 1420470955 = 1010100101010101010101010101011_2
     // This uses 29 Squares + 7 Multiplications => 36 Operations total.
     // Suspect it's possible to improve this with enough effort.
