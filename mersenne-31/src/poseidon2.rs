@@ -109,50 +109,17 @@ impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-    use core::array;
-
     use p3_field::AbstractField;
-    use p3_poseidon2::{poseidon2_round_numbers_128, Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use rand::SeedableRng;
+    use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
 
     type F = Mersenne31;
 
-    // We need to make some round constants. We do this is a pseudo random way using sage code.
+    // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
-    // We start with setting: M31 = GF(2^31 - 1)
-
-    // SIMPLE_SEED comes from:
-    // set_random_seed(11111)
-    // M31.random_element()
-    const SIMPLE_SEED: F = F { value: 389183646 };
-
-    // We also fix a large prime which is relatively prime to 2^31 - 2.
-    // P = Primes()
-    // P.next(11111)
-    const POWER: u64 = 11113;
-
-    fn constants_from_seed<const WIDTH: usize>(
-        seed: F,
-        power: u64,
-        rounds_f: usize,
-        rounds_p: usize,
-    ) -> (Vec<[F; WIDTH]>, Vec<F>) {
-        let external_round_constants: Vec<[F; WIDTH]> = (0..rounds_f)
-            .map(|j| {
-                array::from_fn(|i| {
-                    (F::from_wrapped_u32((i + WIDTH * j) as u32) + seed).exp_u64(power)
-                })
-            })
-            .collect();
-        let seed_update = seed.exp_u64(power).exp_u64(power);
-        let internal_round_constants: Vec<F> = (0..rounds_p)
-            .map(|i| (F::from_wrapped_u32(i as u32) + seed_update).exp_u64(power))
-            .collect();
-
-        (external_round_constants, internal_round_constants)
-    }
 
     // Our Poseidon2 Implementation for Mersenne31
     fn poseidon2_mersenne31<const WIDTH: usize, const D: u64, DiffusionMatrix>(
@@ -161,21 +128,11 @@ mod tests {
     ) where
         DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
     {
-        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
-
-        let (external_round_constants, internal_round_constants) =
-            constants_from_seed::<WIDTH>(SIMPLE_SEED, POWER, rounds_f, rounds_p);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
         let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new(
-                rounds_f,
-                external_round_constants.to_vec(),
-                Poseidon2ExternalMatrixGeneral,
-                rounds_p,
-                internal_round_constants.to_vec(),
-                diffusion_matrix,
-            );
+            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
 
         poseidon2.permute_mut(input);
     }
@@ -194,9 +151,9 @@ mod tests {
         .map(F::from_canonical_u32);
 
         let expected: [F; 16] = [
-            687671392, 187739990, 474872297, 1025723782, 1958464721, 1004876398, 972043176,
-            1231017992, 1815473754, 997812498, 1891950360, 94240126, 1834774779, 2146393033,
-            1194588914, 1694651572,
+            1124552602, 2127602268, 1834113265, 1207687593, 1891161485, 245915620, 981277919,
+            627265710, 1534924153, 1580826924, 887997842, 1526280482, 547791593, 1028672510,
+            1803086471, 323071277,
         ]
         .map(F::from_canonical_u32);
 
@@ -219,10 +176,10 @@ mod tests {
         .map(F::from_canonical_u32);
 
         let expected: [F; 24] = [
-            1647982233, 532201789, 2015259638, 680414033, 1176515591, 1163262902, 2052469886,
-            679834118, 2079721199, 1936663286, 66010933, 593633651, 69437652, 889870443,
-            1128148983, 1865068789, 649133836, 1434401472, 648402879, 1081496263, 388204549,
-            380976594, 1146523540, 841407217,
+            87189408, 212775836, 954807335, 1424761838, 1222521810, 1264950009, 1891204592,
+            710452896, 957091834, 1776630156, 1091081383, 786687731, 1101902149, 1281649821,
+            436070674, 313565599, 1961711763, 2002894460, 2040173120, 854107426, 25198245,
+            1967213543, 604802266, 2086190331,
         ]
         .map(F::from_canonical_u32);
 

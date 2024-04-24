@@ -1,16 +1,10 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
+use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
 use crate::{monty_reduce, to_babybear_array, BabyBear};
-
-// The matrix used in the poseidon2 implementation from Horizen Labs: https://github.com/HorizenLabs/poseidon2
-pub(crate) const MATRIX_DIAG_16_BABYBEAR_MONTY_HL: [BabyBear; 16] = to_babybear_array([
-    0x0a632d94, 0x6db657b7, 0x56fbdc9e, 0x052b3d8a, 0x33745201, 0x5c03108c, 0x0beba37b, 0x258c2e8b,
-    0x12029f39, 0x694909ce, 0x6d231724, 0x21c3b222, 0x3c0904a5, 0x01d6acda, 0x27705c83, 0x5231c802,
-]);
 
 // Optimised diffusion matrices for Babybear16:
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]
@@ -131,271 +125,83 @@ impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabyBear {
 
 impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabyBear {}
 
-#[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixBabyBearHL;
-
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBearHL {
-    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        matmul_internal::<BabyBear, BabyBear, 16>(state, MATRIX_DIAG_16_BABYBEAR_MONTY_HL);
-    }
-}
-
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabyBearHL {}
-
-pub const HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS: [[BabyBear; 16]; 8] = [
-    to_babybear_array([
-        0x69cbb6af, 0x46ad93f9, 0x60a00f4e, 0x6b1297cd, 0x23189afe, 0x732e7bef, 0x72c246de,
-        0x2c941900, 0x0557eede, 0x1580496f, 0x3a3ea77b, 0x54f3f271, 0x0f49b029, 0x47872fe1,
-        0x221e2e36, 0x1ab7202e,
-    ]),
-    to_babybear_array([
-        0x487779a6, 0x3851c9d8, 0x38dc17c0, 0x209f8849, 0x268dcee8, 0x350c48da, 0x5b9ad32e,
-        0x0523272b, 0x3f89055b, 0x01e894b2, 0x13ddedde, 0x1b2ef334, 0x7507d8b4, 0x6ceeb94e,
-        0x52eb6ba2, 0x50642905,
-    ]),
-    to_babybear_array([
-        0x05453f3f, 0x06349efc, 0x6922787c, 0x04bfff9c, 0x768c714a, 0x3e9ff21a, 0x15737c9c,
-        0x2229c807, 0x0d47f88c, 0x097e0ecc, 0x27eadba0, 0x2d7d29e4, 0x3502aaa0, 0x0f475fd7,
-        0x29fbda49, 0x018afffd,
-    ]),
-    to_babybear_array([
-        0x0315b618, 0x6d4497d1, 0x1b171d9e, 0x52861abd, 0x2e5d0501, 0x3ec8646c, 0x6e5f250a,
-        0x148ae8e6, 0x17f5fa4a, 0x3e66d284, 0x0051aa3b, 0x483f7913, 0x2cfe5f15, 0x023427ca,
-        0x2cc78315, 0x1e36ea47,
-    ]),
-    to_babybear_array([
-        0x7290a80d, 0x6f7e5329, 0x598ec8a8, 0x76a859a0, 0x6559e868, 0x657b83af, 0x13271d3f,
-        0x1f876063, 0x0aeeae37, 0x706e9ca6, 0x46400cee, 0x72a05c26, 0x2c589c9e, 0x20bd37a7,
-        0x6a2d3d10, 0x20523767,
-    ]),
-    to_babybear_array([
-        0x5b8fe9c4, 0x2aa501d6, 0x1e01ac3e, 0x1448bc54, 0x5ce5ad1c, 0x4918a14d, 0x2c46a83f,
-        0x4fcf6876, 0x61d8d5c8, 0x6ddf4ff9, 0x11fda4d3, 0x02933a8f, 0x170eaf81, 0x5a9c314f,
-        0x49a12590, 0x35ec52a1,
-    ]),
-    to_babybear_array([
-        0x58eb1611, 0x5e481e65, 0x367125c9, 0x0eba33ba, 0x1fc28ded, 0x066399ad, 0x0cbec0ea,
-        0x75fd1af0, 0x50f5bf4e, 0x643d5f41, 0x6f4fe718, 0x5b3cbbde, 0x1e3afb3e, 0x296fb027,
-        0x45e1547b, 0x4a8db2ab,
-    ]),
-    to_babybear_array([
-        0x59986d19, 0x30bcdfa3, 0x1db63932, 0x1d7c2824, 0x53b33681, 0x0673b747, 0x038a98a3,
-        0x2c5bce60, 0x351979cd, 0x5008fb73, 0x547bca78, 0x711af481, 0x3f93bf64, 0x644d987b,
-        0x3c8bcd87, 0x608758b8,
-    ]),
-];
-
-pub const HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS: [BabyBear; 13] = to_babybear_array([
-    0x5a8053c0, 0x693be639, 0x3858867d, 0x19334f6b, 0x128f0fd8, 0x4e2b1ccb, 0x61210ce0, 0x3c318939,
-    0x0b5b2f22, 0x2edb11d5, 0x213effdf, 0x0cac4606, 0x241af16d,
-]);
-
 #[cfg(test)]
 mod tests {
-    use core::array;
-
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral, Poseidon2ExternalMatrixHL};
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use rand::SeedableRng;
+    use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
 
     type F = BabyBear;
 
-    // A function which recreates the poseidon2 implementation in
-    // https://github.com/HorizenLabs/poseidon2
-    fn hl_poseidon2_babybear_width_16(input: &mut [F; 16]) {
-        const WIDTH: usize = 16;
-        const D: u64 = 7;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 13;
+    // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
+    // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
+
+    // Our Poseidon2 Implementation for BabyBear
+    fn poseidon2_babybear<const WIDTH: usize, const D: u64, DiffusionMatrix>(
+        input: &mut [F; WIDTH],
+        diffusion_matrix: DiffusionMatrix,
+    ) where
+        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
+    {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<
-            BabyBear,
-            Poseidon2ExternalMatrixHL,
-            DiffusionMatrixBabyBearHL,
-            WIDTH,
-            D,
-        > = Poseidon2::new(
-            ROUNDS_F,
-            HL_BABYBEAR_16_EXTERNAL_ROUND_CONSTANTS.to_vec(),
-            Poseidon2ExternalMatrixHL,
-            ROUNDS_P,
-            HL_BABYBEAR_16_INTERNAL_ROUND_CONSTANTS.to_vec(),
-            DiffusionMatrixBabyBearHL,
-        );
+        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
+            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
+
         poseidon2.permute_mut(input);
-    }
-
-    fn poseidon2_babybear_width_16(input: &mut [F; 16]) {
-        const WIDTH: usize = 16;
-        const D: u64 = 7;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 13;
-
-        // Need to make some round constants. We use sage to get a random element which we use as a seed.
-        // set_random_seed(11111);
-        // ZZ.random_element(2**31);
-        const SIMPLE_SEED: u32 = 899088431;
-        let external_round_constants: [[BabyBear; 16]; 8] = array::from_fn(|j| {
-            array::from_fn(|i| F::from_wrapped_u32((i + 16 * j) as u32 + SIMPLE_SEED).exp_u64(11))
-        });
-        let internal_round_constants: [BabyBear; 13] =
-            array::from_fn(|i| F::from_wrapped_u32(i as u32 + SIMPLE_SEED).exp_u64(7));
-
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<
-            BabyBear,
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
-            WIDTH,
-            D,
-        > = Poseidon2::new(
-            ROUNDS_F,
-            external_round_constants.to_vec(),
-            Poseidon2ExternalMatrixGeneral,
-            ROUNDS_P,
-            internal_round_constants.to_vec(),
-            DiffusionMatrixBabyBear,
-        );
-        poseidon2.permute_mut(input);
-    }
-
-    fn poseidon2_babybear_width_24(input: &mut [F; 24]) {
-        const WIDTH: usize = 24;
-        const D: u64 = 7;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 21;
-
-        // Need to make some round constants. We use sage to get a random element which we use as a seed.
-        // set_random_seed(11111);
-        // ZZ.random_element(2**31);
-        const SIMPLE_SEED: u32 = 899088431;
-        let external_round_constants: [[BabyBear; 24]; 8] = array::from_fn(|j| {
-            array::from_fn(|i| F::from_wrapped_u32((i + 24 * j) as u32 + SIMPLE_SEED).exp_u64(11))
-        });
-        let internal_round_constants: [BabyBear; 21] =
-            array::from_fn(|i| F::from_wrapped_u32(i as u32 + SIMPLE_SEED).exp_u64(7));
-
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<
-            BabyBear,
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
-            WIDTH,
-            D,
-        > = Poseidon2::new(
-            ROUNDS_F,
-            external_round_constants.to_vec(),
-            Poseidon2ExternalMatrixGeneral,
-            ROUNDS_P,
-            internal_round_constants.to_vec(),
-            DiffusionMatrixBabyBear,
-        );
-        poseidon2.permute_mut(input);
-    }
-
-    /// Test on the constant 0 input.
-    #[test]
-    fn test_poseidon2_hl_width_16_zeroes() {
-        let mut input: [F; 16] = [0_u32; 16].map(F::from_wrapped_u32);
-
-        let expected: [F; 16] = [
-            1337856655, 1843094405, 328115114, 964209316, 1365212758, 1431554563, 210126733,
-            1214932203, 1929553766, 1647595522, 1496863878, 324695999, 1569728319, 1634598391,
-            597968641, 679989771,
-        ]
-        .map(F::from_canonical_u32);
-        hl_poseidon2_babybear_width_16(&mut input);
-        assert_eq!(input, expected);
-    }
-
-    /// Test on the input 0..16.
-    #[test]
-    fn test_poseidon2_hl_width_16_range() {
-        let mut input: [F; 16] = array::from_fn(|i| F::from_wrapped_u32(i as u32));
-
-        let expected: [F; 16] = [
-            896560466, 771677727, 128113032, 1378976435, 160019712, 1452738514, 682850273,
-            223500421, 501450187, 1804685789, 1671399593, 1788755219, 1736880027, 1352180784,
-            1928489698, 1128802977,
-        ]
-        .map(F::from_canonical_u32);
-        hl_poseidon2_babybear_width_16(&mut input);
-        assert_eq!(input, expected);
     }
 
     /// Test on a roughly random input.
     /// This random input is generated by the following sage code:
-    /// set_random_seed(2468)
-    /// vector([ZZ.random_element(2**31) for t in range(16)])
-    #[test]
-    fn test_poseidon2_hl_width_16_random() {
-        let mut input: [F; 16] = [
-            1179785652, 1291567559, 66272299, 471640172, 653876821, 478855335, 871063984,
-            540251327, 1506944720, 1403776782, 770420443, 126472305, 1535928603, 1017977016,
-            818646757, 359411429,
-        ]
-        .map(F::from_wrapped_u32);
-
-        let expected: [F; 16] = [
-            1736862924, 1950079822, 952072292, 1965704005, 236226362, 1113998185, 1624488077,
-            391891139, 1194078311, 1040746778, 1898067001, 774167026, 193702242, 859952892,
-            732204701, 1744970965,
-        ]
-        .map(F::from_canonical_u32);
-
-        hl_poseidon2_babybear_width_16(&mut input);
-        assert_eq!(input, expected);
-    }
-
-    /// Test on a roughly random input.
-    /// This random input is generated by the following sage code:
-    /// set_random_seed(2468)
-    /// vector([ZZ.random_element(2**31) for t in range(16)])
+    /// set_random_seed(16)
+    /// vector([BB.random_element() for t in range(16)]).
     #[test]
     fn test_poseidon2_width_16_random() {
         let mut input: [F; 16] = [
-            1179785652, 1291567559, 66272299, 471640172, 653876821, 478855335, 871063984,
-            540251327, 1506944720, 1403776782, 770420443, 126472305, 1535928603, 1017977016,
-            818646757, 359411429,
-        ]
-        .map(F::from_wrapped_u32);
-
-        let expected: [F; 16] = [
-            1248638253, 979391849, 357005207, 914460411, 1344873150, 1266301567, 462106912,
-            1416072532, 1666037773, 210481833, 1286244123, 680556324, 1204134065, 167595403,
-            634347617, 917336235,
+            894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
+            120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
+            1783754913,
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear_width_16(&mut input);
+        let expected: [F; 16] = [
+            512585766, 975869435, 1921378527, 1238606951, 899635794, 132650430, 1426417547,
+            1734425242, 57415409, 67173027, 1535042492, 1318033394, 1070659233, 17258943,
+            856719028, 1500534995,
+        ]
+        .map(F::from_canonical_u32);
+
+        poseidon2_babybear::<16, 7, _>(&mut input, DiffusionMatrixBabyBear);
         assert_eq!(input, expected);
     }
 
     /// Test on a roughly random input.
     /// This random input is generated by the following sage code:
-    /// set_random_seed(2468)
-    /// vector([ZZ.random_element(2**31) for t in range(24)])
+    /// set_random_seed(24)
+    /// vector([BB.random_element() for t in range(24)]).
     #[test]
     fn test_poseidon2_width_24_random() {
         let mut input: [F; 24] = [
-            1179785652, 1291567559, 2079538220, 471640172, 653876821, 478855335, 871063984,
-            540251327, 1506944720, 1403776782, 770420443, 126472305, 1535928603, 1017977016,
-            818646757, 359411429, 860757874, 286641299, 1346664023, 1674494652, 1209824408,
-            1264153249, 679420963, 520737796,
-        ]
-        .map(F::from_wrapped_u32);
-
-        let expected: [F; 24] = [
-            1960609465, 35511609, 1437571456, 1200188766, 1073548088, 1433200340, 35789002,
-            1138157699, 202307864, 1222136958, 138511458, 1630086227, 1633931354, 489046210,
-            287720696, 781743383, 246718259, 402408558, 517880637, 57645822, 86443773, 636182948,
-            562190295, 567338916,
+            886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
+            355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
+            1042221543, 474748436, 135686258, 263665994, 1962340735, 1741539604, 449439011,
+            1131357108, 50869465, 1589724894,
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear_width_24(&mut input);
+        let expected: [F; 24] = [
+            162275163, 462059149, 1096991565, 924509284, 300323988, 608502870, 427093935,
+            733126108, 1676785000, 669115065, 441326760, 60861458, 124006210, 687842154, 270552480,
+            1279931581, 1030167257, 126690434, 1291783486, 669126431, 1320670824, 1121967237,
+            458234203, 142219603,
+        ]
+        .map(F::from_canonical_u32);
+
+        poseidon2_babybear::<24, 7, _>(&mut input, DiffusionMatrixBabyBear);
         assert_eq!(input, expected);
     }
 }

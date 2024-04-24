@@ -69,7 +69,7 @@ impl Distribution<BabyBear> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BabyBear {
         loop {
-            let next_u31 = rng.next_u32() & 0x7ffffff;
+            let next_u31 = rng.next_u32() >> 1;
             let is_canonical = next_u31 < P;
             if is_canonical {
                 return BabyBear { value: next_u31 };
