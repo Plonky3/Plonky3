@@ -7,9 +7,9 @@ use alloc::vec::Vec;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::{Complex, ComplexExtendable, ExtensionPowersReducer};
 use p3_field::{ExtensionField, Field};
-use p3_fri::{FriConfig, FriProof, PowersReducer};
+use p3_fri::{FriConfig, FriProof};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -161,7 +161,7 @@ where
             .max()
             .unwrap();
 
-        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, max_width);
+        let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
 
         // log_height -> reduced openings column
         let mut reduced_openings: BTreeMap<usize, Vec<Challenge>> = BTreeMap::new();
@@ -185,6 +185,7 @@ where
                 izip!(&data.committed_domains, mats, points_for_mats)
                     .map(|(lde_domain, permuted_mat, points_for_mat)| {
                         let mat = &permuted_mat.inner;
+                        alpha_reducer.prepare_for_width(mat.width());
                         let log_height = log2_strict_usize(mat.height());
                         let reduced_opening_for_log_height: &mut Vec<Challenge> = reduced_openings
                             .entry(log_height)
@@ -341,7 +342,8 @@ where
             })
             .max()
             .unwrap();
-        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, max_width);
+        let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
+        alpha_reducer.prepare_for_width(max_width);
 
         let g: CircleFriFolder<Val, InputProof<Val, Challenge, InputMmcs, FriMmcs>> =
             CircleFriFolder(PhantomData);
@@ -460,8 +462,6 @@ where
                         fl_value_pairs.push(fl_values.clone());
 
                         fri_input[log_height - 1] = fold_bivariate_row(
-                            // index >> 1,
-                            // wtf?
                             index >> 2,
                             orig_size - 1,
                             bivariate_beta,

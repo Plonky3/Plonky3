@@ -2,9 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
 use p3_commit::PolynomialSpace;
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::{Complex, ComplexExtendable, ExtensionPowersReducer};
 use p3_field::{batch_multiplicative_inverse, ExtensionField};
-use p3_fri::PowersReducer;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -36,7 +35,7 @@ pub(crate) fn deep_quotient_lhs<F: ComplexExtendable, EF: ExtensionField<F>>(
 }
 
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
-    alpha_reducer: &PowersReducer<F, EF>,
+    alpha_reducer: &ExtensionPowersReducer<F, EF>,
     lhs_num: EF,
     lhs_denom_inv: EF,
     ps_at_x: &[F],
@@ -51,7 +50,7 @@ pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionFie
     mat: &RowMajorMatrix<F>,
     zeta: Complex<EF>,
     ps_at_zeta: &[EF],
-    alpha_reducer: &PowersReducer<F, EF>,
+    alpha_reducer: &ExtensionPowersReducer<F, EF>,
     alpha_pow_width: EF,
 ) -> Vec<EF> {
     let (lhs_nums, lhs_denoms): (Vec<_>, Vec<_>) = domain

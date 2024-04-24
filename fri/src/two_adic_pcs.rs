@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
+use p3_field::extension::ExtensionPowersReducer;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
@@ -267,11 +268,10 @@ where
             .flat_map(|(mats, _)| mats)
             .collect_vec();
 
-        let global_max_width = mats.iter().map(|m| m.width()).max().unwrap();
         let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
         let log_global_max_height = log2_strict_usize(global_max_height);
 
-        let alpha_reducer = PowersReducer::<Val, Challenge>::new(alpha, global_max_width);
+        let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
@@ -285,6 +285,8 @@ where
         for (mats, points) in mats_and_points {
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
             for (mat, points_for_mat) in izip!(mats, points) {
+                alpha_reducer.prepare_for_width(mat.width());
+
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![Challenge::zero(); mat.height()]);
@@ -488,75 +490,6 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         .collect()
 }
 
-pub struct PowersReducer<F: Field, EF> {
-    powers: Vec<EF>,
-    // If EF::D = 2 and powers is [01 23 45 67],
-    // this holds [[02 46] [13 57]]
-    transposed_packed: Vec<Vec<F::Packing>>,
-}
-
-impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
-    pub fn new(base: EF, max_width: usize) -> Self {
-        let powers: Vec<EF> = base
-            .powers()
-            .take(max_width.next_multiple_of(F::Packing::WIDTH))
-            .collect();
-
-        let transposed_packed: Vec<Vec<F::Packing>> = transpose_vec(
-            (0..EF::D)
-                .map(|d| {
-                    F::Packing::pack_slice(
-                        &powers.iter().map(|a| a.as_base_slice()[d]).collect_vec(),
-                    )
-                    .to_vec()
-                })
-                .collect(),
-        );
-
-        Self {
-            powers,
-            transposed_packed,
-        }
-    }
-
-    // Compute sum_i base^i * x_i
-    pub fn reduce_ext(&self, xs: &[EF]) -> EF {
-        self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()
-    }
-
-    // Same as `self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()`
-    pub fn reduce_base(&self, xs: &[F]) -> EF {
-        let (xs_packed, xs_sfx) = F::Packing::pack_slice_with_suffix(xs);
-        let mut sums = (0..EF::D).map(|_| F::Packing::zero()).collect::<Vec<_>>();
-        for (&x, pows) in izip!(xs_packed, &self.transposed_packed) {
-            for d in 0..EF::D {
-                sums[d] += x * pows[d];
-            }
-        }
-        let packed_sum = EF::from_base_fn(|d| sums[d].as_slice().iter().copied().sum());
-        let sfx_sum = xs_sfx
-            .iter()
-            .zip(&self.powers[(xs_packed.len() * F::Packing::WIDTH)..])
-            .map(|(&x, &pow)| pow * x)
-            .sum::<EF>();
-        packed_sum + sfx_sum
-    }
-}
-
-fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    assert!(!v.is_empty());
-    let len = v[0].len();
-    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect();
-    (0..len)
-        .map(|_| {
-            iters
-                .iter_mut()
-                .map(|n| n.next().unwrap())
-                .collect::<Vec<T>>()
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -574,12 +507,12 @@ mod tests {
     fn test_powers_reducer() {
         let mut rng = thread_rng();
         let alpha: EF = rng.gen();
-        let n = 1000;
         let sizes = [5, 110, 512, 999, 1000];
-        let r = PowersReducer::<F, EF>::new(alpha, n);
 
         // check reduce_ext
         for size in sizes {
+            let mut r = ExtensionPowersReducer::<F, EF>::new(alpha);
+            r.prepare_for_width(size);
             let xs: Vec<EF> = (0..size).map(|_| rng.gen()).collect();
             assert_eq!(
                 r.reduce_ext(&xs),
@@ -592,6 +525,8 @@ mod tests {
 
         // check reduce_base
         for size in sizes {
+            let mut r = ExtensionPowersReducer::<F, EF>::new(alpha);
+            r.prepare_for_width(size);
             let xs: Vec<F> = (0..size).map(|_| rng.gen()).collect();
             assert_eq!(
                 r.reduce_base(&xs),
