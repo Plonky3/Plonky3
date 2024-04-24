@@ -4,6 +4,7 @@ use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
     scale_vec, sum_vecs, Field, TwoAdicField,
 };
+use p3_interpolation::{barycentric_weights, interpolate};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::VerticalPair;
 use p3_matrix::Matrix;
@@ -98,45 +99,4 @@ where
     fn shift(&self, _lde_bits: usize) -> Val {
         Val::generator()
     }
-}
-
-// TODO: Move to interpolation crate?
-fn barycentric_weights<F: Field>(points: &[F]) -> Vec<F> {
-    let n = points.len();
-    batch_multiplicative_inverse(
-        &(0..n)
-            .map(|i| {
-                (0..n)
-                    .filter(|&j| j != i)
-                    .map(|j| points[i] - points[j])
-                    .product::<F>()
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
-// TODO: Move to interpolation crate?
-fn interpolate<F: Field, Mat: Matrix<F>>(
-    points: &[F],
-    values: &Mat,
-    x: F,
-    barycentric_weights: &[F],
-) -> Vec<F> {
-    // If x is in the list of points, the Lagrange formula would divide by zero.
-    for (i, &x_i) in points.iter().enumerate() {
-        if x_i == x {
-            return values.row(i).collect();
-        }
-    }
-
-    let l_x: F = points.iter().map(|&x_i| x - x_i).product();
-
-    let sum = sum_vecs((0..points.len()).map(|i| {
-        let x_i = points[i];
-        let y_i = values.row(i).collect();
-        let w_i = barycentric_weights[i];
-        scale_vec(w_i / (x - x_i), y_i)
-    }));
-
-    scale_vec(l_x, sum)
 }

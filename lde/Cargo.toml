@@ -8,3 +8,4 @@ license = "MIT OR Apache-2.0"
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-util = { path = "../util" }
+p3-interpolation = { path = "../interpolation" }
