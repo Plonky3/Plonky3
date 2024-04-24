@@ -1,10 +1,12 @@
+use core::cmp::Reverse;
+
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
-use p3_fri::{prover, verifier, BatchOpening, FriConfig, TwoAdicFriFolder};
+use p3_fri::{prover, verifier, FriConfig, TwoAdicFriFolder};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -87,17 +89,18 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         let log_max_height = log2_strict_usize(input[0].len());
 
         let proof = prover::prove(
-            &TwoAdicFriFolder::<[Challenge; 32]>::new(),
+            &TwoAdicFriFolder::<Vec<(usize, Challenge)>>::new(),
             &fc,
             input.clone(),
             &mut chal,
             |idx| {
                 // As our "input opening proof", just pass through the literal reduced openings.
-                let mut ro = [Challenge::zero(); 32];
+                let mut ro = vec![];
                 for v in &input {
                     let log_height = log2_strict_usize(v.len());
-                    ro[log_height] = v[idx >> (log_max_height - log_height)];
+                    ro.push((log_height, v[idx >> (log_max_height - log_height)]));
                 }
+                ro.sort_by_key(|(lh, _)| Reverse(*lh));
                 ro
             },
         );
@@ -108,11 +111,11 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_ext_element();
     verifier::verify(
-        &TwoAdicFriFolder::<[Challenge; 32]>::new(),
+        &TwoAdicFriFolder::<Vec<(usize, Challenge)>>::new(),
         &fc,
         &proof,
         &mut v_challenger,
-        |_index, proof| *proof,
+        |_index, proof| proof.clone(),
     )
     .unwrap();
 

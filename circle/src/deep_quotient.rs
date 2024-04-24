@@ -14,10 +14,11 @@ use crate::domain::CircleDomain;
 use crate::util::v_n;
 use crate::Cfft;
 
-/// Compute numerator and denominator of the left hand side of the DEEP quotient
+/// Compute numerator and denominator of the "left hand side" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
 /// Re(1/v_gamma) + alpha^L Im(1/v_gamma)
 /// ("right hand side" is \bar g - \bar v_gamma)
+/// todo: this isnt a good name, lhs and rhs usually refer to sides of the equal sign..
 pub(crate) fn deep_quotient_lhs<F: ComplexExtendable, EF: ExtensionField<F>>(
     x: Complex<F>,
     zeta: Complex<EF>,

@@ -149,34 +149,20 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
-        let mats_and_points = rounds
-            .iter()
-            .map(|(data, points)| (self.mmcs.get_matrices(&data.mmcs_data), points))
-            .collect_vec();
-
-        let max_width = mats_and_points
-            .iter()
-            .flat_map(|(mats, _)| mats)
-            .map(|m| m.width())
-            .max()
-            .unwrap();
-
         let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
 
-        // log_height -> reduced openings column
-        let mut reduced_openings: BTreeMap<usize, Vec<Challenge>> = BTreeMap::new();
-        // log_height -> alpha^(2 * number of columns already folded in at this height)
-        let mut alpha_offsets: BTreeMap<usize, Challenge> = BTreeMap::new();
+        /*
+        We are reducing columns ("ro" = reduced opening) with powers of alpha:
+          ro = .. + α^n c_n + α^(n+1) c_(n+1) + ..
+        But we want to precompute small powers of alpha, and batch the columns. So we can do:
+          ro = .. + α^n (α^0 c_n + α^1 c_(n+1) + ..) + ..
+        reusing the α^0, α^1, etc., then at the end of each column batch we multiply by the α^n.
+        (Due to circle stark specifics, we need 2 powers of α for each column, so actually α^(2n)).
+        We store this α^(2n), the running reducing factor per log_height, and call it the "alpha offset".
+        */
 
-        // maybe replace this with horner to make more simple?
-        let mut advance_alpha_offset = |log_height: usize, width: usize| {
-            let alpha_pow_width = alpha.exp_u64(width as u64);
-            let alpha_offset_ptr: &mut Challenge =
-                alpha_offsets.entry(log_height).or_insert(Challenge::one());
-            let alpha_offset = *alpha_offset_ptr;
-            *alpha_offset_ptr *= alpha_pow_width.square();
-            (alpha_offset, alpha_pow_width)
-        };
+        // log_height -> (alpha offset, reduced openings column)
+        let mut reduced_openings: BTreeMap<usize, (Challenge, Vec<Challenge>)> = BTreeMap::new();
 
         let values: OpenedValues<Challenge> = rounds
             .iter()
@@ -184,21 +170,30 @@ where
                 let mats = self.mmcs.get_matrices(&data.mmcs_data);
                 izip!(&data.committed_domains, mats, points_for_mats)
                     .map(|(lde_domain, permuted_mat, points_for_mat)| {
+                        // Get the unpermuted matrix.
                         let mat = &permuted_mat.inner;
-                        alpha_reducer.prepare_for_width(mat.width());
+
                         let log_height = log2_strict_usize(mat.height());
-                        let reduced_opening_for_log_height: &mut Vec<Challenge> = reduced_openings
-                            .entry(log_height)
-                            .or_insert_with(|| vec![Challenge::zero(); mat.height()]);
+                        let (alpha_offset, reduced_opening_for_log_height) =
+                            reduced_openings.entry(log_height).or_insert_with(|| {
+                                (Challenge::one(), vec![Challenge::zero(); mat.height()])
+                            });
+
+                        let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
+                        alpha_reducer.prepare_for_width(mat.width());
+
                         points_for_mat
                             .iter()
                             .map(|&zeta| {
                                 let zeta_point = univariate_to_point(zeta).unwrap();
 
+                                // Staying in evaluation form, we lagrange interpolate to get the value of
+                                // each p at zeta.
                                 // todo: we only need half of the values to interpolate, but how?
                                 let ps_at_zeta: Vec<Challenge> =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
+                                            // todo: cache basis
                                             let basis: Vec<Challenge> =
                                                 lde_domain.lagrange_basis(zeta_point);
                                             let v_n_at_zeta = lde_domain.zp_at_point(zeta);
@@ -208,9 +203,7 @@ where
                                                 .collect()
                                         });
 
-                                let (alpha_offset, alpha_pow_width) =
-                                    advance_alpha_offset(log_height, mat.width());
-
+                                // Reduce this matrix, as a deep quotient, into one column with powers of α.
                                 let mat_ros = deep_quotient_reduce_matrix(
                                     lde_domain,
                                     mat,
@@ -220,12 +213,16 @@ where
                                     alpha_pow_width,
                                 );
 
+                                // Fold it into our running reduction, offset by alpha_offset.
                                 reduced_opening_for_log_height
                                     .par_iter_mut()
                                     .zip(mat_ros)
                                     .for_each(|(ro, mat_ro)| {
-                                        *ro += alpha_offset * mat_ro;
+                                        *ro += *alpha_offset * mat_ro;
                                     });
+
+                                // Update alpha_offset from α^i -> α^(i + 2 * width)
+                                *alpha_offset *= alpha_pow_width.square();
 
                                 ps_at_zeta
                             })
@@ -235,29 +232,39 @@ where
             })
             .collect();
 
+        // Iterate over our reduced columns and extract lambda - the multiple of the vanishing polynomial
+        // which may appear in the reduced quotient due to CFFT dimension gap.
+
         let mut lambdas = vec![];
         let first_layer_mats: Vec<RowMajorMatrix<Challenge>> = reduced_openings
             .into_iter()
-            .map(|(log_height, mut ro)| {
+            .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
+                // Todo: use domain methods more intelligently
                 let lambda = extract_lambda(
                     CircleDomain::standard(log_height - self.log_blowup),
                     CircleDomain::standard(log_height),
                     &mut ro,
                 );
                 lambdas.push(lambda);
-                debug_assert!(is_low_degree(
-                    &RowMajorMatrix::new_col(ro.clone()).flatten_to_base()
-                ));
-                // since we unpermuted above (.inner()) we need to permute ROs
+                // We have been working with reduced openings in natural order, but now we are ready
+                // to start FRI, so go to circle bitrev order, and prepare for first layer fold
+                // with 2 siblings per leaf.
                 RowMajorMatrix::new(circle_bitrev_permute(&ro), 2)
             })
             .collect();
+
+        // Commit to reduced openings at each log_height, so we can challenge a global
+        // folding factor for all first layers, which we use for a "manual" (not part of p3-fri) fold.
+        // This is necessary because the first layer of folding uses different twiddles, so it's easiest
+        // to do it here, before p3-fri.
 
         let (first_layer_commitment, first_layer_data) =
             self.fri_config.mmcs.commit(first_layer_mats);
         challenger.observe(first_layer_commitment.clone());
         let bivariate_beta: Challenge = challenger.sample();
+
+        // Fold all first layers at bivariate_beta.
 
         let fri_input: Vec<Vec<Challenge>> = self
             .fri_config
@@ -272,6 +279,10 @@ where
 
         let fri_proof =
             p3_fri::prover::prove(&g, &self.fri_config, fri_input, challenger, |index| {
+                // CircleFriFolder asks for an extra query index bit, so we use that here to index
+                // the first layer fold.
+
+                // Open the input (big opening, lots of columns) at the full index...
                 let input_openings = rounds
                     .iter()
                     .map(|(data, _)| {
@@ -283,6 +294,9 @@ where
                         }
                     })
                     .collect();
+
+                // We committed to first_layer in pairs, so open the reduced index and include the sibling
+                // as part of the input proof.
                 let (first_layer_values, first_layer_proof) = self
                     .fri_config
                     .mmcs
@@ -358,8 +372,8 @@ where
                 let first_layer_index = index & 1;
                 let rest_layers_index = index >> 1;
 
-                let mut ro = [Challenge::zero(); 32];
-                let mut num_reduced = [0; 32];
+                // log_height -> (alpha_offset, ro)
+                let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
                 let InputProof {
                     input_openings,
@@ -399,16 +413,17 @@ where
                         let lde_domain = CircleDomain::standard(mat_domain.log_n + 1);
                         let x = lde_domain.nth_point(orig_idx);
 
+                        let (alpha_offset, ro) = reduced_openings
+                            .entry(log_height)
+                            .or_insert((Challenge::one(), Challenge::zero()));
+                        let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
+
                         for (zeta, ps_at_zeta) in mat_points_and_values {
                             let zeta_point = univariate_to_point(*zeta).unwrap();
 
-                            let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
-                            let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
-                            num_reduced[log_height] += 2 * ps_at_x.len();
-
                             let (lhs_num, lhs_denom) =
                                 deep_quotient_lhs(x, zeta_point, alpha_pow_width);
-                            ro[log_height] += alpha_pow_offset
+                            *ro += *alpha_offset
                                 * deep_quotient_reduce_row(
                                     &alpha_reducer,
                                     lhs_num,
@@ -416,59 +431,54 @@ where
                                     ps_at_x,
                                     alpha_reducer.reduce_ext(ps_at_zeta),
                                 );
+
+                            *alpha_offset *= alpha_pow_width.square();
                         }
                     }
                 }
 
-                let first_layer_dims = num_reduced
+                let mut fl_value_pairs = vec![];
+
+                let first_layer_dims = reduced_openings
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i, &nr)| {
-                        if nr != 0 {
-                            Some(Dimensions {
-                                width: 0,
-                                height: 1 << i,
-                            })
-                        } else {
-                            None
-                        }
+                    .map(|(log_height, _)| Dimensions {
+                        width: 0,
+                        height: 1 << log_height,
                     })
                     .collect_vec();
 
-                let mut fri_input = [Challenge::zero(); 32];
-                let mut fl_value_pairs = vec![];
+                let fri_input: Vec<(usize, Challenge)> =
+                    izip!(reduced_openings, first_layer_siblings, &proof.lambdas)
+                        .map(|((log_height, (_, ro)), &fl_sib, &lambda)| {
+                            assert!(log_height > 0);
 
-                let mut first_layer_iter = first_layer_siblings.iter().zip_eq(&proof.lambdas);
-                for (log_height, &nr) in num_reduced.iter().enumerate() {
-                    if nr != 0 {
-                        assert!(log_height > 0);
+                            let lde_size = log_height;
+                            let orig_size = log_height - self.fri_config.log_blowup;
 
-                        let lde_size = log_height;
-                        let orig_size = log_height - self.fri_config.log_blowup;
+                            let orig_idx = circle_bitrev_idx(full_index, lde_size);
 
-                        let (&fl_sib, &lambda) = first_layer_iter.next().unwrap();
+                            let lde_domain = CircleDomain::standard(log_height);
+                            let x: Complex<Val> = lde_domain.nth_point(orig_idx);
 
-                        let orig_idx = circle_bitrev_idx(full_index, lde_size);
+                            let v_n_at_x = v_n(x.real(), orig_size);
 
-                        let lde_domain = CircleDomain::standard(log_height);
-                        let x: Complex<Val> = lde_domain.nth_point(orig_idx);
+                            let lambda_corrected = ro - lambda * v_n_at_x;
 
-                        let v_n_at_x = v_n(x.real(), orig_size);
+                            let mut fl_values = vec![lambda_corrected; 2];
+                            fl_values[first_layer_index ^ 1] = fl_sib;
+                            fl_value_pairs.push(fl_values.clone());
 
-                        let lambda_corrected = ro[log_height] - lambda * v_n_at_x;
-
-                        let mut fl_values = vec![lambda_corrected; 2];
-                        fl_values[first_layer_index ^ 1] = fl_sib;
-                        fl_value_pairs.push(fl_values.clone());
-
-                        fri_input[log_height - 1] = fold_bivariate_row(
-                            index >> 2,
-                            orig_size - 1,
-                            bivariate_beta,
-                            fl_values.iter().cloned(),
-                        );
-                    }
-                }
+                            (
+                                log_height - 1,
+                                fold_bivariate_row(
+                                    index >> 2,
+                                    orig_size - 1,
+                                    bivariate_beta,
+                                    fl_values.iter().cloned(),
+                                ),
+                            )
+                        })
+                        .collect();
 
                 self.fri_config
                     .mmcs

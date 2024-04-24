@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -9,8 +10,8 @@ use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, AbstractField, ExtensionField,
-    Field, PackedValue, TwoAdicField,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
+    TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
@@ -385,10 +386,10 @@ where
         let g: TwoAdicFriFolder<Vec<BatchOpening<Val, InputMmcs>>> = TwoAdicFriFolder(PhantomData);
 
         verifier::verify(&g, &self.fri, proof, challenger, |index, input_proof| {
-            let mut ro = [Challenge::zero(); 32];
-            let mut alpha_pow = [Challenge::one(); 32];
-
             // TODO: separate this out into functions
+
+            // log_height -> (alpha_pow, reduced_opening)
+            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
             for (batch_opening, (batch_commit, mats)) in izip!(input_proof, &rounds) {
                 let batch_heights = mats
@@ -428,16 +429,26 @@ where
                     let x = Val::generator()
                         * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
+                    let (alpha_pow, ro) = reduced_openings
+                        .entry(log_height)
+                        .or_insert((Challenge::one(), Challenge::zero()));
+
                     for (z, ps_at_z) in mat_points_and_values {
                         for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
                             let quotient = (-p_at_z + p_at_x) / (-*z + x);
-                            ro[log_height] += alpha_pow[log_height] * quotient;
-                            alpha_pow[log_height] *= alpha;
+                            *ro += *alpha_pow * quotient;
+                            *alpha_pow *= alpha;
                         }
                     }
                 }
             }
-            ro
+
+            // Return reduced openings descending by log_height.
+            reduced_openings
+                .into_iter()
+                .rev()
+                .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
+                .collect()
         })
         .expect("fri err");
 
@@ -495,7 +506,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::AbstractExtensionField;
+    use p3_field::{AbstractExtensionField, AbstractField};
     use rand::{thread_rng, Rng};
 
     use super::*;

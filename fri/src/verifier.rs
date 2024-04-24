@@ -17,18 +17,12 @@ pub enum FriError<CommitMmcsErr> {
     InvalidPowWitness,
 }
 
-#[derive(Debug)]
-pub struct FriChallenges<F> {
-    pub query_indices: Vec<usize>,
-    pub betas: Vec<F>,
-}
-
 pub fn verify<G, F, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
     proof: &FriProof<F, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize, &G::InputProof) -> [F; 32],
+    open_input: impl Fn(usize, &G::InputProof) -> Vec<(usize, F)>,
 ) -> Result<(), FriError<M::Error>>
 where
     F: Field,
@@ -63,11 +57,13 @@ where
         let folded_eval = verify_query(
             g,
             config,
-            &proof.commit_phase_commits,
             index >> g.extra_query_index_bits(),
-            &qp.commit_phase_openings,
-            &betas,
-            &ro,
+            izip!(
+                &betas,
+                &proof.commit_phase_commits,
+                &qp.commit_phase_openings
+            ),
+            ro,
             log_max_height,
         )?;
 
@@ -79,37 +75,38 @@ where
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn verify_query<G, F, M>(
+type CommitStep<'a, F, M> = (
+    &'a F,
+    &'a <M as Mmcs<F>>::Commitment,
+    &'a CommitPhaseProofStep<F, M>,
+);
+
+fn verify_query<'a, G, F, M>(
     g: &G,
     config: &FriConfig<M>,
-    commit_phase_commits: &[M::Commitment],
     mut index: usize,
-    commit_phase_openings: &[CommitPhaseProofStep<F, M>],
-    betas: &[F],
-    reduced_openings: &[F; 32],
+    steps: impl Iterator<Item = CommitStep<'a, F, M>>,
+    reduced_openings: Vec<(usize, F)>,
     log_max_height: usize,
 ) -> Result<F, FriError<M::Error>>
 where
     F: Field,
-    M: Mmcs<F>,
+    M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
     let mut folded_eval = F::zero();
+    let mut ro_iter = reduced_openings.into_iter().peekable();
 
-    for (log_folded_height, commit, step, &beta) in izip!(
-        (0..log_max_height).rev(),
-        commit_phase_commits,
-        commit_phase_openings,
-        betas,
-    ) {
-        folded_eval += reduced_openings[log_folded_height + 1];
+    for (log_folded_height, (&beta, comm, opening)) in izip!((0..log_max_height).rev(), steps) {
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
+            folded_eval += ro;
+        }
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
 
         let mut evals = vec![folded_eval; 2];
-        evals[index_sibling % 2] = step.sibling_value;
+        evals[index_sibling % 2] = opening.sibling_value;
 
         let dims = &[Dimensions {
             width: 2,
@@ -118,22 +115,24 @@ where
         config
             .mmcs
             .verify_batch(
-                commit,
+                comm,
                 dims,
                 index_pair,
                 &[evals.clone()],
-                &step.opening_proof,
+                &opening.opening_proof,
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         index = index_pair;
 
-        // If verification is extremely performance-critical (such as in recursive setting),
-        // this can be changed to a stateful API to save intermediate computations.
         folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
     }
 
     debug_assert!(index < config.blowup(), "index was {}", index);
+    debug_assert!(
+        ro_iter.next().is_none(),
+        "verifier reduced_openings were not in descending order?"
+    );
 
     Ok(folded_eval)
 }
