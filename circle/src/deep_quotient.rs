@@ -12,14 +12,12 @@ use tracing::instrument;
 
 use crate::domain::CircleDomain;
 use crate::util::v_n;
-use crate::Cfft;
 
-/// Compute numerator and denominator of the "left hand side" of the DEEP quotient
+/// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
 /// Re(1/v_gamma) + alpha^L Im(1/v_gamma)
-/// ("right hand side" is \bar g - \bar v_gamma)
-/// todo: this isnt a good name, lhs and rhs usually refer to sides of the equal sign..
-pub(crate) fn deep_quotient_lhs<F: ComplexExtendable, EF: ExtensionField<F>>(
+/// (Other "part" is \bar g - \bar v_gamma)
+pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionField<F>>(
     x: Complex<F>,
     zeta: Complex<EF>,
     alpha_pow_width: EF,
@@ -37,40 +35,41 @@ pub(crate) fn deep_quotient_lhs<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     alpha_reducer: &ExtensionPowersReducer<F, EF>,
-    lhs_num: EF,
-    lhs_denom_inv: EF,
+    x: Complex<F>,
+    zeta: Complex<EF>,
     ps_at_x: &[F],
-    alpha_reduced_ps_at_zeta: EF,
+    ps_at_zeta: &[EF],
 ) -> EF {
-    lhs_num * lhs_denom_inv * (alpha_reducer.reduce_base(ps_at_x) - alpha_reduced_ps_at_zeta)
+    let (vp_num, vp_denom) =
+        deep_quotient_vanishing_part(x, zeta, alpha_reducer.factor.exp_u64(ps_at_x.len() as u64));
+    vp_num
+        * vp_denom.inverse()
+        * (alpha_reducer.reduce_base(ps_at_x) - alpha_reducer.reduce_ext(ps_at_zeta))
 }
 
+/// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
 #[instrument(skip_all, fields(log_n = domain.log_n))]
 pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
+    alpha_reducer: &mut ExtensionPowersReducer<F, EF>,
     domain: &CircleDomain<F>,
     mat: &RowMajorMatrix<F>,
     zeta: Complex<EF>,
     ps_at_zeta: &[EF],
-    alpha_reducer: &ExtensionPowersReducer<F, EF>,
-    alpha_pow_width: EF,
 ) -> Vec<EF> {
-    let (lhs_nums, lhs_denoms): (Vec<_>, Vec<_>) = domain
+    // +1 so we can get alpha^width
+    alpha_reducer.prepare_for_width(mat.width() + 1);
+    let alpha_pow_width = alpha_reducer.powers[mat.width()];
+    let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = domain
         .points()
-        .map(|x| deep_quotient_lhs(x, zeta, alpha_pow_width))
+        .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
         .unzip();
-    let lhs_denom_invs = batch_multiplicative_inverse(&lhs_denoms);
+    let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
     let alpha_reduced_ps_at_zeta = alpha_reducer.reduce_ext(ps_at_zeta);
     mat.par_row_slices()
-        .zip(lhs_nums)
-        .zip(lhs_denom_invs)
-        .map(|((ps_at_x, lhs_num), lhs_denom_inv)| {
-            deep_quotient_reduce_row(
-                alpha_reducer,
-                lhs_num,
-                lhs_denom_inv,
-                ps_at_x,
-                alpha_reduced_ps_at_zeta,
-            )
+        .zip(vp_nums)
+        .zip(vp_denom_invs)
+        .map(|((ps_at_x, vp_num), vp_denom_inv)| {
+            vp_num * vp_denom_inv * (alpha_reducer.reduce_base(ps_at_x) - alpha_reduced_ps_at_zeta)
         })
         .collect()
 }
@@ -99,13 +98,4 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     }
 
     lambda
-}
-
-pub fn is_low_degree<F: ComplexExtendable>(evals: &RowMajorMatrix<F>) -> bool {
-    let cfft = Cfft::default();
-    cfft.cfft_batch(evals.clone())
-        .rows()
-        .skip(1)
-        .step_by(2)
-        .all(|row| row.into_iter().all(|col| col.is_zero()))
 }

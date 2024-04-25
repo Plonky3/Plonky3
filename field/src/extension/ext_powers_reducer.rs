@@ -8,10 +8,10 @@ use crate::{AbstractField, ExtensionField, Field, PackedValue};
 /// You must call prepare_for_width first to populate powers of a, then it is efficient to use
 /// with several base vectors. Subsequently preparing for greater widths will reuse precomputation.
 pub struct ExtensionPowersReducer<F: Field, EF> {
-    factor: EF,
+    pub factor: EF,
     next: EF,
 
-    powers: Vec<EF>,
+    pub powers: Vec<EF>,
     // Say EF::D = 2 and F::Packing::WIDTH = 3
     //    powers       vertically_packed_powers
     // [               [

@@ -18,10 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
 use crate::cfft::Cfft;
-use crate::deep_quotient::{
-    deep_quotient_lhs, deep_quotient_reduce_matrix, deep_quotient_reduce_row, extract_lambda,
-    is_low_degree,
-};
+use crate::deep_quotient::{deep_quotient_reduce_matrix, deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
 use crate::folding::{
     circle_bitrev_idx, circle_bitrev_permute, fold_bivariate, fold_bivariate_row, CircleBitrevPerm,
@@ -179,9 +176,6 @@ where
                                 (Challenge::one(), vec![Challenge::zero(); mat.height()])
                             });
 
-                        let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
-                        alpha_reducer.prepare_for_width(mat.width());
-
                         points_for_mat
                             .iter()
                             .map(|&zeta| {
@@ -205,12 +199,11 @@ where
 
                                 // Reduce this matrix, as a deep quotient, into one column with powers of α.
                                 let mat_ros = deep_quotient_reduce_matrix(
+                                    &mut alpha_reducer,
                                     lde_domain,
                                     mat,
                                     zeta_point,
                                     &ps_at_zeta,
-                                    &alpha_reducer,
-                                    alpha_pow_width,
                                 );
 
                                 // Fold it into our running reduction, offset by alpha_offset.
@@ -222,7 +215,7 @@ where
                                     });
 
                                 // Update alpha_offset from α^i -> α^(i + 2 * width)
-                                *alpha_offset *= alpha_pow_width.square();
+                                *alpha_offset *= alpha.exp_u64(2 * mat.width() as u64);
 
                                 ps_at_zeta
                             })
@@ -368,10 +361,6 @@ where
             &proof.fri_proof,
             challenger,
             |index, input_proof| {
-                let full_index = index;
-                let first_layer_index = index & 1;
-                let rest_layers_index = index >> 1;
-
                 // log_height -> (alpha_offset, ro)
                 let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
@@ -380,8 +369,6 @@ where
                     first_layer_siblings,
                     first_layer_proof,
                 } = input_proof;
-
-                // TODO: refactor this!!
 
                 for (batch_opening, (batch_commit, mats)) in izip!(input_openings, &rounds) {
                     let batch_dims: Vec<Dimensions> = mats
@@ -397,7 +384,7 @@ where
                         .verify_batch(
                             batch_commit,
                             &batch_dims,
-                            full_index,
+                            index,
                             &batch_opening.opened_values,
                             &batch_opening.opening_proof,
                         )
@@ -408,7 +395,7 @@ where
                     {
                         let log_orig_domain_size = log2_strict_usize(mat_domain.size());
                         let log_height = log_orig_domain_size + self.fri_config.log_blowup;
-                        let orig_idx = circle_bitrev_idx(full_index, log_height);
+                        let orig_idx = circle_bitrev_idx(index, log_height);
 
                         let lde_domain = CircleDomain::standard(mat_domain.log_n + 1);
                         let x = lde_domain.nth_point(orig_idx);
@@ -416,38 +403,26 @@ where
                         let (alpha_offset, ro) = reduced_openings
                             .entry(log_height)
                             .or_insert((Challenge::one(), Challenge::zero()));
-                        let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
+                        let alpha_pow_width_2 = alpha.exp_u64(ps_at_x.len() as u64).square();
 
-                        for (zeta, ps_at_zeta) in mat_points_and_values {
-                            let zeta_point = univariate_to_point(*zeta).unwrap();
+                        for (zeta_uni, ps_at_zeta) in mat_points_and_values {
+                            let zeta = univariate_to_point(*zeta_uni).unwrap();
 
-                            let (lhs_num, lhs_denom) =
-                                deep_quotient_lhs(x, zeta_point, alpha_pow_width);
                             *ro += *alpha_offset
                                 * deep_quotient_reduce_row(
                                     &alpha_reducer,
-                                    lhs_num,
-                                    lhs_denom.inverse(),
+                                    x,
+                                    zeta,
                                     ps_at_x,
-                                    alpha_reducer.reduce_ext(ps_at_zeta),
+                                    ps_at_zeta,
                                 );
 
-                            *alpha_offset *= alpha_pow_width.square();
+                            *alpha_offset *= alpha_pow_width_2;
                         }
                     }
                 }
 
-                let mut fl_value_pairs = vec![];
-
-                let first_layer_dims = reduced_openings
-                    .iter()
-                    .map(|(log_height, _)| Dimensions {
-                        width: 0,
-                        height: 1 << log_height,
-                    })
-                    .collect_vec();
-
-                let fri_input: Vec<(usize, Challenge)> =
+                let (fri_input, fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) =
                     izip!(reduced_openings, first_layer_siblings, &proof.lambdas)
                         .map(|((log_height, (_, ro)), &fl_sib, &lambda)| {
                             assert!(log_height > 0);
@@ -455,7 +430,7 @@ where
                             let lde_size = log_height;
                             let orig_size = log_height - self.fri_config.log_blowup;
 
-                            let orig_idx = circle_bitrev_idx(full_index, lde_size);
+                            let orig_idx = circle_bitrev_idx(index, lde_size);
 
                             let lde_domain = CircleDomain::standard(log_height);
                             let x: Complex<Val> = lde_domain.nth_point(orig_idx);
@@ -465,10 +440,9 @@ where
                             let lambda_corrected = ro - lambda * v_n_at_x;
 
                             let mut fl_values = vec![lambda_corrected; 2];
-                            fl_values[first_layer_index ^ 1] = fl_sib;
-                            fl_value_pairs.push(fl_values.clone());
+                            fl_values[(index ^ 1) & 1] = fl_sib;
 
-                            (
+                            let fri_input = (
                                 log_height - 1,
                                 fold_bivariate_row(
                                     index >> 2,
@@ -476,17 +450,24 @@ where
                                     bivariate_beta,
                                     fl_values.iter().cloned(),
                                 ),
-                            )
+                            );
+
+                            let fl_dims = Dimensions {
+                                width: 0,
+                                height: 1 << log_height,
+                            };
+
+                            (fri_input, fl_dims, fl_values)
                         })
-                        .collect();
+                        .multiunzip();
 
                 self.fri_config
                     .mmcs
                     .verify_batch(
                         &proof.first_layer_commitment,
-                        &first_layer_dims,
-                        rest_layers_index,
-                        &fl_value_pairs,
+                        &fl_dims,
+                        index >> 1,
+                        &fl_leaves,
                         first_layer_proof,
                     )
                     .expect("first layer verify");
@@ -504,6 +485,7 @@ where
 mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::{ExtensionMmcs, Pcs};
+    use p3_field::extension::BinomialExtensionField;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
@@ -518,8 +500,8 @@ mod tests {
         let mut rng = ChaCha8Rng::from_seed([0; 32]);
 
         type Val = Mersenne31;
-        type Challenge = Mersenne31;
-        // type Challenge = BinomialExtensionField<Mersenne31, 3>;
+        // type Challenge = Mersenne31;
+        type Challenge = BinomialExtensionField<Mersenne31, 3>;
 
         type ByteHash = Keccak256Hash;
         type FieldHash = SerializingHasher32<ByteHash>;
