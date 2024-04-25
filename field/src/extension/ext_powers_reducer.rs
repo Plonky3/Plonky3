@@ -28,23 +28,6 @@ pub struct ExtensionPowersReducer<F: Field, EF> {
 
 impl<F: Field, EF: ExtensionField<F>> ExtensionPowersReducer<F, EF> {
     pub fn new(factor: EF) -> Self {
-        /*
-        let powers: Vec<EF> = base
-            .powers()
-            .take(max_width.next_multiple_of(F::Packing::WIDTH))
-            .collect();
-
-        let transposed_packed: Vec<Vec<F::Packing>> = transpose_vec(
-            (0..EF::D)
-                .map(|d| {
-                    F::Packing::pack_slice(
-                        &powers.iter().map(|a| a.as_base_slice()[d]).collect_vec(),
-                    )
-                    .to_vec()
-                })
-                .collect(),
-        );
-        */
         Self {
             factor,
             next: EF::one(),

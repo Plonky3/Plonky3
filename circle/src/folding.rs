@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
@@ -47,12 +48,15 @@ pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     (sum + beta * diff).halve()
 }
 
-pub(crate) struct CircleFriFolder<F, InputProof>(pub(crate) PhantomData<(F, InputProof)>);
+pub(crate) struct CircleFriFolder<F, InputProof, InputError>(
+    pub(crate) PhantomData<(F, InputProof, InputError)>,
+);
 
-impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof> FriGenericConfig<EF>
-    for CircleFriFolder<F, InputProof>
+impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
+    FriGenericConfig<EF> for CircleFriFolder<F, InputProof, InputError>
 {
     type InputProof = InputProof;
+    type InputError = InputError;
 
     fn extra_query_index_bits(&self) -> usize {
         1
@@ -204,7 +208,7 @@ mod tests {
 
         evals = circle_bitrev_permute(&evals);
 
-        let g: CircleFriFolder<F, ()> = CircleFriFolder(PhantomData);
+        let g: CircleFriFolder<F, (), ()> = CircleFriFolder(PhantomData);
 
         evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
         for _ in log_blowup..(log_n + log_blowup - 1) {

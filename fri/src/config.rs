@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_field::Field;
 use p3_matrix::Matrix;
@@ -18,11 +19,13 @@ impl<M> FriConfig<M> {
 }
 
 /// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
-/// set by the PCS calling fri, and abstracts over implementation details of the PCS.
+/// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
 pub trait FriGenericConfig<F: Field> {
     type InputProof;
+    type InputError: Debug;
 
-    // We can ask FRI to sample extra query bits (LSB) for our own purposes.
+    /// We can ask FRI to sample extra query bits (LSB) for our own purposes.
+    /// They will be passed to our callbacks, but ignored (shifted off) by FRI.
     fn extra_query_index_bits(&self) -> usize;
 
     /// Fold a row, returning a single column.
@@ -36,5 +39,6 @@ pub trait FriGenericConfig<F: Field> {
         evals: impl Iterator<Item = F>,
     ) -> F;
 
+    /// Same as applying fold_row to every row, possibly faster.
     fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
 }

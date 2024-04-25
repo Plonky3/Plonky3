@@ -10,9 +10,10 @@ use p3_matrix::Dimensions;
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
 #[derive(Debug)]
-pub enum FriError<CommitMmcsErr> {
+pub enum FriError<CommitMmcsErr, InputError> {
     InvalidProofShape,
     CommitPhaseMmcsError(CommitMmcsErr),
+    InputError(InputError),
     FinalPolyMismatch,
     InvalidPowWitness,
 }
@@ -22,8 +23,8 @@ pub fn verify<G, F, M, Challenger>(
     config: &FriConfig<M>,
     proof: &FriProof<F, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize, &G::InputProof) -> Vec<(usize, F)>,
-) -> Result<(), FriError<M::Error>>
+    open_input: impl Fn(usize, &G::InputProof) -> Result<Vec<(usize, F)>, G::InputError>,
+) -> Result<(), FriError<M::Error, G::InputError>>
 where
     F: Field,
     M: Mmcs<F>,
@@ -52,7 +53,7 @@ where
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
-        let ro = open_input(index, &qp.input_proof);
+        let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
         debug_assert!(
             ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
@@ -93,7 +94,7 @@ fn verify_query<'a, G, F, M>(
     steps: impl Iterator<Item = CommitStep<'a, F, M>>,
     reduced_openings: Vec<(usize, F)>,
     log_max_height: usize,
-) -> Result<F, FriError<M::Error>>
+) -> Result<F, FriError<M::Error, G::InputError>>
 where
     F: Field,
     M: Mmcs<F> + 'a,

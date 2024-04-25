@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use p3_fri::verifier::FriError;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
@@ -54,6 +55,12 @@ pub struct InputProof<Val: Field, Challenge: Field, InputMmcs: Mmcs<Val>, FriMmc
     first_layer_proof: FriMmcs::Proof,
 }
 
+#[derive(Debug)]
+pub enum InputError<InputMmcsError, FriMmcsError> {
+    InputMmcsError(InputMmcsError),
+    FirstLayerMmcsError(FriMmcsError),
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "Witness: Serialize",
@@ -85,7 +92,7 @@ where
     type Commitment = InputMmcs::Commitment;
     type ProverData = ProverData<Val, InputMmcs::ProverData<CircleBitrevView<RowMajorMatrix<Val>>>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
-    type Error = ();
+    type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
@@ -276,8 +283,11 @@ where
             .rev()
             .collect();
 
-        let g: CircleFriFolder<Val, InputProof<Val, Challenge, InputMmcs, FriMmcs>> =
-            CircleFriFolder(PhantomData);
+        let g: CircleFriFolder<
+            Val,
+            InputProof<Val, Challenge, InputMmcs, FriMmcs>,
+            InputError<InputMmcs::Error, FriMmcs::Error>,
+        > = CircleFriFolder(PhantomData);
 
         let fri_proof =
             p3_fri::prover::prove(&g, &self.fri_config, fri_input, challenger, |index| {
@@ -368,8 +378,11 @@ where
         let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
         alpha_reducer.prepare_for_width(max_width);
 
-        let g: CircleFriFolder<Val, InputProof<Val, Challenge, InputMmcs, FriMmcs>> =
-            CircleFriFolder(PhantomData);
+        let g: CircleFriFolder<
+            Val,
+            InputProof<Val, Challenge, InputMmcs, FriMmcs>,
+            InputError<InputMmcs::Error, FriMmcs::Error>,
+        > = CircleFriFolder(PhantomData);
 
         p3_fri::verifier::verify(
             &g,
@@ -408,7 +421,7 @@ where
                             &batch_opening.opened_values,
                             &batch_opening.opening_proof,
                         )
-                        .expect("input mmcs");
+                        .map_err(InputError::InputMmcsError)?;
 
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in
                         izip!(&batch_opening.opened_values, mats)
@@ -494,14 +507,11 @@ where
                         &fl_leaves,
                         first_layer_proof,
                     )
-                    .expect("first layer verify");
+                    .map_err(InputError::FirstLayerMmcsError)?;
 
-                fri_input
+                Ok(fri_input)
             },
         )
-        .expect("fri verify");
-
-        Ok(())
     }
 }
 
@@ -521,6 +531,8 @@ mod tests {
 
     #[test]
     fn circle_pcs() {
+        // Very simple pcs test. More rigorous tests in p3_fri/tests/pcs.
+
         let mut rng = ChaCha8Rng::from_seed([0; 32]);
 
         type Val = Mersenne31;

@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field};
-use p3_fri::{prover, verifier, FriConfig, TwoAdicFriFolder};
+use p3_fri::{prover, verifier, FriConfig, TwoAdicFriGenericConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -90,7 +90,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         let log_max_height = log2_strict_usize(input[0].len());
 
         let proof = prover::prove(
-            &TwoAdicFriFolder::<Vec<(usize, Challenge)>>(PhantomData),
+            &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
             &fc,
             input.clone(),
             &mut chal,
@@ -112,11 +112,11 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_ext_element();
     verifier::verify(
-        &TwoAdicFriFolder::<Vec<(usize, Challenge)>>(PhantomData),
+        &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
         &fc,
         &proof,
         &mut v_challenger,
-        |_index, proof| proof.clone(),
+        |_index, proof| Ok(proof.clone()),
     )
     .unwrap();
 

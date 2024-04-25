@@ -45,12 +45,6 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     }
 }
 
-#[derive(Debug)]
-pub enum VerificationError<InputMmcsError, FriMmcsError> {
-    InputMmcsError(InputMmcsError),
-    FriError(FriError<FriMmcsError>),
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
@@ -58,10 +52,18 @@ pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
     pub opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
-pub struct TwoAdicFriFolder<InputProof>(pub PhantomData<InputProof>);
+pub struct TwoAdicFriGenericConfig<InputProof, InputError>(
+    pub PhantomData<(InputProof, InputError)>,
+);
 
-impl<F: TwoAdicField, InputProof> FriGenericConfig<F> for TwoAdicFriFolder<InputProof> {
+pub type TwoAdicFriGenericConfigForMmcs<F, M> =
+    TwoAdicFriGenericConfig<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
+
+impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
+    for TwoAdicFriGenericConfig<InputProof, InputError>
+{
     type InputProof = InputProof;
+    type InputError = InputError;
 
     fn extra_query_index_bits(&self) -> usize {
         0
@@ -143,7 +145,7 @@ where
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
-    type Error = VerificationError<InputMmcs::Error, FriMmcs::Error>;
+    type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         let log_n = log2_strict_usize(degree);
@@ -324,7 +326,8 @@ where
 
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
-        let g: TwoAdicFriFolder<Vec<BatchOpening<Val, InputMmcs>>> = TwoAdicFriFolder(PhantomData);
+        let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
+            TwoAdicFriGenericConfig(PhantomData);
 
         let fri_proof = prover::prove(&g, &self.fri, fri_input, challenger, |index| {
             rounds
@@ -371,7 +374,8 @@ where
 
         let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
 
-        let g: TwoAdicFriFolder<Vec<BatchOpening<Val, InputMmcs>>> = TwoAdicFriFolder(PhantomData);
+        let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
+            TwoAdicFriGenericConfig(PhantomData);
 
         verifier::verify(&g, &self.fri, proof, challenger, |index, input_proof| {
             // TODO: separate this out into functions
@@ -395,15 +399,13 @@ where
                 let bits_reduced = log_global_max_height - log_batch_max_height;
                 let reduced_index = index >> bits_reduced;
 
-                self.mmcs
-                    .verify_batch(
-                        batch_commit,
-                        &batch_dims,
-                        reduced_index,
-                        &batch_opening.opened_values,
-                        &batch_opening.opening_proof,
-                    )
-                    .expect("input err");
+                self.mmcs.verify_batch(
+                    batch_commit,
+                    &batch_dims,
+                    reduced_index,
+                    &batch_opening.opened_values,
+                    &batch_opening.opening_proof,
+                )?;
                 for (mat_opening, (mat_domain, mat_points_and_values)) in
                     izip!(&batch_opening.opened_values, mats)
                 {
@@ -432,11 +434,11 @@ where
             }
 
             // Return reduced openings descending by log_height.
-            reduced_openings
+            Ok(reduced_openings
                 .into_iter()
                 .rev()
                 .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
-                .collect()
+                .collect())
         })
         .expect("fri err");
 
