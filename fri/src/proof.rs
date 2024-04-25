@@ -4,7 +4,7 @@ use p3_commit::Mmcs;
 use p3_field::Field;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "Witness: Serialize, InputProof: Serialize",
     deserialize = "Witness: Deserialize<'de>, InputProof: Deserialize<'de>"

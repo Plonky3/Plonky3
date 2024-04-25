@@ -18,7 +18,7 @@ use serde::Serialize;
 pub trait Mmcs<T: Send + Sync>: Clone {
     type ProverData<M>;
     type Commitment: Clone + Serialize + DeserializeOwned;
-    type Proof: Serialize + DeserializeOwned;
+    type Proof: Clone + Serialize + DeserializeOwned;
     type Error: Debug;
 
     fn commit<M: Matrix<T>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>);
@@ -65,7 +65,7 @@ pub trait Mmcs<T: Send + Sync>: Clone {
     /// Verify a batch opening.
     /// `index` is the row index we're opening for each matrix, following the same
     /// semantics as `open_batch`.
-    /// `dimensions` is a slice whose ith element is the dimensions of the the matrix being opened
+    /// `dimensions` is a slice whose ith element is the dimensions of the matrix being opened
     /// in the ith opening
     fn verify_batch(
         &self,

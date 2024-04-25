@@ -12,7 +12,7 @@ use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Baby Bear prime
-/// This is the unqiue 31-bit prime with the highest possible 2 adicity (27).
+/// This is the unique 31-bit prime with the highest possible 2 adicity (27).
 const P: u32 = 0x78000001;
 const MONTY_BITS: u32 = 32;
 // We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
@@ -69,7 +69,7 @@ impl Distribution<BabyBear> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BabyBear {
         loop {
-            let next_u31 = rng.next_u32() & 0x7ffffff;
+            let next_u31 = rng.next_u32() >> 1;
             let is_canonical = next_u31 < P;
             if is_canonical {
                 return BabyBear { value: next_u31 };
