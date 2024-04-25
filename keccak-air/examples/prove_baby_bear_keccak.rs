@@ -62,7 +62,7 @@ fn main() -> Result<(), VerificationError> {
         mmcs: challenge_mmcs,
     };
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);

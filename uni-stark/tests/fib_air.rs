@@ -134,7 +134,7 @@ fn test_public_value() {
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };
-    let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let pis = vec![
@@ -168,7 +168,7 @@ fn test_incorrect_public_value() {
         mmcs: challenge_mmcs,
     };
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
-    let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let pis = vec![

@@ -58,7 +58,6 @@ fn main() -> Result<(), VerificationError> {
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
-        log_blowup: 1,
         cfft: Cfft::default(),
         mmcs: val_mmcs,
         fri_config,

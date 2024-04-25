@@ -95,7 +95,6 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        println!("=== commit ===");
         let (committed_domains, ldes): (Vec<_>, Vec<_>) = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -106,7 +105,6 @@ where
                 );
                 let committed_domain =
                     CircleDomain::standard(domain.log_n + self.fri_config.log_blowup);
-                dbg!(domain.log_n, committed_domain.log_n);
                 let lde = self.cfft.lde(evals, domain, committed_domain);
                 let perm_lde = CircleBitrevPerm::new(lde);
                 (committed_domain, perm_lde)
@@ -149,7 +147,6 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        println!("=== open ===");
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
@@ -287,8 +284,6 @@ where
                 // CircleFriFolder asks for an extra query index bit, so we use that here to index
                 // the first layer fold.
 
-                println!("opening input at {index}");
-
                 // Open the input (big opening, lots of columns) at the full index...
                 let input_openings = rounds
                     .iter()
@@ -353,7 +348,6 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        println!("=== verify ===");
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
         challenger.observe(proof.first_layer_commitment.clone());
@@ -406,8 +400,6 @@ where
                     let log_batch_max_height =
                         log2_strict_usize(batch_heights.iter().max().copied().unwrap());
 
-                    dbg!(log_global_max_height, log_batch_max_height);
-
                     self.mmcs
                         .verify_batch(
                             batch_commit,
@@ -424,8 +416,6 @@ where
                         let log_height = mat_domain.log_n + self.fri_config.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
                         let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
-
-                        dbg!(mat_domain.log_n, log_height, bits_reduced, index, orig_idx);
 
                         let committed_domain = CircleDomain::standard(log_height);
                         let x = committed_domain.nth_point(orig_idx);
@@ -505,8 +495,6 @@ where
                         first_layer_proof,
                     )
                     .expect("first layer verify");
-
-                println!("fl verify ok!");
 
                 fri_input
             },
