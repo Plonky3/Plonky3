@@ -38,14 +38,14 @@ pub struct ProverData<Val, MmcsData> {
     mmcs_data: MmcsData,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
     pub(crate) opened_values: Vec<Vec<Val>>,
     pub(crate) opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct InputProof<Val: Field, Challenge: Field, InputMmcs: Mmcs<Val>, FriMmcs: Mmcs<Challenge>>
 {
@@ -54,7 +54,7 @@ pub struct InputProof<Val: Field, Challenge: Field, InputMmcs: Mmcs<Val>, FriMmc
     first_layer_proof: FriMmcs::Proof,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "Witness: Serialize",
     deserialize = "Witness: Deserialize<'de>"

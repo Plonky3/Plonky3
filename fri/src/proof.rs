@@ -18,7 +18,7 @@ pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub pow_witness: Witness,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "InputProof: Serialize",
     deserialize = "InputProof: Deserialize<'de>",
@@ -30,7 +30,7 @@ pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
     pub commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
     /// The opening of the commit phase codeword at the sibling location.
