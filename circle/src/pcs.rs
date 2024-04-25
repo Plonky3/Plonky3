@@ -2,13 +2,13 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_fri::verifier::FriError;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::{Complex, ComplexExtendable, ExtensionPowersReducer};
 use p3_field::{ExtensionField, Field};
+use p3_fri::verifier::FriError;
 use p3_fri::{FriConfig, FriProof};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
