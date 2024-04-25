@@ -22,7 +22,7 @@ use crate::deep_quotient::{deep_quotient_reduce_matrix, deep_quotient_reduce_row
 use crate::domain::CircleDomain;
 use crate::folding::{
     circle_bitrev_idx, circle_bitrev_permute, fold_bivariate, fold_bivariate_row, CircleBitrevPerm,
-    CircleBitrevView, CircleFriFolder,
+    CircleBitrevView, CircleFriConfig, CircleFriGenericConfig,
 };
 use crate::util::{univariate_to_point, v_n};
 
@@ -283,11 +283,8 @@ where
             .rev()
             .collect();
 
-        let g: CircleFriFolder<
-            Val,
-            InputProof<Val, Challenge, InputMmcs, FriMmcs>,
-            InputError<InputMmcs::Error, FriMmcs::Error>,
-        > = CircleFriFolder(PhantomData);
+        let g: CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> =
+            CircleFriGenericConfig(PhantomData);
 
         let fri_proof =
             p3_fri::prover::prove(&g, &self.fri_config, fri_input, challenger, |index| {
@@ -378,11 +375,8 @@ where
         let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
         alpha_reducer.prepare_for_width(max_width);
 
-        let g: CircleFriFolder<
-            Val,
-            InputProof<Val, Challenge, InputMmcs, FriMmcs>,
-            InputError<InputMmcs::Error, FriMmcs::Error>,
-        > = CircleFriFolder(PhantomData);
+        let g: CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> =
+            CircleFriGenericConfig(PhantomData);
 
         p3_fri::verifier::verify(
             &g,

@@ -3,6 +3,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
+use p3_commit::Mmcs;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
 use p3_fri::FriGenericConfig;
@@ -11,6 +12,7 @@ use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
+use crate::{InputError, InputProof};
 
 pub(crate) fn fold_bivariate<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
@@ -48,12 +50,18 @@ pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     (sum + beta * diff).halve()
 }
 
-pub(crate) struct CircleFriFolder<F, InputProof, InputError>(
+pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
     pub(crate) PhantomData<(F, InputProof, InputError)>,
 );
 
+pub(crate) type CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> = CircleFriGenericConfig<
+    Val,
+    InputProof<Val, Challenge, InputMmcs, FriMmcs>,
+    InputError<<InputMmcs as Mmcs<Val>>::Error, <FriMmcs as Mmcs<Challenge>>::Error>,
+>;
+
 impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
-    FriGenericConfig<EF> for CircleFriFolder<F, InputProof, InputError>
+    FriGenericConfig<EF> for CircleFriGenericConfig<F, InputProof, InputError>
 {
     type InputProof = InputProof;
     type InputError = InputError;
@@ -208,7 +216,7 @@ mod tests {
 
         evals = circle_bitrev_permute(&evals);
 
-        let g: CircleFriFolder<F, (), ()> = CircleFriFolder(PhantomData);
+        let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
 
         evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
         for _ in log_blowup..(log_n + log_blowup - 1) {
