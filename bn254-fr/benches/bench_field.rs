@@ -16,7 +16,7 @@ fn bench_field(c: &mut Criterion) {
     benchmark_iter_sum::<F, 12, REPS>(c, name);
 
     // Note that each round of throughput has 10 operations
-    // So we should have 10 * more repitions for latency tests.
+    // So we should have 10 * more repetitions for latency tests.
     const L_REPS: usize = 10 * REPS;
     benchmark_add_latency::<F, L_REPS>(c, name);
     benchmark_add_throughput::<F, REPS>(c, name);
