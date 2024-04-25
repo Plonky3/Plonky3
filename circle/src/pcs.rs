@@ -27,7 +27,6 @@ use crate::util::{univariate_to_point, v_n};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
-    pub log_blowup: usize,
     pub cfft: Cfft<Val>,
     pub mmcs: InputMmcs,
     pub fri_config: FriConfig<FriMmcs>,
@@ -96,10 +95,18 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
+        println!("=== commit ===");
         let (committed_domains, ldes): (Vec<_>, Vec<_>) = evaluations
             .into_iter()
             .map(|(domain, evals)| {
-                let committed_domain = CircleDomain::standard(domain.log_n + self.log_blowup);
+                assert!(
+                    domain.log_n >= 2,
+                    "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
+                    // (because we bivariate fold one bit, and fri needs one more bit)
+                );
+                let committed_domain =
+                    CircleDomain::standard(domain.log_n + self.fri_config.log_blowup);
+                dbg!(domain.log_n, committed_domain.log_n);
                 let lde = self.cfft.lde(evals, domain, committed_domain);
                 let perm_lde = CircleBitrevPerm::new(lde);
                 (committed_domain, perm_lde)
@@ -142,6 +149,7 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
+        println!("=== open ===");
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
@@ -228,13 +236,16 @@ where
         // which may appear in the reduced quotient due to CFFT dimension gap.
 
         let mut lambdas = vec![];
+        let mut log_heights = vec![];
         let first_layer_mats: Vec<RowMajorMatrix<Challenge>> = reduced_openings
             .into_iter()
             .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
+                log_heights.push(log_height);
+
                 // Todo: use domain methods more intelligently
                 let lambda = extract_lambda(
-                    CircleDomain::standard(log_height - self.log_blowup),
+                    CircleDomain::standard(log_height - self.fri_config.log_blowup),
                     CircleDomain::standard(log_height),
                     &mut ro,
                 );
@@ -245,6 +256,7 @@ where
                 RowMajorMatrix::new(circle_bitrev_permute(&ro), 2)
             })
             .collect();
+        let log_max_height = log_heights.iter().max().copied().unwrap();
 
         // Commit to reduced openings at each log_height, so we can challenge a global
         // folding factor for all first layers, which we use for a "manual" (not part of p3-fri) fold.
@@ -264,6 +276,8 @@ where
             .get_matrices(&first_layer_data)
             .into_iter()
             .map(|m| fold_bivariate(bivariate_beta, m.as_view()))
+            // Reverse, because FRI expects descending by height
+            .rev()
             .collect();
 
         let g: CircleFriFolder<Val, InputProof<Val, Challenge, InputMmcs, FriMmcs>> =
@@ -273,6 +287,8 @@ where
             p3_fri::prover::prove(&g, &self.fri_config, fri_input, challenger, |index| {
                 // CircleFriFolder asks for an extra query index bit, so we use that here to index
                 // the first layer fold.
+
+                println!("opening input at {index}");
 
                 // Open the input (big opening, lots of columns) at the full index...
                 let input_openings = rounds
@@ -293,9 +309,8 @@ where
                     .fri_config
                     .mmcs
                     .open_batch(index >> 1, &first_layer_data);
-                let first_layer_siblings = first_layer_values
-                    .iter()
-                    .map(|v| v[(index ^ 1) & 1])
+                let first_layer_siblings = izip!(&first_layer_values, &log_heights)
+                    .map(|(v, log_height)| v[((index >> (log_max_height - log_height)) & 1) ^ 1])
                     .collect();
                 InputProof {
                     input_openings,
@@ -335,10 +350,15 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
+        println!("=== verify ===");
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
         challenger.observe(proof.first_layer_commitment.clone());
         let bivariate_beta: Challenge = challenger.sample();
+
+        // +1 to account for first layer
+        let log_global_max_height =
+            proof.fri_proof.commit_phase_commits.len() + self.fri_config.log_blowup + 1;
 
         let max_width = rounds
             .iter()
@@ -392,12 +412,14 @@ where
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in
                         izip!(&batch_opening.opened_values, mats)
                     {
-                        let log_orig_domain_size = log2_strict_usize(mat_domain.size());
-                        let log_height = log_orig_domain_size + self.fri_config.log_blowup;
-                        let orig_idx = circle_bitrev_idx(index, log_height);
+                        let log_height = mat_domain.log_n + self.fri_config.log_blowup;
+                        let bits_reduced = log_global_max_height - log_height;
+                        let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
 
-                        let lde_domain = CircleDomain::standard(mat_domain.log_n + 1);
-                        let x = lde_domain.nth_point(orig_idx);
+                        dbg!(mat_domain.log_n, log_height, bits_reduced, index, orig_idx);
+
+                        let committed_domain = CircleDomain::standard(log_height);
+                        let x = committed_domain.nth_point(orig_idx);
 
                         let (alpha_offset, ro) = reduced_openings
                             .entry(log_height)
@@ -421,15 +443,16 @@ where
                     }
                 }
 
-                let (fri_input, fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) =
+                // Verify bivariate fold and lambda correction
+
+                let (mut fri_input, fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) =
                     izip!(reduced_openings, first_layer_siblings, &proof.lambdas)
                         .map(|((log_height, (_, ro)), &fl_sib, &lambda)| {
                             assert!(log_height > 0);
 
-                            let lde_size = log_height;
                             let orig_size = log_height - self.fri_config.log_blowup;
-
-                            let orig_idx = circle_bitrev_idx(index, lde_size);
+                            let bits_reduced = log_global_max_height - log_height;
+                            let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
 
                             let lde_domain = CircleDomain::standard(log_height);
                             let x: Complex<Val> = lde_domain.nth_point(orig_idx);
@@ -439,12 +462,12 @@ where
                             let lambda_corrected = ro - lambda * v_n_at_x;
 
                             let mut fl_values = vec![lambda_corrected; 2];
-                            fl_values[(index ^ 1) & 1] = fl_sib;
+                            fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;
 
                             let fri_input = (
                                 log_height - 1,
                                 fold_bivariate_row(
-                                    index >> 2,
+                                    index >> (2 + bits_reduced),
                                     orig_size - 1,
                                     bivariate_beta,
                                     fl_values.iter().cloned(),
@@ -460,6 +483,9 @@ where
                         })
                         .multiunzip();
 
+                // sort descending
+                fri_input.reverse();
+
                 self.fri_config
                     .mmcs
                     .verify_batch(
@@ -470,6 +496,8 @@ where
                         first_layer_proof,
                     )
                     .expect("first layer verify");
+
+                println!("fl verify ok!");
 
                 fri_input
             },
@@ -499,7 +527,6 @@ mod tests {
         let mut rng = ChaCha8Rng::from_seed([0; 32]);
 
         type Val = Mersenne31;
-        // type Challenge = Mersenne31;
         type Challenge = BinomialExtensionField<Mersenne31, 3>;
 
         type ByteHash = Keccak256Hash;
@@ -527,7 +554,6 @@ mod tests {
 
         type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
         let pcs = Pcs {
-            log_blowup: 1,
             cfft: Cfft::default(),
             mmcs: val_mmcs,
             fri_config,
@@ -540,7 +566,6 @@ mod tests {
             1 << log_n,
         );
 
-        // let d = pcs.natural_domain_for_degree(1 << log_n);
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         let (comm, data) =

@@ -28,8 +28,6 @@ use crate::{prover, FriConfig, FriGenericConfig, FriProof};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    // degree bound
-    log_n: usize,
     dft: Dft,
     mmcs: InputMmcs,
     fri: FriConfig<FriMmcs>,
@@ -37,9 +35,8 @@ pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    pub const fn new(log_n: usize, dft: Dft, mmcs: InputMmcs, fri: FriConfig<FriMmcs>) -> Self {
+    pub const fn new(dft: Dft, mmcs: InputMmcs, fri: FriConfig<FriMmcs>) -> Self {
         Self {
-            log_n,
             dft,
             mmcs,
             fri,
@@ -150,7 +147,6 @@ where
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         let log_n = log2_strict_usize(degree);
-        assert!(log_n <= self.log_n);
         TwoAdicMultiplicativeCoset {
             log_n,
             shift: Val::one(),
@@ -165,8 +161,6 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
-                let log_n = log2_strict_usize(domain.size());
-                assert!(log_n <= self.log_n);
                 let shift = Val::generator() / domain.shift;
                 // Commit to the bit-reversed LDE.
                 self.dft

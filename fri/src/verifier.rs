@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::Field;
@@ -53,6 +53,11 @@ where
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof);
+
+        debug_assert!(
+            ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
+            "reduced openings sorted by height descending"
+        );
 
         let folded_eval = verify_query(
             g,

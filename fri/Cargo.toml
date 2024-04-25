@@ -19,8 +19,10 @@ serde = { version = "1.0", default-features = false, features = ["derive", "allo
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-circle = { path = "../circle" }
 p3-dft = { path = "../dft" }
 p3-goldilocks = { path = "../goldilocks" }
+p3-keccak = { path = "../keccak" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }

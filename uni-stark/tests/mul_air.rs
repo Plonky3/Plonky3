@@ -240,7 +240,7 @@ fn do_test_bb_twoadic(
         mmcs: challenge_mmcs,
     };
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs::new(log_n, dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
@@ -279,8 +279,7 @@ fn do_test_m31_circle(
     log_n: usize,
 ) -> Result<(), VerificationError> {
     type Val = Mersenne31;
-    // type Challenge = BinomialExtensionField<Val, 4>;
-    type Challenge = Mersenne31;
+    type Challenge = BinomialExtensionField<Val, 3>;
 
     type ByteHash = Keccak256Hash;
     type FieldHash = SerializingHasher32<ByteHash>;
@@ -307,7 +306,6 @@ fn do_test_m31_circle(
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
-        log_blowup: 1,
         cfft: Cfft::default(),
         mmcs: val_mmcs,
         fri_config,
