@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use p3_fri::FriGenericConfig;
 
 use itertools::Itertools;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
+use p3_fri::FriGenericConfig;
 use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
