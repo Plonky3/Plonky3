@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, PairBuilder};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
@@ -12,13 +12,18 @@ use crate::symbolic_variable::SymbolicVariable;
 use crate::Entry;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
-pub fn get_log_quotient_degree<F, A>(air: &A, num_public_values: usize) -> usize
+pub fn get_log_quotient_degree<F, A>(
+    air: &A,
+    preprocessed_width: usize,
+    num_public_values: usize,
+) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree = get_max_constraint_degree(air, num_public_values).max(2);
+    let constraint_degree =
+        get_max_constraint_degree(air, preprocessed_width, num_public_values).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the zerofier.
@@ -27,12 +32,16 @@ where
 }
 
 #[instrument(name = "infer constraint degree", skip_all, level = "debug")]
-pub fn get_max_constraint_degree<F, A>(air: &A, num_public_values: usize) -> usize
+pub fn get_max_constraint_degree<F, A>(
+    air: &A,
+    preprocessed_width: usize,
+    num_public_values: usize,
+) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    get_symbolic_constraints(air, num_public_values)
+    get_symbolic_constraints(air, preprocessed_width, num_public_values)
         .iter()
         .map(|c| c.degree_multiple())
         .max()
@@ -42,13 +51,14 @@ where
 #[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
 pub fn get_symbolic_constraints<F, A>(
     air: &A,
+    preprocessed_width: usize,
     num_public_values: usize,
 ) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder = SymbolicAirBuilder::new(air.width(), num_public_values);
+    let mut builder = SymbolicAirBuilder::new(preprocessed_width, air.width(), num_public_values);
     air.eval(&mut builder);
     builder.constraints()
 }
@@ -56,13 +66,21 @@ where
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field> {
+    preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
     main: RowMajorMatrix<SymbolicVariable<F>>,
     public_values: Vec<SymbolicVariable<F>>,
     constraints: Vec<SymbolicExpression<F>>,
 }
 
 impl<F: Field> SymbolicAirBuilder<F> {
-    pub(crate) fn new(width: usize, num_public_values: usize) -> Self {
+    pub(crate) fn new(preprocessed_width: usize, width: usize, num_public_values: usize) -> Self {
+        let prep_values = [0, 1]
+            .into_iter()
+            .flat_map(|offset| {
+                (0..preprocessed_width)
+                    .map(move |index| SymbolicVariable::new(Entry::Main { offset }, index))
+            })
+            .collect();
         let main_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
@@ -73,8 +91,8 @@ impl<F: Field> SymbolicAirBuilder<F> {
             .map(move |index| SymbolicVariable::new(Entry::Public, index))
             .collect();
         Self {
+            preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
             main: RowMajorMatrix::new(main_values, width),
-            // TODO replace zeros once we have SymbolicExpression::PublicValue
             public_values,
             constraints: vec![],
         }
@@ -120,5 +138,11 @@ impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
     type PublicVar = SymbolicVariable<F>;
     fn public_values(&self) -> &[Self::PublicVar] {
         &self.public_values
+    }
+}
+
+impl<F: Field> PairBuilder for SymbolicAirBuilder<F> {
+    fn preprocessed(&self) -> Self::M {
+        self.preprocessed.clone()
     }
 }
