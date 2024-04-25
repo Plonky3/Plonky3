@@ -2,8 +2,6 @@ use alloc::vec::Vec;
 
 use p3_field::Field;
 use p3_matrix::Matrix;
-use p3_maybe_rayon::prelude::*;
-use p3_util::log2_strict_usize;
 
 #[derive(Debug)]
 pub struct FriConfig<M> {
@@ -38,11 +36,5 @@ pub trait FriGenericConfig<F: Field> {
         evals: impl Iterator<Item = F>,
     ) -> F;
 
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
-        let log_height = log2_strict_usize(m.height());
-        m.par_rows()
-            .enumerate()
-            .map(|(i, r)| self.fold_row(i, log_height, beta, r))
-            .collect()
-    }
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
 }

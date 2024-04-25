@@ -61,13 +61,7 @@ pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
     pub opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
-pub struct TwoAdicFriFolder<InputProof>(PhantomData<InputProof>);
-
-impl<InputProof> TwoAdicFriFolder<InputProof> {
-    pub fn new() -> Self {
-        Self(PhantomData)
-    }
-}
+pub struct TwoAdicFriFolder<InputProof>(pub PhantomData<InputProof>);
 
 impl<F: TwoAdicField, InputProof> FriGenericConfig<F> for TwoAdicFriFolder<InputProof> {
     type InputProof = InputProof;

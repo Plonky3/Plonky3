@@ -1,4 +1,5 @@
 use core::cmp::Reverse;
+use std::marker::PhantomData;
 
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
@@ -89,7 +90,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         let log_max_height = log2_strict_usize(input[0].len());
 
         let proof = prover::prove(
-            &TwoAdicFriFolder::<Vec<(usize, Challenge)>>::new(),
+            &TwoAdicFriFolder::<Vec<(usize, Challenge)>>(PhantomData),
             &fc,
             input.clone(),
             &mut chal,
@@ -111,7 +112,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_ext_element();
     verifier::verify(
-        &TwoAdicFriFolder::<Vec<(usize, Challenge)>>::new(),
+        &TwoAdicFriFolder::<Vec<(usize, Challenge)>>(PhantomData),
         &fc,
         &proof,
         &mut v_challenger,
