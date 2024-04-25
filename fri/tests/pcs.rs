@@ -15,9 +15,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 fn seeded_rng() -> impl Rng {
-    // ChaCha20Rng::seed_from_u64(2)
-    use rand::thread_rng;
-    thread_rng()
+    ChaCha20Rng::seed_from_u64(0)
 }
 
 fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
@@ -105,7 +103,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn single() {
             let p = $p;
-            for i in 5..6 {
+            for i in 3..6 {
                 do_test_fri_pcs(&p, &[&[i]]);
             }
         }
@@ -113,7 +111,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_equal() {
             let p = $p;
-            for i in 2..4 {
+            for i in 2..5 {
                 do_test_fri_pcs(&p, &[&[i; 5]]);
             }
         }

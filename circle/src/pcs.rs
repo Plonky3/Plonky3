@@ -242,7 +242,6 @@ where
             .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
                 log_heights.push(log_height);
-
                 // Todo: use domain methods more intelligently
                 let lambda = extract_lambda(
                     CircleDomain::standard(log_height - self.fri_config.log_blowup),
@@ -294,8 +293,12 @@ where
                 let input_openings = rounds
                     .iter()
                     .map(|(data, _)| {
-                        let (opened_values, opening_proof) =
-                            self.mmcs.open_batch(index, &data.mmcs_data);
+                        let log_max_batch_height =
+                            log2_strict_usize(self.mmcs.get_max_height(&data.mmcs_data));
+                        let (opened_values, opening_proof) = self.mmcs.open_batch(
+                            index >> (log_max_height - log_max_batch_height),
+                            &data.mmcs_data,
+                        );
                         BatchOpening {
                             opened_values,
                             opening_proof,
@@ -390,20 +393,26 @@ where
                 } = input_proof;
 
                 for (batch_opening, (batch_commit, mats)) in izip!(input_openings, &rounds) {
-                    let batch_dims: Vec<Dimensions> = mats
+                    let batch_heights: Vec<usize> = mats
                         .iter()
-                        .map(|(domain, _)| Dimensions {
-                            // todo: mmcs doesn't really need width
-                            width: 0,
-                            height: domain.size(),
-                        })
+                        .map(|(domain, _)| (domain.size() << self.fri_config.log_blowup))
                         .collect_vec();
+                    let batch_dims: Vec<Dimensions> = batch_heights
+                        .iter()
+                        // todo: mmcs doesn't really need width
+                        .map(|&height| Dimensions { width: 0, height })
+                        .collect_vec();
+
+                    let log_batch_max_height =
+                        log2_strict_usize(batch_heights.iter().max().copied().unwrap());
+
+                    dbg!(log_global_max_height, log_batch_max_height);
 
                     self.mmcs
                         .verify_batch(
                             batch_commit,
                             &batch_dims,
-                            index,
+                            index >> (log_global_max_height - log_batch_max_height),
                             &batch_opening.opened_values,
                             &batch_opening.opening_proof,
                         )
