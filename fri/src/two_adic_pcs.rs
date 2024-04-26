@@ -173,7 +173,7 @@ where
                 reduced[X] += alpha_offset * inv_denom[X] * sum_i [ alpha^i * p_i[X] - alpha^i * y[i] ]
 
             And separate the sum:
-                reduced[X] += alpha_offset * inv_denom[X] * sum_i [ alpha^i * p_i[X] ] - sum_i [ alpha^i * y[i] ]
+                reduced[X] += alpha_offset * inv_denom[X] * [ sum_i [ alpha^i * p_i[X] ] - sum_i [ alpha^i * y[i] ] ]
 
             And now the last sum doesn't depend on X, so we can precompute that for the matrix, too.
             So the hot loop (that depends on both X and i) is just:
