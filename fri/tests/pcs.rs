@@ -104,7 +104,7 @@ macro_rules! make_tests_for_pcs {
         fn single() {
             let p = $p;
             for i in 3..6 {
-                do_test_fri_pcs(&p, &[&[i]]);
+                $crate::do_test_fri_pcs(&p, &[&[i]]);
             }
         }
 
@@ -112,7 +112,7 @@ macro_rules! make_tests_for_pcs {
         fn many_equal() {
             let p = $p;
             for i in 2..5 {
-                do_test_fri_pcs(&p, &[&[i; 5]]);
+                $crate::do_test_fri_pcs(&p, &[&[i; 5]]);
             }
         }
 
@@ -121,7 +121,7 @@ macro_rules! make_tests_for_pcs {
             let p = $p;
             for i in 2..4 {
                 let degrees = (3..3 + i).collect::<Vec<_>>();
-                do_test_fri_pcs(&p, &[&degrees]);
+                $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
         }
 
@@ -130,22 +130,22 @@ macro_rules! make_tests_for_pcs {
             let p = $p;
             for i in 2..4 {
                 let degrees = (3..3 + i).rev().collect::<Vec<_>>();
-                do_test_fri_pcs(&p, &[&degrees]);
+                $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
         }
 
         #[test]
         fn multiple_rounds() {
             let p = $p;
-            do_test_fri_pcs(&p, &[&[3]]);
-            do_test_fri_pcs(&p, &[&[3], &[3]]);
-            do_test_fri_pcs(&p, &[&[3], &[2]]);
-            do_test_fri_pcs(&p, &[&[2], &[3]]);
-            do_test_fri_pcs(&p, &[&[3, 4], &[3, 4]]);
-            do_test_fri_pcs(&p, &[&[4, 2], &[4, 2]]);
-            do_test_fri_pcs(&p, &[&[2, 2], &[3, 3]]);
-            do_test_fri_pcs(&p, &[&[3, 3], &[2, 2]]);
-            do_test_fri_pcs(&p, &[&[2], &[3, 3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3], &[3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3], &[2]]);
+            $crate::do_test_fri_pcs(&p, &[&[2], &[3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3, 4], &[3, 4]]);
+            $crate::do_test_fri_pcs(&p, &[&[4, 2], &[4, 2]]);
+            $crate::do_test_fri_pcs(&p, &[&[2, 2], &[3, 3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3, 3], &[2, 2]]);
+            $crate::do_test_fri_pcs(&p, &[&[2], &[3, 3]]);
         }
     };
 }
@@ -173,7 +173,7 @@ mod babybear_fri_pcs {
     type Challenger = DuplexChallenger<Val, Perm, 16>;
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
-    fn get_pcs() -> (MyPcs, Challenger) {
+    fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
             DiffusionMatrixBabyBear,
@@ -186,7 +186,7 @@ mod babybear_fri_pcs {
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
         let fri_config = FriConfig {
-            log_blowup: 1,
+            log_blowup,
             num_queries: 10,
             proof_of_work_bits: 8,
             mmcs: challenge_mmcs,
@@ -196,7 +196,12 @@ mod babybear_fri_pcs {
         (pcs, Challenger::new(perm.clone()))
     }
 
-    make_tests_for_pcs!(get_pcs());
+    mod blowup_1 {
+        make_tests_for_pcs!(super::get_pcs(1));
+    }
+    mod blowup_2 {
+        make_tests_for_pcs!(super::get_pcs(2));
+    }
 }
 
 mod m31_fri_pcs {
@@ -224,15 +229,15 @@ mod m31_fri_pcs {
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
 
-    fn get_pcs() -> (Pcs, Challenger) {
+    fn get_pcs(log_blowup: usize) -> (Pcs, Challenger) {
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
         let compress = MyCompress::new(byte_hash);
         let val_mmcs = ValMmcs::new(field_hash, compress);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let fri_config = FriConfig {
-            log_blowup: 1,
-            num_queries: 1,
+            log_blowup,
+            num_queries: 10,
             proof_of_work_bits: 8,
             mmcs: challenge_mmcs,
         };
@@ -244,5 +249,10 @@ mod m31_fri_pcs {
         (pcs, Challenger::from_hasher(vec![], byte_hash))
     }
 
-    make_tests_for_pcs!(get_pcs());
+    mod blowup_1 {
+        make_tests_for_pcs!(super::get_pcs(1));
+    }
+    mod blowup_2 {
+        make_tests_for_pcs!(super::get_pcs(2));
+    }
 }

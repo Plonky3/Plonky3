@@ -4,8 +4,8 @@ use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_commit::Mmcs;
-use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
+use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::{batch_multiplicative_inverse, ExtensionField};
 use p3_fri::FriGenericConfig;
 use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use p3_matrix::Matrix;
@@ -33,17 +33,16 @@ pub(crate) fn fold_bivariate<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     index: usize,
-    log_height: usize,
+    log_folded_height: usize,
     beta: EF,
     evals: impl Iterator<Item = EF>,
 ) -> EF {
     let evals = evals.collect_vec();
     assert_eq!(evals.len(), 2);
 
-    let shift = F::circle_two_adic_generator(log_height + 3);
-    let g = F::circle_two_adic_generator(log_height + 2);
-    let orig_idx = circle_bitrev_idx(index, log_height);
-    let t = (shift * g.exp_u64(orig_idx as u64)).imag().inverse();
+    let t = get_original_point::<F>(index, log_folded_height)
+        .imag()
+        .inverse();
 
     let sum = evals[0] + evals[1];
     let diff = (evals[0] - evals[1]) * t;
@@ -73,17 +72,16 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
     fn fold_row(
         &self,
         index: usize,
-        log_height: usize,
+        log_folded_height: usize,
         beta: EF,
         evals: impl Iterator<Item = EF>,
     ) -> EF {
         let evals = evals.collect_vec();
         assert_eq!(evals.len(), 2);
 
-        let shift = F::circle_two_adic_generator(log_height + 3);
-        let g = F::circle_two_adic_generator(log_height + 2);
-        let orig_idx = circle_bitrev_idx(index, log_height);
-        let t = (shift * g.exp_u64(orig_idx as u64)).real().inverse();
+        let t = get_original_point::<F>(index, log_folded_height)
+            .real()
+            .inverse();
 
         let sum = evals[0] + evals[1];
         let diff = (evals[0] - evals[1]) * t;
@@ -120,6 +118,12 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
             (sum + beta * diff).halve()
         })
         .collect_vec()
+}
+
+fn get_original_point<F: ComplexExtendable>(index: usize, log_folded_height: usize) -> Complex<F> {
+    let orig_index = circle_bitrev_idx(index, log_folded_height);
+    // +1 for folding arity (we are given folded height, not height)
+    CircleDomain::<F>::standard(log_folded_height + 2).nth_point(orig_index)
 }
 
 // circlebitrev -> natural
@@ -171,6 +175,7 @@ impl RowIndexMap for CircleBitrevPerm {
 
 #[cfg(test)]
 mod tests {
+    use hashbrown::HashSet;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::AbstractExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
@@ -219,14 +224,18 @@ mod tests {
         let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
 
         evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
-        for _ in log_blowup..(log_n + log_blowup - 1) {
+        for i in log_blowup..(log_n + log_blowup - 1) {
             evals = g.fold_matrix(rng.gen(), RowMajorMatrix::new(evals, 2));
+            if i != log_n + log_blowup - 2 {
+                // check that we aren't degenerate, we (probabilistically) should be unique before the final layer
+                assert_eq!(
+                    evals.iter().copied().collect::<HashSet<_>>().len(),
+                    evals.len()
+                );
+            }
         }
         assert_eq!(evals.len(), 1 << log_blowup);
-        assert_eq!(
-            evals,
-            core::iter::repeat(evals[0]).take(evals.len()).collect_vec()
-        );
+        assert!(evals.iter().all(|&x| x == evals[0]));
     }
 
     #[test]

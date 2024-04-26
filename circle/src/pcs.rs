@@ -454,7 +454,7 @@ where
                             let fri_input = (
                                 log_height - 1,
                                 fold_bivariate_row(
-                                    index >> (2 + bits_reduced),
+                                    index >> (bits_reduced + 2),
                                     orig_size - 1,
                                     bivariate_beta,
                                     fl_values.iter().cloned(),
