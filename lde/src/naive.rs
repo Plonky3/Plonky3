@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
-    scale_vec, sum_vecs, Field, TwoAdicField,
+    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, Field, TwoAdicField,
 };
 use p3_interpolation::{barycentric_weights, interpolate};
 use p3_matrix::dense::RowMajorMatrix;
