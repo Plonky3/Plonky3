@@ -1,6 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
+use core::iter::Sum;
+use core::ops::Mul;
 
 use num_bigint::BigUint;
 
@@ -160,4 +162,15 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         val /= po2.clone();
     }
     result
+}
+
+/// Maximally generic dot product.
+pub fn dot_product<S, LI, RI>(li: LI, ri: RI) -> S
+where
+    LI: Iterator,
+    RI: Iterator,
+    LI::Item: Mul<RI::Item>,
+    S: Sum<<LI::Item as Mul<RI::Item>>::Output>,
+{
+    li.zip(ri).map(|(l, r)| l * r).sum()
 }

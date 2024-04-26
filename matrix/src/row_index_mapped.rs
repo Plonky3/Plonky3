@@ -62,13 +62,28 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
-    ) -> (impl Iterator<Item = P>, impl Iterator<Item = T>)
+    ) -> (
+        impl Iterator<Item = P> + Send + Sync,
+        impl Iterator<Item = T> + Send + Sync,
+    )
     where
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
         self.inner
             .horizontally_packed_row(self.index_map.map_row_index(r))
+    }
+
+    fn padded_horizontally_packed_row<'a, P>(
+        &'a self,
+        r: usize,
+    ) -> impl Iterator<Item = P> + Send + Sync
+    where
+        P: PackedValue<Value = T>,
+        T: Clone + Default + 'a,
+    {
+        self.inner
+            .padded_horizontally_packed_row(self.index_map.map_row_index(r))
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>

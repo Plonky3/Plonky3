@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
-use p3_field::extension::{Complex, ComplexExtendable, ExtensionPowersReducer};
+use p3_field::extension::{Complex, ComplexExtendable};
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriConfig, FriProof};
@@ -157,8 +157,6 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
-        let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
-
         /*
         We are reducing columns ("ro" = reduced opening) with powers of alpha:
           ro = .. + α^n c_n + α^(n+1) c_(n+1) + ..
@@ -210,7 +208,7 @@ where
 
                                 // Reduce this matrix, as a deep quotient, into one column with powers of α.
                                 let mat_ros = deep_quotient_reduce_matrix(
-                                    &mut alpha_reducer,
+                                    alpha,
                                     lde_domain,
                                     mat,
                                     zeta_point,
@@ -364,17 +362,6 @@ where
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri_config.log_blowup + 1;
 
-        let max_width = rounds
-            .iter()
-            .flat_map(|(_comm, mats)| {
-                mats.iter()
-                    .flat_map(|(_domain, pts)| pts.iter().map(|(_pt, vals)| vals.len()))
-            })
-            .max()
-            .unwrap();
-        let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
-        alpha_reducer.prepare_for_width(max_width);
-
         let g: CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriGenericConfig(PhantomData);
 
@@ -436,13 +423,7 @@ where
                             let zeta = univariate_to_point(*zeta_uni).unwrap();
 
                             *ro += *alpha_offset
-                                * deep_quotient_reduce_row(
-                                    &alpha_reducer,
-                                    x,
-                                    zeta,
-                                    ps_at_x,
-                                    ps_at_zeta,
-                                );
+                                * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta);
 
                             *alpha_offset *= alpha_pow_width_2;
                         }

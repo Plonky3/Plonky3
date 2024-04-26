@@ -5,12 +5,13 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
+use itertools::Itertools;
 use num_bigint::BigUint;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
-use crate::packed::PackedField;
+use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
 /// A generalization of `Field` which permits things like
@@ -337,6 +338,20 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
         } else {
             None
         }
+    }
+
+    fn ext_powers_packed(&self) -> impl Iterator<Item = Self::ExtensionPacking> {
+        let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
+        // Transpose first WIDTH powers
+        let current = Self::ExtensionPacking::from_base_fn(|i| {
+            Base::Packing::from_fn(|j| powers[j].as_base_slice()[i])
+        });
+        // Broadcast self^WIDTH
+        let multiplier = Self::ExtensionPacking::from_base_fn(|i| {
+            Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
+        });
+
+        core::iter::successors(Some(current), move |&current| Some(current * multiplier))
     }
 }
 

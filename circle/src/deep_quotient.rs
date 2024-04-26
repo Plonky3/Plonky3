@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
 use p3_commit::PolynomialSpace;
-use p3_field::extension::{Complex, ComplexExtendable, ExtensionPowersReducer};
-use p3_field::{batch_multiplicative_inverse, ExtensionField};
+use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::{batch_multiplicative_inverse, dot_product, ExtensionField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -34,42 +34,42 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 }
 
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
-    alpha_reducer: &ExtensionPowersReducer<F, EF>,
+    alpha: EF,
     x: Complex<F>,
     zeta: Complex<EF>,
     ps_at_x: &[F],
     ps_at_zeta: &[EF],
 ) -> EF {
     let (vp_num, vp_denom) =
-        deep_quotient_vanishing_part(x, zeta, alpha_reducer.factor.exp_u64(ps_at_x.len() as u64));
+        deep_quotient_vanishing_part(x, zeta, alpha.exp_u64(ps_at_x.len() as u64));
     vp_num
         * vp_denom.inverse()
-        * (alpha_reducer.reduce_base(ps_at_x) - alpha_reducer.reduce_ext(ps_at_zeta))
+        * (dot_product::<EF, _, _>(alpha.powers(), ps_at_x.iter().copied())
+            - dot_product::<EF, _, _>(alpha.powers(), ps_at_zeta.iter().copied()))
 }
 
 /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
 #[instrument(skip_all, fields(log_n = domain.log_n))]
 pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
-    alpha_reducer: &mut ExtensionPowersReducer<F, EF>,
+    alpha: EF,
     domain: &CircleDomain<F>,
     mat: &RowMajorMatrix<F>,
     zeta: Complex<EF>,
     ps_at_zeta: &[EF],
 ) -> Vec<EF> {
-    // +1 so we can get alpha^width
-    alpha_reducer.prepare_for_width(mat.width() + 1);
-    let alpha_pow_width = alpha_reducer.powers[mat.width()];
+    let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
     let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = domain
         .points()
         .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
         .unzip();
     let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
-    let alpha_reduced_ps_at_zeta = alpha_reducer.reduce_ext(ps_at_zeta);
-    mat.par_row_slices()
-        .zip(vp_nums)
-        .zip(vp_denom_invs)
+    let alpha_reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
+
+    mat.dot_ext_powers(alpha)
+        .zip(vp_nums.into_par_iter())
+        .zip(vp_denom_invs.into_par_iter())
         .map(|((ps_at_x, vp_num), vp_denom_inv)| {
-            vp_num * vp_denom_inv * (alpha_reducer.reduce_base(ps_at_x) - alpha_reduced_ps_at_zeta)
+            vp_num * vp_denom_inv * (ps_at_x - alpha_reduced_ps_at_zeta)
         })
         .collect()
 }
@@ -99,3 +99,6 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
     lambda
 }
+
+#[cfg(test)]
+mod tests {}

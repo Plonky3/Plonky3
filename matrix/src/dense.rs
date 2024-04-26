@@ -285,10 +285,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     {
         RowMajorMatrix::new(self.values.into(), self.width)
     }
+
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
-    ) -> (impl Iterator<Item = P>, impl Iterator<Item = T>)
+    ) -> (
+        impl Iterator<Item = P> + Send + Sync,
+        impl Iterator<Item = T> + Send + Sync,
+    )
     where
         P: PackedValue<Value = T>,
         T: Clone + 'a,
@@ -296,6 +300,21 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
         (packed.iter().cloned(), sfx.iter().cloned())
+    }
+
+    fn padded_horizontally_packed_row<'a, P>(
+        &'a self,
+        r: usize,
+    ) -> impl Iterator<Item = P> + Send + Sync
+    where
+        P: PackedValue<Value = T>,
+        T: Clone + Default + 'a,
+    {
+        let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
+        let (packed, sfx) = P::pack_slice_with_suffix(buf);
+        packed.iter().cloned().chain(iter::once(P::from_fn(|i| {
+            sfx.get(i).cloned().unwrap_or_default()
+        })))
     }
 }
 

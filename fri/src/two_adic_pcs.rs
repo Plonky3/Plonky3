@@ -8,10 +8,9 @@ use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::extension::ExtensionPowersReducer;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
-    TwoAdicField,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, dot_product, ExtensionField,
+    Field, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
@@ -262,8 +261,6 @@ where
         let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
         let log_global_max_height = log2_strict_usize(global_max_height);
 
-        let mut alpha_reducer = ExtensionPowersReducer::<Val, Challenge>::new(alpha);
-
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
         let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::generator());
@@ -276,8 +273,6 @@ where
         for (mats, points) in mats_and_points {
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
             for (mat, points_for_mat) in izip!(mats, points) {
-                alpha_reducer.prepare_for_width(mat.width());
-
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![Challenge::zero(); mat.height()]);
@@ -301,21 +296,17 @@ where
                         });
 
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
-                    let sum_alpha_pows_times_y = alpha_reducer.reduce_ext(&ys);
+                    let reduced_ys: Challenge = dot_product(alpha.powers(), ys.iter().copied());
 
                     info_span!("reduce rows").in_scope(|| {
-                        reduced_opening_for_log_height
-                            .par_iter_mut()
-                            .zip_eq(mat.par_row_slices())
+                        mat.dot_ext_powers(alpha)
+                            .zip(reduced_opening_for_log_height.par_iter_mut())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
-                            .zip(inv_denoms.get(&point).unwrap())
-                            .for_each(|((reduced_opening, row), &inv_denom)| {
-                                let row_sum = alpha_reducer.reduce_base(row);
-                                *reduced_opening += inv_denom
-                                    * alpha_pow_offset
-                                    * (row_sum - sum_alpha_pows_times_y);
-                            });
+                            .zip(inv_denoms.get(&point).unwrap().par_iter())
+                            .for_each(|((reduced_row, ro), &inv_denom)| {
+                                *ro += alpha_pow_offset * (reduced_row - reduced_ys) * inv_denom
+                            })
                     });
 
                     num_reduced[log_height] += mat.width();
@@ -489,74 +480,4 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
             )
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-
-    use p3_baby_bear::BabyBear;
-    use p3_field::extension::BinomialExtensionField;
-    use p3_field::{AbstractExtensionField, AbstractField};
-    use rand::{thread_rng, Rng};
-
-    use super::*;
-
-    type F = BabyBear;
-    type EF = BinomialExtensionField<F, 4>;
-
-    #[test]
-    fn test_powers_reducer() {
-        let mut rng = thread_rng();
-        let alpha: EF = rng.gen();
-        let sizes = [5, 110, 512, 999, 1000];
-
-        // check reduce_ext
-        for size in sizes {
-            let mut r = ExtensionPowersReducer::<F, EF>::new(alpha);
-            r.prepare_for_width(size);
-            let xs: Vec<EF> = (0..size).map(|_| rng.gen()).collect();
-            assert_eq!(
-                r.reduce_ext(&xs),
-                xs.iter()
-                    .enumerate()
-                    .map(|(i, &x)| alpha.exp_u64(i as u64) * x)
-                    .sum()
-            );
-        }
-
-        // check reduce_base
-        for size in sizes {
-            let mut r = ExtensionPowersReducer::<F, EF>::new(alpha);
-            r.prepare_for_width(size);
-            let xs: Vec<F> = (0..size).map(|_| rng.gen()).collect();
-            assert_eq!(
-                r.reduce_base(&xs),
-                xs.iter()
-                    .enumerate()
-                    .map(|(i, &x)| alpha.exp_u64(i as u64) * EF::from_base(x))
-                    .sum()
-            );
-        }
-
-        // bench reduce_base
-        /*
-        use core::hint::black_box;
-        use std::time::Instant;
-        let samples = 1_000;
-        for i in 0..5 {
-            let xs: Vec<F> = (0..999).map(|_| rng.gen()).collect();
-            let t0 = Instant::now();
-            for _ in 0..samples {
-                black_box(r.reduce_base_slow(black_box(&xs)));
-            }
-            let dt_slow = t0.elapsed();
-            let t0 = Instant::now();
-            for _ in 0..samples {
-                black_box(r.reduce_base(black_box(&xs)));
-            }
-            let dt_fast = t0.elapsed();
-            println!("sample {i}: slow: {dt_slow:?} fast: {dt_fast:?}");
-        }
-        */
-    }
 }
