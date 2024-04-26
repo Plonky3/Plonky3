@@ -111,3 +111,51 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
     lambda
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_field::extension::BinomialExtensionField;
+    use p3_mersenne_31::Mersenne31;
+    use rand::{thread_rng, Rng};
+
+    use super::*;
+    use crate::Cfft;
+
+    type F = Mersenne31;
+    type EF = BinomialExtensionField<F, 3>;
+
+    #[test]
+    fn reduce_row_same_as_reduce_matrix() {
+        let mut rng = thread_rng();
+        let domain = CircleDomain::<F>::standard(5);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 1 << 5, 1 << 4);
+        let alpha: EF = rng.gen();
+        let zeta: Complex<EF> = Complex::new(rng.gen(), rng.gen());
+        let ps_at_zeta: Vec<EF> = (0..(1 << 4)).map(|_| rng.gen()).collect();
+
+        let matrix_reduced = deep_quotient_reduce_matrix(alpha, &domain, &mat, zeta, &ps_at_zeta);
+        let row_reduced = izip!(domain.points(), mat.rows())
+            .map(|(x, ps_at_x)| {
+                deep_quotient_reduce_row(alpha, x, zeta, &ps_at_x.collect_vec(), &ps_at_zeta)
+            })
+            .collect_vec();
+        assert_eq!(&matrix_reduced, &row_reduced);
+    }
+
+    #[test]
+    fn test_extract_lambda() {
+        let mut rng = thread_rng();
+        let orig_domain = CircleDomain::<F>::standard(3);
+        let lde_domain = CircleDomain::<F>::standard(8);
+        let trace = RowMajorMatrix::<F>::rand(&mut rng, 1 << orig_domain.log_n, 1);
+        let mut lde = Cfft::default().lde(trace, orig_domain, lde_domain).values;
+        // Add our own multiple into the lde
+        let expected_lambda: F = rng.gen();
+        for (pt, y) in izip!(lde_domain.points(), &mut lde) {
+            *y += expected_lambda * v_n(pt.real(), orig_domain.log_n);
+        }
+        // Check that it pulls out the right lambda
+        let actual_lambda = extract_lambda(orig_domain, lde_domain, &mut lde);
+        assert_eq!(actual_lambda, expected_lambda);
+    }
+}
