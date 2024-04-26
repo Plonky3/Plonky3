@@ -74,7 +74,6 @@ impl<F: Field> SymbolicAirBuilder<F> {
             .collect();
         Self {
             main: RowMajorMatrix::new(main_values, width),
-            // TODO replace zeros once we have SymbolicExpression::PublicValue
             public_values,
             constraints: vec![],
         }

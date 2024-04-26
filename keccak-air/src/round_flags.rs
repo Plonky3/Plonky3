@@ -6,6 +6,7 @@ use p3_matrix::Matrix;
 use crate::columns::KeccakCols;
 use crate::NUM_ROUNDS;
 
+#[inline]
 pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     let main = builder.main();
     let (local, next) = (main.row_slice(0), main.row_slice(1));
