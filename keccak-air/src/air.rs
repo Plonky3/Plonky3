@@ -21,6 +21,7 @@ impl<F> BaseAir<F> for KeccakAir {
 }
 
 impl<AB: AirBuilder> Air<AB> for KeccakAir {
+    #[inline]
     fn eval(&self, builder: &mut AB) {
         eval_round_flags(builder);
 
