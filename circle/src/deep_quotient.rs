@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
-use p3_commit::PolynomialSpace;
 use p3_field::extension::{Complex, ComplexExtendable};
 use p3_field::{batch_multiplicative_inverse, dot_product, ExtensionField};
 use p3_matrix::dense::RowMajorMatrix;
@@ -42,10 +41,11 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 ) -> EF {
     let (vp_num, vp_denom) =
         deep_quotient_vanishing_part(x, zeta, alpha.exp_u64(ps_at_x.len() as u64));
-    vp_num
-        * vp_denom.inverse()
-        * (dot_product::<EF, _, _>(alpha.powers(), ps_at_x.iter().copied())
-            - dot_product::<EF, _, _>(alpha.powers(), ps_at_zeta.iter().copied()))
+    (vp_num / vp_denom)
+        * dot_product::<EF, _, _>(
+            alpha.powers(),
+            izip!(ps_at_x, ps_at_zeta).map(|(&p_at_x, &p_at_zeta)| -p_at_zeta + p_at_x),
+        )
 }
 
 /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
@@ -63,18 +63,21 @@ pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionFie
         .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
         .unzip();
     let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
+
     let alpha_reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
 
     mat.dot_ext_powers(alpha)
         .zip(vp_nums.into_par_iter())
         .zip(vp_denom_invs.into_par_iter())
-        .map(|((ps_at_x, vp_num), vp_denom_inv)| {
-            vp_num * vp_denom_inv * (ps_at_x - alpha_reduced_ps_at_zeta)
+        .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
+            vp_num * vp_denom_inv * (reduced_ps_at_x - alpha_reduced_ps_at_zeta)
         })
         .collect()
 }
 
 /// Given evaluations over lde_domain, extract the multiple of the vanishing poly of orig_domain
+/// See Section 4.3, Lemma 6: < v_n, f > = 0 for any f in FFT space
+/// So, we find the "error" (a scalar multiple of v_n) and remove it
 /// |lde_domain| > |orig_domain|
 #[instrument(skip_all, fields(bits = log2_strict_usize(lde.len())))]
 pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
@@ -82,16 +85,29 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     lde_domain: CircleDomain<F>,
     lde: &mut [EF],
 ) -> EF {
-    // TODO: precompute
-    let v_d = lde_domain
+    let num_cosets = 1 << (lde_domain.log_n - orig_domain.log_n);
+
+    // v_n is constant on cosets of the same size as orig_domain, so we only have
+    // as many unique values as we have cosets.
+    let v_d_init = lde_domain
         .points()
-        .map(|x| v_n(x.real(), log2_strict_usize(orig_domain.size())))
+        .take(num_cosets)
+        .map(|x| v_n(x.real(), orig_domain.log_n))
         .collect_vec();
 
-    let v_d_2: F = v_d.iter().map(|x| x.square()).sum();
+    // The unique values are repeated over the rest of the domain like
+    // 0 1 2 .. n-1 n n n-1 .. 1 0 0 1 ..
+    let v_d = v_d_init
+        .iter()
+        .chain(v_d_init.iter().rev())
+        .cycle()
+        .copied();
 
-    let lde_dot_v_d: EF = izip!(lde.iter(), &v_d).map(|(&a, &b)| a * b).sum();
-    let lambda = lde_dot_v_d * v_d_2.inverse();
+    // < v_d, v_d >
+    // This formula was determined experimentally...
+    let v_d_2 = F::two().exp_u64(lde_domain.log_n as u64 - 1);
+
+    let lambda = dot_product::<EF, _, _>(lde.iter().copied(), v_d.clone()) * v_d_2.inverse();
 
     for (y, v_x) in izip!(lde, v_d) {
         *y -= lambda * v_x;
@@ -99,6 +115,3 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
     lambda
 }
-
-#[cfg(test)]
-mod tests {}
