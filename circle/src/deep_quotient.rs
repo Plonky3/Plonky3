@@ -10,7 +10,7 @@ use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::domain::CircleDomain;
-use crate::util::v_n;
+use crate::util::{v_n, v_p};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
@@ -21,14 +21,10 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     zeta: Complex<EF>,
     alpha_pow_width: EF,
 ) -> (EF, EF) {
-    let x_rotate_zeta: Complex<EF> = x.rotate(zeta.conjugate());
-
-    let v_gamma_re: EF = EF::one() - x_rotate_zeta.real();
-    let v_gamma_im: EF = x_rotate_zeta.imag();
-
+    let [re_v_zeta, im_v_zeta] = v_p(zeta, x).to_array();
     (
-        v_gamma_re - alpha_pow_width * v_gamma_im,
-        v_gamma_re.square() + v_gamma_im.square(),
+        re_v_zeta - alpha_pow_width * im_v_zeta,
+        re_v_zeta.square() + im_v_zeta.square(),
     )
 }
 
