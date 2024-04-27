@@ -9,14 +9,17 @@ p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
+p3-fri = { path = "../fri" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
 
 tracing = "0.1.37"
 itertools = "0.12.0"
+serde = "1"
 
 [dev-dependencies]
+p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-merkle-tree = { path = "../merkle-tree" }
@@ -25,3 +28,4 @@ p3-symmetric = { path = "../symmetric" }
 
 hashbrown = "0.14.3"
 rand = "0.8.5"
+rand_chacha = "0.3.1"

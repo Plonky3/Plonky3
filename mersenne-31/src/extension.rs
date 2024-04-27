@@ -1,9 +1,33 @@
 use p3_field::extension::{
-    Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
+    BinomiallyExtendable, Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
 };
 use p3_field::{field_to_array, AbstractField, TwoAdicField};
 
 use crate::Mersenne31;
+
+impl BinomiallyExtendable<3> for Mersenne31 {
+    // ```sage
+    // p = 2^31 - 1
+    // F = GF(p)
+    // R.<x> = F[]
+    // assert (x^3 - 5).is_irreducible()
+    // ```
+    fn w() -> Self {
+        Self::new(5)
+    }
+    // ```sage
+    // F(5)^((p-1)/3)
+    // ```
+    fn dth_root() -> Self {
+        Self::new(1513477735)
+    }
+    // ```sage
+    // F.extension(x^3 - 5, 'u').multiplicative_generator()
+    // ```
+    fn ext_generator() -> [Self; 3] {
+        [Self::new(10), Self::new(1), Self::zero()]
+    }
+}
 
 impl HasComplexBinomialExtension<2> for Mersenne31 {
     // Verifiable in Sage with

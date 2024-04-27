@@ -1,66 +1,38 @@
 use itertools::{izip, Itertools};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
-use p3_commit::{ExtensionMmcs, Pcs};
+use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace};
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::thread_rng;
+use rand::distributions::{Distribution, Standard};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 
-type Val = BabyBear;
-type Challenge = BinomialExtensionField<Val, 4>;
+fn seeded_rng() -> impl Rng {
+    ChaCha20Rng::seed_from_u64(0)
+}
 
-type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
-type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-
-type ValMmcs =
-    FieldMerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
-
-type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-
-type Dft = Radix2DitParallel;
-
-type Challenger = DuplexChallenger<Val, Perm, 16>;
-
-type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-
-fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
+fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
+    (pcs, challenger): &(P, Challenger),
+    log_degrees_by_round: &[&[usize]],
+) where
+    P: Pcs<Challenge, Challenger>,
+    P::Domain: PolynomialSpace<Val = Val>,
+    Val: Field,
+    Standard: Distribution<Val>,
+    Challenge: ExtensionField<Val>,
+    Challenger: Clone + CanObserve<P::Commitment> + FieldChallenger<Val>,
+{
     let num_rounds = log_degrees_by_round.len();
-    let mut rng = thread_rng();
+    let mut rng = seeded_rng();
 
-    let perm = Perm::new_from_rng_128(
-        Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
-        &mut rng,
-    );
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-
-    let val_mmcs = ValMmcs::new(hash, compress);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 10,
-        proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
-    let max_log_n = log_degrees_by_round
-        .iter()
-        .copied()
-        .flatten()
-        .copied()
-        .max()
-        .unwrap();
-    let pcs = MyPcs::new(max_log_n, Dft {}, val_mmcs, fri_config);
-
-    let mut challenger = Challenger::new(perm.clone());
+    let mut p_challenger = challenger.clone();
 
     let domains_and_polys_by_round = log_degrees_by_round
         .iter()
@@ -69,9 +41,11 @@ fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
                 .iter()
                 .map(|&log_degree| {
                     let d = 1 << log_degree;
+                    // random width 5-15
+                    let width = 5 + rng.gen_range(0..=10);
                     (
-                        <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
-                        RowMajorMatrix::<Val>::rand(&mut rng, d, 10),
+                        pcs.natural_domain_for_degree(d),
+                        RowMajorMatrix::<Val>::rand(&mut rng, d, width),
                     )
                 })
                 .collect_vec()
@@ -80,28 +54,26 @@ fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
 
     let (commits_by_round, data_by_round): (Vec<_>, Vec<_>) = domains_and_polys_by_round
         .iter()
-        .map(|domains_and_polys| {
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.clone())
-        })
+        .map(|domains_and_polys| pcs.commit(domains_and_polys.clone()))
         .unzip();
     assert_eq!(commits_by_round.len(), num_rounds);
     assert_eq!(data_by_round.len(), num_rounds);
-    challenger.observe_slice(&commits_by_round);
+    p_challenger.observe_slice(&commits_by_round);
 
-    let zeta: Challenge = challenger.sample_ext_element();
+    let zeta: Challenge = p_challenger.sample_ext_element();
 
     let points_by_round = log_degrees_by_round
         .iter()
         .map(|log_degrees| vec![vec![zeta]; log_degrees.len()])
         .collect_vec();
     let data_and_points = data_by_round.iter().zip(points_by_round).collect();
-    let (opening_by_round, proof) = pcs.open(data_and_points, &mut challenger);
+    let (opening_by_round, proof) = pcs.open(data_and_points, &mut p_challenger);
     assert_eq!(opening_by_round.len(), num_rounds);
 
     // Verify the proof.
-    let mut challenger = Challenger::new(perm);
-    challenger.observe_slice(&commits_by_round);
-    let verifier_zeta: Challenge = challenger.sample_ext_element();
+    let mut v_challenger = challenger.clone();
+    v_challenger.observe_slice(&commits_by_round);
+    let verifier_zeta: Challenge = v_challenger.sample_ext_element();
     assert_eq!(verifier_zeta, zeta);
 
     let commits_and_claims_by_round = izip!(
@@ -120,47 +92,167 @@ fn make_test_fri_pcs(log_degrees_by_round: &[&[usize]]) {
     .collect_vec();
     assert_eq!(commits_and_claims_by_round.len(), num_rounds);
 
-    pcs.verify(commits_and_claims_by_round, &proof, &mut challenger)
+    pcs.verify(commits_and_claims_by_round, &proof, &mut v_challenger)
         .unwrap()
 }
 
-#[test]
-fn test_fri_pcs_single() {
-    make_test_fri_pcs(&[&[3]]);
+// Set it up so we create tests inside a module for each pcs, so we get nice error reports
+// specific to a failing PCS.
+macro_rules! make_tests_for_pcs {
+    ($p:expr) => {
+        #[test]
+        fn single() {
+            let p = $p;
+            for i in 3..6 {
+                $crate::do_test_fri_pcs(&p, &[&[i]]);
+            }
+        }
+
+        #[test]
+        fn many_equal() {
+            let p = $p;
+            for i in 2..5 {
+                $crate::do_test_fri_pcs(&p, &[&[i; 5]]);
+            }
+        }
+
+        #[test]
+        fn many_different() {
+            let p = $p;
+            for i in 2..4 {
+                let degrees = (3..3 + i).collect::<Vec<_>>();
+                $crate::do_test_fri_pcs(&p, &[&degrees]);
+            }
+        }
+
+        #[test]
+        fn many_different_rev() {
+            let p = $p;
+            for i in 2..4 {
+                let degrees = (3..3 + i).rev().collect::<Vec<_>>();
+                $crate::do_test_fri_pcs(&p, &[&degrees]);
+            }
+        }
+
+        #[test]
+        fn multiple_rounds() {
+            let p = $p;
+            $crate::do_test_fri_pcs(&p, &[&[3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3], &[3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3], &[2]]);
+            $crate::do_test_fri_pcs(&p, &[&[2], &[3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3, 4], &[3, 4]]);
+            $crate::do_test_fri_pcs(&p, &[&[4, 2], &[4, 2]]);
+            $crate::do_test_fri_pcs(&p, &[&[2, 2], &[3, 3]]);
+            $crate::do_test_fri_pcs(&p, &[&[3, 3], &[2, 2]]);
+            $crate::do_test_fri_pcs(&p, &[&[2], &[3, 3]]);
+        }
+    };
 }
 
-#[test]
-fn test_fri_pcs_many_equal() {
-    for i in 1..4 {
-        make_test_fri_pcs(&[&[i; 5]]);
+mod babybear_fri_pcs {
+    use super::*;
+
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+
+    type ValMmcs = FieldMerkleTreeMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        8,
+    >;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+
+    type Dft = Radix2DitParallel;
+    type Challenger = DuplexChallenger<Val, Perm, 16>;
+    type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+
+    fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut seeded_rng(),
+        );
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+
+        let val_mmcs = ValMmcs::new(hash, compress);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        let fri_config = FriConfig {
+            log_blowup,
+            num_queries: 10,
+            proof_of_work_bits: 8,
+            mmcs: challenge_mmcs,
+        };
+
+        let pcs = MyPcs::new(Dft {}, val_mmcs, fri_config);
+        (pcs, Challenger::new(perm.clone()))
+    }
+
+    mod blowup_1 {
+        make_tests_for_pcs!(super::get_pcs(1));
+    }
+    mod blowup_2 {
+        make_tests_for_pcs!(super::get_pcs(2));
     }
 }
 
-#[test]
-fn test_fri_pcs_many_different() {
-    for i in 2..4 {
-        let degrees = (3..3 + i).collect::<Vec<_>>();
-        make_test_fri_pcs(&[&degrees]);
-    }
-}
+mod m31_fri_pcs {
+    use p3_challenger::{HashChallenger, SerializingChallenger32};
+    use p3_circle::{Cfft, CirclePcs};
+    use p3_keccak::Keccak256Hash;
+    use p3_mersenne_31::Mersenne31;
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 
-#[test]
-fn test_fri_pcs_many_different_rev() {
-    for i in 2..4 {
-        let degrees = (3..3 + i).rev().collect::<Vec<_>>();
-        make_test_fri_pcs(&[&degrees]);
-    }
-}
+    use super::*;
 
-#[test]
-fn test_fri_pcs_multiple_rounds() {
-    make_test_fri_pcs(&[&[3]]);
-    make_test_fri_pcs(&[&[3], &[3]]);
-    make_test_fri_pcs(&[&[3], &[2]]);
-    make_test_fri_pcs(&[&[2], &[3]]);
-    make_test_fri_pcs(&[&[3, 4], &[3, 4]]);
-    make_test_fri_pcs(&[&[4, 2], &[4, 2]]);
-    make_test_fri_pcs(&[&[2, 2], &[3, 3]]);
-    make_test_fri_pcs(&[&[3, 3], &[2, 2]]);
-    make_test_fri_pcs(&[&[2], &[3, 3]]);
+    type Val = Mersenne31;
+    type Challenge = BinomialExtensionField<Mersenne31, 3>;
+
+    type ByteHash = Keccak256Hash;
+    type FieldHash = SerializingHasher32<ByteHash>;
+
+    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+
+    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+
+    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+
+    fn get_pcs(log_blowup: usize) -> (Pcs, Challenger) {
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let fri_config = FriConfig {
+            log_blowup,
+            num_queries: 10,
+            proof_of_work_bits: 8,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = Pcs {
+            cfft: Cfft::default(),
+            mmcs: val_mmcs,
+            fri_config,
+        };
+        (pcs, Challenger::from_hasher(vec![], byte_hash))
+    }
+
+    mod blowup_1 {
+        make_tests_for_pcs!(super::get_pcs(1));
+    }
+    mod blowup_2 {
+        make_tests_for_pcs!(super::get_pcs(2));
+    }
 }

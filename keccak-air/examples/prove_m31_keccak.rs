@@ -1,6 +1,7 @@
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::{Cfft, CirclePcs};
 use p3_commit::ExtensionMmcs;
+use p3_field::extension::BinomialExtensionField;
 use p3_fri::FriConfig;
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
@@ -30,8 +31,7 @@ fn main() -> Result<(), VerificationError> {
         .init();
 
     type Val = Mersenne31;
-    // type Challenge = BinomialExtensionField<Val, 4>;
-    type Challenge = Val;
+    type Challenge = BinomialExtensionField<Val, 3>;
 
     type ByteHash = Keccak256Hash;
     type FieldHash = SerializingHasher32<ByteHash>;
@@ -49,18 +49,18 @@ fn main() -> Result<(), VerificationError> {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let _fri_config = FriConfig {
+    let fri_config = FriConfig {
         log_blowup: 1,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
 
-    type Pcs = CirclePcs<Val, ValMmcs>;
+    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
-        log_blowup: 1,
         cfft: Cfft::default(),
         mmcs: val_mmcs,
+        fri_config,
     };
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;

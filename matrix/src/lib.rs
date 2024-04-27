@@ -10,7 +10,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
 use itertools::{izip, Itertools};
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{dot_product, AbstractExtensionField, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 
@@ -100,7 +100,10 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
-    ) -> (impl Iterator<Item = P>, impl Iterator<Item = T>)
+    ) -> (
+        impl Iterator<Item = P> + Send + Sync,
+        impl Iterator<Item = T> + Send + Sync,
+    )
     where
         P: PackedValue<Value = T>,
         T: Clone + 'a,
@@ -109,6 +112,50 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         let packed = (0..num_packed).map(move |c| P::from_fn(|i| self.get(r, P::WIDTH * c + i)));
         let sfx = (num_packed * P::WIDTH..self.width()).map(move |c| self.get(r, c));
         (packed, sfx)
+    }
+
+    /// Zero padded.
+    fn padded_horizontally_packed_row<'a, P>(
+        &'a self,
+        r: usize,
+    ) -> impl Iterator<Item = P> + Send + Sync
+    where
+        P: PackedValue<Value = T>,
+        T: Clone + Default + 'a,
+    {
+        let mut row_iter = self.row(r);
+        let num_elems = self.width().next_multiple_of(P::WIDTH);
+        // array::from_fn currently always calls in order, but it's not clear whether that's guaranteed.
+        (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
+    }
+
+    fn par_horizontally_packed_rows<'a, P>(
+        &'a self,
+    ) -> impl IndexedParallelIterator<
+        Item = (
+            impl Iterator<Item = P> + Send + Sync,
+            impl Iterator<Item = T> + Send + Sync,
+        ),
+    >
+    where
+        P: PackedValue<Value = T>,
+        T: Clone + 'a,
+    {
+        (0..self.height())
+            .into_par_iter()
+            .map(|r| self.horizontally_packed_row(r))
+    }
+
+    fn par_padded_horizontally_packed_rows<'a, P>(
+        &'a self,
+    ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = P> + Send + Sync>
+    where
+        P: PackedValue<Value = T>,
+        T: Clone + Default + 'a,
+    {
+        (0..self.height())
+            .into_par_iter()
+            .map(|r| self.padded_horizontally_packed_row(r))
     }
 
     /// Wraps at the end.
@@ -145,5 +192,30 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 acc_l
             },
         )
+    }
+
+    /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
+    fn dot_ext_powers<EF>(&self, base: EF) -> impl IndexedParallelIterator<Item = EF>
+    where
+        T: Field,
+        EF: ExtensionField<T>,
+    {
+        let powers_packed = base
+            .ext_powers_packed()
+            .take(self.width().next_multiple_of(T::Packing::WIDTH))
+            .collect_vec();
+        self.par_padded_horizontally_packed_rows::<T::Packing>()
+            .map(move |row_packed| {
+                let packed_sum_of_packed: EF::ExtensionPacking =
+                    dot_product(powers_packed.iter().copied(), row_packed);
+                let sum_of_packed: EF = EF::from_base_fn(|i| {
+                    packed_sum_of_packed.as_base_slice()[i]
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .sum()
+                });
+                sum_of_packed
+            })
     }
 }

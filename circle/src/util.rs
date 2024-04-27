@@ -119,6 +119,14 @@ pub(crate) fn v_0<F: Field>(p: Complex<F>) -> F {
     p.imag() / (p.real() + F::one())
 }
 
+/// Evaluate the single-point vanishing function v_p(x). Used for DEEP quotient.
+/// Circle STARKs, Section 3.3, Equation 11 (page 11 of the first edition PDF).
+/// Simple zero at p, simple pole at +-infinity.
+pub(crate) fn v_p<F: Field, EF: ExtensionField<F>>(p: Complex<EF>, x: Complex<F>) -> Complex<EF> {
+    let x_rotate_p: Complex<EF> = x.rotate(p.conjugate());
+    Complex::new(EF::one() - x_rotate_p.real(), -x_rotate_p.imag())
+}
+
 /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P, used for normalization to 1.
 /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
 pub(crate) fn s_p_at_p<F: Field>(p_x: F, p_y: F, log_n: usize) -> F {

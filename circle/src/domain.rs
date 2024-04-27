@@ -63,6 +63,12 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         let coset1 = half_gen.shifted_powers(half_gen / self.shift);
         coset0.interleave(coset1).take(1 << self.log_n)
     }
+    pub(crate) fn nth_point(&self, idx: usize) -> Complex<F> {
+        // Only implemented for standard position.
+        assert!(self.is_standard());
+        let gen = F::circle_two_adic_generator(self.log_n);
+        self.shift * gen.exp_u64(idx as u64)
+    }
 
     /// Computes the lagrange basis at point, not yet normalized by the value of the domain
     /// vanishing poly, since that is more efficient to compute after the dot product.
@@ -208,21 +214,24 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         assert!(evals.height() >> (log_chunks + 1) >= 1);
         let width = evals.width();
         let mut values: Vec<Vec<Self::Val>> = vec![vec![]; num_chunks];
-        let mut rows = evals.rows();
-        for _ in 0..(evals.height() >> (log_chunks + 1)) {
-            for chunk in values.iter_mut() {
-                chunk.extend(rows.next().unwrap());
-            }
-            for chunk in values.iter_mut().rev() {
-                chunk.extend(rows.next().unwrap());
-            }
-        }
-        assert!(rows.next().is_none());
-
+        evals
+            .rows()
+            .enumerate()
+            .for_each(|(i, row)| values[forward_backward_index(i, num_chunks)].extend(row));
         values
             .into_iter()
             .map(|v| RowMajorMatrix::new(v, width))
             .collect()
+    }
+}
+
+// 0 1 2 .. len-1 len len len-1 .. 1 0 0 1 ..
+fn forward_backward_index(mut i: usize, len: usize) -> usize {
+    i %= 2 * len;
+    if i < len {
+        i
+    } else {
+        2 * len - 1 - i
     }
 }
 
