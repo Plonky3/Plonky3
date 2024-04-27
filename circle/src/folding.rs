@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_commit::Mmcs;
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, ExtensionField};
 use p3_fri::FriGenericConfig;
 use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
@@ -18,8 +18,8 @@ pub(crate) fn fold_bivariate<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
     evals: impl Matrix<EF>,
 ) -> Vec<EF> {
-    assert_eq!(evals.width(), 2);
-    let domain = CircleDomain::standard(log2_strict_usize(evals.height()) + 1);
+    let log_n = log2_strict_usize(evals.height() * evals.width());
+    let domain = CircleDomain::standard(log_n);
     let mut twiddles = batch_multiplicative_inverse(
         &domain
             .points()
@@ -39,8 +39,11 @@ pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
 ) -> EF {
     let evals = evals.collect_vec();
     assert_eq!(evals.len(), 2);
+    let log_arity = log2_strict_usize(evals.len());
 
-    let t = get_original_point::<F>(index, log_folded_height)
+    let orig_index = circle_bitrev_idx(index, log_folded_height);
+    let t = CircleDomain::<F>::standard(log_folded_height + log_arity)
+        .nth_point(orig_index)
         .imag()
         .inverse();
 
@@ -78,8 +81,12 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
     ) -> EF {
         let evals = evals.collect_vec();
         assert_eq!(evals.len(), 2);
+        let log_arity = log2_strict_usize(evals.len());
 
-        let t = get_original_point::<F>(index, log_folded_height)
+        let orig_index = circle_bitrev_idx(index, log_folded_height);
+        // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
+        let t = CircleDomain::<F>::standard(log_folded_height + log_arity + 1)
+            .nth_point(orig_index)
             .real()
             .inverse();
 
@@ -89,8 +96,9 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
     }
 
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
-        assert_eq!(m.width(), 2);
-        let domain = CircleDomain::standard(log2_strict_usize(m.height()) + 2);
+        let log_n = log2_strict_usize(m.width() * m.height());
+        // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
+        let domain = CircleDomain::standard(log_n + 1);
         let mut twiddles = batch_multiplicative_inverse(
             &domain
                 .points()
@@ -118,12 +126,6 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
             (sum + beta * diff).halve()
         })
         .collect_vec()
-}
-
-fn get_original_point<F: ComplexExtendable>(index: usize, log_folded_height: usize) -> Complex<F> {
-    let orig_index = circle_bitrev_idx(index, log_folded_height);
-    // +1 for folding arity (we are given folded height, not height)
-    CircleDomain::<F>::standard(log_folded_height + 2).nth_point(orig_index)
 }
 
 // circlebitrev -> natural
@@ -197,11 +199,11 @@ mod tests {
         );
     }
 
+    type F = Mersenne31;
+    type EF = BinomialExtensionField<F, 3>;
+
     fn do_test_folding(log_n: usize, log_blowup: usize) {
         let mut rng = thread_rng();
-
-        type F = Mersenne31;
-        type EF = BinomialExtensionField<F, 3>;
 
         let mut evals: Vec<EF> = {
             let evals = RowMajorMatrix::<F>::rand(
@@ -242,5 +244,35 @@ mod tests {
     fn test_folding() {
         do_test_folding(4, 1);
         do_test_folding(5, 2);
+    }
+
+    #[test]
+    fn test_fold_row_matrix_same() {
+        let mut rng = thread_rng();
+        let evals = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 5, 2);
+        let beta: EF = rng.gen();
+
+        let mat_folded = fold_bivariate::<F, EF>(beta, evals.clone());
+        let row_folded = evals
+            .rows()
+            .enumerate()
+            .map(|(index, evals)| fold_bivariate_row::<F, EF>(index, 5, beta, evals))
+            .collect_vec();
+        assert_eq!(
+            mat_folded, row_folded,
+            "bivariate fold_matrix and fold_row do not match"
+        );
+
+        let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
+        let mat_folded = g.fold_matrix(beta, evals.clone());
+        let row_folded = evals
+            .rows()
+            .enumerate()
+            .map(|(index, evals)| g.fold_row(index, 5, beta, evals))
+            .collect_vec();
+        assert_eq!(
+            mat_folded, row_folded,
+            "univariate fold_matrix and fold_row do not match"
+        );
     }
 }

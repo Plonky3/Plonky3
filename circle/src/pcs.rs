@@ -452,10 +452,12 @@ where
                             fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;
 
                             let fri_input = (
+                                // - 1 here is because we have already folded a layer.
                                 log_height - 1,
                                 fold_bivariate_row(
-                                    index >> (bits_reduced + 2),
-                                    orig_size - 1,
+                                    index >> (bits_reduced + 1),
+                                    // - 1 here is log_arity.
+                                    log_height - 1,
                                     bivariate_beta,
                                     fl_values.iter().cloned(),
                                 ),
