@@ -17,7 +17,6 @@ members = [
     "koala-bear",
     "keccak",
     "keccak-air",
-    "lde",
     "matrix",
     "merkle-tree",
     "maybe-rayon",

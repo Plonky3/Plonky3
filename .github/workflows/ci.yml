@@ -113,7 +113,6 @@ jobs:
         cargo check --verbose --package p3-interpolation
         cargo check --verbose --package p3-keccak
         cargo check --verbose --package p3-keccak-air
-        cargo check --verbose --package p3-lde
         cargo check --verbose --package p3-matrix
         cargo check --verbose --package p3-maybe-rayon
         cargo check --verbose --package p3-mds
