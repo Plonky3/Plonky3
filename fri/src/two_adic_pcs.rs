@@ -44,6 +44,10 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
             _phantom: PhantomData,
         }
     }
+
+    pub fn fri_config(&self) -> &FriConfig<FriMmcs> {
+        &self.fri
+    }
 }
 
 #[derive(Debug)]
