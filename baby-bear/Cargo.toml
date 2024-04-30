@@ -10,6 +10,7 @@ nightly-features = []
 [dependencies]
 p3-field = { path = "../field" }
 p3-mds = { path = "../mds" }
+p3-monty-31-bit-field = { path = "../monty-31-bit-field" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 num-bigint = { version = "0.4.3", default-features = false }

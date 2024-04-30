@@ -7,6 +7,7 @@ use p3_field::{
     exp_1420470955, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
     PrimeField32, PrimeField64, TwoAdicField,
 };
+use p3_monty_31_bit_field::MONTY31BitAbstractField;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -96,10 +97,14 @@ impl<'de> Deserialize<'de> for KoalaBear {
     }
 }
 
-const MONTY_ZERO: u32 = to_monty(0);
-const MONTY_ONE: u32 = to_monty(1);
-const MONTY_TWO: u32 = to_monty(2);
-const MONTY_NEG_ONE: u32 = to_monty(P - 1);
+impl MONTY31BitAbstractField for KoalaBear {
+    const P: u32 = P;
+    const MONTY_BITS: u32 = MONTY_BITS;
+    const MONTY_MU: u32 = MONTY_MU;
+    const MONTY_ONE: u32 = to_monty(1);
+    const MONTY_TWO: u32 = to_monty(2);
+    const MONTY_GEN: u32 = to_monty(3);
+}
 
 impl Packable for KoalaBear {}
 
@@ -107,17 +112,17 @@ impl AbstractField for KoalaBear {
     type F = Self;
 
     fn zero() -> Self {
-        Self { value: MONTY_ZERO }
+        Self { value: Self::MONTY_ZERO }
     }
     fn one() -> Self {
-        Self { value: MONTY_ONE }
+        Self { value: Self::MONTY_ONE }
     }
     fn two() -> Self {
-        Self { value: MONTY_TWO }
+        Self { value: Self::MONTY_TWO }
     }
     fn neg_one() -> Self {
         Self {
-            value: MONTY_NEG_ONE,
+            value: Self::MONTY_NEG_ONE,
         }
     }
 
@@ -161,19 +166,19 @@ impl AbstractField for KoalaBear {
 
     #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
-        Self { value: to_monty(n) }
+        Self { value: Self::to_monty(n) }
     }
 
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         Self {
-            value: to_monty_64(n),
+            value: Self::to_monty_64(n),
         }
     }
 
     #[inline]
     fn generator() -> Self {
-        Self::from_canonical_u32(0x1f)
+        Self { value: Self::MONTY_GEN }
     }
 }
 
@@ -327,11 +332,7 @@ impl Add for KoalaBear {
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let mut sum = self.value + rhs.value;
-        let (corr_sum, over) = sum.overflowing_sub(P);
-        if !over {
-            sum = corr_sum;
-        }
+        let sum = Self::add_u32(self.value, rhs.value);
         Self { value: sum }
     }
 }
@@ -362,9 +363,7 @@ impl Sub for KoalaBear {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let (mut diff, over) = self.value.overflowing_sub(rhs.value);
-        let corr = if over { P } else { 0 };
-        diff = diff.wrapping_add(corr);
+        let diff = Self::sub_u32(self.value, rhs.value);
         Self { value: diff }
     }
 }
@@ -390,10 +389,8 @@ impl Mul for KoalaBear {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let long_prod = self.value as u64 * rhs.value as u64;
-        Self {
-            value: monty_reduce(long_prod),
-        }
+        let prod = Self::mul_u32_monty(self.value, rhs.value);
+        Self { value: prod }
     }
 }
 
@@ -442,12 +439,6 @@ pub(crate) const fn to_koalabear_array<const N: usize>(input: [u32; N]) -> [Koal
         i += 1;
     }
     output
-}
-
-#[inline]
-#[must_use]
-const fn to_monty_64(x: u64) -> u32 {
-    (((x as u128) << MONTY_BITS) % P as u128) as u32
 }
 
 #[inline]

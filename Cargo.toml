@@ -22,6 +22,7 @@ members = [
     "maybe-rayon",
     "mersenne-31",
     "monolith",
+    "monty-31-bit-field",
     "poseidon",
     "poseidon2",
     "rescue",
