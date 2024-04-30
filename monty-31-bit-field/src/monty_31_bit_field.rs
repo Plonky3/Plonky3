@@ -1,14 +1,8 @@
 //! An abstraction of 31-bit fields which use a MONTY approach for addition and multiplication with a MONTY constant = 2^32.
 
-use core::fmt::{Debug};
+use core::fmt::Debug;
 
-pub trait MONTY31BitAbstractField: 
-    Sized
-    + Default
-    + Clone
-    + Debug
-{
-
+pub trait MONTY31BitAbstractField: Sized + Default + Clone + Debug {
     const P: u32;
     const MONTY_BITS: u32;
     const MONTY_MU: u32;

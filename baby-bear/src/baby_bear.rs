@@ -107,13 +107,19 @@ impl AbstractField for BabyBear {
     type F = Self;
 
     fn zero() -> Self {
-        Self { value: Self::MONTY_ZERO }
+        Self {
+            value: Self::MONTY_ZERO,
+        }
     }
     fn one() -> Self {
-        Self { value: Self::MONTY_ONE }
+        Self {
+            value: Self::MONTY_ONE,
+        }
     }
     fn two() -> Self {
-        Self { value: Self::MONTY_TWO }
+        Self {
+            value: Self::MONTY_TWO,
+        }
     }
     fn neg_one() -> Self {
         Self {
@@ -161,7 +167,9 @@ impl AbstractField for BabyBear {
 
     #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
-        Self { value: Self::to_monty(n) }
+        Self {
+            value: Self::to_monty(n),
+        }
     }
 
     #[inline]
@@ -173,7 +181,9 @@ impl AbstractField for BabyBear {
 
     #[inline]
     fn generator() -> Self {
-        Self { value: Self::MONTY_GEN }
+        Self {
+            value: Self::MONTY_GEN,
+        }
     }
 }
 
