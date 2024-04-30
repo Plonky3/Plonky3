@@ -182,8 +182,8 @@ where
                 })
                 .collect()
         });
-        let commitment = self.mmcs.commit(ldes);
-        commitment
+
+        self.mmcs.commit(ldes)
     }
 }
 
@@ -264,9 +264,10 @@ where
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
+        #[allow(clippy::type_complexity)]
         let ys_outer: Vec<(&Self::ProverData, Vec<&Vec<C::Challenge>>)> = (*prover_data_and_points)
-            .into_iter()
-            .map(|(pd, cs)| (*pd, (*cs).into_iter().collect::<Vec<&Vec<C::Challenge>>>()))
+            .iter()
+            .map(|(pd, cs)| (*pd, (*cs).iter().collect::<Vec<&Vec<C::Challenge>>>()))
             .collect();
 
         let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = ys_outer
@@ -298,7 +299,7 @@ where
             })
             .collect();
 
-        for (i, (data, points)) in prover_data_and_points.into_iter().enumerate() {
+        for (i, (data, points)) in prover_data_and_points.iter().enumerate() {
             let mats = self.mmcs.get_matrices(data);
             let opened_values_for_round = all_opened_values.pushed_mut(vec![]);
             for (j, (mat, points_for_mat)) in izip!(mats, *points).enumerate() {
@@ -308,7 +309,7 @@ where
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
-                for (k, &point) in points_for_mat.into_iter().enumerate() {
+                for (k, &point) in points_for_mat.iter().enumerate() {
                     let _guard =
                         info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
