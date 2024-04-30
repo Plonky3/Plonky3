@@ -113,12 +113,13 @@ pub struct BatchOpening<C: TwoAdicFriPcsGenericConfig> {
     pub(crate) opening_proof: <C::InputMmcs as Mmcs<C::Val>>::Proof,
 }
 
-impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
-    Pcs<C::Val, In> for TwoAdicFriPcs<C> 
-    where C::FriMmcs: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
-          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
+impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone> Pcs<C::Val, In>
+    for TwoAdicFriPcs<C>
+where
+    C::FriMmcs: Send,
+    <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+    <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+    <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
     type Commitment = <C::InputMmcs as Mmcs<C::Val>>::Commitment;
     type ProverData = <C::InputMmcs as Mmcs<C::Val>>::ProverData;
@@ -133,10 +134,11 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
 
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clone>
     UnivariatePcsWithLde<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
-    where C::FriMmcs: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
-          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
+where
+    C::FriMmcs: Send,
+    <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+    <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+    <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
 
@@ -187,11 +189,12 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sized + Sync + Clon
 
 impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
     UnivariatePcs<C::Val, C::Challenge, In, C::Challenger> for TwoAdicFriPcs<C>
-    where C::FriMmcs: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
-          <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
-          <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
-          C::Challenge: Send + Sync + Sized,
+where
+    C::FriMmcs: Send,
+    <C::FriMmcs as Mmcs<C::Challenge>>::Proof: Send,
+    <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
+    <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
+    C::Challenge: Send + Sync + Sized,
 {
     #[instrument(name = "open_multi_batches", skip_all)]
     fn open_multi_batches(
@@ -261,17 +264,22 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
         let mut num_reduced = [0; 32];
 
-        let ys_outer: Vec::<(&Self::ProverData, Vec<&Vec<C::Challenge>>)> = (*prover_data_and_points)
+        let ys_outer: Vec<(&Self::ProverData, Vec<&Vec<C::Challenge>>)> = (*prover_data_and_points)
             .into_iter()
-            .map(|(pd, cs)| { (*pd, (*cs).into_iter().collect::<Vec<&Vec<C::Challenge>>>()) })
+            .map(|(pd, cs)| (*pd, (*cs).into_iter().collect::<Vec<&Vec<C::Challenge>>>()))
             .collect();
 
         let ys_outer: Vec<Vec<Vec<Vec<C::Challenge>>>> = ys_outer
             .par_iter()
             .map(|(data, points)| {
                 let mats = self.mmcs.get_matrices(data);
-                izip!(mats, (*points).clone()).collect::<Vec<_>>().par_iter().map(|(mat, points_for_mat)| {
-                        points_for_mat.par_iter().map(|&point| {
+                izip!(mats, (*points).clone())
+                    .collect::<Vec<_>>()
+                    .par_iter()
+                    .map(|(mat, points_for_mat)| {
+                        points_for_mat
+                            .par_iter()
+                            .map(|&point| {
                                 // Use Barycentric interpolation to evaluate the matrix at the given point.
                                 info_span!("compute opened values with Lagrange interpolation")
                                     .in_scope(|| {
@@ -283,9 +291,12 @@ impl<C: TwoAdicFriPcsGenericConfig, In: MatrixRows<C::Val> + Sync + Clone>
                                             point,
                                         )
                                     })
-                            }).collect()
-                    }).collect()
-            }).collect();
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
 
         for (i, (data, points)) in prover_data_and_points.into_iter().enumerate() {
             let mats = self.mmcs.get_matrices(data);

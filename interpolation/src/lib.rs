@@ -12,8 +12,8 @@ use p3_field::{
     two_adic_coset_zerofier, ExtensionField, Field, TwoAdicField,
 };
 use p3_matrix::MatrixRows;
-use p3_util::log2_strict_usize;
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
 /// the polynomials at `point`.
@@ -54,19 +54,24 @@ where
         z
     };
 
-    let sum: Vec<EF> =
-        g.powers().zip(diff_invs).enumerate()
-            .map(|(i, (subgroup_i, diff_inv))| {
-                (coset_evals.row(i).into_iter().collect::<Vec<_>>(), (subgroup_i, diff_inv))
-            })
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .map(|(row_i, (subgroup_i, diff_inv))| {
-                let s = diff_inv * subgroup_i;
-                row_i.into_iter().map(|y_i| s * y_i).collect()
-            })
-            .fold_chunks(64, || vec![EF::zero(); width], sum_vecs)
-            .reduce(|| vec![EF::zero(); width], sum_vecs);
+    let sum: Vec<EF> = g
+        .powers()
+        .zip(diff_invs)
+        .enumerate()
+        .map(|(i, (subgroup_i, diff_inv))| {
+            (
+                coset_evals.row(i).into_iter().collect::<Vec<_>>(),
+                (subgroup_i, diff_inv),
+            )
+        })
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(row_i, (subgroup_i, diff_inv))| {
+            let s = diff_inv * subgroup_i;
+            row_i.into_iter().map(|y_i| s * y_i).collect()
+        })
+        .fold_chunks(64, || vec![EF::zero(); width], sum_vecs)
+        .reduce(|| vec![EF::zero(); width], sum_vecs);
 
     let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
     let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);
