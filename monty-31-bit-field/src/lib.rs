@@ -2,8 +2,9 @@
 
 #![no_std]
 
-extern crate alloc;
-
+mod data_traits;
+mod extension;
 mod monty_31_bit_field;
 
+pub use data_traits::*;
 pub use monty_31_bit_field::*;
