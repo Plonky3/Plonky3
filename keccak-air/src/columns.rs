@@ -27,9 +27,6 @@ pub struct KeccakCols<T> {
     /// Permutation inputs, stored in y-major order.
     pub preimage: [[[T; U64_LIMBS]; 5]; 5],
 
-    /// Permutation outputs, stored in y-major order.
-    pub postimage: [[[T; U64_LIMBS]; 5]; 5],
-
     pub a: [[[T; U64_LIMBS]; 5]; 5],
 
     /// ```ignore
@@ -81,12 +78,12 @@ impl<T: Copy> KeccakCols<T> {
         self.a_prime[b][a][(z + 64 - rot) % 64]
     }
 
-    pub fn a_prime_prime_prime(&self, x: usize, y: usize, limb: usize) -> T {
-        debug_assert!(x < 5);
+    pub fn a_prime_prime_prime(&self, y: usize, x: usize, limb: usize) -> T {
         debug_assert!(y < 5);
+        debug_assert!(x < 5);
         debug_assert!(limb < U64_LIMBS);
 
-        if x == 0 && y == 0 {
+        if y == 0 && x == 0 {
             self.a_prime_prime_prime_0_0_limbs[limb]
         } else {
             self.a_prime_prime[y][x][limb]
@@ -117,7 +114,7 @@ pub fn output_limb(i: usize) -> usize {
     let y = i_u64 / 5;
     let x = i_u64 % 5;
 
-    KECCAK_COL_MAP.postimage[y][x][limb_index]
+    KECCAK_COL_MAP.a_prime_prime_prime(y, x, limb_index)
 }
 
 pub const NUM_KECCAK_COLS: usize = size_of::<KeccakCols<u8>>();

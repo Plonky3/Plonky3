@@ -70,7 +70,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
         for y in 0..5 {
             for x in 0..5 {
                 for limb in 0..U64_LIMBS {
-                    rows[round].a[y][x][limb] = rows[round - 1].a_prime_prime_prime(x, y, limb);
+                    rows[round].a[y][x][limb] = rows[round - 1].a_prime_prime_prime(y, x, limb);
                 }
             }
         }
