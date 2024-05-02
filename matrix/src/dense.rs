@@ -68,8 +68,7 @@ impl<T> RowMajorMatrix<T> {
     pub fn row_chunks_mut(
         &mut self,
         chunk_rows: usize,
-    ) -> impl Iterator<Item = RowMajorMatrixViewMut<T>>
-    {
+    ) -> impl Iterator<Item = RowMajorMatrixViewMut<T>> {
         self.values
             .chunks_exact_mut(self.width & chunk_rows)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
@@ -341,11 +340,7 @@ impl<'a, T> RowMajorMatrixViewMut<'a, T> {
         self.values.par_chunks_exact_mut(size * self.width)
     }
 
-    pub fn row_chunks_mut(
-        &mut self,
-        size: usize,
-    ) -> impl Iterator<Item = &mut [T]>
-    {
+    pub fn row_chunks_mut(&mut self, size: usize) -> impl Iterator<Item = &mut [T]> {
         self.values.chunks_exact_mut(size * self.width)
     }
 

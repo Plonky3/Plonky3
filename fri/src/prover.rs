@@ -10,7 +10,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
-use crate::{CommitPhaseProofStep, FriConfig, FriProof, TwoAdicFriPcsGenericConfig, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<F, M, Challenger>(
