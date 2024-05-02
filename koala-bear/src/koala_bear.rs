@@ -80,27 +80,30 @@ impl TwoAdicData for KoalaBearParameters {
 
 const EXT_TWO_ADIC_GENERATORS4: [[u32; 4]; 2] = [[0, 0, 1759267465, 0], [0, 0, 0, 777715144]];
 
-impl BinomialExtensionData for KoalaBearParameters {
-    const W4: u32 = 3;
-    const DTH_ROOT4: u32 = 2113994754;
-    const EXT_GENERATOR_4: [u32; 4] = [2, 1, 0, 0];
-    const EXT_TWO_ADICITY4: usize = 26;
-    fn u32_ext_two_adic_generator4(bits: usize) -> [u32; 4] {
-        assert!(bits <= Self::EXT_TWO_ADICITY4);
+impl BinomialExtensionData<4> for KoalaBearParameters {
+    const W: u32 = 3;
+    const DTH_ROOT: u32 = 2113994754;
+    const EXT_GENERATOR: [u32; 4] = [2, 1, 0, 0];
+    const EXT_TWO_ADICITY: usize = 26;
+    fn u32_ext_two_adic_generator(bits: usize) -> [u32; 4] {
+        assert!(bits <= <Self as BinomialExtensionData<4>>::EXT_TWO_ADICITY);
         if bits > Self::TWO_ADICITY {
             EXT_TWO_ADIC_GENERATORS4[bits - Self::TWO_ADICITY - 1]
         } else {
             [TWO_ADIC_GENERATORS[bits], 0, 0, 0]
         }
     }
+}
 
+impl BinomialExtensionData<5> for KoalaBearParameters {
     // KoalaBear does not have an order 5 binomial extension so we do not implement it.
-    const W5: u32 = todo!();
-    const DTH_ROOT5: u32 = todo!();
-    const EXT_GENERATOR_5: [u32; 5] = todo!();
-    const EXT_TWO_ADICITY5: usize = todo!();
 
-    fn u32_ext_two_adic_generator5(_: usize) -> [u32; 5] {
+    const W: u32 = todo!();
+    const DTH_ROOT: u32 = todo!();
+    const EXT_GENERATOR: [u32; 5] = todo!();
+    const EXT_TWO_ADICITY: usize = todo!();
+
+    fn u32_ext_two_adic_generator(_: usize) -> [u32; 5] {
         todo!()
     }
 }

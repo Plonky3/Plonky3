@@ -15,7 +15,8 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
-    + BinomialExtensionData
+    + BinomialExtensionData<4>
+    + BinomialExtensionData<5>
 {
 }
 
@@ -57,31 +58,21 @@ pub trait TwoAdicData {
     fn u32_two_adic_generator(bits: usize) -> u32;
 }
 
-/// TODO:
-/// There feels like there must be a better way to do this.
-pub trait BinomialExtensionData: MontyParameters + Sized {
-    // WN is a value such that (x^N - WN) is irreducible.
-    const W4: u32;
-    const MONTY_W4: u32 = to_monty::<Self>(Self::W4); // The MONTY form of W4
-    const W5: u32;
-    const MONTY_W5: u32 = to_monty::<Self>(Self::W5); // The MONTY form of W5
+pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
+    // W is a value such that (x^DEG - WN) is irreducible.
+    const W: u32;
+    const MONTY_W: u32 = to_monty::<Self>(Self::W); // The MONTY form of W4
 
-    // DTH_ROOTN = W^((p - 1)/N)
-    const DTH_ROOT4: u32;
-    const MONTY_DTH_ROOT4: u32 = to_monty::<Self>(Self::DTH_ROOT4);
-    const DTH_ROOT5: u32;
-    const MONTY_DTH_ROOT5: u32 = to_monty::<Self>(Self::DTH_ROOT5);
+    // DTH_ROOTN = W^((p - 1)/DEG)
+    const DTH_ROOT: u32;
+    const MONTY_DTH_ROOT: u32 = to_monty::<Self>(Self::DTH_ROOT);
 
-    const EXT_GENERATOR_4: [u32; 4];
-    const MONTY_EXT_GENERATOR_4: [u32; 4] = to_monty_form_array::<4, Self>(Self::EXT_GENERATOR_4);
-    const EXT_GENERATOR_5: [u32; 5];
-    const MONTY_EXT_GENERATOR_5: [u32; 5] = to_monty_form_array::<5, Self>(Self::EXT_GENERATOR_5);
+    const EXT_GENERATOR: [u32; DEG];
+    const MONTY_EXT_GENERATOR: [u32; DEG] = to_monty_form_array::<DEG, Self>(Self::EXT_GENERATOR);
 
-    const EXT_TWO_ADICITY4: usize;
-    const EXT_TWO_ADICITY5: usize;
+    const EXT_TWO_ADICITY: usize;
 
-    fn u32_ext_two_adic_generator4(bits: usize) -> [u32; 4];
-    fn u32_ext_two_adic_generator5(bits: usize) -> [u32; 5];
+    fn u32_ext_two_adic_generator(bits: usize) -> [u32; DEG];
 }
 
 /// Given an element x from a 31 bit field F_P compute x/2.

@@ -80,27 +80,29 @@ impl TwoAdicData for BabyBearParameters {
 
 const EXT_TWO_ADIC_GENERATORS4: [[u32; 4]; 2] = [[0, 0, 1996171314, 0], [0, 0, 0, 124907976]];
 
-impl BinomialExtensionData for BabyBearParameters {
-    const W4: u32 = 11;
-    const DTH_ROOT4: u32 = 1728404513;
-    const EXT_GENERATOR_4: [u32; 4] = [8, 1, 0, 0];
-    const EXT_TWO_ADICITY4: usize = 29;
-    fn u32_ext_two_adic_generator4(bits: usize) -> [u32; 4] {
-        assert!(bits <= Self::EXT_TWO_ADICITY4);
+impl BinomialExtensionData<4> for BabyBearParameters {
+    const W: u32 = 11;
+    const DTH_ROOT: u32 = 1728404513;
+    const EXT_GENERATOR: [u32; 4] = [8, 1, 0, 0];
+    const EXT_TWO_ADICITY: usize = 29;
+    fn u32_ext_two_adic_generator(bits: usize) -> [u32; 4] {
+        assert!(bits <= <Self as BinomialExtensionData<4>>::EXT_TWO_ADICITY);
         if bits > Self::TWO_ADICITY {
             EXT_TWO_ADIC_GENERATORS4[bits - Self::TWO_ADICITY - 1]
         } else {
             [TWO_ADIC_GENERATORS[bits], 0, 0, 0]
         }
     }
+}
 
-    const W5: u32 = 2;
-    const DTH_ROOT5: u32 = 815036133;
-    const EXT_GENERATOR_5: [u32; 5] = [8, 1, 0, 0, 0];
-    const EXT_TWO_ADICITY5: usize = 27;
+impl BinomialExtensionData<5> for BabyBearParameters {
+    const W: u32 = 2;
+    const DTH_ROOT: u32 = 815036133;
+    const EXT_GENERATOR: [u32; 5] = [8, 1, 0, 0, 0];
+    const EXT_TWO_ADICITY: usize = 27;
 
-    fn u32_ext_two_adic_generator5(bits: usize) -> [u32; 5] {
-        assert!(bits <= Self::EXT_TWO_ADICITY5);
+    fn u32_ext_two_adic_generator(bits: usize) -> [u32; 5] {
+        assert!(bits <= <Self as BinomialExtensionData<5>>::EXT_TWO_ADICITY);
 
         [TWO_ADIC_GENERATORS[bits], 0, 0, 0, 0]
     }
