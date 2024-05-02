@@ -20,10 +20,14 @@ pub trait FieldParameters:
 }
 
 pub trait MontyParameters {
+    // A 31-bit prime.
     const PRIME: u32;
 
-    // Constants used for multiplication and similar
+    // The log_2 of the MONTY constant we use for faster multiplication.
     const MONTY_BITS: u32;
+
+    // We define MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
+    // (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
     const MONTY_MU: u32;
     const MONTY_MASK: u32 = ((1u64 << Self::MONTY_BITS) - 1) as u32;
 }

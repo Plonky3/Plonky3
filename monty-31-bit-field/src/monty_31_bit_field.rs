@@ -21,7 +21,10 @@ use crate::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldPar
 pub struct MontyField31<FP: FieldParameters> {
     // TODO:
     // This will eventually be pub(crate)
-    // Setting to pub for now so BabyBear and KoalaBear cartes can build when this is only partially implemented.
+    // Setting to pub for now so BabyBear and KoalaBear crates can build when this is only partially implemented.
+
+    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
+    // likely doing something fishy.
     pub value: u32,
     _phantom: PhantomData<FP>,
 }
@@ -38,10 +41,13 @@ impl<FP: FieldParameters> MontyField31<FP> {
     // Create a new field element from something already in MONTY form.
     // TODO:
     // This will eventually be pub(crate)
-    // Setting to pub for now so BabyBear and KoalaBear cartes can build when this is only partially implemented.
+    // Setting to pub for now so BabyBear and KoalaBear crates can build when this is only partially implemented.
+
+    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
+    // likely doing something fishy.
     pub const fn new_monty(value: u32) -> Self {
         Self {
-            value: value,
+            value,
             _phantom: PhantomData,
         }
     }

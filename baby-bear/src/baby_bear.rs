@@ -4,9 +4,6 @@ use p3_monty_31_bit_field::{
     TwoAdicData,
 };
 
-// We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
-// (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
-
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 pub type BabyBear = MontyField31<BabyBearParameters>;
 
@@ -16,7 +13,7 @@ pub struct BabyBearParameters;
 impl FieldParameters for BabyBearParameters {}
 
 impl MontyParameters for BabyBearParameters {
-    /// The Baby Bear prime
+    /// The Baby Bear prime: 2^31 - 2^27 + 1.
     /// This is the unique 31-bit prime with the highest possible 2 adicity (27).
     const PRIME: u32 = 0x78000001;
 
