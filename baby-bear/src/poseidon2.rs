@@ -3,8 +3,9 @@
 use p3_field::PrimeField32;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
+use p3_monty_31_bit_field::{monty_reduce, to_monty_array};
 
-use crate::{monty_reduce, to_babybear_array, BabyBear};
+use crate::{BabyBear, BabyBearParameters};
 
 // Optimised diffusion matrices for Babybear16:
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]
@@ -25,7 +26,7 @@ use crate::{monty_reduce, to_babybear_array, BabyBear};
 // They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
 pub const MONTY_INVERSE: BabyBear = BabyBear { value: 1 };
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_monty_array::<BabyBearParameters>([
     BabyBear::ORDER_U32 - 2,
     1,
     1 << 1,
@@ -47,7 +48,7 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_
 const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u8; 15] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_monty_array::<BabyBearParameters>([
     BabyBear::ORDER_U32 - 2,
     1,
     1 << 1,
