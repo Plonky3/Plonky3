@@ -54,7 +54,8 @@ where
     for n_log in log_sizes {
         let n = 1 << n_log;
 
-        let mut v: Vec<i64> = Standard.sample_iter(&mut rng).take(n).collect();
+        let u: Vec<u32> = Standard.sample_iter(&mut rng).take(n).collect();
+        let mut v: Vec<i64> = u.iter().map(|&x| x as i64).collect();
 
         let i = 0;
         group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {

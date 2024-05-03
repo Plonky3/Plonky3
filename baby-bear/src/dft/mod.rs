@@ -37,7 +37,6 @@ pub(crate) unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
     use core::iter::repeat_with;
     use p3_field::{AbstractField, Field, PrimeField64};
     use rand::{thread_rng, Rng};
@@ -56,9 +55,9 @@ mod tests {
         for i in 0..n {
             let mut t = 0i64;
             for j in 0..n {
-                t = t + us[j] * vs[(n + i - j) % n];
+                t = t + (us[j] * vs[(n + i - j) % n]) % P;
             }
-            conv.push(t);
+            conv.push(t % P);
         }
         conv
     }
@@ -71,6 +70,31 @@ mod tests {
     fn randvec(n: usize) -> Vec<Real> {
         repeat_with(randcomplex).take(n).collect::<Vec<_>>()
     }
+
+    /*
+    #[test]
+    fn test_forward_8() {
+        const NITERS: usize = 100;
+        let len = 8;
+        let roots = roots_of_unity_vector::<BabyBear>(len);
+        let root = roots[1];
+
+        for _ in 0..NITERS {
+            let us = randvec(len);
+            let mut vs = us.clone();
+            forward_fft(&mut vs, root);
+
+            let mut ws = us.clone();
+            forward_8(&mut ws, &roots[1..4]);
+
+            println!("roots = {:?}", roots);
+            println!("us = {:?}", us);
+            println!("vs = {:?}", vs);
+            println!("ws = {:?}", ws);
+            assert!(vs.iter().zip(ws).all(|(&v, w)| v == w));
+        }
+    }
+    */
 
     #[test]
     fn forward_backward_is_identity() {
@@ -100,35 +124,45 @@ mod tests {
         }
     }
 
-    /*
     #[test]
     fn convolution() {
+        const NITERS: usize = 4;
         let mut len = 4;
         loop {
-            let us = randvec(len);
-            let vs = randvec(len);
+            let roots = roots_of_unity_vector::<BabyBear>(len);
+            let root = roots[1];
+            let root_inv = BabyBear::from_canonical_u32(root as u32)
+                .inverse()
+                .as_canonical_u64() as i64;
 
-            let mut fft_us = us.clone();
-            forward_fft(&mut fft_us);
+            for _ in 0..NITERS {
+                let us = randvec(len);
+                let vs = randvec(len);
 
-            let mut fft_vs = vs.clone();
-            forward_fft(&mut fft_vs);
+                let mut fft_us = us.clone();
+                forward_fft(&mut fft_us, root);
 
-            let mut pt_prods = fft_us
-                .iter()
-                .zip(fft_vs)
-                .map(|(&u, v)| u * v)
-                .collect::<Vec<_>>();
+                let mut fft_vs = vs.clone();
+                forward_fft(&mut fft_vs, root);
 
-            backward_fft(&mut pt_prods);
+                let mut pt_prods = fft_us
+                    .iter()
+                    .zip(fft_vs)
+                    .map(|(&u, v)| (u * v) % P)
+                    .collect::<Vec<_>>();
 
-            let conv = naive_convolve(&us, &vs);
-            assert!(conv.iter().zip(pt_prods).all(|(&c, p)| p == c * len as i64));
+                backward_fft(&mut pt_prods, root_inv);
+
+                let conv = naive_convolve(&us, &vs);
+                assert!(conv
+                    .iter()
+                    .zip(pt_prods)
+                    .all(|(&c, p)| p == (c * len as i64) % P));
+            }
             len *= 2;
             if len > 8192 {
                 break;
             }
         }
     }
-    */
 }

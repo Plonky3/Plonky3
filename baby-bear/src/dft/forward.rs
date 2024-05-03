@@ -1,112 +1,179 @@
-//use super::roots::{D1024, D128, D16, D2048, D256, D32, D4096, D512, D64, D8192};
 use super::{split_at_mut_unchecked, Real, P};
-use p3_field::{PrimeField64, TwoAdicField};
-use p3_util::log2_strict_usize;
 
-use alloc::vec::Vec;
+// TODO: Consider following Hexl and storing the roots in a singler
+// array in bit-reversed order, but with duplicates for certain roots
+// to avoid computing permutations in the inner loop.
+
+const ROOTS8: [i64; 3] = [1592366214, 1728404513, 211723194];
+const ROOTS16: [i64; 7] = [
+    196396260, 1592366214, 78945800, 1728404513, 1400279418, 211723194, 1446056615,
+];
+const ROOTS32: [i64; 15] = [
+    760005850, 196396260, 1240658731, 1592366214, 177390144, 78945800, 1399190761, 1728404513,
+    889310574, 1400279418, 1561292356, 211723194, 1424376889, 1446056615, 740045640,
+];
+const ROOTS64: [i64; 31] = [
+    291676017, 760005850, 1141518129, 196396260, 1521113831, 1240658731, 1074029057, 1592366214,
+    602251207, 177390144, 1684363409, 78945800, 406991886, 1399190761, 1094366075, 1728404513,
+    72041623, 889310574, 1724976031, 1400279418, 1917679203, 1561292356, 1171812390, 211723194,
+    1326890868, 1424376889, 680048719, 1446056615, 1957706687, 740045640, 662200255,
+];
+
+#[inline(always)]
+fn reduce(x: Real) -> Real {
+    (P + (x % P)) % P
+}
+
+const MONTY_BITS: u32 = 32;
+const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
+const MONTY_MU: u32 = 0x88000001;
 
 /*
-// a[0...8n-1], w[0...2n-2]; n >= 2
-//
-// TODO: Original comment is as above, but note that w should have
-// length 2n-1, as is obvious from the original code, which addresses
-// an odd number of elements of w.
-fn forward_pass(a: &mut [Real], w: &[Real]) {
-    debug_assert_eq!(a.len() % 8, 0);
+/// Montgomery reduction of a value in `0..P << MONTY_BITS`.
+#[inline]
+fn monty_reduce(x: u64) -> u32 {
+    let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
+    let u = t * (P as u64);
 
-    let n = a.len() / 8;
+    let (x_sub_u, over) = x.overflowing_sub(u);
+    let x_sub_u_hi = (x_sub_u >> 31) as u32;
+    let corr = if over { P } else { 0 };
+    x_sub_u_hi.wrapping_add(corr)
+}
+*/
 
-    debug_assert!(n >= 2);
-    debug_assert_eq!(w.len(), 2 * n - 1);
+#[inline]
+fn forward_pass(a: &mut [Real], roots: &[Real]) {
+    let half_n = a.len() / 2;
+    assert_eq!(roots.len(), half_n - 1);
 
-    // Split a into four chunks of size 2*n.
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, 2 * n) };
-    let (a1, a2) = unsafe { split_at_mut_unchecked(a1, 2 * n) };
-    let (a2, a3) = unsafe { split_at_mut_unchecked(a2, 2 * n) };
+    let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
 
-    transformzero(&mut a0[0], &mut a1[0], &mut a2[0], &mut a3[0]);
+    let s = top[0];
+    let t = tail[half_n];
+    top[0] = reduce(s + t);
+    tail[0] = reduce(s - t);
 
-    // NB: The original version pulled the first iteration out of the
-    // loop and unrolled the loop two iterations. When I did that all
-    // the larger (>32) FFTs slowed down, most by about 25-35%!
-    for i in 1..2 * n {
-        transform(
-            &mut a0[i],
-            &mut a1[i],
-            &mut a2[i],
-            &mut a3[i],
-            w[i - 1].re,
-            w[i - 1].im,
-        );
+    for i in 1..half_n {
+        let w = roots[i - 1];
+        let s = top[i];
+        let t = tail[i];
+        top[i] = reduce(s + t);
+        tail[i] = reduce((s - t) * w);
+    }
+}
+
+#[inline(always)]
+fn forward_4(a: &mut [Real], root: Real) {
+    assert_eq!(a.len(), 4);
+
+    let t1 = a[1] - a[3];
+    let t5 = a[1] + a[3];
+    let t3 = root * t1;
+    let t4 = a[0] + a[2];
+    let t2 = a[0] - a[2];
+
+    // Return in bit-reversed order
+    a[0] = reduce(t4 + t5); // b0
+    a[2] = reduce(t2 + t3); // b1
+    a[1] = reduce(t4 - t5); // b2
+    a[3] = reduce(t2 - t3); // b3
+}
+
+#[inline(always)]
+pub fn forward_8(a: &mut [Real], roots: &[Real]) {
+    assert_eq!(a.len(), 8);
+    assert_eq!(roots.len(), 3);
+
+    let e0 = a[0] + a[4];
+    let e1 = a[1] + a[5];
+    let e2 = a[2] + a[6];
+    let e3 = a[3] + a[7];
+
+    let f0 = a[0] - a[4];
+    let f1 = a[1] - a[5];
+    let f2 = a[2] - a[6];
+    let f3 = a[3] - a[7];
+
+    let e02 = e0 + e2;
+    let e13 = e1 + e3;
+    let g02 = e0 - e2;
+    let g13 = e1 - e3;
+    let t = g13 * roots[1]; // roots[i] holds g^{i+1}
+
+    // Return result b = [b0, b1, .., b7] in bit-reversed order
+    a[0] = reduce(e02 + e13); // b0
+    a[2] = reduce(g02 + t); // b2
+    a[1] = reduce(e02 - e13); // b4
+    a[3] = reduce(g02 - t); // b6
+
+    let t1 = f1 * roots[0];
+    let t2 = f2 * roots[1];
+    let t3 = f3 * roots[2];
+
+    let u1 = f1 * roots[2];
+    let u3 = f3 * roots[0];
+
+    let v0 = f0 + t2; // (a0 - a4) + (a2 - a6)*r^2
+    let v1 = f0 - t2; // (a0 - a4) - (a2 - a6)*r^2
+    let w0 = t1 + t3; //
+    let w1 = u1 + u3; // (a1 - a5)*r^3 + (a3 - a7)*r
+
+    a[4] = reduce(v0 + w0); // f0 + t1 + t2 + t3; // b1
+    a[6] = reduce(v1 + w1); // f0 + u1 - t2 + u3; // b3
+    a[5] = reduce(v0 - w0); // f0 - t1 + t2 - t3; // b5
+    a[7] = reduce(v1 - w1); // f0 - u1 - t2 - u3; // b7
+}
+
+#[inline(always)]
+pub fn forward_16(a: &mut [Real], roots: &[Real]) {
+    assert_eq!(a.len(), 16);
+
+    let half_n = a.len() / 2;
+
+    forward_pass(a, roots);
+
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, half_n) };
+    forward_8(a0, &ROOTS8);
+    forward_8(a1, &ROOTS8);
+}
+
+#[inline(always)]
+pub fn forward_32(a: &mut [Real], roots: &[Real]) {
+    assert_eq!(a.len(), 32);
+
+    let half_n = a.len() / 2;
+
+    forward_pass(a, roots);
+
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, half_n) };
+    forward_16(a0, &ROOTS16);
+    forward_16(a1, &ROOTS16);
+}
+
+/*
+#[inline]
+pub fn forward_fft(a: &mut [Real], roots: &[Real]) {
+    let n = a.len();
+
+    if n > 8 {
+        forward_pass(a, roots);
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
+
+        forward_fft(a0, xxxroots);
+        forward_fft(a1, xxxroots);
+    } else if n > 4 {
+        debug_assert_eq!(n, 8);
+        forward_8(a, &ROOTS8);
+    } else if n > 1 {
+        debug_assert_eq!(n, 4);
+        forward_4(a, ROOTS8[1]);
     }
 }
 */
 
-// copied from p3_dft::util::reverse_slice_index_bits;
-#[inline]
-const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
-    // NB: The only reason we need overflowing_shr() here as opposed
-    // to plain '>>' is to accommodate the case n == num_bits == 0,
-    // which would become `0 >> 64`. Rust thinks that any shift of 64
-    // bits causes overflow, even when the argument is zero.
-    x.reverse_bits()
-        .overflowing_shr(usize::BITS - bit_len as u32)
-        .0
-}
-fn reverse_slice_index_bits<F>(vals: &mut [F]) {
-    let n = vals.len();
-    if n == 0 {
-        return;
-    }
-    let log_n = log2_strict_usize(n);
-
-    for i in 0..n {
-        let j = reverse_bits_len(i, log_n);
-        if i < j {
-            vals.swap(i, j);
-        }
-    }
-}
-
-pub fn roots_of_unity_vector<F: PrimeField64 + TwoAdicField>(n: usize) -> Vec<Real> {
-    let lg_n = log2_strict_usize(n);
-    let rt = F::two_adic_generator(lg_n);
-
-    let mut w = F::one();
-    let mut v = Vec::with_capacity(n);
-    for _ in 0..n {
-        v.push(w.as_canonical_u64() as i64);
-        w *= rt;
-    }
-    //reverse_slice_index_bits(&mut v);
-    v
-}
-
-#[inline]
-fn forward_pass(a: &mut [Real], root: Real) {
-    let half_n = a.len() / 2;
-    let mut w = 1;
-    for i in 0..half_n {
-        let s = a[i];
-        let t = a[i + half_n];
-        a[i] = (s + t) % P;
-        a[i + half_n] = ((P + s - t) * w) % P;
-        w *= root;
-        w %= P;
-    }
-}
-
-#[inline]
-pub fn forward_fft(a: &mut [Real], root: Real) {
-    // roots: &[Real]) {
-    let n = a.len();
-
-    if n > 1 {
-        forward_pass(a, root);
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
-
-        let root_sqr = (root * root) % P;
-        forward_fft(a0, root_sqr);
-        forward_fft(a1, root_sqr);
-    }
-}
+// n = 4:
+//  - one forward_pass on a[0..4]
+//    -
+//  - two ffts of size 2:
+//    - n = 2: one forward_pass ==> transformzero
