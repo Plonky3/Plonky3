@@ -20,6 +20,7 @@ use crate::{
 };
 
 #[instrument(skip_all)]
+#[allow(clippy::multiple_bound_locations)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
