@@ -15,15 +15,18 @@ extern crate alloc;
 mod complex;
 mod dft;
 mod extension;
+mod extension2;
 mod mds;
 mod mersenne_31;
 mod poseidon2;
+mod quintic;
 mod radix_2_dit;
 
 pub use dft::Mersenne31Dft;
 pub use mds::*;
 pub use mersenne_31::*;
 pub use poseidon2::*;
+pub use quintic::*;
 pub use radix_2_dit::Mersenne31ComplexRadix2Dit;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]

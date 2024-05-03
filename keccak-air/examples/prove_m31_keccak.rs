@@ -1,7 +1,7 @@
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::{Cfft, CirclePcs};
 use p3_commit::ExtensionMmcs;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::{BinomialExtensionField, Complex};
 use p3_fri::FriConfig;
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
@@ -31,7 +31,7 @@ fn main() -> Result<(), VerificationError> {
         .init();
 
     type Val = Mersenne31;
-    type Challenge = BinomialExtensionField<Val, 3>;
+    type Challenge = BinomialExtensionField<Complex<Val>, 2>;
 
     type ByteHash = Keccak256Hash;
     type FieldHash = SerializingHasher32<ByteHash>;
