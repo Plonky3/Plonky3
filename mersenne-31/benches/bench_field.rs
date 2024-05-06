@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use p3_field::AbstractField;
+use p3_field::{extension::Complex, AbstractField, Field};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{M31x5, Mersenne31};
 
 type F = Mersenne31;
 
@@ -30,6 +30,18 @@ fn bench_field(c: &mut Criterion) {
             |x| x.exp_u64(1717986917),
             BatchSize::SmallInput,
         )
+    });
+
+    type F5 = M31x5<F>;
+    c.bench_function("m31x5_inv_cm31", |b| {
+        b.iter_batched(
+            rand::random::<Complex<F>>,
+            |x| x.inverse(),
+            BatchSize::SmallInput,
+        )
+    });
+    c.bench_function("m31x5_inv_naive", |b| {
+        b.iter_batched(rand::random::<F5>, |x| x.inv_naive(), BatchSize::SmallInput)
     });
 }
 

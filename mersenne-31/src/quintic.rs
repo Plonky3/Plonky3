@@ -12,15 +12,30 @@ impl<AF: AbstractField<F = Mersenne31>> Mul for M31x5<AF> {
     #[rustfmt::skip]
     fn mul(self, rhs: Self) -> Self::Output {
         let m = |i: usize, j: usize| self.0[i].clone() * rhs.0[j].clone();
-        let w = |e: AF| e * AF::from_f(Mersenne31::from_canonical_u32(6));
-        // todo: see the pattern? (add w part)
-        Self([
-        	m(0,0) + w(m(4,1) +   m(3,2) +   m(2,3) +   m(1,4)),
-        	m(1,0) +   m(0,1) + w(m(4,2) +   m(3,3) +   m(2,4)) + m(1,4) + m(2,3) + m(3,2) + m(4,1),
-        	m(2,0) +   m(1,1) +   m(0,2) + w(m(4,3) +   m(3,4))          + m(2,4) + m(3,3) + m(4,2),
-        	m(3,0) +   m(2,1) +   m(1,2) +   m(0,3) + w(m(4,4))                   + m(3,4) + m(4,3),
-        	m(4,0) +   m(3,1) +   m(2,2) +   m(1,3) +   m(0,4)                             + m(4,4),
-        ])
+        // prod = lo + hi * X^5
+        //      = lo + hi * (X + 6)
+        let lo = Self([
+            m(0,0),
+            m(1,0) + m(0,1),
+            m(2,0) + m(1,1) + m(0,2),
+            m(3,0) + m(2,1) + m(1,2) + m(0,3),
+            m(4,0) + m(3,1) + m(2,2) + m(1,3) + m(0,4),
+        ]);
+        let hi = Self([
+                     m(4,1) + m(3,2) + m(2,3) + m(1,4),
+                              m(4,2) + m(3,3) + m(2,4),
+                                       m(4,3) + m(3,4),
+                                                m(4,4),
+            AF::zero(),
+        ]);
+
+        // shift hi right to get hi * X
+        let mut hi_times_x = Self::zero();
+        hi_times_x.0[1..].clone_from_slice(&hi.0[..4]);
+
+        // maybe better reduction possible for * 6 ?
+        let w = AF::from_f(Mersenne31::from_canonical_u8(6));
+        lo + hi * w + hi_times_x
     }
 }
 
@@ -45,19 +60,10 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractField for M31x5<AF> {
 
 impl Field for M31x5<Mersenne31> {
     impl_ext_f!(Mersenne31, 5);
-    fn try_inverse(&self) -> Option<Self> {
-        todo!()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::test_add_neg_sub_mul;
-
-    use super::*;
-
-    #[test]
-    fn quintic() {
-        test_add_neg_sub_mul::<M31x5<Mersenne31>>()
-    }
+    use p3_field_testing::test_field;
+    test_field!(crate::M31x5<crate::Mersenne31>);
 }

@@ -56,8 +56,21 @@ macro_rules! define_ext {
             }
         }
 
+        impl<AF: $crate::AbstractField<F = $base>> core::ops::Add<AF> for $name<AF> {
+            type Output = Self;
+            fn add(mut self, rhs: AF) -> Self {
+                Self(self.0.map(|x| x + rhs.clone()))
+            }
+        }
+
         impl<AF: $crate::AbstractField<F = $base>> core::ops::AddAssign for $name<AF> {
             fn add_assign(&mut self, rhs: Self) {
+                *self = self.clone() + rhs;
+            }
+        }
+
+        impl<AF: $crate::AbstractField<F = $base>> core::ops::AddAssign<AF> for $name<AF> {
+            fn add_assign(&mut self, rhs: AF) {
                 *self = self.clone() + rhs;
             }
         }
@@ -79,14 +92,42 @@ macro_rules! define_ext {
             }
         }
 
+        impl<AF: $crate::AbstractField<F = $base>> core::ops::Sub<AF> for $name<AF> {
+            type Output = Self;
+            fn sub(mut self, rhs: AF) -> Self {
+                Self(self.0.map(|x| x - rhs.clone()))
+            }
+        }
+
         impl<AF: $crate::AbstractField<F = $base>> core::ops::SubAssign for $name<AF> {
             fn sub_assign(&mut self, rhs: Self) {
                 *self = self.clone() - rhs;
             }
         }
 
+        impl<AF: $crate::AbstractField<F = $base>> core::ops::SubAssign<AF> for $name<AF> {
+            fn sub_assign(&mut self, rhs: AF) {
+                *self = self.clone() - rhs;
+            }
+        }
+
+        // Downstream crate must define Mul<Self>
+
+        impl<AF: $crate::AbstractField<F = $base>> core::ops::Mul<AF> for $name<AF> {
+            type Output = Self;
+            fn mul(mut self, rhs: AF) -> Self {
+                Self(self.0.map(|x| x * rhs.clone()))
+            }
+        }
+
         impl<AF: $crate::AbstractField<F = $base>> core::ops::MulAssign for $name<AF> {
             fn mul_assign(&mut self, rhs: Self) {
+                *self = self.clone() * rhs;
+            }
+        }
+
+        impl<AF: $crate::AbstractField<F = $base>> core::ops::MulAssign<AF> for $name<AF> {
+            fn mul_assign(&mut self, rhs: AF) {
                 *self = self.clone() * rhs;
             }
         }
@@ -105,8 +146,21 @@ macro_rules! define_ext {
             }
         }
 
+        impl core::ops::Div<$base> for $name<$base> {
+            type Output = Self;
+            fn div(mut self, rhs: $base) -> Self {
+                self * <$base as $crate::Field>::inverse(&rhs)
+            }
+        }
+
         impl core::ops::DivAssign for $name<$base> {
             fn div_assign(&mut self, rhs: Self) {
+                *self = self.clone() / rhs;
+            }
+        }
+
+        impl core::ops::DivAssign<$base> for $name<$base> {
+            fn div_assign(&mut self, rhs: $base) {
                 *self = self.clone() / rhs;
             }
         }

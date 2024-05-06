@@ -206,11 +206,31 @@ pub trait Field:
         exp_u64_by_squaring(val, power)
     }
 
+    /// Exponentiate by a BigUint by squaring.
+    fn exp_biguint(mut self, power: BigUint) -> Self {
+        let mut res = Self::one();
+        for bit in power.to_radix_le(2) {
+            if bit == 1 {
+                res *= self;
+            }
+            self = self.square();
+        }
+        return res;
+    }
+
     /// The multiplicative inverse of this field element, if it exists.
+    /// The default implementation uses x^p = x (mod p), so x^(p-2) = x^-1 (mod p).
+    /// Implementations almost certainly want to replace this with a more efficient method.
     ///
     /// NOTE: The inverse of `0` is undefined and will return `None`.
     #[must_use]
-    fn try_inverse(&self) -> Option<Self>;
+    fn try_inverse(&self) -> Option<Self> {
+        if self.is_zero() {
+            None
+        } else {
+            Some(self.exp_biguint(Self::order() - 2u32))
+        }
+    }
 
     #[must_use]
     fn inverse(&self) -> Self {
