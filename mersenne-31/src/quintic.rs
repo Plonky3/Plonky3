@@ -1,6 +1,9 @@
 use core::ops::Mul;
 
-use p3_field::{define_ext, impl_ext_af, impl_ext_f, AbstractField, Field};
+use p3_field::{
+    define_ext, field_to_array, impl_ext_af, impl_ext_f, AbstractExtensionField, AbstractField,
+    Field,
+};
 
 use crate::Mersenne31;
 
@@ -60,6 +63,30 @@ impl<AF: AbstractField<F = Mersenne31>> AbstractField for M31x5<AF> {
 
 impl Field for M31x5<Mersenne31> {
     impl_ext_f!(Mersenne31, 5);
+}
+
+impl<AF: AbstractField<F = Mersenne31>> AbstractExtensionField<AF> for M31x5<AF> {
+    const D: usize = 5;
+
+    fn from_base(b: AF) -> Self {
+        Self(field_to_array(b))
+    }
+
+    fn from_base_slice(bs: &[AF]) -> Self {
+        let mut me = Self::zero();
+        for i in 0..5 {
+            me.0[i] = bs[i].clone();
+        }
+        me
+    }
+
+    fn from_base_fn<F: FnMut(usize) -> AF>(f: F) -> Self {
+        Self(core::array::from_fn(f))
+    }
+
+    fn as_base_slice(&self) -> &[AF] {
+        &self.0
+    }
 }
 
 #[cfg(test)]
