@@ -29,27 +29,6 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     }
 }
 
-impl BinomiallyExtendable<6> for Mersenne31 {
-    // ```sage
-    // R.<x> = GF(2^31-1)[]; assert (x^6 - 5).is_irreducible()
-    // ```
-    fn w() -> Self {
-        Self::new(5)
-    }
-    // ```sage
-    // GF(2^31-1)(5)^((2^31-2)/6)
-    // ```
-    fn dth_root() -> Self {
-        Self::new(1513477736)
-    }
-    // ```sage
-    // F.extension(x^3 - 5, 'u').multiplicative_generator()
-    // ```
-    fn ext_generator() -> [Self; 6] {
-        todo!()
-    }
-}
-
 impl HasComplexBinomialExtension<2> for Mersenne31 {
     // Verifiable in Sage with
     // ```sage
