@@ -1,5 +1,5 @@
 use p3_field::{exp_1420470955, exp_u64_by_squaring, AbstractField, Field};
-use p3_monty_31_bit_field::{
+use p3_monty_31::{
     BinomialExtensionData, FieldConstants, FieldParameters, MontyField31, MontyParameters,
     TwoAdicData,
 };

@@ -1,5 +1,5 @@
 [package]
-name = "p3-monty-31-bit-field"
+name = "p3-monty-31"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"

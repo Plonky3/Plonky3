@@ -1,5 +1,5 @@
 use p3_field::{exp_1725656503, exp_u64_by_squaring, AbstractField, Field};
-use p3_monty_31_bit_field::{
+use p3_monty_31::{
     BinomialExtensionData, FieldConstants, FieldParameters, MontyField31, MontyParameters,
     TwoAdicData,
 };
@@ -114,7 +114,7 @@ mod tests {
 
     use p3_field::{AbstractField, Field, PrimeField32, PrimeField64, TwoAdicField};
     use p3_field_testing::{test_field, test_two_adic_field};
-    use p3_monty_31_bit_field::to_monty_array;
+    use p3_monty_31::to_monty_array;
 
     use super::*;
 

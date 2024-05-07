@@ -1,7 +1,7 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_monty_31_bit_field::{monty_reduce, to_monty_array};
+use p3_monty_31::{monty_reduce, to_monty_array};
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
