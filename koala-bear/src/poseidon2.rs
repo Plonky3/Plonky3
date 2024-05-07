@@ -1,7 +1,7 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_monty_31::{monty_reduce, to_monty_array};
+use p3_monty_31::{to_monty_array, Poseidon2Utils};
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
@@ -54,8 +54,11 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
         1 << 15,
     ]);
 
-const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u8; 15] =
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+struct Poseidon2KoalaBear {}
+
+impl Poseidon2Utils<KoalaBearParameters, 16, 15> for Poseidon2KoalaBear {
+    const INTERNAL_DIAG_SHIFTS: [u8; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+}
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
     to_monty_array::<24, KoalaBearParameters>([
@@ -85,9 +88,11 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
         1 << 23,
     ]);
 
-const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
-];
+impl Poseidon2Utils<KoalaBearParameters, 24, 23> for Poseidon2KoalaBear {
+    const INTERNAL_DIAG_SHIFTS: [u8; 23] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
+    ];
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixKoalaBear;
@@ -95,17 +100,7 @@ pub struct DiffusionMatrixKoalaBear;
 impl Permutation<[KoalaBear; 16]> for DiffusionMatrixKoalaBear {
     #[inline]
     fn permute_mut(&self, state: &mut [KoalaBear; 16]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = KoalaBear::new_monty(monty_reduce::<KoalaBearParameters>(s0));
-
-        for i in 1..16 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
-            state[i] = KoalaBear::new_monty(monty_reduce::<KoalaBearParameters>(si));
-        }
+        Poseidon2KoalaBear::permute_state(state)
     }
 }
 
@@ -114,16 +109,7 @@ impl DiffusionPermutation<KoalaBear, 16> for DiffusionMatrixKoalaBear {}
 impl Permutation<[KoalaBear; 24]> for DiffusionMatrixKoalaBear {
     #[inline]
     fn permute_mut(&self, state: &mut [KoalaBear; 24]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = KoalaBear::new_monty(monty_reduce::<KoalaBearParameters>(s0));
-        for i in 1..24 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
-            state[i] = KoalaBear::new_monty(monty_reduce::<KoalaBearParameters>(si));
-        }
+        Poseidon2KoalaBear::permute_state(state)
     }
 }
 
