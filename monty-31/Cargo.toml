@@ -1,0 +1,11 @@
+[package]
+name = "p3-monty-31"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-field = { path = "../field" }
+num-bigint = { version = "0.4.3", default-features = false }
+rand = "0.8.5"
+serde = { version = "1.0", default-features = false, features = ["derive"] }

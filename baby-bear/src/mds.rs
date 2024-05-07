@@ -56,9 +56,8 @@ impl Convolve<BabyBear, i64, i64, i64> for SmallConvolveBabyBear {
     #[inline(always)]
     fn reduce(z: i64) -> BabyBear {
         debug_assert!(z >= 0);
-        BabyBear {
-            value: (z as u64 % BabyBear::ORDER_U64) as u32,
-        }
+
+        BabyBear::new_monty((z as u64 % BabyBear::ORDER_U64) as u32)
     }
 }
 
@@ -256,7 +255,7 @@ impl Convolve<BabyBear, i64, i64, i64> for LargeConvolveBabyBear {
 
         let (corr, over) = red.overflowing_add(BabyBear::ORDER_U32);
         let value = if over { corr } else { red };
-        BabyBear { value }
+        BabyBear::new_monty(value)
     }
 }
 

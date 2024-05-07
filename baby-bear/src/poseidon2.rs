@@ -1,10 +1,11 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
+use p3_monty_31::{monty_reduce, to_monty_array};
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{monty_reduce, to_babybear_array, BabyBear};
+use crate::{BabyBear, BabyBearParameters};
 
 // Optimised diffusion matrices for Babybear16:
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]
@@ -23,56 +24,58 @@ use crate::{monty_reduce, to_babybear_array, BabyBear};
 // Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY can all be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
 // They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
-pub const MONTY_INVERSE: BabyBear = BabyBear { value: 1 };
+pub const MONTY_INVERSE: BabyBear = BabyBear::new_monty(1);
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] = to_babybear_array([
-    BabyBear::ORDER_U32 - 2,
-    1,
-    1 << 1,
-    1 << 2,
-    1 << 3,
-    1 << 4,
-    1 << 5,
-    1 << 6,
-    1 << 7,
-    1 << 8,
-    1 << 9,
-    1 << 10,
-    1 << 11,
-    1 << 12,
-    1 << 13,
-    1 << 15,
-]);
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] =
+    to_monty_array::<16, BabyBearParameters>([
+        BabyBear::ORDER_U32 - 2,
+        1,
+        1 << 1,
+        1 << 2,
+        1 << 3,
+        1 << 4,
+        1 << 5,
+        1 << 6,
+        1 << 7,
+        1 << 8,
+        1 << 9,
+        1 << 10,
+        1 << 11,
+        1 << 12,
+        1 << 13,
+        1 << 15,
+    ]);
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u8; 15] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] = to_babybear_array([
-    BabyBear::ORDER_U32 - 2,
-    1,
-    1 << 1,
-    1 << 2,
-    1 << 3,
-    1 << 4,
-    1 << 5,
-    1 << 6,
-    1 << 7,
-    1 << 8,
-    1 << 9,
-    1 << 10,
-    1 << 11,
-    1 << 12,
-    1 << 13,
-    1 << 14,
-    1 << 15,
-    1 << 16,
-    1 << 18,
-    1 << 19,
-    1 << 20,
-    1 << 21,
-    1 << 22,
-    1 << 23,
-]);
+pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
+    to_monty_array::<24, BabyBearParameters>([
+        BabyBear::ORDER_U32 - 2,
+        1,
+        1 << 1,
+        1 << 2,
+        1 << 3,
+        1 << 4,
+        1 << 5,
+        1 << 6,
+        1 << 7,
+        1 << 8,
+        1 << 9,
+        1 << 10,
+        1 << 11,
+        1 << 12,
+        1 << 13,
+        1 << 14,
+        1 << 15,
+        1 << 16,
+        1 << 18,
+        1 << 19,
+        1 << 20,
+        1 << 21,
+        1 << 22,
+        1 << 23,
+    ]);
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
@@ -87,16 +90,13 @@ impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBear {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
         let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = BabyBear {
-            value: monty_reduce(s0),
-        };
+        state[0] = BabyBear::new_monty(monty_reduce::<BabyBearParameters>(s0));
+
         for i in 1..16 {
             let si = full_sum
                 + ((state[i].value as u64)
                     << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
-            state[i] = BabyBear {
-                value: monty_reduce(si),
-            };
+            state[i] = BabyBear::new_monty(monty_reduce::<BabyBearParameters>(si));
         }
     }
 }
@@ -109,16 +109,12 @@ impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabyBear {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
         let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = BabyBear {
-            value: monty_reduce(s0),
-        };
+        state[0] = BabyBear::new_monty(monty_reduce::<BabyBearParameters>(s0));
         for i in 1..24 {
             let si = full_sum
                 + ((state[i].value as u64)
                     << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
-            state[i] = BabyBear {
-                value: monty_reduce(si),
-            };
+            state[i] = BabyBear::new_monty(monty_reduce::<BabyBearParameters>(si));
         }
     }
 }
