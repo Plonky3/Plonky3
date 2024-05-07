@@ -237,7 +237,10 @@ pub trait Field:
     fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
         let primality_test = MillerRabin { error_bits: 128 };
         let composite_splitter = PollardRho;
-        let factorizer = FactorizerFromSplitter { primality_test, composite_splitter };
+        let factorizer = FactorizerFromSplitter {
+            primality_test,
+            composite_splitter,
+        };
         let n = Self::order() - BigUint::one();
         factorizer.factor_counts(&n)
     }
