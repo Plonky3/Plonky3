@@ -1,4 +1,4 @@
-use crate::{MontyParameters};
+use crate::MontyParameters;
 
 #[inline]
 pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
