@@ -215,7 +215,7 @@ pub trait Field:
             }
             self = self.square();
         }
-        return res;
+        res
     }
 
     /// The multiplicative inverse of this field element, if it exists.
