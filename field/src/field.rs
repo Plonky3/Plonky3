@@ -9,11 +9,11 @@ use core::slice;
 use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
+use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
-use crate::helpers::factor;
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
@@ -235,7 +235,11 @@ pub trait Field:
 
     /// A list of (factor, exponent) pairs.
     fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        factor(Self::order() - BigUint::one())
+        let primality_test = MillerRabin { error_bits: 128 };
+        let composite_splitter = PollardRho;
+        let factorizer = FactorizerFromSplitter { primality_test, composite_splitter };
+        let n = Self::order() - BigUint::one();
+        factorizer.factor_counts(&n)
     }
 
     #[inline]

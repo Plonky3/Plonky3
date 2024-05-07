@@ -5,8 +5,6 @@ use core::iter::Sum;
 use core::ops::Mul;
 
 use num_bigint::BigUint;
-use num_integer::Integer;
-use num_traits::{One, Zero};
 
 use crate::field::Field;
 use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField};
@@ -175,75 +173,4 @@ where
     S: Sum<<LI::Item as Mul<RI::Item>>::Output>,
 {
     li.zip(ri).map(|(l, r)| l * r).sum()
-}
-
-pub fn factor(mut n: BigUint) -> Vec<(BigUint, usize)> {
-    // Naive trial division for now.
-    let mut factors = vec![];
-    let mut divisor = BigUint::from(2u8);
-    while &divisor * &divisor <= n {
-        let (quotient, count) = division_loop(n.clone(), &divisor);
-        if count > 0 {
-            factors.push((divisor.clone(), count));
-        }
-        n = quotient;
-        divisor += BigUint::one();
-    }
-    if !n.is_one() {
-        factors.push((n, 1));
-    }
-    factors
-}
-
-/// Divide n by d repeatedly for as long as it's divisible; return the quotient and the number of divisions.
-fn division_loop(mut n: BigUint, d: &BigUint) -> (BigUint, usize) {
-    let mut count = 0;
-    loop {
-        let (quotient, remainder) = n.div_rem(d);
-        if remainder.is_zero() {
-            n = quotient;
-            count += 1;
-        } else {
-            return (n, count);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec;
-
-    use num_bigint::BigUint;
-
-    use crate::factor;
-
-    #[test]
-    fn test_factor() {
-        assert_eq!(factor(BigUint::from(1u8)), vec![]);
-        assert_eq!(factor(BigUint::from(2u8)), vec![(BigUint::from(2u8), 1)]);
-        assert_eq!(factor(BigUint::from(8u8)), vec![(BigUint::from(2u8), 3)]);
-        assert_eq!(
-            factor(BigUint::from((1u32 << 31) - 2)), // M31 multiplicative group
-            vec![
-                (BigUint::from(2u8), 1),
-                (BigUint::from(3u8), 2),
-                (BigUint::from(7u8), 1),
-                (BigUint::from(11u8), 1),
-                (BigUint::from(31u8), 1),
-                (BigUint::from(151u8), 1),
-                (BigUint::from(331u16), 1)
-            ]
-        );
-        assert_eq!(
-            factor(BigUint::from(0xFFFF_FFFF_0000_0000u64)), // Goldilocks multiplicative group
-            vec![
-                (BigUint::from(2u8), 32),
-                (BigUint::from(3u8), 1),
-                (BigUint::from(5u8), 1),
-                (BigUint::from(17u8), 1),
-                (BigUint::from(257u16), 1),
-                (BigUint::from(65537u32), 1)
-            ]
-        );
-    }
 }
