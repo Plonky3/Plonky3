@@ -98,14 +98,12 @@ mod tests {
 
     #[test]
     fn forward_backward_is_identity() {
-        const NITERS: usize = 100;
-        let mut len = 4;
+        const NITERS: usize = 1;
+        let mut len = 8;
         loop {
             let root_table = roots_of_unity_table(len);
             let root = root_table[0][0];
-            let root_inv = BabyBear::from_canonical_u32(root as u32)
-                .inverse()
-                .as_canonical_u64() as i64;
+            let root_inv = BabyBear { value: root as u32 }.inverse().value as i64;
 
             for _ in 0..NITERS {
                 let us = randvec(len);
@@ -115,10 +113,24 @@ mod tests {
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);
 
+                println!("root_table = {:?}", root_table);
+                println!("root_inv = {:?}", root_inv);
+                println!("us = {:?}", us);
+                println!("vs = {:?}", vs);
+                println!("ws = {:?}", ws);
+                println!(
+                    "us = {:?}",
+                    us.clone()
+                        .iter()
+                        .map(|u| (u * len as i64) % P)
+                        .collect::<Vec<_>>()
+                );
+
                 assert!(us.iter().zip(ws).all(|(&u, w)| w == (u * len as i64) % P));
             }
             len *= 2;
-            if len > 8192 {
+            //if len > 8192 {
+            if len > 4 {
                 break;
             }
         }

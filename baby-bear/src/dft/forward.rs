@@ -8,12 +8,12 @@ use p3_util::log2_strict_usize;
 // to avoid computing permutations in the inner loop.
 
 const ROOTS8: [i64; 3] = [1592366214, 1728404513, 211723194];
-const PRE_ROOTS8: [i64; 3] = [1032137103, 473486609, 1964242958];
+const MONTY_ROOTS8: [i64; 3] = [1032137103, 473486609, 1964242958];
 
 const ROOTS16: [i64; 7] = [
     196396260, 1592366214, 78945800, 1728404513, 1400279418, 211723194, 1446056615,
 ];
-const PRE_ROOTS16: [i64; 7] = [
+const MONTY_ROOTS16: [i64; 7] = [
     1594287233, 1032137103, 1173759574, 473486609, 1844575452, 1964242958, 270522423,
 ];
 
@@ -21,7 +21,7 @@ const ROOTS32: [i64; 15] = [
     760005850, 196396260, 1240658731, 1592366214, 177390144, 78945800, 1399190761, 1728404513,
     889310574, 1400279418, 1561292356, 211723194, 1424376889, 1446056615, 740045640,
 ];
-const PRE_ROOTS32: [i64; 15] = [
+const MONTY_ROOTS32: [i64; 15] = [
     1063008748, 1594287233, 1648228672, 1032137103, 24220877, 1173759574, 1310027008, 473486609,
     518723214, 1844575452, 964210272, 1964242958, 48337049, 270522423, 434501889,
 ];
@@ -32,7 +32,7 @@ const ROOTS64: [i64; 31] = [
     1941224298, 889310574, 288289890, 1400279418, 95586718, 1561292356, 841453531, 211723194,
     686375053, 1424376889, 1333217202, 1446056615, 55559234, 740045640, 1351065666,
 ];
-const PRE_ROOTS64: [i64; 31] = [
+const MONTY_ROOTS64: [i64; 31] = [
     1427548538, 1063008748, 19319570, 1594287233, 292252822, 1648228672, 1754391076, 1032137103,
     1419020303, 24220877, 1848478141, 1173759574, 1270902541, 1310027008, 992470346, 473486609,
     690559708, 518723214, 1398247489, 1844575452, 1272476677, 964210272, 486600511, 1964242958,
@@ -46,10 +46,10 @@ pub fn roots_of_unity_table(n: usize) -> Vec<Vec<i64>> {
         .powers()
         .take(half_n)
         .skip(1)
-        .map(|x| x.as_canonical_u32() as i64)
+        .map(|x| x.value as i64)
         .collect();
 
-    (0..lg_n)
+    (0..(lg_n - 1))
         .map(|i| {
             nth_roots
                 .iter()
@@ -91,15 +91,25 @@ const MONTY_MU: u32 = 0x88000001;
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 #[inline(always)]
-fn _monty_reduce(x: u64) -> u32 {
+fn monty_reduce(x: u64) -> u32 {
     const PP: u32 = 0x78000001;
     let t = x.wrapping_mul(MONTY_MU as u64) as u32 as u64;
     let u = t * (P as u64);
 
     let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> 31) as u32;
+    let x_sub_u_hi = (x_sub_u >> MONTY_BITS) as u32;
     let corr = if over { PP } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
+}
+
+// FIXME: Use this!
+#[inline(always)]
+pub fn partial_monty_reduce(u: u64) -> u32 {
+    const PP: u32 = 0x78000001;
+    let q = MONTY_MU.wrapping_mul(u as u32);
+    let h = ((q as u64 * P as u64) >> 32) as u32;
+    let r = PP - h + (u >> 32) as u32;
+    r as u32
 }
 
 /// Given x in [0, 2p), return the x mod p in [0, p)
@@ -173,7 +183,7 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
         top[i] = reduce_2p(x + y);
 
         let t = P + x - y;
-        tail[i] = barrett_reduce(t as u32, w as u32) as i64;
+        tail[i] = monty_reduce((t * w) as u64) as i64;
     }
 }
 
@@ -181,11 +191,11 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
 fn forward_4(a: &mut [Real]) {
     assert_eq!(a.len(), 4);
 
-    const ROOT: u32 = ROOTS8[1] as u32;
+    const ROOT: i64 = MONTY_ROOTS8[1];
 
     let t1 = P + a[1] - a[3];
     let t5 = a[1] + a[3];
-    let t3 = partial_barrett_reduce(t1 as u32, ROOT) as i64;
+    let t3 = monty_reduce((t1 * ROOT) as u64) as i64;
     let t4 = a[0] + a[2];
     let t2 = P + a[0] - a[2];
 
@@ -248,7 +258,7 @@ pub fn forward_8(a: &mut [Real], roots: &[Real]) {
 pub fn forward_8(a: &mut [Real]) {
     assert_eq!(a.len(), 8);
 
-    forward_pass(a, &ROOTS8);
+    forward_pass(a, &MONTY_ROOTS8);
 
     let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
     forward_4(a0);
@@ -259,7 +269,7 @@ pub fn forward_8(a: &mut [Real]) {
 pub fn forward_16(a: &mut [Real]) {
     assert_eq!(a.len(), 16);
 
-    forward_pass(a, &ROOTS16);
+    forward_pass(a, &MONTY_ROOTS16);
 
     let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
     forward_8(a0);
@@ -270,7 +280,7 @@ pub fn forward_16(a: &mut [Real]) {
 pub fn forward_32(a: &mut [Real]) {
     assert_eq!(a.len(), 32);
 
-    forward_pass(a, &ROOTS32);
+    forward_pass(a, &MONTY_ROOTS32);
 
     let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
     forward_16(a0);
@@ -281,7 +291,7 @@ pub fn forward_32(a: &mut [Real]) {
 pub fn forward_64(a: &mut [Real]) {
     assert_eq!(a.len(), 64);
 
-    forward_pass(a, &ROOTS64);
+    forward_pass(a, &MONTY_ROOTS64);
 
     let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
     forward_32(a0);
