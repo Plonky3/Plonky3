@@ -3,12 +3,12 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::{DirectMmcs, Mmcs};
-use p3_field::PackedField;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::{Dimensions, Matrix, MatrixRows};
-use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use p3_commit::Mmcs;
+use p3_field::{PackedField, PackedValue};
+use p3_matrix::{Dimensions, Matrix};
+use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
+use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
 
@@ -18,15 +18,15 @@ use crate::FieldMerkleTree;
 /// - `P`: a leaf value TODO
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
-#[derive(Copy, Clone)]
-pub struct FieldMerkleTreeMmcs<P, H, C, const DIGEST_ELEMS: usize> {
+#[derive(Copy, Clone, Debug)]
+pub struct FieldMerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
     hash: H,
     compress: C,
-    _phantom: PhantomData<P>,
+    _phantom: PhantomData<(P, PW)>,
 }
 
-impl<P, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, H, C, DIGEST_ELEMS> {
-    pub fn new(hash: H, compress: C) -> Self {
+impl<P, PW, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
+    pub const fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
             compress,
@@ -35,28 +35,39 @@ impl<P, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, H, C, DIGEST_ELE
     }
 }
 
-impl<P, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Scalar>
-    for FieldMerkleTreeMmcs<P, H, C, DIGEST_ELEMS>
+impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Scalar>
+    for FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
 where
     P: PackedField,
-    H: CryptographicHasher<P::Scalar, [P::Scalar; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [P; DIGEST_ELEMS]>,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
-    C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
+    PW::Value: Eq,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
-    type ProverData = FieldMerkleTree<P::Scalar, DIGEST_ELEMS>;
-    type Commitment = [P::Scalar; DIGEST_ELEMS];
-    type Proof = Vec<[P::Scalar; DIGEST_ELEMS]>;
+    type Commitment = Hash<P::Scalar, PW::Value, DIGEST_ELEMS>;
+    type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
     type Error = ();
-    type Mat<'a> = RowMajorMatrixView<'a, P::Scalar> where H: 'a, C: 'a;
+    type ProverData<M> = FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>;
 
-    fn open_batch(
+    fn commit<M: Matrix<P::Scalar>>(
+        &self,
+        inputs: Vec<M>,
+    ) -> (Self::Commitment, Self::ProverData<M>) {
+        let tree = FieldMerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
+        let root = tree.root();
+        (root, tree)
+    }
+
+    fn open_batch<M: Matrix<P::Scalar>>(
         &self,
         index: usize,
-        prover_data: &FieldMerkleTree<P::Scalar, DIGEST_ELEMS>,
-    ) -> (Vec<Vec<P::Scalar>>, Vec<[P::Scalar; DIGEST_ELEMS]>) {
+        prover_data: &FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>,
+    ) -> (Vec<Vec<P::Scalar>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
@@ -78,20 +89,20 @@ where
         (openings, proof)
     }
 
-    fn get_matrices<'a>(
-        &'a self,
-        prover_data: &'a Self::ProverData,
-    ) -> Vec<RowMajorMatrixView<'a, P::Scalar>> {
-        prover_data.leaves.iter().map(|mat| mat.as_view()).collect()
+    fn get_matrices<'a, M: Matrix<P::Scalar>>(
+        &self,
+        prover_data: &'a Self::ProverData<M>,
+    ) -> Vec<&'a M> {
+        prover_data.leaves.iter().collect()
     }
 
     fn verify_batch(
         &self,
-        commit: &[P::Scalar; DIGEST_ELEMS],
+        commit: &Self::Commitment,
         dimensions: &[Dimensions],
         mut index: usize,
         opened_values: &[Vec<P::Scalar>],
-        proof: &Vec<[P::Scalar; DIGEST_ELEMS]>,
+        proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         let mut heights_tallest_first = dimensions
             .iter()
@@ -140,32 +151,11 @@ where
             }
         }
 
-        if root == *commit {
+        if commit == &root {
             Ok(())
         } else {
             Err(())
         }
-    }
-}
-
-impl<P, H, C, const DIGEST_ELEMS: usize> DirectMmcs<P::Scalar>
-    for FieldMerkleTreeMmcs<P, H, C, DIGEST_ELEMS>
-where
-    P: PackedField,
-    H: CryptographicHasher<P::Scalar, [P::Scalar; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [P; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
-    C: Sync,
-{
-    fn commit(
-        &self,
-        inputs: Vec<RowMajorMatrix<P::Scalar>>,
-    ) -> (Self::Commitment, Self::ProverData) {
-        let tree = FieldMerkleTree::new::<P, H, C>(&self.hash, &self.compress, inputs);
-        let root = tree.root();
-        (root, tree)
     }
 }
 
@@ -174,32 +164,34 @@ mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
-    use p3_baby_bear::BabyBear;
-    use p3_commit::{DirectMmcs, Mmcs};
+    use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
+    use p3_commit::Mmcs;
     use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
-    use p3_mds::coset_mds::CosetMds;
-    use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
     use rand::thread_rng;
 
-    use crate::FieldMerkleTreeMmcs;
+    use super::FieldMerkleTreeMmcs;
 
     type F = BabyBear;
 
-    type MyMds = CosetMds<F, 16>;
-    type Perm = Poseidon2<F, MyMds, DiffusionMatrixBabybear, 16, 5>;
+    type Perm = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-    type MyMmcs = FieldMerkleTreeMmcs<<F as Field>::Packing, MyHash, MyCompress, 8>;
+    type MyMmcs =
+        FieldMerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 8>;
 
     #[test]
     fn commit_single_1x8() {
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut thread_rng(),
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -232,8 +224,11 @@ mod tests {
 
     #[test]
     fn commit_single_2x2() {
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut thread_rng(),
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -255,8 +250,11 @@ mod tests {
 
     #[test]
     fn commit_single_2x3() {
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut thread_rng(),
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -286,8 +284,11 @@ mod tests {
 
     #[test]
     fn commit_mixed() {
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut thread_rng(),
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -348,8 +349,11 @@ mod tests {
     #[test]
     fn commit_either_order() {
         let mut rng = thread_rng();
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut rng,
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -366,8 +370,11 @@ mod tests {
     #[should_panic]
     fn mismatched_heights() {
         let mut rng = thread_rng();
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut rng,
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -385,8 +392,11 @@ mod tests {
     #[test]
     fn verify_tampered_proof_fails() {
         let mut rng = thread_rng();
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut rng,
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -421,8 +431,11 @@ mod tests {
     #[test]
     fn size_gaps() {
         let mut rng = thread_rng();
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut rng,
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -473,8 +486,11 @@ mod tests {
     #[test]
     fn different_widths() {
         let mut rng = thread_rng();
-        let mds = MyMds::default();
-        let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut rng);
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear,
+            &mut rng,
+        );
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);

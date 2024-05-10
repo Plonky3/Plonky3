@@ -1,16 +1,16 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_blake3::Blake3;
-use p3_commit::DirectMmcs;
-use p3_field::{Field, PackedField};
+use p3_commit::Mmcs;
+use p3_field::{Field, PackedField, PackedValue};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_rescue::{BasicSboxLayer, Rescue};
 use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
@@ -18,6 +18,8 @@ use p3_symmetric::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_poseidon2(criterion);
@@ -29,11 +31,12 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type F = BabyBear;
 
-    type Mds = IntegratedCosetMds<F, 16>;
-    let mds = Mds::default();
-
-    type Perm = Poseidon2<BabyBear, Mds, DiffusionMatrixBabybear, 16, 7>;
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+    type Perm = Poseidon2<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabyBear,
+        &mut thread_rng(),
+    );
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
     let h = H::new(perm.clone());
@@ -41,7 +44,7 @@ fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type C = TruncatedPermutation<Perm, 2, 8, 16>;
     let c = C::new(perm);
 
-    bench_merkle_tree::<<F as Field>::Packing, H, C, 8>(criterion, h, c);
+    bench_merkle_tree::<<F as Field>::Packing, <F as Field>::Packing, H, C, 8>(criterion, h, c);
 }
 
 fn bench_bb_rescue(criterion: &mut Criterion) {
@@ -60,7 +63,7 @@ fn bench_bb_rescue(criterion: &mut Criterion) {
     type C = TruncatedPermutation<Perm, 2, 8, 16>;
     let c = C::new(perm);
 
-    bench_merkle_tree::<<F as Field>::Packing, H, C, 8>(criterion, h, c);
+    bench_merkle_tree::<<F as Field>::Packing, <F as Field>::Packing, H, C, 8>(criterion, h, c);
 }
 
 fn bench_bb_blake3(criterion: &mut Criterion) {
@@ -69,39 +72,43 @@ fn bench_bb_blake3(criterion: &mut Criterion) {
     type H = SerializingHasher32<Blake3>;
     let h = H::new(Blake3 {});
 
-    type C = CompressionFunctionFromHasher<F, H, 2, 8>;
-    let c = C::new(h);
+    type C = CompressionFunctionFromHasher<u8, Blake3, 2, 32>;
+    let b = Blake3 {};
+    let c = C::new(b);
 
-    bench_merkle_tree::<F, H, C, 8>(criterion, h, c);
+    bench_merkle_tree::<F, u8, H, C, 32>(criterion, h, c);
 }
 
 fn bench_bb_keccak(criterion: &mut Criterion) {
     type F = BabyBear;
 
     type H = SerializingHasher32<Keccak256Hash>;
-    let h = H::new(Keccak256Hash {});
+    let k = Keccak256Hash {};
+    let h = H::new(k);
 
-    type C = CompressionFunctionFromHasher<F, H, 2, 8>;
-    let c = C::new(h);
+    type C = CompressionFunctionFromHasher<u8, Keccak256Hash, 2, 32>;
+    let c = C::new(k);
 
-    bench_merkle_tree::<F, H, C, 8>(criterion, h, c);
+    bench_merkle_tree::<F, u8, H, C, 32>(criterion, h, c);
 }
 
-fn bench_merkle_tree<P, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Criterion, h: H, c: C)
+fn bench_merkle_tree<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Criterion, h: H, c: C)
 where
     P: PackedField,
-    H: CryptographicHasher<P::Scalar, [P::Scalar; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [P; DIGEST_ELEMS]>,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
-    C: PseudoCompressionFunction<[P::Scalar; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
+    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
+    [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     Standard: Distribution<P::Scalar>,
 {
     const ROWS: usize = 1 << 15;
     const COLS: usize = 135;
 
-    let matrix = RowMajorMatrix::rand(&mut thread_rng(), ROWS, COLS);
+    let matrix = RowMajorMatrix::<P::Scalar>::rand(&mut thread_rng(), ROWS, COLS);
     let dims = matrix.dimensions();
     let leaves = vec![matrix];
 
@@ -115,7 +122,7 @@ where
     let mut group = criterion.benchmark_group(name);
     group.sample_size(10);
 
-    let mmcs = FieldMerkleTreeMmcs::<P, H, C, DIGEST_ELEMS>::new(h, c);
+    let mmcs = FieldMerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
     group.bench_with_input(params, &leaves, |b, input| {
         b.iter(|| mmcs.commit(input.clone()))
     });

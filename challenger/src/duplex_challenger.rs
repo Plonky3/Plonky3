@@ -1,21 +1,21 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::PrimeField64;
-use p3_symmetric::CryptographicPermutation;
+use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DuplexChallenger<F, P, const WIDTH: usize>
 where
     F: Clone,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    sponge_state: [F; WIDTH],
-    input_buffer: Vec<F>,
-    output_buffer: Vec<F>,
-    permutation: P,
+    pub sponge_state: [F; WIDTH],
+    pub input_buffer: Vec<F>,
+    pub output_buffer: Vec<F>,
+    pub permutation: P,
 }
 
 impl<F, P, const WIDTH: usize> DuplexChallenger<F, P, WIDTH>
@@ -87,21 +87,52 @@ where
     }
 }
 
-impl<F, P, const WIDTH: usize> CanSample<F> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const N: usize, const WIDTH: usize> CanObserve<Hash<F, F, N>>
+    for DuplexChallenger<F, P, WIDTH>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn sample(&mut self) -> F {
-        // If we have buffered inputs, we must perform a duplexing so that the challenge will
-        // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
-        if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
-            self.duplexing();
+    fn observe(&mut self, values: Hash<F, F, N>) {
+        for value in values {
+            self.observe(value);
         }
+    }
+}
 
-        self.output_buffer
-            .pop()
-            .expect("Output buffer should be non-empty")
+// for TrivialPcs
+impl<F, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for DuplexChallenger<F, P, WIDTH>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn observe(&mut self, valuess: Vec<Vec<F>>) {
+        for values in valuess {
+            for value in values {
+                self.observe(value);
+            }
+        }
+    }
+}
+
+impl<F, EF, P, const WIDTH: usize> CanSample<EF> for DuplexChallenger<F, P, WIDTH>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn sample(&mut self) -> EF {
+        EF::from_base_fn(|_| {
+            // If we have buffered inputs, we must perform a duplexing so that the challenge will
+            // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
+            if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
+                self.duplexing();
+            }
+
+            self.output_buffer
+                .pop()
+                .expect("Output buffer should be non-empty")
+        })
     }
 }
 
@@ -123,7 +154,7 @@ where
 mod tests {
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
-    use p3_symmetric::{CryptographicPermutation, Permutation};
+    use p3_symmetric::Permutation;
 
     use super::*;
 
@@ -218,7 +249,9 @@ mod tests {
 
         (0..WIDTH / 2).for_each(|element| {
             assert_eq!(
-                duplex_challenger.sample(),
+                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                    &mut duplex_challenger
+                ),
                 F::from_canonical_u8(element as u8)
             );
             assert_eq!(
@@ -229,7 +262,12 @@ mod tests {
         });
 
         (0..WIDTH / 2).for_each(|i| {
-            assert_eq!(duplex_challenger.sample(), F::from_canonical_u8(0));
+            assert_eq!(
+                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                    &mut duplex_challenger
+                ),
+                F::from_canonical_u8(0)
+            );
             assert_eq!(duplex_challenger.input_buffer, vec![]);
             assert_eq!(
                 duplex_challenger.output_buffer,

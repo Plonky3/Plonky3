@@ -1,9 +1,8 @@
 use alloc::vec::Vec;
 
-use p3_dft::reverse_slice_index_bits;
 use p3_field::{AbstractField, TwoAdicField};
 use p3_symmetric::Permutation;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;

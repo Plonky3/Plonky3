@@ -2,7 +2,13 @@
 
 #![no_std]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::hint::unreachable_unchecked;
+
+pub mod array_serialization;
+pub mod linear_map;
 
 /// Computes `ceil(a / b)`. Assumes `a + b` does not overflow.
 #[must_use]
@@ -12,7 +18,7 @@ pub const fn ceil_div_usize(a: usize, b: usize) -> usize {
 
 /// Computes `ceil(log_2(n))`.
 #[must_use]
-pub fn log2_ceil_usize(n: usize) -> usize {
+pub const fn log2_ceil_usize(n: usize) -> usize {
     (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
 }
 
@@ -43,6 +49,37 @@ pub const fn indices_arr<const N: usize>() -> [usize; N] {
         i += 1;
     }
     indices_arr
+}
+
+#[inline]
+pub const fn reverse_bits(x: usize, n: usize) -> usize {
+    reverse_bits_len(x, n.trailing_zeros() as usize)
+}
+
+#[inline]
+pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
+    // NB: The only reason we need overflowing_shr() here as opposed
+    // to plain '>>' is to accommodate the case n == num_bits == 0,
+    // which would become `0 >> 64`. Rust thinks that any shift of 64
+    // bits causes overflow, even when the argument is zero.
+    x.reverse_bits()
+        .overflowing_shr(usize::BITS - bit_len as u32)
+        .0
+}
+
+pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
+    let n = vals.len();
+    if n == 0 {
+        return;
+    }
+    let log_n = log2_strict_usize(n);
+
+    for i in 0..n {
+        let j = reverse_bits_len(i, log_n);
+        if i < j {
+            vals.swap(i, j);
+        }
+    }
 }
 
 #[inline(always)]
@@ -84,4 +121,37 @@ pub fn branch_hint() {
     unsafe {
         core::arch::asm!("", options(nomem, nostack, preserves_flags));
     }
+}
+
+/// Convenience methods for Vec.
+pub trait VecExt<T> {
+    /// Push `elem` and return a reference to it.
+    fn pushed_ref(&mut self, elem: T) -> &T;
+    /// Push `elem` and return a mutable reference to it.
+    fn pushed_mut(&mut self, elem: T) -> &mut T;
+}
+
+impl<T> VecExt<T> for alloc::vec::Vec<T> {
+    fn pushed_ref(&mut self, elem: T) -> &T {
+        self.push(elem);
+        self.last().unwrap()
+    }
+    fn pushed_mut(&mut self, elem: T) -> &mut T {
+        self.push(elem);
+        self.last_mut().unwrap()
+    }
+}
+
+pub fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
+    assert!(!v.is_empty());
+    let len = v[0].len();
+    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect();
+    (0..len)
+        .map(|_| {
+            iters
+                .iter_mut()
+                .map(|n| n.next().unwrap())
+                .collect::<Vec<T>>()
+        })
+        .collect()
 }

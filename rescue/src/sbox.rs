@@ -4,7 +4,7 @@ use p3_field::{AbstractField, PrimeField, PrimeField64};
 
 use crate::util::get_inverse;
 
-pub trait SboxLayers<AF, const WIDTH: usize>: Clone
+pub trait SboxLayers<AF, const WIDTH: usize>: Clone + Sync
 where
     AF: AbstractField,
     AF::F: PrimeField,
@@ -14,7 +14,7 @@ where
     fn inverse_sbox_layer(&self, state: &mut [AF; WIDTH]);
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct BasicSboxLayer<F: PrimeField> {
     alpha: u64,
     alpha_inv: u64,
@@ -22,7 +22,7 @@ pub struct BasicSboxLayer<F: PrimeField> {
 }
 
 impl<F: PrimeField> BasicSboxLayer<F> {
-    pub fn new(alpha: u64, alpha_inv: u64) -> Self {
+    pub const fn new(alpha: u64, alpha_inv: u64) -> Self {
         Self {
             alpha,
             alpha_inv,

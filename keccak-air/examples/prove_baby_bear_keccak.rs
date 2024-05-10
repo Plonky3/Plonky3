@@ -1,26 +1,22 @@
 use p3_baby_bear::BabyBear;
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::Field;
-use p3_fri::{FriBasedPcs, FriConfigImpl, FriLdt};
+use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_ldt::QuotientMmcs;
-use p3_mds::coset_mds::CosetMds;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
-use p3_uni_stark::{prove, verify, StarkConfigImpl, VerificationError};
-use rand::{random, thread_rng};
+use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use rand::random;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-const NUM_HASHES: usize = 680;
+const NUM_HASHES: usize = 1365;
 
 fn main() -> Result<(), VerificationError> {
     let env_filter = EnvFilter::builder()
@@ -33,24 +29,18 @@ fn main() -> Result<(), VerificationError> {
         .init();
 
     type Val = BabyBear;
-    type Domain = Val;
     type Challenge = BinomialExtensionField<Val, 4>;
-    type PackedChallenge = BinomialExtensionField<<Domain as Field>::Packing, 4>;
 
-    type MyMds = CosetMds<Val, 16>;
-    let mds = MyMds::default();
+    type ByteHash = Keccak256Hash;
+    type FieldHash = SerializingHasher32<ByteHash>;
+    let byte_hash = ByteHash {};
+    let field_hash = FieldHash::new(Keccak256Hash {});
 
-    type Perm = Poseidon2<Val, MyMds, DiffusionMatrixBabybear, 16, 5>;
-    let perm = Perm::new_from_rng(8, 22, mds, DiffusionMatrixBabybear, &mut thread_rng());
+    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+    let compress = MyCompress::new(byte_hash);
 
-    type MyHash = SerializingHasher32<Keccak256Hash>;
-    let hash = MyHash::new(Keccak256Hash {});
-
-    type MyCompress = CompressionFunctionFromHasher<Val, MyHash, 2, 8>;
-    let compress = MyCompress::new(hash);
-
-    type ValMmcs = FieldMerkleTreeMmcs<Val, MyHash, MyCompress, 8>;
-    let val_mmcs = ValMmcs::new(hash, compress);
+    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -58,24 +48,27 @@ fn main() -> Result<(), VerificationError> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 16>;
-
-    type Quotient = QuotientMmcs<Domain, Challenge, ValMmcs>;
-    type MyFriConfig = FriConfigImpl<Val, Challenge, Quotient, ChallengeMmcs, Challenger>;
-    let fri_config = MyFriConfig::new(40, challenge_mmcs);
-    let ldt = FriLdt { config: fri_config };
-
-    type Pcs = FriBasedPcs<MyFriConfig, ValMmcs, Dft, Challenger>;
-    type MyConfig = StarkConfigImpl<Val, Challenge, PackedChallenge, Pcs, Challenger>;
-
-    let pcs = Pcs::new(dft, val_mmcs, ldt);
-    let config = StarkConfigImpl::new(pcs);
-    let mut challenger = Challenger::new(perm.clone());
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
-    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
 
-    let mut challenger = Challenger::new(perm);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof)
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        num_queries: 100,
+        proof_of_work_bits: 16,
+        mmcs: challenge_mmcs,
+    };
+    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    let pcs = Pcs::new(dft, val_mmcs, fri_config);
+
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs);
+
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+
+    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
 }

@@ -1,4 +1,4 @@
-# Plonky3
+![Plonky3-powered-by-polygon](https://github.com/Plonky3/Plonky3/assets/86010/7ec356ad-b0f3-4c4c-aa1d-3a151c1065e7)
 
 Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown.
 
@@ -11,13 +11,13 @@ Fields:
 - [x] Mersenne31
   - [x] "complex" extension field
   - [x] ~128 bit extension field
-  - [ ] AVX2
-  - [ ] AVX-512
+  - [x] AVX2
+  - [x] AVX-512
   - [x] NEON
 - [x] BabyBear
   - [x] ~128 bit extension field
-  - [ ] AVX2
-  - [ ] AVX-512
+  - [x] AVX2
+  - [x] AVX-512
   - [x] NEON
 - [x] Goldilocks
   - [x] ~128 bit extension field
@@ -55,6 +55,30 @@ Hashes
   - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
 - [x] Monolith
+
+
+## Benchmark
+
+We sometimes use a Keccak AIR to compare Plonky3's performance to other libraries like Plonky2. Several variations are possible here, with different fields and so forth, but here is one example:
+```
+RUST_LOG=info cargo run --example prove_baby_bear_keccak --release --features parallel
+```
+
+## CPU features
+
+Plonky3 contains optimizations that rely on newer CPU instructions that are not available in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
+```
+RUSTFLAGS="-Ctarget-cpu=native" cargo test
+```
+
+Support for some instructions, such as AVX-512, is still experimental. They are only available in the nightly build of Rustc and are enabled by the [`nightly-features` feature flag](#nightly-only-optimizations). To use them, you must enable the flag in Rustc (e.g. by setting `target-feature`) and you must also enable the `nightly-features` feature.
+
+## Nightly-only optimizations
+
+Some optimizations (in particular, AVX-512-optimized math) rely on features that are currently available only in the nightly build of Rustc. To use them, you need to enable the `nightly-features` feature. For example, to run the tests:
+```
+cargo test --features nightly-features
+```
 
 
 ## License

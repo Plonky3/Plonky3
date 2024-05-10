@@ -7,6 +7,8 @@ extern crate alloc;
 pub mod bench_func;
 
 pub use bench_func::*;
+use num_bigint::BigUint;
+use num_traits::identities::One;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
     two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
@@ -26,6 +28,7 @@ where
     assert_eq!(x + (-x), F::zero());
     assert_eq!(-x, F::zero() - x);
     assert_eq!(x + x, x * F::two());
+    assert_eq!(x, x.halve() * F::two());
     assert_eq!(x * (-x), -x.square());
     assert_eq!(x + y, y + x);
     assert_eq!(x * y, y * x);
@@ -33,6 +36,10 @@ where
     assert_eq!(x - (y + z), (x - y) - z);
     assert_eq!((x + y) - z, x + (y - z));
     assert_eq!(x * (y + z), x * y + x * z);
+    assert_eq!(
+        x + y + z + x + y + z,
+        [x, x, y, y, z, z].iter().cloned().sum()
+    );
 }
 
 pub fn test_inv_div<F: Field>()
@@ -68,6 +75,14 @@ where
             assert_eq!(x * z, F::one());
         }
     }
+}
+
+pub fn test_multiplicative_group_factors<F: Field>() {
+    let product: BigUint = F::multiplicative_group_factors()
+        .into_iter()
+        .map(|(factor, exponent)| factor.pow(exponent as u32))
+        .product();
+    assert_eq!(product + BigUint::one(), F::order());
 }
 
 pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
@@ -125,6 +140,10 @@ macro_rules! test_field {
             fn test_inverse() {
                 $crate::test_inverse::<$field>();
             }
+            #[test]
+            fn test_multiplicative_group_factors() {
+                $crate::test_multiplicative_group_factors::<$field>();
+            }
         }
     };
 }
@@ -164,4 +183,38 @@ macro_rules! test_two_adic_extension_field {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::{BinomialExtensionField, HasFrobenius};
+    use p3_field::{binomial_expand, eval_poly, AbstractExtensionField, AbstractField};
+    use rand::random;
+
+    use super::*;
+
+    #[test]
+    fn test_minimal_poly() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        for _ in 0..1024 {
+            let x: EF = random();
+            let m: Vec<EF> = x.minimal_poly().into_iter().map(EF::from_base).collect();
+            assert!(eval_poly(&m, x).is_zero());
+        }
+    }
+
+    #[test]
+    fn test_binomial_expand() {
+        type F = BabyBear;
+        // (x - 1)(x - 2) = x^2 - 3x + 2
+        assert_eq!(
+            binomial_expand(&[F::one(), F::two()]),
+            vec![F::two(), -F::from_canonical_usize(3), F::one()]
+        );
+    }
 }

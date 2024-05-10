@@ -1,14 +1,21 @@
 use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use p3_util::log2_ceil_u64;
+use itertools::Itertools;
+use num_bigint::BigUint;
+use num_traits::One;
+use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
-use crate::packed::PackedField;
+use crate::packed::{PackedField, PackedValue};
+use crate::Packable;
 
 /// A generalization of `Field` which permits things like
 /// - an actual field element
@@ -142,11 +149,20 @@ pub trait AbstractField:
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
+
+    fn try_div<Rhs>(self, rhs: Rhs) -> Option<<Self as Mul<Rhs>>::Output>
+    where
+        Rhs: Field,
+        Self: Mul<Rhs>,
+    {
+        rhs.try_inverse().map(|inv| self * inv)
+    }
 }
 
 /// An element of a finite field.
 pub trait Field:
     AbstractField<F = Self>
+    + Packable
     + 'static
     + Copy
     + Div<Self, Output = Self>
@@ -155,6 +171,8 @@ pub trait Field:
     + Send
     + Sync
     + Display
+    + Serialize
+    + DeserializeOwned
 {
     type Packing: PackedField<Scalar = Self>;
 
@@ -201,31 +219,48 @@ pub trait Field:
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
+
+    /// Computes input/2.
+    /// Should be overwritten by most field implementations to use bitshifts.
+    /// Will error if the field characteristic is 2.
+    #[must_use]
+    fn halve(&self) -> Self {
+        let half = Self::two()
+            .try_inverse()
+            .expect("Cannot divide by 2 in fields with characteristic 2");
+        *self * half
+    }
+
+    fn order() -> BigUint;
+
+    /// A list of (factor, exponent) pairs.
+    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        let primality_test = MillerRabin { error_bits: 128 };
+        let composite_splitter = PollardRho;
+        let factorizer = FactorizerFromSplitter {
+            primality_test,
+            composite_splitter,
+        };
+        let n = Self::order() - BigUint::one();
+        factorizer.factor_counts(&n)
+    }
+
+    #[inline]
+    fn bits() -> usize {
+        Self::order().bits() as usize
+    }
 }
 
-pub trait PrimeField: Field + Ord {}
+pub trait PrimeField: Field + Ord {
+    fn as_canonical_biguint(&self) -> BigUint;
+}
 
 /// A prime field of order less than `2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
-    // TODO: Move to Field itself? Limiting it to `PrimeField64` seems unusual.
-    #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
-    fn bits() -> usize {
-        log2_ceil_u64(Self::ORDER_U64) as usize
-    }
-
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
-
-    /// Return the value \sum_{i=0}^N u[i] * v[i].
-    ///
-    /// NB: Assumes that sum(u) <= 2^32 to allow implementations to avoid
-    /// overflow handling.
-    ///
-    /// TODO: Mark unsafe because of the assumption?
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self;
 }
 
 /// A prime field of order less than `2^32`.
@@ -238,6 +273,7 @@ pub trait PrimeField32: PrimeField64 {
 
 pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
+    + From<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>
@@ -262,6 +298,10 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// different f might have been used.
     fn from_base_slice(bs: &[Base]) -> Self;
 
+    /// Similar to `core:array::from_fn`, with the same caveats as
+    /// `from_base_slice`.
+    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
+
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a field element
@@ -276,21 +316,63 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// different f might have been used.
     fn as_base_slice(&self) -> &[Base];
 
-    /// Returns the monomial `X^exponent`.
+    /// Suppose this field extension is represented by the quotient
+    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// polynomial of degree `D`. This function returns the field
+    /// element `X^exponent` if `exponent < D` and panics otherwise.
+    /// (The fact that f is not known at the point that this function
+    /// is defined prevents implementing exponentiation of higher
+    /// powers since the reduction cannot be performed.)
+    ///
+    /// NB: The value produced by this function fundamentally depends
+    /// on the choice of irreducible polynomial f. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different f might have been used.
     fn monomial(exponent: usize) -> Self {
+        assert!(exponent < Self::D, "requested monomial of too high degree");
         let mut vec = vec![Base::zero(); Self::D];
         vec[exponent] = Base::one();
         Self::from_base_slice(&vec)
     }
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base, F = Self> {
+pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
+    type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
+        + 'static
+        + Copy
+        + Send
+        + Sync;
+
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
+    fn as_base(&self) -> Option<Base> {
+        if self.is_in_basefield() {
+            Some(self.as_base_slice()[0])
+        } else {
+            None
+        }
+    }
+
+    fn ext_powers_packed(&self) -> impl Iterator<Item = Self::ExtensionPacking> {
+        let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
+        // Transpose first WIDTH powers
+        let current = Self::ExtensionPacking::from_base_fn(|i| {
+            Base::Packing::from_fn(|j| powers[j].as_base_slice()[i])
+        });
+        // Broadcast self^WIDTH
+        let multiplier = Self::ExtensionPacking::from_base_fn(|i| {
+            Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
+        });
+
+        core::iter::successors(Some(current), move |&current| Some(current * multiplier))
+    }
 }
 
-impl<F: Field> ExtensionField<F> for F {}
+impl<F: Field> ExtensionField<F> for F {
+    type ExtensionPacking = F::Packing;
+}
 
 impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     const D: usize = 1;
@@ -302,6 +384,10 @@ impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     fn from_base_slice(bs: &[AF]) -> Self {
         assert_eq!(bs.len(), 1);
         bs[0].clone()
+    }
+
+    fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
+        f(0)
     }
 
     fn as_base_slice(&self) -> &[AF] {
@@ -322,7 +408,7 @@ pub trait TwoAdicField: Field {
 }
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Powers<F> {
     pub base: F,
     pub current: F,
@@ -339,7 +425,7 @@ impl<AF: AbstractField> Iterator for Powers<AF> {
 }
 
 /// like `Powers`, but packed into `PackedField` elements
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
     // base ** P::WIDTH
     pub multiplier: P,

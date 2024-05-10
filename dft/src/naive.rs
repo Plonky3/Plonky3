@@ -7,10 +7,11 @@ use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct NaiveDft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
+    type Evaluations = RowMajorMatrix<F>;
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let w = mat.width();
         let h = mat.height();
@@ -25,6 +26,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
                 }
             }
         }
+
         res
     }
 }
@@ -68,8 +70,8 @@ mod tests {
         // 0, 0
         assert_eq!(
             dft,
-            RowMajorMatrix {
-                values: vec![
+            RowMajorMatrix::new(
+                vec![
                     F::from_canonical_u8(9),
                     F::from_canonical_u8(5),
                     F::zero(),
@@ -77,8 +79,8 @@ mod tests {
                     F::neg_one(),
                     F::zero(),
                 ],
-                width: 3,
-            }
+                3,
+            )
         )
     }
 
@@ -89,6 +91,17 @@ mod tests {
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.dft_batch(original.clone());
         let idft = NaiveDft.idft_batch(dft);
+        assert_eq!(original, idft);
+    }
+
+    #[test]
+    fn coset_dft_idft_consistency() {
+        type F = Goldilocks;
+        let generator = F::generator();
+        let mut rng = thread_rng();
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let dft = NaiveDft.coset_dft_batch(original.clone(), generator);
+        let idft = NaiveDft.coset_idft_batch(dft, generator);
         assert_eq!(original, idft);
     }
 }

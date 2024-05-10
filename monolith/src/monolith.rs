@@ -17,6 +17,7 @@ use crate::util::get_random_u32;
 // The Monolith-31 permutation over Mersenne31.
 // NUM_FULL_ROUNDS is the number of rounds - 1
 // (used to avoid const generics because we need an array of length NUM_FULL_ROUNDS)
+#[derive(Debug)]
 pub struct MonolithMersenne31<Mds, const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
 where
     Mds: MdsPermutation<Mersenne31, WIDTH>,
@@ -51,7 +52,7 @@ where
         }
     }
 
-    fn s_box(y: u8) -> u8 {
+    const fn s_box(y: u8) -> u8 {
         let tmp = y ^ !y.rotate_left(1) & y.rotate_left(2) & y.rotate_left(3);
         tmp.rotate_left(1)
     }
@@ -113,10 +114,12 @@ where
             .map(|arr| arr.map(|_| Self::random_field_element(&mut shake)))
     }
 
+    #[inline]
     pub fn concrete(&self, state: &mut [Mersenne31; WIDTH]) {
         self.mds.permute_mut(state);
     }
 
+    #[inline]
     pub fn add_round_constants(
         &self,
         state: &mut [Mersenne31; WIDTH],
@@ -128,13 +131,15 @@ where
         }
     }
 
+    #[inline]
     pub fn bricks(state: &mut [Mersenne31; WIDTH]) {
         // Feistel Type-3
-        for (x, x_mut) in (state.to_owned()).iter().zip(state.iter_mut().skip(1)) {
+        for (x, x_mut) in state.to_owned().iter().zip(state.iter_mut().skip(1)) {
             *x_mut += x.square();
         }
     }
 
+    #[inline]
     pub fn bar(&self, el: Mersenne31) -> Mersenne31 {
         let val = &mut el.as_canonical_u32();
 
@@ -151,6 +156,7 @@ where
         Mersenne31::from_canonical_u32(*val)
     }
 
+    #[inline]
     pub fn bars(&self, state: &mut [Mersenne31; WIDTH]) {
         state
             .iter_mut()

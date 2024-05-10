@@ -47,17 +47,17 @@ mod tests {
         BabyBear,
     };
 
-    fn naive_convolve(us: &[Real], vs: &[Real]) -> Vec<Real> {
+    fn naive_convolve(us: &[BabyBear], vs: &[BabyBear]) -> Vec<BabyBear> {
         let n = us.len();
         assert_eq!(n, vs.len());
 
         let mut conv = Vec::with_capacity(n);
         for i in 0..n {
-            let mut t = 0i64;
+            let mut t = BabyBear::zero();
             for j in 0..n {
-                t = t + (us[j] * vs[(n + i - j) % n]) % P;
+                t = t + us[j] * vs[(n + i - j) % n];
             }
-            conv.push(t % P);
+            conv.push(t);
         }
         conv
     }
@@ -98,8 +98,8 @@ mod tests {
 
     #[test]
     fn forward_backward_is_identity() {
-        const NITERS: usize = 1;
-        let mut len = 8;
+        const NITERS: usize = 100;
+        let mut len = 4;
         loop {
             let root_table = roots_of_unity_table(len);
             let root = root_table[0][0];
@@ -113,24 +113,10 @@ mod tests {
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);
 
-                println!("root_table = {:?}", root_table);
-                println!("root_inv = {:?}", root_inv);
-                println!("us = {:?}", us);
-                println!("vs = {:?}", vs);
-                println!("ws = {:?}", ws);
-                println!(
-                    "us = {:?}",
-                    us.clone()
-                        .iter()
-                        .map(|u| (u * len as i64) % P)
-                        .collect::<Vec<_>>()
-                );
-
                 assert!(us.iter().zip(ws).all(|(&u, w)| w == (u * len as i64) % P));
             }
             len *= 2;
-            //if len > 8192 {
-            if len > 4 {
+            if len > 8192 {
                 break;
             }
         }
@@ -143,9 +129,7 @@ mod tests {
         loop {
             let root_table = roots_of_unity_table(len);
             let root = root_table[0][0];
-            let root_inv = BabyBear::from_canonical_u32(root as u32)
-                .inverse()
-                .as_canonical_u64() as i64;
+            let root_inv = BabyBear { value: root as u32 }.inverse().value as i64;
 
             for _ in 0..NITERS {
                 let us = randvec(len);
@@ -160,12 +144,28 @@ mod tests {
                 let mut pt_prods = fft_us
                     .iter()
                     .zip(fft_vs)
-                    .map(|(&u, v)| (u * v) % P)
+                    .map(|(&u, v)| {
+                        let prod = BabyBear { value: u as u32 } * BabyBear { value: v as u32 };
+                        prod.value as i64
+                    })
                     .collect::<Vec<_>>();
 
                 backward_fft(&mut pt_prods, root_inv);
 
-                let conv = naive_convolve(&us, &vs);
+                let bus = us
+                    .iter()
+                    .map(|&u| BabyBear { value: u as u32 })
+                    .collect::<Vec<_>>();
+                let bvs = vs
+                    .iter()
+                    .map(|&v| BabyBear { value: v as u32 })
+                    .collect::<Vec<_>>();
+                let bconv = naive_convolve(&bus, &bvs);
+                let conv = bconv
+                    .iter()
+                    .map(|&BabyBear { value }| value as i64)
+                    .collect::<Vec<_>>();
+
                 assert!(conv
                     .iter()
                     .zip(pt_prods)

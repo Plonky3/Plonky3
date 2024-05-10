@@ -1,34 +1,44 @@
-use p3_air::{AirBuilder, TwoRowMatrixView};
-use p3_field::{AbstractField, Field};
+use alloc::vec::Vec;
 
-use crate::StarkConfig;
+use p3_air::{AirBuilder, AirBuilderWithPublicValues};
+use p3_field::AbstractField;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::stack::VerticalPair;
 
-pub struct ProverConstraintFolder<'a, SC: StarkConfig> {
-    pub(crate) main: TwoRowMatrixView<'a, SC::PackedVal>,
-    pub(crate) is_first_row: SC::PackedVal,
-    pub(crate) is_last_row: SC::PackedVal,
-    pub(crate) is_transition: SC::PackedVal,
-    pub(crate) alpha: SC::Challenge,
-    pub(crate) accumulator: SC::PackedChallenge,
+use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
+
+#[derive(Debug)]
+pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
+    pub main: RowMajorMatrix<PackedVal<SC>>,
+    pub public_values: &'a Vec<Val<SC>>,
+    pub is_first_row: PackedVal<SC>,
+    pub is_last_row: PackedVal<SC>,
+    pub is_transition: PackedVal<SC>,
+    pub alpha: SC::Challenge,
+    pub accumulator: PackedChallenge<SC>,
 }
 
-pub struct VerifierConstraintFolder<'a, Challenge> {
-    pub(crate) main: TwoRowMatrixView<'a, Challenge>,
-    pub(crate) is_first_row: Challenge,
-    pub(crate) is_last_row: Challenge,
-    pub(crate) is_transition: Challenge,
-    pub(crate) alpha: Challenge,
-    pub(crate) accumulator: Challenge,
+type ViewPair<'a, T> = VerticalPair<RowMajorMatrixView<'a, T>, RowMajorMatrixView<'a, T>>;
+
+#[derive(Debug)]
+pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
+    pub main: ViewPair<'a, SC::Challenge>,
+    pub public_values: &'a Vec<Val<SC>>,
+    pub is_first_row: SC::Challenge,
+    pub is_last_row: SC::Challenge,
+    pub is_transition: SC::Challenge,
+    pub alpha: SC::Challenge,
+    pub accumulator: SC::Challenge,
 }
 
-impl<'a, SC: StarkConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
-    type F = SC::Val;
-    type Expr = SC::PackedVal;
-    type Var = SC::PackedVal;
-    type M = TwoRowMatrixView<'a, SC::PackedVal>;
+impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
+    type F = Val<SC>;
+    type Expr = PackedVal<SC>;
+    type Var = PackedVal<SC>;
+    type M = RowMajorMatrix<PackedVal<SC>>;
 
     fn main(&self) -> Self::M {
-        self.main
+        self.main.clone()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -48,17 +58,25 @@ impl<'a, SC: StarkConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x: SC::PackedVal = x.into();
-        self.accumulator *= SC::PackedChallenge::from_f(self.alpha);
+        let x: PackedVal<SC> = x.into();
+        self.accumulator *= PackedChallenge::<SC>::from_f(self.alpha);
         self.accumulator += x;
     }
 }
 
-impl<'a, Challenge: Field> AirBuilder for VerifierConstraintFolder<'a, Challenge> {
-    type F = Challenge;
-    type Expr = Challenge;
-    type Var = Challenge;
-    type M = TwoRowMatrixView<'a, Challenge>;
+impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
+    type PublicVar = Self::F;
+
+    fn public_values(&self) -> &[Self::F] {
+        self.public_values
+    }
+}
+
+impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
+    type F = Val<SC>;
+    type Expr = SC::Challenge;
+    type Var = SC::Challenge;
+    type M = ViewPair<'a, SC::Challenge>;
 
     fn main(&self) -> Self::M {
         self.main
@@ -81,8 +99,16 @@ impl<'a, Challenge: Field> AirBuilder for VerifierConstraintFolder<'a, Challenge
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x: Challenge = x.into();
+        let x: SC::Challenge = x.into();
         self.accumulator *= self.alpha;
         self.accumulator += x;
+    }
+}
+
+impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'a, SC> {
+    type PublicVar = Self::F;
+
+    fn public_values(&self) -> &[Self::F] {
+        self.public_values
     }
 }

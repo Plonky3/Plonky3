@@ -1,28 +1,27 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::Field;
 use p3_symmetric::CryptographicHasher;
 
 use crate::{CanObserve, CanSample};
 
-#[derive(Clone)]
-pub struct HashChallenger<F, H, const OUT_LEN: usize>
+#[derive(Clone, Debug)]
+pub struct HashChallenger<T, H, const OUT_LEN: usize>
 where
-    F: Field,
-    H: CryptographicHasher<F, [F; OUT_LEN]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
-    input_buffer: Vec<F>,
-    output_buffer: Vec<F>,
+    input_buffer: Vec<T>,
+    output_buffer: Vec<T>,
     hasher: H,
 }
 
-impl<F, H, const OUT_LEN: usize> HashChallenger<F, H, OUT_LEN>
+impl<T, H, const OUT_LEN: usize> HashChallenger<T, H, OUT_LEN>
 where
-    F: Field,
-    H: CryptographicHasher<F, [F; OUT_LEN]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
-    pub fn new(initial_state: Vec<F>, hasher: H) -> Self {
+    pub fn new(initial_state: Vec<T>, hasher: H) -> Self {
         Self {
             input_buffer: initial_state,
             output_buffer: vec![],
@@ -41,12 +40,12 @@ where
     }
 }
 
-impl<F, H, const OUT_LEN: usize> CanObserve<F> for HashChallenger<F, H, OUT_LEN>
+impl<T, H, const OUT_LEN: usize> CanObserve<T> for HashChallenger<T, H, OUT_LEN>
 where
-    F: Field,
-    H: CryptographicHasher<F, [F; OUT_LEN]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
-    fn observe(&mut self, value: F) {
+    fn observe(&mut self, value: T) {
         // Any buffered output is now invalid.
         self.output_buffer.clear();
 
@@ -54,25 +53,25 @@ where
     }
 }
 
-impl<F, H, const N: usize, const OUT_LEN: usize> CanObserve<[F; N]>
-    for HashChallenger<F, H, OUT_LEN>
+impl<T, H, const N: usize, const OUT_LEN: usize> CanObserve<[T; N]>
+    for HashChallenger<T, H, OUT_LEN>
 where
-    F: Field,
-    H: CryptographicHasher<F, [F; OUT_LEN]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
-    fn observe(&mut self, values: [F; N]) {
+    fn observe(&mut self, values: [T; N]) {
         for value in values {
             self.observe(value);
         }
     }
 }
 
-impl<F, H, const OUT_LEN: usize> CanSample<F> for HashChallenger<F, H, OUT_LEN>
+impl<T, H, const OUT_LEN: usize> CanSample<T> for HashChallenger<T, H, OUT_LEN>
 where
-    F: Field,
-    H: CryptographicHasher<F, [F; OUT_LEN]>,
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
-    fn sample(&mut self) -> F {
+    fn sample(&mut self) -> T {
         if self.output_buffer.is_empty() {
             self.flush();
         }

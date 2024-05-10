@@ -1,14 +1,16 @@
 use alloc::vec::Vec;
 
 use p3_field::{Field, Powers, TwoAdicField};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
-use p3_maybe_rayon::{IndexedParallelIterator, ParallelIterator};
-use p3_util::log2_strict_usize;
+use p3_maybe_rayon::prelude::*;
+use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
+use tracing::instrument;
 
-use crate::butterflies::dit_butterfly;
-use crate::util::{bit_reversed_zero_pad, reverse_matrix_index_bits};
-use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
+use crate::butterflies::{Butterfly, DitButterfly};
+use crate::TwoAdicSubgroupDft;
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -17,11 +19,13 @@ use crate::{reverse_bits, reverse_slice_index_bits, TwoAdicSubgroupDft};
 /// the same network but in bit-reversed order. This way we're always working with small blocks,
 /// so within each half, we can have a certain amount of parallelism with no cross-thread
 /// communication.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Radix2DitParallel;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
-    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
+
+    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> Self::Evaluations {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
 
@@ -38,17 +42,17 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
-        reverse_matrix_index_bits(&mut mat);
 
-        mat
+        mat.bit_reverse_rows()
     }
 
+    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
     fn coset_lde_batch(
         &self,
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-    ) -> RowMajorMatrix<F> {
+    ) -> Self::Evaluations {
         let h = mat.height();
         let log_h = log2_strict_usize(h);
         let mid = log_h / 2;
@@ -82,7 +86,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
 
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -99,9 +103,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
         reverse_matrix_index_bits(&mut mat);
         reverse_slice_index_bits(&mut twiddles);
         par_dit_layer_rev(&mut mat, mid, &twiddles);
-        reverse_matrix_index_bits(&mut mat);
 
-        mat
+        mat.bit_reverse_rows()
     }
 }
 
@@ -110,11 +113,12 @@ fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[
     let log_h = log2_strict_usize(mat.height());
 
     // max block size: 2^mid
-    mat.par_row_chunks_mut(1 << mid).for_each(|mut submat| {
-        for layer in 0..mid {
-            dit_layer(&mut submat, log_h, layer, twiddles);
-        }
-    });
+    mat.par_row_chunks_exact_mut(1 << mid)
+        .for_each(|mut submat| {
+            for layer in 0..mid {
+                dit_layer(&mut submat, log_h, layer, twiddles);
+            }
+        });
 }
 
 /// This can be used as the second half of a parallelized butterfly network.
@@ -122,7 +126,7 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
     let log_h = log2_strict_usize(mat.height());
 
     // max block size: 2^(log_h - mid)
-    mat.par_row_chunks_mut(1 << (log_h - mid))
+    mat.par_row_chunks_exact_mut(1 << (log_h - mid))
         .enumerate()
         .for_each(|(thread, mut submat)| {
             for layer in mid..log_h {
@@ -134,7 +138,7 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
 
 /// One layer of a DIT butterfly network.
 fn dit_layer<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<F>,
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
     twiddles: &[F],
@@ -150,7 +154,9 @@ fn dit_layer<F: Field>(
             let hi = block_start + i;
             let lo = hi + half_block_size;
             let twiddle = twiddles[i << layer_rev];
-            dit_butterfly(submat, hi, lo, twiddle);
+
+            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
+            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }
@@ -158,7 +164,7 @@ fn dit_layer<F: Field>(
 /// Like `dit_layer`, except the matrix and twiddles are encoded in bit-reversed order.
 /// This can also be viewed as a layer of the Bowers G^T network.
 fn dit_layer_rev<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<F>,
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
     twiddles_rev: &[F],
@@ -174,7 +180,8 @@ fn dit_layer_rev<F: Field>(
         for i in 0..half_block_size {
             let hi = block_start + i;
             let lo = hi + half_block_size;
-            dit_butterfly(submat, hi, lo, twiddle);
+            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
+            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }
@@ -200,6 +207,12 @@ mod tests {
     #[test]
     fn idft_matches_naive() {
         test_idft_matches_naive::<Goldilocks, Radix2DitParallel>();
+    }
+
+    #[test]
+    fn coset_idft_matches_naive() {
+        test_coset_idft_matches_naive::<BabyBear, Radix2DitParallel>();
+        test_coset_idft_matches_naive::<Goldilocks, Radix2DitParallel>();
     }
 
     #[test]

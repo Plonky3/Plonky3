@@ -6,17 +6,25 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
+use num_bigint::BigUint;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
+use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenuis, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{field_to_array, AbstractExtensionField, AbstractField, ExtensionField, TwoAdicField};
+use crate::{
+    field_to_array, AbstractExtensionField, AbstractField, ExtensionField, Packable, TwoAdicField,
+};
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct BinomialExtensionField<AF, const D: usize> {
-    value: [AF; D],
+    #[serde(
+        with = "p3_util::array_serialization",
+        bound(serialize = "AF: Serialize", deserialize = "AF: Deserialize<'de>")
+    )]
+    pub(crate) value: [AF; D],
 }
 
 impl<AF: AbstractField, const D: usize> Default for BinomialExtensionField<AF, D> {
@@ -35,12 +43,15 @@ impl<AF: AbstractField, const D: usize> From<AF> for BinomialExtensionField<AF, 
     }
 }
 
+impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
+
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
+    type ExtensionPacking = BinomialExtensionField<F::Packing, D>;
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenuis<F> for BinomialExtensionField<F, D> {
+impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     fn frobenius(&self) -> Self {
         self.repeated_frobenius(1)
@@ -207,6 +218,16 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::w()))),
             _ => Some(self.frobenius_inv()),
         }
+    }
+
+    fn halve(&self) -> Self {
+        Self {
+            value: self.value.map(|x| x.halve()),
+        }
+    }
+
+    fn order() -> BigUint {
+        F::order().pow(D as u32)
     }
 }
 
@@ -498,6 +519,13 @@ where
     fn from_base_slice(bs: &[AF]) -> Self {
         Self {
             value: bs.to_vec().try_into().expect("slice has wrong length"),
+        }
+    }
+
+    #[inline]
+    fn from_base_fn<F: FnMut(usize) -> AF>(f: F) -> Self {
+        Self {
+            value: array::from_fn(f),
         }
     }
 

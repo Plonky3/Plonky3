@@ -2,45 +2,65 @@ use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
-use p3_matrix::MatrixRowSlices;
+use p3_matrix::Matrix;
 
-use crate::columns::KeccakCols;
+use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::logic::{andn_gen, xor3_gen, xor_gen};
 use crate::round_flags::eval_round_flags;
 use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 /// Assumes the field size is at least 16 bits.
+#[derive(Debug)]
 pub struct KeccakAir {}
 
-impl<F> BaseAir<F> for KeccakAir {}
+impl<F> BaseAir<F> for KeccakAir {
+    fn width(&self) -> usize {
+        NUM_KECCAK_COLS
+    }
+}
 
 impl<AB: AirBuilder> Air<AB> for KeccakAir {
+    #[inline]
     fn eval(&self, builder: &mut AB) {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let local: &KeccakCols<AB::Var> = main.row_slice(0).borrow();
-        let next: &KeccakCols<AB::Var> = main.row_slice(1).borrow();
+        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let local: &KeccakCols<AB::Var> = (*local).borrow();
+        let next: &KeccakCols<AB::Var> = (*next).borrow();
+
+        let first_step = local.step_flags[0];
+        let final_step = local.step_flags[NUM_ROUNDS - 1];
+        let not_final_step = AB::Expr::one() - final_step;
+
+        // If this is the first step, the input A must match the preimage.
+        for y in 0..5 {
+            for x in 0..5 {
+                for limb in 0..U64_LIMBS {
+                    builder
+                        .when(first_step)
+                        .assert_eq(local.preimage[y][x][limb], local.a[y][x][limb]);
+                }
+            }
+        }
 
         // The export flag must be 0 or 1.
         builder.assert_bool(local.export);
 
         // If this is not the final step, the export flag must be off.
-        let final_step = local.step_flags[NUM_ROUNDS - 1];
-        let not_final_step = AB::Expr::one() - final_step;
         builder
             .when(not_final_step.clone())
             .assert_zero(local.export);
 
         // If this is not the final step, the local and next preimages must match.
-        for x in 0..5 {
-            for y in 0..5 {
+        for y in 0..5 {
+            for x in 0..5 {
                 for limb in 0..U64_LIMBS {
-                    let diff = local.preimage[y][x][limb] - next.preimage[y][x][limb];
                     builder
+                        .when(not_final_step.clone())
                         .when_transition()
-                        .assert_eq(not_final_step.clone(), diff);
+                        .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
                 }
             }
         }
@@ -64,8 +84,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         //            = xor(A'[x, y, z], C[x, z], C'[x, z]).
         // The last step is valid based on the identity we checked above.
         // It isn't required, but makes this check a bit cleaner.
-        for x in 0..5 {
-            for y in 0..5 {
+        for y in 0..5 {
+            for x in 0..5 {
                 let get_bit = |z| {
                     let a_prime: AB::Var = local.a_prime[y][x][z];
                     let c: AB::Var = local.c[x][z];
@@ -88,11 +108,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // diff = sum_{i=0}^4 A'[x, i, z] - C'[x, z]
         for x in 0..5 {
             for z in 0..64 {
-                // TODO: from_fn
-                let sum: AB::Expr = [0, 1, 2, 3, 4]
-                    .map(|y| local.a_prime[y][x][z].into())
-                    .into_iter()
-                    .sum();
+                let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
                 let four = AB::Expr::from_canonical_u8(4);
                 builder
@@ -101,8 +117,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         }
 
         // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
-        for x in 0..5 {
-            for y in 0..5 {
+        for y in 0..5 {
+            for x in 0..5 {
                 let get_bit = |z| {
                     let andn = andn_gen::<AB::Expr>(
                         local.b((x + 1) % 5, y, z).into(),
@@ -159,7 +175,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for x in 0..5 {
             for y in 0..5 {
                 for limb in 0..U64_LIMBS {
-                    let output = local.a_prime_prime_prime(x, y, limb);
+                    let output = local.a_prime_prime_prime(y, x, limb);
                     let input = next.a[y][x][limb];
                     builder
                         .when_transition()

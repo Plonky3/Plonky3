@@ -1,74 +1,44 @@
-use core::marker::PhantomData;
+use alloc::vec::Vec;
+use core::fmt::Debug;
 
-use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{DirectMmcs, Mmcs};
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
+use p3_field::Field;
+use p3_matrix::Matrix;
 
-pub trait FriConfig {
-    type Val: PrimeField64;
-    type Challenge: ExtensionField<Self::Val> + TwoAdicField;
-
-    type InputMmcs: Mmcs<Self::Challenge>;
-    type CommitPhaseMmcs: DirectMmcs<Self::Challenge>;
-
-    type Challenger: FieldChallenger<Self::Val>
-        + CanObserve<<Self::CommitPhaseMmcs as Mmcs<Self::Challenge>>::Commitment>;
-
-    fn commit_phase_mmcs(&self) -> &Self::CommitPhaseMmcs;
-
-    fn num_queries(&self) -> usize;
-
-    fn log_blowup(&self) -> usize;
-
-    fn blowup(&self) -> usize {
-        1 << self.log_blowup()
-    }
-
-    // TODO: grinding bits
+#[derive(Debug)]
+pub struct FriConfig<M> {
+    pub log_blowup: usize,
+    pub num_queries: usize,
+    pub proof_of_work_bits: usize,
+    pub mmcs: M,
 }
 
-pub struct FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> {
-    num_queries: usize,
-    commit_phase_mmcs: CommitPhaseMmcs,
-    _phantom: PhantomData<(Val, Challenge, InputMmcs, Challenger)>,
-}
-
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
-    FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
-{
-    pub fn new(num_queries: usize, commit_phase_mmcs: CommitPhaseMmcs) -> Self {
-        Self {
-            num_queries,
-            commit_phase_mmcs,
-            _phantom: PhantomData,
-        }
+impl<M> FriConfig<M> {
+    pub const fn blowup(&self) -> usize {
+        1 << self.log_blowup
     }
 }
 
-impl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger> FriConfig
-    for FriConfigImpl<Val, Challenge, InputMmcs, CommitPhaseMmcs, Challenger>
-where
-    Val: PrimeField64,
-    Challenge: ExtensionField<Val> + TwoAdicField,
-    InputMmcs: Mmcs<Challenge>,
-    CommitPhaseMmcs: DirectMmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<<CommitPhaseMmcs as Mmcs<Challenge>>::Commitment>,
-{
-    type Val = Val;
-    type Challenge = Challenge;
-    type InputMmcs = InputMmcs;
-    type CommitPhaseMmcs = CommitPhaseMmcs;
-    type Challenger = Challenger;
+/// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
+/// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
+pub trait FriGenericConfig<F: Field> {
+    type InputProof;
+    type InputError: Debug;
 
-    fn commit_phase_mmcs(&self) -> &CommitPhaseMmcs {
-        &self.commit_phase_mmcs
-    }
+    /// We can ask FRI to sample extra query bits (LSB) for our own purposes.
+    /// They will be passed to our callbacks, but ignored (shifted off) by FRI.
+    fn extra_query_index_bits(&self) -> usize;
 
-    fn num_queries(&self) -> usize {
-        self.num_queries
-    }
+    /// Fold a row, returning a single column.
+    /// Right now the input row will always be 2 columns wide,
+    /// but we may support higher folding arity in the future.
+    fn fold_row(
+        &self,
+        index: usize,
+        log_height: usize,
+        beta: F,
+        evals: impl Iterator<Item = F>,
+    ) -> F;
 
-    fn log_blowup(&self) -> usize {
-        1 // TODO: 2x blowup for now, but should make it configurable
-    }
+    /// Same as applying fold_row to every row, possibly faster.
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
 }

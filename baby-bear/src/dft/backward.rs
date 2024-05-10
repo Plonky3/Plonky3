@@ -29,10 +29,9 @@ fn reduce_2p(x: i64) -> i64 {
 #[inline]
 fn backward_pass(a: &mut [Real], root: Real) {
     let half_n = a.len() / 2;
-    let mut w = MONTY_MU as i64;
+    let mut w = (1i64 << MONTY_BITS) % P;
     for i in 0..half_n {
         let s = a[i];
-        //let tw = (a[i + half_n] * w) % P;
         let tw = monty_reduce(a[i + half_n] as u64 * w as u64) as i64;
         a[i] = reduce_2p(s + tw);
         a[i + half_n] = reduce_2p(P + s - tw);

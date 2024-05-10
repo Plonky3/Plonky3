@@ -2,7 +2,11 @@
 
 #![no_std]
 
+extern crate alloc;
+
 mod extension;
+mod mds;
+mod poseidon2;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -10,16 +14,23 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+pub use mds::*;
+use num_bigint::BigUint;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField64,
-    TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
+    PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
+pub use poseidon2::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
+
+/// The Goldilocks prime
+const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
 pub struct Goldilocks {
     /// Not necessarily canonical.
     value: u64,
@@ -41,6 +52,8 @@ impl PartialEq for Goldilocks {
 }
 
 impl Eq for Goldilocks {}
+
+impl Packable for Goldilocks {}
 
 impl Hash for Goldilocks {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -207,12 +220,26 @@ impl Field for Goldilocks {
         // compute base^1111111111111111111111111111111011111111111111111111111111111111
         Some(t63.square() * *self)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Goldilocks::new(halve_u64::<P>(self.value))
+    }
+
+    #[inline]
+    fn order() -> BigUint {
+        P.into()
+    }
 }
 
-impl PrimeField for Goldilocks {}
+impl PrimeField for Goldilocks {
+    fn as_canonical_biguint(&self) -> BigUint {
+        <Self as PrimeField64>::as_canonical_u64(self).into()
+    }
+}
 
 impl PrimeField64 for Goldilocks {
-    const ORDER_U64: u64 = 0xFFFF_FFFF_0000_0001;
+    const ORDER_U64: u64 = P;
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
@@ -222,20 +249,6 @@ impl PrimeField64 for Goldilocks {
             c -= Self::ORDER_U64;
         }
         c
-    }
-
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
-        // In order not to overflow a u128, we must have sum(u) <= 2^64.
-        // However, we enforce the stronger condition sum(u) <= 2^32
-        // to ensure the semantics of this function are consistent
-        // between the implementations.
-        debug_assert!(u.into_iter().map(u128::from).sum::<u128>() <= (1u128 << 32));
-
-        let mut dot = u[0] as u128 * v[0].value as u128;
-        for i in 1..N {
-            dot += u[i] as u128 * v[i].value as u128;
-        }
-        reduce128(dot)
     }
 }
 
@@ -280,7 +293,11 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+
+        // This sum will not overflow so long as iter.len() < 2^64.
+        let sum = iter.map(|x| x.value as u128).sum::<u128>();
+        reduce128(sum)
     }
 }
 
@@ -349,9 +366,6 @@ impl Div for Goldilocks {
     }
 }
 
-// HELPER FUNCTIONS
-// ================================================================================================
-
 /// Squares the base N number of times and multiplies the result by the tail value.
 #[inline(always)]
 fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
@@ -361,7 +375,7 @@ fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
-fn reduce128(x: u128) -> Goldilocks {
+pub(crate) fn reduce128(x: u128) -> Goldilocks {
     let (x_lo, x_hi) = split(x); // This is a no-op
     let x_hi_hi = x_hi >> 32;
     let x_hi_lo = x_hi & Goldilocks::NEG_ORDER;
@@ -378,7 +392,7 @@ fn reduce128(x: u128) -> Goldilocks {
 
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
-fn split(x: u128) -> (u64, u64) {
+const fn split(x: u128) -> (u64, u64) {
     (x as u64, (x >> 64) as u64)
 }
 
@@ -420,6 +434,22 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     let (res_wrapped, carry) = x.overflowing_add(y);
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
+}
+
+/// Convert a constant u64 array into a constant Goldilocks array.
+#[inline]
+#[must_use]
+pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
+    let mut output = [Goldilocks { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = input[i];
+        i += 1;
+    }
+    output
 }
 
 #[cfg(test)]

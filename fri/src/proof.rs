@@ -1,45 +1,42 @@
 use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
+use p3_field::Field;
+use serde::{Deserialize, Serialize};
 
-use crate::FriConfig;
-
-#[allow(dead_code)] // TODO: fields should be used soon
-pub struct FriProof<FC: FriConfig> {
-    pub(crate) commit_phase_commits: Vec<<FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Commitment>,
-    pub(crate) query_proofs: Vec<QueryProof<FC>>,
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(
+    serialize = "Witness: Serialize, InputProof: Serialize",
+    deserialize = "Witness: Deserialize<'de>, InputProof: Deserialize<'de>"
+))]
+pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
+    pub commit_phase_commits: Vec<M::Commitment>,
+    pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
-    pub(crate) final_poly: FC::Challenge,
+    pub final_poly: F,
+    pub pow_witness: Witness,
 }
 
-#[allow(dead_code)] // TODO: fields should be used soon
-pub struct QueryProof<FC: FriConfig> {
-    /// For each input commitment, this contains openings of each matrix at the queried location,
-    /// along with an opening proof.
-    pub(crate) input_openings: Vec<InputOpening<FC>>,
-
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(
+    serialize = "InputProof: Serialize",
+    deserialize = "InputProof: Deserialize<'de>",
+))]
+pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
+    pub input_proof: InputProof,
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
     /// queried location, along with an opening proof.
-    pub(crate) commit_phase_openings: Vec<CommitPhaseProofStep<FC>>,
+    pub commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
-/// Openings of each input codeword at the queried location, along with an opening proof, for a
-/// single commitment round.
-#[allow(dead_code)] // TODO: fields should be used soon
-pub struct InputOpening<FC: FriConfig> {
-    /// The opening of each input codeword at the queried location.
-    pub(crate) opened_values: Vec<Vec<FC::Challenge>>,
-
-    pub(crate) opening_proof: <FC::InputMmcs as Mmcs<FC::Challenge>>::Proof,
-}
-
-#[allow(dead_code)] // TODO: fields should be used soon
-pub struct CommitPhaseProofStep<FC: FriConfig> {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(bound = "")]
+pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
     /// The opening of the commit phase codeword at the sibling location.
     // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI
     // folding arities besides 2, meaning that there can be multiple siblings.
-    pub(crate) sibling_value: FC::Challenge,
+    pub sibling_value: F,
 
-    pub(crate) opening_proof: <FC::CommitPhaseMmcs as Mmcs<FC::Challenge>>::Proof,
+    pub opening_proof: M::Proof,
 }

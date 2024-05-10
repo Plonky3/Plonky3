@@ -1,48 +1,96 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_baby_bear::BabyBear;
-use p3_field::PrimeField64;
-use p3_goldilocks::Goldilocks;
-use p3_mds::babybear::MdsMatrixBabyBear;
-use p3_mds::goldilocks::MdsMatrixGoldilocks;
-use p3_mds::MdsPermutation;
+use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
+use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
+use p3_field::{PrimeField, PrimeField64};
+use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
+use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
+use p3_mersenne_31::{DiffusionMatrixMersenne31, Mersenne31};
 use p3_poseidon2::{
-    DiffusionMatrixBabybear, DiffusionMatrixGoldilocks, DiffusionPermutation, Poseidon2,
+    DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral,
 };
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
-    poseidon2::<BabyBear, MdsMatrixBabyBear, DiffusionMatrixBabybear, 16, 7>(c);
-    poseidon2::<BabyBear, MdsMatrixBabyBear, DiffusionMatrixBabybear, 24, 7>(c);
+    poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>(c);
+    poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, 7>(c);
 
-    poseidon2::<Goldilocks, MdsMatrixGoldilocks, DiffusionMatrixGoldilocks, 8, 7>(c);
-    poseidon2::<Goldilocks, MdsMatrixGoldilocks, DiffusionMatrixGoldilocks, 12, 7>(c);
-    poseidon2::<Goldilocks, MdsMatrixGoldilocks, DiffusionMatrixGoldilocks, 16, 7>(c);
+    poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>(c);
+    poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 5>(c);
+    poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 7>(c);
+    poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 3>(c);
+    poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 5>(c);
+    poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 7>(c);
+
+    poseidon2_p64::<Mersenne31, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 16, 5>(
+        c,
+    );
+    poseidon2_p64::<Mersenne31, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 24, 5>(
+        c,
+    );
+
+    poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>(c);
+    poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 12, 7>(
+        c,
+    );
+    poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 16, 7>(
+        c,
+    );
+
+    poseidon2::<Bn254Fr, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBN254, 3, 5>(c, 8, 22);
 }
 
-fn poseidon2<F, Mds, Diffusion, const WIDTH: usize, const D: u64>(c: &mut Criterion)
-where
-    F: PrimeField64,
+fn poseidon2<F, MdsLight, Diffusion, const WIDTH: usize, const D: u64>(
+    c: &mut Criterion,
+    rounds_f: usize,
+    rounds_p: usize,
+) where
+    F: PrimeField,
     Standard: Distribution<F>,
-    Mds: MdsPermutation<F, WIDTH> + Default,
+    MdsLight: MdsLightPermutation<F, WIDTH> + Default,
     Diffusion: DiffusionPermutation<F, WIDTH> + Default,
 {
     let mut rng = thread_rng();
-    let external_mds = Mds::default();
-    let internal_mds = Diffusion::default();
+    let external_linear_layer = MdsLight::default();
+    let internal_linear_layer = Diffusion::default();
 
-    // TODO: Should be calculated for the particular field, width and ALPHA.
-    let rounds_f = 8;
-    let rounds_p = 22;
-
-    let poseidon = Poseidon2::<F, Mds, Diffusion, WIDTH, D>::new_from_rng(
+    let poseidon = Poseidon2::<F, MdsLight, Diffusion, WIDTH, D>::new_from_rng(
         rounds_f,
+        external_linear_layer,
         rounds_p,
-        external_mds,
-        internal_mds,
+        internal_linear_layer,
+        &mut rng,
+    );
+    let input = [F::zero(); WIDTH];
+    let name = format!(
+        "poseidon2::<{}, {}, {}, {}>",
+        type_name::<F>(),
+        D,
+        rounds_f,
+        rounds_p
+    );
+    let id = BenchmarkId::new(name, WIDTH);
+    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
+}
+
+// For fields implementing PrimeField64 we should benchmark using the optimal round constants.
+fn poseidon2_p64<F, MdsLight, Diffusion, const WIDTH: usize, const D: u64>(c: &mut Criterion)
+where
+    F: PrimeField64,
+    Standard: Distribution<F>,
+    MdsLight: MdsLightPermutation<F, WIDTH> + Default,
+    Diffusion: DiffusionPermutation<F, WIDTH> + Default,
+{
+    let mut rng = thread_rng();
+    let external_linear_layer = MdsLight::default();
+    let internal_linear_layer = Diffusion::default();
+
+    let poseidon = Poseidon2::<F, MdsLight, Diffusion, WIDTH, D>::new_from_rng_128(
+        external_linear_layer,
+        internal_linear_layer,
         &mut rng,
     );
     let input = [F::zero(); WIDTH];

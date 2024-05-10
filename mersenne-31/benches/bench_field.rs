@@ -1,129 +1,28 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use p3_field::{AbstractField, Field};
+use p3_field::AbstractField;
+use p3_field_testing::bench_func::{
+    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
+    benchmark_sub_latency, benchmark_sub_throughput,
+};
 use p3_mersenne_31::Mersenne31;
-use rand::Rng;
 
 type F = Mersenne31;
 
-fn bench_m31(c: &mut Criterion) {
-    c.bench_function("add-latency", |b| {
-        b.iter_batched(
-            || {
-                let mut rng = rand::thread_rng();
-                // rng.gen::<F>()
-                let mut vec = Vec::new();
-                for _ in 0..10000 {
-                    vec.push(rng.gen::<F>())
-                }
-                vec
-            },
-            |x| x.iter().fold(F::zero(), |x, y| x + *y),
-            BatchSize::SmallInput,
-        )
-    });
+fn bench_field(c: &mut Criterion) {
+    let name = "Mersenne31";
+    const REPS: usize = 1000;
+    benchmark_inv::<F>(c, name);
+    benchmark_iter_sum::<F, 4, REPS>(c, name);
+    benchmark_iter_sum::<F, 8, REPS>(c, name);
+    benchmark_iter_sum::<F, 12, REPS>(c, name);
 
-    c.bench_function("add-throughput", |b| {
-        b.iter_batched(
-            || {
-                let mut rng = rand::thread_rng();
-                (
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                )
-            },
-            |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {
-                for _ in 0..1000 {
-                    (a, b, c, d, e, f, g, h, i, j) = (
-                        a + b,
-                        b + c,
-                        c + d,
-                        d + e,
-                        e + f,
-                        f + g,
-                        g + h,
-                        h + i,
-                        i + j,
-                        j + a,
-                    );
-                }
-                (a, b, c, d, e, f, g, h, i, j)
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    c.bench_function("sub-latency", |b| {
-        b.iter_batched(
-            || {
-                let mut rng = rand::thread_rng();
-                // rng.gen::<F>()
-                let mut vec = Vec::new();
-                for _ in 0..10000 {
-                    vec.push(rng.gen::<F>())
-                }
-                vec
-            },
-            |x| x.iter().fold(F::zero(), |x, y| x - *y),
-            BatchSize::SmallInput,
-        )
-    });
-
-    c.bench_function("sub-throughput", |b| {
-        b.iter_batched(
-            || {
-                let mut rng = rand::thread_rng();
-                (
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                    rng.gen::<F>(),
-                )
-            },
-            |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {
-                for _ in 0..1000 {
-                    (a, b, c, d, e, f, g, h, i, j) = (
-                        a - b,
-                        b - c,
-                        c - d,
-                        d - e,
-                        e - f,
-                        f - g,
-                        g - h,
-                        h - i,
-                        i - j,
-                        j - a,
-                    );
-                }
-                (a, b, c, d, e, f, g, h, i, j)
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    c.bench_function("try_inverse", |b| {
-        b.iter_batched(
-            || {
-                let mut rng = rand::thread_rng();
-                rng.gen::<F>()
-            },
-            |x| x.try_inverse(),
-            BatchSize::SmallInput,
-        )
-    });
+    // Note that each round of throughput has 10 operations
+    // So we should have 10 * more repetitions for latency tests.
+    const L_REPS: usize = 10 * REPS;
+    benchmark_add_latency::<F, L_REPS>(c, name);
+    benchmark_add_throughput::<F, REPS>(c, name);
+    benchmark_sub_latency::<F, L_REPS>(c, name);
+    benchmark_sub_throughput::<F, REPS>(c, name);
 
     c.bench_function("5th_root", |b| {
         b.iter_batched(
@@ -134,5 +33,5 @@ fn bench_m31(c: &mut Criterion) {
     });
 }
 
-criterion_group!(mersenne31_arithmetics, bench_m31);
+criterion_group!(mersenne31_arithmetics, bench_field);
 criterion_main!(mersenne31_arithmetics);

@@ -4,15 +4,28 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+[features]
+nightly-features = []
+
 [dependencies]
-criterion = "0.5"
-itertools = "0.11.0"
+itertools = "0.12.0"
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
+p3-mds = { path = "../mds" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
+p3-poseidon2 = { path = "../poseidon2" }
+p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
+num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+criterion = "0.5"
+p3-field-testing = { path = "../field-testing" }
+rand_chacha = "0.3.1"
+rand_xoshiro = "0.6.0"
 
 [[bench]]
 name = "bench_field"
@@ -21,6 +34,3 @@ harness = false
 [[bench]]
 name = "extension"
 harness = false
-
-[dev-dependencies]
-p3-field-testing = { path = "../field-testing" }

@@ -7,6 +7,7 @@ use p3_field::{
 };
 
 /// Precomputations of the evaluation of `Z_H(X) = X^n - 1` on a coset `s K` with `H <= K`.
+#[derive(Debug)]
 pub struct ZerofierOnCoset<F: Field> {
     /// `n = |H|`.
     log_n: usize,
@@ -62,7 +63,7 @@ impl<F: TwoAdicField> ZerofierOnCoset<F> {
     /// Evaluate the Langrange basis polynomial, `L_i(x) = Z_H(x) / (x - g_H^i)`, on our coset `s K`.
     /// Here `L_i(x)` is unnormalized in the sense that it evaluates to some nonzero value at `g_H^i`,
     /// not necessarily 1.
-    pub(crate) fn lagrange_basis_unnormalized(&self, i: usize) -> Vec<F> {
+    pub fn lagrange_basis_unnormalized(&self, i: usize) -> Vec<F> {
         let log_coset_size = self.log_n + self.rate_bits;
         let coset_size = 1 << log_coset_size;
         let g_h = F::two_adic_generator(self.log_n);

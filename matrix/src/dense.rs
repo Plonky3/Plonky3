@@ -1,56 +1,171 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter::Cloned;
-use core::slice;
+use core::borrow::{Borrow, BorrowMut};
+use core::marker::PhantomData;
+use core::ops::Deref;
+use core::{iter, slice};
 
-use p3_field::{ExtensionField, Field, PackedField};
-use p3_maybe_rayon::{IndexedParallelIterator, MaybeParChunksMut, ParallelIterator};
+use p3_field::{ExtensionField, Field, PackedValue};
+use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
-use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
+use crate::Matrix;
 
 /// A default constant for block size matrix transposition. The value was chosen with 32-byte type, in mind.
 const TRANSPOSE_BLOCK_SIZE: usize = 64;
 
 /// A dense matrix stored in row-major form.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RowMajorMatrix<T> {
-    /// All values, stored in row-major order.
-    pub values: Vec<T>,
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DenseMatrix<T, V = Vec<T>> {
+    pub values: V,
     pub width: usize,
+    _phantom: PhantomData<T>,
 }
 
-impl<T> RowMajorMatrix<T> {
+pub type RowMajorMatrix<T> = DenseMatrix<T, Vec<T>>;
+pub type RowMajorMatrixView<'a, T> = DenseMatrix<T, &'a [T]>;
+pub type RowMajorMatrixViewMut<'a, T> = DenseMatrix<T, &'a mut [T]>;
+
+pub trait DenseStorage<T>: Borrow<[T]> + Into<Vec<T>> + Send + Sync {}
+impl<T, S: Borrow<[T]> + Into<Vec<T>> + Send + Sync> DenseStorage<T> for S {}
+
+impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
+    /// Create a new dense matrix of the given dimensions, backed by a `Vec`, and filled with
+    /// default values.
     #[must_use]
-    pub fn new(values: Vec<T>, width: usize) -> Self {
-        debug_assert!(width >= 1);
-        debug_assert_eq!(values.len() % width, 0);
-        Self { values, width }
+    pub fn default(width: usize, height: usize) -> Self {
+        Self::new(vec![T::default(); width * height], width)
+    }
+}
+
+impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
+    #[must_use]
+    pub fn new(values: S, width: usize) -> Self {
+        debug_assert!(width == 0 || values.borrow().len() % width == 0);
+        Self {
+            values,
+            width,
+            _phantom: PhantomData,
+        }
     }
 
     #[must_use]
-    pub fn new_row(values: Vec<T>) -> Self {
-        let width = values.len();
-        Self { values, width }
+    pub fn new_row(values: S) -> Self {
+        let width = values.borrow().len();
+        Self::new(values, width)
     }
 
     #[must_use]
-    pub fn new_col(values: Vec<T>) -> Self {
-        Self { values, width: 1 }
+    pub fn new_col(values: S) -> Self {
+        Self::new(values, 1)
     }
 
-    pub fn row_mut(&mut self, r: usize) -> &mut [T] {
-        debug_assert!(r < self.height());
-        &mut self.values[r * self.width..(r + 1) * self.width]
+    pub fn as_view(&self) -> RowMajorMatrixView<'_, T> {
+        RowMajorMatrixView::new(self.values.borrow(), self.width)
     }
 
-    pub fn rows(&self) -> impl Iterator<Item = &[T]> {
-        self.values.chunks_exact(self.width)
+    pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<'_, T>
+    where
+        S: BorrowMut<[T]>,
+    {
+        RowMajorMatrixViewMut::new(self.values.borrow_mut(), self.width)
     }
 
-    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
-        self.values.chunks_exact_mut(self.width)
+    pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
+    where
+        T: ExtensionField<F>,
+    {
+        let width = self.width * T::D;
+        let values = self
+            .values
+            .borrow()
+            .iter()
+            .flat_map(|x| x.as_base_slice().iter().copied())
+            .collect();
+        RowMajorMatrix::new(values, width)
+    }
+
+    pub fn par_row_slices(&self) -> impl IndexedParallelIterator<Item = &[T]>
+    where
+        T: Sync,
+    {
+        self.values.borrow().par_chunks_exact(self.width)
+    }
+
+    pub fn row_mut(&mut self, r: usize) -> &mut [T]
+    where
+        S: BorrowMut<[T]>,
+    {
+        &mut self.values.borrow_mut()[r * self.width..(r + 1) * self.width]
+    }
+
+    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]>
+    where
+        S: BorrowMut<[T]>,
+    {
+        self.values.borrow_mut().chunks_exact_mut(self.width)
+    }
+
+    pub fn par_rows_mut<'a>(&'a mut self) -> impl IndexedParallelIterator<Item = &'a mut [T]>
+    where
+        T: 'a + Send,
+        S: BorrowMut<[T]>,
+    {
+        self.values.borrow_mut().par_chunks_exact_mut(self.width)
+    }
+
+    pub fn horizontally_packed_row_mut<P>(&mut self, r: usize) -> (&mut [P], &mut [T])
+    where
+        P: PackedValue<Value = T>,
+        S: BorrowMut<[T]>,
+    {
+        P::pack_slice_with_suffix_mut(self.row_mut(r))
+    }
+
+    pub fn scale_row(&mut self, r: usize, scale: T)
+    where
+        T: Field,
+        S: BorrowMut<[T]>,
+    {
+        let (packed, sfx) = self.horizontally_packed_row_mut::<T::Packing>(r);
+        let packed_scale: T::Packing = scale.into();
+        packed.iter_mut().for_each(|x| *x *= packed_scale);
+        sfx.iter_mut().for_each(|x| *x *= scale);
+    }
+
+    pub fn scale(&mut self, scale: T)
+    where
+        T: Field,
+        S: BorrowMut<[T]>,
+    {
+        let (packed, sfx) = T::Packing::pack_slice_with_suffix_mut(self.values.borrow_mut());
+        let packed_scale: T::Packing = scale.into();
+        packed.iter_mut().for_each(|x| *x *= packed_scale);
+        sfx.iter_mut().for_each(|x| *x *= scale);
+    }
+
+    pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
+        let (lo, hi) = self.values.borrow().split_at(r * self.width);
+        (
+            DenseMatrix::new(lo, self.width),
+            DenseMatrix::new(hi, self.width),
+        )
+    }
+
+    pub fn split_rows_mut(
+        &mut self,
+        r: usize,
+    ) -> (RowMajorMatrixViewMut<T>, RowMajorMatrixViewMut<T>)
+    where
+        S: BorrowMut<[T]>,
+    {
+        let (lo, hi) = self.values.borrow_mut().split_at_mut(r * self.width);
+        (
+            DenseMatrix::new(lo, self.width),
+            DenseMatrix::new(hi, self.width),
+        )
     }
 
     pub fn par_row_chunks_mut(
@@ -59,98 +174,157 @@ impl<T> RowMajorMatrix<T> {
     ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
     where
         T: Send,
+        S: BorrowMut<[T]>,
     {
         self.values
+            .borrow_mut()
+            .par_chunks_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
+    }
+
+    pub fn par_row_chunks_exact_mut(
+        &mut self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixViewMut<T>>
+    where
+        T: Send,
+        S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow_mut()
             .par_chunks_exact_mut(self.width * chunk_rows)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
-    #[must_use]
-    pub fn as_view(&self) -> RowMajorMatrixView<T> {
-        RowMajorMatrixView {
-            values: &self.values,
-            width: self.width,
-        }
-    }
-
-    pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<T> {
-        RowMajorMatrixViewMut {
-            values: &mut self.values,
-            width: self.width,
-        }
-    }
-
-    /// Expand this matrix, if necessary, to a minimum of `height` rows.
-    pub fn expand_to_height(&mut self, height: usize)
+    pub fn row_pair_mut(&mut self, row_1: usize, row_2: usize) -> (&mut [T], &mut [T])
     where
-        T: Default + Clone,
+        S: BorrowMut<[T]>,
     {
-        if self.height() < height {
-            self.values.resize(self.width * height, T::default());
-        }
+        debug_assert_ne!(row_1, row_2);
+        let start_1 = row_1 * self.width;
+        let start_2 = row_2 * self.width;
+        let (lo, hi) = self.values.borrow_mut().split_at_mut(start_2);
+        (&mut lo[start_1..][..self.width], &mut hi[..self.width])
     }
 
-    pub fn map<U, F: Fn(T) -> U>(&self, f: F) -> RowMajorMatrix<U>
+    #[allow(clippy::type_complexity)]
+    pub fn packed_row_pair_mut<P>(
+        &mut self,
+        row_1: usize,
+        row_2: usize,
+    ) -> ((&mut [P], &mut [T]), (&mut [P], &mut [T]))
     where
+        S: BorrowMut<[T]>,
+        P: PackedValue<Value = T>,
+    {
+        let (slice_1, slice_2) = self.row_pair_mut(row_1, row_2);
+        (
+            P::pack_slice_with_suffix_mut(slice_1),
+            P::pack_slice_with_suffix_mut(slice_2),
+        )
+    }
+
+    pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
+    where
+        T: Copy + Default + Send + Sync,
+    {
+        if added_bits == 0 {
+            return self.to_row_major_matrix();
+        }
+
+        // This is equivalent to:
+        //     reverse_matrix_index_bits(mat);
+        //     mat
+        //         .values
+        //         .resize(mat.values.len() << added_bits, F::zero());
+        //     reverse_matrix_index_bits(mat);
+        // But rather than implement it with bit reversals, we directly construct the resulting matrix,
+        // whose rows are zero except for rows whose low `added_bits` bits are zero.
+
+        let w = self.width;
+        let mut padded = RowMajorMatrix::new(
+            vec![T::default(); self.values.borrow().len() << added_bits],
+            w,
+        );
+        padded
+            .par_row_chunks_exact_mut(1 << added_bits)
+            .zip(self.par_row_slices())
+            .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
+
+        padded
+    }
+}
+
+impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S> {
+    fn width(&self) -> usize {
+        self.width
+    }
+    fn height(&self) -> usize {
+        if self.width == 0 {
+            0
+        } else {
+            self.values.borrow().len() / self.width
+        }
+    }
+    fn get(&self, r: usize, c: usize) -> T {
+        self.values.borrow()[r * self.width + c].clone()
+    }
+    type Row<'a> = iter::Cloned<slice::Iter<'a, T>> where Self: 'a;
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        self.values.borrow()[r * self.width..(r + 1) * self.width]
+            .iter()
+            .cloned()
+    }
+    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
+        &self.values.borrow()[r * self.width..(r + 1) * self.width]
+    }
+    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
+    where
+        Self: Sized,
         T: Clone,
     {
-        RowMajorMatrix {
-            values: self.values.iter().map(|v| f(v.clone())).collect(),
-            width: self.width,
-        }
+        RowMajorMatrix::new(self.values.into(), self.width)
     }
 
-    /// Flatten a matrix of extension field elements into a matrix of base field elements.
-    pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
+    fn horizontally_packed_row<'a, P>(
+        &'a self,
+        r: usize,
+    ) -> (
+        impl Iterator<Item = P> + Send + Sync,
+        impl Iterator<Item = T> + Send + Sync,
+    )
     where
-        T: ExtensionField<F>,
+        P: PackedValue<Value = T>,
+        T: Clone + 'a,
     {
-        let width = self.width * T::D;
-        let values = self
-            .values
-            .iter()
-            .flat_map(|x| x.as_base_slice().iter().copied())
-            .collect();
-        RowMajorMatrix { values, width }
+        let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
+        let (packed, sfx) = P::pack_slice_with_suffix(buf);
+        (packed.iter().cloned(), sfx.iter().cloned())
     }
 
-    pub fn to_ext<EF: ExtensionField<T>>(&self) -> RowMajorMatrix<EF>
+    fn padded_horizontally_packed_row<'a, P>(
+        &'a self,
+        r: usize,
+    ) -> impl Iterator<Item = P> + Send + Sync
     where
-        T: Field,
+        P: PackedValue<Value = T>,
+        T: Clone + Default + 'a,
     {
-        self.map(EF::from_base)
+        let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
+        let (packed, sfx) = P::pack_slice_with_suffix(buf);
+        packed.iter().cloned().chain(iter::once(P::from_fn(|i| {
+            sfx.get(i).cloned().unwrap_or_default()
+        })))
     }
+}
 
-    pub fn scale_row(&mut self, r: usize, scale: T)
-    where
-        T: Field,
-    {
-        let row = self.row_slice_mut(r);
-        let (prefix, shorts, suffix) = unsafe { row.align_to_mut::<T::Packing>() };
-        prefix.iter_mut().for_each(|x| *x *= scale);
-        shorts.iter_mut().for_each(|x| *x *= scale);
-        suffix.iter_mut().for_each(|x| *x *= scale);
-    }
-
-    #[inline]
-    pub fn packed_row<P>(&self, r: usize) -> impl Iterator<Item = P> + '_
-    where
-        T: Field,
-        P: PackedField<Scalar = T>,
-    {
-        debug_assert!(r + P::WIDTH <= self.height());
-        (0..self.width).map(move |col| P::from_fn(|i| self.get(r + i, col)))
-    }
-
+impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         Standard: Distribution<T>,
     {
         let values = rng.sample_iter(Standard).take(rows * cols).collect();
-        Self {
-            values,
-            width: cols,
-        }
+        Self::new(values, cols)
     }
 
     pub fn rand_nonzero<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
@@ -163,272 +337,10 @@ impl<T> RowMajorMatrix<T> {
             .filter(|x| !x.is_zero())
             .take(rows * cols)
             .collect();
-        Self {
-            values,
-            width: cols,
-        }
-    }
-}
-
-impl<T> Matrix<T> for RowMajorMatrix<T> {
-    fn width(&self) -> usize {
-        self.width
+        Self::new(values, cols)
     }
 
-    fn height(&self) -> usize {
-        self.values.len() / self.width
-    }
-}
-
-impl<T: Clone> MatrixGet<T> for RowMajorMatrix<T> {
-    #[inline]
-    fn get(&self, r: usize, c: usize) -> T {
-        self.values[r * self.width + c].clone()
-    }
-}
-
-impl<T: Clone> MatrixRows<T> for RowMajorMatrix<T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where T: 'a;
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.row_slice(r).iter().cloned()
-    }
-
-    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
-    where
-        Self: Sized,
-    {
-        self
-    }
-}
-
-impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrix<T> {
-    fn row_slice(&self, r: usize) -> &[T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
-    }
-}
-
-impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
-    fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
-        debug_assert!(r < self.height());
-        &mut self.values[r * self.width..(r + 1) * self.width]
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct RowMajorMatrixView<'a, T> {
-    pub values: &'a [T],
-    pub width: usize,
-}
-
-impl<'a, T> RowMajorMatrixView<'a, T> {
-    #[must_use]
-    pub fn new(values: &'a [T], width: usize) -> Self {
-        debug_assert_eq!(values.len() % width, 0);
-        Self { values, width }
-    }
-
-    pub fn rows(&self) -> impl Iterator<Item = &[T]> {
-        self.values.chunks_exact(self.width)
-    }
-
-    pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
-        let (upper_values, lower_values) = self.values.split_at(r * self.width);
-        let upper = RowMajorMatrixView {
-            values: upper_values,
-            width: self.width,
-        };
-        let lower = RowMajorMatrixView {
-            values: lower_values,
-            width: self.width,
-        };
-        (upper, lower)
-    }
-}
-
-impl<T> Matrix<T> for RowMajorMatrixView<'_, T> {
-    fn width(&self) -> usize {
-        self.width
-    }
-
-    fn height(&self) -> usize {
-        self.values.len() / self.width
-    }
-}
-
-impl<T: Clone> MatrixGet<T> for RowMajorMatrixView<'_, T> {
-    fn get(&self, r: usize, c: usize) -> T {
-        self.values[r * self.width + c].clone()
-    }
-}
-
-impl<T: Clone> MatrixRows<T> for RowMajorMatrixView<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.row_slice(r).iter().cloned()
-    }
-
-    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
-    where
-        Self: Sized,
-        T: Clone,
-    {
-        RowMajorMatrix::new(self.values.to_vec(), self.width)
-    }
-}
-
-impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
-    fn row_slice(&self, r: usize) -> &[T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
-    }
-}
-
-pub struct RowMajorMatrixViewMut<'a, T> {
-    pub values: &'a mut [T],
-    pub width: usize,
-}
-
-impl<'a, T> RowMajorMatrixViewMut<'a, T> {
-    #[must_use]
-    pub fn new(values: &'a mut [T], width: usize) -> Self {
-        debug_assert_eq!(values.len() % width, 0);
-        Self { values, width }
-    }
-
-    pub fn row_mut(&mut self, r: usize) -> &mut [T] {
-        debug_assert!(r < self.height());
-        &mut self.values[r * self.width..(r + 1) * self.width]
-    }
-
-    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]> {
-        self.values.chunks_exact_mut(self.width)
-    }
-
-    pub fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [T]>
-    where
-        T: Send,
-    {
-        self.values.par_chunks_exact_mut(self.width)
-    }
-
-    pub fn par_row_chunks_mut(
-        &mut self,
-        size: usize,
-    ) -> impl IndexedParallelIterator<Item = &mut [T]>
-    where
-        T: Send,
-    {
-        self.values.par_chunks_exact_mut(size * self.width)
-    }
-
-    pub fn rows(&self) -> impl Iterator<Item = &[T]> {
-        self.values.chunks_exact(self.width)
-    }
-
-    #[must_use]
-    pub fn as_view(&self) -> RowMajorMatrixView<T> {
-        RowMajorMatrixView {
-            values: self.values,
-            width: self.width,
-        }
-    }
-
-    pub fn split_rows(&mut self, r: usize) -> (RowMajorMatrixViewMut<T>, RowMajorMatrixViewMut<T>) {
-        let (upper_values, lower_values) = self.values.split_at_mut(r * self.width);
-        let upper = RowMajorMatrixViewMut {
-            values: upper_values,
-            width: self.width,
-        };
-        let lower = RowMajorMatrixViewMut {
-            values: lower_values,
-            width: self.width,
-        };
-        (upper, lower)
-    }
-
-    /// Return a pair of rows, each in the form (prefix, shorts, suffix), as they would be returned
-    /// by the `align_to_mut` method.
-    #[allow(clippy::type_complexity)]
-    pub fn packing_aligned_rows(
-        &mut self,
-        row_1: usize,
-        row_2: usize,
-    ) -> (
-        (&mut [T], &mut [T::Packing], &mut [T]),
-        (&mut [T], &mut [T::Packing], &mut [T]),
-    )
-    where
-        T: Field,
-    {
-        let RowMajorMatrixViewMut { values, width } = self;
-        let start_1 = row_1 * *width;
-        let start_2 = row_2 * *width;
-        let (hi_part, lo_part) = values.split_at_mut(start_2);
-        let slice_1 = &mut hi_part[start_1..][..*width];
-        let slice_2 = &mut lo_part[..*width];
-        unsafe {
-            (
-                slice_1.align_to_mut::<T::Packing>(),
-                slice_2.align_to_mut::<T::Packing>(),
-            )
-        }
-    }
-}
-
-impl<T> Matrix<T> for RowMajorMatrixViewMut<'_, T> {
-    fn width(&self) -> usize {
-        self.width
-    }
-
-    fn height(&self) -> usize {
-        self.values.len() / self.width
-    }
-}
-
-impl<T: Clone> MatrixGet<T> for RowMajorMatrixViewMut<'_, T> {
-    fn get(&self, r: usize, c: usize) -> T {
-        self.values[r * self.width + c].clone()
-    }
-}
-
-impl<T: Clone> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.row_slice(r).iter().cloned()
-    }
-
-    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
-    where
-        Self: Sized,
-        T: Clone,
-    {
-        RowMajorMatrix::new(self.values.to_vec(), self.width)
-    }
-}
-
-impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
-    fn row_slice(&self, r: usize) -> &[T] {
-        debug_assert!(r < self.height());
-        &self.values[r * self.width..(r + 1) * self.width]
-    }
-}
-
-impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
-    fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
-        debug_assert!(r < self.height());
-        &mut self.values[r * self.width..(r + 1) * self.width]
-    }
-}
-
-impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
-where
-    T: Clone + Default + Send + Sync,
-{
-    fn transpose(self) -> Self {
+    pub fn transpose(self) -> Self {
         let block_size = TRANSPOSE_BLOCK_SIZE;
         let height = self.height();
         let width = self.width();

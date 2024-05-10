@@ -2,22 +2,32 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use num_bigint::BigUint;
 use p3_field::{
-    exp_1725656503, exp_u64_by_squaring, AbstractField, Field, PrimeField, PrimeField32,
-    PrimeField64, TwoAdicField,
+    exp_1725656503, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
+    PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::{Deserialize, Deserializer, Serialize};
 
+/// The Baby Bear prime
+/// This is the unique 31-bit prime with the highest possible 2 adicity (27).
 const P: u32 = 0x78000001;
-const MONTY_BITS: u32 = 31;
-const MONTY_MASK: u32 = (1 << MONTY_BITS) - 1;
-const MONTY_MU: u32 = 0x8000001;
+const MONTY_BITS: u32 = 32;
+// We are defining MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
+// (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
+const MONTY_MU: u32 = 0x88000001;
+
+// This is derived from above.
+const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // `PackedBabyBearNeon` relies on this!
 pub struct BabyBear {
+    // This is `pub(crate)` just for tests. If you're accessing `value` outside of those, you're
+    // likely doing something fishy.
     pub(crate) value: u32,
 }
 
@@ -59,7 +69,7 @@ impl Distribution<BabyBear> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BabyBear {
         loop {
-            let next_u31 = rng.next_u32() & 0x7ffffff;
+            let next_u31 = rng.next_u32() >> 1;
             let is_canonical = next_u31 < P;
             if is_canonical {
                 return BabyBear { value: next_u31 };
@@ -68,20 +78,42 @@ impl Distribution<BabyBear> for Standard {
     }
 }
 
+impl Serialize for BabyBear {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u32(self.as_canonical_u32())
+    }
+}
+
+impl<'de> Deserialize<'de> for BabyBear {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let val = u32::deserialize(d)?;
+        Ok(BabyBear::from_canonical_u32(val))
+    }
+}
+
+const MONTY_ZERO: u32 = to_monty(0);
+const MONTY_ONE: u32 = to_monty(1);
+const MONTY_TWO: u32 = to_monty(2);
+const MONTY_NEG_ONE: u32 = to_monty(P - 1);
+
+impl Packable for BabyBear {}
+
 impl AbstractField for BabyBear {
     type F = Self;
 
     fn zero() -> Self {
-        Self { value: 0 }
+        Self { value: MONTY_ZERO }
     }
     fn one() -> Self {
-        Self { value: 0x7ffffff }
+        Self { value: MONTY_ONE }
     }
     fn two() -> Self {
-        Self { value: 0xffffffe }
+        Self { value: MONTY_TWO }
     }
     fn neg_one() -> Self {
-        Self { value: 0x70000002 }
+        Self {
+            value: MONTY_NEG_ONE,
+        }
     }
 
     #[inline]
@@ -143,7 +175,31 @@ impl AbstractField for BabyBear {
 impl Field for BabyBear {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedBabyBearNeon;
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ))]
+    type Packing = crate::PackedBabyBearAVX2;
+    #[cfg(all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ))]
+    type Packing = crate::PackedBabyBearAVX512;
+    #[cfg(not(any(
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(all(feature = "nightly-features", target_feature = "avx512f"))
+        ),
+        all(
+            feature = "nightly-features",
+            target_arch = "x86_64",
+            target_feature = "avx512f"
+        ),
+    )))]
     type Packing = Self;
 
     #[inline]
@@ -190,9 +246,25 @@ impl Field for BabyBear {
 
         Some(p1110111111111111111111111111111)
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        BabyBear {
+            value: halve_u32::<P>(self.value),
+        }
+    }
+
+    #[inline]
+    fn order() -> BigUint {
+        P.into()
+    }
 }
 
-impl PrimeField for BabyBear {}
+impl PrimeField for BabyBear {
+    fn as_canonical_biguint(&self) -> BigUint {
+        <Self as PrimeField32>::as_canonical_u32(self).into()
+    }
+}
 
 impl PrimeField64 for BabyBear {
     const ORDER_U64: u64 = <Self as PrimeField32>::ORDER_U32 as u64;
@@ -200,20 +272,6 @@ impl PrimeField64 for BabyBear {
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
         u64::from(self.as_canonical_u32())
-    }
-
-    #[inline]
-    fn linear_combination_u64<const N: usize>(u: [u64; N], v: &[Self; N]) -> Self {
-        // In order not to overflow a u64, we must have sum(u) <= 2^32.
-        debug_assert!(u.iter().sum::<u64>() <= (1u64 << 32));
-
-        let mut dot = u[0] * v[0].value as u64;
-        for i in 1..N {
-            dot += u[i] * v[i].value as u64;
-        }
-        Self {
-            value: (dot % (P as u64)) as u32,
-        }
     }
 }
 
@@ -230,10 +288,38 @@ impl TwoAdicField for BabyBear {
     const TWO_ADICITY: usize = 27;
 
     fn two_adic_generator(bits: usize) -> Self {
-        // TODO: Consider a `match` which may speed this up.
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::from_canonical_u32(0x1a427a41); // generates the whole 2^TWO_ADICITY group
-        base.exp_power_of_2(Self::TWO_ADICITY - bits)
+        match bits {
+            0 => Self::one(),
+            1 => Self::from_canonical_u32(0x78000000),
+            2 => Self::from_canonical_u32(0x67055c21),
+            3 => Self::from_canonical_u32(0x5ee99486),
+            4 => Self::from_canonical_u32(0xbb4c4e4),
+            5 => Self::from_canonical_u32(0x2d4cc4da),
+            6 => Self::from_canonical_u32(0x669d6090),
+            7 => Self::from_canonical_u32(0x17b56c64),
+            8 => Self::from_canonical_u32(0x67456167),
+            9 => Self::from_canonical_u32(0x688442f9),
+            10 => Self::from_canonical_u32(0x145e952d),
+            11 => Self::from_canonical_u32(0x4fe61226),
+            12 => Self::from_canonical_u32(0x4c734715),
+            13 => Self::from_canonical_u32(0x11c33e2a),
+            14 => Self::from_canonical_u32(0x62c3d2b1),
+            15 => Self::from_canonical_u32(0x77cad399),
+            16 => Self::from_canonical_u32(0x54c131f4),
+            17 => Self::from_canonical_u32(0x4cabd6a6),
+            18 => Self::from_canonical_u32(0x5cf5713f),
+            19 => Self::from_canonical_u32(0x3e9430e8),
+            20 => Self::from_canonical_u32(0xba067a3),
+            21 => Self::from_canonical_u32(0x18adc27d),
+            22 => Self::from_canonical_u32(0x21fd55bc),
+            23 => Self::from_canonical_u32(0x4b859b3d),
+            24 => Self::from_canonical_u32(0x3bd57996),
+            25 => Self::from_canonical_u32(0x4483d85a),
+            26 => Self::from_canonical_u32(0x3a26eef8),
+            27 => Self::from_canonical_u32(0x1a427a41),
+            _ => unreachable!("Already asserted that bits <= Self::TWO_ADICITY"),
+        }
     }
 }
 
@@ -261,7 +347,14 @@ impl AddAssign for BabyBear {
 impl Sum for BabyBear {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // There might be a faster reduction method possible for lengths <= 16 which avoids %.
+
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
+        BabyBear {
+            value: (sum % P as u64) as u32,
+        }
     }
 }
 
@@ -332,42 +425,80 @@ impl Div for BabyBear {
 #[inline]
 #[must_use]
 const fn to_monty(x: u32) -> u32 {
-    (((x as u64) << 31) % P as u64) as u32
+    (((x as u64) << MONTY_BITS) % P as u64) as u32
+}
+
+/// Convert a constant u32 array into a constant Babybear array.
+/// Saves every element in Monty Form
+#[inline]
+#[must_use]
+pub(crate) const fn to_babybear_array<const N: usize>(input: [u32; N]) -> [BabyBear; N] {
+    let mut output = [BabyBear { value: 0 }; N];
+    let mut i = 0;
+    loop {
+        if i == N {
+            break;
+        }
+        output[i].value = to_monty(input[i]);
+        i += 1;
+    }
+    output
 }
 
 #[inline]
 #[must_use]
-fn to_monty_64(x: u64) -> u32 {
-    (((x as u128) << 31) % P as u128) as u32
+const fn to_monty_64(x: u64) -> u32 {
+    (((x as u128) << MONTY_BITS) % P as u128) as u32
 }
 
 #[inline]
 #[must_use]
-fn from_monty(x: u32) -> u32 {
+const fn from_monty(x: u32) -> u32 {
     monty_reduce(x as u64)
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 #[inline]
 #[must_use]
-fn monty_reduce(x: u64) -> u32 {
+pub(crate) const fn monty_reduce(x: u64) -> u32 {
     let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
     let u = t * (P as u64);
 
     let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> 31) as u32;
+    let x_sub_u_hi = (x_sub_u >> MONTY_BITS) as u32;
     let corr = if over { P } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeField64;
+    use core::array;
+
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn test_baby_bear_two_adicity_generators() {
+        let base = BabyBear::from_canonical_u32(0x1a427a41);
+        for bits in 0..=BabyBear::TWO_ADICITY {
+            assert_eq!(
+                BabyBear::two_adic_generator(bits),
+                base.exp_power_of_2(BabyBear::TWO_ADICITY - bits)
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_babybear_array() {
+        let range_array: [u32; 32] = array::from_fn(|i| i as u32);
+        assert_eq!(
+            to_babybear_array(range_array),
+            range_array.map(F::from_canonical_u32)
+        )
+    }
 
     #[test]
     fn test_baby_bear() {
@@ -421,6 +552,37 @@ mod tests {
         assert_eq!(m1.exp_u64(1725656503).exp_const_u64::<7>(), m1);
         assert_eq!(m2.exp_u64(1725656503).exp_const_u64::<7>(), m2);
         assert_eq!(f_2.exp_u64(1725656503).exp_const_u64::<7>(), f_2);
+
+        let f_serialized = serde_json::to_string(&f).unwrap();
+        let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
+        assert_eq!(f, f_deserialized);
+
+        let f_1_serialized = serde_json::to_string(&f_1).unwrap();
+        let f_1_deserialized: F = serde_json::from_str(&f_1_serialized).unwrap();
+        let f_1_serialized_again = serde_json::to_string(&f_1_deserialized).unwrap();
+        let f_1_deserialized_again: F = serde_json::from_str(&f_1_serialized_again).unwrap();
+        assert_eq!(f_1, f_1_deserialized);
+        assert_eq!(f_1, f_1_deserialized_again);
+
+        let f_2_serialized = serde_json::to_string(&f_2).unwrap();
+        let f_2_deserialized: F = serde_json::from_str(&f_2_serialized).unwrap();
+        assert_eq!(f_2, f_2_deserialized);
+
+        let f_p_minus_1_serialized = serde_json::to_string(&f_p_minus_1).unwrap();
+        let f_p_minus_1_deserialized: F = serde_json::from_str(&f_p_minus_1_serialized).unwrap();
+        assert_eq!(f_p_minus_1, f_p_minus_1_deserialized);
+
+        let f_p_minus_2_serialized = serde_json::to_string(&f_p_minus_2).unwrap();
+        let f_p_minus_2_deserialized: F = serde_json::from_str(&f_p_minus_2_serialized).unwrap();
+        assert_eq!(f_p_minus_2, f_p_minus_2_deserialized);
+
+        let m1_serialized = serde_json::to_string(&m1).unwrap();
+        let m1_deserialized: F = serde_json::from_str(&m1_serialized).unwrap();
+        assert_eq!(m1, m1_deserialized);
+
+        let m2_serialized = serde_json::to_string(&m2).unwrap();
+        let m2_deserialized: F = serde_json::from_str(&m2_serialized).unwrap();
+        assert_eq!(m2, m2_deserialized);
     }
 
     test_field!(crate::BabyBear);
