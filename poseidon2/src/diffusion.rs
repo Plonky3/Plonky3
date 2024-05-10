@@ -8,23 +8,6 @@
 //!
 //! This file implements a trait for linear layers that satisfy these three properties.
 
-use p3_field::{AbstractField, Field};
-use p3_symmetric::Permutation;
-
-pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
-
-/// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
-pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
-    state: &mut [AF; WIDTH],
-    mat_internal_diag_m_1: [F; WIDTH],
-) {
-    let sum: AF = state.iter().cloned().sum();
-    for i in 0..WIDTH {
-        state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
-        state[i] += sum.clone();
-    }
-}
-
 // The requirements translate to the following 3 properties:
 // 1: All entries are non 0.
 // 2: No Subspace Trails.
@@ -43,3 +26,20 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
 // diag_mat  = diagonal_matrix(field, vector);
 // for i in range(1, 2 * length + 1)
 //      assert ((const_mat + diag_mat)^i).characteristic_polynomial().is_irreducible()
+
+use p3_field::{AbstractField, Field};
+use p3_symmetric::Permutation;
+
+pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
+
+/// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
+pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
+    state: &mut [AF; WIDTH],
+    mat_internal_diag_m_1: [F; WIDTH],
+) {
+    let sum: AF = state.iter().cloned().sum();
+    for i in 0..WIDTH {
+        state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
+        state[i] += sum.clone();
+    }
+}
