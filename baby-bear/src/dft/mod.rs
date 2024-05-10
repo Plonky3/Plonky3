@@ -3,7 +3,7 @@ mod backward;
 mod forward;
 
 pub use crate::dft::backward::backward_fft;
-pub use crate::dft::forward::{forward_fft, roots_of_unity_vector};
+pub use crate::dft::forward::{forward_fft, roots_of_unity_table};
 
 // TODO: These are only pub for benches at the moment...
 //pub mod backward;
@@ -41,7 +41,7 @@ mod tests {
     use p3_field::{AbstractField, Field, PrimeField64};
     use rand::{thread_rng, Rng};
 
-    use super::{backward_fft, forward_fft, roots_of_unity_vector};
+    use super::{backward_fft, forward_fft, roots_of_unity_table};
     use crate::{
         dft::{Real, P},
         BabyBear,
@@ -101,8 +101,8 @@ mod tests {
         const NITERS: usize = 100;
         let mut len = 4;
         loop {
-            let roots = roots_of_unity_vector::<BabyBear>(len);
-            let root = roots[1];
+            let root_table = roots_of_unity_table(len);
+            let root = root_table[0][0];
             let root_inv = BabyBear::from_canonical_u32(root as u32)
                 .inverse()
                 .as_canonical_u64() as i64;
@@ -110,7 +110,7 @@ mod tests {
             for _ in 0..NITERS {
                 let us = randvec(len);
                 let mut vs = us.clone();
-                forward_fft(&mut vs, root);
+                forward_fft(&mut vs, &root_table);
 
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);
@@ -129,8 +129,8 @@ mod tests {
         const NITERS: usize = 4;
         let mut len = 4;
         loop {
-            let roots = roots_of_unity_vector::<BabyBear>(len);
-            let root = roots[1];
+            let root_table = roots_of_unity_table(len);
+            let root = root_table[0][0];
             let root_inv = BabyBear::from_canonical_u32(root as u32)
                 .inverse()
                 .as_canonical_u64() as i64;
@@ -140,10 +140,10 @@ mod tests {
                 let vs = randvec(len);
 
                 let mut fft_us = us.clone();
-                forward_fft(&mut fft_us, root);
+                forward_fft(&mut fft_us, &root_table);
 
                 let mut fft_vs = vs.clone();
-                forward_fft(&mut fft_vs, root);
+                forward_fft(&mut fft_vs, &root_table);
 
                 let mut pt_prods = fft_us
                     .iter()

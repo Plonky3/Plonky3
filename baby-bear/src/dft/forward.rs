@@ -1,47 +1,67 @@
 use super::{split_at_mut_unchecked, Real, P};
+use crate::BabyBear;
+use p3_field::{AbstractField, PrimeField32, TwoAdicField};
+use p3_util::log2_strict_usize;
 
-// TODO: Consider following Hexl and storing the roots in a singler
+// TODO: Consider following Hexl and storing the roots in a single
 // array in bit-reversed order, but with duplicates for certain roots
 // to avoid computing permutations in the inner loop.
 
 const ROOTS8: [i64; 3] = [1592366214, 1728404513, 211723194];
+const PRE_ROOTS8: [i64; 3] = [1032137103, 473486609, 1964242958];
+
 const ROOTS16: [i64; 7] = [
     196396260, 1592366214, 78945800, 1728404513, 1400279418, 211723194, 1446056615,
 ];
+const PRE_ROOTS16: [i64; 7] = [
+    1594287233, 1032137103, 1173759574, 473486609, 1844575452, 1964242958, 270522423,
+];
+
 const ROOTS32: [i64; 15] = [
     760005850, 196396260, 1240658731, 1592366214, 177390144, 78945800, 1399190761, 1728404513,
     889310574, 1400279418, 1561292356, 211723194, 1424376889, 1446056615, 740045640,
 ];
-const ROOTS64: [i64; 31] = [
-    291676017, 760005850, 1141518129, 196396260, 1521113831, 1240658731, 1074029057, 1592366214,
-    602251207, 177390144, 1684363409, 78945800, 406991886, 1399190761, 1094366075, 1728404513,
-    72041623, 889310574, 1724976031, 1400279418, 1917679203, 1561292356, 1171812390, 211723194,
-    1326890868, 1424376889, 680048719, 1446056615, 1957706687, 740045640, 662200255,
+const PRE_ROOTS32: [i64; 15] = [
+    1063008748, 1594287233, 1648228672, 1032137103, 24220877, 1173759574, 1310027008, 473486609,
+    518723214, 1844575452, 964210272, 1964242958, 48337049, 270522423, 434501889,
 ];
 
-#[inline(always)]
-fn reduce(x: Real) -> Real {
-    (P + (x % P)) % P
-}
+const ROOTS64: [i64; 31] = [
+    1721589904, 760005850, 871747792, 196396260, 492152090, 1240658731, 939236864, 1592366214,
+    1411014714, 177390144, 328902512, 78945800, 1606274035, 1399190761, 918899846, 1728404513,
+    1941224298, 889310574, 288289890, 1400279418, 95586718, 1561292356, 841453531, 211723194,
+    686375053, 1424376889, 1333217202, 1446056615, 55559234, 740045640, 1351065666,
+];
+const PRE_ROOTS64: [i64; 31] = [
+    1427548538, 1063008748, 19319570, 1594287233, 292252822, 1648228672, 1754391076, 1032137103,
+    1419020303, 24220877, 1848478141, 1173759574, 1270902541, 1310027008, 992470346, 473486609,
+    690559708, 518723214, 1398247489, 1844575452, 1272476677, 964210272, 486600511, 1964242958,
+    12128229, 48337049, 377028776, 270522423, 1626304099, 434501889, 741605237,
+];
 
-const MONTY_BITS: u32 = 32;
-const MONTY_MASK: u32 = ((1u64 << MONTY_BITS) - 1) as u32;
-const MONTY_MU: u32 = 0x88000001;
+pub fn roots_of_unity_table(n: usize) -> Vec<Vec<i64>> {
+    let lg_n = log2_strict_usize(n);
+    let half_n = 1 << (lg_n - 1);
+    let nth_roots: Vec<_> = BabyBear::two_adic_generator(lg_n)
+        .powers()
+        .take(half_n)
+        .skip(1)
+        .map(|x| x.as_canonical_u32() as i64)
+        .collect();
+
+    (0..lg_n)
+        .map(|i| {
+            nth_roots
+                .iter()
+                .skip((1 << i) - 1)
+                .step_by(1 << i)
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
 
 /*
-/// Montgomery reduction of a value in `0..P << MONTY_BITS`.
-#[inline]
-fn monty_reduce(x: u64) -> u32 {
-    let t = x.wrapping_mul(MONTY_MU as u64) & (MONTY_MASK as u64);
-    let u = t * (P as u64);
-
-    let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> 31) as u32;
-    let corr = if over { P } else { 0 };
-    x_sub_u_hi.wrapping_add(corr)
-}
-*/
-
 #[inline]
 fn forward_pass(a: &mut [Real], roots: &[Real]) {
     let half_n = a.len() / 2;
@@ -50,7 +70,7 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
     let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
 
     let s = top[0];
-    let t = tail[half_n];
+    let t = tail[0];
     top[0] = reduce(s + t);
     tail[0] = reduce(s - t);
 
@@ -62,24 +82,122 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
         tail[i] = reduce((s - t) * w);
     }
 }
+*/
 
+const TWO_P: i64 = 2 * P;
+
+const MONTY_BITS: u32 = 32;
+const MONTY_MU: u32 = 0x88000001;
+
+/// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 #[inline(always)]
-fn forward_4(a: &mut [Real], root: Real) {
-    assert_eq!(a.len(), 4);
+fn _monty_reduce(x: u64) -> u32 {
+    const PP: u32 = 0x78000001;
+    let t = x.wrapping_mul(MONTY_MU as u64) as u32 as u64;
+    let u = t * (P as u64);
 
-    let t1 = a[1] - a[3];
-    let t5 = a[1] + a[3];
-    let t3 = root * t1;
-    let t4 = a[0] + a[2];
-    let t2 = a[0] - a[2];
-
-    // Return in bit-reversed order
-    a[0] = reduce(t4 + t5); // b0
-    a[2] = reduce(t2 + t3); // b1
-    a[1] = reduce(t4 - t5); // b2
-    a[3] = reduce(t2 - t3); // b3
+    let (x_sub_u, over) = x.overflowing_sub(u);
+    let x_sub_u_hi = (x_sub_u >> 31) as u32;
+    let corr = if over { PP } else { 0 };
+    x_sub_u_hi.wrapping_add(corr)
 }
 
+/// Given x in [0, 2p), return the x mod p in [0, p)
+#[inline(always)]
+fn reduce_2p(x: i64) -> i64 {
+    if x < P {
+        x
+    } else {
+        x - P
+    }
+}
+
+/// Given x in [0, 4p), return the x mod p in [0, p)
+#[inline(always)]
+fn reduce_4p(mut x: i64) -> i64 {
+    if x > P {
+        x -= P;
+    }
+    if x > P {
+        x -= P;
+    }
+    if x > P {
+        x -= P;
+    }
+    x
+}
+
+#[inline(always)]
+fn partial_barrett_reduce(x: u32, w: u32) -> u32 {
+    const P: u32 = 0x78000001;
+
+    let w_pre = ((w as u64) << 32) / (P as u64);
+    debug_assert!(w_pre <= u32::MAX as u64);
+    let w_pre = w_pre as u32;
+
+    let q = x as u64 * w_pre as u64;
+    let q_hi = (q >> 32) as u32;
+    let u = x.wrapping_mul(w);
+    let qp = q_hi.wrapping_mul(P);
+    let r = u.wrapping_sub(qp);
+    debug_assert!(r < 2 * P);
+
+    // Don't do final correction, so result is in [0, 2p)
+    r
+}
+
+#[inline(always)]
+fn barrett_reduce(x: u32, w: u32) -> u32 {
+    let r = partial_barrett_reduce(x, w);
+    reduce_2p(r as i64) as u32
+}
+
+#[inline]
+fn forward_pass(a: &mut [Real], roots: &[Real]) {
+    let half_n = a.len() / 2;
+    assert_eq!(roots.len(), half_n - 1);
+
+    let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
+
+    let x = top[0];
+    let y = tail[0];
+
+    top[0] = reduce_2p(x + y);
+    tail[0] = reduce_2p(P + x - y);
+
+    for i in 1..half_n {
+        let w = roots[i - 1];
+        let x = top[i];
+        let y = tail[i];
+
+        top[i] = reduce_2p(x + y);
+
+        let t = P + x - y;
+        tail[i] = barrett_reduce(t as u32, w as u32) as i64;
+    }
+}
+
+#[inline(always)]
+fn forward_4(a: &mut [Real]) {
+    assert_eq!(a.len(), 4);
+
+    const ROOT: u32 = ROOTS8[1] as u32;
+
+    let t1 = P + a[1] - a[3];
+    let t5 = a[1] + a[3];
+    let t3 = partial_barrett_reduce(t1 as u32, ROOT) as i64;
+    let t4 = a[0] + a[2];
+    let t2 = P + a[0] - a[2];
+
+    // Return in bit-reversed order
+    a[0] = reduce_4p(t4 + t5); // b0
+    a[2] = reduce_4p(t2 + t3); // b1
+    a[1] = reduce_4p(TWO_P + t4 - t5); // b2
+    a[3] = reduce_4p(TWO_P + t2 - t3); // b3
+}
+
+// TODO: Maybe allow to expand into i64 and do a %P at the end?
+/*
 #[inline(always)]
 pub fn forward_8(a: &mut [Real], roots: &[Real]) {
     assert_eq!(a.len(), 8);
@@ -90,10 +208,10 @@ pub fn forward_8(a: &mut [Real], roots: &[Real]) {
     let e2 = a[2] + a[6];
     let e3 = a[3] + a[7];
 
-    let f0 = a[0] - a[4];
-    let f1 = a[1] - a[5];
-    let f2 = a[2] - a[6];
-    let f3 = a[3] - a[7];
+    let f0 = P + a[0] - a[4];
+    let f1 = P + a[1] - a[5];
+    let f2 = P + a[2] - a[6];
+    let f3 = P + a[3] - a[7];
 
     let e02 = e0 + e2;
     let e13 = e1 + e3;
@@ -124,53 +242,73 @@ pub fn forward_8(a: &mut [Real], roots: &[Real]) {
     a[5] = reduce(v0 - w0); // f0 - t1 + t2 - t3; // b5
     a[7] = reduce(v1 - w1); // f0 - u1 - t2 - u3; // b7
 }
+*/
 
 #[inline(always)]
-pub fn forward_16(a: &mut [Real], roots: &[Real]) {
+pub fn forward_8(a: &mut [Real]) {
+    assert_eq!(a.len(), 8);
+
+    forward_pass(a, &ROOTS8);
+
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+    forward_4(a0);
+    forward_4(a1);
+}
+
+#[inline(always)]
+pub fn forward_16(a: &mut [Real]) {
     assert_eq!(a.len(), 16);
 
-    let half_n = a.len() / 2;
+    forward_pass(a, &ROOTS16);
 
-    forward_pass(a, roots);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, half_n) };
-    forward_8(a0, &ROOTS8);
-    forward_8(a1, &ROOTS8);
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+    forward_8(a0);
+    forward_8(a1);
 }
 
 #[inline(always)]
-pub fn forward_32(a: &mut [Real], roots: &[Real]) {
+pub fn forward_32(a: &mut [Real]) {
     assert_eq!(a.len(), 32);
 
-    let half_n = a.len() / 2;
+    forward_pass(a, &ROOTS32);
 
-    forward_pass(a, roots);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, half_n) };
-    forward_16(a0, &ROOTS16);
-    forward_16(a1, &ROOTS16);
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+    forward_16(a0);
+    forward_16(a1);
 }
 
-/*
+#[inline(always)]
+pub fn forward_64(a: &mut [Real]) {
+    assert_eq!(a.len(), 64);
+
+    forward_pass(a, &ROOTS64);
+
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+    forward_32(a0);
+    forward_32(a1);
+}
+
 #[inline]
-pub fn forward_fft(a: &mut [Real], roots: &[Real]) {
+pub fn forward_fft(a: &mut [Real], root_table: &[Vec<i64>]) {
     let n = a.len();
+    assert!(1 << root_table.len() == n);
 
-    if n > 8 {
-        forward_pass(a, roots);
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
+    match n {
+        64 => forward_64(a),
+        32 => forward_32(a),
+        16 => forward_16(a),
+        8 => forward_8(a),
+        4 => forward_4(a),
+        _ => {
+            debug_assert!(n > 64);
+            forward_pass(a, &root_table[0]);
+            let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
 
-        forward_fft(a0, xxxroots);
-        forward_fft(a1, xxxroots);
-    } else if n > 4 {
-        debug_assert_eq!(n, 8);
-        forward_8(a, &ROOTS8);
-    } else if n > 1 {
-        debug_assert_eq!(n, 4);
-        forward_4(a, ROOTS8[1]);
+            forward_fft(a0, &root_table[1..]);
+            forward_fft(a1, &root_table[1..]);
+        }
     }
 }
-*/
 
 // n = 4:
 //  - one forward_pass on a[0..4]

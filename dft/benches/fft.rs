@@ -50,9 +50,9 @@ where
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    let rt = 1400279418;
     for n_log in log_sizes {
         let n = 1 << n_log;
+        let root_table = p3_baby_bear::dft::roots_of_unity_table(n);
 
         let u: Vec<u32> = Standard.sample_iter(&mut rng).take(n).collect();
         let mut v: Vec<i64> = u.iter().map(|&x| x as i64).collect();
@@ -60,7 +60,7 @@ where
         let i = 0;
         group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
             b.iter(|| {
-                p3_baby_bear::dft::forward_fft(&mut v, rt);
+                p3_baby_bear::dft::forward_fft(&mut v, &root_table);
             });
         });
     }
