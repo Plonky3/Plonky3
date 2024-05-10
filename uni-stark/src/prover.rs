@@ -20,6 +20,7 @@ use crate::{
 };
 
 #[instrument(skip_all)]
+#[allow(clippy::multiple_bound_locations)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
@@ -51,6 +52,7 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
 
     challenger.observe(trace_commit.clone());
+    challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_ext_element();
 
     let quotient_domain =
