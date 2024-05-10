@@ -13,6 +13,7 @@ use p3_symmetric::Permutation;
 
 pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
 
+/// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
 pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
