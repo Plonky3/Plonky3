@@ -30,8 +30,8 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
 // 3: For a matrix of the form 1 + D, the diagonal D should also be non 0.
 //
 // Properties 1 and 3 are essentially immediate to check and a sufficient condition for property 2
-// is that the minimal polynomial of the matrix is maximal and irreducible.
-// This is equivalent to the characteristic polynomial of the matrix being irreducible.
+// is that the minimal polynomial of the matrix M and all its powers M^2, ..., M^{2WIDTH} are maximal and irreducible.
+// This is equivalent to all the characteristic polynomials being irreducible.
 //
 // These can be verified by the following sage code (Changing field/vector/length as desired):
 //
@@ -40,4 +40,5 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
 // vector = [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536];
 // const_mat = matrix.ones(field, length);
 // diag_mat  = diagonal_matrix(field, vector);
-// assert (const_mat + diag_mat).characteristic_polynomial().is_irreducible()
+// for i in range(1, 2 * length + 1)
+//      assert ((const_mat + diag_mat)^i).characteristic_polynomial().is_irreducible()
