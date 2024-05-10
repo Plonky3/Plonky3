@@ -6,10 +6,6 @@
 //! > arbitrarily long subspace trails, and ensuring that the polynomial representation
 //! > of the scheme is dense." (Section 5.2)
 //!
-//! > These properties can be ensured by checking the following two conditions:
-//! > Every entry of the Matrix is non 0.
-//! > The characteristic polynomial of the matrix is irreducible.
-//!
 //! This file implements a trait for linear layers that satisfy these three properties.
 
 use p3_field::{AbstractField, Field};
@@ -27,3 +23,21 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
         state[i] += sum.clone();
     }
 }
+
+// The requirements translate to the following 3 properties:
+// 1: All entries are non 0.
+// 2: No Subspace Trails.
+// 3: For a matrix of the form 1 + D, the diagonal D should also be non 0.
+//
+// Properties 1 and 3 are essentially immediate to check and a sufficient condition for property 2
+// is that the minimal polynomial of the matrix is maximal and irreducible.
+// This is equivalent to the characteristic polynomial of the matrix being irreducible.
+//
+// These can be verified by the following sage code (Changing field/vector/length as desired):
+//
+// field = GF(2^31 - 1);
+// length = 16;
+// vector = [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536];
+// const_mat = matrix.ones(field, length);
+// diag_mat  = diagonal_matrix(field, vector);
+// assert (const_mat + diag_mat).characteristic_polynomial().is_irreducible()
