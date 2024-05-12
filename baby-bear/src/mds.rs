@@ -79,10 +79,10 @@ const fn barret_red_babybear(input: i128) -> i64 {
     // So input_high < 2**63 and fits in an i64.
     let input_high = (input >> N) as i64; // input_high < input / beta < 2**{80 - N}
 
-    // I, input_high are i64's so this mulitiplication can't overflow.
+    // I, input_high are i64's so this multiplication can't overflow.
     let quot = (((input_high as i128) * (I as i128)) >> N) as i64;
 
-    // Replace quot by a close value which is divisibly by 2^10.
+    // Replace quot by a close value which is divisible by 2^10.
     let quot_2adic = quot & MASK;
 
     // quot_2adic, P are i64's so this can't overflow.
