@@ -1,8 +1,8 @@
 use core::{fmt::Debug, marker::PhantomData};
 
-use crate::{AbstractExtensionAlgebra, AbstractField, Extension, Field};
+use crate::{AbstractExtension, AbstractExtensionAlgebra, AbstractField, Field, HasBase};
 
-pub trait BinomialExtensionParams<F, const D: usize>: Sized + Debug {
+pub trait BinomialExtensionParams<F, const D: usize>: Sized + Send + Sync + Debug {
     const W: F;
     // 1, ...
     const ORDER_D_SUBGROUP: [F; D];
@@ -12,7 +12,13 @@ pub trait BinomialExtensionParams<F, const D: usize>: Sized + Debug {
 #[derive(Debug)]
 pub struct BinomialExtensionAlgebra<F, const D: usize, P>(PhantomData<(F, P)>);
 
-impl<F: Field, const D: usize, P: BinomialExtensionParams<F, D>> AbstractExtensionAlgebra<F>
+impl<F: Field, const D: usize, P: BinomialExtensionParams<F, D>> HasBase
+    for BinomialExtensionAlgebra<F, D, P>
+{
+    type Base = F;
+}
+
+impl<F: Field, const D: usize, P: BinomialExtensionParams<F, D>> AbstractExtensionAlgebra
     for BinomialExtensionAlgebra<F, D, P>
 where
     Self: 'static,
@@ -22,11 +28,11 @@ where
     const GEN: Self::Repr<F> = P::GEN;
 
     fn mul<AF: AbstractField<F = F>>(
-        a: Extension<AF, Self>,
-        b: Extension<AF, Self>,
-    ) -> Extension<AF, Self> {
+        a: AbstractExtension<AF, Self>,
+        b: AbstractExtension<AF, Self>,
+    ) -> AbstractExtension<AF, Self> {
         let w_af = AF::from_f(P::W);
-        let mut res = Extension::<AF, Self>::default();
+        let mut res = AbstractExtension::<AF, Self>::default();
         #[allow(clippy::needless_range_loop)]
         for i in 0..D {
             for j in 0..D {
@@ -40,18 +46,21 @@ where
         res
     }
 
-    fn repeated_frobenius(a: Extension<F, Self>, mut count: usize) -> Extension<F, Self> {
+    fn repeated_frobenius(
+        a: AbstractExtension<F, Self>,
+        mut count: usize,
+    ) -> AbstractExtension<F, Self> {
         if count == 0 {
             return a;
         }
         count %= D;
-        Extension::from_base_fn(|i| a[i] * P::ORDER_D_SUBGROUP[(i * count) % D])
+        AbstractExtension::from_base_fn(|i| a[i] * P::ORDER_D_SUBGROUP[(i * count) % D])
     }
 
-    fn inverse(a: Extension<F, Self>) -> Extension<F, Self> {
+    fn inverse(a: AbstractExtension<F, Self>) -> AbstractExtension<F, Self> {
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = Extension::<F, Self>::one();
+        let mut f = AbstractExtension::<F, Self>::one();
         for _ in 1..D {
             f = (f * a).repeated_frobenius(1);
         }

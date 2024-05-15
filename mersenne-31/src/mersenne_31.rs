@@ -29,6 +29,12 @@ impl Mersenne31 {
         debug_assert!((value >> 31) == 0);
         Self { value }
     }
+    const fn const_from_wrapped_u64(value: u64) -> Self {
+        Self::new((value % Self::ORDER_U64) as u32)
+    }
+    pub const fn const_mul(self, rhs: Self) -> Self {
+        Self::const_from_wrapped_u64((self.value as u64) * (rhs.value as u64))
+    }
 }
 
 impl PartialEq for Mersenne31 {

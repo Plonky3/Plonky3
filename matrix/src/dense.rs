@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
 
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{AbstractExtension, AbstractField, ExtensionAlgebra, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -71,20 +71,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         S: BorrowMut<[T]>,
     {
         RowMajorMatrixViewMut::new(self.values.borrow_mut(), self.width)
-    }
-
-    pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
-    where
-        T: ExtensionField<F>,
-    {
-        let width = self.width * T::D;
-        let values = self
-            .values
-            .borrow()
-            .iter()
-            .flat_map(|x| x.as_base_slice().iter().copied())
-            .collect();
-        RowMajorMatrix::new(values, width)
     }
 
     pub fn par_row_slices(&self) -> impl IndexedParallelIterator<Item = &[T]>
@@ -252,6 +238,24 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
 
         padded
+    }
+}
+
+impl<AF, A, S> DenseMatrix<AbstractExtension<AF, A>, S>
+where
+    AF: AbstractField + Send + Sync,
+    A: ExtensionAlgebra<Base = AF::F>,
+    S: DenseStorage<AbstractExtension<AF, A>>,
+{
+    pub fn flatten_to_base(&self) -> RowMajorMatrix<AF> {
+        let width = self.width * A::D;
+        let values = self
+            .values
+            .borrow()
+            .iter()
+            .flat_map(|x| x.as_base_slice().iter().cloned())
+            .collect();
+        RowMajorMatrix::new(values, width)
     }
 }
 

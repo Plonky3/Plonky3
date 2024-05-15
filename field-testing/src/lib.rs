@@ -9,7 +9,7 @@ pub mod bench_func;
 pub use bench_func::*;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
+    two_adic_subgroup_zerofier, Field, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -104,8 +104,10 @@ pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
     }
 }
 
+/*
 pub fn test_ef_two_adic_generator_consistency<
     F: TwoAdicField,
+    A: A
     EF: TwoAdicField + ExtensionField<F>,
 >() {
     assert_eq!(
@@ -113,11 +115,13 @@ pub fn test_ef_two_adic_generator_consistency<
         EF::two_adic_generator(F::TWO_ADICITY)
     );
 }
+*/
 
 #[macro_export]
 macro_rules! test_field {
     ($field:ty) => {
         mod field_tests {
+            use super::*;
             #[test]
             fn test_add_neg_sub_mul() {
                 $crate::test_add_neg_sub_mul::<$field>();

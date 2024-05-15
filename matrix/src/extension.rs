@@ -1,14 +1,14 @@
 use core::iter;
 use core::marker::PhantomData;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{Extension, ExtensionAlgebra};
 
 use crate::Matrix;
 
 #[derive(Debug)]
-pub struct FlatMatrixView<F, EF, Inner>(Inner, PhantomData<(F, EF)>);
+pub struct FlatMatrixView<A, Inner>(Inner, PhantomData<A>);
 
-impl<F, EF, Inner> FlatMatrixView<F, EF, Inner> {
+impl<A: ExtensionAlgebra, Inner: Matrix<Extension<A>>> FlatMatrixView<A, Inner> {
     pub fn new(inner: Inner) -> Self {
         Self(inner, PhantomData)
     }
@@ -17,21 +17,18 @@ impl<F, EF, Inner> FlatMatrixView<F, EF, Inner> {
     }
 }
 
-impl<F, EF, Inner> Matrix<F> for FlatMatrixView<F, EF, Inner>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    Inner: Matrix<EF>,
+impl<A: ExtensionAlgebra, Inner: Matrix<Extension<A>>> Matrix<A::Base>
+    for FlatMatrixView<A, Inner>
 {
     fn width(&self) -> usize {
-        self.0.width() * EF::D
+        self.0.width() * A::D
     }
 
     fn height(&self) -> usize {
         self.0.height()
     }
 
-    type Row<'a> = FlatIter<F, Inner::Row<'a>>
+    type Row<'a> = FlatIter<A, Inner::Row<'a>>
     where
         Self: 'a;
 
@@ -44,25 +41,24 @@ where
     }
 }
 
-pub struct FlatIter<F, I: Iterator> {
+pub struct FlatIter<A, I: Iterator> {
     inner: iter::Peekable<I>,
     idx: usize,
-    _phantom: PhantomData<F>,
+    _phantom: PhantomData<A>,
 }
 
-impl<F, EF, I> Iterator for FlatIter<F, I>
+impl<A, I> Iterator for FlatIter<A, I>
 where
-    F: Field,
-    EF: ExtensionField<F>,
-    I: Iterator<Item = EF>,
+    A: ExtensionAlgebra,
+    I: Iterator<Item = Extension<A>>,
 {
-    type Item = F;
+    type Item = A::Base;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx == EF::D {
+        if self.idx == A::D {
             self.idx = 0;
             self.inner.next();
         }
-        let value = self.inner.peek()?.as_base_slice()[self.idx];
+        let value = self.inner.peek()?[self.idx];
         self.idx += 1;
         Some(value)
     }

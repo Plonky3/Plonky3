@@ -1,10 +1,60 @@
-use p3_field::extension::{
-    BinomiallyExtendable, Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
+use core::mem;
+use p3_field::{
+    AbstractField, BinomialExtensionAlgebra, BinomialExtensionParams, Complex, ComplexExtendable,
 };
-use p3_field::{field_to_array, AbstractField, TwoAdicField};
 
 use crate::Mersenne31;
 
+const fn m31(x: u32) -> Mersenne31 {
+    Mersenne31::new(x)
+}
+const fn m31s<const N: usize>(xs: [u32; N]) -> [Mersenne31; N] {
+    let mut ys = [Mersenne31::new(0); N];
+    let mut i = 0;
+    while i < N {
+        ys[i] = m31(xs[i]);
+        i += 1;
+    }
+    ys
+}
+
+impl ComplexExtendable for Mersenne31 {
+    const COMPLEX_GEN: [Self; 2] = m31s([12, 1]);
+    const CIRCLE_TWO_ADICITY: usize = 31;
+    fn circle_two_adic_generator(bits: usize) -> [Self; 2] {
+        let base = Complex::new(m31(311_014_874), m31(1_584_694_829));
+        base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits).0
+    }
+}
+
+#[cfg(test)]
+mod test_m31_complex {
+    use super::*;
+    use p3_field::Complex;
+    use p3_field_testing::test_field;
+    test_field!(Complex<Mersenne31>);
+}
+
+pub type Mersenne31Cubic = BinomialExtensionAlgebra<Mersenne31, 3, Mersenne31CubicParams>;
+
+#[derive(Debug)]
+pub struct Mersenne31CubicParams;
+
+impl BinomialExtensionParams<Mersenne31, 3> for Mersenne31CubicParams {
+    const W: Mersenne31 = m31(5);
+    const ORDER_D_SUBGROUP: [Mersenne31; 3] = m31s([1, 1513477735, 634005911]);
+    const GEN: [Mersenne31; 3] = m31s([10, 1, 0]);
+}
+
+#[cfg(test)]
+mod test_m31_cubic {
+    use super::*;
+    use p3_field::Extension;
+    use p3_field_testing::test_field;
+    test_field!(Extension<Mersenne31Cubic>);
+}
+
+/*
 impl BinomiallyExtendable<3> for Mersenne31 {
     // ```sage
     // p = 2^31 - 1
@@ -151,3 +201,5 @@ mod test_quadratic_extension {
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
+
+*/

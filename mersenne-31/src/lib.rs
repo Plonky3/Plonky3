@@ -14,8 +14,8 @@ extern crate alloc;
 
 // mod complex;
 // mod dft;
-// mod extension;
-mod extensions;
+mod extension;
+// mod extensions;
 mod mds;
 mod mersenne_31;
 mod poseidon2;
@@ -49,19 +49,3 @@ mod x86_64_avx512;
     target_feature = "avx512f"
 ))]
 pub use x86_64_avx512::*;
-
-/*
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-struct MyExt;
-impl ExtensionAlgebra for MyExt {
-    type F = Mersenne31;
-    const D: usize = 2;
-    type Repr<AF: AbstractField<F = Self::F>> = [AF; 2];
-    fn mul<AF: AbstractField<F = Self::F>>(a: Ext<AF, Self>, b: Ext<AF, Self>) -> Ext<AF, Self> {
-        Ext([
-            a.0[0].clone() * a.0[1].clone(),
-            b.0[1].clone() * b.0[0].clone(),
-        ])
-    }
-}
-*/

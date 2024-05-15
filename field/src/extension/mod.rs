@@ -36,62 +36,81 @@ impl<AF: AbstractField, const N: usize> AbstractFieldArray<AF> for [AF; N] {
     }
 }
 
-pub trait AbstractExtensionAlgebra<F: Field>: 'static + Sized + Debug {
+// We need an auxiliary trait for this, otherwise when ExtensionAlgebra tries to typecheck its supertrait,
+// it will have a cycle trying to resolve Self::Base
+pub trait HasBase {
+    type Base: Field;
+}
+
+pub trait AbstractExtensionAlgebra: HasBase + 'static + Sized + Send + Sync + Debug {
     const D: usize;
-    type Repr<AF: AbstractField<F = F>>: AbstractFieldArray<AF>;
+    type Repr<AF: AbstractField<F = Self::Base>>: AbstractFieldArray<AF>;
 
-    const GEN: Self::Repr<F>;
+    const GEN: Self::Repr<Self::Base>;
 
-    fn mul<AF: AbstractField<F = F>>(
-        a: Extension<AF, Self>,
-        b: Extension<AF, Self>,
-    ) -> Extension<AF, Self>;
+    fn mul<AF: AbstractField<F = Self::Base>>(
+        a: AbstractExtension<AF, Self>,
+        b: AbstractExtension<AF, Self>,
+    ) -> AbstractExtension<AF, Self>;
 
-    fn square<AF: AbstractField<F = F>>(a: Extension<AF, Self>) -> Extension<AF, Self> {
+    fn square<AF: AbstractField<F = Self::Base>>(
+        a: AbstractExtension<AF, Self>,
+    ) -> AbstractExtension<AF, Self> {
         a.clone() * a
     }
-    fn repeated_frobenius(a: Extension<F, Self>, count: usize) -> Extension<F, Self>;
-    fn inverse(a: Extension<F, Self>) -> Extension<F, Self>;
+    fn repeated_frobenius(
+        a: AbstractExtension<Self::Base, Self>,
+        count: usize,
+    ) -> AbstractExtension<Self::Base, Self>;
+    fn inverse(a: AbstractExtension<Self::Base, Self>) -> AbstractExtension<Self::Base, Self>;
 }
 
-pub trait ExtensionAlgebra<F: Field>:
-    AbstractExtensionAlgebra<F, Repr<F> = Self::FieldRepr>
+pub trait ExtensionAlgebra:
+    AbstractExtensionAlgebra<Repr<<Self as HasBase>::Base> = Self::FieldRepr>
 {
     // The `AbstractFieldArray<F>` bound isn't necessary, but helps the methods dispatch more easily
-    type FieldRepr: AbstractFieldArray<F> + 'static + Copy + Send + Sync + Eq + Hash;
+    type FieldRepr: AbstractFieldArray<Self::Base> + 'static + Copy + Send + Sync + Eq + Hash;
 }
-impl<F: Field, A: AbstractExtensionAlgebra<F>> ExtensionAlgebra<F> for A
+impl<A: AbstractExtensionAlgebra> ExtensionAlgebra for A
 where
-    Self::Repr<F>: 'static + Copy + Send + Sync + Eq + Hash,
+    Self::Repr<Self::Base>: 'static + Copy + Send + Sync + Eq + Hash,
 {
-    type FieldRepr = Self::Repr<F>;
+    type FieldRepr = Self::Repr<Self::Base>;
 }
 
 #[derive(Debug)]
-pub struct Extension<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>>(pub A::Repr<AF>);
+pub struct AbstractExtension<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>>(
+    pub A::Repr<AF>,
+);
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Clone for Extension<AF, A> {
+pub type Extension<A> = AbstractExtension<<A as HasBase>::Base, A>;
+
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Clone
+    for AbstractExtension<AF, A>
+{
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Copy for Extension<F, A> {}
+impl<A: ExtensionAlgebra> Copy for Extension<A> {}
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Default for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Default
+    for AbstractExtension<AF, A>
+{
     fn default() -> Self {
         Self(A::Repr::<AF>::from_fn(|_| AF::default()))
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> PartialEq for Extension<F, A> {
+impl<A: ExtensionAlgebra> PartialEq for Extension<A> {
     fn eq(&self, other: &Self) -> bool {
         self.0.eq(&other.0)
     }
 }
-impl<F: Field, A: ExtensionAlgebra<F>> Eq for Extension<F, A> {}
+impl<A: ExtensionAlgebra> Eq for Extension<A> {}
 
-impl<F: Field, A: ExtensionAlgebra<F>> Display for Extension<F, A> {
+impl<A: ExtensionAlgebra> Display for Extension<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_zero() {
             write!(f, "0")
@@ -115,7 +134,7 @@ impl<F: Field, A: ExtensionAlgebra<F>> Display for Extension<F, A> {
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Hash for Extension<F, A> {
+impl<A: ExtensionAlgebra> Hash for Extension<A> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         for i in 0..A::D {
             self[i].hash(state);
@@ -123,9 +142,9 @@ impl<F: Field, A: ExtensionAlgebra<F>> Hash for Extension<F, A> {
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Packable for Extension<F, A> {}
+impl<A: ExtensionAlgebra> Packable for Extension<A> {}
 
-impl<F: Field, A: ExtensionAlgebra<F>> Serialize for Extension<F, A> {
+impl<A: ExtensionAlgebra> Serialize for Extension<A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -138,9 +157,9 @@ impl<F: Field, A: ExtensionAlgebra<F>> Serialize for Extension<F, A> {
     }
 }
 
-struct FieldArrayVisitor<F: Field, A: ExtensionAlgebra<F>>(PhantomData<(F, A)>);
-impl<'de, F: Field, A: ExtensionAlgebra<F>> Visitor<'de> for FieldArrayVisitor<F, A> {
-    type Value = Extension<F, A>;
+struct FieldArrayVisitor<A: ExtensionAlgebra>(PhantomData<A>);
+impl<'de, A: ExtensionAlgebra> Visitor<'de> for FieldArrayVisitor<A> {
+    type Value = Extension<A>;
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_fmt(format_args!("extension of length {}", A::D))
     }
@@ -158,7 +177,7 @@ impl<'de, F: Field, A: ExtensionAlgebra<F>> Visitor<'de> for FieldArrayVisitor<F
     }
 }
 
-impl<'de, F: Field, A: ExtensionAlgebra<F>> Deserialize<'de> for Extension<F, A> {
+impl<'de, A: ExtensionAlgebra> Deserialize<'de> for Extension<A> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -167,16 +186,16 @@ impl<'de, F: Field, A: ExtensionAlgebra<F>> Deserialize<'de> for Extension<F, A>
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Distribution<Extension<F, A>> for Standard
+impl<A: ExtensionAlgebra> Distribution<Extension<A>> for Standard
 where
-    Standard: Distribution<F>,
+    Standard: Distribution<A::Base>,
 {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Extension<F, A> {
-        Extension::from_base_fn(|_| Standard.sample(rng))
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Extension<A> {
+        AbstractExtension::from_base_fn(|_| Standard.sample(rng))
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> AbstractExtension<AF, A> {
     pub fn from_base(x: AF) -> Self {
         let mut me = Self::default();
         me[0] = x;
@@ -185,31 +204,44 @@ impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Extension<AF, A> {
     pub fn from_base_fn(f: impl FnMut(usize) -> AF) -> Self {
         Self(A::Repr::<AF>::from_fn(f))
     }
+    pub fn as_base_slice(&self) -> &[AF] {
+        self.0.as_ref()
+    }
     pub fn map<AF2: AbstractField<F = AF::F>>(
         self,
         mut f: impl FnMut(AF) -> AF2,
-    ) -> Extension<AF2, A> {
+    ) -> AbstractExtension<AF2, A> {
         // could do this without `clone` if we used `replace_with`
-        Extension::<AF2, A>::from_base_fn(|i| f(self[i].clone()))
+        AbstractExtension::<AF2, A>::from_base_fn(|i| f(self[i].clone()))
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Extension<F, A> {
+impl<A: ExtensionAlgebra> Extension<A> {
     pub fn frobenius(self) -> Self {
         self.repeated_frobenius(1)
     }
     pub fn repeated_frobenius(self, count: usize) -> Self {
         A::repeated_frobenius(self, count)
     }
+
+    pub fn ext_powers_packed(
+        &self,
+    ) -> impl Iterator<Item = AbstractExtension<<A::Base as Field>::Packing, A>> {
+        (0..0).map(|_| todo!())
+    }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Index<usize> for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Index<usize>
+    for AbstractExtension<AF, A>
+{
     type Output = AF;
     fn index(&self, i: usize) -> &Self::Output {
         &self.0.as_ref()[i]
     }
 }
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> IndexMut<usize> for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> IndexMut<usize>
+    for AbstractExtension<AF, A>
+{
     fn index_mut(&mut self, i: usize) -> &mut Self::Output {
         &mut self.0.as_mut()[i]
     }
@@ -228,15 +260,17 @@ macro_rules! forward_methods_to_base {
     () => {};
 }
 
-impl<AF: AbstractField, A: ExtensionAlgebra<AF::F>> AbstractField for Extension<AF, A> {
-    type F = Extension<AF::F, A>;
+impl<AF: AbstractField, A: ExtensionAlgebra<Base = AF::F>> AbstractField
+    for AbstractExtension<AF, A>
+{
+    type F = Extension<A>;
 
     fn from_f(f: Self::F) -> Self {
         f.map(AF::from_f)
     }
 
     fn generator() -> Self {
-        Self::from_f(Extension(A::GEN))
+        Self::from_f(AbstractExtension(A::GEN))
     }
 
     forward_methods_to_base!(
@@ -259,7 +293,7 @@ impl<AF: AbstractField, A: ExtensionAlgebra<AF::F>> AbstractField for Extension<
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Field for Extension<F, A> {
+impl<A: ExtensionAlgebra> Field for Extension<A> {
     type Packing = Self;
 
     fn try_inverse(&self) -> Option<Self> {
@@ -271,7 +305,7 @@ impl<F: Field, A: ExtensionAlgebra<F>> Field for Extension<F, A> {
     }
 
     fn order() -> BigUint {
-        F::order().pow(A::D as u32)
+        A::Base::order().pow(A::D as u32)
     }
 
     fn halve(&self) -> Self {
@@ -279,14 +313,18 @@ impl<F: Field, A: ExtensionAlgebra<F>> Field for Extension<F, A> {
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Neg for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Neg
+    for AbstractExtension<AF, A>
+{
     type Output = Self;
     fn neg(self) -> Self::Output {
         self.map(|x| -x)
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Add for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Add
+    for AbstractExtension<AF, A>
+{
     type Output = Self;
     fn add(mut self, rhs: Self) -> Self::Output {
         for i in 0..A::D {
@@ -296,19 +334,25 @@ impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Add for Extension<AF
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> AddAssign for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> AddAssign
+    for AbstractExtension<AF, A>
+{
     fn add_assign(&mut self, rhs: Self) {
         *self = self.clone() + rhs;
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Sum for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Sum
+    for AbstractExtension<AF, A>
+{
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::from_base(AF::zero()), |acc, x| acc + x)
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Sub for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Sub
+    for AbstractExtension<AF, A>
+{
     type Output = Self;
     fn sub(mut self, rhs: Self) -> Self::Output {
         for i in 0..A::D {
@@ -318,48 +362,66 @@ impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Sub for Extension<AF
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> SubAssign for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> SubAssign
+    for AbstractExtension<AF, A>
+{
     fn sub_assign(&mut self, rhs: Self) {
         *self = self.clone() - rhs;
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Mul for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Mul
+    for AbstractExtension<AF, A>
+{
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
         A::mul(self, rhs)
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Mul<AF> for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Mul<AF>
+    for AbstractExtension<AF, A>
+{
     type Output = Self;
     fn mul(self, rhs: AF) -> Self::Output {
         self.map(|x| x * rhs.clone())
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> MulAssign for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> MulAssign
+    for AbstractExtension<AF, A>
+{
     fn mul_assign(&mut self, rhs: Self) {
         *self = self.clone() * rhs;
     }
 }
 
-impl<AF: AbstractField, A: AbstractExtensionAlgebra<AF::F>> Product for Extension<AF, A> {
+impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Product
+    for AbstractExtension<AF, A>
+{
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::from_base(AF::one()), |acc, x| acc * x)
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Div for Extension<F, A> {
+impl<A: ExtensionAlgebra> Div<Self> for AbstractExtension<A::Base, A> {
     type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
         self * rhs.inverse()
     }
 }
 
-impl<F: Field, A: ExtensionAlgebra<F>> Div<F> for Extension<F, A> {
-    type Output = Self;
-    fn div(self, rhs: F) -> Self::Output {
-        self * rhs.inverse()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn foo<A: ExtensionAlgebra>(ext: Extension<A>, base: A::Base) {
+        let x = ext * base;
+    }
+    fn foo2<A: ExtensionAlgebra>(
+        ext: AbstractExtension<<A::Base as Field>::Packing, A>,
+        base: <A::Base as Field>::Packing,
+    ) {
+        let x = ext * base;
     }
 }
