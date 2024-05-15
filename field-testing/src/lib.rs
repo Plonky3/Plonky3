@@ -8,10 +8,9 @@ pub mod bench_func;
 
 pub use bench_func::*;
 use num_bigint::BigUint;
-use num_traits::identities::One;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, Field, TwoAdicField,
+    two_adic_subgroup_zerofier, AbstractField, Field, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -22,24 +21,24 @@ where
     Standard: Distribution<F>,
 {
     let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
-    let y = rng.gen::<F>();
-    let z = rng.gen::<F>();
-    assert_eq!(x + (-x), F::zero());
-    assert_eq!(-x, F::zero() - x);
-    assert_eq!(x + x, x * F::two());
-    assert_eq!(x, x.halve() * F::two());
-    assert_eq!(x * (-x), -x.square());
-    assert_eq!(x + y, y + x);
-    assert_eq!(x * y, y * x);
-    assert_eq!(x * (y * z), (x * y) * z);
-    assert_eq!(x - (y + z), (x - y) - z);
-    assert_eq!((x + y) - z, x + (y - z));
-    assert_eq!(x * (y + z), x * y + x * z);
-    assert_eq!(
-        x + y + z + x + y + z,
-        [x, x, y, y, z, z].iter().cloned().sum()
-    );
+    for _ in 0..1000 {
+        let [x, y, z] = rng.gen::<[F; 3]>();
+        assert_eq!(x + (-x), F::zero());
+        assert_eq!(-x, F::zero() - x);
+        assert_eq!(x + x, x * F::two());
+        assert_eq!(x, x.halve() * F::two());
+        assert_eq!(x * (-x), -x.square());
+        assert_eq!(x + y, y + x);
+        assert_eq!(x * y, y * x);
+        assert_eq!(x * (y * z), (x * y) * z);
+        assert_eq!(x - (y + z), (x - y) - z);
+        assert_eq!((x + y) - z, x + (y - z));
+        assert_eq!(x * (y + z), x * y + x * z);
+        assert_eq!(
+            x + y + z + x + y + z,
+            [x, x, y, y, z, z].iter().cloned().sum()
+        );
+    }
 }
 
 pub fn test_inv_div<F: Field>()
@@ -47,15 +46,15 @@ where
     Standard: Distribution<F>,
 {
     let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
-    let y = rng.gen::<F>();
-    let z = rng.gen::<F>();
-    assert_eq!(x * x.inverse(), F::one());
-    assert_eq!(x.inverse() * x, F::one());
-    assert_eq!(x.square().inverse(), x.inverse().square());
-    assert_eq!((x / y) * y, x);
-    assert_eq!(x / (y * z), (x / y) / z);
-    assert_eq!((x * y) / z, x * (y / z));
+    for _ in 0..1000 {
+        let [x, y, z] = rng.gen::<[F; 3]>();
+        assert_eq!(x * x.inverse(), F::one());
+        assert_eq!(x.inverse() * x, F::one());
+        assert_eq!(x.square().inverse(), x.inverse().square());
+        assert_eq!((x / y) * y, x);
+        assert_eq!(x / (y * z), (x / y) / z);
+        assert_eq!((x * y) / z, x * (y / z));
+    }
 }
 
 pub fn test_inverse<F: Field>()
@@ -63,7 +62,6 @@ where
     Standard: Distribution<F>,
 {
     assert_eq!(None, F::zero().try_inverse());
-
     assert_eq!(Some(F::one()), F::one().try_inverse());
 
     let mut rng = rand::thread_rng();
@@ -77,12 +75,32 @@ where
     }
 }
 
-pub fn test_multiplicative_group_factors<F: Field>() {
+pub fn test_multiplicative_group_order<F: Field>() {
+    // Check that product of factors actually matches p - 1.
     let product: BigUint = F::multiplicative_group_factors()
         .into_iter()
         .map(|(factor, exponent)| factor.pow(exponent as u32))
         .product();
-    assert_eq!(product + BigUint::one(), F::order());
+    assert_eq!(product + 1u32, F::order());
+
+    // Check that g^(p-1) = 1.
+    // (this is true for any element but we might as well check)
+    assert_eq!(F::generator().exp_biguint(F::order() - 1u32), F::one());
+
+    // Check that g does not actually generate some smaller subgroup.
+    // Say we have p - 1 = a0^n0 * a1^n1 * ...
+    // And g generates a subgroup of order a0^m0 * a1^m1 * ...
+    // If all m_i = n_i, we are good
+    // If g doesn't generate the full subgroup, it will have some m_i < n_i.
+    // So for each i, we can test g^((p-1)/a_i), equivalent to setting m_i = n_i - 1,
+    // and the result will be 1 iff m_i < n_i.
+    for (factor, _) in F::multiplicative_group_factors() {
+        assert_ne!(
+            F::generator().exp_biguint((F::order() - 1u32) / factor.clone()),
+            F::one(),
+            "Generator does not generate the full multiplicative subgroup; missing a subgroup for {factor}",
+        );
+    }
 }
 
 pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
@@ -145,8 +163,8 @@ macro_rules! test_field {
                 $crate::test_inverse::<$field>();
             }
             #[test]
-            fn test_multiplicative_group_factors() {
-                $crate::test_multiplicative_group_factors::<$field>();
+            fn test_multiplicative_group_order() {
+                $crate::test_multiplicative_group_order::<$field>();
             }
         }
     };
