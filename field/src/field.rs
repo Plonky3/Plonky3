@@ -1,17 +1,14 @@
-use alloc::vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::slice;
 
-use itertools::Itertools;
 use num_bigint::BigUint;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
-use crate::packed::{PackedField, PackedValue};
+use crate::packed::PackedField;
 use crate::Packable;
 
 /// A generalization of `Field` which permits things like
@@ -100,6 +97,18 @@ pub trait AbstractField:
             }
             _ => self.exp_u64(POWER),
         }
+    }
+
+    /// Exponentiate by a BigUint by squaring.
+    fn exp_biguint(mut self, power: BigUint) -> Self {
+        let mut res = Self::one();
+        for bit in power.to_radix_le(2) {
+            if bit == 1 {
+                res *= self.clone();
+            }
+            self = self.square();
+        }
+        res
     }
 
     #[must_use]
@@ -256,72 +265,7 @@ pub trait PrimeField32: PrimeField64 {
     fn as_canonical_u32(&self) -> u32;
 }
 
-pub trait AbstractExtensionField<Base: AbstractField>:
-    AbstractField
-    + From<Base>
-    + Add<Base, Output = Self>
-    + AddAssign<Base>
-    + Sub<Base, Output = Self>
-    + SubAssign<Base>
-    + Mul<Base, Output = Self>
-    + MulAssign<Base>
-{
-    const D: usize;
-
-    fn from_base(b: Base) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a slice `bs` of
-    /// length at most D, and constructs the field element
-    /// \sum_i bs[i] * X^i.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn from_base_slice(bs: &[Base]) -> Self;
-
-    /// Similar to `core:array::from_fn`, with the same caveats as
-    /// `from_base_slice`.
-    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a field element
-    /// \sum_i bs[i] * X^i and returns the coefficients as a slice
-    /// `bs` of length at most D containing, from lowest degree to
-    /// highest.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn as_base_slice(&self) -> &[Base];
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function returns the field
-    /// element `X^exponent` if `exponent < D` and panics otherwise.
-    /// (The fact that f is not known at the point that this function
-    /// is defined prevents implementing exponentiation of higher
-    /// powers since the reduction cannot be performed.)
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn monomial(exponent: usize) -> Self {
-        assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::zero(); Self::D];
-        vec[exponent] = Base::one();
-        Self::from_base_slice(&vec)
-    }
-}
-
+/*
 pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
     type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
         + 'static
@@ -354,31 +298,7 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
         core::iter::successors(Some(current), move |&current| Some(current * multiplier))
     }
 }
-
-impl<F: Field> ExtensionField<F> for F {
-    type ExtensionPacking = F::Packing;
-}
-
-impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
-    const D: usize = 1;
-
-    fn from_base(b: AF) -> Self {
-        b
-    }
-
-    fn from_base_slice(bs: &[AF]) -> Self {
-        assert_eq!(bs.len(), 1);
-        bs[0].clone()
-    }
-
-    fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
-        f(0)
-    }
-
-    fn as_base_slice(&self) -> &[AF] {
-        slice::from_ref(self)
-    }
-}
+*/
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods
 /// for obtaining two-adic generators.
