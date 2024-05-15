@@ -10,7 +10,7 @@ pub use bench_func::*;
 use num_bigint::BigUint;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, AbstractField, Field, TwoAdicField,
+    two_adic_subgroup_zerofier, AbstractField, Complex, ComplexExtendable, Field, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -125,10 +125,24 @@ pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
 }
 
 pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
-    let log_n = F::TWO_ADICITY;
-    let g = F::two_adic_generator(log_n);
-    for bits in 0..=log_n {
-        assert_eq!(g.exp_power_of_2(bits), F::two_adic_generator(log_n - bits));
+    assert_eq!(F::two_adic_generator(0), F::one());
+    for bits in 1..=F::TWO_ADICITY {
+        assert_ne!(F::two_adic_generator(bits), F::one());
+        assert_eq!(
+            F::two_adic_generator(bits).square(),
+            F::two_adic_generator(bits - 1)
+        );
+    }
+}
+
+pub fn test_circle_two_adic_generator<F: ComplexExtendable>() {
+    assert_eq!(F::circle_two_adic_generator(0), Complex::<F>::one());
+    for bits in 1..=F::CIRCLE_TWO_ADICITY {
+        assert_ne!(F::circle_two_adic_generator(bits), Complex::<F>::one());
+        assert_eq!(
+            F::circle_two_adic_generator(bits).square(),
+            F::circle_two_adic_generator(bits - 1)
+        );
     }
 }
 
@@ -171,6 +185,19 @@ macro_rules! test_field {
 }
 
 #[macro_export]
+macro_rules! test_complex {
+    ($field:ty) => {
+        mod complex_tests {
+            use super::*;
+            #[test]
+            fn test_circle_two_adic_generator() {
+                $crate::test_circle_two_adic_generator::<$field>();
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! test_two_adic_field {
     ($field:ty) => {
         mod two_adic_field_tests {
@@ -183,7 +210,7 @@ macro_rules! test_two_adic_field {
                 $crate::test_two_adic_coset_zerofier::<$field>();
             }
             #[test]
-            fn test_two_adic_consisitency() {
+            fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
             }
         }

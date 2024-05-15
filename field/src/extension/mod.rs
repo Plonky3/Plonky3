@@ -7,9 +7,11 @@ use core::{
     ops::{Add, AddAssign, Div, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-use alloc::{format, string::ToString};
+use alloc::vec;
+use alloc::{format, string::ToString, vec::Vec};
 use itertools::Itertools;
 use num_bigint::BigUint;
+use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use rand::distributions::{Distribution, Standard};
 use serde::{
     de::{SeqAccess, Visitor},
@@ -58,11 +60,13 @@ pub trait AbstractExtensionAlgebra: HasBase + 'static + Sized + Send + Sync + De
     ) -> AbstractExtension<AF, Self> {
         a.clone() * a
     }
-    fn repeated_frobenius(
-        a: AbstractExtension<Self::Base, Self>,
+
+    fn repeated_frobenius<AF: AbstractField<F = Self::Base>>(
+        a: AbstractExtension<AF, Self>,
         count: usize,
-    ) -> AbstractExtension<Self::Base, Self>;
-    fn inverse(a: AbstractExtension<Self::Base, Self>) -> AbstractExtension<Self::Base, Self>;
+    ) -> AbstractExtension<AF, Self>;
+
+    fn inverse(a: Extension<Self>) -> Extension<Self>;
 }
 
 pub trait ExtensionAlgebra:
@@ -311,7 +315,43 @@ impl<A: ExtensionAlgebra> Field for Extension<A> {
     fn halve(&self) -> Self {
         self.map(|x| x.halve())
     }
+
+    // To get factors of p^d - 1, we can factorize the cyclotomic polys
+    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        assert!(
+            A::D <= CYCLOTOMIC_POLYS.len(),
+            "extension degree too high, add more cyclotomic polys"
+        );
+        let factorizer = FactorizerFromSplitter {
+            primality_test: MillerRabin { error_bits: 128 },
+            composite_splitter: PollardRho,
+        };
+        let mut factors = vec![];
+        for i in 1..=A::D {
+            if A::D % i == 0 {
+                factors.extend(factorizer.factors(&CYCLOTOMIC_POLYS[i - 1](A::Base::order())));
+            }
+        }
+        factors.sort();
+        factors
+            .into_iter()
+            .dedup_with_count()
+            .map(|(exp, factor)| (factor, exp))
+            .collect()
+    }
 }
+
+// From https://en.wikipedia.org/wiki/Cyclotomic_polynomial#Examples
+// Add more if we need higher degree extensions
+const CYCLOTOMIC_POLYS: &[fn(BigUint) -> BigUint] = &[
+    // Starts at 1.
+    |x| x - 1u32,
+    |x| x + 1u32,
+    |x| x.pow(2) + x + 1u32,
+    |x| x.pow(2) + 1u32,
+    |x| x.pow(4) + x.pow(3) + x.pow(2) + x + 1u32,
+    |x| x.pow(2) - x + 1u32,
+];
 
 impl<AF: AbstractField, A: AbstractExtensionAlgebra<Base = AF::F>> Neg
     for AbstractExtension<AF, A>

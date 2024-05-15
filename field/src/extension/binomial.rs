@@ -1,6 +1,8 @@
 use core::{fmt::Debug, marker::PhantomData};
 
-use crate::{AbstractExtension, AbstractExtensionAlgebra, AbstractField, Field, HasBase};
+use crate::{
+    AbstractExtension, AbstractExtensionAlgebra, AbstractField, Extension, Field, HasBase,
+};
 
 pub trait BinomialExtensionParams<F, const D: usize>: Sized + Send + Sync + Debug {
     const W: F;
@@ -46,21 +48,23 @@ where
         res
     }
 
-    fn repeated_frobenius(
-        a: AbstractExtension<F, Self>,
+    fn repeated_frobenius<AF: AbstractField<F = F>>(
+        a: AbstractExtension<AF, Self>,
         mut count: usize,
-    ) -> AbstractExtension<F, Self> {
+    ) -> AbstractExtension<AF, Self> {
         if count == 0 {
             return a;
         }
         count %= D;
-        AbstractExtension::from_base_fn(|i| a[i] * P::ORDER_D_SUBGROUP[(i * count) % D])
+        AbstractExtension::from_base_fn(|i| {
+            a[i].clone() * AF::from_f(P::ORDER_D_SUBGROUP[(i * count) % D])
+        })
     }
 
-    fn inverse(a: AbstractExtension<F, Self>) -> AbstractExtension<F, Self> {
+    fn inverse(a: Extension<Self>) -> Extension<Self> {
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = AbstractExtension::<F, Self>::one();
+        let mut f = Extension::<Self>::one();
         for _ in 1..D {
             f = (f * a).repeated_frobenius(1);
         }

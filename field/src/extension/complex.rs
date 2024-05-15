@@ -1,6 +1,8 @@
 use core::marker::PhantomData;
 
-use crate::{AbstractExtension, AbstractExtensionAlgebra, AbstractField, Field, HasBase};
+use crate::{
+    AbstractExtension, AbstractExtensionAlgebra, AbstractField, Extension, Field, HasBase,
+};
 
 pub type Complex<AF> = AbstractExtension<AF, ComplexAlgebra<<AF as AbstractField>::F>>;
 
@@ -12,7 +14,7 @@ pub trait ComplexExtendable: Field {
     /// The two-adicity of `p+1`, the order of the circle group.
     const CIRCLE_TWO_ADICITY: usize;
 
-    fn circle_two_adic_generator(bits: usize) -> [Self; 2];
+    fn circle_two_adic_generator(bits: usize) -> Complex<Self>;
 }
 
 #[derive(Debug)]
@@ -46,10 +48,10 @@ impl<F: ComplexExtendable> AbstractExtensionAlgebra for ComplexAlgebra<F> {
         ])
     }
 
-    fn repeated_frobenius(
-        a: AbstractExtension<F, Self>,
+    fn repeated_frobenius<AF: AbstractField<F = F>>(
+        a: AbstractExtension<AF, Self>,
         count: usize,
-    ) -> AbstractExtension<F, Self> {
+    ) -> AbstractExtension<AF, Self> {
         if count % 2 == 0 {
             a
         } else {
@@ -57,7 +59,7 @@ impl<F: ComplexExtendable> AbstractExtensionAlgebra for ComplexAlgebra<F> {
         }
     }
 
-    fn inverse(a: AbstractExtension<F, Self>) -> AbstractExtension<F, Self> {
+    fn inverse(a: Extension<Self>) -> Extension<Self> {
         a.conj() * a.norm().inverse()
     }
 }
