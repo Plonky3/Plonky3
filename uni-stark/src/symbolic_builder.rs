@@ -78,7 +78,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
             .into_iter()
             .flat_map(|offset| {
                 (0..preprocessed_width)
-                    .map(move |index| SymbolicVariable::new(Entry::Main { offset }, index))
+                    .map(move |index| SymbolicVariable::new(Entry::Preprocessed { offset }, index))
             })
             .collect();
         let main_values = [0, 1]
