@@ -14,8 +14,7 @@ extern crate alloc;
 
 // mod complex;
 // mod dft;
-mod extension;
-// mod extensions;
+mod extensions;
 mod mds;
 mod mersenne_31;
 mod poseidon2;
