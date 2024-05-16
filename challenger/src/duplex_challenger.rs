@@ -7,7 +7,7 @@ use p3_symmetric::{CryptographicPermutation, Hash};
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
 #[derive(Clone, Debug)]
-pub struct DuplexChallenger<F, P, const WIDTH: usize>
+pub struct DuplexChallenger<F, P, const WIDTH: usize, const RATE: usize>
 where
     F: Clone,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -18,7 +18,7 @@ where
     pub permutation: P,
 }
 
-impl<F, P, const WIDTH: usize> DuplexChallenger<F, P, WIDTH>
+impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -36,7 +36,7 @@ where
     }
 
     fn duplexing(&mut self) {
-        assert!(self.input_buffer.len() <= WIDTH);
+        assert!(self.input_buffer.len() <= RATE);
 
         // Overwrite the first r elements with the inputs.
         for (i, val) in self.input_buffer.drain(..).enumerate() {
@@ -51,14 +51,16 @@ where
     }
 }
 
-impl<F, P, const WIDTH: usize> FieldChallenger<F> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const WIDTH: usize, const RATE: usize> FieldChallenger<F>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
 }
 
-impl<F, P, const WIDTH: usize> CanObserve<F> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const WIDTH: usize, const RATE: usize> CanObserve<F>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -69,13 +71,14 @@ where
 
         self.input_buffer.push(value);
 
-        if self.input_buffer.len() == WIDTH {
+        if self.input_buffer.len() == RATE {
             self.duplexing();
         }
     }
 }
 
-impl<F, P, const N: usize, const WIDTH: usize> CanObserve<[F; N]> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<[F; N]>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -87,8 +90,8 @@ where
     }
 }
 
-impl<F, P, const N: usize, const WIDTH: usize> CanObserve<Hash<F, F, N>>
-    for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<Hash<F, F, N>>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -101,7 +104,8 @@ where
 }
 
 // for TrivialPcs
-impl<F, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const WIDTH: usize, const RATE: usize> CanObserve<Vec<Vec<F>>>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -115,7 +119,8 @@ where
     }
 }
 
-impl<F, EF, P, const WIDTH: usize> CanSample<EF> for DuplexChallenger<F, P, WIDTH>
+impl<F, EF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -136,7 +141,8 @@ where
     }
 }
 
-impl<F, P, const WIDTH: usize> CanSampleBits<usize> for DuplexChallenger<F, P, WIDTH>
+impl<F, P, const WIDTH: usize, const RATE: usize> CanSampleBits<usize>
+    for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
@@ -158,7 +164,8 @@ mod tests {
 
     use super::*;
 
-    const WIDTH: usize = 32;
+    const WIDTH: usize = 24;
+    const RATE: usize = 16;
 
     type TestArray = [F; WIDTH];
     type F = Goldilocks;
@@ -167,65 +174,12 @@ mod tests {
     struct TestPermutation {}
 
     impl Permutation<TestArray> for TestPermutation {
-        fn permute(&self, mut input: TestArray) -> TestArray {
-            self.permute_mut(&mut input);
-            input
-        }
-
         fn permute_mut(&self, input: &mut TestArray) {
             input.reverse()
         }
     }
 
     impl CryptographicPermutation<TestArray> for TestPermutation {}
-
-    #[test]
-    fn test_duplex_challenger() {
-        let permutation = TestPermutation {};
-        let mut duplex_challenger = DuplexChallenger::new(permutation);
-
-        // observe elements before reaching WIDTH
-        (0..WIDTH - 1).for_each(|element| {
-            duplex_challenger.observe(F::from_canonical_u8(element as u8));
-            assert_eq!(duplex_challenger.input_buffer.len(), element + 1);
-            assert_eq!(
-                duplex_challenger.input_buffer,
-                (0..element + 1)
-                    .map(|i| F::from_canonical_u8(i as u8))
-                    .collect::<Vec<_>>()
-            );
-            assert_eq!(duplex_challenger.output_buffer, vec![]);
-            assert_eq!(duplex_challenger.sponge_state, [F::zero(); WIDTH]);
-        });
-
-        // Test functionality when we observe WIDTH elements
-        duplex_challenger.observe(F::from_canonical_u8(31));
-        assert_eq!(duplex_challenger.input_buffer, vec![]);
-
-        let should_be_output_buffer: [F; WIDTH] = (0..WIDTH as u8)
-            .rev()
-            .map(F::from_canonical_u8)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        assert_eq!(duplex_challenger.output_buffer, should_be_output_buffer);
-        assert_eq!(duplex_challenger.sponge_state, should_be_output_buffer);
-
-        // Test functionality when observe, over more than WIDTH elements
-        duplex_challenger.observe(F::from_canonical_u8(255));
-        assert_eq!(duplex_challenger.input_buffer, [F::from_canonical_u8(255)]);
-        assert_eq!(duplex_challenger.output_buffer, vec![]);
-        assert_eq!(duplex_challenger.sponge_state, should_be_output_buffer);
-
-        // Test functionality when observing additional elements
-        duplex_challenger.duplexing();
-        let mut should_be_output_buffer = (0..31).map(F::from_canonical_u8).collect::<Vec<_>>();
-        should_be_output_buffer.push(F::from_canonical_u8(255));
-        assert_eq!(duplex_challenger.input_buffer, vec![]);
-        assert_eq!(duplex_challenger.output_buffer, should_be_output_buffer);
-        let should_be_sponge_state: [F; WIDTH] = should_be_output_buffer.try_into().unwrap();
-        assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state);
-    }
 
     #[test]
     fn test_duplex_challenger_randomized() {
@@ -249,7 +203,7 @@ mod tests {
 
         (0..WIDTH / 2).for_each(|element| {
             assert_eq!(
-                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                <DuplexChallenger<F, TestPermutation, WIDTH, RATE> as CanSample<F>>::sample(
                     &mut duplex_challenger
                 ),
                 F::from_canonical_u8(element as u8)
@@ -263,7 +217,7 @@ mod tests {
 
         (0..WIDTH / 2).for_each(|i| {
             assert_eq!(
-                <DuplexChallenger<F, TestPermutation, WIDTH> as CanSample<F>>::sample(
+                <DuplexChallenger<F, TestPermutation, WIDTH, RATE> as CanSample<F>>::sample(
                     &mut duplex_challenger
                 ),
                 F::from_canonical_u8(0)

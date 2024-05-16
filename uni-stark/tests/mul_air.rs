@@ -160,7 +160,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 16>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     type Pcs = TrivialPcs<Val, Radix2DitParallel>;
     let pcs = TrivialPcs {
@@ -231,7 +231,7 @@ fn do_test_bb_twoadic(
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 16>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let fri_config = FriConfig {
         log_blowup,
