@@ -20,7 +20,7 @@ pub struct CirclePcs<Val: Field, InputMmcs> {
     pub mmcs: InputMmcs,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProverData<Val, MmcsData> {
     committed_domains: Vec<CircleDomain<Val>>,
     mmcs_data: MmcsData,
@@ -31,6 +31,7 @@ where
     Val: ComplexExtendable,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
+    <InputMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>: Clone,
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
