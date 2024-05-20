@@ -63,7 +63,7 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
-    final_poly: F,
+    final_poly: Vec<F>,
 }
 
 #[instrument(name = "commit phase", skip_all)]
@@ -84,7 +84,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.blowup() {
+    while folded.len() > config.final_poly_len() {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
@@ -102,17 +102,10 @@ where
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(folded.len(), config.blowup());
-    let final_poly = folded[0];
-    for x in folded {
-        assert_eq!(x, final_poly);
-    }
-
     CommitPhaseResult {
         commits,
         data,
-        final_poly,
+        final_poly: folded,
     }
 }
 
