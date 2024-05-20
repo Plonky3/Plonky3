@@ -12,6 +12,7 @@ use core::ops::Deref;
 use itertools::{izip, Itertools};
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 
 use crate::dense::RowMajorMatrix;
@@ -26,7 +27,7 @@ pub mod stack;
 pub mod strided;
 pub mod util;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,

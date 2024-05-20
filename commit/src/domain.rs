@@ -8,6 +8,8 @@ use p3_field::{
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub struct LagrangeSelectors<T> {
@@ -53,7 +55,9 @@ pub trait PolynomialSpace: Copy {
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "Val: Serialize"))]
+#[serde(bound(deserialize = "Val: DeserializeOwned"))]
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
     pub log_n: usize,
     pub shift: Val,

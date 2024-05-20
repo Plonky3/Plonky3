@@ -25,7 +25,7 @@ where
     type Commitment: Clone + Serialize + DeserializeOwned;
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
-    type ProverData;
+    type ProverData: Clone;
 
     /// The opening argument.
     type Proof: Clone + Serialize + DeserializeOwned;
