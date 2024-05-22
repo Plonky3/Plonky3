@@ -5,8 +5,9 @@ use p3_symmetric::Permutation;
 
 use crate::{monty_reduce, FieldParameters, MontyField31};
 
-pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize, const WIDTH_MINUS_ONE: usize> {
-    const INTERNAL_DIAG_SHIFTS: [u8; WIDTH_MINUS_ONE];
+pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
+    type ArrayLike: AsRef<[u8]> + Sized;
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike;
 
     fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
@@ -14,8 +15,8 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize, const WIDTH_MI
         let s0 = part_sum + (-state[0]).value as u64;
         state[0] = MontyField31::new_monty(monty_reduce::<FP>(s0));
 
-        for i in 0..WIDTH_MINUS_ONE {
-            let si = full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS[i]);
+        for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
+            let si = full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS.as_ref()[i]);
             state[i + 1] = MontyField31::new_monty(monty_reduce::<FP>(si));
         }
     }
@@ -61,6 +62,6 @@ impl<FP: FieldParameters, PU: Poseidon2Monty31<FP>> DiffusionPermutation<MontyFi
 }
 
 pub trait Poseidon2Monty31<FP: FieldParameters>:
-    Poseidon2Utils<FP, 16, 15> + Poseidon2Utils<FP, 24, 23> + Clone + Sync
+    Poseidon2Utils<FP, 16> + Poseidon2Utils<FP, 24> + Clone + Sync
 {
 }
