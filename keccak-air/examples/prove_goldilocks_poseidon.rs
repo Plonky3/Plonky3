@@ -56,7 +56,7 @@ fn main() -> Result<(), VerificationError> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 8>;
+    type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);

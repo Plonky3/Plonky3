@@ -170,7 +170,7 @@ mod babybear_fri_pcs {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 
     type Dft = Radix2DitParallel;
-    type Challenger = DuplexChallenger<Val, Perm, 16>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
     fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
