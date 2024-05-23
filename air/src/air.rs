@@ -163,6 +163,12 @@ pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     condition: AB::Expr,
 }
 
+impl<'a, AB: AirBuilder> FilteredAirBuilder<'a, AB> {
+    pub fn condition(&self) -> AB::Expr {
+        self.condition.clone()
+    }
+}
+
 impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     type F = AB::F;
     type Expr = AB::Expr;
@@ -186,7 +192,7 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.inner.assert_zero(self.condition.clone() * x.into());
+        self.inner.assert_zero(self.condition() * x.into());
     }
 }
 
@@ -200,7 +206,7 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
         I: Into<Self::ExprEF>,
     {
         self.inner
-            .assert_zero_ext(x.into() * self.condition.clone());
+            .assert_zero_ext(x.into() * self.condition());
     }
 }
 
