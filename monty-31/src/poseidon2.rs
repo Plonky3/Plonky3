@@ -27,41 +27,32 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
 // Permutation<[_; 16]> for the various field packings. (AVX2, AVX512, NEON)
 // It's also a little ugly due to the need for 2 pieces of PhantomData.
 
+pub trait Poseidon2Monty31<FP: FieldParameters>:
+    Poseidon2Utils<FP, 16> + Poseidon2Utils<FP, 24> + Clone + Sync
+{
+}
+
 #[derive(Debug, Clone, Default)]
 struct DiffusionMatrixMontyField31<FP: FieldParameters, PU: Poseidon2Monty31<FP>> {
     _phantom1: PhantomData<FP>,
     _phantom2: PhantomData<PU>,
 }
 
-impl<FP: FieldParameters, PU: Poseidon2Monty31<FP>> Permutation<[MontyField31<FP>; 16]>
-    for DiffusionMatrixMontyField31<FP, PU>
+impl <FP: FieldParameters, const WIDTH: usize, PU: Poseidon2Monty31<FP>> Permutation<[MontyField31<FP>; WIDTH]> for DiffusionMatrixMontyField31<FP, PU>
+where
+    PU: Poseidon2Utils<FP, WIDTH>
 {
     #[inline]
-    fn permute_mut(&self, state: &mut [MontyField31<FP>; 16]) {
-        PU::permute_state(state)
+    fn permute_mut(&self, state: &mut [MontyField31<FP>; WIDTH]) {
+        PU::permute_state(state);
     }
 }
 
-impl<FP: FieldParameters, PU: Poseidon2Monty31<FP>> DiffusionPermutation<MontyField31<FP>, 16>
-    for DiffusionMatrixMontyField31<FP, PU>
+impl <FP: FieldParameters, const WIDTH: usize, PU: Poseidon2Monty31<FP>> DiffusionPermutation<MontyField31<FP>, WIDTH> for DiffusionMatrixMontyField31<FP, PU>
+where
+    PU: Poseidon2Utils<FP, WIDTH>
 {
 }
 
-impl<FP: FieldParameters, PU: Poseidon2Monty31<FP>> Permutation<[MontyField31<FP>; 24]>
-    for DiffusionMatrixMontyField31<FP, PU>
-{
-    #[inline]
-    fn permute_mut(&self, state: &mut [MontyField31<FP>; 24]) {
-        PU::permute_state(state)
-    }
-}
 
-impl<FP: FieldParameters, PU: Poseidon2Monty31<FP>> DiffusionPermutation<MontyField31<FP>, 24>
-    for DiffusionMatrixMontyField31<FP, PU>
-{
-}
 
-pub trait Poseidon2Monty31<FP: FieldParameters>:
-    Poseidon2Utils<FP, 16> + Poseidon2Utils<FP, 24> + Clone + Sync
-{
-}
