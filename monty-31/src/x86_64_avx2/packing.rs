@@ -158,7 +158,7 @@ fn add<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 // MONTGOMERY MULTIPLICATION
 //   This implementation is based on [1] but with minor changes. The reduction is as follows:
 //
-// Constants: P = 2^31 - 2^27 + 1
+// Constants: P < 2^31
 //            B = 2^32
 //            μ = P^-1 mod B
 // Input: 0 <= C < P B
@@ -199,7 +199,7 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
     }
 }
 
-/// Multiply vectors of Baby Bear field elements in canonical form.
+/// Multiply vectors of MontyField31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -238,7 +238,7 @@ fn mul<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
-/// Negate a vector of Baby Bear field elements in canonical form.
+/// Negate a vector of MontyField31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -267,7 +267,7 @@ fn neg<FPAVX2: FieldParametersAVX2>(val: __m256i) -> __m256i {
     }
 }
 
-/// Subtract vectors of Baby Bear field elements in canonical form.
+/// Subtract vectors of MontyField31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
