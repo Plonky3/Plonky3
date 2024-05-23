@@ -47,7 +47,7 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] =
         1 << 15,
     ]);
 
-struct Poseidon2BabyBear;
+struct Poseidon2BabyBear {}
 
 impl Poseidon2Utils<BabyBearParameters, 16> for Poseidon2BabyBear {
     type ArrayLike = [u8; 15];
