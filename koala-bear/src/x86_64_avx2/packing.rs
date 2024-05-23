@@ -14,7 +14,6 @@ impl FieldParametersAVX2 for KoalaBearParameters {
     const PACKEDMU: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x81000001; WIDTH]) };
 }
 
-
 #[cfg(test)]
 mod tests {
     use p3_field::{AbstractField, Field, PackedField};

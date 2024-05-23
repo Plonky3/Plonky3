@@ -47,7 +47,7 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
         1 << 15,
     ]);
 
-struct Poseidon2KoalaBear {}
+struct Poseidon2KoalaBear;
 
 impl Poseidon2Utils<KoalaBearParameters, 16> for Poseidon2KoalaBear {
     type ArrayLike = [u8; 15];
