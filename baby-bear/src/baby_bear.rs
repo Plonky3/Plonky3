@@ -7,7 +7,7 @@ use p3_monty_31::{
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 pub type BabyBear = MontyField31<BabyBearParameters>;
 
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub struct BabyBearParameters;
 
 impl FieldParameters for BabyBearParameters {}

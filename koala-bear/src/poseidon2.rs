@@ -51,7 +51,10 @@ struct Poseidon2KoalaBear {}
 
 impl Poseidon2Utils<KoalaBearParameters, 16> for Poseidon2KoalaBear {
     type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY;
 }
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
@@ -87,6 +90,8 @@ impl Poseidon2Utils<KoalaBearParameters, 24> for Poseidon2KoalaBear {
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
     ];
+
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY;
 }
 
 #[derive(Debug, Clone, Default)]
