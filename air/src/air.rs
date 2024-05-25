@@ -205,8 +205,7 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
     where
         I: Into<Self::ExprEF>,
     {
-        self.inner
-            .assert_zero_ext(x.into() * self.condition());
+        self.inner.assert_zero_ext(x.into() * self.condition());
     }
 }
 
