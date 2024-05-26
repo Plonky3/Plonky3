@@ -10,7 +10,9 @@ use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
 use itertools::{izip, Itertools};
-use p3_field::{dot_product, AbstractExtensionField, ExtensionField, Field, PackedValue};
+use p3_field::{
+    dot_product, AbstractExtension, AbstractField, Extension, ExtensionAlgebra, Field, PackedValue,
+};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 
@@ -176,13 +178,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Compute Mᵀv, aka premultiply this matrix by the given vector,
     /// aka scale each row by the corresponding entry in `v` and take the row-wise sum.
     /// `v` can be a vector of extension elements.
-    fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>
+    fn columnwise_dot_product<A: ExtensionAlgebra<Base = T>>(
+        &self,
+        v: &[Extension<A>],
+    ) -> Vec<Extension<A>>
     where
         T: Field,
-        EF: ExtensionField<T>,
     {
         self.par_rows().zip(v).par_fold_reduce(
-            || vec![EF::zero(); self.width()],
+            || vec![Extension::<A>::zero(); self.width()],
             |mut acc, (row, &scale)| {
                 izip!(&mut acc, row).for_each(|(a, x)| *a += scale * x);
                 acc
@@ -195,27 +199,22 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
-    fn dot_ext_powers<EF>(&self, base: EF) -> impl IndexedParallelIterator<Item = EF>
+    fn dot_ext_powers<A: ExtensionAlgebra<Base = T>>(
+        &self,
+        base: Extension<A>,
+    ) -> impl IndexedParallelIterator<Item = Extension<A>>
     where
         T: Field,
-        EF: ExtensionField<T>,
     {
-        let powers_packed = base
+        let powers_packed: Vec<AbstractExtension<T::Packing, A>> = base
             .ext_powers_packed()
             .take(self.width().next_multiple_of(T::Packing::WIDTH))
             .collect_vec();
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
-                let packed_sum_of_packed: EF::ExtensionPacking =
-                    dot_product(powers_packed.iter().copied(), row_packed);
-                let sum_of_packed: EF = EF::from_base_fn(|i| {
-                    packed_sum_of_packed.as_base_slice()[i]
-                        .as_slice()
-                        .iter()
-                        .copied()
-                        .sum()
-                });
-                sum_of_packed
+                let packed_sum_of_packed: AbstractExtension<T::Packing, A> =
+                    dot_product(powers_packed.iter().cloned(), row_packed);
+                packed_sum_of_packed.map(|x| x.as_slice().iter().copied().sum())
             })
     }
 }
