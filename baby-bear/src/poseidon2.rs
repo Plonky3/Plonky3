@@ -95,9 +95,9 @@ impl Poseidon2Utils<BabyBearParameters, 24> for DiffusionMatrixBabyBear {
     const INTERNAL_DIAG_MONTY: [BabyBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY;
 }
 
-impl<const WIDTH: usize> Permutation<[BabyBear; WIDTH]> for DiffusionMatrixBabyBear 
+impl<const WIDTH: usize> Permutation<[BabyBear; WIDTH]> for DiffusionMatrixBabyBear
 where
-    DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>
+    DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>,
 {
     #[inline]
     fn permute_mut(&self, state: &mut [BabyBear; WIDTH]) {
@@ -105,8 +105,7 @@ where
     }
 }
 
-impl<const WIDTH: usize> DiffusionPermutation<BabyBear, WIDTH> for DiffusionMatrixBabyBear 
-where
+impl<const WIDTH: usize> DiffusionPermutation<BabyBear, WIDTH> for DiffusionMatrixBabyBear where
     DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>
 {
 }

@@ -95,18 +95,19 @@ impl Poseidon2Utils<KoalaBearParameters, 24> for DiffusionMatrixKoalaBear {
     const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY;
 }
 
-impl<const WIDTH: usize> Permutation<[KoalaBear; WIDTH]> for DiffusionMatrixKoalaBear 
+impl<const WIDTH: usize> Permutation<[KoalaBear; WIDTH]> for DiffusionMatrixKoalaBear
 where
-DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>
+    DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>,
 {
     #[inline]
     fn permute_mut(&self, state: &mut [KoalaBear; WIDTH]) {
-        <DiffusionMatrixKoalaBear as Poseidon2Utils<KoalaBearParameters, WIDTH>>::permute_state(state)
+        <DiffusionMatrixKoalaBear as Poseidon2Utils<KoalaBearParameters, WIDTH>>::permute_state(
+            state,
+        )
     }
 }
 
-impl<const WIDTH: usize> DiffusionPermutation<KoalaBear, WIDTH> for DiffusionMatrixKoalaBear 
-where
+impl<const WIDTH: usize> DiffusionPermutation<KoalaBear, WIDTH> for DiffusionMatrixKoalaBear where
     DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>
 {
 }
