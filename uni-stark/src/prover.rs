@@ -31,19 +31,20 @@ pub fn prove<
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
-    public_values: &Vec<SC::Val>,
+    public_values: RowMajorMatrix<SC::Val>,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, public_values);
+    crate::check_constraints::check_constraints(air, &trace, &public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.len());
+    let log_quotient_degree =
+        get_log_quotient_degree::<SC::Val, A>(air, public_values.values.len());
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 
@@ -52,7 +53,7 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
     challenger.observe(trace_commit.clone());
-    challenger.observe_slice(public_values);
+    challenger.observe_slice(public_values.values.as_slice());
     let alpha: SC::Challenge = challenger.sample_ext_element();
 
     let mut trace_ldes = pcs.get_ldes(&trace_data);
@@ -118,10 +119,10 @@ where
 }
 
 #[instrument(name = "compute quotient polynomial", skip_all)]
-fn quotient_values<SC, A, Mat>(
+fn quotient_values<SC, A, Mat, PubMat>(
     config: &SC,
     air: &A,
-    public_values: &Vec<SC::Val>,
+    public_values: PubMat,
     degree_bits: usize,
     quotient_degree_bits: usize,
     trace_lde: Mat,
@@ -130,6 +131,7 @@ fn quotient_values<SC, A, Mat>(
 where
     SC: StarkGenericConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    PubMat: MatrixGet<SC::Val> + Sync,
     Mat: MatrixGet<SC::Val> + Sync,
 {
     let degree = 1 << degree_bits;
@@ -190,13 +192,33 @@ where
                 })
                 .collect();
 
+            let public_local: Vec<_> = (0..public_values.width())
+                .map(|col| {
+                    PackedVal::<SC>::from_fn(|offset| {
+                        let row = wrap(i_local_start + offset);
+                        trace_lde.get(row, col)
+                    })
+                })
+                .collect();
+            let public_next: Vec<_> = (0..public_values.width())
+                .map(|col| {
+                    PackedVal::<SC>::from_fn(|offset| {
+                        let row = wrap(i_next_start + offset);
+                        trace_lde.get(row, col)
+                    })
+                })
+                .collect();
+
             let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
                 },
-                public_values,
+                public_values: TwoRowMatrixView {
+                    local: &public_local,
+                    next: &public_next,
+                },
                 is_first_row,
                 is_last_row,
                 is_transition,

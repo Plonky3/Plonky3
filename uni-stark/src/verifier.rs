@@ -5,7 +5,7 @@ use p3_air::{Air, BaseAir, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::UnivariatePcs;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
-use p3_matrix::Dimensions;
+use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
 use p3_util::reverse_slice_index_bits;
 use tracing::instrument;
 
@@ -18,13 +18,13 @@ pub fn verify<SC, A>(
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
-    public_values: &Vec<SC::Val>,
+    public_values: &RowMajorMatrix<SC::Val>,
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.len());
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.width());
     let quotient_degree = 1 << log_quotient_degree;
 
     let Proof {
@@ -46,7 +46,7 @@ where
     let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
     challenger.observe(commitments.trace.clone());
-    challenger.observe_slice(public_values);
+    challenger.observe_slice(public_values.values.as_slice());
     let alpha: SC::Challenge = challenger.sample_ext_element();
     challenger.observe(commitments.quotient_chunks.clone());
     let zeta: SC::Challenge = challenger.sample_ext_element();
@@ -107,12 +107,20 @@ where
     let is_first_row = z_h / (zeta - SC::Val::one());
     let is_last_row = z_h / (zeta - g_subgroup.inverse());
     let is_transition = zeta - g_subgroup.inverse();
+
+    //TODO: derive these by interpolating the public values matrix
+    let public_local = vec![];
+    let public_next = vec![];
+
     let mut folder = VerifierConstraintFolder {
         main: TwoRowMatrixView {
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
         },
-        public_values,
+        public_values: TwoRowMatrixView {
+            local: &public_local,
+            next: &public_next,
+        },
         is_first_row,
         is_last_row,
         is_transition,

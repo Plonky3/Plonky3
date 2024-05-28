@@ -109,9 +109,7 @@ pub trait AirBuilder: Sized {
 }
 
 pub trait AirBuilderWithPublicValues: AirBuilder {
-    type PublicVar: Into<Self::Expr> + Copy;
-
-    fn public_values(&self) -> &[Self::PublicVar];
+    fn public_values(&self) -> Self::M;
 }
 
 pub trait PairBuilder: AirBuilder {

@@ -56,12 +56,12 @@ where
 /// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
 pub struct SymbolicAirBuilder<F: Field> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
-    public_values: Vec<F>,
+    public_values: RowMajorMatrix<SymbolicVariable<F>>,
     constraints: Vec<SymbolicExpression<F>>,
 }
 
 impl<F: Field> SymbolicAirBuilder<F> {
-    pub(crate) fn new(width: usize, num_public_values: usize) -> Self {
+    pub(crate) fn new(width: usize, public_width: usize) -> Self {
         let values = [false, true]
             .into_iter()
             .flat_map(|is_next| {
@@ -72,10 +72,22 @@ impl<F: Field> SymbolicAirBuilder<F> {
                 })
             })
             .collect();
+
+        let public_values = [false, true]
+            .into_iter()
+            .flat_map(|is_next| {
+                (0..public_width).map(move |column| SymbolicVariable {
+                    is_next,
+                    column,
+                    _phantom: PhantomData,
+                })
+            })
+            .collect();
+
         Self {
             main: RowMajorMatrix::new(values, width),
             // TODO replace zeros once we have SymbolicExpression::PublicValue
-            public_values: vec![F::zero(); num_public_values],
+            public_values: RowMajorMatrix::new(public_values, width),
             constraints: vec![],
         }
     }
@@ -117,9 +129,7 @@ impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
 }
 
 impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
-    type PublicVar = F;
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.public_values.as_slice()
+    fn public_values(&self) -> Self::M {
+        self.public_values.clone()
     }
 }

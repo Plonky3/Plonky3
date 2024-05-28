@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use p3_air::{AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
 use p3_field::AbstractField;
 
@@ -6,7 +5,7 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig};
 
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, PackedVal<SC>>,
-    pub public_values: &'a Vec<SC::Val>,
+    pub public_values: TwoRowMatrixView<'a, PackedVal<SC>>,
     pub is_first_row: PackedVal<SC>,
     pub is_last_row: PackedVal<SC>,
     pub is_transition: PackedVal<SC>,
@@ -16,7 +15,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
 
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: TwoRowMatrixView<'a, SC::Challenge>,
-    pub public_values: &'a Vec<SC::Val>,
+    pub public_values: TwoRowMatrixView<'a, SC::Challenge>,
     pub is_first_row: SC::Challenge,
     pub is_last_row: SC::Challenge,
     pub is_transition: SC::Challenge,
@@ -58,9 +57,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
-    type PublicVar = Self::F;
-
-    fn public_values(&self) -> &[Self::F] {
+    fn public_values(&self) -> Self::M {
         self.public_values
     }
 }
@@ -98,9 +95,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     }
 }
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'a, SC> {
-    type PublicVar = Self::F;
-
-    fn public_values(&self) -> &[Self::F] {
+    fn public_values(&self) -> Self::M {
         self.public_values
     }
 }
