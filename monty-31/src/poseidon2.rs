@@ -9,6 +9,10 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
     type ArrayLike: AsRef<[u8]> + Sized;
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike;
 
+    // Long term INTERNAL_DIAG_MONTY will be removed.
+    // Currently we need it for the naive Packed field implementations.
+    const INTERNAL_DIAG_MONTY: [MontyField31<FP>; WIDTH];
+
     fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
@@ -33,7 +37,7 @@ pub trait Poseidon2Monty31<FP: FieldParameters>:
 }
 
 #[derive(Debug, Clone, Default)]
-struct DiffusionMatrixMontyField31<FP: FieldParameters, PU: Poseidon2Monty31<FP>> {
+pub struct DiffusionMatrixMontyField31<FP: FieldParameters, PU: Poseidon2Monty31<FP>> {
     _phantom1: PhantomData<FP>,
     _phantom2: PhantomData<PU>,
 }
@@ -53,6 +57,3 @@ where
     PU: Poseidon2Utils<FP, WIDTH>
 {
 }
-
-
-
