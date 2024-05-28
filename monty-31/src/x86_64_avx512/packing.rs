@@ -1,4 +1,5 @@
 use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
+use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -69,7 +70,7 @@ impl<FP: FieldParameters> PackedMontyField31AVX512<FP> {
     /// `From<MontyField31>::from`, but `const`.
     #[inline]
     #[must_use]
-    const fn broadcast(value: MontyField31) -> Self {
+    const fn broadcast(value: MontyField31<FP>) -> Self {
         Self([value; WIDTH])
     }
 }
@@ -330,7 +331,7 @@ fn sub<FPAVX512: FieldParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 
 impl<FP: FieldParameters> From<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn from(value: MontyField31) -> Self {
+    fn from(value: MontyField31<FP>) -> Self {
         Self::broadcast(value)
     }
 }
@@ -384,7 +385,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX512<FP> {
 }
 
 impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
-    type F = MontyField31;
+    type F = MontyField31<FP>;
 
     #[inline]
     fn zero() -> Self {
@@ -454,7 +455,7 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
 impl<FP: FieldParameters> Add<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
-    fn add(self, rhs: MontyField31) -> Self {
+    fn add(self, rhs: MontyField31<FP>) -> Self {
         self + Self::from(rhs)
     }
 }
@@ -462,7 +463,7 @@ impl<FP: FieldParameters> Add<MontyField31<FP>> for PackedMontyField31AVX512<FP>
 impl<FP: FieldParameters> Mul<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: MontyField31) -> Self {
+    fn mul(self, rhs: MontyField31<FP>) -> Self {
         self * Self::from(rhs)
     }
 }
@@ -470,28 +471,28 @@ impl<FP: FieldParameters> Mul<MontyField31<FP>> for PackedMontyField31AVX512<FP>
 impl<FP: FieldParameters> Sub<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: MontyField31) -> Self {
+    fn sub(self, rhs: MontyField31<FP>) -> Self {
         self - Self::from(rhs)
     }
 }
 
 impl<FP: FieldParameters> AddAssign<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn add_assign(&mut self, rhs: MontyField31) {
+    fn add_assign(&mut self, rhs: MontyField31<FP>) {
         *self += Self::from(rhs)
     }
 }
 
 impl<FP: FieldParameters> MulAssign<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn mul_assign(&mut self, rhs: MontyField31) {
+    fn mul_assign(&mut self, rhs: MontyField31<FP>) {
         *self *= Self::from(rhs)
     }
 }
 
 impl<FP: FieldParameters> SubAssign<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn sub_assign(&mut self, rhs: MontyField31) {
+    fn sub_assign(&mut self, rhs: MontyField31<FP>) {
         *self -= Self::from(rhs)
     }
 }
@@ -500,9 +501,9 @@ impl<FP: FieldParameters> Sum<MontyField31<FP>> for PackedMontyField31AVX512<FP>
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
-        I: Iterator<Item = MontyField31>,
+        I: Iterator<Item = MontyField31<FP>>,
     {
-        iter.sum::<MontyField31>().into()
+        iter.sum::<MontyField31<FP>>().into()
     }
 }
 
@@ -510,9 +511,9 @@ impl<FP: FieldParameters> Product<MontyField31<FP>> for PackedMontyField31AVX512
     #[inline]
     fn product<I>(iter: I) -> Self
     where
-        I: Iterator<Item = MontyField31>,
+        I: Iterator<Item = MontyField31<FP>>,
     {
-        iter.product::<MontyField31>().into()
+        iter.product::<MontyField31<FP>>().into()
     }
 }
 
@@ -520,39 +521,39 @@ impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31AVX512<FP>
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
-    fn div(self, rhs: MontyField31) -> Self {
+    fn div(self, rhs: MontyField31<FP>) -> Self {
         self * rhs.inverse()
     }
 }
 
-impl Add<PackedMontyField31AVX512> for MontyField31 {
-    type Output = PackedMontyField31AVX512;
+impl<FP: FieldParameters> Add<PackedMontyField31AVX512<FP>> for MontyField31<FP> {
+    type Output = PackedMontyField31AVX512<FP>;
     #[inline]
-    fn add(self, rhs: PackedMontyField31AVX512) -> PackedMontyField31AVX512 {
-        PackedMontyField31AVX512::from(self) + rhs
+    fn add(self, rhs: PackedMontyField31AVX512<FP>) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>::from(self) + rhs
     }
 }
 
-impl Mul<PackedMontyField31AVX512> for MontyField31 {
-    type Output = PackedMontyField31AVX512;
+impl<FP: FieldParameters> Mul<PackedMontyField31AVX512<FP>> for MontyField31<FP> {
+    type Output = PackedMontyField31AVX512<FP>;
     #[inline]
-    fn mul(self, rhs: PackedMontyField31AVX512) -> PackedMontyField31AVX512 {
-        PackedMontyField31AVX512::from(self) * rhs
+    fn mul(self, rhs: PackedMontyField31AVX512<FP>) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>::from(self) * rhs
     }
 }
 
-impl Sub<PackedMontyField31AVX512> for MontyField31 {
-    type Output = PackedMontyField31AVX512;
+impl<FP: FieldParameters> Sub<PackedMontyField31AVX512<FP>> for MontyField31<FP> {
+    type Output = PackedMontyField31AVX512<FP>;
     #[inline]
-    fn sub(self, rhs: PackedMontyField31AVX512) -> PackedMontyField31AVX512 {
-        PackedMontyField31AVX512::from(self) - rhs
+    fn sub(self, rhs: PackedMontyField31AVX512<FP>) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>::from(self) - rhs
     }
 }
 
-impl Distribution<PackedMontyField31AVX512> for Standard {
+impl<FP: FieldParameters> Distribution<PackedMontyField31AVX512<FP>> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX512 {
-        PackedMontyField31AVX512(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>(rng.gen())
     }
 }
 
@@ -732,25 +733,25 @@ fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
 }
 
 unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
-    type Value = MontyField31;
+    type Value = MontyField31<FP>;
 
     const WIDTH: usize = WIDTH;
 
     #[inline]
-    fn from_slice(slice: &[MontyField31]) -> &Self {
+    fn from_slice(slice: &[MontyField31<FP>]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[MontyField31; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
+            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &*slice.as_ptr().cast()
         }
     }
     #[inline]
-    fn from_slice_mut(slice: &mut [MontyField31]) -> &mut Self {
+    fn from_slice_mut(slice: &mut [MontyField31<FP>]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[MontyField31; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
+            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &mut *slice.as_mut_ptr().cast()
@@ -759,23 +760,23 @@ unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
 
     /// Similar to `core:array::from_fn`.
     #[inline]
-    fn from_fn<F: FnMut(usize) -> MontyField31>(f: F) -> Self {
+    fn from_fn<F: FnMut(usize) -> MontyField31<FP>>(f: F) -> Self {
         let vals_arr: [_; WIDTH] = core::array::from_fn(f);
         Self(vals_arr)
     }
 
     #[inline]
-    fn as_slice(&self) -> &[MontyField31] {
+    fn as_slice(&self) -> &[MontyField31<FP>] {
         &self.0[..]
     }
     #[inline]
-    fn as_slice_mut(&mut self) -> &mut [MontyField31] {
+    fn as_slice_mut(&mut self) -> &mut [MontyField31<FP>] {
         &mut self.0[..]
     }
 }
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX512<FP> {
-    type Scalar = MontyField31;
+    type Scalar = MontyField31<FP>;
 
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {

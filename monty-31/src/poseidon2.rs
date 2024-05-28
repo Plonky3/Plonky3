@@ -34,6 +34,7 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
 pub trait Poseidon2Monty31<FP: FieldParameters>:
     Poseidon2Utils<FP, 16> + Poseidon2Utils<FP, 24> + Clone + Sync
 {
+	const MONTY_INVERSE: MontyField31<FP> = MontyField31::<FP>::new_monty(1);
 }
 
 #[derive(Debug, Clone, Default)]

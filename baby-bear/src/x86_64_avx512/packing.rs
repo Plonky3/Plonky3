@@ -16,10 +16,12 @@ impl FieldParametersAVX512 for BabyBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
+    use p3_field::{AbstractField, Field, PackedField};
+    use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
+    use crate::BabyBear;
 
     type F = BabyBear;
     type P = PackedBabyBearAVX512;
