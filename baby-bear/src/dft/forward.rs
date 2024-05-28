@@ -100,31 +100,6 @@ fn reduce_4p(mut x: i64) -> i64 {
     x
 }
 
-#[inline(always)]
-fn partial_barrett_reduce(x: u32, w: u32) -> u32 {
-    const P: u32 = 0x78000001;
-
-    let w_pre = ((w as u64) << 32) / (P as u64);
-    debug_assert!(w_pre <= u32::MAX as u64);
-    let w_pre = w_pre as u32;
-
-    let q = x as u64 * w_pre as u64;
-    let q_hi = (q >> 32) as u32;
-    let u = x.wrapping_mul(w);
-    let qp = q_hi.wrapping_mul(P);
-    let r = u.wrapping_sub(qp);
-    debug_assert!(r < 2 * P);
-
-    // Don't do final correction, so result is in [0, 2p)
-    r
-}
-
-#[inline(always)]
-fn barrett_reduce(x: u32, w: u32) -> u32 {
-    let r = partial_barrett_reduce(x, w);
-    reduce_2p(r as i64) as u32
-}
-
 #[inline]
 fn forward_pass(a: &mut [Real], roots: &[Real]) {
     let half_n = a.len() / 2;
