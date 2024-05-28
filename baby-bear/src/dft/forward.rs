@@ -47,29 +47,6 @@ pub fn roots_of_unity_table(n: usize) -> Vec<Vec<i64>> {
         .collect()
 }
 
-/*
-#[inline]
-fn forward_pass(a: &mut [Real], roots: &[Real]) {
-    let half_n = a.len() / 2;
-    assert_eq!(roots.len(), half_n - 1);
-
-    let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
-
-    let s = top[0];
-    let t = tail[0];
-    top[0] = reduce(s + t);
-    tail[0] = reduce(s - t);
-
-    for i in 1..half_n {
-        let w = roots[i - 1];
-        let s = top[i];
-        let t = tail[i];
-        top[i] = reduce(s + t);
-        tail[i] = reduce((s - t) * w);
-    }
-}
-*/
-
 const TWO_P: i64 = 2 * P;
 
 const MONTY_BITS: u32 = 32;
@@ -192,54 +169,6 @@ fn forward_4(a: &mut [Real]) {
     a[3] = reduce_4p(TWO_P + t2 - t3); // b3
 }
 
-// TODO: Maybe allow to expand into i64 and do a %P at the end?
-/*
-#[inline(always)]
-pub fn forward_8(a: &mut [Real], roots: &[Real]) {
-    assert_eq!(a.len(), 8);
-    assert_eq!(roots.len(), 3);
-
-    let e0 = a[0] + a[4];
-    let e1 = a[1] + a[5];
-    let e2 = a[2] + a[6];
-    let e3 = a[3] + a[7];
-
-    let f0 = P + a[0] - a[4];
-    let f1 = P + a[1] - a[5];
-    let f2 = P + a[2] - a[6];
-    let f3 = P + a[3] - a[7];
-
-    let e02 = e0 + e2;
-    let e13 = e1 + e3;
-    let g02 = e0 - e2;
-    let g13 = e1 - e3;
-    let t = g13 * roots[1]; // roots[i] holds g^{i+1}
-
-    // Return result b = [b0, b1, .., b7] in bit-reversed order
-    a[0] = reduce(e02 + e13); // b0
-    a[2] = reduce(g02 + t); // b2
-    a[1] = reduce(e02 - e13); // b4
-    a[3] = reduce(g02 - t); // b6
-
-    let t1 = f1 * roots[0];
-    let t2 = f2 * roots[1];
-    let t3 = f3 * roots[2];
-
-    let u1 = f1 * roots[2];
-    let u3 = f3 * roots[0];
-
-    let v0 = f0 + t2; // (a0 - a4) + (a2 - a6)*r^2
-    let v1 = f0 - t2; // (a0 - a4) - (a2 - a6)*r^2
-    let w0 = t1 + t3; //
-    let w1 = u1 + u3; // (a1 - a5)*r^3 + (a3 - a7)*r
-
-    a[4] = reduce(v0 + w0); // f0 + t1 + t2 + t3; // b1
-    a[6] = reduce(v1 + w1); // f0 + u1 - t2 + u3; // b3
-    a[5] = reduce(v0 - w0); // f0 - t1 + t2 - t3; // b5
-    a[7] = reduce(v1 - w1); // f0 - u1 - t2 - u3; // b7
-}
-*/
-
 #[inline(always)]
 pub fn forward_8(a: &mut [Real]) {
     assert_eq!(a.len(), 8);
@@ -305,9 +234,3 @@ pub fn forward_fft(a: &mut [Real], root_table: &[Vec<i64>]) {
         }
     }
 }
-
-// n = 4:
-//  - one forward_pass on a[0..4]
-//    -
-//  - two ffts of size 2:
-//    - n = 2: one forward_pass ==> transformzero
