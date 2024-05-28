@@ -47,9 +47,10 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
         1 << 15,
     ]);
 
-struct Poseidon2KoalaBear;
+#[derive(Debug, Clone, Default)]
+pub struct DiffusionMatrixKoalaBear;
 
-impl Poseidon2Utils<KoalaBearParameters, 16> for Poseidon2KoalaBear {
+impl Poseidon2Utils<KoalaBearParameters, 16> for DiffusionMatrixKoalaBear {
     type ArrayLike = [u8; 15];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
@@ -85,7 +86,7 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
         1 << 23,
     ]);
 
-impl Poseidon2Utils<KoalaBearParameters, 24> for Poseidon2KoalaBear {
+impl Poseidon2Utils<KoalaBearParameters, 24> for DiffusionMatrixKoalaBear {
     type ArrayLike = [u8; 23];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
@@ -94,26 +95,21 @@ impl Poseidon2Utils<KoalaBearParameters, 24> for Poseidon2KoalaBear {
     const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY;
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixKoalaBear;
-
-impl Permutation<[KoalaBear; 16]> for DiffusionMatrixKoalaBear {
+impl<const WIDTH: usize> Permutation<[KoalaBear; WIDTH]> for DiffusionMatrixKoalaBear 
+where
+DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>
+{
     #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; 16]) {
-        Poseidon2KoalaBear::permute_state(state)
+    fn permute_mut(&self, state: &mut [KoalaBear; WIDTH]) {
+        <DiffusionMatrixKoalaBear as Poseidon2Utils<KoalaBearParameters, WIDTH>>::permute_state(state)
     }
 }
 
-impl DiffusionPermutation<KoalaBear, 16> for DiffusionMatrixKoalaBear {}
-
-impl Permutation<[KoalaBear; 24]> for DiffusionMatrixKoalaBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; 24]) {
-        Poseidon2KoalaBear::permute_state(state)
-    }
+impl<const WIDTH: usize> DiffusionPermutation<KoalaBear, WIDTH> for DiffusionMatrixKoalaBear 
+where
+    DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>
+{
 }
-
-impl DiffusionPermutation<KoalaBear, 24> for DiffusionMatrixKoalaBear {}
 
 #[cfg(test)]
 mod tests {
