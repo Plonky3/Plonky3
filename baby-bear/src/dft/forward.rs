@@ -1,7 +1,8 @@
-use super::{split_at_mut_unchecked, Real, P};
-use crate::BabyBear;
 use p3_field::{AbstractField, TwoAdicField};
 use p3_util::log2_strict_usize;
+
+use super::{split_at_mut_unchecked, Real, P};
+use crate::BabyBear;
 
 // TODO: Consider following Hexl and storing the roots in a single
 // array in bit-reversed order, but with duplicates for certain roots
@@ -65,7 +66,6 @@ fn monty_reduce(x: u64) -> u32 {
     x_sub_u_hi.wrapping_add(corr)
 }
 
-// FIXME: Use this!
 #[inline(always)]
 pub fn partial_monty_reduce(u: u64) -> u32 {
     const PP: u32 = 0x78000001;
@@ -158,7 +158,7 @@ fn forward_4(a: &mut [Real]) {
 
     let t1 = P + a[1] - a[3];
     let t5 = a[1] + a[3];
-    let t3 = monty_reduce((t1 * ROOT) as u64) as i64;
+    let t3 = partial_monty_reduce((t1 * ROOT) as u64) as i64;
     let t4 = a[0] + a[2];
     let t2 = P + a[0] - a[2];
 
@@ -213,12 +213,36 @@ pub fn forward_64(a: &mut [Real]) {
     forward_32(a1);
 }
 
+#[inline(always)]
+pub fn forward_128(a: &mut [Real], roots: &[Real]) {
+    assert_eq!(a.len(), 128);
+
+    forward_pass(a, roots);
+
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+    forward_64(a0);
+    forward_64(a1);
+}
+
+#[inline(always)]
+pub fn forward_256(a: &mut [Real], root_table: &[Vec<i64>]) {
+    assert_eq!(a.len(), 256);
+
+    forward_pass(a, &root_table[0]);
+
+    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+    forward_128(a0, &root_table[1]);
+    forward_128(a1, &root_table[1]);
+}
+
 #[inline]
 pub fn forward_fft(a: &mut [Real], root_table: &[Vec<i64>]) {
     let n = a.len();
     assert!(1 << (root_table.len() + 1) == n);
 
     match n {
+        256 => forward_256(a, &root_table),
+        128 => forward_128(a, &root_table[0]),
         64 => forward_64(a),
         32 => forward_32(a),
         16 => forward_16(a),
