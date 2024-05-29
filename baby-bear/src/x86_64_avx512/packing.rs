@@ -27,10 +27,10 @@ mod tests {
     type P = PackedBabyBearAVX512;
 
     const fn array_from_valid_reps(vals: [u32; WIDTH]) -> [F; WIDTH] {
-        let mut res = [BabyBear { value: 0 }; WIDTH];
+        let mut res = [BabyBear::new_monty(0); WIDTH];
         let mut i = 0;
         while i < WIDTH {
-            res[i] = BabyBear { value: vals[i] };
+            res[i] = BabyBear::new_monty(vals[i]);
             i += 1;
         }
         res

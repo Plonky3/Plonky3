@@ -27,10 +27,10 @@ mod tests {
     type P = PackedKoalaBearAVX512;
 
     const fn array_from_valid_reps(vals: [u32; WIDTH]) -> [F; WIDTH] {
-        let mut res = [KoalaBear { value: 0 }; WIDTH];
+        let mut res = [KoalaBear::new_monty(0); WIDTH];
         let mut i = 0;
         while i < WIDTH {
-            res[i] = KoalaBear { value: vals[i] };
+            res[i] = KoalaBear::new_monty(vals[i]);
             i += 1;
         }
         res
