@@ -37,7 +37,7 @@ mod tests {
     }
 
     const fn packed_from_valid_reps(vals: [u32; WIDTH]) -> P {
-        PackedBabyBearAVX512(array_from_valid_reps(vals))
+        PackedMontyField31AVX512::<BabyBearParameters>(array_from_valid_reps(vals))
     }
 
     fn array_from_random(seed: u64) -> [F; WIDTH] {
@@ -46,7 +46,7 @@ mod tests {
     }
 
     fn packed_from_random(seed: u64) -> P {
-        PackedBabyBearAVX512(array_from_random(seed))
+        PackedMontyField31AVX512::<BabyBearParameters>(array_from_random(seed))
     }
 
     const SPECIAL_VALS: [F; WIDTH] = array_from_valid_reps([
@@ -307,8 +307,8 @@ mod tests {
         let arr = array_from_random(0xb0c7a5153103c5a8);
         let arr_inv = arr.map(|x| x.inverse());
 
-        let vec = PackedBabyBearAVX512(arr);
-        let vec_inv = PackedBabyBearAVX512(arr_inv);
+        let vec = PackedMontyField31AVX512::<BabyBearParameters>(arr);
+        let vec_inv = PackedMontyField31AVX512::<BabyBearParameters>(arr_inv);
 
         let res = vec * vec_inv;
         assert_eq!(res, P::one());
@@ -437,8 +437,8 @@ mod tests {
         let arr0 = array_from_random(0xac23b5a694dabf70);
         let arr1 = array_from_random(0xd249ec90e8a6e733);
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -451,8 +451,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x1e2b153f07b64cf3);
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -465,8 +465,8 @@ mod tests {
         let arr0 = array_from_random(0xfcf974ac7625a260);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 + vec1;
 
         for i in 0..WIDTH {
@@ -479,8 +479,8 @@ mod tests {
         let arr0 = array_from_random(0x167ce9d8e920876e);
         let arr1 = array_from_random(0x52ddcdd3461e046f);
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -493,8 +493,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x358498640bfe1375);
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -507,8 +507,8 @@ mod tests {
         let arr0 = array_from_random(0x05d81ebfb8f0005c);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 - vec1;
 
         for i in 0..WIDTH {
@@ -521,8 +521,8 @@ mod tests {
         let arr0 = array_from_random(0x4242ebdc09b74d77);
         let arr1 = array_from_random(0x9937b275b3c056cd);
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -535,8 +535,8 @@ mod tests {
         let arr0 = SPECIAL_VALS;
         let arr1 = array_from_random(0x5285448b835458a3);
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -549,8 +549,8 @@ mod tests {
         let arr0 = array_from_random(0x22508dc80001d865);
         let arr1 = SPECIAL_VALS;
 
-        let vec0 = PackedBabyBearAVX512(arr0);
-        let vec1 = PackedBabyBearAVX512(arr1);
+        let vec0 = PackedMontyField31AVX512::<BabyBearParameters>(arr0);
+        let vec1 = PackedMontyField31AVX512::<BabyBearParameters>(arr1);
         let vec_res = vec0 * vec1;
 
         for i in 0..WIDTH {
@@ -562,7 +562,7 @@ mod tests {
     fn test_neg_vs_scalar() {
         let arr = array_from_random(0xc3c273a9b334372f);
 
-        let vec = PackedBabyBearAVX512(arr);
+        let vec = PackedMontyField31AVX512::<BabyBearParameters>(arr);
         let vec_res = -vec;
 
         for i in 0..WIDTH {
@@ -574,7 +574,7 @@ mod tests {
     fn test_neg_vs_scalar_special_vals() {
         let arr = SPECIAL_VALS;
 
-        let vec = PackedBabyBearAVX512(arr);
+        let vec = PackedMontyField31AVX512::<BabyBearParameters>(arr);
         let vec_res = -vec;
 
         for i in 0..WIDTH {
