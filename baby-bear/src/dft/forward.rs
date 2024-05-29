@@ -100,6 +100,12 @@ fn reduce_4p(mut x: i64) -> i64 {
     x
 }
 
+#[inline(always)]
+fn butterfly(x: i64, y: i64, w: i64) -> (i64, i64) {
+    let t = P + x - y;
+    (reduce_2p(x + y), monty_reduce((t * w) as u64) as i64)
+}
+
 #[inline]
 fn forward_pass(a: &mut [Real], roots: &[Real]) {
     let half_n = a.len() / 2;
@@ -114,14 +120,7 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
     tail[0] = reduce_2p(P + x - y);
 
     for i in 1..half_n {
-        let w = roots[i - 1];
-        let x = top[i];
-        let y = tail[i];
-
-        top[i] = reduce_2p(x + y);
-
-        let t = P + x - y;
-        tail[i] = monty_reduce((t * w) as u64) as i64;
+        (top[i], tail[i]) = butterfly(top[i], tail[i], roots[i - 1]);
     }
 }
 
