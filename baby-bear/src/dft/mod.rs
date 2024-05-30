@@ -8,7 +8,7 @@ pub use crate::dft::forward::{forward_fft, roots_of_unity_table};
 // TODO: These are only pub for benches at the moment...
 //pub mod backward;
 
-type Real = i64;
+type Real = u32;
 const P: Real = 0x78000001;
 
 /// Copied from Rust nightly sources
@@ -38,7 +38,7 @@ pub(crate) unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut
 #[cfg(test)]
 mod tests {
     use core::iter::repeat_with;
-    use p3_field::{AbstractField, Field, PrimeField64};
+    use p3_field::{AbstractField, Field};
     use rand::{thread_rng, Rng};
 
     use super::{backward_fft, forward_fft, roots_of_unity_table};
@@ -64,7 +64,7 @@ mod tests {
 
     fn randcomplex() -> Real {
         let mut rng = thread_rng();
-        (rng.gen::<u32>() % (P as u32)) as i64
+        rng.gen::<u32>() % P
     }
 
     fn randvec(n: usize) -> Vec<Real> {
@@ -103,7 +103,7 @@ mod tests {
         loop {
             let root_table = roots_of_unity_table(len);
             let root = root_table[0][0];
-            let root_inv = BabyBear { value: root as u32 }.inverse().value as i64;
+            let root_inv = BabyBear { value: root }.inverse().value;
 
             for _ in 0..NITERS {
                 let us = randvec(len);
@@ -113,7 +113,10 @@ mod tests {
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);
 
-                assert!(us.iter().zip(ws).all(|(&u, w)| w == (u * len as i64) % P));
+                assert!(us
+                    .iter()
+                    .zip(ws)
+                    .all(|(&u, w)| w as u64 == (u as u64 * len as u64) % P as u64));
             }
             len *= 2;
             if len > 8192 {
@@ -129,7 +132,7 @@ mod tests {
         loop {
             let root_table = roots_of_unity_table(len);
             let root = root_table[0][0];
-            let root_inv = BabyBear { value: root as u32 }.inverse().value as i64;
+            let root_inv = BabyBear { value: root }.inverse().value;
 
             for _ in 0..NITERS {
                 let us = randvec(len);
@@ -145,8 +148,8 @@ mod tests {
                     .iter()
                     .zip(fft_vs)
                     .map(|(&u, v)| {
-                        let prod = BabyBear { value: u as u32 } * BabyBear { value: v as u32 };
-                        prod.value as i64
+                        let prod = BabyBear { value: u } * BabyBear { value: v };
+                        prod.value
                     })
                     .collect::<Vec<_>>();
 
@@ -154,22 +157,22 @@ mod tests {
 
                 let bus = us
                     .iter()
-                    .map(|&u| BabyBear { value: u as u32 })
+                    .map(|&u| BabyBear { value: u })
                     .collect::<Vec<_>>();
                 let bvs = vs
                     .iter()
-                    .map(|&v| BabyBear { value: v as u32 })
+                    .map(|&v| BabyBear { value: v })
                     .collect::<Vec<_>>();
                 let bconv = naive_convolve(&bus, &bvs);
                 let conv = bconv
                     .iter()
-                    .map(|&BabyBear { value }| value as i64)
+                    .map(|&BabyBear { value }| value)
                     .collect::<Vec<_>>();
 
                 assert!(conv
                     .iter()
                     .zip(pt_prods)
-                    .all(|(&c, p)| p == (c * len as i64) % P));
+                    .all(|(&c, p)| p as u64 == (c as u64 * len as u64) % P as u64));
             }
             len *= 2;
             if len > 8192 {
