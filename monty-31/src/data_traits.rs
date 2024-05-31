@@ -125,6 +125,7 @@ pub trait FieldParameters:
     + TwoAdicData
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
+    + crate::FieldParametersAVX2
     + crate::FieldParametersAVX512
 {
 }

@@ -113,7 +113,7 @@ impl<FP: FieldParameters> Neg for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Sub for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Sub for PackedMontyField31AVX2<FP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -294,42 +294,42 @@ fn sub<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
-impl<FP: FieldParameters>From<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> From<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     #[inline]
     fn from(value: MontyField31<FP>) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl<FP: FieldParameters>Default for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Default for PackedMontyField31AVX2<FP> {
     #[inline]
     fn default() -> Self {
         MontyField31::<FP>::default().into()
     }
 }
 
-impl<FP: FieldParameters>AddAssign for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> AddAssign for PackedMontyField31AVX2<FP> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<FP: FieldParameters>MulAssign for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> MulAssign for PackedMontyField31AVX2<FP> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl<FP: FieldParameters>SubAssign for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> SubAssign for PackedMontyField31AVX2<FP> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl<FP: FieldParameters>Sum for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Sum for PackedMontyField31AVX2<FP> {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -339,7 +339,7 @@ impl<FP: FieldParameters>Sum for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Product for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -349,7 +349,7 @@ impl<FP: FieldParameters>Product for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>AbstractField for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     type F = MontyField31<FP>;
 
     #[inline]
@@ -417,7 +417,7 @@ impl<FP: FieldParameters>AbstractField for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Add<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Add<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: MontyField31<FP>) -> Self {
@@ -425,7 +425,7 @@ impl<FP: FieldParameters>Add<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Mul<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Mul<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: MontyField31<FP>) -> Self {
@@ -433,7 +433,7 @@ impl<FP: FieldParameters>Mul<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Sub<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Sub<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: MontyField31<FP>) -> Self {
@@ -441,28 +441,28 @@ impl<FP: FieldParameters>Sub<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>AddAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> AddAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     #[inline]
     fn add_assign(&mut self, rhs: MontyField31<FP>) {
         *self += Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters>MulAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> MulAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     #[inline]
     fn mul_assign(&mut self, rhs: MontyField31<FP>) {
         *self *= Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters>SubAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> SubAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     #[inline]
     fn sub_assign(&mut self, rhs: MontyField31<FP>) {
         *self -= Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters>Sum<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Sum<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -472,7 +472,7 @@ impl<FP: FieldParameters>Sum<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Product<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Product<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -482,7 +482,7 @@ impl<FP: FieldParameters>Product<MontyField31<FP>> for PackedMontyField31AVX2<FP
     }
 }
 
-impl<FP: FieldParameters>Div<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
@@ -491,7 +491,7 @@ impl<FP: FieldParameters>Div<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters>Add<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
+impl<FP: FieldParameters> Add<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
     type Output = PackedMontyField31AVX2<FP>;
     #[inline]
     fn add(self, rhs: PackedMontyField31AVX2<FP>) -> PackedMontyField31AVX2<FP> {
@@ -499,7 +499,7 @@ impl<FP: FieldParameters>Add<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters>Mul<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
+impl<FP: FieldParameters> Mul<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
     type Output = PackedMontyField31AVX2<FP>;
     #[inline]
     fn mul(self, rhs: PackedMontyField31AVX2<FP>) -> PackedMontyField31AVX2<FP> {
@@ -507,7 +507,7 @@ impl<FP: FieldParameters>Mul<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters>Sub<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
+impl<FP: FieldParameters> Sub<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
     type Output = PackedMontyField31AVX2<FP>;
     #[inline]
     fn sub(self, rhs: PackedMontyField31AVX2<FP>) -> PackedMontyField31AVX2<FP> {
@@ -515,7 +515,7 @@ impl<FP: FieldParameters>Sub<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters>Distribution<PackedMontyField31AVX2<FP>> for Standard {
+impl<FP: FieldParameters> Distribution<PackedMontyField31AVX2<FP>> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<FP> {
         PackedMontyField31AVX2::<FP>(rng.gen())
@@ -617,7 +617,7 @@ fn interleave4(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
     }
 }
 
-unsafe impl<FP: FieldParameters>PackedValue for PackedMontyField31AVX2<FP> {
+unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX2<FP> {
     type Value = MontyField31<FP>;
 
     const WIDTH: usize = WIDTH;
