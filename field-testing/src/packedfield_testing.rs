@@ -1,5 +1,5 @@
 use p3_field::{Field, PackedField, PackedValue};
-use core::{array, usize};
+use core::array;
 
 
 pub trait PackedTestingHelpers<const WIDTH: usize, F, PF>
