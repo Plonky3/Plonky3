@@ -719,12 +719,12 @@ unsafe impl PackedField for PackedBabyBearNeon {
 
 #[cfg(test)]
 mod tests {
+    use p3_field_testing::{test_packed_field, PackedTestingHelpers};
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
-    use p3_field_testing::{PackedTestingHelpers, test_packed_field};
-    use crate::to_babybear_array;
 
     use super::*;
+    use crate::to_babybear_array;
 
     type F = BabyBear;
     type P = PackedBabyBearNeon;
@@ -747,16 +747,22 @@ mod tests {
 
         const ZEROS: [F; WIDTH] = to_babybear_array([0x00000000; WIDTH]);
 
-        const SPECIAL_VALS: [F; WIDTH] = to_babybear_array([
-            0x00000000, 0x00000001, 0x00000002, 0x78000000,
-        ]);
+        const SPECIAL_VALS: [F; WIDTH] =
+            to_babybear_array([0x00000000, 0x00000001, 0x00000002, 0x78000000]);
     }
 
-    test_packed_field!({ super::WIDTH }, crate::BabyBear, crate::PackedBabyBearAVX2, super::PackedTestingBabyBear);
+    test_packed_field!(
+        { super::WIDTH },
+        crate::BabyBear,
+        crate::PackedBabyBearAVX2,
+        super::PackedTestingBabyBear
+    );
 
     #[test]
     fn test_cube_vs_mul() {
-        let vec = PackedBabyBearNeon(to_koalabear_array([0x4efd5eaf, 0x311b8e0c, 0x74dd27c1, 0x449613f0]));
+        let vec = PackedBabyBearNeon(to_koalabear_array([
+            0x4efd5eaf, 0x311b8e0c, 0x74dd27c1, 0x449613f0,
+        ]));
         let res0 = vec * vec.square();
         let res1 = vec.cube();
         assert_eq!(res0, res1);
@@ -764,7 +770,9 @@ mod tests {
 
     #[test]
     fn test_cube_vs_scalar() {
-        let arr = PackedBabyBearNeon(to_koalabear_array([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]));
+        let arr = PackedBabyBearNeon(to_koalabear_array([
+            0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6,
+        ]));
 
         let vec = PackedBabyBearNeon(arr);
         let vec_res = vec.cube();

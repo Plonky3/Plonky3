@@ -8,14 +8,13 @@ pub mod bench_func;
 pub mod packedfield_testing;
 
 pub use bench_func::*;
-pub use packedfield_testing::*;
-
 use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
     two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
 };
+pub use packedfield_testing::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 

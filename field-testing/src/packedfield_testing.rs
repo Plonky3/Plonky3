@@ -1,11 +1,11 @@
-use p3_field::{Field, PackedField, PackedValue};
 use core::array;
 
+use p3_field::{Field, PackedField, PackedValue};
 
 pub trait PackedTestingHelpers<const WIDTH: usize, F, PF>
 where
     F: Field,
-    PF: PackedField<Scalar = F> + PackedValue
+    PF: PackedField<Scalar = F> + PackedValue,
 {
     fn packed_from_valid_reps(vals: [u32; WIDTH]) -> PF;
     fn array_from_random(seed: u64) -> [F; WIDTH];
@@ -16,11 +16,15 @@ where
 }
 
 /// Interleave arr1 and arr2 using chuncks of size i.
-fn interleave<const WIDTH: usize>(arr1: [u32; WIDTH], arr2: [u32; WIDTH], i: usize) -> ([u32; WIDTH], [u32; WIDTH]) {
-    assert!(WIDTH%i == 0);
+fn interleave<const WIDTH: usize>(
+    arr1: [u32; WIDTH],
+    arr2: [u32; WIDTH],
+    i: usize,
+) -> ([u32; WIDTH], [u32; WIDTH]) {
+    assert!(WIDTH % i == 0);
 
     if i == WIDTH {
-        return (arr1, arr2)
+        return (arr1, arr2);
     }
 
     let mut outleft = [0_u32; WIDTH];
@@ -28,15 +32,14 @@ fn interleave<const WIDTH: usize>(arr1: [u32; WIDTH], arr2: [u32; WIDTH], i: usi
 
     let mut flag = false;
 
-    for j in 0..WIDTH{
-        if j%i == 0 {
+    for j in 0..WIDTH {
+        if j % i == 0 {
             flag = !flag;
         }
         if flag {
             outleft[j] = arr1[j];
             outleft[j + i] = arr2[j];
-        }
-        else {
+        } else {
             outright[j - i] = arr1[j];
             outright[j] = arr2[j];
         }
@@ -51,7 +54,7 @@ where
     PF: PackedField<Scalar = F> + PackedValue + Eq,
     PTH: PackedTestingHelpers<WIDTH, F, PF>,
 {
-    assert!(WIDTH%i == 0);
+    assert!(WIDTH % i == 0);
 
     let arr1 = array::from_fn(|i| i as u32);
     let arr2 = array::from_fn(|i| (WIDTH + i) as u32);
@@ -64,9 +67,17 @@ where
 
     let expected0 = PTH::packed_from_valid_reps(out1);
     let expected1 = PTH::packed_from_valid_reps(out2);
-    
-    assert_eq!(res0, expected0, "Error in left output when testing interleave {}.", i);
-    assert_eq!(res1, expected1, "Error in right output when testing interleave {}.", i);
+
+    assert_eq!(
+        res0, expected0,
+        "Error in left output when testing interleave {}.",
+        i
+    );
+    assert_eq!(
+        res1, expected1,
+        "Error in right output when testing interleave {}.",
+        i
+    );
 }
 
 pub fn test_interleaves<const WIDTH: usize, F, PF, PTH>()
@@ -94,22 +105,61 @@ where
     let vec2 = PTH::packed_from_random(0x5806c495e9451f8e);
     let zeros = *(PF::from_slice(&PTH::ZEROS));
 
-    assert_eq!((vec0 + vec1) + vec2, vec0 + (vec1 + vec2), "Error when testing associativity of add.");
-    assert_eq!(vec0 + vec1, vec1 + vec0, "Error when testing commutativity of add.");
-    assert_eq!(vec0, vec0 + zeros, "Error when testing additive identity right.");
-    assert_eq!(vec0, zeros + vec0, "Error when testing additive identity left.");
-    assert_eq!(vec0 + (-vec0), PF::zero(), "Error when testing additive inverse.");
-    assert_eq!(vec0 - vec0, PF::zero(), "Error when testing subtracting of self.");
-    assert_eq!(vec0 - vec1, -(vec1 - vec0), "Error when testing anticommutativity of sub.");
+    assert_eq!(
+        (vec0 + vec1) + vec2,
+        vec0 + (vec1 + vec2),
+        "Error when testing associativity of add."
+    );
+    assert_eq!(
+        vec0 + vec1,
+        vec1 + vec0,
+        "Error when testing commutativity of add."
+    );
+    assert_eq!(
+        vec0,
+        vec0 + zeros,
+        "Error when testing additive identity right."
+    );
+    assert_eq!(
+        vec0,
+        zeros + vec0,
+        "Error when testing additive identity left."
+    );
+    assert_eq!(
+        vec0 + (-vec0),
+        PF::zero(),
+        "Error when testing additive inverse."
+    );
+    assert_eq!(
+        vec0 - vec0,
+        PF::zero(),
+        "Error when testing subtracting of self."
+    );
+    assert_eq!(
+        vec0 - vec1,
+        -(vec1 - vec0),
+        "Error when testing anticommutativity of sub."
+    );
     assert_eq!(vec0, vec0 - zeros, "Error when testing subtracting zero.");
-    assert_eq!(-vec0, zeros - vec0, "Error when testing subtracting from zero");
+    assert_eq!(
+        -vec0,
+        zeros - vec0,
+        "Error when testing subtracting from zero"
+    );
     assert_eq!(vec0, -(-vec0), "Error when testing double negation");
-    assert_eq!(vec0 - vec1, vec0 + (-vec1), "Error when testing addition of negation");
+    assert_eq!(
+        vec0 - vec1,
+        vec0 + (-vec1),
+        "Error when testing addition of negation"
+    );
     assert_eq!(PF::one() + PF::one(), PF::two(), "Error 1 + 1 =/= 2");
     assert_eq!(PF::neg_one() + PF::two(), PF::one(), "Error -1 + 2 =/= 1");
-    assert_eq!(vec0.double(), vec0 + vec0, "Error when comparing x.double() to x + x");
+    assert_eq!(
+        vec0.double(),
+        vec0 + vec0,
+        "Error when comparing x.double() to x + x"
+    );
 }
-
 
 #[allow(clippy::eq_op)]
 pub fn test_mul<const WIDTH: usize, F, PF, PTH>()
@@ -123,15 +173,51 @@ where
     let vec2 = PTH::packed_from_random(0x08fac4ee76260e44);
     let zeros = *(PF::from_slice(&PTH::ZEROS));
 
-    assert_eq!((vec0 * vec1) * vec2, vec0 * (vec1 * vec2), "Error when testing associativity of mul.");
-    assert_eq!(vec0 * vec1, vec1 * vec0, "Error when testing commutativity of mul.");
-    assert_eq!(vec0, vec0 * PF::one(), "Error when testing multiplicative identity right.");
-    assert_eq!(vec0, PF::one() *  vec0, "Error when testing multiplicative identity left.");
-    assert_eq!(vec0 * zeros, PF::zero(), "Error when testing right multiplication by 0.");
-    assert_eq!(zeros * vec0, PF::zero(), "Error when testing left multiplication by 0.");
-    assert_eq!(vec0 * PF::neg_one(), -(vec0), "Error when testing right multiplication by -1.");
-    assert_eq!(PF::neg_one() * vec0, -(vec0), "Error when testing left multiplication by -1.");
-    assert_eq!(vec0.double(), PF::two() * vec0, "Error when comparing x.double() to 2 * x");
+    assert_eq!(
+        (vec0 * vec1) * vec2,
+        vec0 * (vec1 * vec2),
+        "Error when testing associativity of mul."
+    );
+    assert_eq!(
+        vec0 * vec1,
+        vec1 * vec0,
+        "Error when testing commutativity of mul."
+    );
+    assert_eq!(
+        vec0,
+        vec0 * PF::one(),
+        "Error when testing multiplicative identity right."
+    );
+    assert_eq!(
+        vec0,
+        PF::one() * vec0,
+        "Error when testing multiplicative identity left."
+    );
+    assert_eq!(
+        vec0 * zeros,
+        PF::zero(),
+        "Error when testing right multiplication by 0."
+    );
+    assert_eq!(
+        zeros * vec0,
+        PF::zero(),
+        "Error when testing left multiplication by 0."
+    );
+    assert_eq!(
+        vec0 * PF::neg_one(),
+        -(vec0),
+        "Error when testing right multiplication by -1."
+    );
+    assert_eq!(
+        PF::neg_one() * vec0,
+        -(vec0),
+        "Error when testing left multiplication by -1."
+    );
+    assert_eq!(
+        vec0.double(),
+        PF::two() * vec0,
+        "Error when comparing x.double() to 2 * x"
+    );
 }
 
 #[allow(clippy::eq_op)]
@@ -145,13 +231,37 @@ where
     let vec1 = PTH::packed_from_random(0xf04cbac0cbad419f);
     let vec2 = PTH::packed_from_random(0x76976e2abdc5a056);
 
-    assert_eq!(vec0 * (-vec1), -(vec0 * vec1), "Error when testing distributivity of mul and right neg.");
-    assert_eq!((-vec0) * vec1, -(vec0 * vec1), "Error when testing distributivity of mul and left neg.");
+    assert_eq!(
+        vec0 * (-vec1),
+        -(vec0 * vec1),
+        "Error when testing distributivity of mul and right neg."
+    );
+    assert_eq!(
+        (-vec0) * vec1,
+        -(vec0 * vec1),
+        "Error when testing distributivity of mul and left neg."
+    );
 
-    assert_eq!(vec0 * (vec1 + vec2), vec0 * vec1 + vec0 * vec2, "Error when testing distributivity of add and left mul.");
-    assert_eq!((vec0 + vec1) * vec2, vec0 * vec2 + vec1 * vec2, "Error when testing distributivity of add and right mul.");
-    assert_eq!(vec0 * (vec1 - vec2), vec0 * vec1 - vec0 * vec2, "Error when testing distributivity of sub and left mul.");
-    assert_eq!((vec0 - vec1) * vec2, vec0 * vec2 - vec1 * vec2, "Error when testing distributivity of sub and right mul.");
+    assert_eq!(
+        vec0 * (vec1 + vec2),
+        vec0 * vec1 + vec0 * vec2,
+        "Error when testing distributivity of add and left mul."
+    );
+    assert_eq!(
+        (vec0 + vec1) * vec2,
+        vec0 * vec2 + vec1 * vec2,
+        "Error when testing distributivity of add and right mul."
+    );
+    assert_eq!(
+        vec0 * (vec1 - vec2),
+        vec0 * vec1 - vec0 * vec2,
+        "Error when testing distributivity of sub and left mul."
+    );
+    assert_eq!(
+        (vec0 - vec1) * vec2,
+        vec0 * vec2 - vec1 * vec2,
+        "Error when testing distributivity of sub and right mul."
+    );
 }
 
 #[allow(clippy::eq_op)]
@@ -213,12 +323,11 @@ where
 }
 
 pub fn test_multiplicative_inverse<const WIDTH: usize, F, PF, PTH>()
-    where
-        F: Field,
-        PF: PackedField<Scalar = F> + PackedValue + Eq,
-        PTH: PackedTestingHelpers<WIDTH, F, PF>,
-    {
-
+where
+    F: Field,
+    PF: PackedField<Scalar = F> + PackedValue + Eq,
+    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+{
     let arr = PTH::array_from_random(0xb0c7a5153103c5a8);
     let arr_inv = arr.map(|x| x.inverse());
 

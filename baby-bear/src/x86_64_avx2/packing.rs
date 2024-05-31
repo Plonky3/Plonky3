@@ -668,12 +668,12 @@ unsafe impl PackedField for PackedBabyBearAVX2 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field_testing::{test_packed_field, PackedTestingHelpers};
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
-    use p3_field_testing::{PackedTestingHelpers, test_packed_field};
-    use crate::to_babybear_array;
 
     use super::*;
+    use crate::to_babybear_array;
 
     type F = BabyBear;
     type P = PackedBabyBearAVX2;
@@ -702,5 +702,10 @@ mod tests {
         ]);
     }
 
-    test_packed_field!({ super::WIDTH }, crate::BabyBear, crate::PackedBabyBearAVX2, super::PackedTestingBabyBear);
+    test_packed_field!(
+        { super::WIDTH },
+        crate::BabyBear,
+        crate::PackedBabyBearAVX2,
+        super::PackedTestingBabyBear
+    );
 }
