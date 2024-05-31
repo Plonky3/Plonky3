@@ -7,12 +7,11 @@ where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue
 {
-    fn array_from_valid_reps(vals: [u32; WIDTH]) -> [F; WIDTH];
     fn packed_from_valid_reps(vals: [u32; WIDTH]) -> PF;
     fn array_from_random(seed: u64) -> [F; WIDTH];
     fn packed_from_random(seed: u64) -> PF;
 
-    const ZEROS: [F; WIDTH]; // Some fields have multiple representations for 0. Need to test both.
+    const ZEROS: [F; WIDTH]; // Some fields might have multiple representations for 0.
     const SPECIAL_VALS: [F; WIDTH]; // Let the user specify some particular values which could lead to errors.
 }
 

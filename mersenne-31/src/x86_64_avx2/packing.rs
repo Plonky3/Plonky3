@@ -656,12 +656,8 @@ mod tests {
     struct PackedTestingMersenne31 {}
 
     impl PackedTestingHelpers<WIDTH, F, P> for PackedTestingMersenne31 {
-        fn array_from_valid_reps(vals: [u32; WIDTH]) -> [F; WIDTH] {
-            to_mersenne31_array(vals)
-        }
-    
         fn packed_from_valid_reps(vals: [u32; WIDTH]) -> P {
-            PackedMersenne31AVX2(Self::array_from_valid_reps(vals))
+            PackedMersenne31AVX2(to_mersenne31_array(vals))
         }
     
         fn array_from_random(seed: u64) -> [F; WIDTH] {
