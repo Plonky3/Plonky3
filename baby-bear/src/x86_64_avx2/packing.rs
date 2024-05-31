@@ -702,5 +702,5 @@ mod tests {
         ]);
     }
 
-        test_packed_field!({ super::WIDTH }, crate::BabyBear, crate::PackedBabyBearAVX2, super::PackedTestingBabyBear);
+    test_packed_field!({ super::WIDTH }, crate::BabyBear, crate::PackedBabyBearAVX2, super::PackedTestingBabyBear);
 }

@@ -693,7 +693,6 @@ mod tests {
             PackedKoalaBearAVX2(Self::array_from_random(seed))
         }
     
-        /// Zero has a redundant representation, so let's test both.
         const ZEROS: [F; WIDTH] = to_koalabear_array([0x00000000; WIDTH]);
     
         const SPECIAL_VALS: [F; WIDTH] = to_koalabear_array([
