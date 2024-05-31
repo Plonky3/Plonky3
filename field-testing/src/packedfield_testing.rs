@@ -11,7 +11,9 @@ where
     fn packed_from_valid_reps(vals: [u32; WIDTH]) -> PF;
     fn array_from_random(seed: u64) -> [F; WIDTH];
     fn packed_from_random(seed: u64) -> PF;
-    const SPECIAL_VALS: [F; WIDTH];
+
+    const ZEROS: [F; WIDTH]; // Some fields have multiple representations for 0. Need to test both.
+    const SPECIAL_VALS: [F; WIDTH]; // Let the user specify some particular values which could lead to errors.
 }
 
 /// Interleave arr1 and arr2 using chuncks of size i.
@@ -44,7 +46,7 @@ fn interleave<const WIDTH: usize>(arr1: [u32; WIDTH], arr2: [u32; WIDTH], i: usi
     (outleft, outright)
 }
 
-pub fn test_interleave<const WIDTH: usize, F, PF, PTH>(i: usize)
+fn test_interleave<const WIDTH: usize, F, PF, PTH>(i: usize)
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
@@ -57,15 +59,28 @@ where
 
     let vec0 = PTH::packed_from_valid_reps(arr1);
     let vec1 = PTH::packed_from_valid_reps(arr2);
-    let (res0, res1) = vec0.interleave(vec1, 1);
+    let (res0, res1) = vec0.interleave(vec1, i);
 
     let (out1, out2) = interleave(arr1, arr2, i);
 
     let expected0 = PTH::packed_from_valid_reps(out1);
     let expected1 = PTH::packed_from_valid_reps(out2);
     
-    assert_eq!(res0, expected0);
-    assert_eq!(res1, expected1);
+    assert_eq!(res0, expected0, "Error in left output when testing interleave {}.", i);
+    assert_eq!(res1, expected1, "Error in right output when testing interleave {}.", i);
+}
+
+pub fn test_interleaves<const WIDTH: usize, F, PF, PTH>()
+where
+    F: Field,
+    PF: PackedField<Scalar = F> + PackedValue + Eq,
+    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+{
+    let mut i = 1;
+    while i <= WIDTH {
+        test_interleave::<WIDTH, F, PF, PTH>(i);
+        i *= 2;
+    }
 }
 
 #[allow(clippy::eq_op)]
@@ -78,16 +93,17 @@ where
     let vec0 = PTH::packed_from_random(0x8b078c2b693c893f);
     let vec1 = PTH::packed_from_random(0x4ff5dec04791e481);
     let vec2 = PTH::packed_from_random(0x5806c495e9451f8e);
+    let zeros = *(PF::from_slice(&PTH::ZEROS));
 
     assert_eq!((vec0 + vec1) + vec2, vec0 + (vec1 + vec2), "Error when testing associativity of add.");
     assert_eq!(vec0 + vec1, vec1 + vec0, "Error when testing commutativity of add.");
-    assert_eq!(vec0, vec0 + PF::zero(), "Error when testing additive identity right.");
-    assert_eq!(vec0, PF::zero() + vec0, "Error when testing additive identity left.");
+    assert_eq!(vec0, vec0 + zeros, "Error when testing additive identity right.");
+    assert_eq!(vec0, zeros + vec0, "Error when testing additive identity left.");
     assert_eq!(vec0 + (-vec0), PF::zero(), "Error when testing additive inverse.");
     assert_eq!(vec0 - vec0, PF::zero(), "Error when testing subtracting of self.");
     assert_eq!(vec0 - vec1, -(vec1 - vec0), "Error when testing anticommutativity of sub.");
-    assert_eq!(vec0, vec0 - PF::zero(), "Error when testing subtracting zero.");
-    assert_eq!(-vec0, PF::zero() - vec0, "Error when testing subtracting from zero");
+    assert_eq!(vec0, vec0 - zeros, "Error when testing subtracting zero.");
+    assert_eq!(-vec0, zeros - vec0, "Error when testing subtracting from zero");
     assert_eq!(vec0, -(-vec0), "Error when testing double negation");
     assert_eq!(vec0 - vec1, vec0 + (-vec1), "Error when testing addition of negation");
     assert_eq!(PF::one() + PF::one(), PF::two(), "Error 1 + 1 =/= 2");
@@ -106,13 +122,14 @@ where
     let vec0 = PTH::packed_from_random(0x0b1ee4d7c979d50c);
     let vec1 = PTH::packed_from_random(0x39faa0844a36e45a);
     let vec2 = PTH::packed_from_random(0x08fac4ee76260e44);
+    let zeros = *(PF::from_slice(&PTH::ZEROS));
 
     assert_eq!((vec0 * vec1) * vec2, vec0 * (vec1 * vec2), "Error when testing associativity of mul.");
     assert_eq!(vec0 * vec1, vec1 * vec0, "Error when testing commutativity of mul.");
     assert_eq!(vec0, vec0 * PF::one(), "Error when testing multiplicative identity right.");
     assert_eq!(vec0, PF::one() *  vec0, "Error when testing multiplicative identity left.");
-    assert_eq!(vec0 * PF::zero(), PF::zero(), "Error when testing right multiplication by 0.");
-    assert_eq!(PF::zero() * vec0, PF::zero(), "Error when testing left multiplication by 0.");
+    assert_eq!(vec0 * zeros, PF::zero(), "Error when testing right multiplication by 0.");
+    assert_eq!(zeros * vec0, PF::zero(), "Error when testing left multiplication by 0.");
     assert_eq!(vec0 * PF::neg_one(), -(vec0), "Error when testing right multiplication by -1.");
     assert_eq!(PF::neg_one() * vec0, -(vec0), "Error when testing left multiplication by -1.");
     assert_eq!(vec0.double(), PF::two() * vec0, "Error when comparing x.double() to 2 * x");
@@ -211,4 +228,36 @@ pub fn test_multiplicative_inverse<const WIDTH: usize, F, PF, PTH>()
 
     let res = vec * vec_inv;
     assert_eq!(res, PF::one());
+}
+
+#[macro_export]
+macro_rules! test_packed_field {
+    ($width:expr, $field:ty, $packedfield:ty, $helper:ty) => {
+        mod packed_field_tests {
+            #[test]
+            fn test_interleaves() {
+                $crate::test_interleaves::<$width, $field, $packedfield, $helper>();
+            }
+            #[test]
+            fn test_add_neg() {
+                $crate::test_add_neg::<$width, $field, $packedfield, $helper>();
+            }
+            #[test]
+            fn test_mul() {
+                $crate::test_mul::<$width, $field, $packedfield, $helper>();
+            }
+            #[test]
+            fn test_distributivity() {
+                $crate::test_distributivity::<$width, $field, $packedfield, $helper>();
+            }
+            #[test]
+            fn test_vs_scalar() {
+                $crate::test_vs_scalar::<$width, $field, $packedfield, $helper>();
+            }
+            #[test]
+            fn test_multiplicative_inverse() {
+                $crate::test_multiplicative_inverse::<$width, $field, $packedfield, $helper>();
+            }
+        }
+    };
 }
