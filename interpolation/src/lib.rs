@@ -15,6 +15,8 @@ use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
 /// the polynomials at `point`.
+///
+/// This assumes the point is not in the subgroup, otherwise the behavior is undefined.
 pub fn interpolate_subgroup<F, EF, Mat>(subgroup_evals: &Mat, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
@@ -26,6 +28,8 @@ where
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two
 /// subgroup, evaluate the polynomials at `point`.
+///
+/// This assumes the point is not in the coset, otherwise the behavior is undefined.
 pub fn interpolate_coset<F, EF, Mat>(coset_evals: &Mat, shift: F, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
