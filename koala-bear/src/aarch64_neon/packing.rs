@@ -764,14 +764,12 @@ mod tests {
 
     #[test]
     fn test_cube_vs_scalar_special_vals() {
-        let arr = [F::zero(), F::one(), F::two(), F::neg_one()];
-
-        let vec = PackedKoalaBearNeon(arr);
+        let vec = PackedKoalaBearNeon(SPECIAL_VALS);
         let vec_res = vec.cube();
 
         #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
-            assert_eq!(vec_res.0[i], arr[i].cube());
+            assert_eq!(vec_res.0[i], SPECIAL_VALS[i].cube());
         }
     }
 }

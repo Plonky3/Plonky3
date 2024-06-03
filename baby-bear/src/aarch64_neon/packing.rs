@@ -724,9 +724,9 @@ mod tests {
     use super::{BabyBear, PackedBabyBearNeon, WIDTH};
     use crate::to_babybear_array;
 
-    const ZEROS: [F; WIDTH] = to_babybear_array([0x00000000; WIDTH]);
+    const ZEROS: [BabyBear; WIDTH] = to_babybear_array([0x00000000; WIDTH]);
 
-    const SPECIAL_VALS: [F; WIDTH] =
+    const SPECIAL_VALS: [BabyBear; WIDTH] =
         to_babybear_array([0x00000000, 0x00000001, 0x00000002, 0x78000000]);
 
     test_packed_field!(
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_cube_vs_mul() {
-        let vec = PackedBabyBearNeon(to_koalabear_array([
+        let vec = PackedBabyBearNeon(to_babybear_array([
             0x4efd5eaf, 0x311b8e0c, 0x74dd27c1, 0x449613f0,
         ]));
         let res0 = vec * vec.square();
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_cube_vs_scalar() {
-        let arr = PackedBabyBearNeon(to_koalabear_array([
+        let arr = PackedBabyBearNeon(to_babybear_array([
             0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6,
         ]));
 
@@ -764,14 +764,12 @@ mod tests {
 
     #[test]
     fn test_cube_vs_scalar_special_vals() {
-        let arr = [F::zero(), F::one(), F::two(), F::neg_one()];
-
-        let vec = PackedBabyBearNeon(arr);
+        let vec = PackedBabyBearNeon(SPECIAL_VALS);
         let vec_res = vec.cube();
 
         #[allow(clippy::needless_range_loop)]
         for i in 0..WIDTH {
-            assert_eq!(vec_res.0[i], arr[i].cube());
+            assert_eq!(vec_res.0[i], SPECIAL_VALS[i].cube());
         }
     }
 }
