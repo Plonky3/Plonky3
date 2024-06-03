@@ -22,7 +22,7 @@ fn transpose_benchmark(c: &mut Criterion) {
     const HEIGHT_1024: usize = 1024;
 
     let matrix_1024x1024 = RowMajorMatrix::new(vec![0; WIDTH_1024 * HEIGHT_1024], WIDTH_1024);
-    c.bench_function("transpose 1024x124", |b| {
+    c.bench_function("transpose 1024x1024", |b| {
         b.iter(|| matrix_1024x1024.clone().transpose())
     });
 

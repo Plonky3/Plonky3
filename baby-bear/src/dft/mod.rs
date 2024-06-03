@@ -3,7 +3,7 @@ mod backward;
 mod forward;
 
 pub use crate::dft::backward::backward_fft;
-pub use crate::dft::forward::{forward_fft, roots_of_unity_table};
+pub use crate::dft::forward::{forward_fft, four_step_fft, roots_of_unity_table};
 
 // TODO: These are only pub for benches at the moment...
 //pub mod backward;
@@ -38,14 +38,13 @@ pub(crate) unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut
 #[cfg(test)]
 mod tests {
     use core::iter::repeat_with;
+
     use p3_field::{AbstractField, Field};
     use rand::{thread_rng, Rng};
 
-    use super::{backward_fft, forward_fft, roots_of_unity_table};
-    use crate::{
-        dft::{Real, P},
-        BabyBear,
-    };
+    use super::{backward_fft, forward_fft, four_step_fft, roots_of_unity_table};
+    use crate::dft::{Real, P};
+    use crate::BabyBear;
 
     fn naive_convolve(us: &[BabyBear], vs: &[BabyBear]) -> Vec<BabyBear> {
         let n = us.len();
@@ -71,30 +70,37 @@ mod tests {
         repeat_with(randcomplex).take(n).collect::<Vec<_>>()
     }
 
-    /*
     #[test]
-    fn test_forward_8() {
-        const NITERS: usize = 100;
-        let len = 8;
-        let roots = roots_of_unity_vector::<BabyBear>(len);
-        let root = roots[1];
+    fn test_forward_16() {
+        const NITERS: usize = 1; //100;
+        let len = 16;
+        let root_table = roots_of_unity_table(len);
 
         for _ in 0..NITERS {
             let us = randvec(len);
+            /*
+            //let us = vec![0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+            // monty form of [0..16)
+            let us = vec![
+                0, 268435454, 536870908, 805306362, 1073741816, 1342177270, 1610612724, 1879048178,
+                134217711, 402653165, 671088619, 939524073, 1207959527, 1476394981, 1744830435,
+                2013265889,
+            ];
+            */
+
             let mut vs = us.clone();
-            forward_fft(&mut vs, root);
+            forward_fft(&mut vs, &root_table);
 
             let mut ws = us.clone();
-            forward_8(&mut ws, &roots[1..4]);
+            four_step_fft(&mut ws, &root_table);
 
-            println!("roots = {:?}", roots);
+            println!("roots = {:?}", root_table);
             println!("us = {:?}", us);
             println!("vs = {:?}", vs);
             println!("ws = {:?}", ws);
             assert!(vs.iter().zip(ws).all(|(&v, w)| v == w));
         }
     }
-    */
 
     #[test]
     fn forward_backward_is_identity() {

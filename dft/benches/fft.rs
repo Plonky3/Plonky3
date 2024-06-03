@@ -21,6 +21,7 @@ fn bench_fft(c: &mut Criterion) {
     const BATCH_SIZE: usize = 100;
 
     baby_bear_fft::<BATCH_SIZE>(c, log_sizes);
+    four_step_fft::<BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
@@ -60,6 +61,29 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
             b.iter(|| {
                 p3_baby_bear::dft::forward_fft(&mut u, &root_table);
+            });
+        });
+    }
+}
+
+fn four_step_fft<const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+where
+    Standard: Distribution<i64>,
+{
+    let mut group = c.benchmark_group(&format!("fs_fft::<{}>", BATCH_SIZE));
+    group.sample_size(10);
+
+    let mut rng = thread_rng();
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+        let root_table = p3_baby_bear::dft::roots_of_unity_table(n);
+
+        let mut u: Vec<u32> = Standard.sample_iter(&mut rng).take(n).collect();
+
+        let i = 0;
+        group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
+            b.iter(|| {
+                p3_baby_bear::dft::four_step_fft(&mut u, &root_table);
             });
         });
     }

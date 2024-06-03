@@ -1,5 +1,6 @@
 use p3_field::{AbstractField, TwoAdicField};
-use p3_util::log2_strict_usize;
+use p3_maybe_rayon::prelude::*;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use super::{split_at_mut_unchecked, Real, P};
 use crate::BabyBear;
@@ -26,9 +27,11 @@ const MONTY_ROOTS64: [u32; 31] = [
     12128229, 48337049, 377028776, 270522423, 1626304099, 434501889, 741605237,
 ];
 
+/// FIXME: The (i-1)th vector contains the roots...
 pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Real>> {
     let lg_n = log2_strict_usize(n);
     let half_n = 1 << (lg_n - 1);
+    // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
     let nth_roots: Vec<_> = BabyBear::two_adic_generator(lg_n)
         .powers()
         .take(half_n)
@@ -125,6 +128,16 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
     for i in 1..half_n {
         (top[i], tail[i]) = butterfly(top[i], tail[i], roots[i - 1]);
     }
+}
+
+#[inline(always)]
+fn forward_2(a: &mut [Real]) {
+    assert_eq!(a.len(), 2);
+
+    let s = reduce_2p(a[0] + a[1]);
+    let t = reduce_2p(P + a[0] - a[1]);
+    a[0] = s;
+    a[1] = t;
 }
 
 #[inline(always)]
@@ -227,6 +240,7 @@ pub fn forward_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
         16 => forward_16(a),
         8 => forward_8(a),
         4 => forward_4(a),
+        2 => forward_2(a),
         _ => {
             debug_assert!(n > 64);
             forward_pass(a, &root_table[0]);
@@ -236,4 +250,132 @@ pub fn forward_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
             forward_fft(a1, &root_table[1..]);
         }
     }
+}
+
+/// Square root of an integer
+/// Source: https://en.wikipedia.org/wiki/Integer_square_root#Using_only_integer_division
+#[inline]
+fn _isqrt(s: usize) -> usize {
+    // Zero yields zero
+    // One yields one
+    if s <= 1 {
+        return s;
+    }
+
+    // Initial estimate (must be too high)
+    let mut x0 = s / 2;
+
+    // Update
+    let mut x1 = (x0 + s / x0) / 2;
+
+    while x1 < x0 {
+        x0 = x1;
+        x1 = (x0 + s / x0) / 2;
+    }
+    debug_assert_eq!(x0 * x0, s);
+    x0
+}
+
+#[inline]
+fn naive_transpose_inplace(a: &mut [Real], ncols: usize) {
+    debug_assert_eq!(a.len(), ncols * ncols);
+    let nrows = ncols; // matrix is square
+
+    for i in 0..nrows {
+        for j in (i + 1)..ncols {
+            let t = a[i * ncols + j];
+            a[i * ncols + j] = a[j * ncols + i];
+            a[j * ncols + i] = t;
+        }
+    }
+}
+
+/*
+const BLOCK_SIZE: usize = 64;
+
+#[inline(always)]
+fn transpose_scalar_block(a: &[Real], b: &mut [Real], lda: usize, ldb: usize) {
+    for i in 0..BLOCK_SIZE {
+        for j in 0..BLOCK_SIZE {
+            b[j * ldb + i] = a[i * lda + j];
+        }
+    }
+}
+
+#[inline]
+fn transpose_block(a: &[Real], b: &mut [Real], n: usize, m: usize) {
+    let lda = n;
+    let ldb = m;
+
+    for i in (0..n).step_by(BLOCK_SIZE) {
+        for j in (0..m).step_by(BLOCK_SIZE) {
+            let a_begin = i * lda + j;
+            let b_begin = j * ldb + i;
+            transpose_scalar_block(&a[a_begin..], &mut b[b_begin..], lda, ldb);
+        }
+    }
+}
+*/
+
+/// Size of FFT above which we parallelise the FFT.
+const FFT_PARALLEL_THRESHOLD: usize = 1024;
+
+pub fn four_step_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
+    let n = a.len();
+
+    if n <= FFT_PARALLEL_THRESHOLD {
+        forward_fft(a, root_table);
+        return;
+    }
+
+    let lg_n = log2_strict_usize(n);
+    let lg_sqrt_n = lg_n / 2;
+    let sqrt_n = 1 << lg_sqrt_n;
+
+    debug_assert_eq!(n, sqrt_n * sqrt_n, "n is not square");
+
+    naive_transpose_inplace(a, sqrt_n);
+    //transpose_block(a, &mut b, sqrt_n, sqrt_n);
+
+    // TODO: Avoid the bitreversal
+    // Since we are doing non-square transposes, we need a second buffer anyway,
+    // so might as well not use an inplace FFT which allows avoiding the bit reversal.
+    a.par_chunks_exact_mut(sqrt_n).for_each(|col| {
+        forward_fft(col, &root_table[lg_sqrt_n..]);
+        reverse_slice_index_bits(col);
+    });
+
+    // TODO: parallelise
+    // TODO: store in bit-reversed order?
+    for i in 1..sqrt_n {
+        for j in 1..sqrt_n {
+            let s = a[i * sqrt_n + j];
+            let exp = i * j;
+            let w = if exp < n / 2 {
+                root_table[0][exp - 1]
+            } else if exp == n / 2 {
+                // TODO: Don't multiply in this case
+                //P - 1
+                1744830467
+            } else {
+                // exp > n / 2
+                P - root_table[0][(exp - n / 2) - 1]
+            };
+            let t = monty_reduce(s as u64 * w as u64);
+            a[i * sqrt_n + j] = t;
+        }
+    }
+
+    // TODO: Consider combining this transpose and the twiddle adjustment above?
+    naive_transpose_inplace(a, sqrt_n);
+    //transpose_block(&b, a, sqrt_n, sqrt_n);
+
+    // TODO: If we're just doing convolution, then we can skip the bitreversal.
+    a.par_chunks_exact_mut(sqrt_n).for_each(|row| {
+        forward_fft(row, &root_table[lg_sqrt_n..]);
+        reverse_slice_index_bits(row);
+    });
+
+    // TODO: If we're just doing convolution, then we can skip the last transpose
+    naive_transpose_inplace(a, sqrt_n);
 }
