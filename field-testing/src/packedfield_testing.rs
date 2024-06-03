@@ -15,8 +15,7 @@ where
 
 fn packed_from_random<const WIDTH: usize, F, PF>(seed: u64) -> PF
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue,
+    PF: PackedValue<Value = F>,
     Standard: Distribution<F>,
 {
     let field_array = array_from_random::<WIDTH, F>(seed);
@@ -26,7 +25,7 @@ where
 fn packed_from_valid_reps<const WIDTH: usize, F, PF>(vals: [u32; WIDTH]) -> PF
 where
     F: Field,
-    PF: PackedField<Scalar = F> + PackedValue,
+    PF: PackedValue<Value = F>,
     Standard: Distribution<F>,
 {
     let field_array = vals.map(F::from_canonical_u32);
