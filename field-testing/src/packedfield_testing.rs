@@ -1,18 +1,36 @@
 use core::array;
 
 use p3_field::{Field, PackedField, PackedValue};
+use rand::distributions::{Distribution, Standard};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 
-pub trait PackedTestingHelpers<const WIDTH: usize, F, PF>
+fn array_from_random<const WIDTH: usize, F>(seed: u64) -> [F; WIDTH]
+where
+    Standard: Distribution<F>,
+{
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    [(); WIDTH].map(|_| rng.gen())
+}
+
+fn packed_from_random<const WIDTH: usize, F, PF>(seed: u64) -> PF
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue,
+    Standard: Distribution<F>,
 {
-    fn packed_from_valid_reps(vals: [u32; WIDTH]) -> PF;
-    fn array_from_random(seed: u64) -> [F; WIDTH];
-    fn packed_from_random(seed: u64) -> PF;
+    let field_array = array_from_random::<WIDTH, F>(seed);
+    *PF::from_slice(&field_array)
+}
 
-    const ZEROS: [F; WIDTH]; // Some fields might have multiple representations for 0.
-    const SPECIAL_VALS: [F; WIDTH]; // Let the user specify some particular values which could lead to errors.
+fn packed_from_valid_reps<const WIDTH: usize, F, PF>(vals: [u32; WIDTH]) -> PF
+where
+    F: Field,
+    PF: PackedField<Scalar = F> + PackedValue,
+    Standard: Distribution<F>,
+{
+    let field_array = vals.map(F::from_canonical_u32);
+    *PF::from_slice(&field_array)
 }
 
 /// Interleave arr1 and arr2 using chuncks of size i.
@@ -48,25 +66,25 @@ fn interleave<const WIDTH: usize>(
     (outleft, outright)
 }
 
-fn test_interleave<const WIDTH: usize, F, PF, PTH>(i: usize)
+fn test_interleave<const WIDTH: usize, F, PF>(i: usize)
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
     assert!(WIDTH % i == 0);
 
     let arr1 = array::from_fn(|i| i as u32);
     let arr2 = array::from_fn(|i| (WIDTH + i) as u32);
 
-    let vec0 = PTH::packed_from_valid_reps(arr1);
-    let vec1 = PTH::packed_from_valid_reps(arr2);
+    let vec0: PF = packed_from_valid_reps::<WIDTH, F, PF>(arr1);
+    let vec1: PF = packed_from_valid_reps::<WIDTH, F, PF>(arr2);
     let (res0, res1) = vec0.interleave(vec1, i);
 
     let (out1, out2) = interleave(arr1, arr2, i);
 
-    let expected0 = PTH::packed_from_valid_reps(out1);
-    let expected1 = PTH::packed_from_valid_reps(out2);
+    let expected0: PF = packed_from_valid_reps::<WIDTH, F, PF>(out1);
+    let expected1: PF = packed_from_valid_reps::<WIDTH, F, PF>(out2);
 
     assert_eq!(
         res0, expected0,
@@ -80,30 +98,30 @@ where
     );
 }
 
-pub fn test_interleaves<const WIDTH: usize, F, PF, PTH>()
+pub fn test_interleaves<const WIDTH: usize, F, PF>()
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
     let mut i = 1;
     while i <= WIDTH {
-        test_interleave::<WIDTH, F, PF, PTH>(i);
+        test_interleave::<WIDTH, F, PF>(i);
         i *= 2;
     }
 }
 
 #[allow(clippy::eq_op)]
-pub fn test_add_neg<const WIDTH: usize, F, PF, PTH>()
+pub fn test_add_neg<const WIDTH: usize, F, PF>(zeros_array: [F; WIDTH])
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
-    let vec0 = PTH::packed_from_random(0x8b078c2b693c893f);
-    let vec1 = PTH::packed_from_random(0x4ff5dec04791e481);
-    let vec2 = PTH::packed_from_random(0x5806c495e9451f8e);
-    let zeros = *(PF::from_slice(&PTH::ZEROS));
+    let vec0 = packed_from_random::<WIDTH, F, PF>(0x8b078c2b693c893f);
+    let vec1 = packed_from_random::<WIDTH, F, PF>(0x4ff5dec04791e481);
+    let vec2 = packed_from_random::<WIDTH, F, PF>(0x5806c495e9451f8e);
+    let zeros = *(PF::from_slice(&zeros_array));
 
     assert_eq!(
         (vec0 + vec1) + vec2,
@@ -162,16 +180,16 @@ where
 }
 
 #[allow(clippy::eq_op)]
-pub fn test_mul<const WIDTH: usize, F, PF, PTH>()
+pub fn test_mul<const WIDTH: usize, F, PF>(zeros_array: [F; WIDTH])
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
-    let vec0 = PTH::packed_from_random(0x0b1ee4d7c979d50c);
-    let vec1 = PTH::packed_from_random(0x39faa0844a36e45a);
-    let vec2 = PTH::packed_from_random(0x08fac4ee76260e44);
-    let zeros = *(PF::from_slice(&PTH::ZEROS));
+    let vec0 = packed_from_random::<WIDTH, F, PF>(0x0b1ee4d7c979d50c);
+    let vec1 = packed_from_random::<WIDTH, F, PF>(0x39faa0844a36e45a);
+    let vec2 = packed_from_random::<WIDTH, F, PF>(0x08fac4ee76260e44);
+    let zeros = *(PF::from_slice(&zeros_array));
 
     assert_eq!(
         (vec0 * vec1) * vec2,
@@ -221,15 +239,15 @@ where
 }
 
 #[allow(clippy::eq_op)]
-pub fn test_distributivity<const WIDTH: usize, F, PF, PTH>()
+pub fn test_distributivity<const WIDTH: usize, F, PF>()
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
-    let vec0 = PTH::packed_from_random(0x278d9e202925a1d1);
-    let vec1 = PTH::packed_from_random(0xf04cbac0cbad419f);
-    let vec2 = PTH::packed_from_random(0x76976e2abdc5a056);
+    let vec0 = packed_from_random::<WIDTH, F, PF>(0x278d9e202925a1d1);
+    let vec1 = packed_from_random::<WIDTH, F, PF>(0xf04cbac0cbad419f);
+    let vec2 = packed_from_random::<WIDTH, F, PF>(0x76976e2abdc5a056);
 
     assert_eq!(
         vec0 * (-vec1),
@@ -265,18 +283,18 @@ where
 }
 
 #[allow(clippy::eq_op)]
-pub fn test_vs_scalar<const WIDTH: usize, F, PF, PTH>()
+pub fn test_vs_scalar<const WIDTH: usize, F, PF>(special_vals: [F; WIDTH])
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
-    let arr0 = PTH::array_from_random(0x278d9e202925a1d1);
-    let arr1 = PTH::array_from_random(0xf04cbac0cbad419f);
+    let arr0 = array_from_random::<WIDTH, F>(0x278d9e202925a1d1);
+    let arr1 = array_from_random::<WIDTH, F>(0xf04cbac0cbad419f);
 
     let vec0 = *(PF::from_slice(&arr0));
     let vec1 = *(PF::from_slice(&arr1));
-    let vec_special = *(PF::from_slice(&PTH::SPECIAL_VALS));
+    let vec_special = *(PF::from_slice(&special_vals));
 
     let vec_sum = vec0 + vec1;
     let arr_sum = vec_sum.as_slice();
@@ -306,29 +324,29 @@ where
 
     for i in 0..WIDTH {
         assert_eq!(arr_sum[i], arr0[i] + arr1[i]);
-        assert_eq!(arr_special_sum_left[i], PTH::SPECIAL_VALS[i] + arr0[i]);
-        assert_eq!(arr_special_sum_right[i], arr1[i] + PTH::SPECIAL_VALS[i]);
+        assert_eq!(arr_special_sum_left[i], special_vals[i] + arr0[i]);
+        assert_eq!(arr_special_sum_right[i], arr1[i] + special_vals[i]);
 
         assert_eq!(arr_sub[i], arr0[i] - arr1[i]);
-        assert_eq!(arr_special_sub_left[i], PTH::SPECIAL_VALS[i] - arr0[i]);
-        assert_eq!(arr_special_sub_right[i], arr1[i] - PTH::SPECIAL_VALS[i]);
+        assert_eq!(arr_special_sub_left[i], special_vals[i] - arr0[i]);
+        assert_eq!(arr_special_sub_right[i], arr1[i] - special_vals[i]);
 
         assert_eq!(arr_mul[i], arr0[i] * arr1[i]);
-        assert_eq!(arr_special_mul_left[i], PTH::SPECIAL_VALS[i] * arr0[i]);
-        assert_eq!(arr_special_mul_right[i], arr1[i] * PTH::SPECIAL_VALS[i]);
+        assert_eq!(arr_special_mul_left[i], special_vals[i] * arr0[i]);
+        assert_eq!(arr_special_mul_right[i], arr1[i] * special_vals[i]);
 
         assert_eq!(arr_neg[i], -arr0[i]);
-        assert_eq!(arr_special_neg[i], -PTH::SPECIAL_VALS[i]);
+        assert_eq!(arr_special_neg[i], -special_vals[i]);
     }
 }
 
-pub fn test_multiplicative_inverse<const WIDTH: usize, F, PF, PTH>()
+pub fn test_multiplicative_inverse<const WIDTH: usize, F, PF>()
 where
     F: Field,
     PF: PackedField<Scalar = F> + PackedValue + Eq,
-    PTH: PackedTestingHelpers<WIDTH, F, PF>,
+    Standard: Distribution<F>,
 {
-    let arr = PTH::array_from_random(0xb0c7a5153103c5a8);
+    let arr = array_from_random::<WIDTH, F>(0xb0c7a5153103c5a8);
     let arr_inv = arr.map(|x| x.inverse());
 
     let vec = *(PF::from_slice(&arr));
@@ -340,31 +358,31 @@ where
 
 #[macro_export]
 macro_rules! test_packed_field {
-    ($width:expr, $field:ty, $packedfield:ty, $helper:ty) => {
+    ($width:expr, $field:ty, $packedfield:ty, $zeros:expr, $specials:expr) => {
         mod packed_field_tests {
             #[test]
             fn test_interleaves() {
-                $crate::test_interleaves::<$width, $field, $packedfield, $helper>();
+                $crate::test_interleaves::<$width, $field, $packedfield>();
             }
             #[test]
             fn test_add_neg() {
-                $crate::test_add_neg::<$width, $field, $packedfield, $helper>();
+                $crate::test_add_neg::<$width, $field, $packedfield>($zeros);
             }
             #[test]
             fn test_mul() {
-                $crate::test_mul::<$width, $field, $packedfield, $helper>();
+                $crate::test_mul::<$width, $field, $packedfield>($zeros);
             }
             #[test]
             fn test_distributivity() {
-                $crate::test_distributivity::<$width, $field, $packedfield, $helper>();
+                $crate::test_distributivity::<$width, $field, $packedfield>();
             }
             #[test]
             fn test_vs_scalar() {
-                $crate::test_vs_scalar::<$width, $field, $packedfield, $helper>();
+                $crate::test_vs_scalar::<$width, $field, $packedfield>($specials);
             }
             #[test]
             fn test_multiplicative_inverse() {
-                $crate::test_multiplicative_inverse::<$width, $field, $packedfield, $helper>();
+                $crate::test_multiplicative_inverse::<$width, $field, $packedfield>();
             }
         }
     };

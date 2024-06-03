@@ -668,43 +668,23 @@ unsafe impl PackedField for PackedKoalaBearAVX2 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::{test_packed_field, PackedTestingHelpers};
-    use rand::SeedableRng;
-    use rand_chacha::ChaCha20Rng;
+    use p3_field_testing::test_packed_field;
 
-    use super::*;
+    use super::{KoalaBear, WIDTH};
     use crate::to_koalabear_array;
 
-    type F = KoalaBear;
-    type P = PackedKoalaBearAVX2;
-    struct PackedTestingKoalaBear {}
+    const ZEROS: [KoalaBear; WIDTH] = to_koalabear_array([0x00000000; WIDTH]);
 
-    impl PackedTestingHelpers<WIDTH, F, P> for PackedTestingKoalaBear {
-        fn packed_from_valid_reps(vals: [u32; WIDTH]) -> P {
-            PackedKoalaBearAVX2(to_koalabear_array(vals))
-        }
-
-        fn array_from_random(seed: u64) -> [F; WIDTH] {
-            let mut rng = ChaCha20Rng::seed_from_u64(seed);
-            [(); WIDTH].map(|_| rng.gen())
-        }
-
-        fn packed_from_random(seed: u64) -> P {
-            PackedKoalaBearAVX2(Self::array_from_random(seed))
-        }
-
-        const ZEROS: [F; WIDTH] = to_koalabear_array([0x00000000; WIDTH]);
-
-        const SPECIAL_VALS: [F; WIDTH] = to_koalabear_array([
-            0x00000000, 0x00000001, 0x7f000000, 0x7effffff, 0x3f800000, 0x0ffffffe, 0x68000003,
-            0x70000002,
-        ]);
-    }
+    const SPECIAL_VALS: [KoalaBear; WIDTH] = to_koalabear_array([
+        0x00000000, 0x00000001, 0x7f000000, 0x7effffff, 0x3f800000, 0x0ffffffe, 0x68000003,
+        0x70000002,
+    ]);
 
     test_packed_field!(
         { super::WIDTH },
         crate::KoalaBear,
         crate::PackedKoalaBearAVX2,
-        super::PackedTestingKoalaBear
+        super::ZEROS,
+        super::SPECIAL_VALS
     );
 }

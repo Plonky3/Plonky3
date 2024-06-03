@@ -744,50 +744,29 @@ unsafe impl PackedField for PackedMersenne31AVX512 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::{test_packed_field, PackedTestingHelpers};
-    use rand::SeedableRng;
-    use rand_chacha::ChaCha20Rng;
+    use p3_field_testing::test_packed_field;
 
-    use super::*;
+    use super::{Mersenne31, WIDTH};
     use crate::to_mersenne31_array;
 
-    type F = Mersenne31;
-    type P = PackedMersenne31AVX512;
+    /// Zero has a redundant representation, so let's test both.
+    const ZEROS: [F; WIDTH] = to_mersenne31_array([
+        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
+        0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
+        0x00000000, 0x7fffffff,
+    ]);
 
-    struct PackedTestingMersenne31 {}
-
-    impl PackedTestingHelpers<WIDTH, F, P> for PackedTestingMersenne31 {
-        fn packed_from_valid_reps(vals: [u32; WIDTH]) -> P {
-            PackedMersenne31AVX512(to_mersenne31_array(vals))
-        }
-
-        fn array_from_random(seed: u64) -> [F; WIDTH] {
-            let mut rng = ChaCha20Rng::seed_from_u64(seed);
-            [(); WIDTH].map(|_| rng.gen())
-        }
-
-        fn packed_from_random(seed: u64) -> P {
-            PackedMersenne31AVX512(Self::array_from_random(seed))
-        }
-
-        /// Zero has a redundant representation, so let's test both.
-        const ZEROS: [F; WIDTH] = to_mersenne31_array([
-            0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
-            0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
-            0x00000000, 0x7fffffff,
-        ]);
-
-        const SPECIAL_VALS: [F; WIDTH] = to_mersenne31_array([
-            0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
-            0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
-            0x40000000, 0x3fffffff,
-        ]);
-    }
+    const SPECIAL_VALS: [F; WIDTH] = to_mersenne31_array([
+        0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
+        0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
+        0x40000000, 0x3fffffff,
+    ]);
 
     test_packed_field!(
         { super::WIDTH },
         crate::Mersenne31,
         crate::PackedMersenne31AVX512,
-        super::PackedTestingMersenne31
+        super::ZEROS,
+        super::SPECIAL_VALS
     );
 }
