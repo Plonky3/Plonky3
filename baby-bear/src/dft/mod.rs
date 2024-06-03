@@ -105,20 +105,24 @@ mod tests {
     #[test]
     fn forward_backward_is_identity() {
         const NITERS: usize = 100;
-        let mut len = 4;
+        let mut len = 16;
         loop {
             let root_table = roots_of_unity_table(len);
             let root = root_table[0][0];
             let root_inv = BabyBear { value: root }.inverse().value;
 
+            println!("roots = {:?}", root_table);
+
             for _ in 0..NITERS {
                 let us = randvec(len);
                 let mut vs = us.clone();
-                forward_fft(&mut vs, &root_table);
+                //forward_fft(&mut vs, &root_table);
+                four_step_fft(&mut vs, &root_table);
 
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);
 
+                println!("us = {us:?};\nvs = {vs:?};\nws = {ws:?}");
                 assert!(us
                     .iter()
                     .zip(ws)

@@ -276,80 +276,100 @@ fn _isqrt(s: usize) -> usize {
     x0
 }
 
-#[inline]
-fn naive_transpose_inplace(a: &mut [Real], ncols: usize) {
-    debug_assert_eq!(a.len(), ncols * ncols);
-    let nrows = ncols; // matrix is square
-
-    for i in 0..nrows {
-        for j in (i + 1)..ncols {
-            let t = a[i * ncols + j];
-            a[i * ncols + j] = a[j * ncols + i];
-            a[j * ncols + i] = t;
-        }
-    }
-}
-
-/*
-const BLOCK_SIZE: usize = 64;
+/// Parameter for tuning the transpose operation.
+/// TODO: Should depend on the size of the matrix elements.
+const TRANSPOSE_BLOCK_SIZE: usize = 4; // TODO: 64 is better for u32
 
 #[inline(always)]
-fn transpose_scalar_block(a: &[Real], b: &mut [Real], lda: usize, ldb: usize) {
-    for i in 0..BLOCK_SIZE {
-        for j in 0..BLOCK_SIZE {
-            b[j * ldb + i] = a[i * lda + j];
+fn transpose_scalar_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usize) {
+    for i in 0..TRANSPOSE_BLOCK_SIZE {
+        for j in 0..TRANSPOSE_BLOCK_SIZE {
+            // Ensure the generated code doesn't do bounds checks:
+            unsafe {
+                // Equivalent to: output[j * nrows + i] = input[i * ncols + j]
+                *output.get_unchecked_mut(j * nrows + i) = *input.get_unchecked(i * ncols + j);
+            }
         }
     }
 }
 
 #[inline]
-fn transpose_block(a: &[Real], b: &mut [Real], n: usize, m: usize) {
-    let lda = n;
-    let ldb = m;
+fn transpose_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usize) {
+    debug_assert_eq!(nrows % TRANSPOSE_BLOCK_SIZE, 0);
+    debug_assert_eq!(ncols % TRANSPOSE_BLOCK_SIZE, 0);
 
-    for i in (0..n).step_by(BLOCK_SIZE) {
-        for j in (0..m).step_by(BLOCK_SIZE) {
-            let a_begin = i * lda + j;
-            let b_begin = j * ldb + i;
-            transpose_scalar_block(&a[a_begin..], &mut b[b_begin..], lda, ldb);
+    for i in (0..nrows).step_by(TRANSPOSE_BLOCK_SIZE) {
+        for j in (0..ncols).step_by(TRANSPOSE_BLOCK_SIZE) {
+            let in_begin = i * ncols + j;
+            let out_begin = j * nrows + i;
+
+            // Equivalent to:
+            // transpose_scalar_block(
+            //     &mut output[out_begin..],
+            //     &input[in_begin..],
+            //     nrows, ncols);
+            let (out, inp) = unsafe {
+                (
+                    output.get_unchecked_mut(out_begin..),
+                    input.get_unchecked(in_begin..),
+                )
+            };
+
+            transpose_scalar_block(out, inp, nrows, ncols);
         }
     }
 }
-*/
+
+fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
+    for i in 0..nrows {
+        for j in 0..ncols {
+            print!("{} ", a[i * ncols + j]);
+        }
+        println!("");
+    }
+    println!("");
+}
 
 /// Size of FFT above which we parallelise the FFT.
-const FFT_PARALLEL_THRESHOLD: usize = 1024;
+const FFT_PARALLEL_THRESHOLD: usize = 2; //TODO: Use 1024 or something
 
-pub fn four_step_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
-    let n = a.len();
-
+fn four_step_fft_inner(output: &mut [Real], input: &mut [Real], root_table: &[Vec<Real>]) {
+    let n = input.len();
     if n <= FFT_PARALLEL_THRESHOLD {
-        forward_fft(a, root_table);
+        let mut output = vec![0u32; input.len()];
+        forward_fft(input, root_table);
+        output.copy_from_slice(&input);
         return;
     }
+    assert_eq!(n, output.len());
 
     let lg_n = log2_strict_usize(n);
     let lg_sqrt_n = lg_n / 2;
     let sqrt_n = 1 << lg_sqrt_n;
 
-    debug_assert_eq!(n, sqrt_n * sqrt_n, "n is not square");
+    let ncols = sqrt_n;
+    let nrows = n / sqrt_n;
+    let lg_ncols = lg_sqrt_n;
+    let lg_nrows = lg_n - lg_sqrt_n;
 
-    naive_transpose_inplace(a, sqrt_n);
-    //transpose_block(a, &mut b, sqrt_n, sqrt_n);
+    debug_assert_eq!(n, nrows * ncols);
+    debug_assert_eq!(nrows, 1 << lg_nrows);
+
+    transpose_block(output, input, nrows, ncols);
 
     // TODO: Avoid the bitreversal
     // Since we are doing non-square transposes, we need a second buffer anyway,
     // so might as well not use an inplace FFT which allows avoiding the bit reversal.
-    a.par_chunks_exact_mut(sqrt_n).for_each(|col| {
-        forward_fft(col, &root_table[lg_sqrt_n..]);
+    output.par_chunks_exact_mut(nrows).for_each(|col| {
+        forward_fft(col, &root_table[lg_ncols..]);
         reverse_slice_index_bits(col);
     });
 
     // TODO: parallelise
     // TODO: store in bit-reversed order?
-    for i in 1..sqrt_n {
-        for j in 1..sqrt_n {
-            let s = a[i * sqrt_n + j];
+    for i in 1..ncols {
+        for j in 1..nrows {
+            let s = output[i * nrows + j];
             let exp = i * j;
             let w = if exp < n / 2 {
                 root_table[0][exp - 1]
@@ -362,20 +382,32 @@ pub fn four_step_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
                 P - root_table[0][(exp - n / 2) - 1]
             };
             let t = monty_reduce(s as u64 * w as u64);
-            a[i * sqrt_n + j] = t;
+            output[i * nrows + j] = t;
         }
     }
 
     // TODO: Consider combining this transpose and the twiddle adjustment above?
-    naive_transpose_inplace(a, sqrt_n);
-    //transpose_block(&b, a, sqrt_n, sqrt_n);
+    transpose_block(input, output, ncols, nrows);
 
     // TODO: If we're just doing convolution, then we can skip the bitreversal.
-    a.par_chunks_exact_mut(sqrt_n).for_each(|row| {
-        forward_fft(row, &root_table[lg_sqrt_n..]);
+    input.par_chunks_exact_mut(ncols).for_each(|row| {
+        forward_fft(row, &root_table[lg_nrows..]);
         reverse_slice_index_bits(row);
     });
 
     // TODO: If we're just doing convolution, then we can skip the last transpose
-    naive_transpose_inplace(a, sqrt_n);
+    transpose_block(output, input, nrows, ncols);
+
+    // TODO: Shouldn't be necessary
+    reverse_slice_index_bits(output);
+}
+
+pub fn four_step_fft(input: &mut [Real], root_table: &[Vec<Real>]) {
+    // TODO: Don't do this copy
+    let mut output = Vec::with_capacity(input.len());
+    unsafe {
+        output.set_len(input.len());
+    }
+    four_step_fft_inner(&mut output, input, root_table);
+    input.copy_from_slice(&output);
 }
