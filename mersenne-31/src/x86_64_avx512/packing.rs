@@ -749,13 +749,6 @@ mod tests {
     use super::{Mersenne31, WIDTH};
     use crate::to_mersenne31_array;
 
-    /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] = to_mersenne31_array([
-        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
-        0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
-        0x00000000, 0x7fffffff,
-    ]);
-
     const SPECIAL_VALS: [Mersenne31; WIDTH] = to_mersenne31_array([
         0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
         0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
@@ -763,10 +756,7 @@ mod tests {
     ]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::Mersenne31,
         crate::PackedMersenne31AVX512,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedMersenne31AVX512(super::SPECIAL_VALS)
     );
 }

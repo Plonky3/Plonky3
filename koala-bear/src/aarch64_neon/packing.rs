@@ -724,17 +724,12 @@ mod tests {
     use super::{KoalaBear, PackedKoalaBearNeon, WIDTH};
     use crate::to_koalabear_array;
 
-    const ZEROS: [KoalaBear; WIDTH] = to_koalabear_array([0x00000000; WIDTH]);
-
     const SPECIAL_VALS: [KoalaBear; WIDTH] =
         to_koalabear_array([0x00000000, 0x00000001, 0x00000002, 0x7f000000]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::KoalaBear,
         crate::PackedKoalaBearNeon,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedKoalaBearNeon(super::SPECIAL_VALS)
     );
 
     #[test]

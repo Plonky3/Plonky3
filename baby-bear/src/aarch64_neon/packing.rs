@@ -724,17 +724,12 @@ mod tests {
     use super::{BabyBear, PackedBabyBearNeon, WIDTH};
     use crate::to_babybear_array;
 
-    const ZEROS: [BabyBear; WIDTH] = to_babybear_array([0x00000000; WIDTH]);
-
     const SPECIAL_VALS: [BabyBear; WIDTH] =
         to_babybear_array([0x00000000, 0x00000001, 0x00000002, 0x78000000]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::BabyBear,
         crate::PackedBabyBearNeon,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedBabyBearNeon(super::SPECIAL_VALS)
     );
 
     #[test]
