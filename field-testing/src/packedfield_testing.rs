@@ -233,7 +233,7 @@ where
     assert_eq!(
         vec0.double(),
         PF::two() * vec0,
-        "Error when comparing x.double() to 2 * x"
+        "Error when comparing x.double() to 2 * x."
     );
 }
 
@@ -322,20 +322,43 @@ where
     let arr_special_neg = vec_special_neg.as_slice();
 
     for i in 0..WIDTH {
-        assert_eq!(arr_sum[i], arr0[i] + arr1[i]);
-        assert_eq!(arr_special_sum_left[i], special_vals[i] + arr0[i]);
-        assert_eq!(arr_special_sum_right[i], arr1[i] + special_vals[i]);
+        assert_eq!(
+            arr_sum[i],
+            arr0[i] + arr1[i],
+            "Error when testing add consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(
+            arr_special_sum_left[i],
+            special_vals[i] + arr0[i],
+            "Error when testing consistency of left add for special values for packed and scalar at location {}.",
+            i);
+        assert_eq!(arr_special_sum_right[i], arr1[i] + special_vals[i], "Error when testing consistency of right add for special values for packed and scalar at location {}.", i);
 
-        assert_eq!(arr_sub[i], arr0[i] - arr1[i]);
-        assert_eq!(arr_special_sub_left[i], special_vals[i] - arr0[i]);
-        assert_eq!(arr_special_sub_right[i], arr1[i] - special_vals[i]);
+        assert_eq!(
+            arr_sub[i],
+            arr0[i] - arr1[i],
+            "Error when testing sub consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_sub_left[i], special_vals[i] - arr0[i], "Error when testing consistency of left sub for special values for packed and scalar at location {}.", i);
+        assert_eq!(arr_special_sub_right[i], arr1[i] - special_vals[i], "Error when testing consistency of right sub for special values for packed and scalar at location {}.", i);
 
-        assert_eq!(arr_mul[i], arr0[i] * arr1[i]);
-        assert_eq!(arr_special_mul_left[i], special_vals[i] * arr0[i]);
-        assert_eq!(arr_special_mul_right[i], arr1[i] * special_vals[i]);
+        assert_eq!(
+            arr_mul[i],
+            arr0[i] * arr1[i],
+            "Error when testing mul consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_mul_left[i], special_vals[i] * arr0[i], "Error when testing consistency of left mul for special values for packed and scalar at location {}.", i);
+        assert_eq!(arr_special_mul_right[i], arr1[i] * special_vals[i], "Error when testing consistency of right mul for special values for packed and scalar at location {}.", i);
 
-        assert_eq!(arr_neg[i], -arr0[i]);
-        assert_eq!(arr_special_neg[i], -special_vals[i]);
+        assert_eq!(
+            arr_neg[i], -arr0[i],
+            "Error when testing neg consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_neg[i], -special_vals[i], "Error when testing consistency of neg for special values for packed and scalar at location {}.", i);
     }
 }
 
@@ -352,7 +375,11 @@ where
     let vec_inv = *(PF::from_slice(&arr_inv));
 
     let res = vec * vec_inv;
-    assert_eq!(res, PF::one());
+    assert_eq!(
+        res,
+        PF::one(),
+        "Error when testing multiplication by inverse."
+    );
 }
 
 #[macro_export]
