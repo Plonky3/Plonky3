@@ -113,7 +113,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     }
 }
 
-fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
+pub fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
     tallest_matrices: Vec<&M>,
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
@@ -160,7 +160,7 @@ where
 
 /// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
-fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
+pub fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
     matrices_to_inject: Vec<&M>,
     h: &H,
