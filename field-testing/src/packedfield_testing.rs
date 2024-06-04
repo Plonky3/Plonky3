@@ -1,55 +1,36 @@
-use core::array;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use p3_field::{Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
-fn array_from_random<const WIDTH: usize, F>(seed: u64) -> [F; WIDTH]
+fn packed_from_random<PV>(seed: u64) -> PV
 where
-    Standard: Distribution<F>,
+    PV: PackedValue,
+    Standard: Distribution<PV::Value>,
 {
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
-    [(); WIDTH].map(|_| rng.gen())
-}
-
-fn packed_from_random<const WIDTH: usize, F, PF>(seed: u64) -> PF
-where
-    PF: PackedValue<Value = F>,
-    Standard: Distribution<F>,
-{
-    let field_array = array_from_random::<WIDTH, F>(seed);
-    *PF::from_slice(&field_array)
-}
-
-fn packed_from_valid_reps<const WIDTH: usize, F, PF>(vals: [u32; WIDTH]) -> PF
-where
-    F: Field,
-    PF: PackedValue<Value = F>,
-    Standard: Distribution<F>,
-{
-    let field_array = vals.map(F::from_canonical_u32);
-    *PF::from_slice(&field_array)
+    PV::from_fn(|_| rng.gen())
 }
 
 /// Interleave arr1 and arr2 using chuncks of size i.
-fn interleave<const WIDTH: usize>(
-    arr1: [u32; WIDTH],
-    arr2: [u32; WIDTH],
-    i: usize,
-) -> ([u32; WIDTH], [u32; WIDTH]) {
-    assert!(WIDTH % i == 0);
+fn interleave<T: Copy + Default>(arr1: &[T], arr2: &[T], i: usize) -> (Vec<T>, Vec<T>) {
+    let width = arr1.len();
+    assert_eq!(width, arr2.len());
+    assert_eq!(width % i, 0);
 
-    if i == WIDTH {
-        return (arr1, arr2);
+    if i == width {
+        return (arr1.to_vec(), arr2.to_vec());
     }
 
-    let mut outleft = [0_u32; WIDTH];
-    let mut outright = [0_u32; WIDTH];
+    let mut outleft = vec![T::default(); width];
+    let mut outright = vec![T::default(); width];
 
     let mut flag = false;
 
-    for j in 0..WIDTH {
+    for j in 0..width {
         if j % i == 0 {
             flag = !flag;
         }
@@ -65,62 +46,57 @@ fn interleave<const WIDTH: usize>(
     (outleft, outright)
 }
 
-fn test_interleave<const WIDTH: usize, F, PF>(i: usize)
+fn test_interleave<PF>(i: usize)
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
-    assert!(WIDTH % i == 0);
+    assert!(PF::WIDTH % i == 0);
 
-    let arr1 = array::from_fn(|i| i as u32);
-    let arr2 = array::from_fn(|i| (WIDTH + i) as u32);
+    let vec1 = packed_from_random::<PF>(0x4ff5dec04791e481);
+    let vec2 = packed_from_random::<PF>(0x5806c495e9451f8e);
 
-    let vec0: PF = packed_from_valid_reps::<WIDTH, F, PF>(arr1);
-    let vec1: PF = packed_from_valid_reps::<WIDTH, F, PF>(arr2);
-    let (res0, res1) = vec0.interleave(vec1, i);
+    let arr1 = vec1.as_slice();
+    let arr2 = vec2.as_slice();
 
+    let (res1, res2) = vec1.interleave(vec2, i);
     let (out1, out2) = interleave(arr1, arr2, i);
 
-    let expected0: PF = packed_from_valid_reps::<WIDTH, F, PF>(out1);
-    let expected1: PF = packed_from_valid_reps::<WIDTH, F, PF>(out2);
-
     assert_eq!(
-        res0, expected0,
+        res1.as_slice(),
+        &out1,
         "Error in left output when testing interleave {}.",
         i
     );
     assert_eq!(
-        res1, expected1,
+        res2.as_slice(),
+        &out2,
         "Error in right output when testing interleave {}.",
         i
     );
 }
 
-pub fn test_interleaves<const WIDTH: usize, F, PF>()
+pub fn test_interleaves<PF>()
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
     let mut i = 1;
-    while i <= WIDTH {
-        test_interleave::<WIDTH, F, PF>(i);
+    while i <= PF::WIDTH {
+        test_interleave::<PF>(i);
         i *= 2;
     }
 }
 
 #[allow(clippy::eq_op)]
-pub fn test_add_neg<const WIDTH: usize, F, PF>(zeros_array: [F; WIDTH])
+pub fn test_add_neg<PF>(zeros: PF)
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
-    let vec0 = packed_from_random::<WIDTH, F, PF>(0x8b078c2b693c893f);
-    let vec1 = packed_from_random::<WIDTH, F, PF>(0x4ff5dec04791e481);
-    let vec2 = packed_from_random::<WIDTH, F, PF>(0x5806c495e9451f8e);
-    let zeros = *(PF::from_slice(&zeros_array));
+    let vec0 = packed_from_random::<PF>(0x8b078c2b693c893f);
+    let vec1 = packed_from_random::<PF>(0x4ff5dec04791e481);
+    let vec2 = packed_from_random::<PF>(0x5806c495e9451f8e);
 
     assert_eq!(
         (vec0 + vec1) + vec2,
@@ -178,17 +154,14 @@ where
     );
 }
 
-#[allow(clippy::eq_op)]
-pub fn test_mul<const WIDTH: usize, F, PF>(zeros_array: [F; WIDTH])
+pub fn test_mul<PF>(zeros: PF)
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
-    let vec0 = packed_from_random::<WIDTH, F, PF>(0x0b1ee4d7c979d50c);
-    let vec1 = packed_from_random::<WIDTH, F, PF>(0x39faa0844a36e45a);
-    let vec2 = packed_from_random::<WIDTH, F, PF>(0x08fac4ee76260e44);
-    let zeros = *(PF::from_slice(&zeros_array));
+    let vec0 = packed_from_random::<PF>(0x0b1ee4d7c979d50c);
+    let vec1 = packed_from_random::<PF>(0x39faa0844a36e45a);
+    let vec2 = packed_from_random::<PF>(0x08fac4ee76260e44);
 
     assert_eq!(
         (vec0 * vec1) * vec2,
@@ -237,16 +210,14 @@ where
     );
 }
 
-#[allow(clippy::eq_op)]
-pub fn test_distributivity<const WIDTH: usize, F, PF>()
+pub fn test_distributivity<PF>()
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
-    let vec0 = packed_from_random::<WIDTH, F, PF>(0x278d9e202925a1d1);
-    let vec1 = packed_from_random::<WIDTH, F, PF>(0xf04cbac0cbad419f);
-    let vec2 = packed_from_random::<WIDTH, F, PF>(0x76976e2abdc5a056);
+    let vec0 = packed_from_random::<PF>(0x278d9e202925a1d1);
+    let vec1 = packed_from_random::<PF>(0xf04cbac0cbad419f);
+    let vec2 = packed_from_random::<PF>(0x76976e2abdc5a056);
 
     assert_eq!(
         vec0 * (-vec1),
@@ -281,19 +252,17 @@ where
     );
 }
 
-#[allow(clippy::eq_op)]
-pub fn test_vs_scalar<const WIDTH: usize, F, PF>(special_vals: [F; WIDTH])
+pub fn test_vs_scalar<PF>(special_vals: PF)
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
-    let arr0 = array_from_random::<WIDTH, F>(0x278d9e202925a1d1);
-    let arr1 = array_from_random::<WIDTH, F>(0xf04cbac0cbad419f);
+    let vec0: PF = packed_from_random(0x278d9e202925a1d1);
+    let vec1: PF = packed_from_random(0xf04cbac0cbad419f);
+    let vec_special = special_vals;
 
-    let vec0 = *(PF::from_slice(&arr0));
-    let vec1 = *(PF::from_slice(&arr1));
-    let vec_special = *(PF::from_slice(&special_vals));
+    let arr0 = vec0.as_slice();
+    let arr1 = vec1.as_slice();
 
     let vec_sum = vec0 + vec1;
     let arr_sum = vec_sum.as_slice();
@@ -321,7 +290,8 @@ where
     let vec_special_neg = -vec_special;
     let arr_special_neg = vec_special_neg.as_slice();
 
-    for i in 0..WIDTH {
+    let special_vals = special_vals.as_slice();
+    for i in 0..PF::WIDTH {
         assert_eq!(arr_sum[i], arr0[i] + arr1[i]);
         assert_eq!(arr_special_sum_left[i], special_vals[i] + arr0[i]);
         assert_eq!(arr_special_sum_right[i], arr1[i] + special_vals[i]);
@@ -339,49 +309,47 @@ where
     }
 }
 
-pub fn test_multiplicative_inverse<const WIDTH: usize, F, PF>()
+pub fn test_multiplicative_inverse<PF>()
 where
-    F: Field,
-    PF: PackedField<Scalar = F> + PackedValue + Eq,
-    Standard: Distribution<F>,
+    PF: PackedField + Eq,
+    Standard: Distribution<PF::Scalar>,
 {
-    let arr = array_from_random::<WIDTH, F>(0xb0c7a5153103c5a8);
-    let arr_inv = arr.map(|x| x.inverse());
-
-    let vec = *(PF::from_slice(&arr));
-    let vec_inv = *(PF::from_slice(&arr_inv));
-
+    let vec: PF = packed_from_random(0xb0c7a5153103c5a8);
+    let arr = vec.as_slice();
+    let vec_inv = PF::from_fn(|i| arr[i].inverse());
     let res = vec * vec_inv;
     assert_eq!(res, PF::one());
 }
 
 #[macro_export]
 macro_rules! test_packed_field {
-    ($width:expr, $field:ty, $packedfield:ty, $zeros:expr, $specials:expr) => {
+    ($packedfield:ty, $zeros:expr, $specials:expr) => {
         mod packed_field_tests {
+            use p3_field::AbstractField;
+
             #[test]
             fn test_interleaves() {
-                $crate::test_interleaves::<$width, $field, $packedfield>();
+                $crate::test_interleaves::<$packedfield>();
             }
             #[test]
             fn test_add_neg() {
-                $crate::test_add_neg::<$width, $field, $packedfield>($zeros);
+                $crate::test_add_neg::<$packedfield>($zeros);
             }
             #[test]
             fn test_mul() {
-                $crate::test_mul::<$width, $field, $packedfield>($zeros);
+                $crate::test_mul::<$packedfield>($zeros);
             }
             #[test]
             fn test_distributivity() {
-                $crate::test_distributivity::<$width, $field, $packedfield>();
+                $crate::test_distributivity::<$packedfield>();
             }
             #[test]
             fn test_vs_scalar() {
-                $crate::test_vs_scalar::<$width, $field, $packedfield>($specials);
+                $crate::test_vs_scalar::<$packedfield>($specials);
             }
             #[test]
             fn test_multiplicative_inverse() {
-                $crate::test_multiplicative_inverse::<$width, $field, $packedfield>();
+                $crate::test_multiplicative_inverse::<$packedfield>();
             }
         }
     };

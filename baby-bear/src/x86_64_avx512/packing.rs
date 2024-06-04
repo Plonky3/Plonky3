@@ -788,7 +788,6 @@ mod tests {
     use super::{BabyBear, WIDTH};
     use crate::to_babybear_array;
 
-    const ZEROS: [BabyBear; WIDTH] = to_babybear_array([0x00000000; WIDTH]);
     const SPECIAL_VALS: [BabyBear; WIDTH] = to_babybear_array([
         0x00000000, 0x00000001, 0x78000000, 0x77ffffff, 0x3c000000, 0x0ffffffe, 0x68000003,
         0x70000002, 0x00000000, 0x00000001, 0x78000000, 0x77ffffff, 0x3c000000, 0x0ffffffe,
@@ -796,10 +795,8 @@ mod tests {
     ]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::BabyBear,
         crate::PackedBabyBearAVX512,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedBabyBearAVX512::zero(),
+        crate::PackedBabyBearAVX512(super::SPECIAL_VALS)
     );
 }
