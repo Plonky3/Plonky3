@@ -13,14 +13,16 @@ pub struct VirtualPairCol<F: Field> {
 /// A column in a PAIR, i.e. either a preprocessed column or a main trace column.
 pub enum PairCol {
     Preprocessed(usize),
+    Public(usize),
     Main(usize),
 }
 
 impl PairCol {
-    fn get<T: Copy>(&self, preprocessed: &[T], main: &[T]) -> T {
+    fn get<T: Copy>(&self, preprocessed: &[T], public: &[T], main: &[T]) -> T {
         match self {
             PairCol::Preprocessed(i) => preprocessed[*i],
             PairCol::Main(i) => main[*i],
+            PairCol::Public(i) => public[*i],
         }
     }
 }
@@ -108,7 +110,7 @@ impl<F: Field> VirtualPairCol<F> {
         Self::new_main(vec![(a_col, F::one()), (b_col, F::neg_one())], F::zero())
     }
 
-    pub fn apply<Expr, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Expr
+    pub fn apply<Expr, Var>(&self, preprocessed: &[Var], public: &[Var], main: &[Var]) -> Expr
     where
         F: Into<Expr>,
         Expr: AbstractField + Mul<F, Output = Expr>,
@@ -116,7 +118,7 @@ impl<F: Field> VirtualPairCol<F> {
     {
         let mut result = self.constant.into();
         for (column, weight) in &self.column_weights {
-            result += column.get(preprocessed, main).into() * *weight;
+            result += column.get(preprocessed, public, main).into() * *weight;
         }
         result
     }
