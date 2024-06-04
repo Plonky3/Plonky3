@@ -302,8 +302,14 @@ where
             arr_special_sum_left[i],
             special_vals[i] + arr0[i],
             "Error when testing consistency of left add for special values for packed and scalar at location {}.",
-            i);
-        assert_eq!(arr_special_sum_right[i], arr1[i] + special_vals[i], "Error when testing consistency of right add for special values for packed and scalar at location {}.", i);
+            i
+        );
+        assert_eq!(
+            arr_special_sum_right[i],
+            arr1[i] + special_vals[i],
+            "Error when testing consistency of right add for special values for packed and scalar at location {}.",
+            i
+        );
 
         assert_eq!(
             arr_sub[i],
@@ -311,8 +317,16 @@ where
             "Error when testing sub consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_sub_left[i], special_vals[i] - arr0[i], "Error when testing consistency of left sub for special values for packed and scalar at location {}.", i);
-        assert_eq!(arr_special_sub_right[i], arr1[i] - special_vals[i], "Error when testing consistency of right sub for special values for packed and scalar at location {}.", i);
+        assert_eq!(arr_special_sub_left[i],
+            special_vals[i] - arr0[i],
+            "Error when testing consistency of left sub for special values for packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_sub_right[i],
+            arr1[i] - special_vals[i],
+            "Error when testing consistency of right sub for special values for packed and scalar at location {}.",
+            i
+        );
 
         assert_eq!(
             arr_mul[i],
@@ -320,15 +334,27 @@ where
             "Error when testing mul consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_mul_left[i], special_vals[i] * arr0[i], "Error when testing consistency of left mul for special values for packed and scalar at location {}.", i);
-        assert_eq!(arr_special_mul_right[i], arr1[i] * special_vals[i], "Error when testing consistency of right mul for special values for packed and scalar at location {}.", i);
+        assert_eq!(arr_special_mul_left[i],
+            special_vals[i] * arr0[i],
+            "Error when testing consistency of left mul for special values for packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_mul_right[i],
+            arr1[i] * special_vals[i],
+            "Error when testing consistency of right mul for special values for packed and scalar at location {}.",
+            i
+        );
 
         assert_eq!(
             arr_neg[i], -arr0[i],
             "Error when testing neg consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_neg[i], -special_vals[i], "Error when testing consistency of neg for special values for packed and scalar at location {}.", i);
+        assert_eq!(arr_special_neg[i],
+            -special_vals[i],
+            "Error when testing consistency of neg for special values for packed and scalar at location {}.",
+            i
+        );
     }
 }
 
