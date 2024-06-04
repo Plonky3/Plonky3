@@ -660,10 +660,8 @@ mod tests {
     ]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::Mersenne31,
         crate::PackedMersenne31AVX2,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedMersenne31AVX2(super::ZEROS),
+        crate::PackedMersenne31AVX2(super::SPECIAL_VALS)
     );
 }

@@ -591,10 +591,8 @@ mod tests {
         to_mersenne31_array([0x00000000, 0x00000001, 0x00000002, 0x7ffffffe]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::Mersenne31,
         crate::PackedMersenne31Neon,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedMersenne31Neon(super::ZEROS),
+        crate::PackedMersenne31Neon(super::SPECIAL_VALS)
     );
 }

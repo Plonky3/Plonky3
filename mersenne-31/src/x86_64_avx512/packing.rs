@@ -763,10 +763,8 @@ mod tests {
     ]);
 
     test_packed_field!(
-        { super::WIDTH },
-        crate::Mersenne31,
         crate::PackedMersenne31AVX512,
-        super::ZEROS,
-        super::SPECIAL_VALS
+        crate::PackedMersenne31AVX512(super::ZEROS),
+        crate::PackedMersenne31AVX512(super::SPECIAL_VALS)
     );
 }
