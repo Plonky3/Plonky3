@@ -89,7 +89,7 @@ where
 }
 
 #[allow(clippy::eq_op)]
-pub fn test_add_neg<PF>()
+pub fn test_add_neg<PF>(zeros: PF)
 where
     PF: PackedField + Eq,
     Standard: Distribution<PF::Scalar>,
@@ -97,7 +97,6 @@ where
     let vec0 = packed_from_random::<PF>(0x8b078c2b693c893f);
     let vec1 = packed_from_random::<PF>(0x4ff5dec04791e481);
     let vec2 = packed_from_random::<PF>(0x5806c495e9451f8e);
-    let zeros = PF::zero();
 
     assert_eq!(
         (vec0 + vec1) + vec2,
@@ -155,7 +154,7 @@ where
     );
 }
 
-pub fn test_mul<PF>()
+pub fn test_mul<PF>(zeros: PF)
 where
     PF: PackedField + Eq,
     Standard: Distribution<PF::Scalar>,
@@ -163,7 +162,6 @@ where
     let vec0 = packed_from_random::<PF>(0x0b1ee4d7c979d50c);
     let vec1 = packed_from_random::<PF>(0x39faa0844a36e45a);
     let vec2 = packed_from_random::<PF>(0x08fac4ee76260e44);
-    let zeros = PF::zero();
 
     assert_eq!(
         (vec0 * vec1) * vec2,
@@ -325,19 +323,21 @@ where
 
 #[macro_export]
 macro_rules! test_packed_field {
-    ($packedfield:ty, $specials:expr) => {
+    ($packedfield:ty, $zeros:expr, $specials:expr) => {
         mod packed_field_tests {
+            use p3_field::AbstractField;
+
             #[test]
             fn test_interleaves() {
                 $crate::test_interleaves::<$packedfield>();
             }
             #[test]
             fn test_add_neg() {
-                $crate::test_add_neg::<$packedfield>();
+                $crate::test_add_neg::<$packedfield>($zeros);
             }
             #[test]
             fn test_mul() {
-                $crate::test_mul::<$packedfield>();
+                $crate::test_mul::<$packedfield>($zeros);
             }
             #[test]
             fn test_distributivity() {

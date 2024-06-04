@@ -729,6 +729,7 @@ mod tests {
 
     test_packed_field!(
         crate::PackedBabyBearNeon,
+        crate::PackedBabyBearNeon::zero(),
         crate::PackedBabyBearNeon(super::SPECIAL_VALS)
     );
 

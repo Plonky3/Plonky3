@@ -796,6 +796,7 @@ mod tests {
 
     test_packed_field!(
         crate::PackedBabyBearAVX512,
+        crate::PackedBabyBearAVX512::zero(),
         crate::PackedBabyBearAVX512(super::SPECIAL_VALS)
     );
 }
