@@ -73,7 +73,10 @@ where
             log_max_height,
         )?;
 
-        if folded_eval != proof.final_poly {
+        let final_poly_index =
+            index >> (log_max_height + g.extra_query_index_bits() - config.log_final_poly_len);
+
+        if g.eval_final_poly(&proof.final_poly, final_poly_index) != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }
     }

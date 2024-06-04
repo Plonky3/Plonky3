@@ -45,4 +45,6 @@ pub trait FriGenericConfig<F: Field> {
 
     /// Same as applying fold_row to every row, possibly faster.
     fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
+
+    fn eval_final_poly(&self, final_poly: &[F], index: usize) -> F;
 }
