@@ -7,6 +7,7 @@
 //! database.
 
 use core::marker::PhantomData;
+
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::dot_product;
 use p3_mds::MdsPermutation;
@@ -34,11 +35,9 @@ pub struct MdsMatrixMontyField31<FP: FieldParameters, MU: MDSUtils<FP>> {
 ///
 /// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
 /// 2^24 (roughly), though in practice the sum will be less than 2^9.
-struct SmallConvolveMontyField31<FP: FieldParameters> {
-    _phantom1: PhantomData<FP>,
-}
+struct SmallConvolveMontyField31;
 
-impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallConvolveMontyField31<FP> {
+impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallConvolveMontyField31 {
     /// Return the lift of a BabyBear element, satisfying 0 <=
     /// input.value < P < 2^31. Note that BabyBear elements are
     /// represented in Monty form.
@@ -219,7 +218,9 @@ struct LargeConvolveMontyField31<FP: FieldParameters, MU: MDSUtils<FP>> {
     _phantom2: PhantomData<MU>,
 }
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Convolve<MontyField31<FP>, i64, i64, i64> for LargeConvolveMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Convolve<MontyField31<FP>, i64, i64, i64>
+    for LargeConvolveMontyField31<FP, MU>
+{
     /// Return the lift of a MontyField31 element, satisfying
     /// 0 <= input.value < P < 2^31.
     /// Note that MontyField31 elements are represented in Monty form.
@@ -279,12 +280,14 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Convolve<MontyField31<FP>, i64, i64,
     }
 }
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 8]> for MdsMatrixMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 8]>
+    for MdsMatrixMontyField31<FP, MU>
+{
     fn permute(&self, input: [MontyField31<FP>; 8]) -> [MontyField31<FP>; 8] {
-            SmallConvolveMontyField31::<FP>::apply(
+        SmallConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_8_COL,
-            SmallConvolveMontyField31::<FP>::conv8,
+            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv8,
         )
     }
 
@@ -292,14 +295,19 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 8]> f
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 8> for MdsMatrixMontyField31<FP, MU> {}
+impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 8>
+    for MdsMatrixMontyField31<FP, MU>
+{
+}
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 12]> for MdsMatrixMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 12]>
+    for MdsMatrixMontyField31<FP, MU>
+{
     fn permute(&self, input: [MontyField31<FP>; 12]) -> [MontyField31<FP>; 12] {
-            SmallConvolveMontyField31::<FP>::apply(
+        SmallConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_12_COL,
-            SmallConvolveMontyField31::<FP>::conv12,
+            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv12,
         )
     }
 
@@ -307,14 +315,19 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 12]> 
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 12> for MdsMatrixMontyField31<FP, MU> {}
+impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 12>
+    for MdsMatrixMontyField31<FP, MU>
+{
+}
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 16]> for MdsMatrixMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 16]>
+    for MdsMatrixMontyField31<FP, MU>
+{
     fn permute(&self, input: [MontyField31<FP>; 16]) -> [MontyField31<FP>; 16] {
-            SmallConvolveMontyField31::<FP>::apply(
+        SmallConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_16_COL,
-            SmallConvolveMontyField31::<FP>::conv16,
+            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv16,
         )
     }
 
@@ -322,11 +335,16 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 16]> 
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 16> for MdsMatrixMontyField31<FP, MU> {}
+impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 16>
+    for MdsMatrixMontyField31<FP, MU>
+{
+}
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 24]> for MdsMatrixMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 24]>
+    for MdsMatrixMontyField31<FP, MU>
+{
     fn permute(&self, input: [MontyField31<FP>; 24]) -> [MontyField31<FP>; 24] {
-            LargeConvolveMontyField31::<FP, MU>::apply(
+        LargeConvolveMontyField31::<FP, MU>::apply(
             input,
             MU::MATRIX_CIRC_MDS_24_COL,
             LargeConvolveMontyField31::<FP, MU>::conv24,
@@ -337,11 +355,16 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 24]> 
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 24> for MdsMatrixMontyField31<FP, MU> {}
+impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 24>
+    for MdsMatrixMontyField31<FP, MU>
+{
+}
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 32]> for MdsMatrixMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 32]>
+    for MdsMatrixMontyField31<FP, MU>
+{
     fn permute(&self, input: [MontyField31<FP>; 32]) -> [MontyField31<FP>; 32] {
-            LargeConvolveMontyField31::<FP, MU>::apply(
+        LargeConvolveMontyField31::<FP, MU>::apply(
             input,
             MU::MATRIX_CIRC_MDS_32_COL,
             LargeConvolveMontyField31::<FP, MU>::conv32,
@@ -352,11 +375,16 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 32]> 
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 32> for MdsMatrixMontyField31<FP, MU> {}
+impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 32>
+    for MdsMatrixMontyField31<FP, MU>
+{
+}
 
-impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 64]> for MdsMatrixMontyField31<FP, MU> {
+impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 64]>
+    for MdsMatrixMontyField31<FP, MU>
+{
     fn permute(&self, input: [MontyField31<FP>; 64]) -> [MontyField31<FP>; 64] {
-            LargeConvolveMontyField31::<FP, MU>::apply(
+        LargeConvolveMontyField31::<FP, MU>::apply(
             input,
             MU::MATRIX_CIRC_MDS_64_COL,
             LargeConvolveMontyField31::<FP, MU>::conv64,
@@ -367,5 +395,7 @@ impl<FP: FieldParameters, MU: MDSUtils<FP>> Permutation<[MontyField31<FP>; 64]> 
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 64> for MdsMatrixMontyField31<FP, MU> {}
-
+impl<FP: FieldParameters, MU: MDSUtils<FP>> MdsPermutation<MontyField31<FP>, 64>
+    for MdsMatrixMontyField31<FP, MU>
+{
+}
