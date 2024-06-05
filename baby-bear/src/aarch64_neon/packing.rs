@@ -719,6 +719,7 @@ unsafe impl PackedField for PackedBabyBearNeon {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::AbstractField;
     use p3_field_testing::test_packed_field;
 
     use super::{BabyBear, PackedBabyBearNeon, WIDTH};
@@ -745,9 +746,7 @@ mod tests {
 
     #[test]
     fn test_cube_vs_scalar() {
-        let arr = PackedBabyBearNeon(to_babybear_array([
-            0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6,
-        ]));
+        let arr = to_babybear_array([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]);
 
         let vec = PackedBabyBearNeon(arr);
         let vec_res = vec.cube();
