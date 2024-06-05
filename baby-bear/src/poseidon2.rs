@@ -51,7 +51,8 @@ struct Poseidon2BabyBear;
 
 impl Poseidon2Utils<BabyBearParameters, 16> for Poseidon2BabyBear {
     type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 }
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
