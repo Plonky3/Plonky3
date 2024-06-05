@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-field = { path = "../field" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
+rand_chacha = "0.3.1"
 criterion = "0.5.1"
 num-bigint = { version = "0.4.3", default-features = false }
 num-traits = "0.2.19"
