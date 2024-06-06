@@ -33,21 +33,19 @@ impl Permutation<[PackedMersenne31AVX2; 24]> for DiffusionMatrixMersenne31 {
 impl DiffusionPermutation<PackedMersenne31AVX2, 24> for DiffusionMatrixMersenne31 {}
 
 const P: u32 = 0x7fffffff;
+const PX4: u64 = (P as u64) << 2;
 const PSQ: i64 = (P as i64) * (P as i64);
 const P_4XU64: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
-const MASK: __m256i = unsafe {
-    transmute::<[u64; 4], _>([
-        0,
-        0xffffffffffffffff,
-        0xffffffffffffffff,
-        0xffffffffffffffff,
-    ])
-};
 
-const INTERNAL_SHIFTS0: __m256i = unsafe { transmute::<[u64; 4], _>([0, 0, 1, 2]) };
-const INTERNAL_SHIFTS1: __m256i = unsafe { transmute::<[u64; 4], _>([3, 4, 5, 6]) };
-const INTERNAL_SHIFTS2: __m256i = unsafe { transmute::<[u64; 4], _>([7, 8, 10, 12]) };
-const INTERNAL_SHIFTS3: __m256i = unsafe { transmute::<[u64; 4], _>([13, 14, 15, 16]) };
+pub const INTERNAL_SHIFTS0: __m256i = unsafe { transmute::<[u64; 4], _>([0, 0, 1, 2]) };
+pub const INTERNAL_SHIFTS1: __m256i = unsafe { transmute::<[u64; 4], _>([3, 4, 5, 6]) };
+pub const INTERNAL_SHIFTS2: __m256i = unsafe { transmute::<[u64; 4], _>([7, 8, 10, 12]) };
+pub const INTERNAL_SHIFTS3: __m256i = unsafe { transmute::<[u64; 4], _>([13, 14, 15, 16]) };
+
+const INTERNAL_SHIFTS0_T: __m256i = unsafe { transmute::<[u64; 4], _>([0, 3, 7, 13]) };
+const INTERNAL_SHIFTS1_T: __m256i = unsafe { transmute::<[u64; 4], _>([0, 4, 8, 14]) };
+const INTERNAL_SHIFTS2_T: __m256i = unsafe { transmute::<[u64; 4], _>([1, 5, 10, 15]) };
+const INTERNAL_SHIFTS3_T: __m256i = unsafe { transmute::<[u64; 4], _>([2, 6, 12, 16]) };
 
 #[derive(Clone, Debug)]
 pub struct Poseidon2AVX2M31 {
@@ -64,7 +62,7 @@ pub struct Packed64bitM31Matrix([__m256i; 4]);
 
 impl Packed64bitM31Matrix {
     /// Compute the transpose of the given matrix.
-    fn transpose(&mut self) {
+    pub fn transpose(&mut self) {
         unsafe {
             // Safety: If this code got compiled then AVX2 intrinsics are available.
             let i0 = x86_64::_mm256_unpacklo_epi64(self.0[0], self.0[1]);
@@ -110,7 +108,7 @@ impl Packed64bitM31Matrix {
     /// [ 1 2 1 1 ]
     /// [ 1 1 2 1 ]
     /// [ 1 1 1 2 ].
-    fn mat_mul_i_plus_1(&mut self) {
+    fn _mat_mul_i_plus_1(&mut self) {
         unsafe {
             // Safety: If the inputs are <= L, the outputs are <= 5L.
             // Hence if L < 2^61, overflow will not occur.
@@ -122,6 +120,22 @@ impl Packed64bitM31Matrix {
             self.0[1] = x86_64::_mm256_add_epi64(self.0[1], t0123);
             self.0[2] = x86_64::_mm256_add_epi64(self.0[2], t0123);
             self.0[3] = x86_64::_mm256_add_epi64(self.0[3], t0123);
+        }
+    }
+
+    /// Right Multiply by the matrix I + 1:
+    /// [ 2 1 1 1 ]
+    /// [ 1 2 1 1 ]
+    /// [ 1 1 2 1 ]
+    /// [ 1 1 1 2 ].
+    fn right_mat_mul_i_plus_1(&mut self) {
+        // This basically boils down to needing to take the sum of each row.
+        unsafe {
+            // Safety: If the inputs are <= L, the outputs are <= 5L.
+            self.0[0] = x86_64::_mm256_add_epi64(self.0[0], hsum(self.0[0]));
+            self.0[1] = x86_64::_mm256_add_epi64(self.0[1], hsum(self.0[1]));
+            self.0[2] = x86_64::_mm256_add_epi64(self.0[2], hsum(self.0[2]));
+            self.0[3] = x86_64::_mm256_add_epi64(self.0[3], hsum(self.0[3]));
         }
     }
 
@@ -173,49 +187,51 @@ impl Packed64bitM31Matrix {
             // We will then move the first element back in later.
 
             let s0 = { transmute::<_, [u64; 4]>(self.0[0]) }[0] as u32; // Pull out the first element.
-            self.0[0] = x86_64::_mm256_and_si256(self.0[0], MASK); // 0 the first element in the matrix.
 
+            // Can do part of the sum vertically.
             let t01 = x86_64::_mm256_add_epi64(self.0[0], self.0[1]);
             let t23 = x86_64::_mm256_add_epi64(self.0[2], self.0[3]);
             let t0123 = x86_64::_mm256_add_epi64(t01, t23);
 
             // Now need to sum t0123 horizontally.
-            let total: u64 = { transmute::<_, [u64; 4]>(t0123) }.into_iter().sum();
+            let t0123: [u64; 4] = transmute(t0123);
+            let total = t0123[0] + t0123[1] + t0123[2] + t0123[3] - (s0 as u64);
             // IMPROVE: Suspect this is suboptimal and can be improved.
 
             // Doing the diagonal multiplication.
-            self.0[0] = x86_64::_mm256_sllv_epi64(self.0[0], INTERNAL_SHIFTS0);
-            self.0[1] = x86_64::_mm256_sllv_epi64(self.0[1], INTERNAL_SHIFTS1);
-            self.0[2] = x86_64::_mm256_sllv_epi64(self.0[2], INTERNAL_SHIFTS2);
-            self.0[3] = x86_64::_mm256_sllv_epi64(self.0[3], INTERNAL_SHIFTS3);
+            self.0[0] = x86_64::_mm256_sllv_epi64(self.0[0], INTERNAL_SHIFTS0_T);
+            self.0[1] = x86_64::_mm256_sllv_epi64(self.0[1], INTERNAL_SHIFTS1_T);
+            self.0[2] = x86_64::_mm256_sllv_epi64(self.0[2], INTERNAL_SHIFTS2_T);
+            self.0[3] = x86_64::_mm256_sllv_epi64(self.0[3], INTERNAL_SHIFTS3_T);
 
             // Need to compute s0 -> (s0 + rc)^5
-            let (sum, over) = s0.overflowing_add(rc); // s0 + rc < 2^33 - 3, over detects if its >= 2^32.
-            let sum_corr = sum.wrapping_sub(P << 1) as i32; // If over, sum_corr is in [0, 2^31 - 1].
-            let sum_sub = sum.wrapping_sub(P) as i32; // If not over, sum_sub is in [-2^31 + 1, 2^31 - 1].
-                                                      ////////////////////
-                                                      // BUG!! sum_sub could be exactly 2^31.
-                                                      // Need to fix before production.
-                                                      ////////////////////
-            let val = if over { sum_corr } else { sum_sub };
+            let (sum, over) = s0.overflowing_add(rc); // s0 + rc <= 3P, over detects if its > 2^32 - 1 = 2P + 1.
+            let (sum_corr, under) = sum.overflowing_sub(P << 1); // If over, sum_corr is in [0, P].
+                                                                 // Under is used to flag the unique sum = 2P + 1 case.
+            let sum_sub = sum.wrapping_sub(P) as i32; // If not over and under, sum_sub is in [-P, P].
 
-            let sq = (val as i64) * (val as i64); // Always positive as its a square.
-            let sq_red = ((sq as u32 & P) + ((sq >> 31) as u32)).wrapping_sub(P) as i32; // Redcing to an element in [-2^31 + 1, 2^31 - 1]
+            let val = if over | !under {
+                sum_corr as i32
+            } else {
+                sum_sub
+            }; // -P - 1 <= val <= P
 
-            let quad = (sq_red as i64) * (sq_red as i64); // Always positive as its a square.
-            let quad_red = ((quad as u32 & P) + ((quad >> 31) as u32)).wrapping_sub(P) as i32; // Redcing to an element in [-2^31 + 1, 2^31 - 1]
+            let sq = (val as i64) * (val as i64); // 0 <= sq <= P^2
+            let sq_red = ((sq as u32 & P) + ((sq >> 31) as u32)).wrapping_sub(P) as i32; // -P <= sq_red <= P
 
-            let fifth = (((quad_red as i64) * (val as i64)) + PSQ) as u64; // This lies in [0, 2^63] as 2P^2 < 2^63.
+            let quad = (sq_red as i64) * (sq_red as i64); // 0 <= quad <= P^2
+            let quad_red = ((quad as u32 & P) + ((quad >> 31) as u32)).wrapping_sub(P) as i32; // -P <= quad_red <= P
+
+            let fifth = (((quad_red as i64) * (val as i64)) + PSQ) as u64; // 0 <= fifth <= 2P^2
             let fifth_red =
-                ((fifth as u32 & P) + ((fifth >> 31) as u32 & P) + ((fifth >> 62) as u32)) as u64; // Note fifth_red < 2^32 as P + P + 1 < 2^32.
+                ((fifth as u32 & P) + ((fifth >> 31) as u32 & P) + ((fifth >> 62) as u32)) as u64; // Note fifth_red <= 2P + 1 < 2^32.
 
             // Need to mutiply self00 by -2.
             // Easiest to do 4P - self00 to get the negative, then shift left by 1.
             // only involves shifts.
-            let s00 = (((P as u64) << 2) - fifth_red) << 1;
+            let s00 = (PX4 - fifth_red) << 1;
 
-            let self00 = { transmute::<[u64; 4], __m256i>([s00, 0, 0, 0]) };
-            self.0[0] = x86_64::_mm256_add_epi64(self.0[0], self00);
+            self.0[0] = x86_64::_mm256_insert_epi64::<0>(self.0[0], s00 as i64);
 
             let full_total = total + fifth_red;
             let shift = x86_64::_mm256_set1_epi64x(full_total as i64);
@@ -265,6 +281,21 @@ fn full_reduce(x: __m256i) -> __m256i {
     }
 }
 
+/// Compute the horizontal sum.
+/// Outputs a constant __m256i vector with each element equal to the sum.
+fn hsum(input: __m256i) -> __m256i {
+    unsafe {
+        let t0: [u64; 4] = transmute(input);
+        let total0 = t0[0] + t0[1] + t0[2] + t0[3];
+        x86_64::_mm256_set1_epi64x(total0 as i64)
+    }
+    // Another possible appraoch which doesn't pass to scalars:
+    // let t0 = x86_64::_mm256_castpd_si256(x86_64::_mm256_permute_pd::<0b0101>(x86_64::_mm256_castsi256_pd(input)));
+    // let part_sum = x86_64::_mm256_add_epi64(input, t0);
+    // let part_sum_swap = x86_64::_mm256_permute4x64_epi64::<0b00001111>(part_sum);
+    // x86_64::_mm256_add_epi64(part_sum, part_sum_swap)
+}
+
 /// Computex x -> x^5 for each element of the vector.
 /// The input must be in canoncial form.
 /// The output will not be in canonical form.
@@ -301,10 +332,8 @@ impl Poseidon2AVX2M31 {
     /// Output will be < 2^33.
     fn rotated_external_round(&self, state: &mut Packed64bitM31Matrix, index: usize) {
         let round_constant = self.external_round_constants[index];
-        state.transpose();
         state.mat_mul_aes();
-        state.transpose();
-        state.mat_mul_i_plus_1();
+        state.right_mat_mul_i_plus_1();
         state.add_rc(round_constant);
         state.full_reduce();
         state.joint_sbox();
@@ -318,10 +347,8 @@ impl Poseidon2AVX2M31 {
             self.rotated_external_round(state, index)
         }
 
-        state.transpose();
         state.mat_mul_aes();
-        state.transpose();
-        state.mat_mul_i_plus_1();
+        state.right_mat_mul_i_plus_1();
         state.full_reduce();
 
         // TODO: Internal Rounds
@@ -338,10 +365,8 @@ impl Poseidon2AVX2M31 {
             self.rotated_external_round(state, index)
         }
 
-        state.transpose();
         state.mat_mul_aes();
-        state.transpose();
-        state.mat_mul_i_plus_1();
+        state.right_mat_mul_i_plus_1();
         state.full_reduce();
     }
 
@@ -457,9 +482,14 @@ mod tests {
                 .sample_iter(Standard)
                 .take(ROUNDS_P)
                 .collect::<Vec<F>>();
+
             let ex_con_avx2 = external_consts_f
                 .into_iter()
-                .map(|arr| transmute(arr.map(|x| x.value as u64)))
+                .map(|arr| {
+                    let mut mat: Packed64bitM31Matrix = transmute(arr.map(|x| x.value as u64));
+                    mat.transpose();
+                    mat
+                })
                 .collect::<Vec<Packed64bitM31Matrix>>();
             let in_con_avx2 = internal_constants_f
                 .into_iter()
@@ -475,8 +505,10 @@ mod tests {
             internal_round_constants: internal_constants,
         };
 
+        avx2_input.transpose();
         p2.poseidon2(&mut avx2_input);
         avx2_input.full_reduce();
+        avx2_input.transpose();
 
         let output: [F; 16] = unsafe {
             transmute::<_, [u64; 16]>(avx2_input).map(|elem| Mersenne31 { value: elem as u32 })

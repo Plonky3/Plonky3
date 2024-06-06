@@ -138,7 +138,7 @@ fn poseidon2_avx2_m31(c: &mut Criterion) {
     };
 
     let avx2_input: Packed64bitM31Matrix = unsafe { transmute([0_u64; 16]) };
-    let name = "poseidon2_avx2_m31";
+    let name = "poseidon2_avx2_Mersenne31";
     let id = BenchmarkId::new(name, 16);
     c.bench_with_input(id, &avx2_input, |b, &avx2_input| {
         b.iter(|| p2.poseidon2_non_mut(avx2_input))
