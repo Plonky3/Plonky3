@@ -1,7 +1,5 @@
-use core::{
-    arch::aarch64::{int32x4_t, uint32x4_t},
-    mem::transmute,
-};
+use core::arch::aarch64::{int32x4_t, uint32x4_t};
+use core::mem::transmute;
 
 use p3_monty_31::{FieldParametersNeon, PackedMontyField31Neon};
 

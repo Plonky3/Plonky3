@@ -20,7 +20,8 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
         state[0] = MontyField31::new_monty(monty_reduce::<FP>(s0));
 
         for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
-            let si = full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS.as_ref()[i]);
+            let si =
+                full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS.as_ref()[i]);
             state[i + 1] = MontyField31::new_monty(monty_reduce::<FP>(si));
         }
     }
@@ -34,7 +35,7 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
 pub trait Poseidon2Monty31<FP: FieldParameters>:
     Poseidon2Utils<FP, 16> + Poseidon2Utils<FP, 24> + Clone + Sync
 {
-	const MONTY_INVERSE: MontyField31<FP> = MontyField31::<FP>::new_monty(1);
+    const MONTY_INVERSE: MontyField31<FP> = MontyField31::<FP>::new_monty(1);
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,9 +44,10 @@ pub struct DiffusionMatrixMontyField31<FP: FieldParameters, PU: Poseidon2Monty31
     _phantom2: PhantomData<PU>,
 }
 
-impl <FP: FieldParameters, const WIDTH: usize, PU: Poseidon2Monty31<FP>> Permutation<[MontyField31<FP>; WIDTH]> for DiffusionMatrixMontyField31<FP, PU>
+impl<FP: FieldParameters, const WIDTH: usize, PU: Poseidon2Monty31<FP>>
+    Permutation<[MontyField31<FP>; WIDTH]> for DiffusionMatrixMontyField31<FP, PU>
 where
-    PU: Poseidon2Utils<FP, WIDTH>
+    PU: Poseidon2Utils<FP, WIDTH>,
 {
     #[inline]
     fn permute_mut(&self, state: &mut [MontyField31<FP>; WIDTH]) {
@@ -53,8 +55,9 @@ where
     }
 }
 
-impl <FP: FieldParameters, const WIDTH: usize, PU: Poseidon2Monty31<FP>> DiffusionPermutation<MontyField31<FP>, WIDTH> for DiffusionMatrixMontyField31<FP, PU>
+impl<FP: FieldParameters, const WIDTH: usize, PU: Poseidon2Monty31<FP>>
+    DiffusionPermutation<MontyField31<FP>, WIDTH> for DiffusionMatrixMontyField31<FP, PU>
 where
-    PU: Poseidon2Utils<FP, WIDTH>
+    PU: Poseidon2Utils<FP, WIDTH>,
 {
 }

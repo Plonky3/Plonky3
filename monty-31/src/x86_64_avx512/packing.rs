@@ -8,20 +8,12 @@ use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{MontyField31, FieldParameters};
+use crate::{FieldParameters, MontyField31};
 
 const WIDTH: usize = 16;
 
 pub trait FieldParametersAVX512:
-    Copy
-    + Clone
-    + Default
-    + Eq
-    + PartialEq
-    + Sync
-    + Send
-    + Hash
-    + 'static
+    Copy + Clone + Default + Eq + PartialEq + Sync + Send + Hash + 'static
 {
     const PACKEDP: __m512i;
     const PACKEDMU: __m512i;
