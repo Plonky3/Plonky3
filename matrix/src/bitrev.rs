@@ -5,7 +5,7 @@ use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use crate::util::reverse_matrix_index_bits;
 use crate::Matrix;
 
-/// A matrix that is possibly bit-reversed, and can easily switch
+/// A matrix whose row indices are possibly bit-reversed, enabling easily switching
 /// between orderings. Pretty much just either `RowMajorMatrix` or
 /// `BitReversedMatrixView<RowMajorMatrix>`.
 pub trait BitReversableMatrix<T: Send + Sync>: Matrix<T> {
@@ -19,6 +19,7 @@ pub struct BitReversalPerm {
 }
 
 impl BitReversalPerm {
+    /// Assumes the inner matrix height is a power of two; panics otherwise.
     pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
         inner: Inner,
     ) -> BitReversedMatrixView<Inner> {
