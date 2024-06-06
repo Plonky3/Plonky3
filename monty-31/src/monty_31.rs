@@ -179,13 +179,12 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
 
 impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-    type Packing = todo!();
-    // type Packing = crate::PackedMontyField31Neon;
+    type Packing = crate::PackedMontyField31Neon<FP>;
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",
         not(all(feature = "nightly-features", target_feature = "avx512f"))
-    ))] 
+    ))]
     type Packing = crate::PackedMontyField31AVX2<FP>;
     #[cfg(all(
         feature = "nightly-features",
