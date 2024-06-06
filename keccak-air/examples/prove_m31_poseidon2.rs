@@ -1,13 +1,13 @@
 use p3_challenger::DuplexChallenger;
+use p3_circle::{Cfft, CirclePcs};
 use p3_commit::ExtensionMmcs;
-use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
+use p3_fri::FriConfig;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon::Poseidon;
+use p3_mersenne_31::{DiffusionMatrixMersenne31, Mersenne31};
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
 use rand::{random, thread_rng};
@@ -29,16 +29,20 @@ fn main() -> Result<(), VerificationError> {
         .with(ForestLayer::default())
         .init();
 
-    type Val = Goldilocks;
-    type Challenge = BinomialExtensionField<Val, 2>;
+    type Val = Mersenne31;
+    type Challenge = BinomialExtensionField<Val, 3>;
 
-    type Perm = Poseidon<Val, MdsMatrixGoldilocks, 8, 7>;
-    let perm = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut thread_rng());
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 16, 5>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixMersenne31,
+        &mut thread_rng(),
+    );
 
-    type MyHash = PaddingFreeSponge<Perm, 8, 4, 4>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
 
-    type MyCompress = TruncatedPermutation<Perm, 2, 4, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     let compress = MyCompress::new(perm.clone());
 
     type ValMmcs = FieldMerkleTreeMmcs<
@@ -46,20 +50,14 @@ fn main() -> Result<(), VerificationError> {
         <Val as Field>::Packing,
         MyHash,
         MyCompress,
-        4,
+        8,
     >;
     let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
-
-    type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
-
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let fri_config = FriConfig {
         log_blowup: 1,
@@ -67,11 +65,19 @@ fn main() -> Result<(), VerificationError> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
-    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config);
+
+    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+    let pcs = Pcs {
+        cfft: Cfft::default(),
+        mmcs: val_mmcs,
+        fri_config,
+    };
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
+
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_trace_rows::<Val>(inputs);
 
     let mut challenger = Challenger::new(perm.clone());
     let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);

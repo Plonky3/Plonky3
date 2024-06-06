@@ -288,7 +288,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a slice `bs` of
-    /// length at most D, and constructs the field element
+    /// length at exactly D, and constructs the field element
     /// \sum_i bs[i] * X^i.
     ///
     /// NB: The value produced by this function fundamentally depends

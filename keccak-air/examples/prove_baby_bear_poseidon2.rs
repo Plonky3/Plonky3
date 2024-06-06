@@ -78,7 +78,6 @@ fn main() -> Result<(), VerificationError> {
     let config = MyConfig::new(pcs);
 
     let mut challenger = Challenger::new(perm.clone());
-
     let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::new(perm);
