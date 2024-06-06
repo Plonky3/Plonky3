@@ -77,7 +77,7 @@ pub trait FieldParameters:
     + TwoAdicData
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
-    + crate::FieldParametersNEON
+    + crate::FieldParametersNeon
 {
 }
 #[cfg(all(

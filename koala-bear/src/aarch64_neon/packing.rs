@@ -1,4 +1,7 @@
-use core::arch::aarch64::{int32x4_t, uint32x4_t};
+use core::{
+    arch::aarch64::{int32x4_t, uint32x4_t},
+    mem::transmute,
+};
 
 use p3_monty_31::{FieldParametersNeon, PackedMontyField31Neon};
 
@@ -7,9 +10,9 @@ use crate::KoalaBearParameters;
 const WIDTH: usize = 4;
 
 impl FieldParametersNeon for KoalaBearParameters {
-    const PACKEDP: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
+    const PACKEDP: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7f000001; WIDTH]) };
     // This MU is the same 0x88000001 as elsewhere, just interpreted as an `i32`.
-    const PACKEDMU: int32x4_t = unsafe { transmute::<[i32; WIDTH], _>([-0x77ffffff; WIDTH]) };
+    const PACKEDMU: int32x4_t = unsafe { transmute::<[i32; WIDTH], _>([-0x7effffff; WIDTH]) };
 }
 
 pub type PackedKoalaBearNeon = PackedMontyField31Neon<KoalaBearParameters>;

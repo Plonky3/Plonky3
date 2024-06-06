@@ -513,7 +513,7 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
     #[inline]
     fn cube(&self) -> Self {
         let val = self.to_vector();
-        let res = cube(val);
+        let res = cube::<FP>(val);
         unsafe {
             // Safety: `cube` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
