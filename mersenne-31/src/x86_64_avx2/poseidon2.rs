@@ -103,6 +103,7 @@ impl Packed64bitM31Matrix {
         }
     }
 
+    /// Can probably rework this to do it without the transpose.
     /// Left Multiply by the matrix I + 1:
     /// [ 2 1 1 1 ]
     /// [ 1 2 1 1 ]
@@ -176,8 +177,10 @@ impl Packed64bitM31Matrix {
             let t01 = x86_64::_mm256_add_epi64(self.0[0], self.0[1]);
             let t23 = x86_64::_mm256_add_epi64(self.0[2], self.0[3]);
             let t0123 = x86_64::_mm256_add_epi64(t01, t23);
+
             // Now need to sum t0123 horizontally.
             let total: u64 = { transmute::<_, [u64; 4]>(t0123) }.into_iter().sum();
+            // IMPROVE: Suspect this is suboptimal and can be improved.
 
             // Doing the diagonal multiplication.
             self.0[0] = x86_64::_mm256_sllv_epi64(self.0[0], INTERNAL_SHIFTS0);
@@ -186,13 +189,13 @@ impl Packed64bitM31Matrix {
             self.0[3] = x86_64::_mm256_sllv_epi64(self.0[3], INTERNAL_SHIFTS3);
 
             // Need to compute s0 -> (s0 + rc)^5
-            let (sum, over) = s0.overflowing_add(rc); // s0 + rc < 2^33, over detects if its > 2^32.
+            let (sum, over) = s0.overflowing_add(rc); // s0 + rc < 2^33 - 3, over detects if its >= 2^32.
             let sum_corr = sum.wrapping_sub(P << 1) as i32; // If over, sum_corr is in [0, 2^31 - 1].
             let sum_sub = sum.wrapping_sub(P) as i32; // If not over, sum_sub is in [-2^31 + 1, 2^31 - 1].
                                                       ////////////////////
-                                                      // BUG!! sum_sub could be exactly 2^31! Probably won't come up in the short term but definately need to fix
+                                                      // BUG!! sum_sub could be exactly 2^31.
+                                                      // Need to fix before production.
                                                       ////////////////////
-
             let val = if over { sum_corr } else { sum_sub };
 
             let sq = (val as i64) * (val as i64); // Always positive as its a square.
