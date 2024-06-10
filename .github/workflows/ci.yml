@@ -130,6 +130,6 @@ jobs:
 
     - name: Cargo Check Crates (all architectures)
       run: |
-        cargo check --verbose --target aarch64-unknown-linux-gnu
-        cargo check --verbose --target aarch64-apple-darwin
+        cargo check --verbose --target aarch64-unknown-linux-gnu --features=pure
+        cargo check --verbose --target aarch64-apple-darwin --features=pure
         RUSTFLAGS="-Ctarget-feature=+avx2" cargo check --verbose --target x86_64-unknown-linux-gnu
