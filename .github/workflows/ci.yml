@@ -125,3 +125,9 @@ jobs:
         cargo check --verbose --package p3-symmetric
         cargo check --verbose --package p3-uni-stark
         cargo check --verbose --package p3-util
+
+    - name: Cargo Check p3-field (all architectures)
+      run: |
+        cargo check --verbose --target aarch64-unknown-linux-gnu
+        cargo check --verbose --target aarch64-apple-darwin
+        RUSTFLAGS="-Ctarget-feature=+avx2" cargo check --verbose --target x86_64-unknown-linux-gnu
