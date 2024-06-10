@@ -20,6 +20,15 @@ impl<M> FriConfig<M> {
     pub const fn final_poly_len(&self) -> usize {
         1 << self.log_final_poly_len
     }
+
+    /// Returns the soundness bits of this FRI instance based on the
+    /// [ethSTARK](https://eprint.iacr.org/2021/582) conjecture.
+    ///
+    /// Certain users may instead want to look at proven soundness, a more complex calculation which
+    /// isn't currently supported by this crate.
+    pub fn conjectured_soundness_bits(&self) -> usize {
+        self.log_blowup * self.num_queries + self.proof_of_work_bits
+    }
 }
 
 /// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is

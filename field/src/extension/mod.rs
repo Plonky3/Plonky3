@@ -58,5 +58,7 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
 pub trait HasTwoAdicBionmialExtension<const D: usize>: BinomiallyExtendable<D> {
     const EXT_TWO_ADICITY: usize;
 
+    /// Assumes the multiplicative group size has at least `bits` powers of two, otherwise the
+    /// behavior is undefined.
     fn ext_two_adic_generator(bits: usize) -> [Self; D];
 }
