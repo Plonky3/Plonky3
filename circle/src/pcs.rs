@@ -359,8 +359,9 @@ where
         let bivariate_beta: Challenge = challenger.sample();
 
         // +1 to account for first layer
-        let log_global_max_height =
-            proof.fri_proof.commit_phase_commits.len() + self.fri_config.log_blowup + 1;
+        let log_global_max_height = proof.fri_proof.commit_phase_commits.len()
+            + log2_strict_usize(proof.fri_proof.final_poly.len())
+            + 1;
 
         let g: CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriGenericConfig(PhantomData);
@@ -533,6 +534,7 @@ mod tests {
 
         let fri_config = FriConfig {
             log_blowup: 1,
+            log_final_poly_len: 5,
             num_queries: 2,
             proof_of_work_bits: 1,
             mmcs: challenge_mmcs,

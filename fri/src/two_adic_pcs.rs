@@ -363,7 +363,8 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
-        let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
+        let log_global_max_height =
+            proof.commit_phase_commits.len() + log2_strict_usize(proof.final_poly.len());
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);

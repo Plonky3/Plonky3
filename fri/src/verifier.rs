@@ -6,6 +6,7 @@ use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_matrix::Dimensions;
+use p3_util::log2_strict_usize;
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
@@ -49,7 +50,8 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    let log_max_height =
+        proof.commit_phase_commits.len() + log2_strict_usize(proof.final_poly.len());
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
@@ -70,10 +72,12 @@ where
                 &qp.commit_phase_openings
             ),
             ro,
-            log_max_height,
         )?;
 
-        if folded_eval != proof.final_poly {
+        let final_poly_index =
+            index >> (proof.commit_phase_commits.len() + g.extra_query_index_bits());
+
+        if proof.final_poly[final_poly_index] != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }
     }
@@ -93,21 +97,16 @@ fn verify_query<'a, G, F, M>(
     mut index: usize,
     steps: impl Iterator<Item = CommitStep<'a, F, M>>,
     reduced_openings: Vec<(usize, F)>,
-    log_max_height: usize,
 ) -> Result<F, FriError<M::Error, G::InputError>>
 where
     F: Field,
     M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
-    let mut folded_eval = F::zero();
     let mut ro_iter = reduced_openings.into_iter().peekable();
+    let (log_max_height, mut folded_eval) = ro_iter.next().unwrap();
 
     for (log_folded_height, (&beta, comm, opening)) in izip!((0..log_max_height).rev(), steps) {
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
-            folded_eval += ro;
-        }
-
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
 
@@ -132,11 +131,20 @@ where
         index = index_pair;
 
         folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
+
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
+            folded_eval += ro;
+        }
     }
 
-    debug_assert!(index < config.blowup(), "index was {}", index);
     debug_assert!(
-        ro_iter.next().is_none(),
+        index < config.blowup() || index < config.final_poly_len(),
+        "index was {}",
+        index
+    );
+    debug_assert_eq!(
+        ro_iter.collect_vec(),
+        vec![],
         "verifier reduced_openings were not in descending order?"
     );
 
