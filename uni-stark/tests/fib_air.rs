@@ -129,6 +129,7 @@ fn test_public_value() {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let fri_config = FriConfig {
         log_blowup: 2,
+        log_final_poly_len: 5,
         num_queries: 28,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
@@ -162,6 +163,7 @@ fn test_incorrect_public_value() {
     let dft = Dft {};
     let fri_config = FriConfig {
         log_blowup: 2,
+        log_final_poly_len: 5,
         num_queries: 28,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,

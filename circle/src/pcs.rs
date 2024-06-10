@@ -534,6 +534,7 @@ mod tests {
 
         let fri_config = FriConfig {
             log_blowup: 1,
+            log_final_poly_len: 5,
             num_queries: 2,
             proof_of_work_bits: 1,
             mmcs: challenge_mmcs,
