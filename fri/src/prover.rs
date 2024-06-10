@@ -84,7 +84,10 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > cmp::min(config.blowup(), config.final_poly_len()) {
+    // Keep folding until final_poly smaller than configured and all inputs mixed in.
+    while folded.len() > cmp::max(config.blowup(), config.final_poly_len())
+        || inputs_iter.peek().is_some()
+    {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());

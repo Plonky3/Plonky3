@@ -72,7 +72,6 @@ where
                 &qp.commit_phase_openings
             ),
             ro,
-            log_max_height,
         )?;
 
         let final_poly_index =
@@ -98,21 +97,16 @@ fn verify_query<'a, G, F, M>(
     mut index: usize,
     steps: impl Iterator<Item = CommitStep<'a, F, M>>,
     reduced_openings: Vec<(usize, F)>,
-    log_max_height: usize,
 ) -> Result<F, FriError<M::Error, G::InputError>>
 where
     F: Field,
     M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
-    let mut folded_eval = F::zero();
     let mut ro_iter = reduced_openings.into_iter().peekable();
+    let (log_max_height, mut folded_eval) = ro_iter.next().unwrap();
 
     for (log_folded_height, (&beta, comm, opening)) in izip!((0..log_max_height).rev(), steps) {
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
-            folded_eval += ro;
-        }
-
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
 
@@ -137,11 +131,20 @@ where
         index = index_pair;
 
         folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
+
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
+            folded_eval += ro;
+        }
     }
 
-    debug_assert!(index < config.blowup(), "index was {}", index);
     debug_assert!(
-        ro_iter.next().is_none(),
+        index < config.blowup() || index < config.final_poly_len(),
+        "index was {}",
+        index
+    );
+    debug_assert_eq!(
+        ro_iter.collect_vec(),
+        vec![],
         "verifier reduced_openings were not in descending order?"
     );
 
