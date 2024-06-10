@@ -19,12 +19,12 @@ use tracing::instrument;
 /// see `FieldMerkleTreeMmcs`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FieldMerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
-    pub(crate) leaves: Vec<M>,
+    pub leaves: Vec<M>,
     // Enable serialization for this field whenever the underlying array type supports it (len 1-32).
     #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
     // Enable deserialization for this field whenever the underlying array type supports it (len 1-32).
     #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
-    pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
+    pub digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
     _phantom: PhantomData<F>,
 }
 
@@ -97,6 +97,14 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             digest_layers.push(next_digests);
         }
 
+        Self {
+            leaves,
+            digest_layers,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn from_parts(leaves: Vec<M>, digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>) -> Self {
         Self {
             leaves,
             digest_layers,
