@@ -6,6 +6,7 @@ use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_matrix::Dimensions;
+use p3_util::log2_strict_usize;
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
@@ -49,7 +50,8 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    let log_max_height =
+        proof.commit_phase_commits.len() + log2_strict_usize(proof.final_poly.len());
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
@@ -74,9 +76,9 @@ where
         )?;
 
         let final_poly_index =
-            index >> (log_max_height + g.extra_query_index_bits() - config.log_final_poly_len);
+            index >> (proof.commit_phase_commits.len() + g.extra_query_index_bits());
 
-        if g.eval_final_poly(&proof.final_poly, final_poly_index) != folded_eval {
+        if proof.final_poly[final_poly_index] != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }
     }

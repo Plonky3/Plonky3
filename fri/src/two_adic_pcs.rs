@@ -127,13 +127,6 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
             })
             .collect()
     }
-
-    fn eval_final_poly(&self, final_poly: &[F], index: usize) -> F {
-        let bits = log2_strict_usize(final_poly.len());
-        let x = F::two_adic_generator(bits).exp_u64(reverse_bits_len(index, bits) as u64);
-
-        todo!()
-    }
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -370,7 +363,8 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample();
 
-        let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
+        let log_global_max_height =
+            proof.commit_phase_commits.len() + log2_strict_usize(proof.final_poly.len());
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);

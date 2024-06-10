@@ -1,6 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
+use core::{cmp, iter};
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
@@ -84,7 +84,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.final_poly_len() {
+    while folded.len() > cmp::min(config.blowup(), config.final_poly_len()) {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());

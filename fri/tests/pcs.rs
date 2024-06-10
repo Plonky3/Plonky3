@@ -173,7 +173,7 @@ mod babybear_fri_pcs {
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
-    fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
+    fn get_pcs(log_blowup: usize, log_final_poly_len: usize) -> (MyPcs, Challenger) {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
             DiffusionMatrixBabyBear,
@@ -187,6 +187,7 @@ mod babybear_fri_pcs {
 
         let fri_config = FriConfig {
             log_blowup,
+            log_final_poly_len,
             num_queries: 10,
             proof_of_work_bits: 8,
             mmcs: challenge_mmcs,
@@ -196,11 +197,23 @@ mod babybear_fri_pcs {
         (pcs, Challenger::new(perm.clone()))
     }
 
-    mod blowup_1 {
-        make_tests_for_pcs!(super::get_pcs(1));
+    mod blowup_1_finalpoly_0 {
+        make_tests_for_pcs!(super::get_pcs(1, 0));
     }
-    mod blowup_2 {
-        make_tests_for_pcs!(super::get_pcs(2));
+    mod blowup_1_finalpoly_1 {
+        make_tests_for_pcs!(super::get_pcs(1, 1));
+    }
+    mod blowup_1_finalpoly_5 {
+        make_tests_for_pcs!(super::get_pcs(1, 5));
+    }
+    mod blowup_2_finalpoly_0 {
+        make_tests_for_pcs!(super::get_pcs(2, 0));
+    }
+    mod blowup_2_finalpoly_1 {
+        make_tests_for_pcs!(super::get_pcs(2, 1));
+    }
+    mod blowup_2_finalpoly_5 {
+        make_tests_for_pcs!(super::get_pcs(2, 5));
     }
 }
 
@@ -229,7 +242,7 @@ mod m31_fri_pcs {
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
 
-    fn get_pcs(log_blowup: usize) -> (Pcs, Challenger) {
+    fn get_pcs(log_blowup: usize, log_final_poly_len: usize) -> (Pcs, Challenger) {
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
         let compress = MyCompress::new(byte_hash);
@@ -237,6 +250,7 @@ mod m31_fri_pcs {
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let fri_config = FriConfig {
             log_blowup,
+            log_final_poly_len,
             num_queries: 10,
             proof_of_work_bits: 8,
             mmcs: challenge_mmcs,
@@ -249,10 +263,22 @@ mod m31_fri_pcs {
         (pcs, Challenger::from_hasher(vec![], byte_hash))
     }
 
-    mod blowup_1 {
-        make_tests_for_pcs!(super::get_pcs(1));
+    mod blowup_1_finalpoly_0 {
+        make_tests_for_pcs!(super::get_pcs(1, 0));
     }
-    mod blowup_2 {
-        make_tests_for_pcs!(super::get_pcs(2));
+    mod blowup_1_finalpoly_1 {
+        make_tests_for_pcs!(super::get_pcs(1, 1));
+    }
+    mod blowup_1_finalpoly_5 {
+        make_tests_for_pcs!(super::get_pcs(1, 5));
+    }
+    mod blowup_2_finalpoly_0 {
+        make_tests_for_pcs!(super::get_pcs(2, 0));
+    }
+    mod blowup_2_finalpoly_1 {
+        make_tests_for_pcs!(super::get_pcs(2, 1));
+    }
+    mod blowup_2_finalpoly_5 {
+        make_tests_for_pcs!(super::get_pcs(2, 5));
     }
 }
