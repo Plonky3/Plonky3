@@ -1,9 +1,7 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_monty_31::{to_monty_array, Poseidon2Utils};
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_monty_31::{to_monty_array, DiffusionMatrixMontyField31, Poseidon2Monty31, Poseidon2Utils};
 
 use crate::{KoalaBear, KoalaBearParameters};
 
@@ -25,10 +23,19 @@ use crate::{KoalaBear, KoalaBearParameters};
 // Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY can all be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
 // They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
-pub const MONTY_INVERSE: KoalaBear = KoalaBear::new_monty(1);
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
-    to_monty_array::<16, KoalaBearParameters>([
+pub type DiffusionMatrixKoalaBear =
+    DiffusionMatrixMontyField31<KoalaBearParameters, KoalaBearPoseidon2Utils>;
+
+#[derive(Debug, Clone, Default)]
+pub struct KoalaBearPoseidon2Utils;
+
+impl Poseidon2Utils<KoalaBearParameters, 16> for KoalaBearPoseidon2Utils {
+    type ArrayLike = [u8; 15];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = to_monty_array::<16, KoalaBearParameters>([
         KoalaBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -46,20 +53,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
         1 << 13,
         1 << 15,
     ]);
-
-#[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixKoalaBear;
-
-impl Poseidon2Utils<KoalaBearParameters, 16> for DiffusionMatrixKoalaBear {
-    type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
-
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY;
 }
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
-    to_monty_array::<24, KoalaBearParameters>([
+impl Poseidon2Utils<KoalaBearParameters, 24> for KoalaBearPoseidon2Utils {
+    type ArrayLike = [u8; 23];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
+    ];
+
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = to_monty_array::<24, KoalaBearParameters>([
         KoalaBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -85,37 +87,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
         1 << 21,
         1 << 23,
     ]);
-
-impl Poseidon2Utils<KoalaBearParameters, 24> for DiffusionMatrixKoalaBear {
-    type ArrayLike = [u8; 23];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
-    ];
-
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY;
 }
 
-impl<const WIDTH: usize> Permutation<[KoalaBear; WIDTH]> for DiffusionMatrixKoalaBear
-where
-    DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>,
-{
-    #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; WIDTH]) {
-        <DiffusionMatrixKoalaBear as Poseidon2Utils<KoalaBearParameters, WIDTH>>::permute_state(
-            state,
-        )
-    }
-}
-
-impl<const WIDTH: usize> DiffusionPermutation<KoalaBear, WIDTH> for DiffusionMatrixKoalaBear where
-    DiffusionMatrixKoalaBear: Poseidon2Utils<KoalaBearParameters, WIDTH>
-{
-}
+impl Poseidon2Monty31<KoalaBearParameters> for KoalaBearPoseidon2Utils {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{DiffusionPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -162,7 +142,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear);
+        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
         assert_eq!(input, expected);
     }
 
@@ -188,7 +168,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear);
+        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
         assert_eq!(input, expected);
     }
 }

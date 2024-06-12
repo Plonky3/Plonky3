@@ -5,6 +5,8 @@ use p3_symmetric::Permutation;
 
 use crate::{monty_reduce, FieldParameters, MontyField31};
 
+/// Everything needed to compute the internal linear layers.
+/// INTERNAL_DIAG_MONTY is needed currently for Packed Field impls but can be removed long term.
 pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
     type ArrayLike: AsRef<[u8]> + Sized;
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike;
@@ -27,11 +29,12 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
     }
 }
 
-// Long term we could also do an implementation like the following:
-// Currently this doesn't work due to the orphan rule and the fact that we need to derive
-// Permutation<[_; 16]> for the various field packings. (AVX2, AVX512, NEON)
-// It's also a little ugly due to the need for 2 pieces of PhantomData.
+// Would be good to try and find a way to cut down on PhantomData.
 
+/// MONTY_INVERSE is needed for Packed Field impls.
+/// Will be removed once we have specialised code.
+/// Trait includes data which does not depend on the width of the Poseidon2 permutation.
+/// Long term will likely include some info about external rounds if we end up specialising them.
 pub trait Poseidon2Monty31<FP: FieldParameters>:
     Poseidon2Utils<FP, 16> + Poseidon2Utils<FP, 24> + Clone + Sync
 {

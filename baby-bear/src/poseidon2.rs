@@ -1,9 +1,7 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_monty_31::{to_monty_array, Poseidon2Utils};
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_monty_31::{to_monty_array, DiffusionMatrixMontyField31, Poseidon2Monty31, Poseidon2Utils};
 
 use crate::{BabyBear, BabyBearParameters};
 
@@ -22,13 +20,18 @@ use crate::{BabyBear, BabyBearParameters};
 // Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
 // such that (1 + D(v)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
 
-// Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY can all be removed.
-// Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
-pub const MONTY_INVERSE: BabyBear = BabyBear::new_monty(1);
+pub type DiffusionMatrixBabyBear =
+    DiffusionMatrixMontyField31<BabyBearParameters, BabyBearPoseidon2Utils>;
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] =
-    to_monty_array::<16, BabyBearParameters>([
+#[derive(Debug, Clone, Default)]
+pub struct BabyBearPoseidon2Utils;
+
+impl Poseidon2Utils<BabyBearParameters, 16> for BabyBearPoseidon2Utils {
+    type ArrayLike = [u8; 15];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+
+    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = to_monty_array::<16, BabyBearParameters>([
         BabyBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -46,20 +49,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] =
         1 << 13,
         1 << 15,
     ]);
-
-#[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixBabyBear;
-
-impl Poseidon2Utils<BabyBearParameters, 16> for DiffusionMatrixBabyBear {
-    type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
-
-    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY;
 }
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
-    to_monty_array::<24, BabyBearParameters>([
+impl Poseidon2Utils<BabyBearParameters, 24> for BabyBearPoseidon2Utils {
+    type ArrayLike = [u8; 23];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
+    ];
+
+    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = to_monty_array::<24, BabyBearParameters>([
         BabyBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -85,35 +83,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
         1 << 22,
         1 << 23,
     ]);
-
-impl Poseidon2Utils<BabyBearParameters, 24> for DiffusionMatrixBabyBear {
-    type ArrayLike = [u8; 23];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
-    ];
-
-    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY;
 }
 
-impl<const WIDTH: usize> Permutation<[BabyBear; WIDTH]> for DiffusionMatrixBabyBear
-where
-    DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>,
-{
-    #[inline]
-    fn permute_mut(&self, state: &mut [BabyBear; WIDTH]) {
-        <DiffusionMatrixBabyBear as Poseidon2Utils<BabyBearParameters, WIDTH>>::permute_state(state)
-    }
-}
-
-impl<const WIDTH: usize> DiffusionPermutation<BabyBear, WIDTH> for DiffusionMatrixBabyBear where
-    DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>
-{
-}
+impl Poseidon2Monty31<BabyBearParameters> for BabyBearPoseidon2Utils {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{DiffusionPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -160,7 +138,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<16, 7, _>(&mut input, DiffusionMatrixBabyBear);
+        poseidon2_babybear::<16, 7, _>(&mut input, DiffusionMatrixBabyBear::default());
         assert_eq!(input, expected);
     }
 
@@ -186,7 +164,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<24, 7, _>(&mut input, DiffusionMatrixBabyBear);
+        poseidon2_babybear::<24, 7, _>(&mut input, DiffusionMatrixBabyBear::default());
         assert_eq!(input, expected);
     }
 }
