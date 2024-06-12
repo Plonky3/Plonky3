@@ -1,7 +1,7 @@
 use p3_field::{exp_1725656503, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    BinomialExtensionData, FieldConstants, FieldParameters, MontyField31, MontyParameters,
-    TwoAdicData,
+    BarettParameters, BinomialExtensionData, FieldConstants, FieldParameters, MontyField31,
+    MontyParameters, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
@@ -20,6 +20,8 @@ impl MontyParameters for BabyBearParameters {
     const MONTY_BITS: u32 = 32;
     const MONTY_MU: u32 = 0x88000001;
 }
+
+impl BarettParameters for BabyBearParameters {}
 
 impl FieldConstants for BabyBearParameters {
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {

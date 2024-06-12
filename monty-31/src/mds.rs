@@ -13,7 +13,7 @@ use p3_mds::util::dot_product;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{FieldParameters, MontyField31};
+use crate::{BarettParameters, FieldParameters, MontyField31};
 /// A collection of constants related to convolutions.
 /// The MDS matrices are saved using their left most column.
 pub trait MDSUtils: Clone + Sync {
@@ -27,7 +27,7 @@ pub trait MDSUtils: Clone + Sync {
 
 #[derive(Clone, Debug, Default)]
 pub struct MdsMatrixMontyField31<MU: MDSUtils> {
-    _phantom2: PhantomData<MU>,
+    _phantom1: PhantomData<MU>,
 }
 
 /// Instantiate convolution for "small" RHS vectors over a 31-bit MONTY_FIELD.
@@ -81,25 +81,20 @@ impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallCon
 /// x' = x mod 2^10
 /// See Thm 1 (Below function) for a proof that this function is correct.
 #[inline(always)]
-fn barret_red_monty31(input: i128, prime: u32) -> i64 {
-    const N: usize = 40; // beta = 2^N, fixing N = 40 here
-    let prime: i128 = prime as i128;
-    let pseudo_inv: i64 = (((1_i128) << (2 * N)) / prime) as i64; // I = 2^80 / P => I < 2**50
-    const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
-
+fn barret_red_monty31<BP: BarettParameters>(input: i128) -> i64 {
     // input = input_low + beta*input_high
     // So input_high < 2**63 and fits in an i64.
-    let input_high = (input >> N) as i64; // input_high < input / beta < 2**{80 - N}
+    let input_high = (input >> BP::N) as i64; // input_high < input / beta < 2**{80 - N}
 
     // I, input_high are i64's so this multiplication can't overflow.
-    let quot = (((input_high as i128) * (pseudo_inv as i128)) >> N) as i64;
+    let quot = (((input_high as i128) * (BP::PSEUDO_INV as i128)) >> BP::N) as i64;
 
     // Replace quot by a close value which is divisible by 2^10.
-    let quot_2adic = quot & MASK;
+    let quot_2adic = quot & BP::MASK;
 
     // quot_2adic, P are i64's so this can't overflow.
     // sub is by construction divisible by both P and 2^10.
-    let sub = (quot_2adic as i128) * prime;
+    let sub = (quot_2adic as i128) * BP::PRIME_I128;
 
     (input - sub) as i64
 }
@@ -234,7 +229,7 @@ impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for LargeCon
         for i in 0..N {
             dp += u[i] as i128 * v[i] as i128;
         }
-        barret_red_monty31(dp, FP::PRIME)
+        barret_red_monty31::<FP>(dp)
     }
 
     #[inline(always)]
