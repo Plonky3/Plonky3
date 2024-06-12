@@ -1,7 +1,10 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_monty_31::{to_monty_array, DiffusionMatrixMontyField31, Poseidon2Monty31, Poseidon2Utils};
+use p3_monty_31::{
+    to_monty_array, DiffusionMatrixMontyField31, DiffusionMatrixParameters,
+    MultipleDiffusionMatrixParameters,
+};
 
 use crate::{BabyBear, BabyBearParameters};
 
@@ -21,12 +24,12 @@ use crate::{BabyBear, BabyBearParameters};
 // such that (1 + D(v)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
 
 pub type DiffusionMatrixBabyBear =
-    DiffusionMatrixMontyField31<BabyBearParameters, BabyBearPoseidon2Utils>;
+    DiffusionMatrixMontyField31<BabyBearParameters, BabyBearDiffusionMatrixParameters>;
 
 #[derive(Debug, Clone, Default)]
-pub struct BabyBearPoseidon2Utils;
+pub struct BabyBearDiffusionMatrixParameters;
 
-impl Poseidon2Utils<BabyBearParameters, 16> for BabyBearPoseidon2Utils {
+impl DiffusionMatrixParameters<BabyBearParameters, 16> for BabyBearDiffusionMatrixParameters {
     type ArrayLike = [u8; 15];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
@@ -51,7 +54,7 @@ impl Poseidon2Utils<BabyBearParameters, 16> for BabyBearPoseidon2Utils {
     ]);
 }
 
-impl Poseidon2Utils<BabyBearParameters, 24> for BabyBearPoseidon2Utils {
+impl DiffusionMatrixParameters<BabyBearParameters, 24> for BabyBearDiffusionMatrixParameters {
     type ArrayLike = [u8; 23];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
@@ -85,7 +88,7 @@ impl Poseidon2Utils<BabyBearParameters, 24> for BabyBearPoseidon2Utils {
     ]);
 }
 
-impl Poseidon2Monty31<BabyBearParameters> for BabyBearPoseidon2Utils {}
+impl MultipleDiffusionMatrixParameters<BabyBearParameters> for BabyBearDiffusionMatrixParameters {}
 
 #[cfg(test)]
 mod tests {

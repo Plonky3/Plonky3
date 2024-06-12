@@ -1,7 +1,10 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_monty_31::{to_monty_array, DiffusionMatrixMontyField31, Poseidon2Monty31, Poseidon2Utils};
+use p3_monty_31::{
+    to_monty_array, DiffusionMatrixMontyField31, DiffusionMatrixParameters,
+    MultipleDiffusionMatrixParameters,
+};
 
 use crate::{KoalaBear, KoalaBearParameters};
 
@@ -25,12 +28,12 @@ use crate::{KoalaBear, KoalaBearParameters};
 // They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
 
 pub type DiffusionMatrixKoalaBear =
-    DiffusionMatrixMontyField31<KoalaBearParameters, KoalaBearPoseidon2Utils>;
+    DiffusionMatrixMontyField31<KoalaBearParameters, KoalaBearDiffusionMatrixParameters>;
 
 #[derive(Debug, Clone, Default)]
-pub struct KoalaBearPoseidon2Utils;
+pub struct KoalaBearDiffusionMatrixParameters;
 
-impl Poseidon2Utils<KoalaBearParameters, 16> for KoalaBearPoseidon2Utils {
+impl DiffusionMatrixParameters<KoalaBearParameters, 16> for KoalaBearDiffusionMatrixParameters {
     type ArrayLike = [u8; 15];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
@@ -55,7 +58,7 @@ impl Poseidon2Utils<KoalaBearParameters, 16> for KoalaBearPoseidon2Utils {
     ]);
 }
 
-impl Poseidon2Utils<KoalaBearParameters, 24> for KoalaBearPoseidon2Utils {
+impl DiffusionMatrixParameters<KoalaBearParameters, 24> for KoalaBearDiffusionMatrixParameters {
     type ArrayLike = [u8; 23];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
@@ -89,7 +92,7 @@ impl Poseidon2Utils<KoalaBearParameters, 24> for KoalaBearPoseidon2Utils {
     ]);
 }
 
-impl Poseidon2Monty31<KoalaBearParameters> for KoalaBearPoseidon2Utils {}
+impl MultipleDiffusionMatrixParameters<KoalaBearParameters> for KoalaBearDiffusionMatrixParameters {}
 
 #[cfg(test)]
 mod tests {
