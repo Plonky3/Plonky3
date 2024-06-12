@@ -1,4 +1,5 @@
 use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
+use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -7,30 +8,36 @@ use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::Mersenne31;
+use crate::{FieldParameters, MontyField31};
 
 const WIDTH: usize = 16;
-const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+
+pub trait FieldParametersAVX512:
+    Copy + Clone + Default + Eq + PartialEq + Sync + Send + Hash + 'static
+{
+    const PACKEDP: __m512i;
+    const PACKEDMU: __m512i;
+}
+
 const EVENS: __mmask16 = 0b0101010101010101;
-const ODDS: __mmask16 = 0b1010101010101010;
 const EVENS4: __mmask16 = 0x0f0f;
 
-/// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
+/// Vectorized AVX-512F implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
+pub struct PackedMontyField31AVX512<FP: FieldParameters>(pub [MontyField31<FP>; WIDTH]);
 
-impl PackedMersenne31AVX512 {
+impl<FP: FieldParameters> PackedMontyField31AVX512<FP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
     fn to_vector(self) -> __m512i {
         unsafe {
-            // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
-            // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
+            // Safety: `MontyField31` is `repr(transparent)` so it can be transmuted to `u32`. It
+            // follows that `[MontyField31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
             // transmuted to `__m512i`, since arrays are guaranteed to be contiguous in memory.
-            // Finally `PackedMersenne31AVX512` is `repr(transparent)` so it can be transmuted to
-            // `[Mersenne31; WIDTH]`.
+            // Finally `PackedMontyField31AVX512` is `repr(transparent)` so it can be transmuted to
+            // `[MontyField31; WIDTH]`.
             transmute(self)
         }
     }
@@ -40,33 +47,33 @@ impl PackedMersenne31AVX512 {
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
-    /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
+    /// `MontyField31`. In particular, each element of vector must be in `0..=P`.
     unsafe fn from_vector(vector: __m512i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `Mersenne31` values. We must only reason about memory representations. `__m512i` can be
+        // `MontyField31` values. We must only reason about memory representations. `__m512i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`), which
-        // in turn can be transmuted to `PackedMersenne31AVX512` (since `PackedMersenne31AVX512` is also
+        // be transmuted to `[MontyField31; WIDTH]` (since `MontyField31` is `repr(transparent)`), which
+        // in turn can be transmuted to `PackedMontyField31AVX512` (since `PackedMontyField31AVX512` is also
         // `repr(transparent)`).
         transmute(vector)
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
-    /// `From<Mersenne31>::from`, but `const`.
+    /// `From<MontyField31>::from`, but `const`.
     #[inline]
     #[must_use]
-    const fn broadcast(value: Mersenne31) -> Self {
+    const fn broadcast(value: MontyField31<FP>) -> Self {
         Self([value; WIDTH])
     }
 }
 
-impl Add for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Add for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = add::<FP>(lhs, rhs);
         unsafe {
             // Safety: `add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -74,13 +81,13 @@ impl Add for PackedMersenne31AVX512 {
     }
 }
 
-impl Mul for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Mul for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = mul(lhs, rhs);
+        let res = mul::<FP>(lhs, rhs);
         unsafe {
             // Safety: `mul` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -88,12 +95,12 @@ impl Mul for PackedMersenne31AVX512 {
     }
 }
 
-impl Neg for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Neg for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
         let val = self.to_vector();
-        let res = neg(val);
+        let res = neg::<FP>(val);
         unsafe {
             // Safety: `neg` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -101,13 +108,13 @@ impl Neg for PackedMersenne31AVX512 {
     }
 }
 
-impl Sub for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Sub for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
+        let res = sub::<FP>(lhs, rhs);
         unsafe {
             // Safety: `sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -115,11 +122,11 @@ impl Sub for PackedMersenne31AVX512 {
     }
 }
 
-/// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
+/// Add two vectors of Baby Bear field elements in canonical form.
+/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add(lhs: __m512i, rhs: __m512i) -> __m512i {
+fn add<FPAVX512: FieldParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -127,19 +134,48 @@ fn add(lhs: __m512i, rhs: __m512i) -> __m512i {
     // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
-    //   Let t := lhs + rhs. We want to return a value r in {0, ..., P} such that r = t (mod P).
-    //   Define u := (t - P) mod 2^32 and r := min(t, u). t is in {0, ..., 2 P}. We argue by cases.
-    //   If t is in {0, ..., P - 1}, then u is in {(P - 1 <) 2^32 - P, ..., 2^32 - 1}, so r = t is
-    // in the correct range.
-    //   If t is in {P, ..., 2 P}, then u is in {0, ..., P} and r = u is in the correct range.
+    //   Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in
+    // 0, ..., P - 1, so t is in 0, ..., 2 P - 2 (< 2^32). It suffices to return t if t < P and
+    // t - P otherwise.
+    //   Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
+    //   If t is in 0, ..., P - 1, then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
+    // Otherwise, t is in P, ..., 2 P - 2, u is in 0, ..., P - 2 (< P) and r = u. Hence, r is t if
+    // t < P and t - P otherwise, as desired.
+
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_add_epi32(lhs, rhs);
-        let u = x86_64::_mm512_sub_epi32(t, P);
+        let u = x86_64::_mm512_sub_epi32(t, FPAVX512::PACKEDP);
         x86_64::_mm512_min_epu32(t, u)
     }
 }
 
+// MONTGOMERY MULTIPLICATION
+//   This implementation is based on [1] but with minor changes. The reduction is as follows:
+//
+// Constants: P < 2^31
+//            B = 2^32
+//            μ = P^-1 mod B
+// Input: 0 <= C < P B
+// Output: 0 <= R < P such that R = C B^-1 (mod P)
+//   1. Q := μ C mod B
+//   2. D := (C - Q P) / B
+//   3. R := if D < 0 then D + P else D
+//
+// We first show that the division in step 2. is exact. It suffices to show that C = Q P (mod B). By
+// definition of Q and μ, we have Q P = μ C P = P^-1 C P = C (mod B). We also have
+// C - Q P = C (mod P), so thus D = C B^-1 (mod P).
+//
+// It remains to show that R is in the correct range. It suffices to show that -P <= D < P. We know
+// that 0 <= C < P B and 0 <= Q P < P B. Then -P B < C - QP < P B and -P < D < P, as desired.
+//
+// [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
+//     2010, algorithm 2.7.
+
+/// Viewing the input as a vector of 16 `u32`s, copy the odd elements into the even elements below
+/// them. In other words, for all `0 <= i < 8`, set the even elements according to
+/// `res[2 * i] := a[2 * i + 1]`, and the odd elements according to
+/// `res[2 * i + 1] := a[2 * i + 1]`.
 #[inline]
 #[must_use]
 fn movehdup_epi32(a: __m512i) -> __m512i {
@@ -150,6 +186,11 @@ fn movehdup_epi32(a: __m512i) -> __m512i {
     }
 }
 
+/// Viewing `a` as a vector of 16 `u32`s, copy the odd elements into the even elements below them,
+/// then merge with `src` according to the mask provided. In other words, for all `0 <= i < 8`, set
+/// the even elements according to `res[2 * i] := if k[2 * i] { a[2 * i + 1] } else { src[2 * i] }`,
+/// and the odd elements according to
+/// `res[2 * i + 1] := if k[2 * i + 1] { a[2 * i + 1] } else { src[2 * i + 1] }`.
 #[inline]
 #[must_use]
 fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
@@ -162,97 +203,102 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     }
 }
 
+/// Multiply vectors of Baby Bear field elements in canonical form.
+/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn mask_moveldup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
-    // The instruction is only available in the floating-point flavor; this distinction is only for
-    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
-    unsafe {
-        let src = x86_64::_mm512_castsi512_ps(src);
-        let a = x86_64::_mm512_castsi512_ps(a);
-        x86_64::_mm512_castps_si512(x86_64::_mm512_mask_moveldup_ps(src, k, a))
-    }
-}
-
-/// Multiply vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-fn mul(lhs: __m512i, rhs: __m512i) -> __m512i {
+#[allow(non_snake_case)]
+fn mul<FPAVX512: FieldParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
-    // vpaddd     lhs_evn_dbl, lhs, lhs
-    // vmovshdup  rhs_odd, rhs
-    // vpsrlq     lhs_odd_dbl, lhs, 31
-    // vpmuludq   prod_lo_dbl, lhs_evn_dbl, rhs
-    // vpmuludq   prod_odd_dbl, lhs_odd_dbl, rhs_odd
-    // vmovdqa32  prod_hi, prod_odd_dbl
-    // vmovshdup  prod_hi{EVENS}, prod_lo_dbl
-    // vmovsldup  prod_lo_dbl{ODDS}, prod_odd_dbl
-    // vpsrld     prod_lo, prod_lo_dbl, 1
-    // vpaddd     t, prod_lo, prod_hi
-    // vpsubd     u, t, P
-    // vpminud    res, t, u
-    // throughput: 5.5 cyc/vec (2.91 els/cyc)
-    // latency: (lhs->res) 15 cyc, (rhs->res) 14 cyc
+    //      vmovshdup  lhs_odd, lhs
+    //      vmovshdup  rhs_odd, rhs
+    //      vpmuludq   prod_evn, lhs, rhs
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P_hi, q_odd, P
+    //      vmovshdup  q_P_hi{EVENS}, q_P_evn
+    //      vpcmpltud  underflow, prod_hi, q_P_hi
+    //      vpsubd     res, prod_hi, q_P_hi
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 6.5 cyc/vec (2.46 els/cyc)
+    // latency: 21 cyc
     unsafe {
-        // vpmuludq only reads the bottom 32 bits of every 64-bit quadword.
-        // The even indices are already in the bottom 32 bits of a quadword, so we can leave them.
+        // `vpmuludq` only reads the even doublewords, so when we pass `lhs` and `rhs` directly we
+        // get the eight products at even positions.
+        let lhs_evn = lhs;
         let rhs_evn = rhs;
-        // Again, vpmuludq only reads the bottom 32 bits so we don't need to clear the top. But we
-        // do want to double the lhs.
-        let lhs_evn_dbl = x86_64::_mm512_add_epi32(lhs, lhs);
-        // Copy the high 32 bits in each quadword of rhs down to the low 32.
+
+        // Copy the odd doublewords into even positions to compute the eight products at odd
+        // positions.
+        // NB: The odd doublewords are ignored by `vpmuludq`, so we have a lot of choices for how to
+        // do this; `vmovshdup` is nice because it runs on a memory port if the operand is in
+        // memory, thus improving our throughput.
+        let lhs_odd = movehdup_epi32(lhs);
         let rhs_odd = movehdup_epi32(rhs);
-        // Right shift by 31 is equivalent to moving the high 32 bits down to the low 32, and then
-        // doubling it. So these are the odd indices in lhs, but doubled.
-        let lhs_odd_dbl = x86_64::_mm512_srli_epi64::<31>(lhs);
 
-        // Multiply odd indices; since lhs_odd_dbl is doubled, these products are also doubled.
-        // prod_odd_dbl.quadword[i] = 2 * lhs.doubleword[2 * i + 1] * rhs.doubleword[2 * i + 1]
-        let prod_odd_dbl = x86_64::_mm512_mul_epu32(lhs_odd_dbl, rhs_odd);
-        // Multiply even indices; these are also doubled.
-        // prod_evn_dbl.quadword[i] = 2 * lhs.doubleword[2 * i] * rhs.doubleword[2 * i]
-        let prod_evn_dbl = x86_64::_mm512_mul_epu32(lhs_evn_dbl, rhs_evn);
+        let prod_evn = x86_64::_mm512_mul_epu32(lhs_evn, rhs_evn);
+        let prod_odd = x86_64::_mm512_mul_epu32(lhs_odd, rhs_odd);
 
-        // Move the low halves of odd products into odd positions; keep the low halves of even
-        // products in even positions (where they already are). Note that the products are doubled,
-        // so the result is a vector of all the low halves, but doubled.
-        let prod_lo_dbl = mask_moveldup_epi32(prod_evn_dbl, ODDS, prod_odd_dbl);
-        // Move the high halves of even products into even positions, keeping the high halves of odd
-        // products where they are. The products are doubled, but we are looking at (prod >> 32),
-        // which cancels out the doubling, so this result is _not_ doubled.
-        let prod_hi = mask_movehdup_epi32(prod_odd_dbl, EVENS, prod_evn_dbl);
-        // Right shift to undo the doubling.
-        let prod_lo = x86_64::_mm512_srli_epi32::<1>(prod_lo_dbl);
+        let q_evn = x86_64::_mm512_mul_epu32(prod_evn, FPAVX512::PACKEDMU);
+        let q_odd = x86_64::_mm512_mul_epu32(prod_odd, FPAVX512::PACKEDMU);
 
-        // Standard addition of two 31-bit values.
-        add(prod_lo, prod_hi)
+        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
+        // latency.
+        let prod_hi = mask_movehdup_epi32(prod_odd, EVENS, prod_evn);
+
+        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+        // low 32 bits anyway.
+        let q_P_evn = x86_64::_mm512_mul_epu32(q_evn, FPAVX512::PACKEDP);
+        let q_P_odd = x86_64::_mm512_mul_epu32(q_odd, FPAVX512::PACKEDP);
+
+        // We can ignore all the low halves of `q_P` as they cancel out. Get all the high halves as
+        // one vector.
+        let q_P_hi = mask_movehdup_epi32(q_P_odd, EVENS, q_P_evn);
+
+        // Subtraction `prod_hi - q_P_hi` modulo `P`.
+        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+        // check runs on port 5, increasing our throughput, although it does cost us an additional
+        // cycle of latency.
+        let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_P_hi);
+        let t = x86_64::_mm512_sub_epi32(prod_hi, q_P_hi);
+        x86_64::_mm512_mask_add_epi32(t, underflow, t, FPAVX512::PACKEDP)
     }
 }
 
-/// Negate a vector of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the input does not conform to this representation, the result is undefined.
+/// Negate a vector of Baby Bear field elements in canonical form.
+/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn neg(val: __m512i) -> __m512i {
+fn neg<FPAVX512: FieldParametersAVX512>(val: __m512i) -> __m512i {
     // We want this to compile to:
-    //      vpxord  res, val, P
-    // throughput: .5 cyc/vec (32 els/cyc)
-    // latency: 1 cyc
+    //      vptestmd  nonzero, val, val
+    //      vpsubd    res{nonzero}{z}, P, val
+    // throughput: 1 cyc/vec (16 els/cyc)
+    // latency: 4 cyc
 
-    //   Since val is in {0, ..., P (= 2^31 - 1)}, res = val XOR P = P - val. Then res is in {0,
-    // ..., P}.
+    // NB: This routine prioritizes throughput over latency. An alternative method would be to do
+    // sub(0, val), which would result in shorter latency, but also lower throughput.
+
+    //   If val is nonzero, then val is in {1, ..., P - 1} and P - val is in the same range. If val
+    // is zero, then the result is zeroed by masking.
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        x86_64::_mm512_xor_epi32(val, P)
+        let nonzero = x86_64::_mm512_test_epi32_mask(val, val);
+        x86_64::_mm512_maskz_sub_epi32(nonzero, FPAVX512::PACKEDP, val)
     }
 }
 
-/// Subtract vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
+/// Subtract vectors of Baby Bear field elements in canonical form.
+/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
+fn sub<FPAVX512: FieldParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
@@ -260,57 +306,57 @@ fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
     // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
-    //   Let d := lhs - rhs and t := d mod 2^32. We want to return a value r in {0, ..., P} such
-    // that r = d (mod P).
-    //   Define u := (t + P) mod 2^32 and r := min(t, u). d is in {-P, ..., P}. We argue by cases.
-    //   If d is in {0, ..., P}, then t = d and u is in {P, ..., 2 P}. r = t is in the correct
-    // range.
-    //   If d is in {-P, ..., -1}, then t is in {2^32 - P, ..., 2^32 - 1} and u is in
-    // {0, ..., P - 1}. r = u is in the correct range.
+    //   Let t := lhs - rhs. We want to return t mod P. Recall that lhs and rhs are in
+    // 0, ..., P - 1, so t is in (-2^31 <) -P + 1, ..., P - 1 (< 2^31). It suffices to return t if
+    // t >= 0 and t + P otherwise.
+    //   Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
+    //   If t is in 0, ..., P - 1, then u is in P, ..., 2 P - 1 and r = t.
+    // Otherwise, t is in -P + 1, ..., -1; u is in 1, ..., P - 1 (< P) and r = u. Hence, r is t if
+    // t < P and t - P otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, P);
+        let u = x86_64::_mm512_add_epi32(t, FPAVX512::PACKEDP);
         x86_64::_mm512_min_epu32(t, u)
     }
 }
 
-impl From<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> From<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn from(value: Mersenne31) -> Self {
+    fn from(value: MontyField31<FP>) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl Default for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Default for PackedMontyField31AVX512<FP> {
     #[inline]
     fn default() -> Self {
-        Mersenne31::default().into()
+        MontyField31::default().into()
     }
 }
 
-impl AddAssign for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> AddAssign for PackedMontyField31AVX512<FP> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl MulAssign for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> MulAssign for PackedMontyField31AVX512<FP> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl SubAssign for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> SubAssign for PackedMontyField31AVX512<FP> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl Sum for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Sum for PackedMontyField31AVX512<FP> {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
@@ -320,7 +366,7 @@ impl Sum for PackedMersenne31AVX512 {
     }
 }
 
-impl Product for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Product for PackedMontyField31AVX512<FP> {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
@@ -330,27 +376,27 @@ impl Product for PackedMersenne31AVX512 {
     }
 }
 
-impl AbstractField for PackedMersenne31AVX512 {
-    type F = Mersenne31;
+impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
+    type F = MontyField31<FP>;
 
     #[inline]
     fn zero() -> Self {
-        Mersenne31::zero().into()
+        MontyField31::zero().into()
     }
 
     #[inline]
     fn one() -> Self {
-        Mersenne31::one().into()
+        MontyField31::one().into()
     }
 
     #[inline]
     fn two() -> Self {
-        Mersenne31::two().into()
+        MontyField31::two().into()
     }
 
     #[inline]
     fn neg_one() -> Self {
-        Mersenne31::neg_one().into()
+        MontyField31::neg_one().into()
     }
 
     #[inline]
@@ -360,146 +406,146 @@ impl AbstractField for PackedMersenne31AVX512 {
 
     #[inline]
     fn from_bool(b: bool) -> Self {
-        Mersenne31::from_bool(b).into()
+        MontyField31::from_bool(b).into()
     }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
-        Mersenne31::from_canonical_u8(n).into()
+        MontyField31::from_canonical_u8(n).into()
     }
     #[inline]
     fn from_canonical_u16(n: u16) -> Self {
-        Mersenne31::from_canonical_u16(n).into()
+        MontyField31::from_canonical_u16(n).into()
     }
     #[inline]
     fn from_canonical_u32(n: u32) -> Self {
-        Mersenne31::from_canonical_u32(n).into()
+        MontyField31::from_canonical_u32(n).into()
     }
     #[inline]
     fn from_canonical_u64(n: u64) -> Self {
-        Mersenne31::from_canonical_u64(n).into()
+        MontyField31::from_canonical_u64(n).into()
     }
     #[inline]
     fn from_canonical_usize(n: usize) -> Self {
-        Mersenne31::from_canonical_usize(n).into()
+        MontyField31::from_canonical_usize(n).into()
     }
 
     #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
-        Mersenne31::from_wrapped_u32(n).into()
+        MontyField31::from_wrapped_u32(n).into()
     }
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
-        Mersenne31::from_wrapped_u64(n).into()
+        MontyField31::from_wrapped_u64(n).into()
     }
 
     #[inline]
     fn generator() -> Self {
-        Mersenne31::generator().into()
+        MontyField31::generator().into()
     }
 }
 
-impl Add<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Add<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
+    fn add(self, rhs: MontyField31<FP>) -> Self {
         self + Self::from(rhs)
     }
 }
 
-impl Mul<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Mul<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
+    fn mul(self, rhs: MontyField31<FP>) -> Self {
         self * Self::from(rhs)
     }
 }
 
-impl Sub<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Sub<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
+    fn sub(self, rhs: MontyField31<FP>) -> Self {
         self - Self::from(rhs)
     }
 }
 
-impl AddAssign<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> AddAssign<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
+    fn add_assign(&mut self, rhs: MontyField31<FP>) {
         *self += Self::from(rhs)
     }
 }
 
-impl MulAssign<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> MulAssign<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
+    fn mul_assign(&mut self, rhs: MontyField31<FP>) {
         *self *= Self::from(rhs)
     }
 }
 
-impl SubAssign<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> SubAssign<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
+    fn sub_assign(&mut self, rhs: MontyField31<FP>) {
         *self -= Self::from(rhs)
     }
 }
 
-impl Sum<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Sum<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
     fn sum<I>(iter: I) -> Self
     where
-        I: Iterator<Item = Mersenne31>,
+        I: Iterator<Item = MontyField31<FP>>,
     {
-        iter.sum::<Mersenne31>().into()
+        iter.sum::<MontyField31<FP>>().into()
     }
 }
 
-impl Product<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Product<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     #[inline]
     fn product<I>(iter: I) -> Self
     where
-        I: Iterator<Item = Mersenne31>,
+        I: Iterator<Item = MontyField31<FP>>,
     {
-        iter.product::<Mersenne31>().into()
+        iter.product::<MontyField31<FP>>().into()
     }
 }
 
-impl Div<Mersenne31> for PackedMersenne31AVX512 {
+impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
+    fn div(self, rhs: MontyField31<FP>) -> Self {
         self * rhs.inverse()
     }
 }
 
-impl Add<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
+impl<FP: FieldParameters> Add<PackedMontyField31AVX512<FP>> for MontyField31<FP> {
+    type Output = PackedMontyField31AVX512<FP>;
     #[inline]
-    fn add(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) + rhs
+    fn add(self, rhs: PackedMontyField31AVX512<FP>) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>::from(self) + rhs
     }
 }
 
-impl Mul<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
+impl<FP: FieldParameters> Mul<PackedMontyField31AVX512<FP>> for MontyField31<FP> {
+    type Output = PackedMontyField31AVX512<FP>;
     #[inline]
-    fn mul(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) * rhs
+    fn mul(self, rhs: PackedMontyField31AVX512<FP>) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>::from(self) * rhs
     }
 }
 
-impl Sub<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
+impl<FP: FieldParameters> Sub<PackedMontyField31AVX512<FP>> for MontyField31<FP> {
+    type Output = PackedMontyField31AVX512<FP>;
     #[inline]
-    fn sub(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) - rhs
+    fn sub(self, rhs: PackedMontyField31AVX512<FP>) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>::from(self) - rhs
     }
 }
 
-impl Distribution<PackedMersenne31AVX512> for Standard {
+impl<FP: FieldParameters> Distribution<PackedMontyField31AVX512<FP>> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX512<FP> {
+        PackedMontyField31AVX512::<FP>(rng.gen())
     }
 }
 
@@ -678,26 +724,26 @@ fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     }
 }
 
-unsafe impl PackedValue for PackedMersenne31AVX512 {
-    type Value = Mersenne31;
+unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
+    type Value = MontyField31<FP>;
 
     const WIDTH: usize = WIDTH;
 
     #[inline]
-    fn from_slice(slice: &[Mersenne31]) -> &Self {
+    fn from_slice(slice: &[MontyField31<FP>]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX512` since the
+            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &*slice.as_ptr().cast()
         }
     }
     #[inline]
-    fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
+    fn from_slice_mut(slice: &mut [MontyField31<FP>]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX512` since the
+            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
             // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
             // safe too.
             &mut *slice.as_mut_ptr().cast()
@@ -706,23 +752,23 @@ unsafe impl PackedValue for PackedMersenne31AVX512 {
 
     /// Similar to `core:array::from_fn`.
     #[inline]
-    fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
+    fn from_fn<F: FnMut(usize) -> MontyField31<FP>>(f: F) -> Self {
         let vals_arr: [_; WIDTH] = core::array::from_fn(f);
         Self(vals_arr)
     }
 
     #[inline]
-    fn as_slice(&self) -> &[Mersenne31] {
+    fn as_slice(&self) -> &[MontyField31<FP>] {
         &self.0[..]
     }
     #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
+    fn as_slice_mut(&mut self) -> &mut [MontyField31<FP>] {
         &mut self.0[..]
     }
 }
 
-unsafe impl PackedField for PackedMersenne31AVX512 {
-    type Scalar = Mersenne31;
+unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX512<FP> {
+    type Scalar = MontyField31<FP>;
 
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
@@ -740,31 +786,4 @@ unsafe impl PackedField for PackedMersenne31AVX512 {
             (Self::from_vector(res0), Self::from_vector(res1))
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_field_testing::test_packed_field;
-
-    use super::{Mersenne31, WIDTH};
-    use crate::to_mersenne31_array;
-
-    /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] = to_mersenne31_array([
-        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
-        0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
-        0x00000000, 0x7fffffff,
-    ]);
-
-    const SPECIAL_VALS: [Mersenne31; WIDTH] = to_mersenne31_array([
-        0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
-        0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
-        0x40000000, 0x3fffffff,
-    ]);
-
-    test_packed_field!(
-        crate::PackedMersenne31AVX512,
-        crate::PackedMersenne31AVX512(super::ZEROS),
-        crate::PackedMersenne31AVX512(super::SPECIAL_VALS)
-    );
 }

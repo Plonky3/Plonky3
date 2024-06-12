@@ -1,27 +1,9 @@
+use core::fmt::Debug;
 use core::hash::Hash;
 
 use p3_field::{AbstractField, Field};
 
 use crate::{to_monty, to_monty_from_array};
-
-pub trait FieldParameters:
-    Copy
-    + Clone
-    + Default
-    + Eq
-    + PartialEq
-    + Sync
-    + Send
-    + Hash
-    + 'static
-    + MontyParameters
-    + FieldConstants
-    + TwoAdicData
-    + BarettParameters
-    + BinomialExtensionData<4>
-    + BinomialExtensionData<5>
-{
-}
 
 pub trait MontyParameters {
     // A 31-bit prime.
@@ -84,6 +66,111 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     const EXT_TWO_ADICITY: usize;
 
     fn u32_ext_two_adic_generator(bits: usize) -> [u32; DEG];
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub trait FieldParameters:
+    Copy
+    + Clone
+    + Default
+    + Debug
+    + Eq
+    + PartialEq
+    + Sync
+    + Send
+    + Hash
+    + 'static
+    + MontyParameters
+    + FieldConstants
+    + TwoAdicData
+    + BarettParameters
+    + BinomialExtensionData<4>
+    + BinomialExtensionData<5>
+    + crate::FieldParametersNeon
+{
+}
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+pub trait FieldParameters:
+    Copy
+    + Clone
+    + Default
+    + Debug
+    + Eq
+    + PartialEq
+    + Sync
+    + Send
+    + Hash
+    + 'static
+    + MontyParameters
+    + FieldConstants
+    + TwoAdicData
+    + BarettParameters
+    + BinomialExtensionData<4>
+    + BinomialExtensionData<5>
+    + crate::FieldParametersAVX2
+{
+}
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub trait FieldParameters:
+    Copy
+    + Clone
+    + Default
+    + Debug
+    + Eq
+    + PartialEq
+    + Sync
+    + Send
+    + Hash
+    + 'static
+    + MontyParameters
+    + FieldConstants
+    + TwoAdicData
+    + BarettParameters
+    + BinomialExtensionData<4>
+    + BinomialExtensionData<5>
+    + crate::FieldParametersAVX2
+    + crate::FieldParametersAVX512
+{
+}
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ),
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+)))]
+pub trait FieldParameters:
+    Copy
+    + Clone
+    + Default
+    + Debug
+    + Eq
+    + PartialEq
+    + Sync
+    + Send
+    + Hash
+    + 'static
+    + MontyParameters
+    + FieldConstants
+    + TwoAdicData
+    + BarettParameters
+    + BinomialExtensionData<4>
+    + BinomialExtensionData<5>
+{
 }
 
 /// Given an element x from a 31 bit field F_P compute x/2.

@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+[features]
+nightly-features = []
+
 [dependencies]
 p3-field = { path = "../field" }
 p3-mds = { path = "../mds" }

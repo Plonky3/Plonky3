@@ -7,7 +7,7 @@ use p3_monty_31::{
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
 pub type KoalaBear = MontyField31<KoalaBearParameters>;
 
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub struct KoalaBearParameters;
 
 impl FieldParameters for KoalaBearParameters {}

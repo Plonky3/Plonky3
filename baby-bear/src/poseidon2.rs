@@ -47,12 +47,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY: [BabyBear; 16] =
         1 << 15,
     ]);
 
-struct Poseidon2BabyBear;
+#[derive(Debug, Clone, Default)]
+pub struct DiffusionMatrixBabyBear;
 
-impl Poseidon2Utils<BabyBearParameters, 16> for Poseidon2BabyBear {
+impl Poseidon2Utils<BabyBearParameters, 16> for DiffusionMatrixBabyBear {
     type ArrayLike = [u8; 15];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+
+    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY;
 }
 
 pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
@@ -83,33 +86,29 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY: [BabyBear; 24] =
         1 << 23,
     ]);
 
-impl Poseidon2Utils<BabyBearParameters, 24> for Poseidon2BabyBear {
+impl Poseidon2Utils<BabyBearParameters, 24> for DiffusionMatrixBabyBear {
     type ArrayLike = [u8; 23];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
     ];
+
+    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY;
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixBabyBear;
-
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBear {
+impl<const WIDTH: usize> Permutation<[BabyBear; WIDTH]> for DiffusionMatrixBabyBear
+where
+    DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>,
+{
     #[inline]
-    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        Poseidon2BabyBear::permute_state(state)
+    fn permute_mut(&self, state: &mut [BabyBear; WIDTH]) {
+        <DiffusionMatrixBabyBear as Poseidon2Utils<BabyBearParameters, WIDTH>>::permute_state(state)
     }
 }
 
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabyBear {}
-
-impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabyBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [BabyBear; 24]) {
-        Poseidon2BabyBear::permute_state(state)
-    }
+impl<const WIDTH: usize> DiffusionPermutation<BabyBear, WIDTH> for DiffusionMatrixBabyBear where
+    DiffusionMatrixBabyBear: Poseidon2Utils<BabyBearParameters, WIDTH>
+{
 }
-
-impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabyBear {}
 
 #[cfg(test)]
 mod tests {
