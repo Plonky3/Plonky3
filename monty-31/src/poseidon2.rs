@@ -16,7 +16,8 @@ pub trait Poseidon2Utils<FP: FieldParameters, const WIDTH: usize> {
         state[0] = MontyField31::new_monty(monty_reduce::<FP>(s0));
 
         for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
-            let si = full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS.as_ref()[i]);
+            let si =
+                full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS.as_ref()[i]);
             state[i + 1] = MontyField31::new_monty(monty_reduce::<FP>(si));
         }
     }
