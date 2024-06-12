@@ -25,7 +25,7 @@ pub struct MontyField31<FP: FieldParameters> {
 
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
-    pub value: u32,
+    pub(crate) value: u32,
     _phantom: PhantomData<FP>,
 }
 
@@ -363,7 +363,9 @@ impl<FP: FieldParameters> Div for MontyField31<FP> {
 }
 
 /// Convert a constant u32 array into a constant field array saved in monty form.
-/// Long term this will be removed.
+/// Long term this might? be removed.
+/// TODO: Decide on if this is worth keeping around.
+/// BabyBear/KoalaBear crates do need a way to save some constants in MONTY form.
 #[inline]
 #[must_use]
 pub const fn to_monty_array<const N: usize, FP: FieldParameters>(

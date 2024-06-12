@@ -27,7 +27,7 @@ pub trait MDSUtils: Clone + Sync {
 
 #[derive(Clone, Debug, Default)]
 pub struct MdsMatrixMontyField31<MU: MDSUtils> {
-    _phantom1: PhantomData<MU>,
+    _phantom: PhantomData<MU>,
 }
 
 /// Instantiate convolution for "small" RHS vectors over a 31-bit MONTY_FIELD.
