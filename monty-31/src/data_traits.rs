@@ -18,6 +18,14 @@ pub trait MontyParameters {
     const MONTY_MASK: u32 = ((1u64 << Self::MONTY_BITS) - 1) as u32;
 }
 
+/// Constants needed for the Barett reduction used in the MDS code.
+pub trait BarettParameters: MontyParameters {
+    const N: usize = 40; // beta = 2^N, fixing N = 40 here
+    const PRIME_I128: i128 = Self::PRIME as i128;
+    const PSEUDO_INV: i64 = (((1_i128) << (2 * Self::N)) / Self::PRIME_I128) as i64; // I = 2^80 / P => I < 2**50
+    const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
+}
+
 pub trait FieldConstants: MontyParameters + Sized {
     // Simple Field Values.
     const MONTY_ZERO: u32 = 0; // The monty form of 0 is always 0.
@@ -75,6 +83,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
+    + BarettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
     + crate::FieldParametersNeon
@@ -99,6 +108,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
+    + BarettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
     + crate::FieldParametersAVX2
@@ -123,6 +133,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
+    + BarettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
     + crate::FieldParametersAVX2
@@ -156,6 +167,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
+    + BarettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
 {
