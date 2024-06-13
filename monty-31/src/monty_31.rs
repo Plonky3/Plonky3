@@ -45,7 +45,7 @@ impl<FP: FieldParameters> MontyField31<FP> {
 
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
-    pub const fn new_monty(value: u32) -> Self {
+    pub(crate) const fn new_monty(value: u32) -> Self {
         Self {
             value,
             _phantom: PhantomData,

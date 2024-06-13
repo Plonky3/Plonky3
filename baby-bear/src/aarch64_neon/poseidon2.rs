@@ -1,40 +1,3 @@
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
-
-use crate::{
-    BabyBear, DiffusionMatrixBabyBear, PackedBabyBearNeon, MONTY_INVERSE,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY,
-};
-
-// We need to change from the standard implementation as we are interpreting the matrix (1 + D(v)) as the monty form of the matrix not the raw form.
-// matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
-// These will be removed once we have architecture specific implementations.
-
-impl Permutation<[PackedBabyBearNeon; 16]> for DiffusionMatrixBabyBear {
-    fn permute_mut(&self, state: &mut [PackedBabyBearNeon; 16]) {
-        matmul_internal::<BabyBear, PackedBabyBearNeon, 16>(
-            state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
-    }
-}
-
-impl DiffusionPermutation<PackedBabyBearNeon, 16> for DiffusionMatrixBabyBear {}
-
-impl Permutation<[PackedBabyBearNeon; 24]> for DiffusionMatrixBabyBear {
-    fn permute_mut(&self, state: &mut [PackedBabyBearNeon; 24]) {
-        matmul_internal::<BabyBear, PackedBabyBearNeon, 24>(
-            state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
-    }
-}
-
-impl DiffusionPermutation<PackedBabyBearNeon, 24> for DiffusionMatrixBabyBear {}
-
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
@@ -57,7 +20,7 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
 
@@ -82,7 +45,7 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
 
