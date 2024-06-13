@@ -88,13 +88,9 @@ fn compute_twiddles<F: ComplexExtendable>(log_n: usize, shift: Complex<F>) -> Ve
         .collect()
 }
 
-fn apply_twiddles<F: Field>(
-    m: &mut RowMajorMatrix<F>,
-    twiddles: &[F],
-    f: impl Fn(F, F, F) -> (F, F),
-) {
-    let blk_sz = m.values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, m.values.chunks_exact_mut(blk_sz)) {
+fn apply_twiddles<F: Field>(values: &mut [F], twiddles: &[F], f: impl Fn(F, F, F) -> (F, F)) {
+    let blk_sz = values.len() / twiddles.len();
+    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
         let (los, his) = blk.split_at_mut(blk_sz / 2);
         for (lo, hi) in izip!(los, his) {
             (*lo, *hi) = f(*lo, *hi, t);
@@ -107,7 +103,7 @@ pub fn cfft<F: ComplexExtendable>(evals: CircleEvaluations<F>) -> RowMajorMatrix
     let CircleDomain { log_n, shift } = domain;
     for t in compute_twiddles(log_n, shift) {
         apply_twiddles(
-            &mut values,
+            &mut values.values,
             &batch_multiplicative_inverse(&t),
             |lo, hi, t| (lo + hi, (lo - hi) * t),
         );
@@ -123,7 +119,9 @@ pub fn icfft<F: ComplexExtendable>(
     let CircleDomain { log_n, shift } = domain;
     assert_eq!(coeffs.height(), 1 << log_n);
     for t in compute_twiddles(log_n, shift).into_iter().rev() {
-        apply_twiddles(&mut coeffs, &t, |lo, hi, t| (lo + hi * t, lo - hi * t));
+        apply_twiddles(&mut coeffs.values, &t, |lo, hi, t| {
+            (lo + hi * t, lo - hi * t)
+        });
     }
     CircleEvaluations {
         domain,
