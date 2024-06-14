@@ -340,6 +340,11 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
         Self::new(values, cols)
     }
 
+    pub fn pad_to_height(&mut self, new_height: usize, fill: T) {
+        assert!(new_height >= self.height());
+        self.values.resize(self.width * new_height, fill);
+    }
+
     pub fn transpose(self) -> Self {
         let block_size = TRANSPOSE_BLOCK_SIZE;
         let height = self.height();

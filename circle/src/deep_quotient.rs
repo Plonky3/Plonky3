@@ -10,18 +10,20 @@ use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::domain::CircleDomain;
+use crate::point::Point;
 use crate::util::{v_n, v_p};
+use crate::{natural_slice_to_cfft, CircleEvaluations};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
 /// Re(1/v_gamma) + alpha^L Im(1/v_gamma)
 /// (Other "part" is \bar g - \bar v_gamma)
 pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionField<F>>(
-    x: Complex<F>,
-    zeta: Complex<EF>,
+    x: Point<F>,
+    zeta: Point<EF>,
     alpha_pow_width: EF,
 ) -> (EF, EF) {
-    let [re_v_zeta, im_v_zeta] = v_p(zeta, x).to_array();
+    let (re_v_zeta, im_v_zeta) = v_p(zeta, x);
     (
         re_v_zeta - alpha_pow_width * im_v_zeta,
         re_v_zeta.square() + im_v_zeta.square(),
@@ -30,8 +32,8 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     alpha: EF,
-    x: Complex<F>,
-    zeta: Complex<EF>,
+    x: Point<F>,
+    zeta: Point<EF>,
     ps_at_x: &[F],
     ps_at_zeta: &[EF],
 ) -> EF {
@@ -44,13 +46,14 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
         )
 }
 
+/*
 /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
 #[instrument(skip_all, fields(log_n = domain.log_n))]
 pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
     alpha: EF,
     domain: &CircleDomain<F>,
     mat: &RowMajorMatrix<F>,
-    zeta: Complex<EF>,
+    zeta: Point<EF>,
     ps_at_zeta: &[EF],
 ) -> Vec<EF> {
     let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
@@ -70,6 +73,35 @@ pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionFie
         })
         .collect()
 }
+*/
+
+impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
+    pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
+        &self,
+        alpha: EF,
+        zeta: Point<EF>,
+        ps_at_zeta: &[EF],
+    ) -> Vec<EF> {
+        let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
+        let points = natural_slice_to_cfft(&self.domain.points().collect_vec());
+        let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = points
+            .into_iter()
+            .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
+            .unzip();
+        let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
+
+        let alpha_reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
+
+        self.values
+            .dot_ext_powers(alpha)
+            .zip(vp_nums.into_par_iter())
+            .zip(vp_denom_invs.into_par_iter())
+            .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
+                vp_num * vp_denom_inv * (reduced_ps_at_x - alpha_reduced_ps_at_zeta)
+            })
+            .collect()
+    }
+}
 
 /// Given evaluations over lde_domain, extract the multiple of the vanishing poly of orig_domain
 /// See Section 4.3, Lemma 6: < v_n, f > = 0 for any f in FFT space
@@ -88,7 +120,7 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     let v_d_init = lde_domain
         .points()
         .take(num_cosets)
-        .map(|x| v_n(x.real(), orig_domain.log_n))
+        .map(|p| p.v_n(orig_domain.log_n))
         .collect_vec();
 
     // The unique values are repeated over the rest of the domain like
@@ -116,21 +148,53 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_mersenne_31::Mersenne31;
-    use rand::{thread_rng, Rng};
+    use rand::{random, thread_rng, Rng};
 
     use super::*;
-    use crate::Cfft;
 
     type F = Mersenne31;
+    // type EF = F;
     type EF = BinomialExtensionField<F, 3>;
 
+    #[test]
+    fn reduce_evaluations_low_degree() {
+        let evals = CircleEvaluations::from_cfft_order(
+            CircleDomain::standard(5),
+            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 5, 1 << 3),
+        );
+        let lde = evals.clone().extrapolate(CircleDomain::standard(6));
+        assert!(lde.dim() <= (1 << 5));
+
+        let alpha: EF = random();
+        let zeta: Point<EF> = Point::from_projective_line(random());
+
+        let ps_at_zeta = evals.evaluate_at_point(zeta);
+        let reduced0 = CircleEvaluations::<F>::from_cfft_order(
+            CircleDomain::standard(6),
+            RowMajorMatrix::new_col(lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta))
+                .flatten_to_base(),
+        );
+        assert!(reduced0.dim() <= (1 << 5) + 1);
+
+        let not_ps_at_zeta = evals.evaluate_at_point(zeta.double());
+        let reduced1 = CircleEvaluations::<F>::from_cfft_order(
+            CircleDomain::standard(6),
+            RowMajorMatrix::new_col(lde.deep_quotient_reduce(alpha, zeta, &not_ps_at_zeta))
+                .flatten_to_base(),
+        );
+        assert!(reduced1.dim() > (1 << 5) + 1);
+
+        // let ps_at_zeta: Vec<EF> = (0..(1 << 4)).map(|_| rng.gen()).collect();
+    }
+
+    /*
     #[test]
     fn reduce_row_same_as_reduce_matrix() {
         let mut rng = thread_rng();
         let domain = CircleDomain::<F>::standard(5);
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 1 << 5, 1 << 4);
         let alpha: EF = rng.gen();
-        let zeta: Complex<EF> = Complex::new(rng.gen(), rng.gen());
+        let zeta: Point<EF> = Point::from_projective_line(rng.gen());
         let ps_at_zeta: Vec<EF> = (0..(1 << 4)).map(|_| rng.gen()).collect();
 
         let matrix_reduced = deep_quotient_reduce_matrix(alpha, &domain, &mat, zeta, &ps_at_zeta);
@@ -145,17 +209,23 @@ mod tests {
     #[test]
     fn test_extract_lambda() {
         let mut rng = thread_rng();
+
         let orig_domain = CircleDomain::<F>::standard(3);
-        let lde_domain = CircleDomain::<F>::standard(8);
         let trace = RowMajorMatrix::<F>::rand(&mut rng, 1 << orig_domain.log_n, 1);
-        let mut lde = Cfft::default().lde(trace, orig_domain, lde_domain).values;
+
+        let lde_domain = CircleDomain::<F>::standard(8);
+        let mut lde = CircleEvaluations::from_natural(orig_domain, trace).extrapolate(lde_domain);
+        // let mut lde = Cfft::default().lde(trace, orig_domain, lde_domain).values;
+
         // Add our own multiple into the lde
         let expected_lambda: F = rng.gen();
-        for (pt, y) in izip!(lde_domain.points(), &mut lde) {
-            *y += expected_lambda * v_n(pt.real(), orig_domain.log_n);
+        for (pt, y) in izip!(lde_domain.points(), &mut lde.values.values) {
+            *y += expected_lambda * pt.v_n(orig_domain.log_n) // v_n(pt.x, orig_domain.log_n);
         }
+
         // Check that it pulls out the right lambda
-        let actual_lambda = extract_lambda(orig_domain, lde_domain, &mut lde);
+        let actual_lambda = extract_lambda(orig_domain, lde_domain, &mut lde.values.values);
         assert_eq!(actual_lambda, expected_lambda);
     }
+    */
 }

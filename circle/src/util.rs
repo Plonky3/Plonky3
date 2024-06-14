@@ -1,73 +1,6 @@
-#[cfg(test)]
-use alloc::vec;
-#[cfg(test)]
-use alloc::vec::Vec;
+use p3_field::{extension::Complex, ExtensionField, Field};
 
-use p3_field::extension::Complex;
-#[cfg(test)]
-use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
-#[cfg(test)]
-use p3_matrix::dense::RowMajorMatrix;
-#[cfg(test)]
-use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-
-/// Get the cfft polynomial basis.
-/// The basis consists off all multi-linear products of: y, x, 2x^2 - 1, 2(2x^2 - 1)^2 - 1, ...
-/// The ordering of these basis elements is the bit reversal of the sequence: 1, y, x, xy, (2x^2 - 1), (2x^2 - 1)y, ...
-/// We also need to throw in a couple of negative signs for technical reasons.
-#[cfg(test)]
-pub(crate) fn circle_basis<F: ComplexExtendable>(point: Complex<F>, log_n: usize) -> Vec<F> {
-    if log_n == 0 {
-        return vec![F::one()];
-    }
-
-    let mut basis = vec![F::one()];
-    basis.reserve(1 << log_n);
-
-    // First compute the repeated applications of the squaring map π(x) = 2x^2 - 1
-    let mut cur = point.real();
-    for _ in 0..(log_n - 1) {
-        for i in 0..basis.len() {
-            basis.push(basis[i] * cur);
-        }
-        cur = F::two() * cur.square() - F::one();
-    }
-
-    // Bit reverse, and compute the second half of the array,
-    // which is just each element of the first half times y
-    reverse_slice_index_bits(&mut basis);
-    for i in 0..basis.len() {
-        basis.push(basis[i] * point.imag());
-    }
-
-    // Negate each element each time the binary representation of its index has a pair of adjacent ones,
-    // or equivalently, if the number of adjacent ones is odd.
-    // This comes from a peculiarity in how we compute the CFFT:
-    // The butterfly zips the first half of the domain with the second half reversed, because that maps each point
-    // to its involution. After each layer, the second half is still in reverse order, so we should use the twiddles
-    // in reverse order as well, but we ignore that and use the same twiddles for both halves.
-    // Using t(g^(N-k)) instead of t(g^k) just adds a negative sign. It turns out the number of negations is the number
-    // of adjacent ones in the index.
-    for (i, val) in basis.iter_mut().enumerate() {
-        let num_adjacent_ones = (i & (i >> 1)).count_ones();
-        if num_adjacent_ones % 2 == 1 {
-            *val = -*val;
-        }
-    }
-
-    basis
-}
-
-#[cfg(test)]
-pub(crate) fn eval_circle_polys<F: ComplexExtendable>(
-    coeffs: &RowMajorMatrix<F>,
-    point: Complex<F>,
-) -> Vec<F> {
-    use p3_matrix::Matrix;
-    let log_n = log2_strict_usize(coeffs.height());
-    coeffs.columnwise_dot_product(&circle_basis(point, log_n))
-}
+use crate::point::Point;
 
 /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
 /// ```ignore
@@ -126,9 +59,16 @@ pub(crate) fn v_0<F: Field>(p: Complex<F>) -> F {
 /// Evaluate the single-point vanishing function v_p(x). Used for DEEP quotient.
 /// Circle STARKs, Section 3.3, Equation 11 (page 11 of the first edition PDF).
 /// Simple zero at p, simple pole at +-infinity.
+/*
 pub(crate) fn v_p<F: Field, EF: ExtensionField<F>>(p: Complex<EF>, x: Complex<F>) -> Complex<EF> {
     let x_rotate_p: Complex<EF> = x.rotate(p.conjugate());
     Complex::new(EF::one() - x_rotate_p.real(), -x_rotate_p.imag())
+}
+*/
+
+pub(crate) fn v_p<F: Field, EF: ExtensionField<F>>(p: Point<EF>, x: Point<F>) -> (EF, EF) {
+    let x_minus_p = -p + x;
+    (EF::one() - x_minus_p.x, -x_minus_p.y)
 }
 
 /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P, used for normalization to 1.
