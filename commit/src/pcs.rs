@@ -77,6 +77,8 @@ where
     where
         Self: 'a;
 
+    type LdeOwned: MatrixRows<Val> + MatrixGet<Val> + Sync;
+
     fn coset_shift(&self) -> Val;
 
     fn log_blowup(&self) -> usize;
@@ -84,6 +86,17 @@ where
     fn get_ldes<'a, 'b>(&'a self, prover_data: &'b Self::ProverData) -> Vec<Self::Lde<'b>>
     where
         'a: 'b;
+
+    // Compute the (shifted) low-degree extensions only without computing the commitment.
+    fn compute_ldes_batches(
+        &self,
+        polynomials: Vec<In>,
+        coset_shifts: &[Val],
+    ) -> Vec<Self::LdeOwned>;
+
+    fn compute_lde_batch(&self, polynomials: In, coset_shift: Val) -> Vec<Self::LdeOwned> {
+        self.compute_ldes_batches(vec![polynomials], &[coset_shift])
+    }
 
     // Commit to polys that are already defined over a coset.
     fn commit_shifted_batches(

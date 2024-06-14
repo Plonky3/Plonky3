@@ -13,7 +13,7 @@ use p3_field::{
 };
 use p3_interpolation::interpolate_coset;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
-use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix, MatrixRows};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
@@ -141,6 +141,7 @@ where
     <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
+    type LdeOwned = BitReversedMatrixView<RowMajorMatrix<C::Val>>;
 
     fn coset_shift(&self) -> C::Val {
         C::Val::generator()
@@ -162,26 +163,38 @@ where
             .collect()
     }
 
-    fn commit_shifted_batches(
+    fn compute_ldes_batches(
         &self,
         polynomials: Vec<In>,
         coset_shifts: &[C::Val],
-    ) -> (Self::Commitment, Self::ProverData) {
-        let ldes = info_span!("compute all coset LDEs").in_scope(|| {
+    ) -> Vec<Self::LdeOwned> {
+        info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .par_iter()
                 .zip_eq(coset_shifts)
                 .map(|(poly, coset_shift)| {
                     let shift = C::Val::generator() / *coset_shift;
                     let input = ((*poly).clone()).to_row_major_matrix();
-                    // Commit to the bit-reversed LDE.
                     self.dft
                         .coset_lde_batch(input, self.fri.log_blowup, shift)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 })
+                .map(BitReversedMatrixView::new)
                 .collect()
-        });
+        })
+    }
+
+    fn commit_shifted_batches(
+        &self,
+        polynomials: Vec<In>,
+        coset_shifts: &[C::Val],
+    ) -> (Self::Commitment, Self::ProverData) {
+        let ldes = self
+            .compute_ldes_batches(polynomials, coset_shifts)
+            .into_iter()
+            .map(|x| x.to_row_major_matrix())
+            .collect();
 
         self.mmcs.commit(ldes)
     }
