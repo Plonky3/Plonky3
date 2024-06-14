@@ -81,7 +81,7 @@ impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallCon
 /// x' = x mod 2^10
 /// See Thm 1 (Below function) for a proof that this function is correct.
 #[inline(always)]
-fn barret_red_monty31<BP: BarettParameters>(input: i128) -> i64 {
+fn barrett_red_monty31<BP: BarettParameters>(input: i128) -> i64 {
     // input = input_low + beta*input_high
     // So input_high < 2**63 and fits in an i64.
     let input_high = (input >> BP::N) as i64; // input_high < input / beta < 2**{80 - N}
@@ -100,7 +100,7 @@ fn barret_red_monty31<BP: BarettParameters>(input: i128) -> i64 {
 }
 
 // Theorem 1:
-// Given |x| < 2^80, barret_red(x) computes an x' such that:
+// Given |x| < 2^80, barrett_red(x) computes an x' such that:
 //       x' = x mod p
 //       x' = x mod 2^10
 //       |x'| < 2**50.
@@ -223,18 +223,18 @@ impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for LargeCon
         // For a convolution of size N, |x|, |y| < N * 2^31, so the
         // product could be as much as N^2 * 2^62. This will overflow an
         // i64, so we first widen to i128. Note that N^2 * 2^62 < 2^80
-        // for N <= 64, as required by `barret_red_monty31()`.
+        // for N <= 64, as required by `barrett_red_monty31()`.
 
         let mut dp = 0i128;
         for i in 0..N {
             dp += u[i] as i128 * v[i] as i128;
         }
-        barret_red_monty31::<FP>(dp)
+        barrett_red_monty31::<FP>(dp)
     }
 
     #[inline(always)]
     fn reduce(z: i64) -> MontyField31<FP> {
-        // After the barret reduction method, the output z of parity
+        // After the barrett reduction method, the output z of parity
         // dot satisfies |z| < 2^50 (See Thm 1 above).
         //
         // In the recombining steps, conv_n maps (wo, w1) ->
