@@ -8,10 +8,9 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, ExtensionField};
 use p3_fri::FriGenericConfig;
 use p3_matrix::Matrix;
-use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
-use crate::point::Point;
 use crate::{InputError, InputProof};
 
 pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
@@ -134,37 +133,30 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng, Rng};
+    use rand::{random, thread_rng};
 
     use super::*;
-    // use crate::Cfft;
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
 
     #[test]
-    fn fold_y_matrix_same_as_row() {
+    fn fold_matrix_same_as_row() {
         let log_folded_height = 5;
         let m = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << log_folded_height, 2);
         let beta: EF = random();
-        let mat_folded = fold_y::<F, EF>(beta, m.as_view());
-        let row_folded = (0..(1 << log_folded_height))
+
+        let mat_y_folded = fold_y::<F, EF>(beta, m.as_view());
+        let row_y_folded = (0..(1 << log_folded_height))
             .map(|i| fold_y_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
             .collect_vec();
-        assert_eq!(mat_folded, row_folded);
-    }
+        assert_eq!(mat_y_folded, row_y_folded);
 
-    #[test]
-    fn fold_x_matrix_same_as_row() {
-        let log_folded_height = 5;
-        let m = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << log_folded_height, 2);
-        let beta: EF = random();
-
-        let mat_folded = fold_x::<F, EF>(beta, m.as_view());
-        let row_folded = (0..(1 << log_folded_height))
+        let mat_x_folded = fold_x::<F, EF>(beta, m.as_view());
+        let row_x_folded = (0..(1 << log_folded_height))
             .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
             .collect_vec();
-        assert_eq!(mat_folded, row_folded);
+        assert_eq!(mat_x_folded, row_x_folded);
     }
 
     /*

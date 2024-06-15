@@ -1,17 +1,18 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use itertools::{iterate, izip, Itertools};
 use p3_commit::PolynomialSpace;
-use p3_dft::divide_by_height;
-use p3_field::{batch_multiplicative_inverse, extension::ComplexExtendable, ExtensionField, Field};
+use p3_dft::{divide_by_height, Butterfly, DifButterfly, DitButterfly};
+use p3_field::{
+    batch_multiplicative_inverse, extension::ComplexExtendable, ExtensionField, Field, PackedValue,
+};
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
-use p3_util::{reverse_bits_len, reverse_slice_index_bits};
+use p3_maybe_rayon::prelude::*;
+use p3_util::reverse_slice_index_bits;
+use tracing::{info_span, instrument};
 
 use crate::{
-    cfft_index_to_natural,
-    domain::CircleDomain,
-    natural_slice_to_cfft,
-    ordering::{CfftAsNaturalPerm, NaturalAsCfftPerm},
-    point::Point,
-    CfftAsNaturalView, NaturalAsCfftView,
+    cfft_permute_index, cfft_permute_slice, domain::CircleDomain, point::Point, CfftPerm, CfftView,
 };
 
 #[derive(Clone)]
@@ -28,49 +29,63 @@ impl<F: Copy + Send + Sync, M: Matrix<F>> CircleEvaluations<F, M> {
     pub fn from_natural_order(
         domain: CircleDomain<F>,
         values: M,
-    ) -> CircleEvaluations<F, NaturalAsCfftView<M>> {
-        CircleEvaluations::from_cfft_order(domain, NaturalAsCfftPerm::view(values))
+    ) -> CircleEvaluations<F, CfftView<M>> {
+        CircleEvaluations::from_cfft_order(domain, CfftPerm::view(values))
     }
     pub(crate) fn to_cfft_order(self) -> M {
         self.values
     }
-    pub fn to_natural_order(self) -> CfftAsNaturalView<M> {
-        CfftAsNaturalPerm::view(self.values)
+    pub fn to_natural_order(self) -> CfftView<M> {
+        CfftPerm::view(self.values)
     }
 }
 
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
+    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
     pub fn interpolate(self) -> RowMajorMatrix<F> {
         let CircleEvaluations { domain, values } = self;
-        let mut values = values.to_row_major_matrix();
-        fft_layer(
-            &mut values.values,
-            &batch_multiplicative_inverse(&domain.y_twiddles()),
-            |lo, hi, t| (lo + hi, (lo - hi) * t),
-        );
-        for twiddles in compute_twiddles(domain).into_iter().skip(1) {
-            fft_layer(
-                &mut values.values,
-                &batch_multiplicative_inverse(&twiddles),
-                |lo, hi, t| (lo + hi, (lo - hi) * t),
-            );
+        let mut values = info_span!("to_rmm").in_scope(|| values.to_row_major_matrix());
+        let twiddles = info_span!("twiddles").in_scope(|| {
+            compute_twiddles(domain).into_iter().map(|ts| {
+                batch_multiplicative_inverse(&ts)
+                    .into_iter()
+                    .map(|t| DifButterfly(t))
+                    .collect_vec()
+            })
+        });
+        for ts in twiddles {
+            fft_layer(&mut values.values, &ts);
         }
         divide_by_height(&mut values);
         values
     }
+    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
     pub fn extrapolate(
         self,
         target_domain: CircleDomain<F>,
     ) -> CircleEvaluations<F, RowMajorMatrix<F>> {
-        assert!(target_domain.size() >= self.domain.size());
+        assert!(target_domain.log_n >= self.domain.log_n);
+        let added_bits = target_domain.log_n - self.domain.log_n;
         let mut coeffs = self.interpolate();
+        // We could simply pad coeffs like this:
+        /*
         coeffs.pad_to_height(target_domain.size(), F::zero());
         CircleEvaluations::<F>::evaluate(target_domain, coeffs)
+        */
+        // But the first `added_bits` layers will simply fill out the zeros
+        // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
+        // both `x_1` and `x_2` are set to `x_1`).
+        // So instead we directly repeat the coeffs and skip the initial layers.
+        coeffs.values.reserve(target_domain.size() * coeffs.width());
+        for _ in 0..added_bits {
+            coeffs.values.extend_from_within(..);
+        }
+        CircleEvaluations::<F>::evaluate_skipping_layers(target_domain, coeffs, added_bits)
     }
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         let v_n = point.v_n(self.domain.log_n) - self.domain.shift.v_n(self.domain.log_n);
         self.values
-            .columnwise_dot_product(&natural_slice_to_cfft(&self.domain.lagrange_basis(point)))
+            .columnwise_dot_product(&cfft_permute_slice(&self.domain.lagrange_basis(point)))
             .into_iter()
             .map(|x| x * v_n)
             .collect_vec()
@@ -92,25 +107,43 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 }
 
 impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
-    pub fn evaluate(domain: CircleDomain<F>, mut coeffs: RowMajorMatrix<F>) -> Self {
+    pub fn evaluate(domain: CircleDomain<F>, coeffs: RowMajorMatrix<F>) -> Self {
+        Self::evaluate_skipping_layers(domain, coeffs, 0)
+    }
+    #[instrument(skip_all, fields(dims = %coeffs.dimensions()))]
+    fn evaluate_skipping_layers(
+        domain: CircleDomain<F>,
+        mut coeffs: RowMajorMatrix<F>,
+        skipped_layers: usize,
+    ) -> Self {
         assert_eq!(coeffs.height(), 1 << domain.log_n);
-        for twiddles in compute_twiddles(domain).into_iter().rev() {
-            fft_layer(&mut coeffs.values, &twiddles, |lo, hi, t| {
-                (lo + hi * t, lo - hi * t)
-            });
+        let twiddles = info_span!("twiddles").in_scope(|| {
+            compute_twiddles(domain)
+                .into_iter()
+                .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
+        });
+        for ts in twiddles.rev().skip(skipped_layers) {
+            fft_layer(&mut coeffs.values, &ts);
         }
         Self::from_cfft_order(domain, coeffs)
     }
 }
 
-fn fft_layer<F: Field>(values: &mut [F], twiddles: &[F], f: impl Fn(F, F, F) -> (F, F)) {
+#[instrument(skip_all, fields(
+    len = values.len(),
+    blks = twiddles.len(),
+    blk_sz = values.len() / twiddles.len(),
+))]
+fn fft_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
+    assert_eq!(values.len() % twiddles.len(), 0);
     let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (los, his) = blk.split_at_mut(blk_sz / 2);
-        for (lo, hi) in izip!(los, his) {
-            (*lo, *hi) = f(*lo, *hi, t);
-        }
-    }
+    values
+        .par_chunks_exact_mut(blk_sz)
+        .zip(twiddles)
+        .for_each(|(blk, &t)| {
+            let (los, his) = blk.split_at_mut(blk_sz / 2);
+            t.apply_to_rows(los, his)
+        });
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
@@ -120,8 +153,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         ys
     }
     pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
-        self.nth_point(cfft_index_to_natural(index << 1, self.log_n))
-            .y
+        self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
     }
     pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
         let gen = self.gen() * (1 << layer);
@@ -135,9 +167,6 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     }
     pub(crate) fn nth_x_twiddle(&self, index: usize) -> F {
         (self.shift + self.gen() * index).x
-
-        // let gen = self.gen() * (1 << layer);
-        // let shift = self.shift * (1 << layer);
     }
 }
 

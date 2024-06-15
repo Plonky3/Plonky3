@@ -15,8 +15,8 @@ mod point;
 // mod twiddles;
 mod ordering;
 mod util;
-//
-// pub use cfft::*;
+
 pub use cfft::*;
+pub use domain::*;
 pub use ordering::*;
 pub use pcs::*;

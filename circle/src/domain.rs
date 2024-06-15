@@ -50,7 +50,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     pub(crate) const fn new(log_n: usize, shift: Point<F>) -> Self {
         Self { log_n, shift }
     }
-    pub(crate) fn standard(log_n: usize) -> Self {
+    pub fn standard(log_n: usize) -> Self {
         Self {
             log_n,
             shift: Point::generator(log_n + 1),

@@ -1,96 +1,83 @@
+use alloc::vec::Vec;
 use p3_matrix::{
+    dense::RowMajorMatrix,
     row_index_mapped::{RowIndexMap, RowIndexMappedView},
     Matrix,
 };
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
-pub(crate) fn cfft_index_to_natural(index: usize, log_height: usize) -> usize {
-    let msb = index & 1;
-    let index = reverse_bits_len(index >> 1, log_height - 1) << 1;
-    if msb == 0 {
-        index
-    } else {
-        (1 << log_height) - index - 1
-    }
-}
-
-pub(crate) fn natural_index_to_cfft(index: usize, log_height: usize) -> usize {
+#[inline]
+pub(crate) fn cfft_permute_index(index: usize, log_n: usize) -> usize {
     let (index, lsb) = (index >> 1, index & 1);
     reverse_bits_len(
         if lsb == 0 {
             index
         } else {
-            (1 << log_height) - index - 1
+            (1 << log_n) - index - 1
         },
-        log_height,
+        log_n,
     )
 }
 
-pub(crate) fn natural_slice_to_cfft<T: Clone>(xs: &[T]) -> Vec<T> {
+pub(crate) fn cfft_permute_slice<T: Clone>(xs: &[T]) -> Vec<T> {
     let log_n = log2_strict_usize(xs.len());
     (0..xs.len())
-        .map(|i| xs[cfft_index_to_natural(i, log_n)].clone())
+        .map(|i| xs[cfft_permute_index(i, log_n)].clone())
         .collect()
 }
 
-pub(crate) fn cfft_slice_to_natural<T: Clone>(xs: &[T]) -> Vec<T> {
-    let log_n = log2_strict_usize(xs.len());
-    (0..xs.len())
-        .map(|i| xs[natural_index_to_cfft(i, log_n)].clone())
-        .collect()
-}
-
-pub type CfftAsNaturalView<M> = RowIndexMappedView<CfftAsNaturalPerm, M>;
-
-#[derive(Copy, Clone)]
-pub struct CfftAsNaturalPerm {
-    log_height: usize,
-}
-
-impl RowIndexMap for CfftAsNaturalPerm {
-    fn height(&self) -> usize {
-        1 << self.log_height
-    }
-    fn map_row_index(&self, r: usize) -> usize {
-        natural_index_to_cfft(r, self.log_height)
-    }
-}
-
-impl CfftAsNaturalPerm {
-    pub fn view<T: Send + Sync, M: Matrix<T>>(
-        inner: M,
-    ) -> RowIndexMappedView<CfftAsNaturalPerm, M> {
-        RowIndexMappedView {
-            index_map: CfftAsNaturalPerm {
-                log_height: log2_strict_usize(inner.height()),
-            },
-            inner,
+pub(crate) fn cfft_permute_slice_chunked_in_place<T>(xs: &mut [T], chunk_size: usize) {
+    assert_eq!(xs.len() % chunk_size, 0);
+    let n_chunks = xs.len() / chunk_size;
+    let log_n = log2_strict_usize(n_chunks);
+    for i in 0..n_chunks {
+        let j = cfft_permute_index(i, log_n);
+        if i < j {
+            // somehow this is slightly faster than the unsafe block below
+            for k in 0..chunk_size {
+                xs.swap(i * chunk_size + k, j * chunk_size + k);
+            }
+            /*
+            unsafe {
+                core::ptr::swap_nonoverlapping(
+                    xs.as_mut_ptr().add(i * chunk_size),
+                    xs.as_mut_ptr().add(j * chunk_size),
+                    chunk_size,
+                );
+            }
+            */
         }
     }
 }
 
-pub type NaturalAsCfftView<M> = RowIndexMappedView<NaturalAsCfftPerm, M>;
+pub type CfftView<M> = RowIndexMappedView<CfftPerm, M>;
 
 #[derive(Copy, Clone)]
-pub struct NaturalAsCfftPerm {
+pub struct CfftPerm {
     log_height: usize,
 }
 
-impl RowIndexMap for NaturalAsCfftPerm {
+impl RowIndexMap for CfftPerm {
     fn height(&self) -> usize {
         1 << self.log_height
     }
     fn map_row_index(&self, r: usize) -> usize {
-        cfft_index_to_natural(r, self.log_height)
+        cfft_permute_index(r, self.log_height)
+    }
+    fn to_row_major_matrix<T: Clone + Send + Sync, Inner: Matrix<T>>(
+        &self,
+        inner: Inner,
+    ) -> RowMajorMatrix<T> {
+        let mut inner = inner.to_row_major_matrix();
+        cfft_permute_slice_chunked_in_place(&mut inner.values, inner.width);
+        inner
     }
 }
 
-impl NaturalAsCfftPerm {
-    pub fn view<T: Send + Sync, M: Matrix<T>>(
-        inner: M,
-    ) -> RowIndexMappedView<NaturalAsCfftPerm, M> {
+impl CfftPerm {
+    pub fn view<T: Send + Sync, M: Matrix<T>>(inner: M) -> RowIndexMappedView<CfftPerm, M> {
         RowIndexMappedView {
-            index_map: NaturalAsCfftPerm {
+            index_map: CfftPerm {
                 log_height: log2_strict_usize(inner.height()),
             },
             inner,
@@ -105,18 +92,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cfft2nat() {
+    fn ordering() {
+        // reference ordering derived by hand
         assert_eq!(
-            (0..8).map(|i| cfft_index_to_natural(i, 3)).collect_vec(),
-            vec![0, 7, 4, 3, 2, 5, 6, 1],
+            (0..8).map(|i| cfft_permute_index(i, 3)).collect_vec(),
+            &[0, 7, 4, 3, 2, 5, 6, 1],
         );
         for log_n in 1..5 {
-            for i in 0..(1 << log_n) {
-                assert_eq!(
-                    i,
-                    cfft_index_to_natural(natural_index_to_cfft(i, log_n), log_n)
-                );
+            let n = 1 << log_n;
+            let sigma = |i| cfft_permute_index(i, log_n);
+            for i in 0..n {
+                // involution: σ(σ(i)) = i
+                assert_eq!(sigma(sigma(i)), i);
             }
+            // perm_slice same as perm_idx
+            assert_eq!(
+                cfft_permute_slice(&(0..n).collect_vec()),
+                (0..n).map(|i| sigma(i)).collect_vec()
+            );
         }
     }
 }

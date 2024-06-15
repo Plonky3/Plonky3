@@ -23,7 +23,7 @@ use crate::domain::CircleDomain;
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
 use crate::util::{univariate_to_point, v_n};
-use crate::{cfft_index_to_natural, CfftAsNaturalPerm, CircleEvaluations};
+use crate::{cfft_permute_index, CfftPerm, CircleEvaluations};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
@@ -141,7 +141,7 @@ where
         let mat = self.mmcs.get_matrices(&data.mmcs_data)[idx];
         assert_eq!(mat.height(), 1 << domain.log_n);
         assert_eq!(domain, data.committed_domains[idx]);
-        CfftAsNaturalPerm::view(mat.as_view())
+        CfftPerm::view(mat.as_view())
     }
 
     #[instrument(skip_all)]
@@ -400,7 +400,7 @@ where
                     {
                         let log_height = mat_domain.log_n + self.fri_config.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
-                        let orig_idx = cfft_index_to_natural(index >> bits_reduced, log_height);
+                        let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
                         let committed_domain = CircleDomain::standard(log_height);
                         let x = committed_domain.nth_point(orig_idx);
@@ -430,7 +430,7 @@ where
 
                             let orig_size = log_height - self.fri_config.log_blowup;
                             let bits_reduced = log_global_max_height - log_height;
-                            let orig_idx = cfft_index_to_natural(index >> bits_reduced, log_height);
+                            let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
                             let lde_domain = CircleDomain::standard(log_height);
                             let p: Point<Val> = lde_domain.nth_point(orig_idx);

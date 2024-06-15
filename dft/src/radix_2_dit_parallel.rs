@@ -173,16 +173,15 @@ fn dit_layer_rev<F: Field>(
 
     let half_block_size = 1 << layer_rev;
     let block_size = half_block_size * 2;
+    let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for (block, block_start) in (0..submat.height()).step_by(block_size).enumerate() {
-        let twiddle = twiddles_rev[block];
-        for i in 0..half_block_size {
-            let hi = block_start + i;
-            let lo = hi + half_block_size;
-            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
-            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
-        }
+    for (block_i, block_start) in (0..submat.height()).step_by(block_size).enumerate() {
+        let twiddle = twiddles_rev[block_i];
+
+        let block = &mut submat.values[block_start * width..(block_start + block_size) * width];
+        let (lo, hi) = block.split_at_mut(half_block_size * width);
+        DitButterfly(twiddle).apply_to_rows(lo, hi)
     }
 }
 

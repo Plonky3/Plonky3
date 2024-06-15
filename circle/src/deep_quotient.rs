@@ -12,7 +12,7 @@ use tracing::instrument;
 use crate::domain::CircleDomain;
 use crate::point::Point;
 use crate::util::v_p;
-use crate::{natural_slice_to_cfft, CircleEvaluations};
+use crate::{cfft_permute_slice, CircleEvaluations};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
@@ -83,7 +83,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         ps_at_zeta: &[EF],
     ) -> Vec<EF> {
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
-        let points = natural_slice_to_cfft(&self.domain.points().collect_vec());
+        let points = cfft_permute_slice(&self.domain.points().collect_vec());
         let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = points
             .into_iter()
             .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
@@ -136,7 +136,7 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     let v_d_2 = F::two().exp_u64(log_lde_size as u64 - 1);
 
     let v_d = v_d.take(lde.len()).collect_vec();
-    let v_d = natural_slice_to_cfft(&v_d);
+    let v_d = cfft_permute_slice(&v_d);
 
     let lambda =
         dot_product::<EF, _, _>(lde.iter().copied(), v_d.iter().copied()) * v_d_2.inverse();
