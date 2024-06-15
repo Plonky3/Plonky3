@@ -11,7 +11,7 @@ use tracing::instrument;
 
 use crate::domain::CircleDomain;
 use crate::point::Point;
-use crate::util::{v_n, v_p};
+use crate::util::v_p;
 use crate::{natural_slice_to_cfft, CircleEvaluations};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
@@ -109,18 +109,18 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 /// |lde_domain| > |orig_domain|
 #[instrument(skip_all, fields(bits = log2_strict_usize(lde.len())))]
 pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
-    orig_domain: CircleDomain<F>,
-    lde_domain: CircleDomain<F>,
     lde: &mut [EF],
+    log_blowup: usize,
 ) -> EF {
-    let num_cosets = 1 << (lde_domain.log_n - orig_domain.log_n);
+    let log_lde_size = log2_strict_usize(lde.len());
+    // let num_cosets = 1 << (log_lde_size - orig_domain.log_n);
 
     // v_n is constant on cosets of the same size as orig_domain, so we only have
     // as many unique values as we have cosets.
-    let v_d_init = lde_domain
+    let v_d_init = CircleDomain::<F>::standard(log_lde_size)
         .points()
-        .take(num_cosets)
-        .map(|p| p.v_n(orig_domain.log_n))
+        .take(1 << log_blowup)
+        .map(|p| p.v_n(log_lde_size - log_blowup))
         .collect_vec();
 
     // The unique values are repeated over the rest of the domain like
@@ -133,9 +133,13 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
     // < v_d, v_d >
     // This formula was determined experimentally...
-    let v_d_2 = F::two().exp_u64(lde_domain.log_n as u64 - 1);
+    let v_d_2 = F::two().exp_u64(log_lde_size as u64 - 1);
 
-    let lambda = dot_product::<EF, _, _>(lde.iter().copied(), v_d.clone()) * v_d_2.inverse();
+    let v_d = v_d.take(lde.len()).collect_vec();
+    let v_d = natural_slice_to_cfft(&v_d);
+
+    let lambda =
+        dot_product::<EF, _, _>(lde.iter().copied(), v_d.iter().copied()) * v_d_2.inverse();
 
     for (y, v_x) in izip!(lde, v_d) {
         *y -= lambda * v_x;
@@ -146,9 +150,9 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{extension::BinomialExtensionField, AbstractField};
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng, Rng};
+    use rand::{random, thread_rng};
 
     use super::*;
 
@@ -158,33 +162,35 @@ mod tests {
 
     #[test]
     fn reduce_evaluations_low_degree() {
+        let log_n = 5;
+        let log_blowup = 1;
         let evals = CircleEvaluations::from_cfft_order(
-            CircleDomain::standard(5),
-            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 5, 1 << 3),
+            CircleDomain::standard(log_n),
+            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << 3),
         );
-        let lde = evals.clone().extrapolate(CircleDomain::standard(6));
-        assert!(lde.dim() <= (1 << 5));
+        let lde = evals
+            .clone()
+            .extrapolate(CircleDomain::standard(log_n + log_blowup));
+        assert!(lde.dim() <= (1 << log_n));
 
         let alpha: EF = random();
         let zeta: Point<EF> = Point::from_projective_line(random());
 
         let ps_at_zeta = evals.evaluate_at_point(zeta);
         let reduced0 = CircleEvaluations::<F>::from_cfft_order(
-            CircleDomain::standard(6),
+            CircleDomain::standard(log_n + log_blowup),
             RowMajorMatrix::new_col(lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta))
                 .flatten_to_base(),
         );
-        assert!(reduced0.dim() <= (1 << 5) + 1);
+        assert!(reduced0.dim() <= (1 << log_n) + 1);
 
         let not_ps_at_zeta = evals.evaluate_at_point(zeta.double());
         let reduced1 = CircleEvaluations::<F>::from_cfft_order(
-            CircleDomain::standard(6),
+            CircleDomain::standard(log_n + log_blowup),
             RowMajorMatrix::new_col(lde.deep_quotient_reduce(alpha, zeta, &not_ps_at_zeta))
                 .flatten_to_base(),
         );
-        assert!(reduced1.dim() > (1 << 5) + 1);
-
-        // let ps_at_zeta: Vec<EF> = (0..(1 << 4)).map(|_| rng.gen()).collect();
+        assert!(reduced1.dim() > (1 << log_n) + 1);
     }
 
     /*
@@ -205,27 +211,33 @@ mod tests {
             .collect_vec();
         assert_eq!(&matrix_reduced, &row_reduced);
     }
+    */
 
     #[test]
     fn test_extract_lambda() {
-        let mut rng = thread_rng();
+        let log_n = 5;
+        for log_blowup in [1, 2, 3] {
+            let mut coeffs = RowMajorMatrix::<F>::rand(&mut thread_rng(), (1 << log_n) + 1, 1);
+            coeffs.pad_to_height(1 << (log_n + log_blowup), F::zero());
 
-        let orig_domain = CircleDomain::<F>::standard(3);
-        let trace = RowMajorMatrix::<F>::rand(&mut rng, 1 << orig_domain.log_n, 1);
+            let domain = CircleDomain::standard(log_n + log_blowup);
+            let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone())
+                .to_cfft_order()
+                .values;
 
-        let lde_domain = CircleDomain::<F>::standard(8);
-        let mut lde = CircleEvaluations::from_natural(orig_domain, trace).extrapolate(lde_domain);
-        // let mut lde = Cfft::default().lde(trace, orig_domain, lde_domain).values;
+            let lambda = extract_lambda(&mut lde, log_blowup);
+            assert_eq!(lambda, coeffs.get(1 << log_n, 0));
 
-        // Add our own multiple into the lde
-        let expected_lambda: F = rng.gen();
-        for (pt, y) in izip!(lde_domain.points(), &mut lde.values.values) {
-            *y += expected_lambda * pt.v_n(orig_domain.log_n) // v_n(pt.x, orig_domain.log_n);
+            let coeffs2 = CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde))
+                .interpolate()
+                .values;
+            assert_eq!(&coeffs2[..(1 << log_n)], &coeffs.values[..(1 << log_n)]);
+            assert_eq!(lambda, coeffs.values[1 << log_n]);
+            assert_eq!(coeffs2[1 << log_n], F::zero());
+            assert_eq!(
+                &coeffs2[(1 << log_n) + 1..],
+                &coeffs.values[(1 << log_n) + 1..]
+            );
         }
-
-        // Check that it pulls out the right lambda
-        let actual_lambda = extract_lambda(orig_domain, lde_domain, &mut lde.values.values);
-        assert_eq!(actual_lambda, expected_lambda);
     }
-    */
 }

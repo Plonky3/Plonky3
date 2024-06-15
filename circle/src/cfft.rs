@@ -128,7 +128,7 @@ fn compute_twiddles<F: ComplexExtendable>(domain: CircleDomain<F>) -> Vec<Vec<F>
     twiddles
 }
 
-pub fn circle_basis<F: ComplexExtendable>(p: Point<F>, log_n: usize) -> Vec<F> {
+pub fn circle_basis<F: Field>(p: Point<F>, log_n: usize) -> Vec<F> {
     let mut b = vec![F::one(), p.y];
     let mut x = p.x;
     for _ in 0..(log_n - 1) {
@@ -146,13 +146,13 @@ mod tests {
     use super::*;
 
     use itertools::iproduct;
+    use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
 
     type F = Mersenne31;
-    type EF = Mersenne31;
-    // type EF = BinomialExtensionField<F, 3>;
+    type EF = BinomialExtensionField<F, 3>;
 
     #[test]
     fn test_cfft_icfft() {

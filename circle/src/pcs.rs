@@ -17,12 +17,13 @@ use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
-use crate::deep_quotient::{deep_quotient_reduce_matrix, deep_quotient_reduce_row, extract_lambda};
+use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
 
+use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
 use crate::util::{univariate_to_point, v_n};
-use crate::{CfftAsNaturalPerm, CircleEvaluations};
+use crate::{cfft_index_to_natural, CfftAsNaturalPerm, CircleEvaluations};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
@@ -178,15 +179,17 @@ where
             .map(|(data, points_for_mats)| {
                 let mats = self.mmcs.get_matrices(&data.mmcs_data);
                 izip!(&data.committed_domains, mats, points_for_mats)
-                    .map(|(&committed_domain, evals, points_for_mat)| {
+                    .map(|(&committed_domain, mat, points_for_mat)| {
                         // Get the unpermuted matrix.
                         // let mat = &permuted_mat.inner;
 
+                        let log_height = log2_strict_usize(mat.height());
                         // It's in cfft order.
-                        let evals =
-                            CircleEvaluations::from_cfft_order(committed_domain, evals.as_view());
+                        let evals = CircleEvaluations::from_cfft_order(
+                            CircleDomain::standard(log_height),
+                            mat.as_view(),
+                        );
 
-                        // let log_height = log2_strict_usize(mat.height());
                         let log_height = evals.domain.log_n;
                         let (alpha_offset, reduced_opening_for_log_height) =
                             reduced_openings.entry(log_height).or_insert_with(|| {
@@ -206,15 +209,6 @@ where
                                         .in_scope(|| evals.evaluate_at_point(zeta));
 
                                 // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                                /*
-                                let mat_ros = deep_quotient_reduce_matrix(
-                                    alpha,
-                                    lde_domain,
-                                    mat,
-                                    zeta_point,
-                                    &ps_at_zeta,
-                                );
-                                */
                                 let mat_ros = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
 
                                 // Fold it into our running reduction, offset by alpha_offset.
@@ -246,17 +240,12 @@ where
             .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
                 log_heights.push(log_height);
-                // Todo: use domain methods more intelligently
-                let lambda = extract_lambda(
-                    CircleDomain::standard(log_height - self.fri_config.log_blowup),
-                    CircleDomain::standard(log_height),
-                    &mut ro,
-                );
+                let lambda = extract_lambda(&mut ro, self.fri_config.log_blowup);
                 lambdas.push(lambda);
                 // We have been working with reduced openings in natural order, but now we are ready
                 // to start FRI, so go to circle bitrev order, and prepare for first layer fold
                 // with 2 siblings per leaf.
-                RowMajorMatrix::new(circle_bitrev_permute(&ro), 2)
+                RowMajorMatrix::new(ro, 2)
             })
             .collect();
         let log_max_height = log_heights.iter().max().copied().unwrap();
@@ -278,7 +267,7 @@ where
             .mmcs
             .get_matrices(&first_layer_data)
             .into_iter()
-            .map(|m| fold_bivariate(bivariate_beta, m.as_view()))
+            .map(|m| fold_y(bivariate_beta, m.as_view()))
             // Reverse, because FRI expects descending by height
             .rev()
             .collect();
@@ -411,7 +400,7 @@ where
                     {
                         let log_height = mat_domain.log_n + self.fri_config.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
-                        let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
+                        let orig_idx = cfft_index_to_natural(index >> bits_reduced, log_height);
 
                         let committed_domain = CircleDomain::standard(log_height);
                         let x = committed_domain.nth_point(orig_idx);
@@ -422,7 +411,7 @@ where
                         let alpha_pow_width_2 = alpha.exp_u64(ps_at_x.len() as u64).square();
 
                         for (zeta_uni, ps_at_zeta) in mat_points_and_values {
-                            let zeta = univariate_to_point(*zeta_uni).unwrap();
+                            let zeta = Point::from_projective_line(*zeta_uni);
 
                             *ro += *alpha_offset
                                 * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta);
@@ -441,14 +430,14 @@ where
 
                             let orig_size = log_height - self.fri_config.log_blowup;
                             let bits_reduced = log_global_max_height - log_height;
-                            let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
+                            let orig_idx = cfft_index_to_natural(index >> bits_reduced, log_height);
 
                             let lde_domain = CircleDomain::standard(log_height);
-                            let x: Complex<Val> = lde_domain.nth_point(orig_idx);
+                            let p: Point<Val> = lde_domain.nth_point(orig_idx);
 
-                            let v_n_at_x = v_n(x.real(), orig_size);
+                            let v_n_at_p = v_n(p.x, orig_size);
 
-                            let lambda_corrected = ro - lambda * v_n_at_x;
+                            let lambda_corrected = ro - lambda * v_n_at_p;
 
                             let mut fl_values = vec![lambda_corrected; 2];
                             fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;
@@ -456,7 +445,7 @@ where
                             let fri_input = (
                                 // - 1 here is because we have already folded a layer.
                                 log_height - 1,
-                                fold_bivariate_row(
+                                fold_y_row(
                                     index >> (bits_reduced + 1),
                                     // - 1 here is log_arity.
                                     log_height - 1,
