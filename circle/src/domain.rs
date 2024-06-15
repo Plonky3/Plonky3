@@ -59,7 +59,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     fn is_standard(&self) -> bool {
         self.shift == Point::generator(self.log_n + 1)
     }
-    fn gen(&self) -> Point<F> {
+    pub(crate) fn gen(&self) -> Point<F> {
         Point::generator(self.log_n - 1)
     }
     pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> {

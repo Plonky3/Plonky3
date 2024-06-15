@@ -1,11 +1,12 @@
-use itertools::{izip, Itertools};
+use itertools::{iterate, izip, Itertools};
 use p3_commit::PolynomialSpace;
 use p3_dft::divide_by_height;
 use p3_field::{batch_multiplicative_inverse, extension::ComplexExtendable, ExtensionField, Field};
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
-use p3_util::reverse_slice_index_bits;
+use p3_util::{reverse_bits_len, reverse_slice_index_bits};
 
 use crate::{
+    cfft_index_to_natural,
     domain::CircleDomain,
     natural_slice_to_cfft,
     ordering::{CfftAsNaturalPerm, NaturalAsCfftPerm},
@@ -42,7 +43,12 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     pub fn interpolate(self) -> RowMajorMatrix<F> {
         let CircleEvaluations { domain, values } = self;
         let mut values = values.to_row_major_matrix();
-        for twiddles in compute_twiddles(domain) {
+        fft_layer(
+            &mut values.values,
+            &batch_multiplicative_inverse(&domain.y_twiddles()),
+            |lo, hi, t| (lo + hi, (lo - hi) * t),
+        );
+        for twiddles in compute_twiddles(domain).into_iter().skip(1) {
             fft_layer(
                 &mut values.values,
                 &batch_multiplicative_inverse(&twiddles),
@@ -104,6 +110,34 @@ fn fft_layer<F: Field>(values: &mut [F], twiddles: &[F], f: impl Fn(F, F, F) -> 
         for (lo, hi) in izip!(los, his) {
             (*lo, *hi) = f(*lo, *hi, t);
         }
+    }
+}
+
+impl<F: ComplexExtendable> CircleDomain<F> {
+    pub(crate) fn y_twiddles(&self) -> Vec<F> {
+        let mut ys = self.coset0().map(|p| p.y).collect_vec();
+        reverse_slice_index_bits(&mut ys);
+        ys
+    }
+    pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
+        self.nth_point(cfft_index_to_natural(index << 1, self.log_n))
+            .y
+    }
+    pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
+        let gen = self.gen() * (1 << layer);
+        let shift = self.shift * (1 << layer);
+        let mut xs = iterate(shift, move |&p| p + gen)
+            .map(|p| p.x)
+            .take(1 << (self.log_n - layer - 2))
+            .collect_vec();
+        reverse_slice_index_bits(&mut xs);
+        xs
+    }
+    pub(crate) fn nth_x_twiddle(&self, index: usize) -> F {
+        (self.shift + self.gen() * index).x
+
+        // let gen = self.gen() * (1 << layer);
+        // let shift = self.shift * (1 << layer);
     }
 }
 

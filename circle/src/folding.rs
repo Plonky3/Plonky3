@@ -70,11 +70,13 @@ pub(crate) fn fold_y<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
     evals: impl Matrix<EF>,
 ) -> Vec<EF> {
-    let log_n = log2_strict_usize(evals.height() * evals.width());
-    let domain = CircleDomain::standard(log_n);
-    let mut twiddles = batch_multiplicative_inverse(&domain.coset0().map(|p| p.y).collect_vec());
-    reverse_slice_index_bits(&mut twiddles);
-    fold(evals, beta, &twiddles)
+    assert_eq!(evals.width(), 2);
+    let log_n = log2_strict_usize(evals.height()) + 1;
+    fold(
+        evals,
+        beta,
+        &batch_multiplicative_inverse(&CircleDomain::standard(log_n).y_twiddles()),
+    )
 }
 
 pub(crate) fn fold_y_row<F: ComplexExtendable, EF: ExtensionField<F>>(
@@ -85,14 +87,11 @@ pub(crate) fn fold_y_row<F: ComplexExtendable, EF: ExtensionField<F>>(
 ) -> EF {
     let evals = evals.collect_vec();
     assert_eq!(evals.len(), 2);
-    let log_arity = log2_strict_usize(evals.len());
-
-    let shift = Point::<F>::generator(log_folded_height + log_arity + 1);
-    let gen = Point::generator(log_folded_height + log_arity - 1);
-    let pt = shift + gen * reverse_bits_len(index, log_folded_height);
-
+    let t = CircleDomain::<F>::standard(log_folded_height + 1)
+        .nth_y_twiddle(index)
+        .inverse();
     let sum = evals[0] + evals[1];
-    let diff = (evals[0] - evals[1]) * pt.y.inverse();
+    let diff = (evals[0] - evals[1]) * t;
     (sum + beta * diff).halve()
 }
 
@@ -103,15 +102,11 @@ pub(crate) fn fold_x<F: ComplexExtendable, EF: ExtensionField<F>>(
     let log_n = log2_strict_usize(evals.width() * evals.height());
     // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
     let domain = CircleDomain::standard(log_n + 1);
-    let mut twiddles = batch_multiplicative_inverse(
-        &domain
-            .coset0()
-            .take(evals.height())
-            .map(|p| p.x)
-            .collect_vec(),
-    );
-    reverse_slice_index_bits(&mut twiddles);
-    fold(evals, beta, &twiddles)
+    fold(
+        evals,
+        beta,
+        &batch_multiplicative_inverse(&domain.x_twiddles(0)),
+    )
 }
 
 pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
@@ -124,12 +119,12 @@ pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     assert_eq!(evals.len(), 2);
     let log_arity = log2_strict_usize(evals.len());
 
-    let shift = Point::<F>::generator(log_folded_height + log_arity + 2);
-    let gen = Point::generator(log_folded_height + log_arity);
-    let pt = shift + gen * reverse_bits_len(index, log_folded_height);
+    let t = CircleDomain::<F>::standard(log_folded_height + log_arity + 1)
+        .nth_x_twiddle(reverse_bits_len(index, log_folded_height))
+        .inverse();
 
     let sum = evals[0] + evals[1];
-    let diff = (evals[0] - evals[1]) * pt.x.inverse();
+    let diff = (evals[0] - evals[1]) * t;
     (sum + beta * diff).halve()
 }
 
