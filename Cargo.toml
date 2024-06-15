@@ -29,3 +29,6 @@ members = [
     "util",
     "uni-stark",
 ]
+
+[profile.release]
+lto = "fat"
