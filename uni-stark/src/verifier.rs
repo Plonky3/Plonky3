@@ -94,7 +94,7 @@ where
         opening_proof,
         challenger,
     )
-    .map_err(|err| VerificationError::InvalidOpeningArgument(err))?;
+    .map_err(VerificationError::InvalidOpeningArgument)?;
 
     let zps = quotient_chunks_domains
         .iter()

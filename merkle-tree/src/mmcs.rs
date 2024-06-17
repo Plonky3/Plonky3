@@ -3,13 +3,12 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-
 use p3_commit::Mmcs;
 use p3_field::{PackedField, PackedValue};
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
+use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
 use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize};
@@ -199,17 +198,16 @@ mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
-    use rand::thread_rng;
-
     use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
     use p3_commit::Mmcs;
     use p3_field::{AbstractField, Field};
-    use p3_matrix::{Dimensions, Matrix};
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::{Dimensions, Matrix};
     use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
+    use rand::thread_rng;
 
     use super::FieldMerkleTreeMmcs;
 
