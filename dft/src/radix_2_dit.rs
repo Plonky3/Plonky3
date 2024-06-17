@@ -51,8 +51,6 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twi
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
 
-    let _width = mat.width();
-
     mat.par_row_chunks_exact_mut(block_size)
         .for_each(|mut block_chunks| {
             let (mut hi_chunks, mut lo_chunks) = block_chunks.split_rows_mut(half_block_size);

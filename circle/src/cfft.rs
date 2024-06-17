@@ -76,89 +76,13 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
         // both `x_1` and `x_2` are set to `x_1`).
         // So instead we directly repeat the coeffs and skip the initial layers.
-
-        // CircleEvaluations::<F>::evaluate_skipping_layers(target_domain, coeffs, added_bits)
-
-        let mut twiddles = info_span!("twiddles").in_scope(|| {
-            compute_twiddles(target_domain)
-                .into_iter()
-                .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
-                .rev()
-                .skip(added_bits)
-        });
-
-        /*
         info_span!("extend coeffs").in_scope(|| {
             coeffs.values.reserve(target_domain.size() * coeffs.width());
             for _ in 0..added_bits {
                 coeffs.values.extend_from_within(..);
             }
         });
-        */
-
-        info_span!("extend coeffs + first layer").in_scope(|| {
-            let old_len = coeffs.height() * coeffs.width();
-            let new_len = target_domain.size() * coeffs.width();
-            coeffs.values.reserve(new_len);
-            unsafe {
-                coeffs.values.set_len(new_len);
-            }
-
-            let ts = twiddles.next().unwrap();
-            let blk_sz = coeffs.values.len() / ts.len();
-            let half_blk_sz = blk_sz >> 1;
-
-            assert_eq!(blk_sz, old_len);
-
-            let mut packed = vec![];
-            let mut values = &mut coeffs.values[..];
-            for _ in 0..ts.len() {
-                let (blk, rest) = values.split_at_mut(blk_sz);
-                values = rest;
-                let (lo, hi) = blk.split_at_mut(half_blk_sz);
-                packed.push(F::Packing::pack_slice_with_suffix_mut(lo));
-                packed.push(F::Packing::pack_slice_with_suffix_mut(hi));
-            }
-            assert_eq!(values.len(), 0);
-            let n_shorts = packed[0].0.len();
-            let n_sfx = packed[0].1.len();
-            assert!(packed
-                .iter()
-                .all(|(shorts, sfx)| shorts.len() == n_shorts && sfx.len() == n_sfx));
-
-            assert_eq!(packed[0].1.len(), 0);
-
-            // for i in 0..packed[0].0.len() {
-            (0..packed[0].0.len()).into_par_iter().for_each(|i| {
-                let lo = packed[0].0[i];
-                let hi = packed[1].0[i];
-                for (j, &t) in ts.iter().enumerate() {
-                    let t_hi = F::Packing::from(t.0) * hi;
-                    packed[2 * j].0[i] = lo + t_hi;
-                    packed[2 * j + 1].0[i] = lo - t_hi;
-                }
-            });
-
-            /*
-            for i in 0..half_blk_sz {
-                let (lo_shorts, lo_sfx) = packed[2 * i];
-
-                let lo = coeffs.values[i];
-                let hi = coeffs.values[half_blk_sz + i];
-                for (&t, blk) in izip!(&ts, coeffs.values.chunks_exact_mut(blk_sz)) {
-                    let t_hi = t.0 * hi;
-                    blk[i] = lo + t_hi;
-                    blk[half_blk_sz + i] = lo - t_hi;
-                }
-            }
-                */
-        });
-
-        for ts in twiddles {
-            fft_layer(&mut coeffs.values, &ts);
-        }
-
-        CircleEvaluations::from_cfft_order(target_domain, coeffs)
+        CircleEvaluations::<F>::evaluate_skipping_layers(target_domain, coeffs, added_bits)
     }
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         let v_n = point.v_n(self.domain.log_n) - self.domain.shift.v_n(self.domain.log_n);
@@ -208,10 +132,10 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
 }
 
 #[instrument(skip_all, fields(
-    len = values.len(),
+    log_len = log2_strict_usize(values.len()),
     mb = (values.len() * core::mem::size_of::<F>()) >> 20,
-    blks = twiddles.len(),
-    blk_sz = values.len() / twiddles.len(),
+    log_blks = log2_strict_usize(twiddles.len()),
+    log_blk_sz = log2_strict_usize(values.len() / twiddles.len()),
 ))]
 fn fft_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
     assert_eq!(values.len() % twiddles.len(), 0);
