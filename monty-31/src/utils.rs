@@ -1,4 +1,4 @@
-use crate::MontyParameters;
+use crate::{FieldParameters, MontyParameters};
 
 #[inline]
 pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
@@ -14,6 +14,19 @@ pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
 #[must_use]
 pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
     monty_reduce::<MP>(x as u64)
+}
+
+/// Given an element x from a 31 bit field F_P compute x/2.
+#[inline]
+pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
+    let shr = input >> 1;
+    let lo_bit = input & 1;
+    let shr_corr = shr + FP::HALF_P_PLUS_1;
+    if lo_bit == 0 {
+        shr
+    } else {
+        shr_corr
+    }
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.

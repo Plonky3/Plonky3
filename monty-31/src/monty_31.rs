@@ -1,4 +1,4 @@
-//! An abstraction of 31-bit fields which use a MONTY approach for addition and multiplication with a MONTY constant = 2^32.
+//! An abstraction of 31-bit fields which use a MONTY approach for faster multiplication with MONTY constant 2^32.
 
 use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
@@ -19,10 +19,6 @@ use crate::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldPar
 #[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct MontyField31<FP: FieldParameters> {
-    // TODO:
-    // This will eventually be pub(crate)
-    // Setting to pub for now so BabyBear and KoalaBear crates can build when this is only partially implemented.
-
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
     pub(crate) value: u32,
@@ -31,6 +27,7 @@ pub struct MontyField31<FP: FieldParameters> {
 
 impl<FP: FieldParameters> MontyField31<FP> {
     // The standard way to crate a new element.
+    // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
     pub const fn new(value: u32) -> Self {
         Self {
             value: to_monty::<FP>(value),
@@ -39,11 +36,7 @@ impl<FP: FieldParameters> MontyField31<FP> {
     }
 
     // Create a new field element from something already in MONTY form.
-    // TODO:
-    // This will eventually be pub(crate)
-    // Setting to pub for now so BabyBear and KoalaBear crates can build when this is only partially implemented.
-
-    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
+    // This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
     // likely doing something fishy.
     pub(crate) const fn new_monty(value: u32) -> Self {
         Self {

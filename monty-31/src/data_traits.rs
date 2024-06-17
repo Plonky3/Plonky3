@@ -5,6 +5,7 @@ use p3_field::{AbstractField, Field};
 
 use crate::{to_monty, to_monty_from_array};
 
+/// MontyParameters contains constants needed to convert elements into MONTY form and perform MONTY reductions.
 pub trait MontyParameters {
     // A 31-bit prime.
     const PRIME: u32;
@@ -18,23 +19,27 @@ pub trait MontyParameters {
     const MONTY_MASK: u32 = ((1u64 << Self::MONTY_BITS) - 1) as u32;
 }
 
-/// Constants needed for the Barett reduction used in the MDS code.
-pub trait BarettParameters: MontyParameters {
+/// BarrettParameters contains constants needed for the Barrett reduction used in the MDS code.
+pub trait BarrettParameters: MontyParameters {
     const N: usize = 40; // beta = 2^N, fixing N = 40 here
     const PRIME_I128: i128 = Self::PRIME as i128;
     const PSEUDO_INV: i64 = (((1_i128) << (2 * Self::N)) / Self::PRIME_I128) as i64; // I = 2^80 / P => I < 2**50
     const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 }
 
+/// FieldConstants contains constants and methods needed to imply AbstractField and Field for MontyField31.
 pub trait FieldConstants: MontyParameters + Sized {
-    // Simple Field Values.
+    // Simple field constants.
     const MONTY_ZERO: u32 = 0; // The monty form of 0 is always 0.
     const MONTY_ONE: u32 = to_monty::<Self>(1);
     const MONTY_TWO: u32 = to_monty::<Self>(2);
     const MONTY_NEG_ONE: u32 = Self::PRIME - Self::MONTY_ONE; // As MONTY_ONE =/= 0, MONTY_NEG_ONE = P - MONTY_ONE.
 
+    // TODO: Don't save both GEN and MONTY_GEN. Only one of these should be in the trait.
     const GEN: u32; // A generator of the fields multiplicative group.
     const MONTY_GEN: u32 = to_monty::<Self>(Self::GEN); // Generator saved in MONTY form
+
+    const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF;
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
@@ -51,6 +56,7 @@ pub trait TwoAdicData {
     fn u32_two_adic_generator(bits: usize) -> u32;
 }
 
+// TODO: This should be deleted long term once we have improved our API for defining extension fields.
 pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     // W is a value such that (x^DEG - WN) is irreducible.
     const W: u32;
@@ -83,7 +89,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
-    + BarettParameters
+    + BarrettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
     + crate::FieldParametersNeon
@@ -108,7 +114,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
-    + BarettParameters
+    + BarrettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
     + crate::FieldParametersAVX2
@@ -133,7 +139,7 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
-    + BarettParameters
+    + BarrettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
     + crate::FieldParametersAVX2
@@ -167,22 +173,8 @@ pub trait FieldParameters:
     + MontyParameters
     + FieldConstants
     + TwoAdicData
-    + BarettParameters
+    + BarrettParameters
     + BinomialExtensionData<4>
     + BinomialExtensionData<5>
 {
-}
-
-/// Given an element x from a 31 bit field F_P compute x/2.
-#[inline]
-pub(crate) const fn halve_u32<MP: MontyParameters>(input: u32) -> u32 {
-    let shift = (MP::PRIME + 1) >> 1;
-    let shr = input >> 1;
-    let lo_bit = input & 1;
-    let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
 }

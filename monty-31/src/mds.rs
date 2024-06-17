@@ -13,7 +13,7 @@ use p3_mds::util::dot_product;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{BarettParameters, FieldParameters, MontyField31};
+use crate::{BarrettParameters, FieldParameters, MontyField31};
 /// A collection of constants related to convolutions.
 /// The MDS matrices are saved using their left most column.
 pub trait MDSUtils: Clone + Sync {
@@ -81,7 +81,7 @@ impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallCon
 /// x' = x mod 2^10
 /// See Thm 1 (Below function) for a proof that this function is correct.
 #[inline(always)]
-fn barrett_red_monty31<BP: BarettParameters>(input: i128) -> i64 {
+fn barrett_red_monty31<BP: BarrettParameters>(input: i128) -> i64 {
     // input = input_low + beta*input_high
     // So input_high < 2**63 and fits in an i64.
     let input_high = (input >> BP::N) as i64; // input_high < input / beta < 2**{80 - N}
