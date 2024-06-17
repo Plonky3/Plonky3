@@ -1,7 +1,7 @@
 use p3_field::{exp_1420470955, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    to_monty_from_array, BarrettParameters, BinomialExtensionData, FieldConstants, FieldParameters,
-    MontyField31, MontyParameters, TwoAdicData,
+    to_monty, to_monty_from_array, BarrettParameters, BinomialExtensionData, FieldConstants,
+    FieldParameters, MontyField31, MontyParameters, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -60,7 +60,7 @@ impl FieldConstants for KoalaBearParameters {
         Some(p1111110111111111111111111111111)
     }
 
-    const GEN: u32 = 3;
+    const MONTY_GEN: u32 = to_monty::<Self>(3);
 }
 
 const TWO_ADIC_GENERATORS: [u32; 25] = [

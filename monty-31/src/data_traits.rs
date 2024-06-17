@@ -35,9 +35,8 @@ pub trait FieldConstants: MontyParameters + Sized {
     const MONTY_TWO: u32 = to_monty::<Self>(2);
     const MONTY_NEG_ONE: u32 = Self::PRIME - Self::MONTY_ONE; // As MONTY_ONE =/= 0, MONTY_NEG_ONE = P - MONTY_ONE.
 
-    // TODO: Don't save both GEN and MONTY_GEN. Only one of these should be in the trait.
-    const GEN: u32; // A generator of the fields multiplicative group.
-    const MONTY_GEN: u32 = to_monty::<Self>(Self::GEN); // Generator saved in MONTY form
+    // A generator of the fields multiplicative group. Needs to be given in Monty Form.
+    const MONTY_GEN: u32;
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
