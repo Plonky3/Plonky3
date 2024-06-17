@@ -1,6 +1,6 @@
 use p3_field::{exp_1725656503, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    BarettParameters, BinomialExtensionData, FieldConstants, FieldParameters, MontyField31,
+    BarrettParameters, BinomialExtensionData, FieldConstants, FieldParameters, MontyField31,
     MontyParameters, TwoAdicData,
 };
 
@@ -21,7 +21,7 @@ impl MontyParameters for BabyBearParameters {
     const MONTY_MU: u32 = 0x88000001;
 }
 
-impl BarettParameters for BabyBearParameters {}
+impl BarrettParameters for BabyBearParameters {}
 
 impl FieldConstants for BabyBearParameters {
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {

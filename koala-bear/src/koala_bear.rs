@@ -1,6 +1,6 @@
 use p3_field::{exp_1420470955, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    BarettParameters, BinomialExtensionData, FieldConstants, FieldParameters, MontyField31,
+    BarrettParameters, BinomialExtensionData, FieldConstants, FieldParameters, MontyField31,
     MontyParameters, TwoAdicData,
 };
 
@@ -24,7 +24,7 @@ impl MontyParameters for KoalaBearParameters {
     const MONTY_MU: u32 = 0x81000001;
 }
 
-impl BarettParameters for KoalaBearParameters {}
+impl BarrettParameters for KoalaBearParameters {}
 
 impl FieldConstants for KoalaBearParameters {
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
