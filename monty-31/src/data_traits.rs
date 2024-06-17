@@ -46,14 +46,14 @@ pub trait FieldConstants: MontyParameters + Sized {
 }
 
 pub trait TwoAdicData {
+    // Largest n such that 2^n divides p - 1.
     const TWO_ADICITY: usize;
 
-    // TODO:
-    // Ideally GENERATORS: [u32; usize] and we would have a MONTY_GENERATORS
-    // which would be the monty form of each element.
-    // Can't seem to do it without passing in TWO_ADICITY as TwoAdicData<TWO_ADICITY> which I'd prefer to avoid for now.
-    // Also can's use Vec<u32> as allocators are not allowed in constants
-    fn u32_two_adic_generator(bits: usize) -> u32;
+    // ArrayLike should be [u32; TWO_ADICITY + 1].
+    type ArrayLike: AsRef<[u32]> + Sized;
+
+    // TWO_ADIC_GENERATORS needs to be in MONTY FORM.
+    const TWO_ADIC_GENERATORS: Self::ArrayLike;
 }
 
 // TODO: This should be deleted long term once we have improved our API for defining extension fields.

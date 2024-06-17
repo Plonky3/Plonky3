@@ -1,7 +1,7 @@
 use p3_field::{exp_1725656503, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    BarrettParameters, BinomialExtensionData, FieldConstants, FieldParameters, MontyField31,
-    MontyParameters, TwoAdicData,
+    to_monty_from_array, BarrettParameters, BinomialExtensionData, FieldConstants, FieldParameters,
+    MontyField31, MontyParameters, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
@@ -73,11 +73,10 @@ const TWO_ADIC_GENERATORS: [u32; 28] = [
 impl TwoAdicData for BabyBearParameters {
     const TWO_ADICITY: usize = 27;
 
-    fn u32_two_adic_generator(bits: usize) -> u32 {
-        assert!(bits <= Self::TWO_ADICITY);
+    type ArrayLike = [u32; Self::TWO_ADICITY + 1];
 
-        TWO_ADIC_GENERATORS[bits]
-    }
+    const TWO_ADIC_GENERATORS: Self::ArrayLike =
+        to_monty_from_array::<28, Self>(TWO_ADIC_GENERATORS);
 }
 
 const EXT_TWO_ADIC_GENERATORS4: [[u32; 4]; 2] = [[0, 0, 1996171314, 0], [0, 0, 0, 124907976]];

@@ -255,8 +255,7 @@ impl<FP: FieldParameters> TwoAdicField for MontyField31<FP> {
     const TWO_ADICITY: usize = FP::TWO_ADICITY;
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-
-        Self::from_canonical_u32(FP::u32_two_adic_generator(bits))
+        Self::new_monty(FP::TWO_ADIC_GENERATORS.as_ref()[bits])
     }
 }
 
