@@ -11,6 +11,7 @@ use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
+use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight};
 
 /// A vector commitment scheme backed by a `FieldMerkleTree`.
 ///
@@ -23,6 +24,17 @@ pub struct FieldMerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
     hash: H,
     compress: C,
     _phantom: PhantomData<(P, PW)>,
+}
+
+#[derive(Debug)]
+pub enum FieldMerkleTreeError {
+    WrongBatchSize,
+    WrongWidth,
+    WrongHeight {
+        max_height: usize,
+        num_siblings: usize,
+    },
+    RootMismatch,
 }
 
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
@@ -51,13 +63,14 @@ where
 {
     type Commitment = Hash<P::Scalar, PW::Value, DIGEST_ELEMS>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
-    type Error = ();
+    type Error = FieldMerkleTreeError;
     type ProverData<M> = FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>;
 
     fn commit<M: Matrix<P::Scalar>>(
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
+        dbg!(inputs[0].height());
         let tree = FieldMerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
@@ -82,7 +95,7 @@ where
             })
             .collect_vec();
 
-        let proof = (0..log_max_height)
+        let proof: Vec<_> = (0..log_max_height)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
 
@@ -104,6 +117,28 @@ where
         opened_values: &[Vec<P::Scalar>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
+        // Check that the openings have the correct shape.
+        if dimensions.len() != opened_values.len() {
+            return Err(WrongBatchSize);
+        }
+        // TODO: Disabled for now since TwoAdicFriPcs and CirclePcs currently pass 0 for width.
+        // for (dims, opened_vals) in dimensions.iter().zip(opened_values) {
+        //     if opened_vals.len() != dims.width {
+        //         return Err(WrongWidth);
+        //     }
+        // }
+        let max_height = dimensions.iter().map(|dim| dim.height).max().unwrap();
+        let log_max_height = log2_ceil_usize(max_height);
+        dbg!(dimensions);
+        dbg!(proof.len());
+        if proof.len() != log_max_height {
+            panic!("oop");
+            return Err(WrongHeight {
+                max_height,
+                num_siblings: proof.len(),
+            });
+        }
+
         let mut heights_tallest_first = dimensions
             .iter()
             .enumerate()
@@ -154,7 +189,7 @@ where
         if commit == &root {
             Ok(())
         } else {
-            Err(())
+            Err(RootMismatch)
         }
     }
 }
