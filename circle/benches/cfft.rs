@@ -25,7 +25,7 @@ fn pretty_name<T>() -> String {
 }
 
 fn bench_lde(c: &mut Criterion) {
-    let log_n = 16;
+    let log_n = 18;
     let log_w = 8;
 
     let mut g = c.benchmark_group("lde");

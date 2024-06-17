@@ -8,7 +8,7 @@ use p3_field::{
 };
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_maybe_rayon::prelude::*;
-use p3_util::reverse_slice_index_bits;
+use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
 
 use crate::{
@@ -76,11 +76,89 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
         // both `x_1` and `x_2` are set to `x_1`).
         // So instead we directly repeat the coeffs and skip the initial layers.
-        coeffs.values.reserve(target_domain.size() * coeffs.width());
-        for _ in 0..added_bits {
-            coeffs.values.extend_from_within(..);
+
+        // CircleEvaluations::<F>::evaluate_skipping_layers(target_domain, coeffs, added_bits)
+
+        let mut twiddles = info_span!("twiddles").in_scope(|| {
+            compute_twiddles(target_domain)
+                .into_iter()
+                .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
+                .rev()
+                .skip(added_bits)
+        });
+
+        /*
+        info_span!("extend coeffs").in_scope(|| {
+            coeffs.values.reserve(target_domain.size() * coeffs.width());
+            for _ in 0..added_bits {
+                coeffs.values.extend_from_within(..);
+            }
+        });
+        */
+
+        info_span!("extend coeffs + first layer").in_scope(|| {
+            let old_len = coeffs.height() * coeffs.width();
+            let new_len = target_domain.size() * coeffs.width();
+            coeffs.values.reserve(new_len);
+            unsafe {
+                coeffs.values.set_len(new_len);
+            }
+
+            let ts = twiddles.next().unwrap();
+            let blk_sz = coeffs.values.len() / ts.len();
+            let half_blk_sz = blk_sz >> 1;
+
+            assert_eq!(blk_sz, old_len);
+
+            let mut packed = vec![];
+            let mut values = &mut coeffs.values[..];
+            for _ in 0..ts.len() {
+                let (blk, rest) = values.split_at_mut(blk_sz);
+                values = rest;
+                let (lo, hi) = blk.split_at_mut(half_blk_sz);
+                packed.push(F::Packing::pack_slice_with_suffix_mut(lo));
+                packed.push(F::Packing::pack_slice_with_suffix_mut(hi));
+            }
+            assert_eq!(values.len(), 0);
+            let n_shorts = packed[0].0.len();
+            let n_sfx = packed[0].1.len();
+            assert!(packed
+                .iter()
+                .all(|(shorts, sfx)| shorts.len() == n_shorts && sfx.len() == n_sfx));
+
+            assert_eq!(packed[0].1.len(), 0);
+
+            // for i in 0..packed[0].0.len() {
+            (0..packed[0].0.len()).into_par_iter().for_each(|i| {
+                let lo = packed[0].0[i];
+                let hi = packed[1].0[i];
+                for (j, &t) in ts.iter().enumerate() {
+                    let t_hi = F::Packing::from(t.0) * hi;
+                    packed[2 * j].0[i] = lo + t_hi;
+                    packed[2 * j + 1].0[i] = lo - t_hi;
+                }
+            });
+
+            /*
+            for i in 0..half_blk_sz {
+                let (lo_shorts, lo_sfx) = packed[2 * i];
+
+                let lo = coeffs.values[i];
+                let hi = coeffs.values[half_blk_sz + i];
+                for (&t, blk) in izip!(&ts, coeffs.values.chunks_exact_mut(blk_sz)) {
+                    let t_hi = t.0 * hi;
+                    blk[i] = lo + t_hi;
+                    blk[half_blk_sz + i] = lo - t_hi;
+                }
+            }
+                */
+        });
+
+        for ts in twiddles {
+            fft_layer(&mut coeffs.values, &ts);
         }
-        CircleEvaluations::<F>::evaluate_skipping_layers(target_domain, coeffs, added_bits)
+
+        CircleEvaluations::from_cfft_order(target_domain, coeffs)
     }
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         let v_n = point.v_n(self.domain.log_n) - self.domain.shift.v_n(self.domain.log_n);
@@ -131,19 +209,37 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
 
 #[instrument(skip_all, fields(
     len = values.len(),
+    mb = (values.len() * core::mem::size_of::<F>()) >> 20,
     blks = twiddles.len(),
     blk_sz = values.len() / twiddles.len(),
 ))]
 fn fft_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
     assert_eq!(values.len() % twiddles.len(), 0);
     let blk_sz = values.len() / twiddles.len();
-    values
-        .par_chunks_exact_mut(blk_sz)
-        .zip(twiddles)
-        .for_each(|(blk, &t)| {
-            let (los, his) = blk.split_at_mut(blk_sz / 2);
-            t.apply_to_rows(los, his)
-        });
+    let log_n_blks = log2_strict_usize(twiddles.len());
+    let log_threads = log2_ceil_usize(current_num_threads()) + 1;
+    if log_n_blks < log_threads {
+        let chunk_sz = blk_sz >> (log_threads - log_n_blks + 1);
+        values
+            .par_chunks_exact_mut(blk_sz)
+            .zip(twiddles)
+            .for_each(|(blk, &t)| {
+                let (los, his) = blk.split_at_mut(blk_sz / 2);
+                los.par_chunks_exact_mut(chunk_sz)
+                    .zip(his.par_chunks_exact_mut(chunk_sz))
+                    .for_each(|(lo_chunk, hi_chunk)| {
+                        t.apply_to_rows(lo_chunk, hi_chunk);
+                    });
+            });
+    } else {
+        values
+            .par_chunks_exact_mut(blk_sz)
+            .zip(twiddles)
+            .for_each(|(blk, &t)| {
+                let (los, his) = blk.split_at_mut(blk_sz / 2);
+                t.apply_to_rows(los, his);
+            });
+    }
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
@@ -243,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_extrapolation() {
-        for (log_n, log_blowup) in iproduct!(2..5, [1, 2]) {
+        for (log_n, log_blowup) in iproduct!(2..5, [1, 2, 3]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
                 RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, 4),
@@ -281,5 +377,10 @@ mod tests {
                     .columnwise_dot_product(&circle_basis(pt, log_n))
             );
         }
+    }
+
+    #[test]
+    fn print_twiddles() {
+        dbg!(compute_twiddles(CircleDomain::<F>::standard(3)));
     }
 }

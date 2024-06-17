@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriConfig, FriProof};
@@ -22,7 +22,7 @@ use crate::domain::CircleDomain;
 
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
-use crate::util::{univariate_to_point, v_n};
+use crate::util::v_n;
 use crate::{cfft_permute_index, CfftPerm, CircleEvaluations};
 
 #[derive(Debug)]

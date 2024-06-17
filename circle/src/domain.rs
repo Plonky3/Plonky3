@@ -1,11 +1,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{iterate, Itertools};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
-use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
+use p3_field::extension::ComplexExtendable;
+use p3_field::{batch_multiplicative_inverse, ExtensionField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -253,8 +252,9 @@ fn forward_backward_index(mut i: usize, len: usize) -> usize {
 mod tests {
     use hashbrown::HashSet;
     use itertools::izip;
+    use p3_field::AbstractField;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng};
+    use rand::thread_rng;
 
     use super::*;
 
