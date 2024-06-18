@@ -19,7 +19,6 @@ use tracing::{info_span, instrument};
 
 use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
-
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
 use crate::{cfft_permute_index, CfftPermutable, CircleEvaluations};

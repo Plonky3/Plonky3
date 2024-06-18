@@ -1,6 +1,7 @@
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
-use p3_field::{extension::ComplexExtendable, ExtensionField, Field};
+use p3_field::extension::ComplexExtendable;
+use p3_field::{ExtensionField, Field};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1

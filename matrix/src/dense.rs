@@ -5,13 +5,13 @@ use core::borrow::{Borrow, BorrowMut};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
-use tracing::instrument;
 
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::Matrix;
 

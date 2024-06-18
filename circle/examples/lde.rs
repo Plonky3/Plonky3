@@ -1,17 +1,19 @@
-use std::{
-    hint::black_box,
-    time::{Duration, Instant},
-};
+use std::hint::black_box;
+use std::time::{Duration, Instant};
 
 use p3_baby_bear::BabyBear;
 use p3_circle::{CircleDomain, CircleEvaluations};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::AbstractField;
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_mersenne_31::Mersenne31;
 use rand::thread_rng;
-use tracing_forest::{util::LevelFilter, ForestLayer};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
+use tracing_forest::util::LevelFilter;
+use tracing_forest::ForestLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 type F = Mersenne31;
 

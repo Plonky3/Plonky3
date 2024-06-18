@@ -1,5 +1,6 @@
 use p3_field::Field;
-use p3_matrix::{bitrev::BitReversableMatrix, Matrix};
+use p3_matrix::bitrev::BitReversableMatrix;
+use p3_matrix::Matrix;
 
 pub trait FftAlgorithm<F: Field>: Clone + Default {
     type Coeffs: BitReversableMatrix<F> + 'static;

@@ -1,10 +1,10 @@
 use alloc::vec;
 use core::borrow::BorrowMut;
-use tracing::instrument;
 
 use p3_field::Field;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_matrix::Matrix;
+use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.
 #[instrument(skip_all, fields(dims = %mat.dimensions()))]

@@ -1,18 +1,20 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
 use itertools::{iterate, izip, Itertools};
 use p3_commit::PolynomialSpace;
 use p3_dft::{divide_by_height, Butterfly, DifButterfly, DitButterfly};
-use p3_field::{batch_multiplicative_inverse, extension::ComplexExtendable, ExtensionField, Field};
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_field::extension::ComplexExtendable;
+use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
 
-use crate::{
-    cfft_permute_index, cfft_permute_slice, domain::CircleDomain, point::Point, CfftPermutable,
-    CfftView,
-};
+use crate::domain::CircleDomain;
+use crate::point::Point;
+use crate::{cfft_permute_index, cfft_permute_slice, CfftPermutable, CfftView};
 
 #[derive(Clone)]
 pub struct CircleEvaluations<F, M = RowMajorMatrix<F>> {
@@ -266,13 +268,13 @@ pub fn circle_basis<F: Field>(p: Point<F>, log_n: usize) -> Vec<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use itertools::iproduct;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
+
+    use super::*;
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
