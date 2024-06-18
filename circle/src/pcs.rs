@@ -22,21 +22,13 @@ use crate::domain::CircleDomain;
 
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
-use crate::{cfft_permute_index, CfftPerm, CircleEvaluations};
+use crate::{cfft_permute_index, CfftPerm, CfftPermutable, CircleEvaluations};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
-    // pub cfft: Cfft<Val>,
     pub mmcs: InputMmcs,
     pub fri_config: FriConfig<FriMmcs>,
-
     pub _phantom: PhantomData<Val>,
-}
-
-#[derive(Debug)]
-pub struct ProverData<Val, MmcsData> {
-    committed_domains: Vec<CircleDomain<Val>>,
-    mmcs_data: MmcsData,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -90,7 +82,7 @@ where
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = ProverData<Val, InputMmcs::ProverData<RowMajorMatrix<Val>>>;
+    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
 
@@ -102,7 +94,7 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let (committed_domains, ldes): (Vec<_>, Vec<_>) = evaluations
+        let ldes = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
@@ -110,24 +102,15 @@ where
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );
-                let evals = CircleEvaluations::from_natural_order(domain, evals);
-                let lde = evals.extrapolate(CircleDomain::standard(
-                    domain.log_n + self.fri_config.log_blowup,
-                ));
-                (lde.domain, lde.values)
-                // let lde = self.cfft.lde(evals, domain, committed_domain);
-                // let perm_lde = CircleBitrevPerm::new(lde);
-                // (committed_domain, perm_lde)
+                CircleEvaluations::from_natural_order(domain, evals)
+                    .extrapolate(CircleDomain::standard(
+                        domain.log_n + self.fri_config.log_blowup,
+                    ))
+                    .to_cfft_order()
             })
-            .unzip();
+            .collect_vec();
         let (comm, mmcs_data) = self.mmcs.commit(ldes);
-        (
-            comm,
-            ProverData {
-                committed_domains,
-                mmcs_data,
-            },
-        )
+        (comm, mmcs_data)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -136,11 +119,17 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
-        // TODO extrapolate if necessary
-        let mat = self.mmcs.get_matrices(&data.mmcs_data)[idx];
-        assert_eq!(mat.height(), 1 << domain.log_n);
-        assert_eq!(domain, data.committed_domains[idx]);
-        CfftPerm::view(mat.as_view())
+        let mat = self.mmcs.get_matrices(&data)[idx];
+        let committed_domain = CircleDomain::standard(log2_strict_usize(mat.height()));
+        if domain == committed_domain {
+            CfftPerm::view(mat.as_view().as_cow())
+        } else {
+            CircleEvaluations::from_cfft_order(committed_domain, mat.as_view())
+                .extrapolate(domain)
+                .to_cfft_order()
+                .as_cow()
+                .cfft_perm_rows()
+        }
     }
 
     #[instrument(skip_all)]
@@ -176,14 +165,11 @@ where
         let values: OpenedValues<Challenge> = rounds
             .iter()
             .map(|(data, points_for_mats)| {
-                let mats = self.mmcs.get_matrices(&data.mmcs_data);
-                izip!(&data.committed_domains, mats, points_for_mats)
-                    .map(|(&committed_domain, mat, points_for_mat)| {
-                        // Get the unpermuted matrix.
-                        // let mat = &permuted_mat.inner;
-
+                let mats = self.mmcs.get_matrices(&data);
+                izip!(mats, points_for_mats)
+                    .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
-                        // It's in cfft order.
+                        // It was committed in cfft order.
                         let evals = CircleEvaluations::from_cfft_order(
                             CircleDomain::standard(log_height),
                             mat.as_view(),
@@ -284,11 +270,10 @@ where
                     .iter()
                     .map(|(data, _)| {
                         let log_max_batch_height =
-                            log2_strict_usize(self.mmcs.get_max_height(&data.mmcs_data));
-                        let (opened_values, opening_proof) = self.mmcs.open_batch(
-                            index >> (log_max_height - log_max_batch_height),
-                            &data.mmcs_data,
-                        );
+                            log2_strict_usize(self.mmcs.get_max_height(&data));
+                        let (opened_values, opening_proof) = self
+                            .mmcs
+                            .open_batch(index >> (log_max_height - log_max_batch_height), &data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
@@ -528,7 +513,6 @@ mod tests {
 
         type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
         let pcs = Pcs {
-            // cfft: Cfft::default(),
             mmcs: val_mmcs,
             fri_config,
             _phantom: PhantomData,

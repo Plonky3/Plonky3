@@ -30,6 +30,9 @@ impl<F: Copy + Send + Sync, M: Matrix<F>> CircleEvaluations<F, M> {
     ) -> CircleEvaluations<F, CfftView<M>> {
         CircleEvaluations::from_cfft_order(domain, CfftPerm::view(values))
     }
+    pub fn to_cfft_order(self) -> M {
+        self.values
+    }
     pub fn to_natural_order(self) -> CfftView<M> {
         CfftPerm::view(self.values)
     }
@@ -79,6 +82,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             par_within_blk_layer(&mut values.values, &ts);
         }
 
+        // TODO: omit this?
         divide_by_height(&mut values);
         values
     }

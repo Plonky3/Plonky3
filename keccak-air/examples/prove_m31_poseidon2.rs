@@ -1,5 +1,7 @@
+use std::marker::PhantomData;
+
 use p3_challenger::DuplexChallenger;
-use p3_circle::{Cfft, CirclePcs};
+use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
@@ -68,9 +70,9 @@ fn main() -> Result<(), VerificationError> {
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
-        cfft: Cfft::default(),
         mmcs: val_mmcs,
         fri_config,
+        _phantom: PhantomData,
     };
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;

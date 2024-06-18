@@ -205,8 +205,10 @@ mod babybear_fri_pcs {
 }
 
 mod m31_fri_pcs {
+    use std::marker::PhantomData;
+
     use p3_challenger::{HashChallenger, SerializingChallenger32};
-    use p3_circle::{Cfft, CirclePcs};
+    use p3_circle::CirclePcs;
     use p3_keccak::Keccak256Hash;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
@@ -242,9 +244,9 @@ mod m31_fri_pcs {
             mmcs: challenge_mmcs,
         };
         let pcs = Pcs {
-            cfft: Cfft::default(),
             mmcs: val_mmcs,
             fri_config,
+            _phantom: PhantomData,
         };
         (pcs, Challenger::from_hasher(vec![], byte_hash))
     }

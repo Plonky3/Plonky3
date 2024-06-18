@@ -121,6 +121,7 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 #[cfg(test)]
 mod tests {
     use p3_field::{extension::BinomialExtensionField, AbstractField};
+    use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
 

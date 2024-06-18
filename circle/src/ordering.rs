@@ -74,12 +74,12 @@ impl RowIndexMap for CfftPerm {
     }
 }
 
-pub(crate) trait CfftPermutable<T: Send + Sync> {
-    fn cfft_perm_rows(self) -> impl Matrix<T>;
+pub(crate) trait CfftPermutable<T: Send + Sync>: Matrix<T> + Sized {
+    fn cfft_perm_rows(self) -> CfftView<Self>;
 }
 
 impl<T: Send + Sync, M: Matrix<T>> CfftPermutable<T> for M {
-    fn cfft_perm_rows(self) -> impl Matrix<T> {
+    fn cfft_perm_rows(self) -> CfftView<M> {
         RowIndexMappedView {
             index_map: CfftPerm {
                 log_height: log2_strict_usize(self.height()),
