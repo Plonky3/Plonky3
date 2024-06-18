@@ -59,7 +59,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
         assert_eq!(twiddles.len(), domain.log_n);
 
-        /*
         let par_twiddles = twiddles
             .peeking_take_while(|ts| ts.len() >= desired_num_jobs())
             .collect_vec();
@@ -71,9 +70,9 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
                     .enumerate()
                     .for_each(|(chunk_i, submat)| {
                         for ts in &par_twiddles {
-                            let tchunk_sz = ts.len() / min_blks;
-                            let twiddle_chunk =
-                                &ts[(tchunk_sz * chunk_i)..(tchunk_sz * (chunk_i + 1))];
+                            let twiddle_chunk_sz = ts.len() / min_blks;
+                            let twiddle_chunk = &ts
+                                [(twiddle_chunk_sz * chunk_i)..(twiddle_chunk_sz * (chunk_i + 1))];
                             serial_layer(submat.values, twiddle_chunk);
                         }
                     });
@@ -82,11 +81,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
         for ts in twiddles {
             par_within_blk_layer(&mut values.values, &ts);
-        }
-        */
-
-        for ts in twiddles {
-            serial_layer(&mut values.values, &ts);
         }
 
         // TODO: omit this?
@@ -159,11 +153,6 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                 .peekable()
         });
 
-        for ts in twiddles {
-            serial_layer(&mut coeffs.values, &ts);
-        }
-
-        /*
         for ts in twiddles.peeking_take_while(|ts| ts.len() < desired_num_jobs()) {
             par_within_blk_layer(&mut coeffs.values, &ts);
         }
@@ -185,7 +174,6 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                     });
             });
         }
-        */
 
         Self::from_cfft_order(domain, coeffs)
     }
@@ -207,8 +195,8 @@ fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &
     for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
         let (lo, hi) = blk.split_at_mut(blk_sz / 2);
         let job_sz = core::cmp::max(1, lo.len() >> log2_ceil_usize(desired_num_jobs()));
-        lo.par_chunks_exact_mut(job_sz)
-            .zip(hi.par_chunks_exact_mut(job_sz))
+        lo.par_chunks_mut(job_sz)
+            .zip(hi.par_chunks_mut(job_sz))
             .for_each(|(lo_job, hi_job)| t.apply_to_rows(lo_job, hi_job));
     }
 }
