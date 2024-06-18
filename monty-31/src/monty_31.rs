@@ -107,16 +107,16 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
     fn zero() -> Self {
-        Self::new_monty(FP::MONTY_ZERO)
+        FP::MONTY_ZERO
     }
     fn one() -> Self {
-        Self::new_monty(FP::MONTY_ONE)
+        FP::MONTY_ONE
     }
     fn two() -> Self {
-        Self::new_monty(FP::MONTY_TWO)
+        FP::MONTY_TWO
     }
     fn neg_one() -> Self {
-        Self::new_monty(FP::MONTY_NEG_ONE)
+        FP::MONTY_NEG_ONE
     }
 
     #[inline]
@@ -169,7 +169,7 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
 
     #[inline]
     fn generator() -> Self {
-        Self::new_monty(FP::MONTY_GEN)
+        FP::MONTY_GEN
     }
 }
 
@@ -258,7 +258,7 @@ impl<FP: FieldParameters + TwoAdicData> TwoAdicField for MontyField31<FP> {
     const TWO_ADICITY: usize = FP::TWO_ADICITY;
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-        Self::new_monty(FP::TWO_ADIC_GENERATORS.as_ref()[bits])
+        FP::TWO_ADIC_GENERATORS.as_ref()[bits]
     }
 }
 

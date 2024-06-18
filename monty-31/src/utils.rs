@@ -6,6 +6,12 @@ pub const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
 }
 
 #[inline]
+pub const fn to_monty_elem<MP: MontyParameters>(x: u32) -> MontyField31<MP> {
+    let val = (((x as u64) << MP::MONTY_BITS) % MP::PRIME as u64) as u32;
+    MontyField31::new_monty(val)
+}
+
+#[inline]
 pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
     (((x as u128) << MP::MONTY_BITS) % MP::PRIME as u128) as u32
 }

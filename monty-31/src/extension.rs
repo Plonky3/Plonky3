@@ -12,10 +12,10 @@ where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
     fn w() -> Self {
-        Self::new_monty(<FP as BinomialExtensionData<WIDTH>>::MONTY_W)
+        <FP as BinomialExtensionData<WIDTH>>::MONTY_W
     }
     fn dth_root() -> Self {
-        Self::new_monty(<FP as BinomialExtensionData<WIDTH>>::MONTY_DTH_ROOT)
+        <FP as BinomialExtensionData<WIDTH>>::MONTY_DTH_ROOT
     }
     fn ext_generator() -> [Self; WIDTH] {
         FP::MONTY_EXT_GENERATOR.map(Self::new_monty)

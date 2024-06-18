@@ -3,7 +3,7 @@ use core::hash::Hash;
 
 use p3_field::{AbstractField, Field};
 
-use crate::{to_monty, to_monty_from_array};
+use crate::{to_monty_elem, to_monty_from_array, MontyField31};
 
 /// MontyParameters contains the prime P along with constants needed to convert elements intoand out of MONTY form.
 pub trait MontyParameters:
@@ -68,13 +68,13 @@ pub trait BarrettParameters: MontyParameters {
 /// FieldParameters contains constants and methods needed to imply AbstractField and Field for MontyField31.
 pub trait FieldParameters: PackedMontyParameters + Sized {
     // Simple field constants.
-    const MONTY_ZERO: u32 = 0; // The monty form of 0 is always 0.
-    const MONTY_ONE: u32 = to_monty::<Self>(1);
-    const MONTY_TWO: u32 = to_monty::<Self>(2);
-    const MONTY_NEG_ONE: u32 = Self::PRIME - Self::MONTY_ONE; // As MONTY_ONE =/= 0, MONTY_NEG_ONE = P - MONTY_ONE.
+    const MONTY_ZERO: MontyField31<Self> = to_monty_elem(0); // The monty form of 0 is always 0.
+    const MONTY_ONE: MontyField31<Self> = to_monty_elem(1);
+    const MONTY_TWO: MontyField31<Self> = to_monty_elem(2);
+    const MONTY_NEG_ONE: MontyField31<Self> = to_monty_elem(Self::PRIME - 1);
 
     // A generator of the fields multiplicative group. Needs to be given in Monty Form.
-    const MONTY_GEN: u32;
+    const MONTY_GEN: MontyField31<Self>;
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
@@ -83,12 +83,12 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 }
 
 /// TwoAdicData contains constants needed to imply TwoAdicField for Monty31 fields.
-pub trait TwoAdicData {
+pub trait TwoAdicData: MontyParameters {
     // Largest n such that 2^n divides p - 1.
     const TWO_ADICITY: usize;
 
     // ArrayLike should be [u32; TWO_ADICITY + 1].
-    type ArrayLike: AsRef<[u32]> + Sized;
+    type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;
 
     // TWO_ADIC_GENERATORS needs to be in MONTY FORM.
     const TWO_ADIC_GENERATORS: Self::ArrayLike;
@@ -99,11 +99,11 @@ pub trait TwoAdicData {
 pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     // W is a value such that (x^DEG - WN) is irreducible.
     const W: u32;
-    const MONTY_W: u32 = to_monty::<Self>(Self::W); // The MONTY form of W4
+    const MONTY_W: MontyField31<Self> = to_monty_elem(Self::W); // The MONTY form of W
 
     // DTH_ROOTN = W^((p - 1)/DEG)
     const DTH_ROOT: u32;
-    const MONTY_DTH_ROOT: u32 = to_monty::<Self>(Self::DTH_ROOT);
+    const MONTY_DTH_ROOT: MontyField31<Self> = to_monty_elem(Self::DTH_ROOT);
 
     const EXT_GENERATOR: [u32; DEG];
     const MONTY_EXT_GENERATOR: [u32; DEG] = to_monty_from_array::<DEG, Self>(Self::EXT_GENERATOR);
