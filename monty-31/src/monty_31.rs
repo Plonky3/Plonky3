@@ -53,8 +53,8 @@ impl<MP: MontyParameters> MontyField31<MP> {
         from_monty::<MP>(elem.value)
     }
 
-    /// Convert a constant u32 array into a constant field array saved in monty form.
-    /// Constant version of array.map() method.
+    /// Convert a constant u32 array into a constant array of field elements.
+    /// Constant version of array.map(MontyField31::new) method.
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [MontyField31::new_monty(0); N];
@@ -69,8 +69,8 @@ impl<MP: MontyParameters> MontyField31<MP> {
         output
     }
 
-    /// A 2d version of the above function.
-    /// Constant version of array.map(|array| array.map())
+    /// Convert a constant 2d u32 array into a constant 2d array of field elements.
+    /// Constant version of array.map(MontyField31::new_array)
     #[inline]
     pub const fn new_2d_array<const N: usize, const M: usize>(
         input: [[u32; N]; M],
