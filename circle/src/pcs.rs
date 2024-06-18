@@ -22,7 +22,7 @@ use crate::domain::CircleDomain;
 
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
-use crate::{cfft_permute_index, CfftPerm, CfftPermutable, CircleEvaluations};
+use crate::{cfft_permute_index, circle_basis, CfftPermutable, CircleEvaluations};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
@@ -119,12 +119,12 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
-        let mat = self.mmcs.get_matrices(&data)[idx];
+        let mat = self.mmcs.get_matrices(&data)[idx].as_view();
         let committed_domain = CircleDomain::standard(log2_strict_usize(mat.height()));
         if domain == committed_domain {
-            CfftPerm::view(mat.as_view().as_cow())
+            mat.as_cow().cfft_perm_rows()
         } else {
-            CircleEvaluations::from_cfft_order(committed_domain, mat.as_view())
+            CircleEvaluations::from_cfft_order(committed_domain, mat)
                 .extrapolate(domain)
                 .to_cfft_order()
                 .as_cow()
@@ -192,8 +192,23 @@ where
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| evals.evaluate_at_point(zeta));
 
+                                assert_eq!(
+                                    &ps_at_zeta,
+                                    &evals
+                                        .clone()
+                                        .interpolate()
+                                        .columnwise_dot_product(&circle_basis(zeta, log_height)),
+                                );
+
                                 // Reduce this matrix, as a deep quotient, into one column with powers of α.
                                 let mat_ros = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+
+                                // dbg!(&mat_ros);
+                                dbg!(CircleEvaluations::from_cfft_order(
+                                    CircleDomain::standard(log_height),
+                                    RowMajorMatrix::new_col(mat_ros.clone()).flatten_to_base(),
+                                )
+                                .dim());
 
                                 // Fold it into our running reduction, offset by alpha_offset.
                                 reduced_opening_for_log_height
@@ -224,8 +239,28 @@ where
             .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
                 log_heights.push(log_height);
+
+                assert_eq!(
+                    CircleEvaluations::from_cfft_order(
+                        CircleDomain::standard(log_height),
+                        RowMajorMatrix::new_col(ro.clone()).flatten_to_base(),
+                    )
+                    .dim(),
+                    (1 << (log_height - self.fri_config.log_blowup)) + 1
+                );
+
                 let lambda = extract_lambda(&mut ro, self.fri_config.log_blowup);
                 lambdas.push(lambda);
+
+                assert_eq!(
+                    CircleEvaluations::from_cfft_order(
+                        CircleDomain::standard(log_height),
+                        RowMajorMatrix::new_col(ro.clone()).flatten_to_base(),
+                    )
+                    .dim(),
+                    1 << (log_height - self.fri_config.log_blowup)
+                );
+
                 // We have been working with reduced openings in natural order, but now we are ready
                 // to start FRI, so go to circle bitrev order, and prepare for first layer fold
                 // with 2 siblings per leaf.

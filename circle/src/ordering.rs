@@ -89,17 +89,6 @@ impl<T: Send + Sync, M: Matrix<T>> CfftPermutable<T> for M {
     }
 }
 
-impl CfftPerm {
-    pub fn view<T: Send + Sync, M: Matrix<T>>(inner: M) -> RowIndexMappedView<CfftPerm, M> {
-        RowIndexMappedView {
-            index_map: CfftPerm {
-                log_height: log2_strict_usize(inner.height()),
-            },
-            inner,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;

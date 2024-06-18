@@ -10,7 +10,8 @@ use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
 
 use crate::{
-    cfft_permute_index, cfft_permute_slice, domain::CircleDomain, point::Point, CfftPerm, CfftView,
+    cfft_permute_index, cfft_permute_slice, domain::CircleDomain, point::Point, CfftPermutable,
+    CfftView,
 };
 
 #[derive(Clone)]
@@ -28,13 +29,13 @@ impl<F: Copy + Send + Sync, M: Matrix<F>> CircleEvaluations<F, M> {
         domain: CircleDomain<F>,
         values: M,
     ) -> CircleEvaluations<F, CfftView<M>> {
-        CircleEvaluations::from_cfft_order(domain, CfftPerm::view(values))
+        CircleEvaluations::from_cfft_order(domain, values.cfft_perm_rows())
     }
     pub fn to_cfft_order(self) -> M {
         self.values
     }
     pub fn to_natural_order(self) -> CfftView<M> {
-        CfftPerm::view(self.values)
+        self.values.cfft_perm_rows()
     }
 }
 
@@ -58,6 +59,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
         assert_eq!(twiddles.len(), domain.log_n);
 
+        /*
         let par_twiddles = twiddles
             .peeking_take_while(|ts| ts.len() >= desired_num_jobs())
             .collect_vec();
@@ -80,6 +82,11 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
         for ts in twiddles {
             par_within_blk_layer(&mut values.values, &ts);
+        }
+        */
+
+        for ts in twiddles {
+            serial_layer(&mut values.values, &ts);
         }
 
         // TODO: omit this?
@@ -106,7 +113,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .collect_vec()
     }
 
-    #[cfg(test)]
+    /// For testing
     pub(crate) fn dim(&self) -> usize
     where
         M: Clone,
@@ -151,6 +158,12 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                 .skip(domain.log_n - log_n)
                 .peekable()
         });
+
+        for ts in twiddles {
+            serial_layer(&mut coeffs.values, &ts);
+        }
+
+        /*
         for ts in twiddles.peeking_take_while(|ts| ts.len() < desired_num_jobs()) {
             par_within_blk_layer(&mut coeffs.values, &ts);
         }
@@ -172,6 +185,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                     });
             });
         }
+        */
 
         Self::from_cfft_order(domain, coeffs)
     }
@@ -277,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_cfft_icfft() {
-        for (log_n, width) in iproduct!(2..5, [1, 2, 4]) {
+        for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
             let shift = Point::generator(F::CIRCLE_TWO_ADICITY) * random();
             let domain = CircleDomain::<F>::new(log_n, shift);
             let trace = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, width);
@@ -304,7 +318,7 @@ mod tests {
         for (log_n, log_blowup) in iproduct!(2..5, [1, 2, 3]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
-                RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, 4),
+                RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, 11),
             );
             let lde = evals
                 .clone()
@@ -324,7 +338,7 @@ mod tests {
 
     #[test]
     fn eval_at_point_matches_cfft() {
-        for (log_n, width) in iproduct!(2..5, [1, 2, 4]) {
+        for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
                 RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, width),
@@ -343,12 +357,27 @@ mod tests {
 
     #[test]
     fn eval_at_point_matches_lde() {
-        let evals = CircleEvaluations::<F>::from_natural_order(
-            CircleDomain::standard(5),
-            RowMajorMatrix::rand(&mut thread_rng(), 1 << 5, 4),
-        );
-        let lde = evals.clone().extrapolate(CircleDomain::standard(8));
-        let zeta = Point::<EF>::from_projective_line(random());
-        assert_eq!(evals.evaluate_at_point(zeta), lde.evaluate_at_point(zeta));
+        for (log_n, width, log_blowup) in iproduct!(2..8, [1, 4, 11], [1, 2]) {
+            let evals = CircleEvaluations::<F>::from_natural_order(
+                CircleDomain::standard(log_n),
+                RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, width),
+            );
+            let lde = evals
+                .clone()
+                .extrapolate(CircleDomain::standard(log_n + log_blowup));
+            let zeta = Point::<EF>::from_projective_line(random());
+            assert_eq!(evals.evaluate_at_point(zeta), lde.evaluate_at_point(zeta));
+            assert_eq!(
+                evals.evaluate_at_point(zeta),
+                evals
+                    .interpolate()
+                    .columnwise_dot_product(&circle_basis(zeta, log_n))
+            );
+            assert_eq!(
+                lde.evaluate_at_point(zeta),
+                lde.interpolate()
+                    .columnwise_dot_product(&circle_basis(zeta, log_n + log_blowup))
+            );
+        }
     }
 }
