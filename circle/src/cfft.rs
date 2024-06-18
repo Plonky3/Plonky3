@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn test_barycentric() {
+    fn eval_at_point_matches_cfft() {
         for (log_n, width) in iproduct!(2..5, [1, 2, 4]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
@@ -342,7 +342,13 @@ mod tests {
     }
 
     #[test]
-    fn print_twiddles() {
-        dbg!(compute_twiddles(CircleDomain::<F>::standard(3)));
+    fn eval_at_point_matches_lde() {
+        let evals = CircleEvaluations::<F>::from_natural_order(
+            CircleDomain::standard(5),
+            RowMajorMatrix::rand(&mut thread_rng(), 1 << 5, 4),
+        );
+        let lde = evals.clone().extrapolate(CircleDomain::standard(8));
+        let zeta = Point::<EF>::from_projective_line(random());
+        assert_eq!(evals.evaluate_at_point(zeta), lde.evaluate_at_point(zeta));
     }
 }

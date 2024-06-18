@@ -175,7 +175,6 @@ where
                             mat.as_view(),
                         );
 
-                        let log_height = evals.domain.log_n;
                         let (alpha_offset, reduced_opening_for_log_height) =
                             reduced_openings.entry(log_height).or_insert_with(|| {
                                 (Challenge::one(), vec![Challenge::zero(); 1 << log_height])
@@ -271,9 +270,9 @@ where
                     .map(|(data, _)| {
                         let log_max_batch_height =
                             log2_strict_usize(self.mmcs.get_max_height(&data));
-                        let (opened_values, opening_proof) = self
-                            .mmcs
-                            .open_batch(index >> (log_max_height - log_max_batch_height), &data);
+                        let reduced_index = index >> (log_max_height - log_max_batch_height);
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_batch(reduced_index, &data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
@@ -288,7 +287,11 @@ where
                     .mmcs
                     .open_batch(index >> 1, &first_layer_data);
                 let first_layer_siblings = izip!(&first_layer_values, &log_heights)
-                    .map(|(v, log_height)| v[((index >> (log_max_height - log_height)) & 1) ^ 1])
+                    .map(|(v, log_height)| {
+                        let reduced_index = index >> (log_max_height - log_height);
+                        let sibling_index = (reduced_index & 1) ^ 1;
+                        v[sibling_index]
+                    })
                     .collect();
                 InputProof {
                     input_openings,

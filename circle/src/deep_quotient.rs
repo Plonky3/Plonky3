@@ -128,8 +128,31 @@ mod tests {
     use super::*;
 
     type F = Mersenne31;
-    // type EF = F;
     type EF = BinomialExtensionField<F, 3>;
+
+    #[test]
+    fn reduce_row_same_as_reduce_matrix() {
+        let domain = CircleDomain::standard(5);
+        let evals = CircleEvaluations::from_cfft_order(
+            domain,
+            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
+        );
+
+        let alpha: EF = random();
+        let zeta: Point<EF> = Point::from_projective_line(random());
+        let ps_at_zeta = evals.evaluate_at_point(zeta);
+
+        let mat_reduced = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+        let row_reduced = evals
+            .to_natural_order()
+            .rows()
+            .zip(domain.points())
+            .map(|(ps_at_x, x)| {
+                deep_quotient_reduce_row(alpha, x, zeta, &ps_at_x.collect_vec(), &ps_at_zeta)
+            })
+            .collect_vec();
+        assert_eq!(cfft_permute_slice(&mat_reduced), row_reduced);
+    }
 
     #[test]
     fn reduce_evaluations_low_degree() {
@@ -164,25 +187,38 @@ mod tests {
         assert!(reduced1.dim() > (1 << log_n) + 1);
     }
 
-    /*
     #[test]
-    fn reduce_row_same_as_reduce_matrix() {
-        let mut rng = thread_rng();
-        let domain = CircleDomain::<F>::standard(5);
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 1 << 5, 1 << 4);
-        let alpha: EF = rng.gen();
-        let zeta: Point<EF> = Point::from_projective_line(rng.gen());
-        let ps_at_zeta: Vec<EF> = (0..(1 << 4)).map(|_| rng.gen()).collect();
+    fn reduce_multiple_evaluations() {
+        let domain = CircleDomain::standard(5);
+        let lde_domain = CircleDomain::standard(8);
 
-        let matrix_reduced = deep_quotient_reduce_matrix(alpha, &domain, &mat, zeta, &ps_at_zeta);
-        let row_reduced = izip!(domain.points(), mat.rows())
-            .map(|(x, ps_at_x)| {
-                deep_quotient_reduce_row(alpha, x, zeta, &ps_at_x.collect_vec(), &ps_at_zeta)
-            })
-            .collect_vec();
-        assert_eq!(&matrix_reduced, &row_reduced);
+        let alpha: EF = random();
+        let zeta: Point<EF> = Point::from_projective_line(random());
+
+        let mut alpha_offset = EF::one();
+        let mut ros = vec![EF::zero(); 1 << lde_domain.log_n];
+
+        for _ in 0..4 {
+            let evals = CircleEvaluations::from_cfft_order(
+                domain,
+                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
+            );
+            let ps_at_zeta = evals.evaluate_at_point(zeta);
+            let lde = evals.extrapolate(lde_domain);
+            assert!(lde.dim() <= (1 << domain.log_n) + 1);
+            let mat_ros = lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+            for (ro, mat_ro) in izip!(&mut ros, mat_ros) {
+                *ro += alpha_offset * mat_ro;
+            }
+            alpha_offset *= alpha.exp_u64(2 * lde.values.width() as u64);
+        }
+
+        let ros = CircleEvaluations::from_cfft_order(
+            lde_domain,
+            RowMajorMatrix::new_col(ros).flatten_to_base(),
+        );
+        assert!(ros.dim() <= (1 << domain.log_n) + 1);
     }
-    */
 
     #[test]
     fn test_extract_lambda() {
