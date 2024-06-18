@@ -46,6 +46,7 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
+    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
     pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
         &self,
         alpha: EF,

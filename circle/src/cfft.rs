@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
-use tracing::{info_span, instrument};
+use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
 use crate::point::Point;
@@ -45,9 +45,9 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
     pub fn interpolate(self) -> RowMajorMatrix<F> {
         let CircleEvaluations { domain, values } = self;
-        let mut values = info_span!("to_rmm").in_scope(|| values.to_row_major_matrix());
+        let mut values = debug_span!("to_rmm").in_scope(|| values.to_row_major_matrix());
 
-        let mut twiddles = info_span!("twiddles").in_scope(|| {
+        let mut twiddles = debug_span!("twiddles").in_scope(|| {
             compute_twiddles(domain)
                 .into_iter()
                 .map(|ts| {
@@ -66,7 +66,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .collect_vec();
         if let Some(min_blks) = par_twiddles.last().map(|ts| ts.len()) {
             let max_blk_sz = values.height() / min_blks;
-            info_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
+            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
                 values
                     .par_row_chunks_exact_mut(max_blk_sz)
                     .enumerate()
@@ -137,7 +137,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
             // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
             // both `x_1` and `x_2` are set to `x_1`).
             // So instead we directly repeat the coeffs and skip the initial layers.
-            info_span!("extend coeffs").in_scope(|| {
+            debug_span!("extend coeffs").in_scope(|| {
                 coeffs.values.reserve(domain.size() * coeffs.width());
                 for _ in log_n..domain.log_n {
                     coeffs.values.extend_from_within(..);
@@ -146,7 +146,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         }
         assert_eq!(coeffs.height(), 1 << domain.log_n);
 
-        let mut twiddles = info_span!("twiddles").in_scope(|| {
+        let mut twiddles = debug_span!("twiddles").in_scope(|| {
             compute_twiddles(domain)
                 .into_iter()
                 .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
@@ -162,7 +162,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         let par_twiddles = twiddles.collect_vec();
         if let Some(min_blks) = par_twiddles.first().map(|ts| ts.len()) {
             let max_blk_sz = coeffs.height() / min_blks;
-            info_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
+            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
                 coeffs
                     .par_row_chunks_exact_mut(max_blk_sz)
                     .enumerate()
@@ -191,7 +191,7 @@ fn serial_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
 }
 
 #[inline]
-#[instrument(skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
+#[instrument(level = "debug", skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
 fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
     let blk_sz = values.len() / twiddles.len();
     for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {

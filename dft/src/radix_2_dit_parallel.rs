@@ -109,7 +109,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
 }
 
 /// This can be used as the first half of a parallelized butterfly network.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
     let log_h = log2_strict_usize(mat.height());
 
@@ -123,7 +123,7 @@ fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[
 }
 
 /// This can be used as the second half of a parallelized butterfly network.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles_rev: &[F]) {
     let log_h = log2_strict_usize(mat.height());
 
