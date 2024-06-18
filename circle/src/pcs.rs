@@ -119,7 +119,7 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
-        let mat = self.mmcs.get_matrices(&data)[idx].as_view();
+        let mat = self.mmcs.get_matrices(data)[idx].as_view();
         let committed_domain = CircleDomain::standard(log2_strict_usize(mat.height()));
         if domain == committed_domain {
             mat.as_cow().cfft_perm_rows()
@@ -165,7 +165,7 @@ where
         let values: OpenedValues<Challenge> = rounds
             .iter()
             .map(|(data, points_for_mats)| {
-                let mats = self.mmcs.get_matrices(&data);
+                let mats = self.mmcs.get_matrices(data);
                 izip!(mats, points_for_mats)
                     .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
@@ -267,10 +267,10 @@ where
                     .iter()
                     .map(|(data, _)| {
                         let log_max_batch_height =
-                            log2_strict_usize(self.mmcs.get_max_height(&data));
+                            log2_strict_usize(self.mmcs.get_max_height(data));
                         let reduced_index = index >> (log_max_height - log_max_batch_height);
                         let (opened_values, opening_proof) =
-                            self.mmcs.open_batch(reduced_index, &data);
+                            self.mmcs.open_batch(reduced_index, data);
                         BatchOpening {
                             opened_values,
                             opening_proof,

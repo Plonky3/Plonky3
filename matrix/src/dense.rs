@@ -35,7 +35,7 @@ pub trait DenseStorage<T>: Borrow<[T]> + Send + Sync {
     fn to_vec(self) -> Vec<T>;
 }
 // Cow doesn't impl IntoOwned so we can't blanket it
-impl<'a, T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
+impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
     fn to_vec(self) -> Vec<T> {
         self
     }

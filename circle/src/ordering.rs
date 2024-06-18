@@ -112,7 +112,7 @@ mod tests {
             // perm_slice same as perm_idx
             assert_eq!(
                 cfft_permute_slice(&(0..n).collect_vec()),
-                (0..n).map(|i| sigma(i)).collect_vec()
+                (0..n).map(sigma).collect_vec()
             );
         }
     }

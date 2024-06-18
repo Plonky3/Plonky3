@@ -4,6 +4,8 @@ use p3_field::{extension::ComplexExtendable, ExtensionField, Field};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
+// _private is to prevent construction so we can debug assert the invariant
+#[allow(clippy::manual_non_exhaustive)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Point<F> {
     pub x: F,
@@ -42,7 +44,7 @@ impl<F: Field> Point<F> {
     /// This is also used as a selector polynomial, with a simple zero at (1,0)
     /// and a simple pole at (-1,0), which in the paper is called v_0
     /// Circle STARKs, Section 5.1, Lemma 11 (page 21 of the first revision PDF)
-    pub fn to_projective_line(&self) -> Option<F> {
+    pub fn to_projective_line(self) -> Option<F> {
         self.y.try_div(self.x + F::one())
     }
 
