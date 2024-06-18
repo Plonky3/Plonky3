@@ -129,11 +129,14 @@ pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
+    use itertools::iproduct;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
+
+    use crate::CircleEvaluations;
 
     use super::*;
 
@@ -159,91 +162,30 @@ mod tests {
         assert_eq!(mat_x_folded, row_x_folded);
     }
 
-    /*
     #[test]
-    fn test_circle_bitrev() {
-        assert_eq!(circle_bitrev_permute(&[0]), &[0]);
-        assert_eq!(circle_bitrev_permute(&[0, 1]), &[0, 1]);
-        assert_eq!(circle_bitrev_permute(&[0, 1, 2, 3]), &[0, 3, 1, 2]);
-        assert_eq!(
-            circle_bitrev_permute(&[0, 1, 2, 3, 4, 5, 6, 7]),
-            &[0, 7, 3, 4, 1, 6, 2, 5]
-        );
-    }
-
-
-    fn do_test_folding(log_n: usize, log_blowup: usize) {
-        let mut rng = thread_rng();
-
-        let mut evals: Vec<EF> = {
-            let evals = RowMajorMatrix::<F>::rand(
-                &mut rng,
-                1 << log_n,
-                <EF as AbstractExtensionField<F>>::D,
-            );
-            let lde = Cfft::default().lde(
-                evals,
-                CircleDomain::standard(log_n),
-                CircleDomain::standard(log_n + log_blowup),
-            );
-            lde.rows()
-                .map(|r| EF::from_base_slice(&r.collect_vec()))
-                .collect()
+    fn folded_matrix_remains_low_degree() {
+        let vec_dim = |evals: &[F]| {
+            CircleEvaluations::from_cfft_order(
+                CircleDomain::standard(log2_strict_usize(evals.len())),
+                RowMajorMatrix::new_col(evals.to_vec()),
+            )
+            .dim()
         };
 
-        evals = circle_bitrev_permute(&evals);
+        for (log_n, log_blowup) in iproduct!(3..6, 1..4) {
+            let mut values = CircleEvaluations::evaluate(
+                CircleDomain::standard(log_n + log_blowup),
+                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1),
+            )
+            .to_cfft_order()
+            .values;
 
-        let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
-
-        evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
-        for i in log_blowup..(log_n + log_blowup - 1) {
-            evals = g.fold_matrix(rng.gen(), RowMajorMatrix::new(evals, 2));
-            if i != log_n + log_blowup - 2 {
-                // check that we aren't degenerate, we (probabilistically) should be unique before the final layer
-                assert_eq!(
-                    evals.iter().copied().collect::<HashSet<_>>().len(),
-                    evals.len()
-                );
+            values = fold_y(random(), RowMajorMatrix::new(values, 2));
+            assert_eq!(vec_dim(&values), values.len() >> log_blowup);
+            for _ in 0..(log_n - 1) {
+                values = fold_x(random(), RowMajorMatrix::new(values, 2));
+                assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             }
         }
-        assert_eq!(evals.len(), 1 << log_blowup);
-        assert!(evals.iter().all(|&x| x == evals[0]));
     }
-
-    #[test]
-    fn test_folding() {
-        do_test_folding(4, 1);
-        do_test_folding(5, 2);
-    }
-
-    #[test]
-    fn test_fold_row_matrix_same() {
-        let mut rng = thread_rng();
-        let evals = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 5, 2);
-        let beta: EF = rng.gen();
-
-        let mat_folded = fold_bivariate::<F, EF>(beta, evals.clone());
-        let row_folded = evals
-            .rows()
-            .enumerate()
-            .map(|(index, evals)| fold_bivariate_row::<F, EF>(index, 5, beta, evals))
-            .collect_vec();
-        assert_eq!(
-            mat_folded, row_folded,
-            "bivariate fold_matrix and fold_row do not match"
-        );
-
-        let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
-        let mat_folded = g.fold_matrix(beta, evals.clone());
-        let row_folded = evals
-            .rows()
-            .enumerate()
-            .map(|(index, evals)| g.fold_row(index, 5, beta, evals))
-            .collect_vec();
-        assert_eq!(
-            mat_folded, row_folded,
-            "univariate fold_matrix and fold_row do not match"
-        );
-    }
-    */
 }
