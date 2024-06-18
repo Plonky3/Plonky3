@@ -1,7 +1,7 @@
 use p3_field::{exp_1420470955, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    to_monty, to_monty_from_array, BarrettParameters, BinomialExtensionData, FieldConstants,
-    FieldParameters, MontyField31, MontyParameters, TwoAdicData,
+    BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
+    PackedMontyParameters, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -9,8 +9,6 @@ pub type KoalaBear = MontyField31<KoalaBearParameters>;
 
 #[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub struct KoalaBearParameters;
-
-impl FieldParameters for KoalaBearParameters {}
 
 impl MontyParameters for KoalaBearParameters {
     /// The KoalaBear prime: 2^31 - 2^24 + 1
@@ -24,9 +22,11 @@ impl MontyParameters for KoalaBearParameters {
     const MONTY_MU: u32 = 0x81000001;
 }
 
+impl PackedMontyParameters for KoalaBearParameters {}
+
 impl BarrettParameters for KoalaBearParameters {}
 
-impl FieldConstants for KoalaBearParameters {
+impl FieldParameters for KoalaBearParameters {
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
         match power {
             1420470955 => exp_1420470955(val), // used to compute x^{1/7}
@@ -60,53 +60,32 @@ impl FieldConstants for KoalaBearParameters {
         Some(p1111110111111111111111111111111)
     }
 
-    const MONTY_GEN: u32 = to_monty::<Self>(3);
+    const MONTY_GEN: KoalaBear = KoalaBear::new(3);
 }
-
-const TWO_ADIC_GENERATORS: [u32; 25] = [
-    0x1, 0x7f000000, 0x7e010002, 0x6832fe4a, 0x8dbd69c, 0xa28f031, 0x5c4a5b99, 0x29b75a80,
-    0x17668b8a, 0x27ad539b, 0x334d48c7, 0x7744959c, 0x768fc6fa, 0x303964b2, 0x3e687d4d, 0x45a60e61,
-    0x6e2f4d7a, 0x163bd499, 0x6c4a8a45, 0x143ef899, 0x514ddcad, 0x484ef19b, 0x205d63c3, 0x68e7dd49,
-    0x6ac49f88,
-];
 
 impl TwoAdicData for KoalaBearParameters {
     const TWO_ADICITY: usize = 24;
 
-    type ArrayLike = [u32; Self::TWO_ADICITY + 1];
+    type ArrayLike = [KoalaBear; Self::TWO_ADICITY + 1];
 
-    const TWO_ADIC_GENERATORS: Self::ArrayLike =
-        to_monty_from_array::<25, Self>(TWO_ADIC_GENERATORS);
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = KoalaBear::new_array([
+        0x1, 0x7f000000, 0x7e010002, 0x6832fe4a, 0x8dbd69c, 0xa28f031, 0x5c4a5b99, 0x29b75a80,
+        0x17668b8a, 0x27ad539b, 0x334d48c7, 0x7744959c, 0x768fc6fa, 0x303964b2, 0x3e687d4d,
+        0x45a60e61, 0x6e2f4d7a, 0x163bd499, 0x6c4a8a45, 0x143ef899, 0x514ddcad, 0x484ef19b,
+        0x205d63c3, 0x68e7dd49, 0x6ac49f88,
+    ]);
 }
-
-const EXT_TWO_ADIC_GENERATORS4: [[u32; 4]; 2] = [[0, 0, 1759267465, 0], [0, 0, 0, 777715144]];
 
 impl BinomialExtensionData<4> for KoalaBearParameters {
-    const W: u32 = 3;
-    const DTH_ROOT: u32 = 2113994754;
-    const EXT_GENERATOR: [u32; 4] = [2, 1, 0, 0];
+    const W: KoalaBear = KoalaBear::new(3);
+    const DTH_ROOT: KoalaBear = KoalaBear::new(2113994754);
+    const EXT_GENERATOR: [KoalaBear; 4] = KoalaBear::new_array([2, 1, 0, 0]);
     const EXT_TWO_ADICITY: usize = 26;
-    fn u32_ext_two_adic_generator(bits: usize) -> [u32; 4] {
-        assert!(bits <= <Self as BinomialExtensionData<4>>::EXT_TWO_ADICITY);
-        if bits > Self::TWO_ADICITY {
-            EXT_TWO_ADIC_GENERATORS4[bits - Self::TWO_ADICITY - 1]
-        } else {
-            [TWO_ADIC_GENERATORS[bits], 0, 0, 0]
-        }
-    }
-}
 
-impl BinomialExtensionData<5> for KoalaBearParameters {
-    // KoalaBear does not have an order 5 binomial extension so we do not implement it.
+    type ArrayLike = [[KoalaBear; 4]; 2];
 
-    const W: u32 = todo!();
-    const DTH_ROOT: u32 = todo!();
-    const EXT_GENERATOR: [u32; 5] = todo!();
-    const EXT_TWO_ADICITY: usize = todo!();
-
-    fn u32_ext_two_adic_generator(_: usize) -> [u32; 5] {
-        todo!()
-    }
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
+        KoalaBear::new_2d_array([[0, 0, 1759267465, 0], [0, 0, 0, 777715144]]);
 }
 
 #[cfg(test)]

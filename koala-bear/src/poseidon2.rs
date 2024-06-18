@@ -2,8 +2,7 @@
 
 use p3_field::PrimeField32;
 use p3_monty_31::{
-    to_monty_array, DiffusionMatrixMontyField31, DiffusionMatrixParameters,
-    MultipleDiffusionMatrixParameters,
+    DiffusionMatrixMontyField31, DiffusionMatrixParameters, MultipleDiffusionMatrixParameters,
 };
 
 use crate::{KoalaBear, KoalaBearParameters};
@@ -38,7 +37,7 @@ impl DiffusionMatrixParameters<KoalaBearParameters, 16> for KoalaBearDiffusionMa
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = to_monty_array::<16, KoalaBearParameters>([
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = KoalaBear::new_array([
         KoalaBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -64,7 +63,7 @@ impl DiffusionMatrixParameters<KoalaBearParameters, 24> for KoalaBearDiffusionMa
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
     ];
 
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = to_monty_array::<24, KoalaBearParameters>([
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = KoalaBear::new_array([
         KoalaBear::ORDER_U32 - 2,
         1,
         1 << 1,

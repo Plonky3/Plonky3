@@ -47,6 +47,40 @@ impl<FP: MontyParameters> MontyField31<FP> {
             _phantom: PhantomData,
         }
     }
+
+    /// Convert a constant u32 array into a constant field array saved in monty form.
+    /// Constant version of array.map() method.
+    #[inline]
+    pub const fn new_array<const N: usize>(input: [u32; N]) -> [MontyField31<FP>; N] {
+        let mut output = [MontyField31::new_monty(0); N];
+        let mut i = 0;
+        loop {
+            if i == N {
+                break;
+            }
+            output[i] = MontyField31::new(input[i]);
+            i += 1;
+        }
+        output
+    }
+
+    /// A 2d version of the above function.
+    /// Constant version of array.map(|array| array.map())
+    #[inline]
+    pub const fn new_2d_array<const N: usize, const M: usize>(
+        input: [[u32; N]; M],
+    ) -> [[MontyField31<FP>; N]; M] {
+        let mut output = [[MontyField31::new_monty(0); N]; M];
+        let mut i = 0;
+        loop {
+            if i == N {
+                break;
+            }
+            output[i] = MontyField31::new_array(input[i]);
+            i += 1;
+        }
+        output
+    }
 }
 
 impl<FP: MontyParameters> Ord for MontyField31<FP> {
@@ -355,25 +389,4 @@ impl<FP: FieldParameters> Div for MontyField31<FP> {
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
-}
-
-/// Convert a constant u32 array into a constant field array saved in monty form.
-/// Long term this might? be removed.
-/// TODO: Decide on if this is worth keeping around.
-/// BabyBear/KoalaBear crates do need a way to save some constants in MONTY form.
-#[inline]
-#[must_use]
-pub const fn to_monty_array<const N: usize, FP: FieldParameters>(
-    input: [u32; N],
-) -> [MontyField31<FP>; N] {
-    let mut output = [MontyField31::new_monty(0); N];
-    let mut i = 0;
-    loop {
-        if i == N {
-            break;
-        }
-        output[i].value = to_monty::<FP>(input[i]);
-        i += 1;
-    }
-    output
 }

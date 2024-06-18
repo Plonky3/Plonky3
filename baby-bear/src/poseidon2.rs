@@ -2,8 +2,7 @@
 
 use p3_field::PrimeField32;
 use p3_monty_31::{
-    to_monty_array, DiffusionMatrixMontyField31, DiffusionMatrixParameters,
-    MultipleDiffusionMatrixParameters,
+    DiffusionMatrixMontyField31, DiffusionMatrixParameters, MultipleDiffusionMatrixParameters,
 };
 
 use crate::{BabyBear, BabyBearParameters};
@@ -34,7 +33,7 @@ impl DiffusionMatrixParameters<BabyBearParameters, 16> for BabyBearDiffusionMatr
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
-    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = to_monty_array::<16, BabyBearParameters>([
+    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = BabyBear::new_array([
         BabyBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -60,7 +59,7 @@ impl DiffusionMatrixParameters<BabyBearParameters, 24> for BabyBearDiffusionMatr
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
     ];
 
-    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = to_monty_array::<24, BabyBearParameters>([
+    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = BabyBear::new_array([
         BabyBear::ORDER_U32 - 2,
         1,
         1 << 1,
