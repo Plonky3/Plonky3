@@ -1,9 +1,8 @@
 use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, dot_product, ExtensionField};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -11,7 +10,6 @@ use tracing::instrument;
 
 use crate::domain::CircleDomain;
 use crate::point::Point;
-use crate::util::v_p;
 use crate::{cfft_permute_slice, CircleEvaluations};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
@@ -23,7 +21,7 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     zeta: Point<EF>,
     alpha_pow_width: EF,
 ) -> (EF, EF) {
-    let (re_v_zeta, im_v_zeta) = v_p(zeta, x);
+    let (re_v_zeta, im_v_zeta) = x.v_p(zeta);
     (
         re_v_zeta - alpha_pow_width * im_v_zeta,
         re_v_zeta.square() + im_v_zeta.square(),
@@ -46,36 +44,8 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
         )
 }
 
-/*
-/// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
-#[instrument(skip_all, fields(log_n = domain.log_n))]
-pub(crate) fn deep_quotient_reduce_matrix<F: ComplexExtendable, EF: ExtensionField<F>>(
-    alpha: EF,
-    domain: &CircleDomain<F>,
-    mat: &RowMajorMatrix<F>,
-    zeta: Point<EF>,
-    ps_at_zeta: &[EF],
-) -> Vec<EF> {
-    let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
-    let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = domain
-        .points()
-        .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
-        .unzip();
-    let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
-
-    let alpha_reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
-
-    mat.dot_ext_powers(alpha)
-        .zip(vp_nums.into_par_iter())
-        .zip(vp_denom_invs.into_par_iter())
-        .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
-            vp_num * vp_denom_inv * (reduced_ps_at_x - alpha_reduced_ps_at_zeta)
-        })
-        .collect()
-}
-*/
-
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
+    /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
     pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
         &self,
         alpha: EF,

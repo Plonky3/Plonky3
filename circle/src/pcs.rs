@@ -22,7 +22,6 @@ use crate::domain::CircleDomain;
 
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
-use crate::util::v_n;
 use crate::{cfft_permute_index, CfftPerm, CircleEvaluations};
 
 #[derive(Debug)]
@@ -435,9 +434,7 @@ where
                             let lde_domain = CircleDomain::standard(log_height);
                             let p: Point<Val> = lde_domain.nth_point(orig_idx);
 
-                            let v_n_at_p = v_n(p.x, orig_size);
-
-                            let lambda_corrected = ro - lambda * v_n_at_p;
+                            let lambda_corrected = ro - lambda * p.v_n(orig_size);
 
                             let mut fl_values = vec![lambda_corrected; 2];
                             fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;

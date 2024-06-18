@@ -82,6 +82,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         divide_by_height(&mut values);
         values
     }
+
     #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
     pub fn extrapolate(
         self,
@@ -90,6 +91,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         assert!(target_domain.log_n >= self.domain.log_n);
         CircleEvaluations::<F>::evaluate(target_domain, self.interpolate())
     }
+
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         let v_n = point.v_n(self.domain.log_n) - self.domain.shift.v_n(self.domain.log_n);
         let basis = cfft_permute_slice(&self.domain.lagrange_basis(point));

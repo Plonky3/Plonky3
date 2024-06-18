@@ -11,7 +11,6 @@ use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
 use crate::point::Point;
-use crate::util::s_p_at_p;
 
 /// A twin-coset of the circle group on F. It has a power-of-two size and an arbitrary shift.
 ///
@@ -46,7 +45,7 @@ pub struct CircleDomain<F> {
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
-    pub(crate) const fn new(log_n: usize, shift: Point<F>) -> Self {
+    pub const fn new(log_n: usize, shift: Point<F>) -> Self {
         Self { log_n, shift }
     }
     pub fn standard(log_n: usize) -> Self {
@@ -89,10 +88,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
 
         // the denominator so that the lagrange basis is normalized to 1
         // TODO: this depends only on domain, so should be precomputed
-        let lagrange_normalizer: Vec<F> = domain
-            .iter()
-            .map(|p| s_p_at_p(p.x, p.y, self.log_n))
-            .collect();
+        let lagrange_normalizer: Vec<F> = domain.iter().map(|p| p.s_p(self.log_n)).collect();
 
         let basis = domain
             .into_iter()

@@ -5,16 +5,14 @@
 
 extern crate alloc;
 
-// mod cfft;
 mod cfft;
 mod deep_quotient;
 mod domain;
 mod folding;
+mod ordering;
 mod pcs;
 mod point;
-// mod twiddles;
-mod ordering;
-mod util;
+// mod util;
 
 pub use cfft::*;
 pub use domain::*;
