@@ -347,37 +347,4 @@ mod tests {
         do_test_circle_domain(4, 8);
         do_test_circle_domain(10, 32);
     }
-
-    /*
-    #[test]
-    fn test_barycentric() {
-        let log_n = 10;
-        let n = 1 << log_n;
-
-        type F = Mersenne31;
-
-        let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 16);
-
-        let cfft = Cfft::default();
-
-        let shift = Point::from_projective_line(random());
-        let d = CircleDomain { shift, log_n };
-
-        let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
-
-        // simple barycentric
-        let zeta: Complex<F> = univariate_to_point(random()).unwrap();
-
-        let basis = d.lagrange_basis(zeta);
-        let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);
-
-        let ys = evals
-            .columnwise_dot_product(&basis)
-            .into_iter()
-            .map(|x| x * v_n_at_zeta)
-            .collect_vec();
-
-        assert_eq!(ys, eval_circle_polys(&coeffs, zeta));
-    }
-    */
 }
