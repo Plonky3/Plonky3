@@ -7,7 +7,7 @@ use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::butterflies::{Butterfly, DitButterfly};
 use crate::TwoAdicSubgroupDft;
@@ -109,6 +109,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
 }
 
 /// This can be used as the first half of a parallelized butterfly network.
+#[instrument(skip_all)]
 fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
     let log_h = log2_strict_usize(mat.height());
 
@@ -122,6 +123,7 @@ fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[
 }
 
 /// This can be used as the second half of a parallelized butterfly network.
+#[instrument(skip_all)]
 fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles_rev: &[F]) {
     let log_h = log2_strict_usize(mat.height());
 

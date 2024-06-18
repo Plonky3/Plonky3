@@ -221,16 +221,15 @@ mod tests {
             coeffs.pad_to_height(1 << (log_n + log_blowup), F::zero());
 
             let domain = CircleDomain::standard(log_n + log_blowup);
-            let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone())
-                .to_cfft_order()
-                .values;
+            let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone()).values;
 
-            let lambda = extract_lambda(&mut lde, log_blowup);
+            let lambda = extract_lambda(&mut lde.values, log_blowup);
             assert_eq!(lambda, coeffs.get(1 << log_n, 0));
 
-            let coeffs2 = CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde))
-                .interpolate()
-                .values;
+            let coeffs2 =
+                CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde.values))
+                    .interpolate()
+                    .values;
             assert_eq!(&coeffs2[..(1 << log_n)], &coeffs.values[..(1 << log_n)]);
             assert_eq!(lambda, coeffs.values[1 << log_n]);
             assert_eq!(coeffs2[1 << log_n], F::zero());

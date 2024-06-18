@@ -4,6 +4,7 @@ use core::borrow::{Borrow, BorrowMut};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
+use tracing::instrument;
 
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
@@ -224,6 +225,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         )
     }
 
+    #[instrument(skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
         T: Copy + Default + Send + Sync,
