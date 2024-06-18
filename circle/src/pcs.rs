@@ -438,7 +438,7 @@ where
 
                             let fl_dims = Dimensions {
                                 width: 0,
-                                height: 1 << log_height,
+                                height: 1 << (log_height - 1),
                             };
 
                             (fri_input, fl_dims, fl_values)
