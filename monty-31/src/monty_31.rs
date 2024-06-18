@@ -15,8 +15,8 @@ use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
-    as_canonical_u32, from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters,
-    MontyParameters, TwoAdicData,
+    from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters, MontyParameters,
+    TwoAdicData,
 };
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
@@ -28,12 +28,12 @@ pub struct MontyField31<MP: MontyParameters> {
     _phantom: PhantomData<MP>,
 }
 
-impl<FP: MontyParameters> MontyField31<FP> {
+impl<MP: MontyParameters> MontyField31<MP> {
     // The standard way to crate a new element.
     // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
     pub const fn new(value: u32) -> Self {
         Self {
-            value: to_monty::<FP>(value),
+            value: to_monty::<MP>(value),
             _phantom: PhantomData,
         }
     }
@@ -48,10 +48,15 @@ impl<FP: MontyParameters> MontyField31<FP> {
         }
     }
 
+    /// Produce a u32 in range [0, P) from a field element corresponding to the true value.
+    pub(crate) fn to_u32(elem: &Self) -> u32 {
+        from_monty::<MP>(elem.value)
+    }
+
     /// Convert a constant u32 array into a constant field array saved in monty form.
     /// Constant version of array.map() method.
     #[inline]
-    pub const fn new_array<const N: usize>(input: [u32; N]) -> [MontyField31<FP>; N] {
+    pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [MontyField31::new_monty(0); N];
         let mut i = 0;
         loop {
@@ -69,11 +74,11 @@ impl<FP: MontyParameters> MontyField31<FP> {
     #[inline]
     pub const fn new_2d_array<const N: usize, const M: usize>(
         input: [[u32; N]; M],
-    ) -> [[MontyField31<FP>; N]; M] {
+    ) -> [[Self; N]; M] {
         let mut output = [[MontyField31::new_monty(0); N]; M];
         let mut i = 0;
         loop {
-            if i == N {
+            if i == M {
                 break;
             }
             output[i] = MontyField31::new_array(input[i]);
@@ -86,7 +91,7 @@ impl<FP: MontyParameters> MontyField31<FP> {
 impl<FP: MontyParameters> Ord for MontyField31<FP> {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        as_canonical_u32(self).cmp(&as_canonical_u32(other))
+        MontyField31::to_u32(self).cmp(&MontyField31::to_u32(other))
     }
 }
 
@@ -99,13 +104,13 @@ impl<FP: MontyParameters> PartialOrd for MontyField31<FP> {
 
 impl<FP: MontyParameters> Display for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&as_canonical_u32(self), f)
+        Display::fmt(&MontyField31::to_u32(self), f)
     }
 }
 
 impl<FP: MontyParameters> Debug for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&as_canonical_u32(self), f)
+        Debug::fmt(&MontyField31::to_u32(self), f)
     }
 }
 
@@ -284,7 +289,7 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
 
     #[inline]
     fn as_canonical_u32(&self) -> u32 {
-        from_monty::<FP>(self.value)
+        MontyField31::to_u32(self)
     }
 }
 

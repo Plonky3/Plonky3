@@ -1,15 +1,21 @@
-use crate::{FieldParameters, MontyField31, MontyParameters};
+use crate::{FieldParameters, MontyParameters};
 
+/// Convert a u32 into MONTY form.
+/// Output is a u32 in range [0, P).
 #[inline]
-pub const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
+pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
     (((x as u64) << MP::MONTY_BITS) % MP::PRIME as u64) as u32
 }
 
+/// Convert a u64 into MONTY form.
+/// Output is a u32 in range [0, P).
 #[inline]
 pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
     (((x as u128) << MP::MONTY_BITS) % MP::PRIME as u128) as u32
 }
 
+/// Convert a u32 out of MONTY form.
+/// Output is an element in [0, P).
 #[inline]
 #[must_use]
 pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
@@ -17,6 +23,7 @@ pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
 }
 
 /// Given an element x from a 31 bit field F_P compute x/2.
+/// Assumes input is in [0, P), output will also be in [0, P).
 #[inline]
 pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
     let shr = input >> 1;
@@ -40,25 +47,4 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     let x_sub_u_hi = (x_sub_u >> MP::MONTY_BITS) as u32;
     let corr = if over { MP::PRIME } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
-}
-
-/// Convert a constant u32 array into a constant u32 array with each u32 converted to monty form.
-#[inline]
-#[must_use]
-pub const fn to_monty_from_array<const N: usize, MP: MontyParameters>(input: [u32; N]) -> [u32; N] {
-    let mut output = [0; N];
-    let mut i = 0;
-    loop {
-        if i == N {
-            break;
-        }
-        output[i] = to_monty::<MP>(input[i]);
-        i += 1;
-    }
-    output
-}
-
-/// Produce a canonical u32 from an element saved in monty form.
-pub(crate) fn as_canonical_u32<MP: MontyParameters>(elem: &MontyField31<MP>) -> u32 {
-    from_monty::<MP>(elem.value)
 }

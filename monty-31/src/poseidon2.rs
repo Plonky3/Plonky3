@@ -18,7 +18,7 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize> {
     // Currently we need it for the naive Packed field implementations.
     const INTERNAL_DIAG_MONTY: [MontyField31<FP>; WIDTH];
 
-    // Implements multiplication by the diffusion matrix 1 + D(v) using a delayed reduction strategy.
+    /// Implements multiplication by the diffusion matrix 1 + D(v) using a delayed reduction strategy.
     fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
