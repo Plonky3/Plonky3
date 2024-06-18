@@ -1,5 +1,4 @@
 use core::arch::x86_64::{self, __m256i};
-use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -344,22 +343,22 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
 
     #[inline]
     fn zero() -> Self {
-        MontyField31::<FP>::zero().into()
+        MontyField31::zero().into()
     }
 
     #[inline]
     fn one() -> Self {
-        MontyField31::<FP>::one().into()
+        MontyField31::one().into()
     }
 
     #[inline]
     fn two() -> Self {
-        MontyField31::<FP>::two().into()
+        MontyField31::two().into()
     }
 
     #[inline]
     fn neg_one() -> Self {
-        MontyField31::<FP>::neg_one().into()
+        MontyField31::neg_one().into()
     }
 
     #[inline]
@@ -369,41 +368,41 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
 
     #[inline]
     fn from_bool(b: bool) -> Self {
-        MontyField31::<FP>::from_bool(b).into()
+        MontyField31::from_bool(b).into()
     }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
-        MontyField31::<FP>::from_canonical_u8(n).into()
+        MontyField31::from_canonical_u8(n).into()
     }
     #[inline]
     fn from_canonical_u16(n: u16) -> Self {
-        MontyField31::<FP>::from_canonical_u16(n).into()
+        MontyField31::from_canonical_u16(n).into()
     }
     #[inline]
     fn from_canonical_u32(n: u32) -> Self {
-        MontyField31::<FP>::from_canonical_u32(n).into()
+        MontyField31::from_canonical_u32(n).into()
     }
     #[inline]
     fn from_canonical_u64(n: u64) -> Self {
-        MontyField31::<FP>::from_canonical_u64(n).into()
+        MontyField31::from_canonical_u64(n).into()
     }
     #[inline]
     fn from_canonical_usize(n: usize) -> Self {
-        MontyField31::<FP>::from_canonical_usize(n).into()
+        MontyField31::from_canonical_usize(n).into()
     }
 
     #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
-        MontyField31::<FP>::from_wrapped_u32(n).into()
+        MontyField31::from_wrapped_u32(n).into()
     }
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
-        MontyField31::<FP>::from_wrapped_u64(n).into()
+        MontyField31::from_wrapped_u64(n).into()
     }
 
     #[inline]
     fn generator() -> Self {
-        MontyField31::<FP>::generator().into()
+        MontyField31::generator().into()
     }
 }
 
@@ -505,10 +504,10 @@ impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX2<PMP>> for MontyField
     }
 }
 
-impl<FP: FieldParameters> Distribution<PackedMontyField31AVX2<FP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<FP> {
-        PackedMontyField31AVX2::<FP>(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<PMP> {
+        PackedMontyField31AVX2::<PMP>(rng.gen())
     }
 }
 
