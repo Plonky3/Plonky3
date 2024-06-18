@@ -23,7 +23,7 @@ pub trait MontyParameters:
 
 /// PackedMontyParameters constains constants needed for MONTY operations for packings of Monty31 fields.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-pub trait PackedMontyParameters: crate::FieldParametersNeon + MontyParameters {}
+pub trait PackedMontyParameters: crate::MontyParametersNeon + MontyParameters {}
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
@@ -38,7 +38,7 @@ pub trait PackedMontyParameters: crate::MontyParametersAVX2 + MontyParameters {}
 ))]
 /// PackedMontyParameters constains constants needed for MONTY operations for packings of Monty31 fields.
 pub trait PackedMontyParameters:
-    crate::FieldParametersAVX2 + crate::FieldParametersAVX512 + MontyParameters
+    crate::MontyParametersAVX2 + crate::MontyParametersAVX512 + MontyParameters
 {
 }
 #[cfg(not(any(
