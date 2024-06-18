@@ -5,19 +5,21 @@ use p3_field::{AbstractField, Field};
 
 use crate::MontyField31;
 
-/// MontyParameters contains the prime P along with constants needed to convert elements intoand out of MONTY form.
+/// MontyParameters contains the prime P along with constants needed to convert elements into and out of MONTY form.
+/// The MONTY constant is assumed to be a power of 2.
 pub trait MontyParameters:
     Copy + Clone + Default + Debug + Eq + PartialEq + Sync + Send + Hash + 'static
 {
     // A 31-bit prime.
     const PRIME: u32;
 
-    // The log_2 of the MONTY constant we use for faster multiplication.
+    // The log_2 of our MONTY constant.
     const MONTY_BITS: u32;
 
-    // We define MU = P^-1 (mod 2^MONTY_BITS). This is different from the usual convention
-    // (MU = -P^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
+    // We define MONTY_MU = PRIME^-1 (mod 2^MONTY_BITS). This is different from the usual convention
+    // (MONTY_MU = -PRIME^-1 (mod 2^MONTY_BITS)) but it avoids a carry.
     const MONTY_MU: u32;
+
     const MONTY_MASK: u32 = ((1u64 << Self::MONTY_BITS) - 1) as u32;
 }
 
@@ -87,10 +89,11 @@ pub trait TwoAdicData: MontyParameters {
     /// Largest n such that 2^n divides p - 1.
     const TWO_ADICITY: usize;
 
-    /// ArrayLike should be [MontyField31; TWO_ADICITY + 1].
+    /// ArrayLike should usually be [MontyField31; TWO_ADICITY + 1].
     type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;
 
-    /// TWO_ADIC_GENERATORS needs to be in MONTY FORM.
+    /// A list of generators of 2-adic subgroups.
+    /// The i'th element must be a 2^i root of unity and the i'th element squared must be the i-1'th element.
     const TWO_ADIC_GENERATORS: Self::ArrayLike;
 }
 
@@ -108,9 +111,9 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
 
     const EXT_TWO_ADICITY: usize;
 
-    /// ArrayLike should be [MontyField31<Self>; DEG] TWO_ADICITY + 1].
+    /// ArrayLike should usually be [MontyField31; EXT_TWO_ADICITY - TWO_ADICITY].
     type ArrayLike: AsRef<[[MontyField31<Self>; DEG]]> + Sized;
 
-    /// TWO_ADIC_GENERATORS needs to be in MONTY FORM.
+    /// A list of generators of 2-adic subgroups not contained in the base field.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
 }
