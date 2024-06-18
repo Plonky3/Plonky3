@@ -107,7 +107,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .collect_vec()
     }
 
-    /// For testing
+    #[cfg(test)]
     pub(crate) fn dim(&self) -> usize
     where
         M: Clone,
