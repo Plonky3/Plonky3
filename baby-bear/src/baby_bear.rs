@@ -63,22 +63,18 @@ impl FieldParameters for BabyBearParameters {
     const MONTY_GEN: BabyBear = BabyBear::new(31);
 }
 
-const TWO_ADIC_GENERATORS: [u32; 28] = [
-    0x1, 0x78000000, 0x67055c21, 0x5ee99486, 0xbb4c4e4, 0x2d4cc4da, 0x669d6090, 0x17b56c64,
-    0x67456167, 0x688442f9, 0x145e952d, 0x4fe61226, 0x4c734715, 0x11c33e2a, 0x62c3d2b1, 0x77cad399,
-    0x54c131f4, 0x4cabd6a6, 0x5cf5713f, 0x3e9430e8, 0xba067a3, 0x18adc27d, 0x21fd55bc, 0x4b859b3d,
-    0x3bd57996, 0x4483d85a, 0x3a26eef8, 0x1a427a41,
-];
-
 impl TwoAdicData for BabyBearParameters {
     const TWO_ADICITY: usize = 27;
 
     type ArrayLike = [BabyBear; Self::TWO_ADICITY + 1];
 
-    const TWO_ADIC_GENERATORS: Self::ArrayLike = BabyBear::new_array(TWO_ADIC_GENERATORS);
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = BabyBear::new_array([
+        0x1, 0x78000000, 0x67055c21, 0x5ee99486, 0xbb4c4e4, 0x2d4cc4da, 0x669d6090, 0x17b56c64,
+        0x67456167, 0x688442f9, 0x145e952d, 0x4fe61226, 0x4c734715, 0x11c33e2a, 0x62c3d2b1,
+        0x77cad399, 0x54c131f4, 0x4cabd6a6, 0x5cf5713f, 0x3e9430e8, 0xba067a3, 0x18adc27d,
+        0x21fd55bc, 0x4b859b3d, 0x3bd57996, 0x4483d85a, 0x3a26eef8, 0x1a427a41,
+    ]);
 }
-
-const EXT_TWO_ADIC_GENERATORS4: [[u32; 4]; 2] = [[0, 0, 1996171314, 0], [0, 0, 0, 124907976]];
 
 impl BinomialExtensionData<4> for BabyBearParameters {
     const W: BabyBear = BabyBear::new(11);
@@ -88,7 +84,7 @@ impl BinomialExtensionData<4> for BabyBearParameters {
 
     type ArrayLike = [[BabyBear; 4]; 2];
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
-        BabyBear::new_2d_array(EXT_TWO_ADIC_GENERATORS4);
+        BabyBear::new_2d_array([[0, 0, 1996171314, 0], [0, 0, 0, 124907976]]);
 }
 
 impl BinomialExtensionData<5> for BabyBearParameters {
