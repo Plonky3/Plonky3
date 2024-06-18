@@ -4,7 +4,6 @@
 
 extern crate alloc;
 
-mod algo;
 mod butterflies;
 mod naive;
 mod radix_2_bowers;
@@ -15,7 +14,6 @@ mod testing;
 mod traits;
 mod util;
 
-pub use algo::*;
 pub use butterflies::*;
 pub use naive::*;
 pub use radix_2_bowers::*;
