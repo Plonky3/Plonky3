@@ -3,7 +3,7 @@ use core::hash::Hash;
 
 use p3_field::{AbstractField, Field};
 
-use crate::{to_monty_elem, to_monty_from_array, MontyField31};
+use crate::MontyField31;
 
 /// MontyParameters contains the prime P along with constants needed to convert elements intoand out of MONTY form.
 pub trait MontyParameters:
@@ -68,10 +68,10 @@ pub trait BarrettParameters: MontyParameters {
 /// FieldParameters contains constants and methods needed to imply AbstractField and Field for MontyField31.
 pub trait FieldParameters: PackedMontyParameters + Sized {
     // Simple field constants.
-    const MONTY_ZERO: MontyField31<Self> = to_monty_elem(0); // The monty form of 0 is always 0.
-    const MONTY_ONE: MontyField31<Self> = to_monty_elem(1);
-    const MONTY_TWO: MontyField31<Self> = to_monty_elem(2);
-    const MONTY_NEG_ONE: MontyField31<Self> = to_monty_elem(Self::PRIME - 1);
+    const MONTY_ZERO: MontyField31<Self> = MontyField31::new(0);
+    const MONTY_ONE: MontyField31<Self> = MontyField31::new(1);
+    const MONTY_TWO: MontyField31<Self> = MontyField31::new(2);
+    const MONTY_NEG_ONE: MontyField31<Self> = MontyField31::new(Self::PRIME - 1);
 
     // A generator of the fields multiplicative group. Needs to be given in Monty Form.
     const MONTY_GEN: MontyField31<Self>;
@@ -84,31 +84,33 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 
 /// TwoAdicData contains constants needed to imply TwoAdicField for Monty31 fields.
 pub trait TwoAdicData: MontyParameters {
-    // Largest n such that 2^n divides p - 1.
+    /// Largest n such that 2^n divides p - 1.
     const TWO_ADICITY: usize;
 
-    // ArrayLike should be [u32; TWO_ADICITY + 1].
+    /// ArrayLike should be [MontyField31; TWO_ADICITY + 1].
     type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;
 
-    // TWO_ADIC_GENERATORS needs to be in MONTY FORM.
+    /// TWO_ADIC_GENERATORS needs to be in MONTY FORM.
     const TWO_ADIC_GENERATORS: Self::ArrayLike;
 }
 
 /// TODO: This should be deleted long term once we have improved our API for defining extension fields.
 /// This allows us to implement Binomial Extensions over Monty31 fields.
 pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
-    // W is a value such that (x^DEG - WN) is irreducible.
-    const W: u32;
-    const MONTY_W: MontyField31<Self> = to_monty_elem(Self::W); // The MONTY form of W
+    /// W is a value such that (x^DEG - WN) is irreducible.
+    const W: MontyField31<Self>;
 
-    // DTH_ROOTN = W^((p - 1)/DEG)
-    const DTH_ROOT: u32;
-    const MONTY_DTH_ROOT: MontyField31<Self> = to_monty_elem(Self::DTH_ROOT);
+    /// DTH_ROOTN = W^((p - 1)/DEG)
+    const DTH_ROOT: MontyField31<Self>;
 
-    const EXT_GENERATOR: [u32; DEG];
-    const MONTY_EXT_GENERATOR: [u32; DEG] = to_monty_from_array::<DEG, Self>(Self::EXT_GENERATOR);
+    /// A generator of the extension fields multiplicative group.
+    const EXT_GENERATOR: [MontyField31<Self>; DEG];
 
     const EXT_TWO_ADICITY: usize;
 
-    fn u32_ext_two_adic_generator(bits: usize) -> [u32; DEG];
+    /// ArrayLike should be [MontyField31<Self>; DEG] TWO_ADICITY + 1].
+    type ArrayLike: AsRef<[[MontyField31<Self>; DEG]]> + Sized;
+
+    /// TWO_ADIC_GENERATORS needs to be in MONTY FORM.
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
 }
