@@ -15,7 +15,7 @@ where
     PV::from_fn(|_| rng.gen())
 }
 
-/// Interleave arr1 and arr2 using chuncks of size i.
+/// Interleave arr1 and arr2 using chunks of size i.
 fn interleave<T: Copy + Default>(arr1: &[T], arr2: &[T], i: usize) -> (Vec<T>, Vec<T>) {
     let width = arr1.len();
     assert_eq!(width, arr2.len());

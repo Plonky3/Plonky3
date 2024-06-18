@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
@@ -77,7 +77,7 @@ where
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: CanSample<Challenge> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
@@ -146,7 +146,7 @@ where
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample();
+        let alpha: Challenge = challenger.sample_ext_element();
 
         /*
         We are reducing columns ("ro" = reduced opening) with powers of alpha:
@@ -239,7 +239,7 @@ where
         let (first_layer_commitment, first_layer_data) =
             self.fri_config.mmcs.commit(first_layer_mats);
         challenger.observe(first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample();
+        let bivariate_beta: Challenge = challenger.sample_ext_element();
 
         // Fold all first layers at bivariate_beta.
 
@@ -329,9 +329,9 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample();
+        let alpha: Challenge = challenger.sample_ext_element();
         challenger.observe(proof.first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample();
+        let bivariate_beta: Challenge = challenger.sample_ext_element();
 
         // +1 to account for first layer
         let log_global_max_height =

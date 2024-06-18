@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use p3_challenger::DuplexChallenger;
@@ -11,7 +12,7 @@ use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_mersenne_31::{DiffusionMatrixMersenne31, Mersenne31};
 use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
@@ -21,7 +22,7 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 const NUM_HASHES: usize = 1365;
 
-fn main() -> Result<(), VerificationError> {
+fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();

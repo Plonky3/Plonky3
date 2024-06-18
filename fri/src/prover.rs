@@ -3,9 +3,9 @@ use alloc::vec::Vec;
 use core::iter;
 
 use itertools::{izip, Itertools};
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
@@ -13,18 +13,19 @@ use tracing::{info_span, instrument};
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<G, F, M, Challenger>(
+pub fn prove<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
-    inputs: Vec<Vec<F>>,
+    inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
     open_input: impl Fn(usize) -> G::InputProof,
-) -> FriProof<F, M, Challenger::Witness, G::InputProof>
+) -> FriProof<Challenge, M, Challenger::Witness, G::InputProof>
 where
-    F: Field,
-    M: Mmcs<F>,
-    Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
-    G: FriGenericConfig<F>,
+    Val: Field,
+    Challenge: ExtensionField<Val>,
+    M: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    G: FriGenericConfig<Challenge>,
 {
     // check sorted descending
     assert!(inputs
@@ -67,17 +68,18 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 }
 
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<G, F, M, Challenger>(
+fn commit_phase<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
-    inputs: Vec<Vec<F>>,
+    inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-) -> CommitPhaseResult<F, M>
+) -> CommitPhaseResult<Challenge, M>
 where
-    F: Field,
-    M: Mmcs<F>,
-    Challenger: CanObserve<M::Commitment> + CanSample<F>,
-    G: FriGenericConfig<F>,
+    Val: Field,
+    Challenge: ExtensionField<Val>,
+    M: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
+    G: FriGenericConfig<Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
@@ -89,7 +91,7 @@ where
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
 
-        let beta: F = challenger.sample();
+        let beta: Challenge = challenger.sample_ext_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
         folded = g.fold_matrix(beta, leaves.as_view());
@@ -108,6 +110,7 @@ where
     for x in folded {
         assert_eq!(x, final_poly);
     }
+    challenger.observe_ext_element(final_poly);
 
     CommitPhaseResult {
         commits,

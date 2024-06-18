@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use p3_challenger::{HashChallenger, SerializingChallenger32};
@@ -10,7 +11,7 @@ use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
@@ -20,7 +21,7 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 const NUM_HASHES: usize = 1365;
 
-fn main() -> Result<(), VerificationError> {
+fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
