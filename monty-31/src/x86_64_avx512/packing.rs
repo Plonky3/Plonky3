@@ -25,7 +25,7 @@ const EVENS4: __mmask16 = 0x0f0f;
 /// Vectorized AVX-512F implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedMontyField31AVX512<FP: FieldParameters>(pub [MontyField31<FP>; WIDTH]);
+pub struct PackedMontyField31AVX512<FP>(pub [MontyField31<FP>; WIDTH]);
 
 impl<FP: FieldParameters> PackedMontyField31AVX512<FP> {
     #[inline]

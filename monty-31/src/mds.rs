@@ -13,7 +13,7 @@ use p3_mds::util::dot_product;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{BarrettParameters, FieldParameters, MontyField31};
+use crate::{BarrettParameters, MontyField31, MontyParameters};
 /// A collection of constants related to convolutions.
 /// The MDS matrices are saved using their left most column.
 pub trait MDSUtils: Clone + Sync {
@@ -36,7 +36,7 @@ pub struct MdsMatrixMontyField31<MU: MDSUtils> {
 /// 2^24 (roughly), though in practice the sum will be less than 2^9.
 struct SmallConvolveMontyField31;
 
-impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallConvolveMontyField31 {
+impl<FP: MontyParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallConvolveMontyField31 {
     /// Return the lift of a BabyBear element, satisfying 0 <=
     /// input.value < P < 2^31. Note that BabyBear elements are
     /// represented in Monty form.
@@ -209,7 +209,10 @@ fn barrett_red_monty31<BP: BarrettParameters>(input: i128) -> i64 {
 #[derive(Debug, Clone, Default)]
 struct LargeConvolveMontyField31;
 
-impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for LargeConvolveMontyField31 {
+impl<FP> Convolve<MontyField31<FP>, i64, i64, i64> for LargeConvolveMontyField31
+where
+    FP: BarrettParameters,
+{
     /// Return the lift of a MontyField31 element, satisfying
     /// 0 <= input.value < P < 2^31.
     /// Note that MontyField31 elements are represented in Monty form.
@@ -269,7 +272,7 @@ impl<FP: FieldParameters> Convolve<MontyField31<FP>, i64, i64, i64> for LargeCon
     }
 }
 
-impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 8]>
+impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 8]>
     for MdsMatrixMontyField31<MU>
 {
     fn permute(&self, input: [MontyField31<FP>; 8]) -> [MontyField31<FP>; 8] {
@@ -284,12 +287,12 @@ impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 8]>
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 8>
+impl<FP: MontyParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 8>
     for MdsMatrixMontyField31<MU>
 {
 }
 
-impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 12]>
+impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 12]>
     for MdsMatrixMontyField31<MU>
 {
     fn permute(&self, input: [MontyField31<FP>; 12]) -> [MontyField31<FP>; 12] {
@@ -304,12 +307,12 @@ impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 12]>
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 12>
+impl<FP: MontyParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 12>
     for MdsMatrixMontyField31<MU>
 {
 }
 
-impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 16]>
+impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 16]>
     for MdsMatrixMontyField31<MU>
 {
     fn permute(&self, input: [MontyField31<FP>; 16]) -> [MontyField31<FP>; 16] {
@@ -324,13 +327,14 @@ impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 16]>
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 16>
+impl<FP: MontyParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 16>
     for MdsMatrixMontyField31<MU>
 {
 }
 
-impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 24]>
-    for MdsMatrixMontyField31<MU>
+impl<FP, MU: MDSUtils> Permutation<[MontyField31<FP>; 24]> for MdsMatrixMontyField31<MU>
+where
+    FP: BarrettParameters,
 {
     fn permute(&self, input: [MontyField31<FP>; 24]) -> [MontyField31<FP>; 24] {
         LargeConvolveMontyField31::apply(
@@ -344,12 +348,12 @@ impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 24]>
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 24>
+impl<FP: BarrettParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 24>
     for MdsMatrixMontyField31<MU>
 {
 }
 
-impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 32]>
+impl<FP: BarrettParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 32]>
     for MdsMatrixMontyField31<MU>
 {
     fn permute(&self, input: [MontyField31<FP>; 32]) -> [MontyField31<FP>; 32] {
@@ -364,12 +368,12 @@ impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 32]>
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 32>
+impl<FP: BarrettParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 32>
     for MdsMatrixMontyField31<MU>
 {
 }
 
-impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 64]>
+impl<FP: BarrettParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 64]>
     for MdsMatrixMontyField31<MU>
 {
     fn permute(&self, input: [MontyField31<FP>; 64]) -> [MontyField31<FP>; 64] {
@@ -384,7 +388,7 @@ impl<FP: FieldParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 64]>
         *input = self.permute(*input);
     }
 }
-impl<FP: FieldParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 64>
+impl<FP: BarrettParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 64>
     for MdsMatrixMontyField31<MU>
 {
 }

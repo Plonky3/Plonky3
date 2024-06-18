@@ -14,18 +14,21 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters};
+use crate::{
+    as_canonical_u32, from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters,
+    MontyParameters, TwoAdicData,
+};
 
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
-pub struct MontyField31<FP: FieldParameters> {
+pub struct MontyField31<MP: MontyParameters> {
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
     pub(crate) value: u32,
-    _phantom: PhantomData<FP>,
+    _phantom: PhantomData<MP>,
 }
 
-impl<FP: FieldParameters> MontyField31<FP> {
+impl<FP: MontyParameters> MontyField31<FP> {
     // The standard way to crate a new element.
     // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
     pub const fn new(value: u32) -> Self {
@@ -46,33 +49,33 @@ impl<FP: FieldParameters> MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Ord for MontyField31<FP> {
+impl<FP: MontyParameters> Ord for MontyField31<FP> {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.as_canonical_u32().cmp(&other.as_canonical_u32())
+        as_canonical_u32(self).cmp(&as_canonical_u32(other))
     }
 }
 
-impl<FP: FieldParameters> PartialOrd for MontyField31<FP> {
+impl<FP: MontyParameters> PartialOrd for MontyField31<FP> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<FP: FieldParameters> Display for MontyField31<FP> {
+impl<FP: MontyParameters> Display for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.as_canonical_u32(), f)
+        Display::fmt(&as_canonical_u32(self), f)
     }
 }
 
-impl<FP: FieldParameters> Debug for MontyField31<FP> {
+impl<FP: MontyParameters> Debug for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.as_canonical_u32(), f)
+        Debug::fmt(&as_canonical_u32(self), f)
     }
 }
 
-impl<FP: FieldParameters> Distribution<MontyField31<FP>> for Standard {
+impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> MontyField31<FP> {
         loop {
@@ -251,7 +254,7 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> TwoAdicField for MontyField31<FP> {
+impl<FP: FieldParameters + TwoAdicData> TwoAdicField for MontyField31<FP> {
     const TWO_ADICITY: usize = FP::TWO_ADICITY;
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
@@ -259,7 +262,7 @@ impl<FP: FieldParameters> TwoAdicField for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Add for MontyField31<FP> {
+impl<FP: MontyParameters> Add for MontyField31<FP> {
     type Output = Self;
 
     #[inline]
@@ -273,14 +276,14 @@ impl<FP: FieldParameters> Add for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> AddAssign for MontyField31<FP> {
+impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<FP: FieldParameters> Sum for MontyField31<FP> {
+impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
@@ -292,7 +295,7 @@ impl<FP: FieldParameters> Sum for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Sub for MontyField31<FP> {
+impl<FP: MontyParameters> Sub for MontyField31<FP> {
     type Output = Self;
 
     #[inline]
@@ -304,7 +307,7 @@ impl<FP: FieldParameters> Sub for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> SubAssign for MontyField31<FP> {
+impl<FP: MontyParameters> SubAssign for MontyField31<FP> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
@@ -320,7 +323,7 @@ impl<FP: FieldParameters> Neg for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Mul for MontyField31<FP> {
+impl<FP: MontyParameters> Mul for MontyField31<FP> {
     type Output = Self;
 
     #[inline]
@@ -330,7 +333,7 @@ impl<FP: FieldParameters> Mul for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> MulAssign for MontyField31<FP> {
+impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;

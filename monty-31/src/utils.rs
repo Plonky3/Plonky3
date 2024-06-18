@@ -1,4 +1,4 @@
-use crate::{FieldParameters, MontyParameters};
+use crate::{FieldParameters, MontyField31, MontyParameters};
 
 #[inline]
 pub const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
@@ -56,4 +56,9 @@ pub const fn to_monty_from_array<const N: usize, MP: MontyParameters>(input: [u3
         i += 1;
     }
     output
+}
+
+/// Produce a canonical u32 from an element saved in monty form.
+pub(crate) fn as_canonical_u32<MP: MontyParameters>(elem: &MontyField31<MP>) -> u32 {
+    from_monty::<MP>(elem.value)
 }

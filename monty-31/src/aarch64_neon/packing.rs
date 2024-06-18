@@ -24,7 +24,7 @@ pub trait FieldParametersNeon:
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedMontyField31Neon<FP: FieldParameters>(pub [MontyField31<FP>; WIDTH]);
+pub struct PackedMontyField31Neon<FP>(pub [MontyField31<FP>; WIDTH]);
 
 impl<FP: FieldParameters> PackedMontyField31Neon<FP> {
     #[inline]
