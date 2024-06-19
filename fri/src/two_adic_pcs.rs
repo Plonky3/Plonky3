@@ -448,10 +448,10 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
 }
 
 pub struct PowersReducer<F: Field, EF> {
-    powers: Vec<EF>,
+    pub powers: Vec<EF>,
     // If EF::D = 2 and powers is [01 23 45 67],
     // this holds [[02 46] [13 57]]
-    transposed_packed: Vec<Vec<F::Packing>>,
+    pub transposed_packed: Vec<Vec<F::Packing>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
