@@ -7,9 +7,9 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
-
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
@@ -34,6 +34,13 @@ where
         .all(|(l, r)| l.len() >= r.len()));
 
     let log_max_height = log2_strict_usize(inputs[0].len());
+
+    // We do not allow the prover to send polynomials in the clear.
+    inputs.iter().for_each(|v| {
+        if let Some(v) = v {
+            assert!(v.len() > config.log_final_poly_len + config.log_blowup);
+        }
+    });
 
     let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
@@ -64,10 +71,9 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
-    final_poly: F,
+    final_poly: Vec<F>,
 }
 
-#[instrument(name = "commit phase", skip_all)]
 fn commit_phase<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
@@ -92,7 +98,7 @@ where
         challenger.observe(commit.clone());
 
         let beta: Challenge = challenger.sample_ext_element();
-        // We passed ownership of `current` to the MMCS, so get a reference to it
+        // We passed ownership of folded to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
         folded = g.fold_matrix(beta, leaves.as_view());
 
@@ -104,13 +110,28 @@ where
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(folded.len(), config.blowup());
-    let final_poly = folded[0];
-    for x in folded {
-        assert_eq!(x, final_poly);
+    // Previously, we checked that folded was constant at this point. Now, we transform folded
+    // from the evaluation domain to the coefficient domain and verify the trailing coefficients.
+    let mut final_poly = folded.clone();
+
+    // Switch from the evaluation basis to the coefficient basis.
+    reverse_slice_index_bits(&mut final_poly);
+    final_poly = Radix2Dit::default().idft(final_poly);
+
+    // The evaluation domain is "blown-up" relative to the polynomial degree of `final_poly`,
+    // so all coefficients after the first final_poly_len should be zero.
+    debug_assert!(
+        final_poly
+            .iter()
+            .skip(1 << config.log_final_poly_len)
+            .all(|x| x.is_zero()),
+        "All coefficients beyond final_poly_len must be zero"
+    );
+
+    // Observe all coefficients of the final polynomial.
+    for &x in &final_poly {
+        challenger.observe_ext_element(x);
     }
-    challenger.observe_ext_element(final_poly);
 
     CommitPhaseResult {
         commits,

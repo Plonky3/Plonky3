@@ -40,7 +40,12 @@ where
             challenger.sample_ext_element()
         })
         .collect();
-    challenger.observe_ext_element(proof.final_poly);
+
+    // Observe all coefficients of the final polynomial.
+    proof
+        .final_poly
+        .iter()
+        .for_each(|x| challenger.observe_ext_element(*x));
 
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
@@ -51,7 +56,8 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    let log_max_height =
+        proof.commit_phase_commits.len() + config.log_blowup + config.log_final_poly_len;
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
@@ -75,7 +81,24 @@ where
             log_max_height,
         )?;
 
-        if folded_eval != proof.final_poly {
+        let final_poly_index = index >> (proof.commit_phase_commits.len());
+
+        let mut eval = F::zero();
+
+        // We open the final polynomial at index `final_poly_index`, which corresponds to evaluating
+        // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
+        // `reverse_bits_len(final_poly_index, log_max_height)`.
+        let x = F::two_adic_generator(log_max_height)
+            .exp_u64(reverse_bits_len(final_poly_index, log_max_height) as u64);
+        let mut x_pow = F::one();
+
+        // Evaluate the final polynomial at x.
+        for coeff in &proof.final_poly {
+            eval += *coeff * x_pow;
+            x_pow *= x;
+        }
+
+        if eval != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }
     }
@@ -136,7 +159,11 @@ where
         folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
     }
 
-    debug_assert!(index < config.blowup(), "index was {}", index);
+    debug_assert!(
+        index < config.blowup() * config.final_poly_len(),
+        "index was {}",
+        index,
+    );
     debug_assert!(
         ro_iter.next().is_none(),
         "verifier reduced_openings were not in descending order?"

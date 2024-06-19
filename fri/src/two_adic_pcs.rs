@@ -366,7 +366,9 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_ext_element();
 
-        let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
+        let log_global_max_height = proof.commit_phase_commits.len()
+            + self.fri.log_blowup
+            + self.fri.log_final_poly_len;
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
