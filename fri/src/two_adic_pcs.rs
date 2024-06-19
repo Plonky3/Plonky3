@@ -447,7 +447,7 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         .collect()
 }
 
-struct PowersReducer<F: Field, EF> {
+pub struct PowersReducer<F: Field, EF> {
     powers: Vec<EF>,
     // If EF::D = 2 and powers is [01 23 45 67],
     // this holds [[02 46] [13 57]]
@@ -455,7 +455,7 @@ struct PowersReducer<F: Field, EF> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
-    fn new(base: EF, max_width: usize) -> Self {
+    pub fn new(base: EF, max_width: usize) -> Self {
         let powers: Vec<EF> = base
             .powers()
             .take(max_width.next_multiple_of(F::Packing::WIDTH))
@@ -479,12 +479,12 @@ impl<F: Field, EF: ExtensionField<F>> PowersReducer<F, EF> {
     }
 
     // Compute sum_i base^i * x_i
-    fn reduce_ext(&self, xs: &[EF]) -> EF {
+    pub fn reduce_ext(&self, xs: &[EF]) -> EF {
         self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()
     }
 
     // Same as `self.powers.iter().zip(xs).map(|(&pow, &x)| pow * x).sum()`
-    fn reduce_base(&self, xs: &[F]) -> EF {
+    pub fn reduce_base(&self, xs: &[F]) -> EF {
         let (xs_packed, xs_sfx) = F::Packing::pack_slice_with_suffix(xs);
         let mut sums = (0..EF::D).map(|_| F::Packing::zero()).collect::<Vec<_>>();
         for (&x, pows) in izip!(xs_packed, &self.transposed_packed) {
