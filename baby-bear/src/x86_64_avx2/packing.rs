@@ -1,7 +1,7 @@
 use core::arch::x86_64::__m256i;
 use core::mem::transmute;
 
-use p3_monty_31::{FieldParametersAVX2, PackedMontyField31AVX2};
+use p3_monty_31::{MontyParametersAVX2, PackedMontyField31AVX2};
 
 use crate::BabyBearParameters;
 
@@ -9,7 +9,7 @@ pub type PackedBabyBearAVX2 = PackedMontyField31AVX2<BabyBearParameters>;
 
 const WIDTH: usize = 8;
 
-impl FieldParametersAVX2 for BabyBearParameters {
+impl MontyParametersAVX2 for BabyBearParameters {
     const PACKEDP: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
     const PACKEDMU: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x88000001; WIDTH]) };
 }
@@ -17,12 +17,11 @@ impl FieldParametersAVX2 for BabyBearParameters {
 #[cfg(test)]
 mod tests {
     use p3_field_testing::test_packed_field;
-    use p3_monty_31::to_monty_array;
 
     use super::WIDTH;
     use crate::BabyBear;
 
-    const SPECIAL_VALS: [BabyBear; WIDTH] = to_monty_array([
+    const SPECIAL_VALS: [BabyBear; WIDTH] = BabyBear::new_array([
         0x00000000, 0x00000001, 0x78000000, 0x77ffffff, 0x3c000000, 0x0ffffffe, 0x68000003,
         0x70000002,
     ]);

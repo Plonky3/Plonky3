@@ -1,5 +1,4 @@
 use core::arch::x86_64::{self, __m256i};
-use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -8,13 +7,11 @@ use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{FieldParameters, MontyField31};
+use crate::{FieldParameters, MontyField31, PackedMontyParameters};
 
 const WIDTH: usize = 8;
 
-pub trait FieldParametersAVX2:
-    Copy + Clone + Default + Eq + PartialEq + Sync + Send + Hash + 'static
-{
+pub trait MontyParametersAVX2 {
     const PACKEDP: __m256i;
     const PACKEDMU: __m256i;
 }
@@ -22,9 +19,9 @@ pub trait FieldParametersAVX2:
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedMontyField31AVX2<FP: FieldParameters>(pub [MontyField31<FP>; WIDTH]);
+pub struct PackedMontyField31AVX2<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
-impl<FP: FieldParameters> PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
@@ -59,18 +56,18 @@ impl<FP: FieldParameters> PackedMontyField31AVX2<FP> {
     /// `From<MontyField31<FP>>::from`, but `const`.
     #[inline]
     #[must_use]
-    const fn broadcast(value: MontyField31<FP>) -> Self {
+    const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
 }
 
-impl<FP: FieldParameters> Add for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<FP>(lhs, rhs);
+        let res = add::<PMP>(lhs, rhs);
         unsafe {
             // Safety: `add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -78,13 +75,13 @@ impl<FP: FieldParameters> Add for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> Mul for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = mul::<FP>(lhs, rhs);
+        let res = mul::<PMP>(lhs, rhs);
         unsafe {
             // Safety: `mul` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -92,12 +89,12 @@ impl<FP: FieldParameters> Mul for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> Neg for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Neg for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
         let val = self.to_vector();
-        let res = neg::<FP>(val);
+        let res = neg::<PMP>(val);
         unsafe {
             // Safety: `neg` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -105,13 +102,13 @@ impl<FP: FieldParameters> Neg for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> Sub for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<FP>(lhs, rhs);
+        let res = sub::<PMP>(lhs, rhs);
         unsafe {
             // Safety: `sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -123,7 +120,7 @@ impl<FP: FieldParameters> Sub for PackedMontyField31AVX2<FP> {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -142,7 +139,7 @@ fn add<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, FPAVX2::PACKEDP);
+        let u = x86_64::_mm256_sub_epi32(t, MPAVX2::PACKEDP);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
@@ -172,11 +169,11 @@ fn add<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-fn monty_d<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
-        let q = x86_64::_mm256_mul_epu32(prod, FPAVX2::PACKEDMU);
-        let q_P = x86_64::_mm256_mul_epu32(q, FPAVX2::PACKEDP);
+        let q = x86_64::_mm256_mul_epu32(prod, MPAVX2::PACKEDMU);
+        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKEDP);
         x86_64::_mm256_sub_epi64(prod, q_P)
     }
 }
@@ -195,7 +192,7 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn mul<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vmovshdup  lhs_odd, lhs
     //      vmovshdup  rhs_odd, rhs
@@ -219,13 +216,13 @@ fn mul<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
         let lhs_odd = movehdup_epi32(lhs);
         let rhs_odd = movehdup_epi32(rhs);
 
-        let d_evn = monty_d::<FPAVX2>(lhs_evn, rhs_evn);
-        let d_odd = monty_d::<FPAVX2>(lhs_odd, rhs_odd);
+        let d_evn = monty_d::<MPAVX2>(lhs_evn, rhs_evn);
+        let d_odd = monty_d::<MPAVX2>(lhs_odd, rhs_odd);
 
         let d_evn_hi = movehdup_epi32(d_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
 
-        let u = x86_64::_mm256_add_epi32(t, FPAVX2::PACKEDP);
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKEDP);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
@@ -234,7 +231,7 @@ fn mul<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn neg<FPAVX2: FieldParametersAVX2>(val: __m256i) -> __m256i {
+fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsubd   t, P, val
     //      vpsignd  res, t, val
@@ -254,7 +251,7 @@ fn neg<FPAVX2: FieldParametersAVX2>(val: __m256i) -> __m256i {
     // res = vpsignd(t, val) = t passes t through.
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(FPAVX2::PACKEDP, val);
+        let t = x86_64::_mm256_sub_epi32(MPAVX2::PACKEDP, val);
         x86_64::_mm256_sign_epi32(t, val)
     }
 }
@@ -263,7 +260,7 @@ fn neg<FPAVX2: FieldParametersAVX2>(val: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
@@ -281,40 +278,40 @@ fn sub<FPAVX2: FieldParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, FPAVX2::PACKEDP);
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKEDP);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
 
-impl<FP: FieldParameters> From<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     #[inline]
-    fn from(value: MontyField31<FP>) -> Self {
+    fn from(value: MontyField31<PMP>) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl<FP: FieldParameters> Default for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX2<PMP> {
     #[inline]
     fn default() -> Self {
-        MontyField31::<FP>::default().into()
+        MontyField31::<PMP>::default().into()
     }
 }
 
-impl<FP: FieldParameters> AddAssign for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> AddAssign for PackedMontyField31AVX2<PMP> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<FP: FieldParameters> MulAssign for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> MulAssign for PackedMontyField31AVX2<PMP> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl<FP: FieldParameters> SubAssign for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> SubAssign for PackedMontyField31AVX2<PMP> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
@@ -346,22 +343,22 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
 
     #[inline]
     fn zero() -> Self {
-        MontyField31::<FP>::zero().into()
+        MontyField31::zero().into()
     }
 
     #[inline]
     fn one() -> Self {
-        MontyField31::<FP>::one().into()
+        MontyField31::one().into()
     }
 
     #[inline]
     fn two() -> Self {
-        MontyField31::<FP>::two().into()
+        MontyField31::two().into()
     }
 
     #[inline]
     fn neg_one() -> Self {
-        MontyField31::<FP>::neg_one().into()
+        MontyField31::neg_one().into()
     }
 
     #[inline]
@@ -371,85 +368,85 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
 
     #[inline]
     fn from_bool(b: bool) -> Self {
-        MontyField31::<FP>::from_bool(b).into()
+        MontyField31::from_bool(b).into()
     }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
-        MontyField31::<FP>::from_canonical_u8(n).into()
+        MontyField31::from_canonical_u8(n).into()
     }
     #[inline]
     fn from_canonical_u16(n: u16) -> Self {
-        MontyField31::<FP>::from_canonical_u16(n).into()
+        MontyField31::from_canonical_u16(n).into()
     }
     #[inline]
     fn from_canonical_u32(n: u32) -> Self {
-        MontyField31::<FP>::from_canonical_u32(n).into()
+        MontyField31::from_canonical_u32(n).into()
     }
     #[inline]
     fn from_canonical_u64(n: u64) -> Self {
-        MontyField31::<FP>::from_canonical_u64(n).into()
+        MontyField31::from_canonical_u64(n).into()
     }
     #[inline]
     fn from_canonical_usize(n: usize) -> Self {
-        MontyField31::<FP>::from_canonical_usize(n).into()
+        MontyField31::from_canonical_usize(n).into()
     }
 
     #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
-        MontyField31::<FP>::from_wrapped_u32(n).into()
+        MontyField31::from_wrapped_u32(n).into()
     }
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
-        MontyField31::<FP>::from_wrapped_u64(n).into()
+        MontyField31::from_wrapped_u64(n).into()
     }
 
     #[inline]
     fn generator() -> Self {
-        MontyField31::<FP>::generator().into()
+        MontyField31::generator().into()
     }
 }
 
-impl<FP: FieldParameters> Add<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Add<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
-    fn add(self, rhs: MontyField31<FP>) -> Self {
+    fn add(self, rhs: MontyField31<PMP>) -> Self {
         self + Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> Mul<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Mul<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: MontyField31<FP>) -> Self {
+    fn mul(self, rhs: MontyField31<PMP>) -> Self {
         self * Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> Sub<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> Sub<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: MontyField31<FP>) -> Self {
+    fn sub(self, rhs: MontyField31<PMP>) -> Self {
         self - Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> AddAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> AddAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     #[inline]
-    fn add_assign(&mut self, rhs: MontyField31<FP>) {
+    fn add_assign(&mut self, rhs: MontyField31<PMP>) {
         *self += Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> MulAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> MulAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     #[inline]
-    fn mul_assign(&mut self, rhs: MontyField31<FP>) {
+    fn mul_assign(&mut self, rhs: MontyField31<PMP>) {
         *self *= Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> SubAssign<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+impl<PMP: PackedMontyParameters> SubAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
     #[inline]
-    fn sub_assign(&mut self, rhs: MontyField31<FP>) {
+    fn sub_assign(&mut self, rhs: MontyField31<PMP>) {
         *self -= Self::from(rhs)
     }
 }
@@ -483,34 +480,34 @@ impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> Add<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
-    type Output = PackedMontyField31AVX2<FP>;
+impl<PMP: PackedMontyParameters> Add<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
+    type Output = PackedMontyField31AVX2<PMP>;
     #[inline]
-    fn add(self, rhs: PackedMontyField31AVX2<FP>) -> PackedMontyField31AVX2<FP> {
-        PackedMontyField31AVX2::<FP>::from(self) + rhs
+    fn add(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
+        PackedMontyField31AVX2::<PMP>::from(self) + rhs
     }
 }
 
-impl<FP: FieldParameters> Mul<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
-    type Output = PackedMontyField31AVX2<FP>;
+impl<PMP: PackedMontyParameters> Mul<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
+    type Output = PackedMontyField31AVX2<PMP>;
     #[inline]
-    fn mul(self, rhs: PackedMontyField31AVX2<FP>) -> PackedMontyField31AVX2<FP> {
-        PackedMontyField31AVX2::<FP>::from(self) * rhs
+    fn mul(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
+        PackedMontyField31AVX2::<PMP>::from(self) * rhs
     }
 }
 
-impl<FP: FieldParameters> Sub<PackedMontyField31AVX2<FP>> for MontyField31<FP> {
-    type Output = PackedMontyField31AVX2<FP>;
+impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
+    type Output = PackedMontyField31AVX2<PMP>;
     #[inline]
-    fn sub(self, rhs: PackedMontyField31AVX2<FP>) -> PackedMontyField31AVX2<FP> {
-        PackedMontyField31AVX2::<FP>::from(self) - rhs
+    fn sub(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
+        PackedMontyField31AVX2::<PMP>::from(self) - rhs
     }
 }
 
-impl<FP: FieldParameters> Distribution<PackedMontyField31AVX2<FP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<FP> {
-        PackedMontyField31AVX2::<FP>(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<PMP> {
+        PackedMontyField31AVX2::<PMP>(rng.gen())
     }
 }
 

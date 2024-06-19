@@ -1,6 +1,5 @@
 use core::arch::aarch64::{self, int32x4_t, uint32x4_t};
 use core::arch::asm;
-use core::hash::Hash;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -10,13 +9,11 @@ use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{FieldParameters, MontyField31};
+use crate::{FieldParameters, MontyField31, PackedMontyParameters};
 
 const WIDTH: usize = 4;
 
-pub trait FieldParametersNeon:
-    Copy + Clone + Default + Eq + PartialEq + Sync + Send + Hash + 'static
-{
+pub trait MontyParametersNeon {
     const PACKEDP: uint32x4_t;
     const PACKEDMU: int32x4_t;
 }
@@ -24,9 +21,9 @@ pub trait FieldParametersNeon:
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
-pub struct PackedMontyField31Neon<FP: FieldParameters>(pub [MontyField31<FP>; WIDTH]);
+pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
-impl<FP: FieldParameters> PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
@@ -61,18 +58,18 @@ impl<FP: FieldParameters> PackedMontyField31Neon<FP> {
     /// `From<MontyField31>::from`, but `const`.
     #[inline]
     #[must_use]
-    const fn broadcast(value: MontyField31<FP>) -> Self {
+    const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
 }
 
-impl<FP: FieldParameters> Add for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Add for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<FP>(lhs, rhs);
+        let res = add::<PMP>(lhs, rhs);
         unsafe {
             // Safety: `add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -80,13 +77,13 @@ impl<FP: FieldParameters> Add for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> Mul for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Mul for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = mul::<FP>(lhs, rhs);
+        let res = mul::<PMP>(lhs, rhs);
         unsafe {
             // Safety: `mul` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -94,12 +91,12 @@ impl<FP: FieldParameters> Mul for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> Neg for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Neg for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
         let val = self.to_vector();
-        let res = neg::<FP>(val);
+        let res = neg::<PMP>(val);
         unsafe {
             // Safety: `neg` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -107,13 +104,13 @@ impl<FP: FieldParameters> Neg for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> Sub for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<FP>(lhs, rhs);
+        let res = sub::<PMP>(lhs, rhs);
         unsafe {
             // Safety: `sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -151,7 +148,7 @@ fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
+fn add<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      add   t.4s, lhs.4s, rhs.4s
     //      sub   u.4s, t.4s, P.4s
@@ -170,7 +167,7 @@ fn add<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let t = aarch64::vaddq_u32(lhs, rhs);
-        let u = aarch64::vsubq_u32(t, FPNeon::PACKEDP);
+        let u = aarch64::vsubq_u32(t, MPNeon::PACKEDP);
         aarch64::vminq_u32(t, u)
     }
 }
@@ -205,13 +202,13 @@ fn add<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
 
 #[inline]
 #[must_use]
-fn mulby_mu<FPNeon: FieldParametersNeon>(val: int32x4_t) -> int32x4_t {
+fn mulby_mu<MPNeon: MontyParametersNeon>(val: int32x4_t) -> int32x4_t {
     // We want this to compile to:
     //      mul      res.4s, val.4s, MU.4s
     // throughput: .25 cyc/vec (16 els/cyc)
     // latency: 3 cyc
 
-    unsafe { aarch64::vmulq_s32(val, FPNeon::PACKEDMU) }
+    unsafe { aarch64::vmulq_s32(val, MPNeon::PACKEDMU) }
 }
 
 #[inline]
@@ -231,7 +228,7 @@ fn get_c_hi(lhs: int32x4_t, rhs: int32x4_t) -> int32x4_t {
 
 #[inline]
 #[must_use]
-fn get_qp_hi<FPNeon: FieldParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> int32x4_t {
+fn get_qp_hi<MPNeon: MontyParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> int32x4_t {
     // We want this to compile to:
     //      mul      q.4s, lhs.4s, mu_rhs.4s
     //      sqdmulh  qp_hi.4s, q.4s, P.4s
@@ -244,7 +241,7 @@ fn get_qp_hi<FPNeon: FieldParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> 
 
         // Gets bits 31, ..., 62 of Q P. Again, saturation is not an issue because `P` is not
         // -2**31.
-        aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(FPNeon::PACKEDP))
+        aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(MPNeon::PACKEDP))
     }
 }
 
@@ -266,7 +263,7 @@ fn get_d(c_hi: int32x4_t, qp_hi: int32x4_t) -> int32x4_t {
 
 #[inline]
 #[must_use]
-fn get_reduced_d<FPNeon: FieldParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t) -> uint32x4_t {
+fn get_reduced_d<MPNeon: MontyParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      shsub    res.4s, c_hi.4s, qp_hi.4s
     //      cmgt     underflow.4s, qp_hi.4s, c_hi.4s
@@ -281,13 +278,13 @@ fn get_reduced_d<FPNeon: FieldParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t)
         // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
         // _subtract_ `underflow` * P.
         let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
-        aarch64::vmlsq_u32(d, confuse_compiler(underflow), FPNeon::PACKEDP)
+        aarch64::vmlsq_u32(d, confuse_compiler(underflow), MPNeon::PACKEDP)
     }
 }
 
 #[inline]
 #[must_use]
-fn mul<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
+fn mul<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      sqdmulh  c_hi.4s, lhs.4s, rhs.4s
     //      mul      mu_rhs.4s, rhs.4s, MU.4s
@@ -304,30 +301,30 @@ fn mul<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
         let lhs = aarch64::vreinterpretq_s32_u32(lhs);
         let rhs = aarch64::vreinterpretq_s32_u32(rhs);
 
-        let mu_rhs = mulby_mu::<FPNeon>(rhs);
+        let mu_rhs = mulby_mu::<MPNeon>(rhs);
         let c_hi = get_c_hi(lhs, rhs);
-        let qp_hi = get_qp_hi::<FPNeon>(lhs, mu_rhs);
-        get_reduced_d::<FPNeon>(c_hi, qp_hi)
+        let qp_hi = get_qp_hi::<MPNeon>(lhs, mu_rhs);
+        get_reduced_d::<MPNeon>(c_hi, qp_hi)
     }
 }
 
 #[inline]
 #[must_use]
-fn cube<FPNeon: FieldParametersNeon>(val: uint32x4_t) -> uint32x4_t {
+fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     // throughput: 2.75 cyc/vec (1.45 els/cyc)
     // latency: 22 cyc
 
     unsafe {
         let val = aarch64::vreinterpretq_s32_u32(val);
-        let mu_val = mulby_mu::<FPNeon>(val);
+        let mu_val = mulby_mu::<MPNeon>(val);
 
         let c_hi_2 = get_c_hi(val, val);
-        let qp_hi_2 = get_qp_hi::<FPNeon>(val, mu_val);
+        let qp_hi_2 = get_qp_hi::<MPNeon>(val, mu_val);
         let val_2 = get_d(c_hi_2, qp_hi_2);
 
         let c_hi_3 = get_c_hi(val_2, val);
-        let qp_hi_3 = get_qp_hi::<FPNeon>(val_2, mu_val);
-        get_reduced_d::<FPNeon>(c_hi_3, qp_hi_3)
+        let qp_hi_3 = get_qp_hi::<MPNeon>(val_2, mu_val);
+        get_reduced_d::<MPNeon>(c_hi_3, qp_hi_3)
     }
 }
 
@@ -335,7 +332,7 @@ fn cube<FPNeon: FieldParametersNeon>(val: uint32x4_t) -> uint32x4_t {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn neg<FPNeon: FieldParametersNeon>(val: uint32x4_t) -> uint32x4_t {
+fn neg<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      sub   t.4s, P.4s, val.4s
     //      cmeq  is_zero.4s, val.4s, #0
@@ -351,7 +348,7 @@ fn neg<FPNeon: FieldParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     //   We return `r := t & ~is_zero`, which is `t` if `val > 0` and `0` otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vsubq_u32(FPNeon::PACKEDP, val);
+        let t = aarch64::vsubq_u32(MPNeon::PACKEDP, val);
         let is_zero = aarch64::vceqzq_u32(val);
         aarch64::vbicq_u32(t, is_zero)
     }
@@ -361,7 +358,7 @@ fn neg<FPNeon: FieldParametersNeon>(val: uint32x4_t) -> uint32x4_t {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
+fn sub<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      sub   res.4s, lhs.4s, rhs.4s
     //      cmhi  underflow.4s, rhs.4s, lhs.4s
@@ -384,39 +381,39 @@ fn sub<FPNeon: FieldParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
         // We really want to emit a `mls` instruction here. The compiler knows that `underflow` is
         // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
         // The `confuse_compiler` prevents this "optimization".
-        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), FPNeon::PACKEDP)
+        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), MPNeon::PACKEDP)
     }
 }
 
-impl<FP: FieldParameters> From<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     #[inline]
-    fn from(value: MontyField31<FP>) -> Self {
+    fn from(value: MontyField31<PMP>) -> Self {
         Self::broadcast(value)
     }
 }
 
-impl<FP: FieldParameters> Default for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Default for PackedMontyField31Neon<PMP> {
     #[inline]
     fn default() -> Self {
-        MontyField31::<FP>::default().into()
+        MontyField31::<PMP>::default().into()
     }
 }
 
-impl<FP: FieldParameters> AddAssign for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> AddAssign for PackedMontyField31Neon<PMP> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<FP: FieldParameters> MulAssign for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> MulAssign for PackedMontyField31Neon<PMP> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl<FP: FieldParameters> SubAssign for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> SubAssign for PackedMontyField31Neon<PMP> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
@@ -521,47 +518,47 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> Add<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Add<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
-    fn add(self, rhs: MontyField31<FP>) -> Self {
+    fn add(self, rhs: MontyField31<PMP>) -> Self {
         self + Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> Mul<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Mul<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: MontyField31<FP>) -> Self {
+    fn mul(self, rhs: MontyField31<PMP>) -> Self {
         self * Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> Sub<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> Sub<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: MontyField31<FP>) -> Self {
+    fn sub(self, rhs: MontyField31<PMP>) -> Self {
         self - Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> AddAssign<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> AddAssign<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     #[inline]
-    fn add_assign(&mut self, rhs: MontyField31<FP>) {
+    fn add_assign(&mut self, rhs: MontyField31<PMP>) {
         *self += Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> MulAssign<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> MulAssign<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     #[inline]
-    fn mul_assign(&mut self, rhs: MontyField31<FP>) {
+    fn mul_assign(&mut self, rhs: MontyField31<PMP>) {
         *self *= Self::from(rhs)
     }
 }
 
-impl<FP: FieldParameters> SubAssign<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+impl<PMP: PackedMontyParameters> SubAssign<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
     #[inline]
-    fn sub_assign(&mut self, rhs: MontyField31<FP>) {
+    fn sub_assign(&mut self, rhs: MontyField31<PMP>) {
         *self -= Self::from(rhs)
     }
 }
@@ -595,34 +592,34 @@ impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> Add<PackedMontyField31Neon<FP>> for MontyField31<FP> {
-    type Output = PackedMontyField31Neon<FP>;
+impl<PMP: PackedMontyParameters> Add<PackedMontyField31Neon<PMP>> for MontyField31<PMP> {
+    type Output = PackedMontyField31Neon<PMP>;
     #[inline]
-    fn add(self, rhs: PackedMontyField31Neon<FP>) -> PackedMontyField31Neon<FP> {
-        PackedMontyField31Neon::<FP>::from(self) + rhs
+    fn add(self, rhs: PackedMontyField31Neon<PMP>) -> PackedMontyField31Neon<PMP> {
+        PackedMontyField31Neon::<PMP>::from(self) + rhs
     }
 }
 
-impl<FP: FieldParameters> Mul<PackedMontyField31Neon<FP>> for MontyField31<FP> {
-    type Output = PackedMontyField31Neon<FP>;
+impl<PMP: PackedMontyParameters> Mul<PackedMontyField31Neon<PMP>> for MontyField31<PMP> {
+    type Output = PackedMontyField31Neon<PMP>;
     #[inline]
-    fn mul(self, rhs: PackedMontyField31Neon<FP>) -> PackedMontyField31Neon<FP> {
-        PackedMontyField31Neon::<FP>::from(self) * rhs
+    fn mul(self, rhs: PackedMontyField31Neon<PMP>) -> PackedMontyField31Neon<PMP> {
+        PackedMontyField31Neon::<PMP>::from(self) * rhs
     }
 }
 
-impl<FP: FieldParameters> Sub<PackedMontyField31Neon<FP>> for MontyField31<FP> {
-    type Output = PackedMontyField31Neon<FP>;
+impl<PMP: PackedMontyParameters> Sub<PackedMontyField31Neon<PMP>> for MontyField31<PMP> {
+    type Output = PackedMontyField31Neon<PMP>;
     #[inline]
-    fn sub(self, rhs: PackedMontyField31Neon<FP>) -> PackedMontyField31Neon<FP> {
-        PackedMontyField31Neon::<FP>::from(self) - rhs
+    fn sub(self, rhs: PackedMontyField31Neon<PMP>) -> PackedMontyField31Neon<PMP> {
+        PackedMontyField31Neon::<PMP>::from(self) - rhs
     }
 }
 
-impl<FP: FieldParameters> Distribution<PackedMontyField31Neon<FP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31Neon<PMP>> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31Neon<FP> {
-        PackedMontyField31Neon::<FP>(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31Neon<PMP> {
+        PackedMontyField31Neon::<PMP>(rng.gen())
     }
 }
 

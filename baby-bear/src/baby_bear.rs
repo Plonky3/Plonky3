@@ -1,7 +1,7 @@
 use p3_field::{exp_1725656503, exp_u64_by_squaring, AbstractField, Field};
 use p3_monty_31::{
-    to_monty, to_monty_from_array, BarrettParameters, BinomialExtensionData, FieldConstants,
-    FieldParameters, MontyField31, MontyParameters, TwoAdicData,
+    BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
+    PackedMontyParameters, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
@@ -9,8 +9,6 @@ pub type BabyBear = MontyField31<BabyBearParameters>;
 
 #[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialEq)]
 pub struct BabyBearParameters;
-
-impl FieldParameters for BabyBearParameters {}
 
 impl MontyParameters for BabyBearParameters {
     /// The Baby Bear prime: 2^31 - 2^27 + 1.
@@ -21,9 +19,11 @@ impl MontyParameters for BabyBearParameters {
     const MONTY_MU: u32 = 0x88000001;
 }
 
+impl PackedMontyParameters for BabyBearParameters {}
+
 impl BarrettParameters for BabyBearParameters {}
 
-impl FieldConstants for BabyBearParameters {
+impl FieldParameters for BabyBearParameters {
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
         match power {
             1725656503 => exp_1725656503(val), // used to compute x^{1/7}
@@ -60,53 +60,41 @@ impl FieldConstants for BabyBearParameters {
         Some(p1110111111111111111111111111111)
     }
 
-    const MONTY_GEN: u32 = to_monty::<Self>(31);
+    const MONTY_GEN: BabyBear = BabyBear::new(31);
 }
-
-const TWO_ADIC_GENERATORS: [u32; 28] = [
-    0x1, 0x78000000, 0x67055c21, 0x5ee99486, 0xbb4c4e4, 0x2d4cc4da, 0x669d6090, 0x17b56c64,
-    0x67456167, 0x688442f9, 0x145e952d, 0x4fe61226, 0x4c734715, 0x11c33e2a, 0x62c3d2b1, 0x77cad399,
-    0x54c131f4, 0x4cabd6a6, 0x5cf5713f, 0x3e9430e8, 0xba067a3, 0x18adc27d, 0x21fd55bc, 0x4b859b3d,
-    0x3bd57996, 0x4483d85a, 0x3a26eef8, 0x1a427a41,
-];
 
 impl TwoAdicData for BabyBearParameters {
     const TWO_ADICITY: usize = 27;
 
-    type ArrayLike = [u32; Self::TWO_ADICITY + 1];
+    type ArrayLike = [BabyBear; Self::TWO_ADICITY + 1];
 
-    const TWO_ADIC_GENERATORS: Self::ArrayLike =
-        to_monty_from_array::<28, Self>(TWO_ADIC_GENERATORS);
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = BabyBear::new_array([
+        0x1, 0x78000000, 0x67055c21, 0x5ee99486, 0xbb4c4e4, 0x2d4cc4da, 0x669d6090, 0x17b56c64,
+        0x67456167, 0x688442f9, 0x145e952d, 0x4fe61226, 0x4c734715, 0x11c33e2a, 0x62c3d2b1,
+        0x77cad399, 0x54c131f4, 0x4cabd6a6, 0x5cf5713f, 0x3e9430e8, 0xba067a3, 0x18adc27d,
+        0x21fd55bc, 0x4b859b3d, 0x3bd57996, 0x4483d85a, 0x3a26eef8, 0x1a427a41,
+    ]);
 }
 
-const EXT_TWO_ADIC_GENERATORS4: [[u32; 4]; 2] = [[0, 0, 1996171314, 0], [0, 0, 0, 124907976]];
-
 impl BinomialExtensionData<4> for BabyBearParameters {
-    const W: u32 = 11;
-    const DTH_ROOT: u32 = 1728404513;
-    const EXT_GENERATOR: [u32; 4] = [8, 1, 0, 0];
+    const W: BabyBear = BabyBear::new(11);
+    const DTH_ROOT: BabyBear = BabyBear::new(1728404513);
+    const EXT_GENERATOR: [BabyBear; 4] = BabyBear::new_array([8, 1, 0, 0]);
     const EXT_TWO_ADICITY: usize = 29;
-    fn u32_ext_two_adic_generator(bits: usize) -> [u32; 4] {
-        assert!(bits <= <Self as BinomialExtensionData<4>>::EXT_TWO_ADICITY);
-        if bits > Self::TWO_ADICITY {
-            EXT_TWO_ADIC_GENERATORS4[bits - Self::TWO_ADICITY - 1]
-        } else {
-            [TWO_ADIC_GENERATORS[bits], 0, 0, 0]
-        }
-    }
+
+    type ArrayLike = [[BabyBear; 4]; 2];
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
+        BabyBear::new_2d_array([[0, 0, 1996171314, 0], [0, 0, 0, 124907976]]);
 }
 
 impl BinomialExtensionData<5> for BabyBearParameters {
-    const W: u32 = 2;
-    const DTH_ROOT: u32 = 815036133;
-    const EXT_GENERATOR: [u32; 5] = [8, 1, 0, 0, 0];
+    const W: BabyBear = BabyBear::new(2);
+    const DTH_ROOT: BabyBear = BabyBear::new(815036133);
+    const EXT_GENERATOR: [BabyBear; 5] = BabyBear::new_array([8, 1, 0, 0, 0]);
     const EXT_TWO_ADICITY: usize = 27;
 
-    fn u32_ext_two_adic_generator(bits: usize) -> [u32; 5] {
-        assert!(bits <= <Self as BinomialExtensionData<5>>::EXT_TWO_ADICITY);
-
-        [TWO_ADIC_GENERATORS[bits], 0, 0, 0, 0]
-    }
+    type ArrayLike = [[BabyBear; 5]; 0];
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = [];
 }
 
 #[cfg(test)]
@@ -115,7 +103,6 @@ mod tests {
 
     use p3_field::{AbstractField, Field, PrimeField32, PrimeField64, TwoAdicField};
     use p3_field_testing::{test_field, test_two_adic_field};
-    use p3_monty_31::to_monty_array;
 
     use super::*;
 
@@ -136,7 +123,7 @@ mod tests {
     fn test_to_babybear_array() {
         let range_array: [u32; 32] = array::from_fn(|i| i as u32);
         assert_eq!(
-            to_monty_array::<32, BabyBearParameters>(range_array),
+            BabyBear::new_array(range_array),
             range_array.map(F::from_canonical_u32)
         )
     }

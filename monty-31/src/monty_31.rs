@@ -14,23 +14,26 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters};
+use crate::{
+    from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters, MontyParameters,
+    TwoAdicData,
+};
 
-#[derive(Copy, Clone, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
-pub struct MontyField31<FP: FieldParameters> {
+pub struct MontyField31<MP: MontyParameters> {
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
     // likely doing something fishy.
     pub(crate) value: u32,
-    _phantom: PhantomData<FP>,
+    _phantom: PhantomData<MP>,
 }
 
-impl<FP: FieldParameters> MontyField31<FP> {
+impl<MP: MontyParameters> MontyField31<MP> {
     // The standard way to crate a new element.
     // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
     pub const fn new(value: u32) -> Self {
         Self {
-            value: to_monty::<FP>(value),
+            value: to_monty::<MP>(value),
             _phantom: PhantomData,
         }
     }
@@ -44,35 +47,74 @@ impl<FP: FieldParameters> MontyField31<FP> {
             _phantom: PhantomData,
         }
     }
-}
 
-impl<FP: FieldParameters> Ord for MontyField31<FP> {
+    /// Produce a u32 in range [0, P) from a field element corresponding to the true value.
+    pub(crate) fn to_u32(elem: &Self) -> u32 {
+        from_monty::<MP>(elem.value)
+    }
+
+    /// Convert a constant u32 array into a constant array of field elements.
+    /// Constant version of array.map(MontyField31::new) method.
     #[inline]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.as_canonical_u32().cmp(&other.as_canonical_u32())
+    pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
+        let mut output = [MontyField31::new_monty(0); N];
+        let mut i = 0;
+        loop {
+            if i == N {
+                break;
+            }
+            output[i] = MontyField31::new(input[i]);
+            i += 1;
+        }
+        output
+    }
+
+    /// Convert a constant 2d u32 array into a constant 2d array of field elements.
+    /// Constant version of array.map(MontyField31::new_array)
+    #[inline]
+    pub const fn new_2d_array<const N: usize, const M: usize>(
+        input: [[u32; N]; M],
+    ) -> [[Self; N]; M] {
+        let mut output = [[MontyField31::new_monty(0); N]; M];
+        let mut i = 0;
+        loop {
+            if i == M {
+                break;
+            }
+            output[i] = MontyField31::new_array(input[i]);
+            i += 1;
+        }
+        output
     }
 }
 
-impl<FP: FieldParameters> PartialOrd for MontyField31<FP> {
+impl<FP: MontyParameters> Ord for MontyField31<FP> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        MontyField31::to_u32(self).cmp(&MontyField31::to_u32(other))
+    }
+}
+
+impl<FP: MontyParameters> PartialOrd for MontyField31<FP> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<FP: FieldParameters> Display for MontyField31<FP> {
+impl<FP: MontyParameters> Display for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.as_canonical_u32(), f)
+        Display::fmt(&MontyField31::to_u32(self), f)
     }
 }
 
-impl<FP: FieldParameters> Debug for MontyField31<FP> {
+impl<FP: MontyParameters> Debug for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.as_canonical_u32(), f)
+        Debug::fmt(&MontyField31::to_u32(self), f)
     }
 }
 
-impl<FP: FieldParameters> Distribution<MontyField31<FP>> for Standard {
+impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> MontyField31<FP> {
         loop {
@@ -104,16 +146,16 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
     fn zero() -> Self {
-        Self::new_monty(FP::MONTY_ZERO)
+        FP::MONTY_ZERO
     }
     fn one() -> Self {
-        Self::new_monty(FP::MONTY_ONE)
+        FP::MONTY_ONE
     }
     fn two() -> Self {
-        Self::new_monty(FP::MONTY_TWO)
+        FP::MONTY_TWO
     }
     fn neg_one() -> Self {
-        Self::new_monty(FP::MONTY_NEG_ONE)
+        FP::MONTY_NEG_ONE
     }
 
     #[inline]
@@ -166,7 +208,7 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
 
     #[inline]
     fn generator() -> Self {
-        Self::new_monty(FP::MONTY_GEN)
+        FP::MONTY_GEN
     }
 }
 
@@ -247,19 +289,19 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
 
     #[inline]
     fn as_canonical_u32(&self) -> u32 {
-        from_monty::<FP>(self.value)
+        MontyField31::to_u32(self)
     }
 }
 
-impl<FP: FieldParameters> TwoAdicField for MontyField31<FP> {
+impl<FP: FieldParameters + TwoAdicData> TwoAdicField for MontyField31<FP> {
     const TWO_ADICITY: usize = FP::TWO_ADICITY;
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-        Self::new_monty(FP::TWO_ADIC_GENERATORS.as_ref()[bits])
+        FP::TWO_ADIC_GENERATORS.as_ref()[bits]
     }
 }
 
-impl<FP: FieldParameters> Add for MontyField31<FP> {
+impl<FP: MontyParameters> Add for MontyField31<FP> {
     type Output = Self;
 
     #[inline]
@@ -273,14 +315,14 @@ impl<FP: FieldParameters> Add for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> AddAssign for MontyField31<FP> {
+impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl<FP: FieldParameters> Sum for MontyField31<FP> {
+impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
@@ -292,7 +334,7 @@ impl<FP: FieldParameters> Sum for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Sub for MontyField31<FP> {
+impl<FP: MontyParameters> Sub for MontyField31<FP> {
     type Output = Self;
 
     #[inline]
@@ -304,7 +346,7 @@ impl<FP: FieldParameters> Sub for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> SubAssign for MontyField31<FP> {
+impl<FP: MontyParameters> SubAssign for MontyField31<FP> {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
@@ -320,7 +362,7 @@ impl<FP: FieldParameters> Neg for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Mul for MontyField31<FP> {
+impl<FP: MontyParameters> Mul for MontyField31<FP> {
     type Output = Self;
 
     #[inline]
@@ -330,7 +372,7 @@ impl<FP: FieldParameters> Mul for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> MulAssign for MontyField31<FP> {
+impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
@@ -352,25 +394,4 @@ impl<FP: FieldParameters> Div for MontyField31<FP> {
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
-}
-
-/// Convert a constant u32 array into a constant field array saved in monty form.
-/// Long term this might? be removed.
-/// TODO: Decide on if this is worth keeping around.
-/// BabyBear/KoalaBear crates do need a way to save some constants in MONTY form.
-#[inline]
-#[must_use]
-pub const fn to_monty_array<const N: usize, FP: FieldParameters>(
-    input: [u32; N],
-) -> [MontyField31<FP>; N] {
-    let mut output = [MontyField31::new_monty(0); N];
-    let mut i = 0;
-    loop {
-        if i == N {
-            break;
-        }
-        output[i].value = to_monty::<FP>(input[i]);
-        i += 1;
-    }
-    output
 }

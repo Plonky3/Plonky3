@@ -1,13 +1,13 @@
 use core::arch::aarch64::{int32x4_t, uint32x4_t};
 use core::mem::transmute;
 
-use p3_monty_31::{FieldParametersNeon, PackedMontyField31Neon};
+use p3_monty_31::{MontyParametersNeon, PackedMontyField31Neon};
 
 use crate::KoalaBearParameters;
 
 const WIDTH: usize = 4;
 
-impl FieldParametersNeon for KoalaBearParameters {
+impl MontyParametersNeon for KoalaBearParameters {
     const PACKEDP: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7f000001; WIDTH]) };
     // This MU is the same 0x88000001 as elsewhere, just interpreted as an `i32`.
     const PACKEDMU: int32x4_t = unsafe { transmute::<[i32; WIDTH], _>([-0x7effffff; WIDTH]) };
@@ -18,13 +18,13 @@ pub type PackedKoalaBearNeon = PackedMontyField31Neon<KoalaBearParameters>;
 #[cfg(test)]
 mod tests {
     use p3_field_testing::test_packed_field;
-    use p3_monty_31::{to_monty_array, PackedMontyField31Neon};
+    use p3_monty_31::PackedMontyField31Neon;
 
     use super::WIDTH;
     use crate::{KoalaBear, KoalaBearParameters};
 
     const SPECIAL_VALS: [KoalaBear; WIDTH] =
-        to_monty_array([0x00000000, 0x00000001, 0x00000002, 0x7f000000]);
+        KoalaBear::new_array([0x00000000, 0x00000001, 0x00000002, 0x7f000000]);
 
     test_packed_field!(
         crate::PackedKoalaBearNeon,
@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn test_cube_vs_mul() {
-        let vec = PackedMontyField31Neon::<KoalaBearParameters>(to_koalabear_array([
+        let vec = PackedMontyField31Neon::<KoalaBearParameters>(KoalaBear::new_array([
             0x4efd5eaf, 0x311b8e0c, 0x74dd27c1, 0x449613f0,
         ]));
         let res0 = vec * vec.square();
@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn test_cube_vs_scalar() {
-        let arr = to_monty_array([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]);
+        let arr = KoalaBear::new_array([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]);
 
         let vec = PackedMontyField31Neon::<KoalaBearParameters>(arr);
         let vec_res = vec.cube();
