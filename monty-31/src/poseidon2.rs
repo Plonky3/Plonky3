@@ -3,10 +3,10 @@ use core::marker::PhantomData;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{monty_reduce, FieldParameters, MontyField31};
+use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters};
 
 /// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + D(v).
-pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize> {
+pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Clone + Sync {
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
     type ArrayLike: AsRef<[u8]> + Sized;
 
@@ -35,12 +35,10 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize> {
 
 /// For a given field, we need to implement DiffusionMatrixParameters for several different WIDTHS.
 /// Some code can be shared between the different sizes.
-pub trait MultipleDiffusionMatrixParameters<FP: FieldParameters>:
-    DiffusionMatrixParameters<FP, 16> + DiffusionMatrixParameters<FP, 24> + Clone + Sync
-{
+pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
     // This is currently needed for Packed Field impls.
     // It can/will be removed once we have vectorized implementations.
-    const MONTY_INVERSE: MontyField31<FP> = MontyField31::<FP>::new_monty(1);
+    const MONTY_INVERSE: MontyField31<MP> = MontyField31::new_monty(1);
 }
 
 // Would be good to try and find a way to cut down on PhantomData.
@@ -48,14 +46,14 @@ pub trait MultipleDiffusionMatrixParameters<FP: FieldParameters>:
 pub struct DiffusionMatrixMontyField31<FP, MP>
 where
     FP: FieldParameters,
-    MP: MultipleDiffusionMatrixParameters<FP>,
+    MP: Clone,
 {
     _phantom1: PhantomData<FP>,
     _phantom2: PhantomData<MP>,
 }
 
-impl<FP, const WIDTH: usize, MP: MultipleDiffusionMatrixParameters<FP>>
-    Permutation<[MontyField31<FP>; WIDTH]> for DiffusionMatrixMontyField31<FP, MP>
+impl<FP, const WIDTH: usize, MP> Permutation<[MontyField31<FP>; WIDTH]>
+    for DiffusionMatrixMontyField31<FP, MP>
 where
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
@@ -66,8 +64,8 @@ where
     }
 }
 
-impl<FP, const WIDTH: usize, MP: MultipleDiffusionMatrixParameters<FP>>
-    DiffusionPermutation<MontyField31<FP>, WIDTH> for DiffusionMatrixMontyField31<FP, MP>
+impl<FP, const WIDTH: usize, MP> DiffusionPermutation<MontyField31<FP>, WIDTH>
+    for DiffusionMatrixMontyField31<FP, MP>
 where
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
