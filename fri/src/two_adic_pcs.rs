@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
@@ -84,8 +84,10 @@ where
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
-    Challenger:
-        CanObserve<FriMmcs::Commitment> + CanSample<Challenge> + GrindingChallenger<Witness = Val>,
+    Challenger: CanObserve<FriMmcs::Commitment>
+        + CanSample<Challenge>
+        + GrindingChallenger<Witness = Val>
+        + FieldChallenger<Val>,
     <InputMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>: Clone,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
