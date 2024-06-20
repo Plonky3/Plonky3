@@ -61,6 +61,32 @@ pub struct Poseidon2AVX2M31 {
 pub struct Packed64bitM31Matrix([__m256i; 4]);
 
 impl Packed64bitM31Matrix {
+    /// Convert an array of packed field elements into a Packed64bitM31Matrix prepared for Poseidon2
+    fn from_packed_field_array(input: [PackedMersenne31AVX2; 2]) -> Packed64bitM31Matrix {
+        unsafe {
+            // Safety: `PackedMersenne31AVX2, Mersenne31, Packed64bitM31Matrix` are all `repr(transparent)`
+            // Thus [PackedMersenne31AVX2; 2] can be transmuted to/from [u32; 16] and
+            // Packed64bitM31Matrix can be transmuted to/from [u64; 16];
+            let array_u32: [u32; 16] = transmute(input);
+            let mut output: Packed64bitM31Matrix = transmute(array_u32.map(|x| x as u64));
+            output.transpose(); // TODO: these should be removed, but it changes the interpretation of the permutation so will involve a change to the scalar version too.
+            output
+        }
+    }
+
+    /// Convert a Packed64bitM31Matrix back into an array of packed field elements.
+    /// The input may not be in canonical form.
+    fn to_packed_field_array(mut input: Packed64bitM31Matrix) -> [PackedMersenne31AVX2; 2] {
+        unsafe {
+            // Safety: `PackedMersenne31AVX2, Mersenne31, Packed64bitM31Matrix` are all `repr(transparent)`
+            // Thus [PackedMersenne31AVX2; 2] can be transmuted to/from [u32; 16] and
+            // Packed64bitM31Matrix can be transmuted to/from [u64; 16];
+            input.full_reduce();
+            input.transpose(); // TODO: these should be removed, but it changes the interpretation of the permutation so will involve a change to the scalar version too.
+            let output: [u32; 16] = transmute::<_, [u64; 16]>(input).map(|x| x as u32);
+            transmute(output)
+        }
+    }
     /// Compute the transpose of the given matrix.
     pub fn transpose(&mut self) {
         unsafe {
@@ -139,7 +165,7 @@ impl Packed64bitM31Matrix {
         }
     }
 
-    /// Do a single round of M31 reduction on each element.
+    /// Do a single round of M31 reduction on each element to return an vectors of element in [0, 2^32).
     fn reduce(&mut self) {
         self.0[0] = reduce(self.0[0]);
         self.0[1] = reduce(self.0[1]);
@@ -147,7 +173,7 @@ impl Packed64bitM31Matrix {
         self.0[3] = reduce(self.0[3]);
     }
 
-    /// Do a single round of M31 reduction on each element.
+    /// Do a full M31 reduction on each element to return an vectors of element in [0, P).
     fn full_reduce(&mut self) {
         self.0[0] = full_reduce(self.0[0]);
         self.0[1] = full_reduce(self.0[1]);
@@ -324,56 +350,77 @@ fn joint_sbox(x: __m256i) -> __m256i {
     }
 }
 
+/// A single External Round.
+/// Note that we change the order to be mat_mul -> RC -> S-box (instead of RC -> S-box -> mat_mul in the paper).
+/// Input does not need to be in canonical form, < 2^50 is fine.
+/// Output will be < 2^33.
+fn rotated_external_round(state: &mut Packed64bitM31Matrix, round_constant: &Packed64bitM31Matrix) {
+    state.mat_mul_aes();
+    state.right_mat_mul_i_plus_1();
+    state.add_rc(*round_constant);
+    state.full_reduce();
+    state.joint_sbox();
+}
+
+/// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
+pub(crate) fn initial_external_rounds(
+    state: &mut Packed64bitM31Matrix,
+    round_constants: &[Packed64bitM31Matrix],
+) {
+    for round_constant in round_constants.iter() {
+        rotated_external_round(state, round_constant)
+    }
+
+    state.mat_mul_aes();
+    state.right_mat_mul_i_plus_1();
+    state.full_reduce(); // Might be able to get away with not doing this.
+}
+
+/// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
+pub(crate) fn internal_rounds(state: &mut Packed64bitM31Matrix, round_constants: &[u32]) {
+    for round_constant in round_constants.iter() {
+        state.internal_round(*round_constant)
+    }
+}
+
+// We finish by doing rf/2 external rounds again. Due to an ordering change we start by doing a "half round" and finish by a matmul.
+pub(crate) fn final_external_rounds(
+    state: &mut Packed64bitM31Matrix,
+    round_constants: &[Packed64bitM31Matrix],
+) {
+    state.add_rc(round_constants[0]);
+    state.full_reduce(); // Can possibly do something cheaper than full reduce here?
+    state.joint_sbox();
+
+    for round_constant in round_constants.iter().skip(1) {
+        rotated_external_round(state, round_constant)
+    }
+
+    state.mat_mul_aes();
+    state.right_mat_mul_i_plus_1();
+    // Output is not reduced.
+}
+
 /// External Poseidon Rounds
 impl Poseidon2AVX2M31 {
-    /// A single External Round.
-    /// Note that we change the order to be mat_mul -> RC -> S-box (instead of RC -> S-box -> mat_mul in the paper).
-    /// Input does not need to be in canonical form, < 2^50 is fine.
-    /// Output will be < 2^33.
-    fn rotated_external_round(&self, state: &mut Packed64bitM31Matrix, index: usize) {
-        let round_constant = self.external_round_constants[index];
-        state.mat_mul_aes();
-        state.right_mat_mul_i_plus_1();
-        state.add_rc(round_constant);
-        state.full_reduce();
-        state.joint_sbox();
-    }
-
     /// The poseidon2 permutation.
-    pub fn poseidon2(&self, state: &mut Packed64bitM31Matrix) {
+    pub fn poseidon2(&self, state: [PackedMersenne31AVX2; 2]) -> [PackedMersenne31AVX2; 2] {
         // We start by doing rf/2 external rounds followed by a mat_mul.
         let half_rf = self.rounds_f / 2;
-        for index in 0..half_rf {
-            self.rotated_external_round(state, index)
-        }
+        let mut internal_state = Packed64bitM31Matrix::from_packed_field_array(state);
+        initial_external_rounds(
+            &mut internal_state,
+            &self.external_round_constants[..half_rf],
+        );
 
-        state.mat_mul_aes();
-        state.right_mat_mul_i_plus_1();
-        state.full_reduce();
+        // Next we do the Internal Rounds
+        internal_rounds(&mut internal_state, &self.internal_round_constants);
 
-        // TODO: Internal Rounds
-        for index in 0..self.rounds_p {
-            state.internal_round(self.internal_round_constants[index])
-        }
-
-        // We finish by doing rf/2 external rounds again. Due to an ordering change we start by doing a "half round" and finish by a matmul.
-        state.add_rc(self.external_round_constants[half_rf]);
-        state.full_reduce(); // Can possibly do something cheaper than full reduce here?
-        state.joint_sbox();
-
-        for index in (1 + half_rf)..self.rounds_f {
-            self.rotated_external_round(state, index)
-        }
-
-        state.mat_mul_aes();
-        state.right_mat_mul_i_plus_1();
-        state.full_reduce();
-    }
-
-    pub fn poseidon2_non_mut(&self, state: Packed64bitM31Matrix) -> Packed64bitM31Matrix {
-        let mut output = state;
-        Self::poseidon2(self, &mut output);
-        output
+        final_external_rounds(
+            &mut internal_state,
+            &self.external_round_constants[half_rf..],
+        );
+        Packed64bitM31Matrix::to_packed_field_array(internal_state)
     }
 }
 
@@ -382,16 +429,16 @@ mod tests {
     use alloc::vec::Vec;
     use core::mem::transmute;
 
-    use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_field::{AbstractField, PrimeField32};
+    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral, Poseidon2Fast};
     use p3_symmetric::Permutation;
     use rand::distributions::Standard;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use crate::{
-        DiffusionMatrixMersenne31, Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2,
-        Poseidon2AVX2M31,
+        final_external_rounds, initial_external_rounds, internal_rounds, DiffusionMatrixMersenne31,
+        Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2, Poseidon2AVX2M31,
     };
 
     type F = Mersenne31;
@@ -469,50 +516,23 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input: Packed64bitM31Matrix =
-            unsafe { transmute(input.map(|x| x.value as u64)) };
+        let avx2_input: [PackedMersenne31AVX2; 2] = unsafe { transmute(input) };
         let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
 
-        let (external_constants, internal_constants) = unsafe {
-            let external_consts_f = (&mut rng)
-                .sample_iter(Standard)
-                .take(ROUNDS_F)
-                .collect::<Vec<[F; WIDTH]>>();
-            let internal_constants_f = (&mut rng)
-                .sample_iter(Standard)
-                .take(ROUNDS_P)
-                .collect::<Vec<F>>();
+        let vector_poseidon_2: Poseidon2Fast<PackedMersenne31AVX2, Packed64bitM31Matrix, u32, 2> =
+            Poseidon2Fast::new_from_rng_128::<Xoroshiro128Plus, 5>(
+                Packed64bitM31Matrix::from_packed_field_array,
+                Packed64bitM31Matrix::to_packed_field_array,
+                |x| x.as_canonical_u32(),
+                initial_external_rounds,
+                internal_rounds,
+                final_external_rounds,
+                &mut rng,
+            );
 
-            let ex_con_avx2 = external_consts_f
-                .into_iter()
-                .map(|arr| {
-                    let mut mat: Packed64bitM31Matrix = transmute(arr.map(|x| x.value as u64));
-                    mat.transpose();
-                    mat
-                })
-                .collect::<Vec<Packed64bitM31Matrix>>();
-            let in_con_avx2 = internal_constants_f
-                .into_iter()
-                .map(|elem| elem.value)
-                .collect::<Vec<u32>>();
-            (ex_con_avx2, in_con_avx2)
-        };
+        let avx2_output = vector_poseidon_2.permute(avx2_input);
 
-        let p2 = Poseidon2AVX2M31 {
-            rounds_f: ROUNDS_F,
-            external_round_constants: external_constants,
-            rounds_p: ROUNDS_P,
-            internal_round_constants: internal_constants,
-        };
-
-        avx2_input.transpose();
-        p2.poseidon2(&mut avx2_input);
-        avx2_input.full_reduce();
-        avx2_input.transpose();
-
-        let output: [F; 16] = unsafe {
-            transmute::<_, [u64; 16]>(avx2_input).map(|elem| Mersenne31 { value: elem as u32 })
-        };
+        let output: [F; 16] = unsafe { transmute(avx2_output) };
 
         assert_eq!(output, expected)
     }

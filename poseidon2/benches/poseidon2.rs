@@ -8,7 +8,8 @@ use p3_field::{PrimeField, PrimeField32, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{
-    DiffusionMatrixMersenne31, Mersenne31, Packed64bitM31Matrix, Poseidon2AVX2M31,
+    DiffusionMatrixMersenne31, Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2,
+    Poseidon2AVX2M31,
 };
 use p3_poseidon2::{
     DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral,
@@ -137,11 +138,11 @@ fn poseidon2_avx2_m31(c: &mut Criterion) {
         internal_round_constants: internal_constants,
     };
 
-    let avx2_input: Packed64bitM31Matrix = unsafe { transmute([0_u64; 16]) };
+    let avx2_input: [PackedMersenne31AVX2; 2] = unsafe { transmute([0_u32; 16]) };
     let name = "poseidon2_avx2_Mersenne31";
     let id = BenchmarkId::new(name, 16);
     c.bench_with_input(id, &avx2_input, |b, &avx2_input| {
-        b.iter(|| p2.poseidon2_non_mut(avx2_input))
+        b.iter(|| p2.poseidon2(avx2_input))
     });
 }
 criterion_group!(benches, bench_poseidon2);

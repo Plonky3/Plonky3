@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 pub use diffusion::{matmul_internal, DiffusionPermutation};
 pub use matrix::*;
-use p3_field::{AbstractField, PrimeField, PrimeField64};
+use p3_field::{AbstractField, PackedField, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -23,7 +23,7 @@ pub use round_numbers::poseidon2_round_numbers_128;
 
 const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
-/// The Poseidon2 permutation.
+/// The Basic Poseidon2 permutation.
 #[derive(Clone, Debug)]
 pub struct Poseidon2<F, MdsLight, Diffusion, const WIDTH: usize, const D: u64> {
     /// The number of external rounds.
@@ -202,5 +202,137 @@ where
     AF::F: PrimeField,
     MdsLight: MdsLightPermutation<AF, WIDTH>,
     Diffusion: DiffusionPermutation<AF, WIDTH>,
+{
+}
+
+/// A Poseidon2 abstraction allowing for fast Packed Field implementations.
+/// F is the field from which the input variables are drawn.
+/// T is the internal working type.
+/// TODO: THIS WILL NEED CHANGES AS IMPLEMENTATIONS DEMAND.
+/// EVENTUALLY WILL REPLACE MAIN POSEIDON2 TYPE
+#[derive(Clone, Debug)]
+pub struct Poseidon2Fast<F, T, U, const WIDTH: usize> {
+    /// Convert from external to internal representation
+    convert_to: fn([F; WIDTH]) -> T,
+
+    /// Convert from internal to external representation
+    convert_back: fn(T) -> [F; WIDTH],
+
+    /// The external round constants for the initial set of external rounds.
+    initial_external_constants: Vec<T>,
+
+    /// The initial external layer.
+    initial_external_layer: fn(&mut T, &[T]),
+
+    /// The internal round constants.
+    internal_constants: Vec<U>,
+
+    /// The internal layer.
+    internal_layer: fn(&mut T, &[U]),
+
+    /// The external round constants for the final set of external rounds.
+    final_external_constants: Vec<T>,
+
+    /// The final external layer.
+    final_external_layer: fn(&mut T, &[T]),
+}
+
+impl<F, T, U, const WIDTH: usize> Poseidon2Fast<F, T, U, WIDTH>
+where
+    F: PackedField,
+    F::Scalar: PrimeField64,
+{
+    /// Create a new Poseidon2 configuration.
+    /// TODO: Fix up this function.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        convert_to: fn([F; WIDTH]) -> T,
+        convert_back: fn(T) -> [F; WIDTH],
+        initial_external_constants: Vec<T>,
+        initial_external_layer: fn(&mut T, &[T]),
+        internal_constants: Vec<U>,
+        internal_layer: fn(&mut T, &[U]),
+        final_external_constants: Vec<T>,
+        final_external_layer: fn(&mut T, &[T]),
+    ) -> Self {
+        // Need to determine supported widths later.
+        // assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
+        Self {
+            convert_to,
+            convert_back,
+            initial_external_constants,
+            initial_external_layer,
+            internal_constants,
+            internal_layer,
+            final_external_constants,
+            final_external_layer,
+        }
+    }
+
+    /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
+    pub fn new_from_rng_128<R: Rng, const D: u64>(
+        convert_to: fn([F; WIDTH]) -> T,
+        convert_back: fn(T) -> [F; WIDTH],
+        to_u: fn(F::Scalar) -> U,
+        initial_external_layer: fn(&mut T, &[T]),
+        internal_layer: fn(&mut T, &[U]),
+        final_external_layer: fn(&mut T, &[T]),
+        rng: &mut R,
+    ) -> Self
+    where
+        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        Standard: Distribution<F::Scalar> + Distribution<[F::Scalar; WIDTH]>,
+    {
+        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F::Scalar>(F::WIDTH * WIDTH, D);
+        let half_f = rounds_f / 2;
+
+        let initial_external_constants = rng
+            .sample_iter(Standard)
+            .take(half_f)
+            .map(convert_to)
+            .collect();
+
+        let final_external_constants = rng
+            .sample_iter(Standard)
+            .take(half_f)
+            .map(convert_to)
+            .collect();
+
+        let internal_constants = rng.sample_iter(Standard).take(rounds_p).map(to_u).collect();
+
+        Self {
+            convert_to,
+            convert_back,
+            initial_external_constants,
+            initial_external_layer,
+            internal_constants,
+            internal_layer,
+            final_external_constants,
+            final_external_layer,
+        }
+    }
+}
+
+impl<F, T, U, const WIDTH: usize> Permutation<[F; WIDTH]> for Poseidon2Fast<F, T, U, WIDTH>
+where
+    F: Clone + Copy,
+    T: Clone + Copy + Sync,
+    U: Clone + Sync,
+{
+    fn permute_mut(&self, state: &mut [F; WIDTH]) {
+        let mut internal_rep = (self.convert_to)(*state);
+        (self.initial_external_layer)(&mut internal_rep, &self.initial_external_constants);
+        (self.internal_layer)(&mut internal_rep, &self.internal_constants);
+        (self.final_external_layer)(&mut internal_rep, &self.final_external_constants);
+        *state = (self.convert_back)(internal_rep)
+    }
+}
+
+impl<F, T, U, const WIDTH: usize> CryptographicPermutation<[F; WIDTH]>
+    for Poseidon2Fast<F, T, U, WIDTH>
+where
+    F: Clone + Copy,
+    T: Clone + Copy + Sync,
+    U: Clone + Sync,
 {
 }
