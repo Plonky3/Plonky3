@@ -68,23 +68,23 @@ impl<F: Field> Point<F> {
         self.x
     }
 
-    /// Evaluate the formal derivative of `v_n`
+    /// Evaluate the formal derivative of `v_n` at `self`
     /// Circle STARKs, Section 5.1, Remark 15 (page 21 of the first revision PDF)
     pub fn v_n_prime(self, log_n: usize) -> F {
         F::two().exp_u64((2 * (log_n - 1)) as u64) * (1..log_n).map(|i| self.v_n(i)).product()
     }
 
-    /// Evaluate the selector function which is zero at p and nonzero elsewhere.
+    /// Evaluate the selector function which is zero at `self` and nonzero elsewhere, at `at`.
     /// Called v_0 . T_p⁻¹ or ṽ_p(x,y) in the paper, used for constraint selectors.
     /// Panics if p = -self, the pole.
     /// Section 5.1, Lemma 11 of Circle Starks (page 21 of first edition PDF)
-    pub fn selector<EF: ExtensionField<F>>(self, p: Point<EF>) -> EF {
-        (p - self).to_projective_line().unwrap()
+    pub fn v_tilde_p<EF: ExtensionField<F>>(self, at: Point<EF>) -> EF {
+        (at - self).to_projective_line().unwrap()
     }
 
-    /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P, used for normalization.
+    /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P=self, used for normalization.
     /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
-    pub fn s_p(self, log_n: usize) -> F {
+    pub fn s_p_at_p(self, log_n: usize) -> F {
         -F::two() * self.v_n_prime(log_n) * self.y
     }
 
@@ -92,9 +92,9 @@ impl<F: Field> Point<F> {
     /// Returns (a, b), representing the complex number a + bi.
     /// Simple zero at p, simple pole at +-infinity.
     /// Circle STARKs, Section 3.3, Equation 11 (page 11 of the first edition PDF).
-    pub fn v_p<EF: ExtensionField<F>>(self, p: Point<EF>) -> (EF, EF) {
-        let x_minus_p = -p + self;
-        (EF::one() - x_minus_p.x, -x_minus_p.y)
+    pub fn v_p<EF: ExtensionField<F>>(self, at: Point<EF>) -> (EF, EF) {
+        let diff = -at + self;
+        (EF::one() - diff.x, -diff.y)
     }
 }
 

@@ -100,12 +100,15 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     }
 
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
-        let v_n = point.v_n(self.domain.log_n) - self.domain.shift.v_n(self.domain.log_n);
-        let basis = cfft_permute_slice(&self.domain.lagrange_basis(point));
-        self.values
-            .columnwise_dot_product(&basis)
+        let lagrange_num = self.domain.zeroifier(point);
+        let lagrange_den = cfft_permute_slice(&self.domain.points().collect_vec())
             .into_iter()
-            .map(|x| x * v_n)
+            .map(|p| p.v_tilde_p(point) * p.s_p_at_p(self.domain.log_n))
+            .collect_vec();
+        self.values
+            .columnwise_dot_product(&batch_multiplicative_inverse(&lagrange_den))
+            .into_iter()
+            .map(|x| x * lagrange_num)
             .collect_vec()
     }
 

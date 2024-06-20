@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::{iterate, Itertools};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, ExtensionField};
+use p3_field::ExtensionField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -80,27 +80,16 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         }
     }
 
-    /// Computes the lagrange basis at point, not yet normalized by the value of the domain
-    /// vanishing poly, since that is more efficient to compute after the dot product.
-    #[instrument(skip_all, fields(log_n = %self.log_n))]
-    pub(crate) fn lagrange_basis<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
-        let domain = self.points().collect_vec();
+    pub(crate) fn zeroifier<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
+        at.v_n(self.log_n) - self.shift.v_n(self.log_n)
+    }
 
-        // the denominator so that the lagrange basis is normalized to 1
-        // TODO: this depends only on domain, so should be precomputed
-        let lagrange_normalizer: Vec<F> = domain.iter().map(|p| p.s_p(self.log_n)).collect();
+    pub(crate) fn s_p<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
+        self.zeroifier(at) / p.v_tilde_p(at)
+    }
 
-        let basis = domain
-            .into_iter()
-            .zip(&lagrange_normalizer)
-            .map(|(p, &ln)| {
-                // ext * base
-                // TODO: this can be sped up
-                (point - p).to_projective_line().unwrap() * ln
-            })
-            .collect_vec();
-
-        batch_multiplicative_inverse(&basis)
+    pub(crate) fn s_p_normalized<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
+        self.zeroifier(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
     }
 }
 
@@ -147,23 +136,19 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     }
 
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
-        Point::from_projective_line(point).v_n(self.log_n) - self.shift.v_n(self.log_n)
+        self.zeroifier(Point::from_projective_line(point))
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
     ) -> LagrangeSelectors<Ext> {
-        let zeroifier = self.zp_at_point(point);
         let point = Point::from_projective_line(point);
-        let is_first_row = zeroifier / self.shift.selector(point);
-        let is_last_row = zeroifier / (-self.shift).selector(point);
-        let is_transition = Ext::one() - is_last_row / (-self.shift).s_p(self.log_n).into();
         LagrangeSelectors {
-            is_first_row,
-            is_last_row,
-            is_transition,
-            inv_zeroifier: zeroifier.inverse(),
+            is_first_row: self.s_p(self.shift, point),
+            is_last_row: self.s_p(-self.shift, point),
+            is_transition: Ext::one() - self.s_p_normalized(-self.shift, point),
+            inv_zeroifier: self.zeroifier(point).inverse(),
         }
     }
 
@@ -248,7 +233,7 @@ mod tests {
 
     use hashbrown::HashSet;
     use itertools::izip;
-    use p3_field::AbstractField;
+    use p3_field::{batch_multiplicative_inverse, AbstractField};
     use p3_mersenne_31::Mersenne31;
     use rand::thread_rng;
 
