@@ -156,21 +156,19 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     ) -> LagrangeSelectors<Ext> {
         let zeroifier = self.zp_at_point(point);
         let point = Point::from_projective_line(point);
+        let is_first_row = zeroifier / self.shift.selector(point);
+        let is_last_row = zeroifier / (-self.shift).selector(point);
+        let is_transition = Ext::one() - is_last_row / (-self.shift).s_p(self.log_n).into();
         LagrangeSelectors {
-            is_first_row: zeroifier / (point - self.shift).to_projective_line().unwrap(),
-            is_last_row: zeroifier / (point + self.shift).to_projective_line().unwrap(),
-            // This is the transition selector from the paper, but seems to send
-            // the quotient out of FFT space. It has a simple zero at the last point
-            // and a simple pole at the negation of the last point.
-            // is_transition: v_0(self.shift.rotate(p)),
-            // Instead we use this selector which has two zeros at the last point,
-            // which seems to work. TODO: More investigation is needed.
-            is_transition: (point + self.shift).x - Ext::one(),
+            is_first_row,
+            is_last_row,
+            is_transition,
             inv_zeroifier: zeroifier.inverse(),
         }
     }
 
     // wow, really slow!
+    // todo: batch inverses
     #[instrument(skip_all, fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
         let sels = coset
@@ -246,6 +244,8 @@ fn forward_backward_index(mut i: usize, len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
+
     use hashbrown::HashSet;
     use itertools::izip;
     use p3_field::AbstractField;
@@ -253,6 +253,7 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
+    use crate::CircleEvaluations;
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
         let pts = d.points().collect_vec();
@@ -340,6 +341,74 @@ mod tests {
                 "split domains and evals correspond to orig domains and evals"
             );
         }
+    }
+
+    #[test]
+    fn selectors() {
+        type F = Mersenne31;
+        let log_n = 8;
+        let n = 1 << log_n;
+
+        let d = CircleDomain::<F>::standard(log_n);
+        let coset = d.create_disjoint_domain(n);
+        let sels = d.selectors_on_coset(coset);
+
+        // selectors_on_coset matches selectors_at_point
+        let mut pt = coset.first_point();
+        for i in 0..coset.size() {
+            let pt_sels = d.selectors_at_point(pt);
+            assert_eq!(sels.is_first_row[i], pt_sels.is_first_row);
+            assert_eq!(sels.is_last_row[i], pt_sels.is_last_row);
+            assert_eq!(sels.is_transition[i], pt_sels.is_transition);
+            assert_eq!(sels.inv_zeroifier[i], pt_sels.inv_zeroifier);
+            pt = coset.next_point(pt).unwrap();
+        }
+
+        let coset_to_d = |evals: &[F]| {
+            let evals = CircleEvaluations::from_natural_order(
+                coset,
+                RowMajorMatrix::new_col(evals.to_vec()),
+            );
+            let coeffs = evals.interpolate().to_row_major_matrix();
+            let (lo, hi) = coeffs.split_rows(n);
+            assert_eq!(hi.values, vec![F::zero(); n]);
+            CircleEvaluations::evaluate(d, lo.to_row_major_matrix())
+                .to_natural_order()
+                .to_row_major_matrix()
+                .values
+        };
+
+        // Nonzero at first point, zero everywhere else on domain
+        let is_first_row = coset_to_d(&sels.is_first_row);
+        assert_ne!(is_first_row[0], F::zero());
+        assert_eq!(&is_first_row[1..], &vec![F::zero(); n - 1]);
+
+        // Nonzero at last point, zero everywhere else on domain
+        let is_last_row = coset_to_d(&sels.is_last_row);
+        assert_eq!(&is_last_row[..n - 1], &vec![F::zero(); n - 1]);
+        assert_ne!(is_last_row[n - 1], F::zero());
+
+        // Nonzero everywhere on domain but last point
+        let is_transition = coset_to_d(&sels.is_transition);
+        assert_ne!(&is_transition[..n - 1], &vec![F::zero(); n - 1]);
+        assert_eq!(is_transition[n - 1], F::zero());
+
+        // Zeroifier coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
+        let z_coeffs = CircleEvaluations::from_natural_order(
+            coset,
+            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_zeroifier)),
+        )
+        .interpolate()
+        .to_row_major_matrix()
+        .values;
+        assert_eq!(
+            z_coeffs,
+            iter::empty()
+                .chain(iter::repeat(F::zero()).take(n))
+                .chain(iter::once(F::one()))
+                .chain(iter::repeat(F::zero()).take(n - 1))
+                .collect_vec()
+        );
     }
 
     #[test]

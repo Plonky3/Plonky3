@@ -74,18 +74,27 @@ impl<F: Field> Point<F> {
         F::two().exp_u64((2 * (log_n - 1)) as u64) * (1..log_n).map(|i| self.v_n(i)).product()
     }
 
-    /// Evaluate the single-point vanishing function v_p(x). Used for DEEP quotient.
+    /// Evaluate the selector function which is zero at p and nonzero elsewhere.
+    /// Called v_0 . T_p⁻¹ or ṽ_p(x,y) in the paper, used for constraint selectors.
+    /// Panics if p = -self, the pole.
+    /// Section 5.1, Lemma 11 of Circle Starks (page 21 of first edition PDF)
+    pub fn selector<EF: ExtensionField<F>>(self, p: Point<EF>) -> EF {
+        (p - self).to_projective_line().unwrap()
+    }
+
+    /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P, used for normalization.
+    /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
+    pub fn s_p(self, log_n: usize) -> F {
+        -F::two() * self.v_n_prime(log_n) * self.y
+    }
+
+    /// Evaluate the alternate single-point vanishing function v_p(x), used for DEEP quotient.
+    /// Returns (a, b), representing the complex number a + bi.
     /// Simple zero at p, simple pole at +-infinity.
     /// Circle STARKs, Section 3.3, Equation 11 (page 11 of the first edition PDF).
     pub fn v_p<EF: ExtensionField<F>>(self, p: Point<EF>) -> (EF, EF) {
         let x_minus_p = -p + self;
         (EF::one() - x_minus_p.x, -x_minus_p.y)
-    }
-
-    /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P, used for normalization to 1.
-    /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
-    pub fn s_p(self, log_n: usize) -> F {
-        -F::two() * self.v_n_prime(log_n) * self.y
     }
 }
 
