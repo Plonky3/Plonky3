@@ -4,19 +4,20 @@ use std::mem::transmute;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
-use p3_field::{PrimeField, PrimeField32, PrimeField64};
+use p3_field::{PackedValue, PrimeField, PrimeField32, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{
-    DiffusionMatrixMersenne31, Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2,
-    Poseidon2AVX2M31,
+    final_external_rounds, initial_external_rounds, internal_rounds, DiffusionMatrixMersenne31,
+    Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2,
 };
 use p3_poseidon2::{
     DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral,
+    Poseidon2Fast,
 };
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
     poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>(c);
@@ -105,44 +106,28 @@ where
 }
 
 fn poseidon2_avx2_m31(c: &mut Criterion) {
-    type F = Mersenne31;
-    const WIDTH: usize = 16;
-    const ROUNDS_F: usize = 8;
-    const ROUNDS_P: usize = 14;
+    const PACKED_WIDTH: usize = 2;
+    const FULL_WIDTH: usize = PACKED_WIDTH * PackedMersenne31AVX2::WIDTH;
+
     let mut rng = thread_rng();
 
-    let (external_constants, internal_constants) = unsafe {
-        let external_consts_f = (&mut rng)
-            .sample_iter(Standard)
-            .take(ROUNDS_F)
-            .collect::<Vec<[F; WIDTH]>>();
-        let internal_constants_f = (&mut rng)
-            .sample_iter(Standard)
-            .take(ROUNDS_P)
-            .collect::<Vec<F>>();
-        let ex_con_avx2 = external_consts_f
-            .into_iter()
-            .map(|arr| transmute(arr.map(|x| x.as_canonical_u32() as u64)))
-            .collect::<Vec<Packed64bitM31Matrix>>();
-        let in_con_avx2 = internal_constants_f
-            .into_iter()
-            .map(|elem| elem.as_canonical_u32())
-            .collect::<Vec<u32>>();
-        (ex_con_avx2, in_con_avx2)
-    };
+    let poseidon_2: Poseidon2Fast<PackedMersenne31AVX2, Packed64bitM31Matrix, u32, PACKED_WIDTH> =
+        Poseidon2Fast::new_from_rng_128::<_, 5>(
+            Packed64bitM31Matrix::from_packed_field_array,
+            Packed64bitM31Matrix::to_packed_field_array,
+            |x| x.as_canonical_u32(),
+            initial_external_rounds,
+            internal_rounds,
+            final_external_rounds,
+            &mut rng,
+        );
 
-    let p2 = Poseidon2AVX2M31 {
-        rounds_f: ROUNDS_F,
-        external_round_constants: external_constants,
-        rounds_p: ROUNDS_P,
-        internal_round_constants: internal_constants,
-    };
-
-    let avx2_input: [PackedMersenne31AVX2; 2] = unsafe { transmute([0_u32; 16]) };
+    let avx2_input: [PackedMersenne31AVX2; PACKED_WIDTH] =
+        unsafe { transmute([0_u32; FULL_WIDTH]) };
     let name = "poseidon2_avx2_Mersenne31";
     let id = BenchmarkId::new(name, 16);
     c.bench_with_input(id, &avx2_input, |b, &avx2_input| {
-        b.iter(|| p2.poseidon2(avx2_input))
+        b.iter(|| poseidon_2.permute(avx2_input))
     });
 }
 criterion_group!(benches, bench_poseidon2);
