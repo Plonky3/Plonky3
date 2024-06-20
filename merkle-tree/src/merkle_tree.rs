@@ -19,12 +19,12 @@ use tracing::instrument;
 /// see `FieldMerkleTreeMmcs`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FieldMerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
-    pub(crate) leaves: Vec<M>,
+    pub leaves: Vec<M>,
     // Enable serialization for this field whenever the underlying array type supports it (len 1-32).
     #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
     // Enable deserialization for this field whenever the underlying array type supports it (len 1-32).
     #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
-    pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
+    pub digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
     _phantom: PhantomData<F>,
 }
 
@@ -104,6 +104,14 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
         }
     }
 
+    pub fn from_parts(leaves: Vec<M>, digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>) -> Self {
+        Self {
+            leaves,
+            digest_layers,
+            _phantom: PhantomData,
+        }
+    }
+
     #[must_use]
     pub fn root(&self) -> Hash<F, W, DIGEST_ELEMS>
     where
@@ -113,7 +121,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     }
 }
 
-fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
+pub fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
     tallest_matrices: Vec<&M>,
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
@@ -160,7 +168,7 @@ where
 
 /// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
-fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
+pub fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
     matrices_to_inject: Vec<&M>,
     h: &H,
