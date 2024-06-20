@@ -218,9 +218,7 @@ impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder
     }
 }
 
-impl<'a, AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues
-    for FilteredAirBuilder<'a, AB>
-{
+impl<'a, AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues for FilteredAirBuilder<'a, AB> {
     type PublicVar = AB::PublicVar;
 
     fn public_values(&self) -> &[Self::PublicVar] {
