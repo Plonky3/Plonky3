@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 
@@ -24,25 +24,26 @@ pub struct FriChallenges<F> {
     pub betas: Vec<F>,
 }
 
-pub fn verify_shape_and_sample_challenges<F, M, Challenger>(
+pub fn verify_shape_and_sample_challenges<F, EF, M, Challenger>(
     config: &FriConfig<M>,
-    proof: &FriProof<F, M, Challenger::Witness>,
+    proof: &FriProof<EF, M, Challenger::Witness>,
     challenger: &mut Challenger,
-) -> Result<FriChallenges<F>, FriError<M::Error>>
+) -> Result<FriChallenges<EF>, FriError<M::Error>>
 where
     F: Field,
-    M: Mmcs<F>,
-    Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+    EF: ExtensionField<F>,
+    M: Mmcs<EF>,
+    Challenger: GrindingChallenger + CanObserve<M::Commitment> + FieldChallenger<F>,
 {
-    let betas: Vec<F> = proof
+    let betas: Vec<EF> = proof
         .commit_phase_commits
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            challenger.sample()
+            challenger.sample_ext_element()
         })
         .collect();
-
+    challenger.observe_ext_element(proof.final_poly);
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
     }

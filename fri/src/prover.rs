@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
 
@@ -12,15 +12,16 @@ use crate::fold_even_odd::fold_even_odd;
 use crate::{CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<F, M, Challenger>(
+pub fn prove<F, EF, M, Challenger>(
     config: &FriConfig<M>,
-    input: &[Option<Vec<F>>; 32],
+    input: &[Option<Vec<EF>>; 32],
     challenger: &mut Challenger,
-) -> (FriProof<F, M, Challenger::Witness>, Vec<usize>)
+) -> (FriProof<EF, M, Challenger::Witness>, Vec<usize>)
 where
-    F: TwoAdicField,
-    M: Mmcs<F>,
-    Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
+    Challenger: GrindingChallenger + CanObserve<M::Commitment> + FieldChallenger<F>,
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
@@ -86,16 +87,17 @@ where
 }
 
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<F, M, Challenger>(
+fn commit_phase<F, EF, M, Challenger>(
     config: &FriConfig<M>,
-    input: &[Option<Vec<F>>; 32],
+    input: &[Option<Vec<EF>>; 32],
     log_max_height: usize,
     challenger: &mut Challenger,
-) -> CommitPhaseResult<F, M>
+) -> CommitPhaseResult<EF, M>
 where
-    F: TwoAdicField,
-    M: Mmcs<F>,
-    Challenger: CanObserve<M::Commitment> + CanSample<F>,
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
+    Challenger: CanObserve<M::Commitment> + FieldChallenger<F>,
 {
     let mut current = input[log_max_height].as_ref().unwrap().clone();
 
@@ -109,7 +111,7 @@ where
         commits.push(commit);
         data.push(prover_data);
 
-        let beta: F = challenger.sample();
+        let beta: EF = challenger.sample_ext_element();
         current = fold_even_odd(current, beta);
 
         if let Some(v) = &input[log_folded_height] {
@@ -123,6 +125,7 @@ where
     for x in current {
         assert_eq!(x, final_poly);
     }
+    challenger.observe_ext_element(final_poly);
 
     CommitPhaseResult {
         commits,
