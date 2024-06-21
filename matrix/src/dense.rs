@@ -87,6 +87,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         RowMajorMatrix::new(values, width)
     }
 
+    pub fn row_slices(&self) -> impl Iterator<Item = &[T]> {
+        self.values.borrow().chunks_exact(self.width)
+    }
+
     pub fn par_row_slices(&self) -> impl IndexedParallelIterator<Item = &[T]>
     where
         T: Sync,
@@ -166,6 +170,34 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             DenseMatrix::new(lo, self.width),
             DenseMatrix::new(hi, self.width),
         )
+    }
+
+    pub fn par_row_chunks(
+        &self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<T>>
+        where
+            T: Send,
+            S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow()
+            .par_chunks(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixView::new(slice, self.width))
+    }
+
+    pub fn par_row_chunks_exact(
+        &self,
+        chunk_rows: usize,
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<T>>
+        where
+            T: Send,
+            S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow()
+            .par_chunks_exact(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixView::new(slice, self.width))
     }
 
     pub fn par_row_chunks_mut(
