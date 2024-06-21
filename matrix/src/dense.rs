@@ -178,7 +178,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<T>>
     where
         T: Send,
-        S: BorrowMut<[T]>,
     {
         self.values
             .borrow()
@@ -192,7 +191,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<T>>
     where
         T: Send,
-        S: BorrowMut<[T]>,
     {
         self.values
             .borrow()
