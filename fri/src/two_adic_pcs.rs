@@ -384,7 +384,7 @@ where
                                 acc[log_height] += alpha_pow[log_height] * (-p_at_z + p_at_x);
                                 alpha_pow[log_height] *= alpha;
                             }
-                            ro[log_height] = ro[log_height] + acc[log_height] / (-*z + x);
+                            ro[log_height] += acc[log_height] / (-*z + x);
                         }
                     }
                 }
