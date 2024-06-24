@@ -379,11 +379,12 @@ where
                             * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
                         for (z, ps_at_z) in mat_points_and_values {
+                            let mut acc = [Challenge::zero(); 32];
                             for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
-                                let quotient = (-p_at_z + p_at_x) / (-*z + x);
-                                ro[log_height] += alpha_pow[log_height] * quotient;
+                                acc[log_height] += alpha_pow[log_height] * (-p_at_z + p_at_x);
                                 alpha_pow[log_height] *= alpha;
                             }
+                            ro[log_height] = ro[log_height] + acc[log_height] / (-*z + x);
                         }
                     }
                 }
