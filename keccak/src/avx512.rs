@@ -41,31 +41,31 @@ fn flatten(mat: [[__m512i; 5]; 5]) -> [__m512i; 25] {
 }
 
 #[inline(always)]
-fn get_theta_parities(state: [[__m512i; 5]; 5]) -> [__m512i; 5] {
+fn get_theta_parities(state: [[__m512i; 5]; 5]) -> [(__m512i, __m512i); 5] {
     unsafe {
         let mut par0 =
-            _mm512_ternarylogic_epi64::<0b10101010>(state[0][0], state[1][0], state[2][0]);
+            _mm512_ternarylogic_epi64::<0b10010110>(state[0][0], state[1][0], state[2][0]);
         let mut par1 =
-            _mm512_ternarylogic_epi64::<0b10101010>(state[0][1], state[1][1], state[2][1]);
+            _mm512_ternarylogic_epi64::<0b10010110>(state[0][1], state[1][1], state[2][1]);
         let mut par2 =
-            _mm512_ternarylogic_epi64::<0b10101010>(state[0][2], state[1][2], state[2][2]);
+            _mm512_ternarylogic_epi64::<0b10010110>(state[0][2], state[1][2], state[2][2]);
         let mut par3 =
-            _mm512_ternarylogic_epi64::<0b10101010>(state[0][3], state[1][3], state[2][3]);
+            _mm512_ternarylogic_epi64::<0b10010110>(state[0][3], state[1][3], state[2][3]);
         let mut par4 =
-            _mm512_ternarylogic_epi64::<0b10101010>(state[0][4], state[1][4], state[2][4]);
+            _mm512_ternarylogic_epi64::<0b10010110>(state[0][4], state[1][4], state[2][4]);
 
-        par0 = _mm512_ternarylogic_epi64::<0b10101010>(par0, state[3][0], state[4][0]);
-        par1 = _mm512_ternarylogic_epi64::<0b10101010>(par1, state[3][1], state[4][1]);
-        par2 = _mm512_ternarylogic_epi64::<0b10101010>(par2, state[3][2], state[4][2]);
-        par3 = _mm512_ternarylogic_epi64::<0b10101010>(par3, state[3][3], state[4][3]);
-        par4 = _mm512_ternarylogic_epi64::<0b10101010>(par4, state[3][4], state[4][4]);
+        par0 = _mm512_ternarylogic_epi64::<0b10010110>(par0, state[3][0], state[4][0]);
+        par1 = _mm512_ternarylogic_epi64::<0b10010110>(par1, state[3][1], state[4][1]);
+        par2 = _mm512_ternarylogic_epi64::<0b10010110>(par2, state[3][2], state[4][2]);
+        par3 = _mm512_ternarylogic_epi64::<0b10010110>(par3, state[3][3], state[4][3]);
+        par4 = _mm512_ternarylogic_epi64::<0b10010110>(par4, state[3][4], state[4][4]);
 
         [
-            _mm512_xor_epi64(par4, _mm512_rol_epi64::<1>(par1)),
-            _mm512_xor_epi64(par0, _mm512_rol_epi64::<1>(par2)),
-            _mm512_xor_epi64(par1, _mm512_rol_epi64::<1>(par3)),
-            _mm512_xor_epi64(par2, _mm512_rol_epi64::<1>(par4)),
-            _mm512_xor_epi64(par3, _mm512_rol_epi64::<1>(par0)),
+            (par4, _mm512_rol_epi64::<1>(par1)),
+            (par0, _mm512_rol_epi64::<1>(par2)),
+            (par1, _mm512_rol_epi64::<1>(par3)),
+            (par2, _mm512_rol_epi64::<1>(par4)),
+            (par3, _mm512_rol_epi64::<1>(par0)),
         ]
     }
 }
@@ -77,39 +77,39 @@ fn theta(state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
     unsafe {
         [
             [
-                _mm512_xor_epi64(state[0][0], theta_parities[0]),
-                _mm512_xor_epi64(state[0][1], theta_parities[1]),
-                _mm512_xor_epi64(state[0][2], theta_parities[2]),
-                _mm512_xor_epi64(state[0][3], theta_parities[3]),
-                _mm512_xor_epi64(state[0][4], theta_parities[4]),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[0][0], theta_parities[0].0, theta_parities[0].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[0][1], theta_parities[1].0, theta_parities[1].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[0][2], theta_parities[2].0, theta_parities[2].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[0][3], theta_parities[3].0, theta_parities[3].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[0][4], theta_parities[4].0, theta_parities[4].1),
             ],
             [
-                _mm512_xor_epi64(state[1][0], theta_parities[0]),
-                _mm512_xor_epi64(state[1][1], theta_parities[1]),
-                _mm512_xor_epi64(state[1][2], theta_parities[2]),
-                _mm512_xor_epi64(state[1][3], theta_parities[3]),
-                _mm512_xor_epi64(state[1][4], theta_parities[4]),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[1][0], theta_parities[0].0, theta_parities[0].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[1][1], theta_parities[1].0, theta_parities[1].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[1][2], theta_parities[2].0, theta_parities[2].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[1][3], theta_parities[3].0, theta_parities[3].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[1][4], theta_parities[4].0, theta_parities[4].1),
             ],
             [
-                _mm512_xor_epi64(state[2][0], theta_parities[0]),
-                _mm512_xor_epi64(state[2][1], theta_parities[1]),
-                _mm512_xor_epi64(state[2][2], theta_parities[2]),
-                _mm512_xor_epi64(state[2][3], theta_parities[3]),
-                _mm512_xor_epi64(state[2][4], theta_parities[4]),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[2][0], theta_parities[0].0, theta_parities[0].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[2][1], theta_parities[1].0, theta_parities[1].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[2][2], theta_parities[2].0, theta_parities[2].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[2][3], theta_parities[3].0, theta_parities[3].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[2][4], theta_parities[4].0, theta_parities[4].1),
             ],
             [
-                _mm512_xor_epi64(state[3][0], theta_parities[0]),
-                _mm512_xor_epi64(state[3][1], theta_parities[1]),
-                _mm512_xor_epi64(state[3][2], theta_parities[2]),
-                _mm512_xor_epi64(state[3][3], theta_parities[3]),
-                _mm512_xor_epi64(state[3][4], theta_parities[4]),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[3][0], theta_parities[0].0, theta_parities[0].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[3][1], theta_parities[1].0, theta_parities[1].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[3][2], theta_parities[2].0, theta_parities[2].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[3][3], theta_parities[3].0, theta_parities[3].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[3][4], theta_parities[4].0, theta_parities[4].1),
             ],
             [
-                _mm512_xor_epi64(state[4][0], theta_parities[0]),
-                _mm512_xor_epi64(state[4][1], theta_parities[1]),
-                _mm512_xor_epi64(state[4][2], theta_parities[2]),
-                _mm512_xor_epi64(state[4][3], theta_parities[3]),
-                _mm512_xor_epi64(state[4][4], theta_parities[4]),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[4][0], theta_parities[0].0, theta_parities[0].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[4][1], theta_parities[1].0, theta_parities[1].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[4][2], theta_parities[2].0, theta_parities[2].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[4][3], theta_parities[3].0, theta_parities[3].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(state[4][4], theta_parities[4].0, theta_parities[4].1),
             ],
         ]
     }
@@ -231,7 +231,6 @@ fn iota(i: usize, state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
     }
     res
 }
-
 #[inline(always)]
 fn round(i: usize, state: [__m512i; 25]) -> [__m512i; 25] {
     let mut state = form_matrix(state);
@@ -257,7 +256,7 @@ mod tests {
     use core::arch::x86_64::{_mm512_setr_epi64, _mm512_setzero_si512};
     use core::mem::transmute_copy;
 
-    // use tiny_keccak::keccakf;
+    use tiny_keccak::keccakf;
     use super::*;
 
     const STATES: [[u64; 25]; 8] = [
@@ -532,85 +531,5 @@ mod tests {
         let expected = tiny_keccak_res();
         let computed = our_res();
         assert_eq!(expected, computed);
-    }
-
-    const RHO: [u32; 24] = [
-        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
-    ];
-
-    const PI: [usize; 24] = [
-        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
-    ];
-
-    const RC: [u64; 24] = [
-        1u64,
-        0x8082u64,
-        0x800000000000808au64,
-        0x8000000080008000u64,
-        0x808bu64,
-        0x80000001u64,
-        0x8000000080008081u64,
-        0x8000000000008009u64,
-        0x8au64,
-        0x88u64,
-        0x80008009u64,
-        0x8000000au64,
-        0x8000808bu64,
-        0x800000000000008bu64,
-        0x8000000000008089u64,
-        0x8000000000008003u64,
-        0x8000000000008002u64,
-        0x8000000000000080u64,
-        0x800au64,
-        0x800000008000000au64,
-        0x8000000080008081u64,
-        0x8000000000008080u64,
-        0x80000001u64,
-        0x8000000080008008u64,
-    ];
-
-    fn keccakf(a: &mut [u64; 25]) {
-        for i in 0..24 {
-            let mut array: [u64; 5] = [0; 5];
-
-            // Theta
-            for x in 0..5 {
-                for y_count in 0..5 {
-                    let y = y_count * 5;
-                    array[x] ^= a[x + y];
-                }
-            }
-
-            for x in 0..5 {
-                for y_count in 0..5 {
-                    let y = y_count * 5;
-                    a[y + x] ^= array[(x + 4) % 5] ^ array[(x + 1) % 5].rotate_left(1);
-                }
-            }
-
-            // Rho and pi
-            let mut last = a[1];
-            for x in 0..24 {
-                array[0] = a[PI[x]];
-                a[PI[x]] = last.rotate_left(RHO[x]);
-                last = array[0];
-            }
-
-            // Chi
-            for y_step in 0..5 {
-                let y = y_step * 5;
-
-                for x in 0..5 {
-                    array[x] = a[y + x];
-                }
-
-                for x in 0..5 {
-                    a[y + x] = array[x] ^ ((!array[(x + 1) % 5]) & (array[(x + 2) % 5]));
-                }
-            }
-
-            // Iota
-            a[0] ^= RC[i];
-        }
     }
 }

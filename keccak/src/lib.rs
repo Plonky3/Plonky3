@@ -24,6 +24,8 @@ pub mod neon;
 // #[cfg(all(feature = "nightly-features", target_arch = "x86_64", target_feature = "avx512f"))]
 pub mod avx512;
 
+pub mod avx2;
+
 /// The Keccak-f permutation.
 #[derive(Copy, Clone, Debug)]
 pub struct KeccakF;
