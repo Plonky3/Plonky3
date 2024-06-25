@@ -17,6 +17,7 @@ pub type PackedBabyBearNeon = PackedMontyField31Neon<BabyBearParameters>;
 
 #[cfg(test)]
 mod tests {
+    use p3_field::AbstractField;
     use p3_field_testing::test_packed_field;
     use p3_monty_31::PackedMontyField31Neon;
 
