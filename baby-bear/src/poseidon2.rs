@@ -2,7 +2,7 @@
 
 use p3_field::PrimeField32;
 use p3_monty_31::{
-    DiffusionMatrixMontyField31, DiffusionMatrixParameters, MultipleDiffusionMatrixParameters,
+    DiffusionMatrixMontyField31, DiffusionMatrixParameters, PackedFieldPoseidon2Helpers,
 };
 
 use crate::{BabyBear, BabyBearParameters};
@@ -87,7 +87,7 @@ impl DiffusionMatrixParameters<BabyBearParameters, 24> for BabyBearDiffusionMatr
     ]);
 }
 
-impl MultipleDiffusionMatrixParameters<BabyBearParameters> for BabyBearDiffusionMatrixParameters {}
+impl PackedFieldPoseidon2Helpers<BabyBearParameters> for BabyBearDiffusionMatrixParameters {}
 
 #[cfg(test)]
 mod tests {

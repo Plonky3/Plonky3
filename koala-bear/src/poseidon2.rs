@@ -2,7 +2,7 @@
 
 use p3_field::PrimeField32;
 use p3_monty_31::{
-    DiffusionMatrixMontyField31, DiffusionMatrixParameters, MultipleDiffusionMatrixParameters,
+    DiffusionMatrixMontyField31, DiffusionMatrixParameters, PackedFieldPoseidon2Helpers,
 };
 
 use crate::{KoalaBear, KoalaBearParameters};
@@ -91,7 +91,7 @@ impl DiffusionMatrixParameters<KoalaBearParameters, 24> for KoalaBearDiffusionMa
     ]);
 }
 
-impl MultipleDiffusionMatrixParameters<KoalaBearParameters> for KoalaBearDiffusionMatrixParameters {}
+impl PackedFieldPoseidon2Helpers<KoalaBearParameters> for KoalaBearDiffusionMatrixParameters {}
 
 #[cfg(test)]
 mod tests {
