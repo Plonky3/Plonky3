@@ -254,10 +254,10 @@ pub fn keccak_perm(buf: &mut [__m512i; 25]) {
 #[cfg(test)]
 mod tests {
 
-    use core::arch::x86_64::{_mm512_setzero_si512, _mm512_setr_epi64};
+    use core::arch::x86_64::{_mm512_setr_epi64, _mm512_setzero_si512};
+    use core::mem::transmute_copy;
 
-    use tiny_keccak::keccakf;
-
+    // use tiny_keccak::keccakf;
     use super::*;
 
     const STATES: [[u64; 25]; 8] = [
@@ -482,8 +482,8 @@ mod tests {
     fn our_res() -> [[u64; 25]; 8] {
         let mut packed_result = [unsafe { _mm512_setzero_si512() }; 25];
         for i in 0..25 {
-            packed_result[i] =
-                unsafe { _mm512_setr_epi64(
+            packed_result[i] = unsafe {
+                _mm512_setr_epi64(
                     STATES[0][i] as i64,
                     STATES[1][i] as i64,
                     STATES[2][i] as i64,
@@ -492,12 +492,13 @@ mod tests {
                     STATES[5][i] as i64,
                     STATES[6][i] as i64,
                     STATES[7][i] as i64,
-                ) };
+                )
+            };
         }
 
         keccak_perm(&mut packed_result);
 
-        let packed_result_arr: [[u64; 8]; 25] = unsafe { transmute(packed_result) };
+        let packed_result_arr: [[u64; 8]; 25] = unsafe { transmute_copy(&packed_result) };
 
         let mut result = [[0; 25]; 8];
         for i in 0..25 {
@@ -531,5 +532,85 @@ mod tests {
         let expected = tiny_keccak_res();
         let computed = our_res();
         assert_eq!(expected, computed);
+    }
+
+    const RHO: [u32; 24] = [
+        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
+    ];
+
+    const PI: [usize; 24] = [
+        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
+    ];
+
+    const RC: [u64; 24] = [
+        1u64,
+        0x8082u64,
+        0x800000000000808au64,
+        0x8000000080008000u64,
+        0x808bu64,
+        0x80000001u64,
+        0x8000000080008081u64,
+        0x8000000000008009u64,
+        0x8au64,
+        0x88u64,
+        0x80008009u64,
+        0x8000000au64,
+        0x8000808bu64,
+        0x800000000000008bu64,
+        0x8000000000008089u64,
+        0x8000000000008003u64,
+        0x8000000000008002u64,
+        0x8000000000000080u64,
+        0x800au64,
+        0x800000008000000au64,
+        0x8000000080008081u64,
+        0x8000000000008080u64,
+        0x80000001u64,
+        0x8000000080008008u64,
+    ];
+
+    fn keccakf(a: &mut [u64; 25]) {
+        for i in 0..24 {
+            let mut array: [u64; 5] = [0; 5];
+
+            // Theta
+            for x in 0..5 {
+                for y_count in 0..5 {
+                    let y = y_count * 5;
+                    array[x] ^= a[x + y];
+                }
+            }
+
+            for x in 0..5 {
+                for y_count in 0..5 {
+                    let y = y_count * 5;
+                    a[y + x] ^= array[(x + 4) % 5] ^ array[(x + 1) % 5].rotate_left(1);
+                }
+            }
+
+            // Rho and pi
+            let mut last = a[1];
+            for x in 0..24 {
+                array[0] = a[PI[x]];
+                a[PI[x]] = last.rotate_left(RHO[x]);
+                last = array[0];
+            }
+
+            // Chi
+            for y_step in 0..5 {
+                let y = y_step * 5;
+
+                for x in 0..5 {
+                    array[x] = a[y + x];
+                }
+
+                for x in 0..5 {
+                    a[y + x] = array[x] ^ ((!array[(x + 1) % 5]) & (array[(x + 2) % 5]));
+                }
+            }
+
+            // Iota
+            a[0] ^= RC[i];
+        }
     }
 }
