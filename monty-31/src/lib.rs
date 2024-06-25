@@ -1,5 +1,3 @@
-//! A framework for finite fields.
-
 #![no_std]
 #![cfg_attr(
     all(

@@ -1,11 +1,12 @@
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use p3_field::{AbstractField, TwoAdicField};
+use p3_field::{field_to_array, TwoAdicField};
 
 use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
 
-// One clear issue for defining extensions is that, depending on the field order,
-// Binomial extensions of a given size may or may not exist.
-// For now we set up the code to handle allow for Binomials extensions of degree 4 and 5.
+// If a field implements BinomialExtensionData<WIDTH> then there is a natural
+// field extension of degree WIDTH we can define.
+// We perform no checks to make sure the data given in BinomialExtensionData<WIDTH> is valid and
+// corresponds to an actual field extension. Ensuring that is left to the implementor.
 
 impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
 where
@@ -31,10 +32,7 @@ where
     fn ext_two_adic_generator(bits: usize) -> [Self; WIDTH] {
         assert!(bits <= Self::EXT_TWO_ADICITY);
         if bits <= FP::TWO_ADICITY {
-            // TODO: Probably a cleaner way to do this?
-            let mut output = [Self::zero(); WIDTH];
-            output[0] = Self::two_adic_generator(bits);
-            output
+            field_to_array(Self::two_adic_generator(bits))
         } else {
             FP::TWO_ADIC_EXTENSION_GENERATORS.as_ref()[bits - FP::TWO_ADICITY - 1]
         }

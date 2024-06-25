@@ -12,8 +12,8 @@ use crate::{FieldParameters, MontyField31, PackedMontyParameters};
 const WIDTH: usize = 16;
 
 pub trait MontyParametersAVX512 {
-    const PACKEDP: __m512i;
-    const PACKEDMU: __m512i;
+    const PACKED_P: __m512i;
+    const PACKED_MU: __m512i;
 }
 
 const EVENS: __mmask16 = 0b0101010101010101;
@@ -142,7 +142,7 @@ fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_add_epi32(lhs, rhs);
-        let u = x86_64::_mm512_sub_epi32(t, MPAVX512::PACKEDP);
+        let u = x86_64::_mm512_sub_epi32(t, MPAVX512::PACKED_P);
         x86_64::_mm512_min_epu32(t, u)
     }
 }
@@ -239,8 +239,8 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         let prod_evn = x86_64::_mm512_mul_epu32(lhs_evn, rhs_evn);
         let prod_odd = x86_64::_mm512_mul_epu32(lhs_odd, rhs_odd);
 
-        let q_evn = x86_64::_mm512_mul_epu32(prod_evn, MPAVX512::PACKEDMU);
-        let q_odd = x86_64::_mm512_mul_epu32(prod_odd, MPAVX512::PACKEDMU);
+        let q_evn = x86_64::_mm512_mul_epu32(prod_evn, MPAVX512::PACKED_MU);
+        let q_odd = x86_64::_mm512_mul_epu32(prod_odd, MPAVX512::PACKED_MU);
 
         // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
@@ -249,8 +249,8 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 
         // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
         // low 32 bits anyway.
-        let q_P_evn = x86_64::_mm512_mul_epu32(q_evn, MPAVX512::PACKEDP);
-        let q_P_odd = x86_64::_mm512_mul_epu32(q_odd, MPAVX512::PACKEDP);
+        let q_P_evn = x86_64::_mm512_mul_epu32(q_evn, MPAVX512::PACKED_P);
+        let q_P_odd = x86_64::_mm512_mul_epu32(q_odd, MPAVX512::PACKED_P);
 
         // We can ignore all the low halves of `q_P` as they cancel out. Get all the high halves as
         // one vector.
@@ -264,7 +264,7 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // cycle of latency.
         let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_P_hi);
         let t = x86_64::_mm512_sub_epi32(prod_hi, q_P_hi);
-        x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKEDP)
+        x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKED_P)
     }
 }
 
@@ -287,7 +287,7 @@ fn neg<MPAVX512: MontyParametersAVX512>(val: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let nonzero = x86_64::_mm512_test_epi32_mask(val, val);
-        x86_64::_mm512_maskz_sub_epi32(nonzero, MPAVX512::PACKEDP, val)
+        x86_64::_mm512_maskz_sub_epi32(nonzero, MPAVX512::PACKED_P, val)
     }
 }
 
@@ -313,7 +313,7 @@ fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKEDP);
+        let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
         x86_64::_mm512_min_epu32(t, u)
     }
 }

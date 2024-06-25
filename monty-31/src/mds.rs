@@ -1,11 +1,3 @@
-//! MDS matrices over the BabyBear field, and permutations defined by them.
-//!
-//! NB: Not all sizes have fast implementations of their permutations.
-//! Supported sizes: 8, 12, 16, 24, 32, 64.
-//! Sizes 8 and 12 are from Plonky2, size 16 was found as part of concurrent
-//! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
-//! database.
-
 use core::marker::PhantomData;
 
 use p3_mds::karatsuba_convolution::Convolve;
@@ -14,8 +6,8 @@ use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
 use crate::{BarrettParameters, MontyField31, MontyParameters};
-/// A collection of constants related to convolutions.
-/// The MDS matrices are saved using their left most column.
+
+/// A collection of circulant MDS matrices saved using their left most column.
 pub trait MDSUtils: Clone + Sync {
     const MATRIX_CIRC_MDS_8_COL: [i64; 8];
     const MATRIX_CIRC_MDS_12_COL: [i64; 12];
@@ -37,8 +29,8 @@ pub struct MdsMatrixMontyField31<MU: MDSUtils> {
 struct SmallConvolveMontyField31;
 
 impl<FP: MontyParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallConvolveMontyField31 {
-    /// Return the lift of a BabyBear element, satisfying 0 <=
-    /// input.value < P < 2^31. Note that BabyBear elements are
+    /// Return the lift of a Monty31 element, satisfying 0 <=
+    /// input.value < P < 2^31. Note that Monty31 elements are
     /// represented in Monty form.
     #[inline(always)]
     fn read(input: MontyField31<FP>) -> i64 {
@@ -50,7 +42,7 @@ impl<FP: MontyParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallCon
     /// which will not overflow for N <= 16.
     ///
     /// Note that the LHS element is in Monty form, while the RHS
-    /// element is an "plain integer". This informs the implementation
+    /// element is a "plain integer". This informs the implementation
     /// of `reduce()` below.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
@@ -114,7 +106,7 @@ fn barrett_red_monty31<BP: BarrettParameters>(input: i128) -> i64 {
 //
 // We start by introducing some simple inequalities and relations between our variables:
 //
-// First consider the relationship between bitshift and division.
+// First consider the relationship between bit-shift and division.
 // It's easy to check that for all x:
 // 1: (x >> N) <= x / 2**N <= 1 + (x >> N)
 //

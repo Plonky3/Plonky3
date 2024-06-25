@@ -23,7 +23,7 @@ pub trait MontyParameters:
     const MONTY_MASK: u32 = ((1u64 << Self::MONTY_BITS) - 1) as u32;
 }
 
-/// PackedMontyParameters constains constants needed for MONTY operations for packings of Monty31 fields.
+/// PackedMontyParameters contains constants needed for MONTY operations for packings of Monty31 fields.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub trait PackedMontyParameters: crate::MontyParametersNeon + MontyParameters {}
 #[cfg(all(
@@ -31,14 +31,14 @@ pub trait PackedMontyParameters: crate::MontyParametersNeon + MontyParameters {}
     target_feature = "avx2",
     not(all(feature = "nightly-features", target_feature = "avx512f"))
 ))]
-/// PackedMontyParameters constains constants needed for MONTY operations for packings of Monty31 fields.
+/// PackedMontyParameters contains constants needed for MONTY operations for packings of Monty31 fields.
 pub trait PackedMontyParameters: crate::MontyParametersAVX2 + MontyParameters {}
 #[cfg(all(
     feature = "nightly-features",
     target_arch = "x86_64",
     target_feature = "avx512f"
 ))]
-/// PackedMontyParameters constains constants needed for MONTY operations for packings of Monty31 fields.
+/// PackedMontyParameters contains constants needed for MONTY operations for packings of Monty31 fields.
 pub trait PackedMontyParameters:
     crate::MontyParametersAVX2 + crate::MontyParametersAVX512 + MontyParameters
 {
@@ -56,7 +56,7 @@ pub trait PackedMontyParameters:
         target_feature = "avx512f"
     ),
 )))]
-/// PackedMontyParameters constains constants needed for MONTY operations for packings of Monty31 fields.
+/// PackedMontyParameters contains constants needed for MONTY operations for packings of Monty31 fields.
 pub trait PackedMontyParameters: MontyParameters {}
 
 /// BarrettParameters contains constants needed for the Barrett reduction used in the MDS code.
@@ -67,7 +67,7 @@ pub trait BarrettParameters: MontyParameters {
     const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 }
 
-/// FieldParameters contains constants and methods needed to imply AbstractField and Field for MontyField31.
+/// FieldParameters contains constants and methods needed to imply AbstractField, Field and PrimeField32 for MontyField31.
 pub trait FieldParameters: PackedMontyParameters + Sized {
     // Simple field constants.
     const MONTY_ZERO: MontyField31<Self> = MontyField31::new(0);
@@ -103,7 +103,7 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     /// W is a value such that (x^DEG - WN) is irreducible.
     const W: MontyField31<Self>;
 
-    /// DTH_ROOTN = W^((p - 1)/DEG)
+    /// DTH_ROOT = W^((p - 1)/DEG)
     const DTH_ROOT: MontyField31<Self>;
 
     /// A generator of the extension fields multiplicative group.

@@ -6,29 +6,29 @@ use crate::{
     PackedFieldPoseidon2Helpers, PackedMontyField31AVX2,
 };
 
-// We need to change from the standard implementation as we are interpreting the matrix (1 + D(v)) as the monty form of the matrix not the raw form.
+// We need to change from the standard implementation as we are interpreting the matrix (1 + Diag(vec)) as the monty form of the matrix not the raw form.
 // matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
 // These will be removed once we have architecture specific implementations.
 
-impl<FP, const WIDTH: usize, MD> Permutation<[PackedMontyField31AVX2<FP>; WIDTH]>
-    for DiffusionMatrixMontyField31<FP, MD>
+impl<FP, const WIDTH: usize, MP> Permutation<[PackedMontyField31AVX2<FP>; WIDTH]>
+    for DiffusionMatrixMontyField31<MP>
 where
     FP: FieldParameters,
-    MD: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
+    MP: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
 {
     fn permute_mut(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
         matmul_internal::<MontyField31<FP>, PackedMontyField31AVX2<FP>, WIDTH>(
             state,
-            MD::INTERNAL_DIAG_MONTY,
+            MP::INTERNAL_DIAG_MONTY,
         );
-        state.iter_mut().for_each(|i| *i *= MD::MONTY_INVERSE);
+        state.iter_mut().for_each(|i| *i *= MP::MONTY_INVERSE);
     }
 }
 
-impl<FP, const WIDTH: usize, MD> DiffusionPermutation<PackedMontyField31AVX2<FP>, WIDTH>
-    for DiffusionMatrixMontyField31<FP, MD>
+impl<FP, const WIDTH: usize, MP> DiffusionPermutation<PackedMontyField31AVX2<FP>, WIDTH>
+    for DiffusionMatrixMontyField31<MP>
 where
     FP: FieldParameters,
-    MD: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
+    MP: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
 {
 }

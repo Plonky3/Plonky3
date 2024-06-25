@@ -5,20 +5,20 @@ use p3_symmetric::Permutation;
 
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters};
 
-/// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + D(v).
+/// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + Diag(vec).
+/// vec is assumed to be of the form [-2, ...] with all entries after the first being small powers of 2.
 pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Clone + Sync {
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
     type ArrayLike: AsRef<[u8]> + Sized;
 
-    // We assume that v[0] = -2 and all other values of v are small powers of 2.
-    // Thus we simply save the powers.
+    // We only need to save the powers and can ignore the initial element.
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike;
 
     // Long term INTERNAL_DIAG_MONTY will be removed.
-    // Currently we need it for the naive Packed field implementations.
+    // Currently it is needed for the Packed field implementations.
     const INTERNAL_DIAG_MONTY: [MontyField31<FP>; WIDTH];
 
-    /// Implements multiplication by the diffusion matrix 1 + D(v) using a delayed reduction strategy.
+    /// Implements multiplication by the diffusion matrix 1 + Diag(vec) using a delayed reduction strategy.
     fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
@@ -33,27 +33,22 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
     }
 }
 
-/// For a given field, we need to implement DiffusionMatrixParameters for several different WIDTHS.
-/// Some code can be shared between the different sizes.
+/// Some code needed by the PackedField implementation can be shared between the different WIDTHS and architectures.
+/// This will likely be deleted once we have vectorized implementations.
 pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
-    // This is currently needed for Packed Field impls.
-    // It can/will be removed once we have vectorized implementations.
     const MONTY_INVERSE: MontyField31<MP> = MontyField31::new_monty(1);
 }
 
-// Would be good to try and find a way to cut down on PhantomData.
 #[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixMontyField31<FP, MP>
+pub struct DiffusionMatrixMontyField31<MP>
 where
-    FP: FieldParameters,
     MP: Clone,
 {
-    _phantom1: PhantomData<FP>,
-    _phantom2: PhantomData<MP>,
+    _phantom: PhantomData<MP>,
 }
 
 impl<FP, const WIDTH: usize, MP> Permutation<[MontyField31<FP>; WIDTH]>
-    for DiffusionMatrixMontyField31<FP, MP>
+    for DiffusionMatrixMontyField31<MP>
 where
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
@@ -65,7 +60,7 @@ where
 }
 
 impl<FP, const WIDTH: usize, MP> DiffusionPermutation<MontyField31<FP>, WIDTH>
-    for DiffusionMatrixMontyField31<FP, MP>
+    for DiffusionMatrixMontyField31<MP>
 where
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,

@@ -8,22 +8,21 @@ use p3_monty_31::{
 use crate::{BabyBear, BabyBearParameters};
 
 // See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimised diffusion matrices for Babybear16:
+// Optimized diffusion matrices for Babybear16:
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]
 // Power of 2 entries: [-2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
 //                   = [ ?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^15]
 //
-// Optimised diffusion matrices for Babybear24:
+// Optimized diffusion matrices for Babybear24:
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24]
 // Power of 2 entries: [-2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 262144, 524288, 1048576, 2097152, 4194304, 8388608]
 //                   = [ ?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^18,   2^19,    2^20,    2^21,    2^22,    2^23]
 //
-// In order to use these to their fullest potential we need to slightly reimage what the matrix looks like.
-// Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
-// such that (1 + D(v)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
+// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
+// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
+// such that (1 + Diag(vec)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
 
-pub type DiffusionMatrixBabyBear =
-    DiffusionMatrixMontyField31<BabyBearParameters, BabyBearDiffusionMatrixParameters>;
+pub type DiffusionMatrixBabyBear = DiffusionMatrixMontyField31<BabyBearDiffusionMatrixParameters>;
 
 #[derive(Debug, Clone, Default)]
 pub struct BabyBearDiffusionMatrixParameters;

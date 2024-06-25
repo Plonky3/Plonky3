@@ -12,13 +12,13 @@ use crate::{FieldParameters, MontyField31, PackedMontyParameters};
 const WIDTH: usize = 8;
 
 pub trait MontyParametersAVX2 {
-    const PACKEDP: __m256i;
-    const PACKEDMU: __m256i;
+    const PACKED_P: __m256i;
+    const PACKED_MU: __m256i;
 }
 
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // This is needed to make `transmute`s safe.
 pub struct PackedMontyField31AVX2<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
@@ -116,7 +116,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
     }
 }
 
-/// Add two vectors of Baby Bear field elements in canonical form.
+/// Add two vectors of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -139,7 +139,7 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, MPAVX2::PACKEDP);
+        let u = x86_64::_mm256_sub_epi32(t, MPAVX2::PACKED_P);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
@@ -147,7 +147,7 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 // MONTGOMERY MULTIPLICATION
 //   This implementation is based on [1] but with minor changes. The reduction is as follows:
 //
-// Constants: P < 2^31
+// Constants: P < 2^31, prime
 //            B = 2^32
 //            μ = P^-1 mod B
 // Input: 0 <= C < P B
@@ -172,8 +172,8 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
-        let q = x86_64::_mm256_mul_epu32(prod, MPAVX2::PACKEDMU);
-        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKEDP);
+        let q = x86_64::_mm256_mul_epu32(prod, MPAVX2::PACKED_MU);
+        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
         x86_64::_mm256_sub_epi64(prod, q_P)
     }
 }
@@ -222,7 +222,7 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
         let d_evn_hi = movehdup_epi32(d_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
 
-        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKEDP);
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
@@ -251,7 +251,7 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
     // res = vpsignd(t, val) = t passes t through.
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(MPAVX2::PACKEDP, val);
+        let t = x86_64::_mm256_sub_epi32(MPAVX2::PACKED_P, val);
         x86_64::_mm256_sign_epi32(t, val)
     }
 }
@@ -278,7 +278,7 @@ fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKEDP);
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
         x86_64::_mm256_min_epu32(t, u)
     }
 }

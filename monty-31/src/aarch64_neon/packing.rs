@@ -14,8 +14,8 @@ use crate::{FieldParameters, MontyField31, PackedMontyParameters};
 const WIDTH: usize = 4;
 
 pub trait MontyParametersNeon {
-    const PACKEDP: uint32x4_t;
-    const PACKEDMU: int32x4_t;
+    const PACKED_P: uint32x4_t;
+    const PACKED_MU: int32x4_t;
 }
 
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
@@ -144,7 +144,7 @@ fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
     y
 }
 
-/// Add two vectors of Baby Bear field elements in canonical form.
+/// Add two vectors of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -167,7 +167,7 @@ fn add<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let t = aarch64::vaddq_u32(lhs, rhs);
-        let u = aarch64::vsubq_u32(t, MPNeon::PACKEDP);
+        let u = aarch64::vsubq_u32(t, MPNeon::PACKED_P);
         aarch64::vminq_u32(t, u)
     }
 }
@@ -208,7 +208,7 @@ fn mulby_mu<MPNeon: MontyParametersNeon>(val: int32x4_t) -> int32x4_t {
     // throughput: .25 cyc/vec (16 els/cyc)
     // latency: 3 cyc
 
-    unsafe { aarch64::vmulq_s32(val, MPNeon::PACKEDMU) }
+    unsafe { aarch64::vmulq_s32(val, MPNeon::PACKED_MU) }
 }
 
 #[inline]
@@ -241,7 +241,7 @@ fn get_qp_hi<MPNeon: MontyParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> 
 
         // Gets bits 31, ..., 62 of Q P. Again, saturation is not an issue because `P` is not
         // -2**31.
-        aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(MPNeon::PACKEDP))
+        aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(MPNeon::PACKED_P))
     }
 }
 
@@ -278,7 +278,7 @@ fn get_reduced_d<MPNeon: MontyParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t)
         // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
         // _subtract_ `underflow` * P.
         let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
-        aarch64::vmlsq_u32(d, confuse_compiler(underflow), MPNeon::PACKEDP)
+        aarch64::vmlsq_u32(d, confuse_compiler(underflow), MPNeon::PACKED_P)
     }
 }
 
@@ -328,7 +328,7 @@ fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     }
 }
 
-/// Negate a vector of Baby Bear field elements in canonical form.
+/// Negate a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -348,13 +348,13 @@ fn neg<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     //   We return `r := t & ~is_zero`, which is `t` if `val > 0` and `0` otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vsubq_u32(MPNeon::PACKEDP, val);
+        let t = aarch64::vsubq_u32(MPNeon::PACKED_P, val);
         let is_zero = aarch64::vceqzq_u32(val);
         aarch64::vbicq_u32(t, is_zero)
     }
 }
 
-/// Subtract vectors of Baby Bear field elements in canonical form.
+/// Subtract vectors of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -381,7 +381,7 @@ fn sub<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
         // We really want to emit a `mls` instruction here. The compiler knows that `underflow` is
         // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
         // The `confuse_compiler` prevents this "optimization".
-        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), MPNeon::PACKEDP)
+        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), MPNeon::PACKED_P)
     }
 }
 

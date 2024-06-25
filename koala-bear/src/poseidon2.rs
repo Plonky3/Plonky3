@@ -8,26 +8,24 @@ use p3_monty_31::{
 use crate::{KoalaBear, KoalaBearParameters};
 
 // See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimised Diffusion matrices for Koalabear16.
+// Optimized Diffusion matrices for Koalabear16.
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17]
 // Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
 //                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    15]
 //
-// Optimised Diffusion matrices for Koalabear24.
+// Optimized Diffusion matrices for Koalabear24.
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25]
 // Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 8388608]
 //                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    14,    15,    16,     17,     18,     19,      20,      21,      23]
 //
-// In order to use these to their fullest potential we need to slightly reimage what the matrix looks like.
-// Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
-// such that (1 + D(v)) is the monty form of the matrix. This allows for delayed reduction tricks.
+// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
+// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
+// such that (1 + Diag(vec)) is the monty form of the matrix. This allows for delayed reduction tricks.
 
-// Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY can all be removed.
+// Long term, INTERNAL_DIAG_MONTY will be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
 
-pub type DiffusionMatrixKoalaBear =
-    DiffusionMatrixMontyField31<KoalaBearParameters, KoalaBearDiffusionMatrixParameters>;
+pub type DiffusionMatrixKoalaBear = DiffusionMatrixMontyField31<KoalaBearDiffusionMatrixParameters>;
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearDiffusionMatrixParameters;

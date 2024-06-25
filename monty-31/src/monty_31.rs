@@ -1,4 +1,4 @@
-//! An abstraction of 31-bit fields which use a MONTY approach for faster multiplication with MONTY constant 2^32.
+//! An abstraction of 31-bit fields which use a MONTY approach for faster multiplication.
 
 use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
@@ -54,7 +54,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
     }
 
     /// Convert a constant u32 array into a constant array of field elements.
-    /// Constant version of array.map(MontyField31::new) method.
+    /// Constant version of array.map(MontyField31::new).
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [MontyField31::new_monty(0); N];
@@ -70,7 +70,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
     }
 
     /// Convert a constant 2d u32 array into a constant 2d array of field elements.
-    /// Constant version of array.map(MontyField31::new_array)
+    /// Constant version of array.map(MontyField31::new_array).
     #[inline]
     pub const fn new_2d_array<const N: usize, const M: usize>(
         input: [[u32; N]; M],

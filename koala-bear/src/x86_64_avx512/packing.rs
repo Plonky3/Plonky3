@@ -10,8 +10,8 @@ pub type PackedKoalaBearAVX512 = PackedMontyField31AVX512<KoalaBearParameters>;
 const WIDTH: usize = 16;
 
 impl MontyParametersAVX512 for KoalaBearParameters {
-    const PACKEDP: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7f000001; WIDTH]) };
-    const PACKEDMU: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x81000001; WIDTH]) };
+    const PACKED_P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7f000001; WIDTH]) };
+    const PACKED_MU: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x81000001; WIDTH]) };
 }
 
 #[cfg(test)]
