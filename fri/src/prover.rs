@@ -1,3 +1,5 @@
+use core::cmp;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -104,7 +106,9 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    for log_folded_height in (config.log_blowup..log_max_height).rev() {
+    for log_folded_height in
+        (cmp::max(config.log_blowup, config.log_final_poly_len)..log_max_height).rev()
+    {
         let leaves = RowMajorMatrix::new(current.clone(), 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
@@ -120,22 +124,24 @@ where
     }
 
     // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(current.len(), config.blowup());
-    let final_poly = current[0];
-    for x in current {
-        assert_eq!(x, final_poly);
-    }
-    challenger.observe_ext_element(final_poly);
+    // assert_eq!(current.len(), config.blowup());
+    // let final_poly = current[0];
+    // for x in current {
+    //     assert_eq!(x, final_poly);
+    // }
+    current
+        .iter()
+        .for_each(|x| challenger.observe_ext_element(*x));
 
     CommitPhaseResult {
         commits,
         data,
-        final_poly,
+        final_poly: current,
     }
 }
 
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
-    final_poly: F,
+    final_poly: Vec<F>,
 }

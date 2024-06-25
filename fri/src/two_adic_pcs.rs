@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
@@ -333,8 +334,8 @@ where
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
                 .map_err(VerificationError::FriError)?;
 
-        let log_global_max_height =
-            proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
+        let log_global_max_height = proof.fri_proof.commit_phase_commits.len()
+            + cmp::max(self.fri.log_blowup, self.fri.log_final_poly_len);
 
         let reduced_openings: Vec<[Challenge; 32]> = proof
             .query_openings

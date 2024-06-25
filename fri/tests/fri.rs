@@ -35,6 +35,7 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_config = FriConfig {
         log_blowup: 1,
+        log_final_poly_len: 3,
         num_queries: 10,
         proof_of_work_bits: 8,
         mmcs,
