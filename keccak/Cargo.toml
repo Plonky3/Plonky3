@@ -14,3 +14,8 @@ criterion = "0.5.1"
 [[bench]]
 name = "bench_avx512"
 harness = false
+
+[[bench]]
+name = "bench_avx2"
+harness = false
+
