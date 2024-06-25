@@ -229,12 +229,12 @@ const STATES: [[u64; 25]; 8] = [
 fn hash_tiny_keccak(states: &mut [[u64; 25]; 8]) {
     keccakf(&mut states[0]);
     keccakf(&mut states[1]);
+    keccakf(&mut states[2]);
     keccakf(&mut states[3]);
     keccakf(&mut states[4]);
     keccakf(&mut states[5]);
     keccakf(&mut states[6]);
     keccakf(&mut states[7]);
-    keccakf(&mut states[8]);
 }
 
 fn hash_avx512(states: &mut [[u64; 25]; 8]) {
@@ -269,12 +269,11 @@ fn hash_avx512(states: &mut [[u64; 25]; 8]) {
         states[7][i] = packed_states_arr[i][7];
     }
 }
-
 fn bench_keccak_avx512(c: &mut Criterion) {
     c.bench_function("keccak_avx512_baseline", |b| {
         b.iter(|| {
             let mut states = STATES;
-            for _ in 0..100 {
+            for _ in 0..1000 {
                 hash_tiny_keccak(&mut states);
             }
             states
@@ -284,7 +283,7 @@ fn bench_keccak_avx512(c: &mut Criterion) {
     c.bench_function("keccak_avx512_impl", |b| {
         b.iter(|| {
             let mut states = STATES;
-            for _ in 0..100 {
+            for _ in 0..1000 {
                 hash_avx512(&mut states);
             }
             states
