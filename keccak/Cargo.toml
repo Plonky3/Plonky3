@@ -8,3 +8,10 @@ license = "MIT OR Apache-2.0"
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "bench_avx512"
+harness = false

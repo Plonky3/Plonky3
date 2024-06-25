@@ -1,9 +1,28 @@
 //! The Keccak-f permutation, and hash functions built from it.
 
 #![no_std]
+// #![cfg_attr(
+//     all(
+//         feature = "nightly-features",
+//         target_arch = "x86_64",
+//         target_feature = "avx512f"
+//     ),
+//     feature(stdarch_x86_avx512)
+// )]
+#![feature(stdarch_x86_avx512)]
 
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
 use tiny_keccak::{keccakf, Hasher, Keccak};
+
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "sha3"
+))]
+pub mod neon;
+
+// #[cfg(all(feature = "nightly-features", target_arch = "x86_64", target_feature = "avx512f"))]
+pub mod avx512;
 
 /// The Keccak-f permutation.
 #[derive(Copy, Clone, Debug)]
