@@ -306,7 +306,6 @@ pub fn keccak_perm(buf: &mut [__m256i; 25]) {
 mod tests {
 
     use core::arch::x86_64::{_mm256_setr_epi64x, _mm256_setzero_si256, _mm256_extract_epi64};
-    use core::mem::transmute_copy;
 
     use tiny_keccak::keccakf;
     use super::*;
