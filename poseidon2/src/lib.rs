@@ -13,6 +13,11 @@ mod matrix;
 mod round_numbers;
 use alloc::vec::Vec;
 
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+mod x86_64_avx2;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+pub use x86_64_avx2::*;
+
 pub use diffusion::{matmul_internal, DiffusionPermutation};
 pub use matrix::*;
 use p3_field::{AbstractField, PackedField, PrimeField, PrimeField64};

@@ -194,7 +194,7 @@ impl Packed64bitM31Matrix {
     #[inline]
     fn add_rc(&mut self, rc: Packed64bitM31Matrix) {
         unsafe {
-            // Safety: element of rc must be in canoncial form.
+            // Safety: element of rc must be in canonical form.
             // Elements of self should be small enough such that overflow is impossible.
             self.0[0] = x86_64::_mm256_add_epi64(self.0[0], rc.0[0]);
             self.0[1] = x86_64::_mm256_add_epi64(self.0[1], rc.0[1]);
@@ -254,7 +254,7 @@ impl Packed64bitM31Matrix {
             let fifth_red =
                 ((fifth as u32 & P) + ((fifth >> 31) as u32 & P) + ((fifth >> 62) as u32)) as u64; // Note fifth_red <= 2P + 1 < 2^32.
 
-            // Need to mutiply self00 by -2.
+            // Need to multiply self00 by -2.
             // Easiest to do 4P - self00 to get the negative, then shift left by 1.
             // only involves shifts.
             let s00 = (PX4 - fifth_red) << 1;
@@ -320,22 +320,22 @@ fn hsum(input: __m256i) -> __m256i {
         let total0 = t0[0] + t0[1] + t0[2] + t0[3];
         x86_64::_mm256_set1_epi64x(total0 as i64)
     }
-    // Another possible appraoch which doesn't pass to scalars:
+    // Another possible approach which doesn't pass to scalars:
     // let t0 = x86_64::_mm256_castpd_si256(x86_64::_mm256_permute_pd::<0b0101>(x86_64::_mm256_castsi256_pd(input)));
     // let part_sum = x86_64::_mm256_add_epi64(input, t0);
     // let part_sum_swap = x86_64::_mm256_permute4x64_epi64::<0b00001111>(part_sum);
     // x86_64::_mm256_add_epi64(part_sum, part_sum_swap)
 }
 
-/// Computex x -> x^5 for each element of the vector.
-/// The input must be in canoncial form.
+/// Compute x -> x^5 for each element of the vector.
+/// The input must be in canonical form.
 /// The output will not be in canonical form.
 #[inline]
 fn joint_sbox(x: __m256i) -> __m256i {
     unsafe {
         // Safety: If input is in canonical form, no overflow will occur and the output will be < 2^33.
 
-        // Square x. If it starts in canoncical form then x^2 < 2^62
+        // Square x. If it starts in canonical form then x^2 < 2^62
         let x2 = x86_64::_mm256_mul_epu32(x, x);
 
         // Reduce and then subtract P. The result will then lie in (-2^31, 2^31).
