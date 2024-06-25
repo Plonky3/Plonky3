@@ -35,6 +35,7 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_config = FriConfig {
         log_blowup: 1,
+        log_final_poly_len: 3,
         num_queries: 10,
         proof_of_work_bits: 8,
         mmcs,
@@ -105,6 +106,18 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
             })
             .collect();
 
+        reduced_openings.iter().enumerate().for_each(|(i, ro)| {
+            println!(
+                "Iteration {}, reduced opening zero indices: {:?}",
+                i,
+                ro.iter()
+                    .enumerate()
+                    .filter(|(_, x)| { x.is_zero() })
+                    .map(|(j, _)| j)
+                    .collect_vec()
+            );
+        });
+
         (proof, reduced_openings, chal.sample_bits(8))
     };
 
@@ -121,6 +134,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         v_challenger.sample_bits(8),
         "prover and verifier transcript have same state after FRI"
     );
+    assert!(false);
 }
 
 #[test]
