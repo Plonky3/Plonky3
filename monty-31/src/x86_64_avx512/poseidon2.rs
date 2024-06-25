@@ -26,7 +26,7 @@ where
 }
 
 impl<FP, const WIDTH: usize, MP> DiffusionPermutation<PackedMontyField31AVX512<FP>, WIDTH>
-    for DiffusionMatrixMontyField31<FP, MP>
+    for DiffusionMatrixMontyField31<MP>
 where
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
