@@ -28,14 +28,14 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type MyFriConfig = FriConfig<ChallengeMmcs>;
 
-fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
+fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm, MyFriConfig) {
     let perm = Perm::new_from_rng_128(Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_config = FriConfig {
         log_blowup: 1,
-        log_final_poly_len: 3,
+        log_final_poly_len,
         num_queries: 10,
         proof_of_work_bits: 8,
         mmcs,
@@ -43,8 +43,8 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
     (perm, fri_config)
 }
 
-fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
-    let (perm, fc) = get_ldt_for_testing(rng);
+fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
+    let (perm, fc) = get_ldt_for_testing(rng, log_final_poly_len);
     let dft = Radix2Dit::default();
 
     let shift = Val::generator();
@@ -129,6 +129,17 @@ fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng);
+        do_test_fri_ldt(&mut rng, 3);
+    }
+}
+
+// This test is expected to panic because the polynomial degree is less the final_poly_degree in the config.
+#[test]
+#[should_panic]
+fn test_fri_ldt_should_panic() {
+    // FRI is kind of flaky depending on indexing luck
+    for i in 0..4 {
+        let mut rng = ChaCha20Rng::seed_from_u64(i);
+        do_test_fri_ldt(&mut rng, 5);
     }
 }

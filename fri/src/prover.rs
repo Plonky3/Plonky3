@@ -31,6 +31,12 @@ where
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
+    input.iter().enumerate().for_each(|(i, v)| {
+        if let Some(_) = v {
+            assert!(i >= config.log_final_poly_len);
+        }
+    });
+
     let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
