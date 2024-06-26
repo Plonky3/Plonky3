@@ -15,10 +15,10 @@ use core::mem::transmute;
 //                          [x2, x6, y2, y6] [x10, x14, y10, y14]
 //                          [x3, x7, y3, y7] [x11, x15, y11, y15]
 //
-// 2 Poseidon 24 instance:  [x0, x4, y0, y4] [x8, x12, y8, y12]   [x16, x17, y16, y17]
-//                          [x1, x5, y1, y5] [x9, x13, y9, y13]   [x18, x19, y18, y19]
-//                          [x2, x6, y2, y6] [x10, x14, y10, y14] [x20, x21, y20, y21]
-//                          [x3, x7, y3, y7] [x11, x15, y11, y15] [x22, x23, y22, y23]
+// 2 Poseidon 24 instance:  [x0, x4, y0, y4] [x8, x12, y8, y12]   [x16, x20, y16, y20]
+//                          [x1, x5, y1, y5] [x9, x13, y9, y13]   [x17, x22, y17, y21]
+//                          [x2, x6, y2, y6] [x10, x14, y10, y14] [x18, x22, y18, y22]
+//                          [x3, x7, y3, y7] [x11, x15, y11, y15] [x19, x23, y19, y23]
 //
 // 4 Poseidon 16 instance:  [w0, x0, y0, z0] [w4, x4, y4, z4] [w8, x8, y8, z8]     [w12, x12, y12, z12]
 //                          [w1, x1, y1, z1] [w5, x5, y5, z5] [w9, x9, y9, z9]     [w13, x13, y13, z13]
@@ -36,8 +36,6 @@ use core::mem::transmute;
 pub struct Packed64bitM31Tensor<const HEIGHT: usize>([[__m256i; 4]; HEIGHT]);
 
 impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
-    // Some of these need to be re-thought as to how they should apply in the tensor model:
-
     // /// Convert an array of packed field elements into a Packed64bitM31Matrix prepared for Poseidon2
     // #[inline]
     // pub fn from_packed_field_array(input: [PackedMersenne31AVX2; 2]) -> Packed64bitM31Matrix {
@@ -67,7 +65,8 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     //     }
     // }
 
-    // Convert data into the form expected by the Poseidon2 implementation
+    /// Convert data from the form produced by transmute::<[u64; N], [[__m256i; 4]; 4]; N/16]>
+    /// into the form expected by the Poseidon2 implementation.
     #[inline]
     fn shuffle_data(&mut self) {
         match HEIGHT {
@@ -103,6 +102,69 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
         };
     }
 
+    /// The inverse of the shuffle_data transformation.
+    #[inline]
+    fn shuffle_data_inverse(&mut self) {
+        match HEIGHT {
+            1 => self.0[0] = transpose(self.0[0]),
+            2 => {
+                let mat0 = transpose(self.0[0]);
+                let mat1 = transpose(self.0[1]);
+
+                self.0[0][0] = mat0[0];
+                self.0[0][1] = mat0[1];
+                self.0[1][0] = mat0[2];
+                self.0[1][1] = mat0[3];
+                self.0[0][2] = mat1[0];
+                self.0[0][3] = mat1[1];
+                self.0[1][2] = mat1[2];
+                self.0[1][3] = mat1[3];
+            }
+            3 => {
+                let mat0 = transpose(self.0[0]);
+                let mat1 = transpose(self.0[1]);
+                let mat2 = transpose(self.0[2]);
+
+                self.0[0][0] = mat0[0];
+                self.0[0][1] = mat0[1];
+                self.0[1][2] = mat0[2];
+                self.0[1][3] = mat0[3];
+                self.0[0][2] = mat1[0];
+                self.0[0][3] = mat1[1];
+                self.0[2][0] = mat1[2];
+                self.0[2][1] = mat1[3];
+                self.0[1][0] = mat2[0];
+                self.0[1][1] = mat2[1];
+                self.0[2][2] = mat2[2];
+                self.0[2][3] = mat2[3];
+            }
+            4 => {
+                let mat0 = transpose(self.0[0]);
+                let mat1 = transpose(self.0[1]);
+                let mat2 = transpose(self.0[2]);
+                let mat3 = transpose(self.0[2]);
+
+                self.0[0][0] = mat0[0];
+                self.0[1][0] = mat0[1];
+                self.0[2][0] = mat0[2];
+                self.0[3][0] = mat0[3];
+                self.0[0][1] = mat1[0];
+                self.0[1][1] = mat1[1];
+                self.0[2][1] = mat1[2];
+                self.0[3][1] = mat1[3];
+                self.0[0][2] = mat2[0];
+                self.0[1][2] = mat2[1];
+                self.0[2][2] = mat2[2];
+                self.0[3][2] = mat2[3];
+                self.0[0][3] = mat3[0];
+                self.0[1][3] = mat3[1];
+                self.0[2][3] = mat3[2];
+                self.0[3][3] = mat3[3];
+            }
+            _ => unreachable!(),
+        };
+    }
+
     /// Left Multiply by the AES matrix:
     /// [ 2 3 1 1 ]
     /// [ 1 2 3 1 ]
@@ -120,8 +182,8 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
                 let t01123 = x86_64::_mm256_add_epi64(t0123, matrix[1]);
                 let t01233 = x86_64::_mm256_add_epi64(t0123, matrix[3]);
 
-                let t00 = x86_64::_mm256_slli_epi64::<1>(matrix[0]);
-                let t22 = x86_64::_mm256_slli_epi64::<1>(matrix[2]);
+                let t00 = x86_64::_mm256_add_epi64(matrix[0], matrix[0]);
+                let t22 = x86_64::_mm256_add_epi64(matrix[2], matrix[2]);
 
                 matrix[0] = x86_64::_mm256_add_epi64(t01, t01123);
                 matrix[1] = x86_64::_mm256_add_epi64(t22, t01123);
@@ -250,35 +312,9 @@ fn right_mat_mul_i_plus_1_dim_4<const HEIGHT: usize>(input: &mut Packed64bitM31T
         }
     }
 }
-//    /// The following all need to be made specific to the field we are using.
-//     #[inline]
-//     fn reduce(?) { } // Reduce from ? to u32
-//     #[inline]
-//     fn full_reduce(?) { } // Reduce from ? to an element in [0, P)
-//     #[inline]
-//     fn joint_sbox(?) { } // Input a vector of u32's stored in u64's
-//     #[inline]
-//     fn double_sbox(?) { } // Input a vector of u32's stored in u64's. Only care about first 2 entries.
-//     #[inline]
-//     fn scalar_sbox(?) { } // Input a scaler u32 stored as a u64.
-//
-//     INTERNAL_SHIFTS0_T // Constants for internal linear layer.
-//
-//
-//
-
-//     /// Compute x -> x^5 for each element of the vector.
-//     /// The input must be in canonical form.
-//     #[inline]
-//     fn joint_sbox(&mut self) {
-//         self.0[0] = joint_sbox(self.0[0]);
-//         self.0[1] = joint_sbox(self.0[1]);
-//         self.0[2] = joint_sbox(self.0[2]);
-//         self.0[3] = joint_sbox(self.0[3]);
-//     }
 
 //     /// Compute a single internal Poseidon2 round.
-//     /// Assume inputs are < 2^32 - 1, but may not be canonical.
+//     /// Assume inputs are < 2^32, but may not be canonical.
 //     /// Assume the round constant is given in canonical form.
 //     #[inline]
 //     fn internal_round(&mut self, rc: u32) {
@@ -328,7 +364,7 @@ fn right_mat_mul_i_plus_1_dim_4<const HEIGHT: usize>(input: &mut Packed64bitM31T
 //             let fifth_red =
 //                 ((fifth as u32 & P) + ((fifth >> 31) as u32 & P) + ((fifth >> 62) as u32)) as u64; // Note fifth_red <= 2P + 1 < 2^32.
 
-//             // Need to mutiply self00 by -2.
+//             // Need to multiply self00 by -2.
 //             // Easiest to do 4P - self00 to get the negative, then shift left by 1.
 //             // only involves shifts.
 //             let s00 = (PX4 - fifth_red) << 1;
@@ -363,35 +399,98 @@ fn hsum(input: __m256i) -> __m256i {
     // x86_64::_mm256_add_epi64(part_sum, part_sum_swap)
 }
 
+pub trait Poseidon2AVX2Methods<const HEIGHT: usize> {
+    /// Given a vector of elements __m256i apply a monty reduction to each u64.
+    /// Each u64 input must lie in [0, 2^{32}P)
+    /// Each output will be a u64 lying in [0, P)
+    fn full_reduce_vec(state: __m256i) -> __m256i;
+
+    /// Apply full_reduce_vec to every __m256i in the matrix.
+    #[inline]
+    fn full_reduce(state: &mut Packed64bitM31Tensor<HEIGHT>) {
+        for mut mat in state.0 {
+            mat[0] = Self::full_reduce_vec(mat[0]);
+            mat[1] = Self::full_reduce_vec(mat[1]);
+            mat[2] = Self::full_reduce_vec(mat[2]);
+            mat[3] = Self::full_reduce_vec(mat[3]);
+        }
+    }
+
+    /// Given a vector of elements __m256i apply a partial monty reduction to each u64
+    /// Each u64 input must lie in [0, 2^{32}P)
+    /// Each output will be a u64 lying in [0, 2P)
+    /// Slightly cheaper than full_reduce
+    fn partial_reduce_vec(state: __m256i) -> __m256i;
+
+    /// Apply partial_reduce_vec to every __m256i in the matrix.
+    #[inline]
+    fn partial_reduce(state: &mut Packed64bitM31Tensor<HEIGHT>) {
+        for mut mat in state.0 {
+            mat[0] = Self::partial_reduce_vec(mat[0]);
+            mat[1] = Self::partial_reduce_vec(mat[1]);
+            mat[2] = Self::partial_reduce_vec(mat[2]);
+            mat[3] = Self::partial_reduce_vec(mat[3]);
+        }
+    }
+
+    /// Apply the s-box: x -> x^s for some small s coprime to p - 1 to a vector __m256i.
+    /// Input must be 4 u64's all in the range [0, P).
+    /// Output will be 4 u64's all in the range [0, 2^{32}P).
+    fn joint_sbox_vec(state: __m256i) -> __m256i;
+
+    /// Apply joint_sbox_vec to every __m256i in the matrix.
+    #[inline]
+    fn joint_sbox(state: &mut Packed64bitM31Tensor<HEIGHT>) {
+        for mut mat in state.0 {
+            mat[0] = Self::joint_sbox_vec(mat[0]);
+            mat[1] = Self::joint_sbox_vec(mat[1]);
+            mat[2] = Self::joint_sbox_vec(mat[2]);
+            mat[3] = Self::joint_sbox_vec(mat[3]);
+        }
+    }
+
+    /// Apply the s-box: x -> x^s to a vector __m256i where we only care about the first 2 u64's
+    fn double_sbox(state: __m256i) -> __m256i;
+
+    /// Apply the s-box: x -> x^s to a single u32.
+    fn scalar_sbox(s0: u32) -> u32;
+
+    // INTERNAL_SHIFTS0_T // Constants for internal linear layer.
+}
+
 /// A single External Round.
 /// Note that we change the order to be mat_mul -> RC -> S-box (instead of RC -> S-box -> mat_mul in the paper).
 /// Input does not need to be in canonical form, < 2^50 is fine.
 /// Output will be < 2^33.
 #[inline]
-fn rotated_external_round<const HEIGHT: usize>(
+fn rotated_external_round<const HEIGHT: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constant: &Packed64bitM31Tensor<HEIGHT>,
-) {
+) where
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+{
     state.mat_mul_aes();
     state.right_mat_mul_i_plus_1();
     state.add_rc(*round_constant);
-    state.full_reduce();
-    state.joint_sbox();
+    P2AVX2::full_reduce(state);
+    P2AVX2::joint_sbox(state);
 }
 
 /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
 #[inline]
-pub fn initial_external_rounds<const HEIGHT: usize>(
+pub fn initial_external_rounds<const HEIGHT: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constants: &[Packed64bitM31Tensor<HEIGHT>],
-) {
+) where
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+{
     for round_constant in round_constants.iter() {
-        rotated_external_round(state, round_constant)
+        rotated_external_round::<HEIGHT, P2AVX2>(state, round_constant)
     }
 
     state.mat_mul_aes();
     state.right_mat_mul_i_plus_1();
-    state.full_reduce(); // Might be able to get away with not doing this.
+    P2AVX2::full_reduce(state); // Might be able to get away with not doing this.
 }
 
 /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
@@ -407,16 +506,18 @@ pub fn internal_rounds<const HEIGHT: usize>(
 
 /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
 #[inline]
-pub fn final_external_rounds<const HEIGHT: usize>(
+pub fn final_external_rounds<const HEIGHT: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constants: &[Packed64bitM31Tensor<HEIGHT>],
-) {
+) where
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+{
     state.add_rc(round_constants[0]);
-    state.full_reduce(); // Can possibly do something cheaper than full reduce here?
-    state.joint_sbox();
+    P2AVX2::full_reduce(state); // Can possibly do something cheaper than full reduce here?
+    P2AVX2::joint_sbox(state);
 
     for round_constant in round_constants.iter().skip(1) {
-        rotated_external_round(state, round_constant)
+        rotated_external_round::<HEIGHT, P2AVX2>(state, round_constant)
     }
 
     state.mat_mul_aes();
