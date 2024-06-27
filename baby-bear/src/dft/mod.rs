@@ -3,7 +3,9 @@ mod backward;
 mod forward;
 
 pub use crate::dft::backward::backward_fft;
-pub use crate::dft::forward::{forward_fft, four_step_fft, roots_of_unity_table};
+pub use crate::dft::forward::{
+    batch_forward_fft, forward_fft, four_step_fft, roots_of_unity_table,
+};
 
 // TODO: These are only pub for benches at the moment...
 //pub mod backward;
@@ -40,6 +42,7 @@ mod tests {
     use core::iter::repeat_with;
 
     use p3_field::{AbstractField, Field};
+    use p3_util::reverse_slice_index_bits;
     use rand::{thread_rng, Rng};
 
     use super::{backward_fft, forward_fft, four_step_fft, roots_of_unity_table};
@@ -72,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_forward_16() {
-        const NITERS: usize = 1; //100;
+        const NITERS: usize = 100;
         let len = 16;
         let root_table = roots_of_unity_table(len);
 
@@ -90,6 +93,7 @@ mod tests {
 
             let mut vs = us.clone();
             forward_fft(&mut vs, &root_table);
+            reverse_slice_index_bits(&mut vs);
 
             let mut ws = us.clone();
             four_step_fft(&mut ws, &root_table);
@@ -118,6 +122,8 @@ mod tests {
                 let mut vs = us.clone();
                 //forward_fft(&mut vs, &root_table);
                 four_step_fft(&mut vs, &root_table);
+
+                reverse_slice_index_bits(&mut vs);
 
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);

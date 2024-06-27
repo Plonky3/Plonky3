@@ -252,6 +252,10 @@ pub fn forward_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
     }
 }
 
+pub fn batch_forward_fft(a: &mut [Vec<Real>], root_table: &[Vec<Real>]) {
+    a.par_iter_mut().for_each(|v| forward_fft(v, root_table));
+}
+
 /// Square root of an integer
 /// Source: https://en.wikipedia.org/wiki/Integer_square_root#Using_only_integer_division
 #[inline]
@@ -278,7 +282,7 @@ fn _isqrt(s: usize) -> usize {
 
 /// Parameter for tuning the transpose operation.
 /// TODO: Should depend on the size of the matrix elements.
-const TRANSPOSE_BLOCK_SIZE: usize = 4; // TODO: 64 is better for u32
+const TRANSPOSE_BLOCK_SIZE: usize = 64; // TODO: 64 is better for u32
 
 #[inline(always)]
 fn transpose_scalar_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usize) {
@@ -318,6 +322,8 @@ fn transpose_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usi
             transpose_scalar_block(out, inp, nrows, ncols);
         }
     }
+    // FIXME: Need to handle case where TRANSPOSE_BLOCK_SIZE doesn't
+    // divide matrix dimensions.
 }
 
 fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
@@ -330,15 +336,20 @@ fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
     println!("");
 }
 
+// TODO: Write a proper out-of-place version
+fn slow_forward_fft(output: &mut [Real], input: &[Real], root_table: &[Vec<Real>]) {
+    output.copy_from_slice(input);
+    forward_fft(output, root_table);
+    reverse_slice_index_bits(output);
+}
+
 /// Size of FFT above which we parallelise the FFT.
 const FFT_PARALLEL_THRESHOLD: usize = 2; //TODO: Use 1024 or something
 
 fn four_step_fft_inner(output: &mut [Real], input: &mut [Real], root_table: &[Vec<Real>]) {
     let n = input.len();
     if n <= FFT_PARALLEL_THRESHOLD {
-        let mut output = vec![0u32; input.len()];
-        forward_fft(input, root_table);
-        output.copy_from_slice(&input);
+        slow_forward_fft(output, input, root_table);
         return;
     }
     assert_eq!(n, output.len());
@@ -355,21 +366,25 @@ fn four_step_fft_inner(output: &mut [Real], input: &mut [Real], root_table: &[Ve
     debug_assert_eq!(n, nrows * ncols);
     debug_assert_eq!(nrows, 1 << lg_nrows);
 
-    transpose_block(output, input, nrows, ncols);
+    let buf1 = input;
+    let buf2 = output;
 
-    // TODO: Avoid the bitreversal
-    // Since we are doing non-square transposes, we need a second buffer anyway,
-    // so might as well not use an inplace FFT which allows avoiding the bit reversal.
-    output.par_chunks_exact_mut(nrows).for_each(|col| {
-        forward_fft(col, &root_table[lg_ncols..]);
-        reverse_slice_index_bits(col);
-    });
+    // buf1 is nrows x ncols
+    transpose_block(buf2, buf1, nrows, ncols);
+
+    // buf2 is ncols x nrows
+    buf1.par_chunks_exact_mut(nrows)
+        .zip(buf2.par_chunks_exact(nrows))
+        .for_each(|(out, col)| {
+            slow_forward_fft(out, col, &root_table[lg_ncols..]);
+        });
+
+    // buf1 is ncols x nrows, each row is fft(col of input)
 
     // TODO: parallelise
-    // TODO: store in bit-reversed order?
+    // TODO: Store root_table[0] in an order that improves cache access
     for i in 1..ncols {
         for j in 1..nrows {
-            let s = output[i * nrows + j];
             let exp = i * j;
             let w = if exp < n / 2 {
                 root_table[0][exp - 1]
@@ -381,25 +396,24 @@ fn four_step_fft_inner(output: &mut [Real], input: &mut [Real], root_table: &[Ve
                 // exp > n / 2
                 P - root_table[0][(exp - n / 2) - 1]
             };
+            let s = buf1[i * nrows + j];
             let t = monty_reduce(s as u64 * w as u64);
-            output[i * nrows + j] = t;
+            buf1[i * nrows + j] = t;
         }
     }
 
     // TODO: Consider combining this transpose and the twiddle adjustment above?
-    transpose_block(input, output, ncols, nrows);
+    transpose_block(buf2, buf1, ncols, nrows);
 
-    // TODO: If we're just doing convolution, then we can skip the bitreversal.
-    input.par_chunks_exact_mut(ncols).for_each(|row| {
-        forward_fft(row, &root_table[lg_nrows..]);
-        reverse_slice_index_bits(row);
-    });
+    // buf2 is nrows x ncols
+    buf1.par_chunks_exact_mut(ncols)
+        .zip(buf2.par_chunks_exact(ncols))
+        .for_each(|(out, row)| {
+            slow_forward_fft(out, row, &root_table[lg_nrows..]);
+        });
 
     // TODO: If we're just doing convolution, then we can skip the last transpose
-    transpose_block(output, input, nrows, ncols);
-
-    // TODO: Shouldn't be necessary
-    reverse_slice_index_bits(output);
+    transpose_block(buf2, buf1, nrows, ncols);
 }
 
 pub fn four_step_fft(input: &mut [Real], root_table: &[Vec<Real>]) {

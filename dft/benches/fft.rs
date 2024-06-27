@@ -15,10 +15,10 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[14, 16, 18];
+    let log_sizes = &[14, 16, 18, 20, 22, 24];
     let log_half_sizes = &[13, 15, 17];
 
-    const BATCH_SIZE: usize = 100;
+    const BATCH_SIZE: usize = 256;
 
     baby_bear_fft::<BATCH_SIZE>(c, log_sizes);
     four_step_fft::<BATCH_SIZE>(c, log_sizes);
@@ -38,6 +38,7 @@ fn bench_fft(c: &mut Criterion) {
 
     ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c);
 
+    coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c);
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c);
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c);
     coset_lde::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c);
@@ -55,12 +56,17 @@ where
         let n = 1 << n_log;
         let root_table = p3_baby_bear::dft::roots_of_unity_table(n);
 
-        let mut u: Vec<u32> = Standard.sample_iter(&mut rng).take(n).collect();
+        let mut u: Vec<Vec<u32>> = (0..BATCH_SIZE)
+            .into_iter()
+            .map(|_| Standard.sample_iter(&mut rng).take(n).collect())
+            .collect();
+        assert_eq!(u.len(), BATCH_SIZE);
+        assert!(u.iter().map(|v| v.len()).all(|l| l == n));
 
         let i = 0;
         group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
             b.iter(|| {
-                p3_baby_bear::dft::forward_fft(&mut u, &root_table);
+                p3_baby_bear::dft::batch_forward_fft(&mut u, &root_table);
             });
         });
     }
