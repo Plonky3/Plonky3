@@ -14,7 +14,7 @@ fn transpose_benchmark(c: &mut Criterion) {
             g.throughput(Throughput::Bytes(
                 (nrows * ncols * core::mem::size_of::<u32>()) as u64,
             ));
-            g.bench_function(&name, |b| b.iter(|| matrix.clone().transpose()));
+            g.bench_function(&name, |b| b.iter(|| matrix.transpose()));
         }
     };
 
