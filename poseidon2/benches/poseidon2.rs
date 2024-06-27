@@ -4,16 +4,16 @@ use std::mem::transmute;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
-use p3_field::{PackedValue, PrimeField, PrimeField32, PrimeField64};
+use p3_field::{PackedField, PackedValue, PrimeField, PrimeField32, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{
     final_external_rounds, initial_external_rounds, internal_rounds, DiffusionMatrixMersenne31,
-    Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2,
+    Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2, Poseidon2DataM31AVX2,
 };
 use p3_poseidon2::{
-    DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral,
-    Poseidon2Fast,
+    DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2AVX2, Poseidon2AVX2Methods,
+    Poseidon2ExternalMatrixGeneral, Poseidon2Fast,
 };
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
@@ -37,6 +37,10 @@ fn bench_poseidon2(c: &mut Criterion) {
         c,
     );
     poseidon2_avx2_m31(c);
+
+    poseidon2_avx2_m31_all::<1, 2, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    poseidon2_avx2_m31_all::<2, 4, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    poseidon2_avx2_m31_all::<4, 8, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
 
     poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>(c);
     poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 12, 7>(
@@ -130,5 +134,39 @@ fn poseidon2_avx2_m31(c: &mut Criterion) {
         b.iter(|| poseidon_2.permute(avx2_input))
     });
 }
+
+fn poseidon2_avx2_m31_all<
+    const HEIGHT: usize,
+    const WIDTH: usize,
+    const PERMWIDTH: usize,
+    Poseidon2Data,
+    PF,
+>(
+    c: &mut Criterion,
+) where
+    PF: PackedField,
+    PF::Scalar: PrimeField32,
+    Poseidon2Data: Poseidon2AVX2Methods<
+        HEIGHT,
+        Field = PF::Scalar,
+        InputOutput = [PF; WIDTH],
+        ExternalConstantsInput = [PF::Scalar; PERMWIDTH],
+    >,
+    Standard: Distribution<PF> + Distribution<[PF; WIDTH]>,
+    Standard: Distribution<PF::Scalar> + Distribution<[PF::Scalar; WIDTH]>,
+{
+    let mut rng = thread_rng();
+
+    let poseidon_2: Poseidon2AVX2<HEIGHT, Poseidon2Data> =
+        Poseidon2AVX2::new_from_rng_128::<_, 5>(&mut rng);
+
+    let avx2_input: [PF; WIDTH] = [PF::zero(); WIDTH];
+    let name = format!("poseidon2_AVX2_Mersenne31::<{}>", HEIGHT);
+    let id = BenchmarkId::new(name, HEIGHT);
+    c.bench_with_input(id, &avx2_input, |b, &avx2_input| {
+        b.iter(|| poseidon_2.permute(avx2_input))
+    });
+}
+
 criterion_group!(benches, bench_poseidon2);
 criterion_main!(benches);

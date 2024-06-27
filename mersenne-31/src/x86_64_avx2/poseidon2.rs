@@ -36,15 +36,15 @@ const PX4: u64 = (P as u64) << 2;
 const PSQ: i64 = (P as i64) * (P as i64);
 const P_4XU64: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
 
-pub const INTERNAL_SHIFTS0: __m256i = unsafe { transmute::<[u64; 4], _>([0, 0, 1, 2]) };
-pub const INTERNAL_SHIFTS1: __m256i = unsafe { transmute::<[u64; 4], _>([3, 4, 5, 6]) };
-pub const INTERNAL_SHIFTS2: __m256i = unsafe { transmute::<[u64; 4], _>([7, 8, 10, 12]) };
-pub const INTERNAL_SHIFTS3: __m256i = unsafe { transmute::<[u64; 4], _>([13, 14, 15, 16]) };
+pub const INTERNAL_SHIFTS0: [u64; 4] = [0, 0, 1, 2];
+pub const INTERNAL_SHIFTS1: [u64; 4] = [3, 4, 5, 6];
+pub const INTERNAL_SHIFTS2: [u64; 4] = [7, 8, 10, 12];
+pub const INTERNAL_SHIFTS3: [u64; 4] = [13, 14, 15, 16];
 
-const INTERNAL_SHIFTS0_T: __m256i = unsafe { transmute::<[u64; 4], _>([0, 3, 7, 13]) };
-const INTERNAL_SHIFTS1_T: __m256i = unsafe { transmute::<[u64; 4], _>([0, 4, 8, 14]) };
-const INTERNAL_SHIFTS2_T: __m256i = unsafe { transmute::<[u64; 4], _>([1, 5, 10, 15]) };
-const INTERNAL_SHIFTS3_T: __m256i = unsafe { transmute::<[u64; 4], _>([2, 6, 12, 16]) };
+const INTERNAL_SHIFTS0_T: [u64; 4] = [0, 3, 7, 13];
+const INTERNAL_SHIFTS1_T: [u64; 4] = [0, 4, 8, 14];
+const INTERNAL_SHIFTS2_T: [u64; 4] = [1, 5, 10, 15];
+const INTERNAL_SHIFTS3_T: [u64; 4] = [2, 6, 12, 16];
 
 /// A 4x4 Matrix of M31 elements with each element stored in 64-bits and each row saved as 256bit packed vector.
 #[derive(Clone, Copy, Debug)]
@@ -214,7 +214,7 @@ impl Packed64bitM31Matrix {
             // Do a matrix multiplication on the remaining elements.
             // We will then move the first element back in later.
 
-            let s0 = { transmute::<_, [u64; 4]>(self.0[0]) }[0] as u32; // Pull out the first element.
+            let s0 = x86_64::_mm256_extract_epi64::<0>(self.0[0]) as u32; // Pull out the first element.
 
             // Can do part of the sum vertically.
             let t01 = x86_64::_mm256_add_epi64(self.0[0], self.0[1]);
@@ -227,10 +227,10 @@ impl Packed64bitM31Matrix {
             // IMPROVE: Suspect this is suboptimal and can be improved.
 
             // Doing the diagonal multiplication.
-            self.0[0] = x86_64::_mm256_sllv_epi64(self.0[0], INTERNAL_SHIFTS0_T);
-            self.0[1] = x86_64::_mm256_sllv_epi64(self.0[1], INTERNAL_SHIFTS1_T);
-            self.0[2] = x86_64::_mm256_sllv_epi64(self.0[2], INTERNAL_SHIFTS2_T);
-            self.0[3] = x86_64::_mm256_sllv_epi64(self.0[3], INTERNAL_SHIFTS3_T);
+            self.0[0] = x86_64::_mm256_sllv_epi64(self.0[0], transmute(INTERNAL_SHIFTS0_T));
+            self.0[1] = x86_64::_mm256_sllv_epi64(self.0[1], transmute(INTERNAL_SHIFTS1_T));
+            self.0[2] = x86_64::_mm256_sllv_epi64(self.0[2], transmute(INTERNAL_SHIFTS2_T));
+            self.0[3] = x86_64::_mm256_sllv_epi64(self.0[3], transmute(INTERNAL_SHIFTS3_T));
 
             // Need to compute s0 -> (s0 + rc)^5
             let (sum, over) = s0.overflowing_add(rc); // s0 + rc <= 3P, over detects if its > 2^32 - 1 = 2P + 1.
@@ -411,19 +411,297 @@ pub fn final_external_rounds(
     // Output is not reduced.
 }
 
+use p3_poseidon2::{Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods};
+
+#[derive(Clone)]
+pub struct Poseidon2DataM31AVX2();
+
+impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
+    /// Given a vector of elements __m256i apply a monty reduction to each u64.
+    /// Each u64 input must lie in [0, 2^{32}P)
+    /// Each output will be a u64 lying in [0, P)
+    #[inline]
+    fn full_reduce_vec(state: __m256i) -> __m256i {
+        full_reduce(state)
+    }
+
+    /// Given a vector of elements __m256i apply a partial monty reduction to each u64
+    /// Each u64 input must lie in [0, 2^{32}P)
+    /// Each output will be a u64 lying in [0, 2P)
+    /// Slightly cheaper than full_reduce
+    #[inline]
+    fn partial_reduce_vec(state: __m256i) -> __m256i {
+        reduce(state)
+    }
+
+    /// Apply the s-box: x -> x^s for some small s coprime to p - 1 to a vector __m256i.
+    /// Input must be 4 u64's all in the range [0, P).
+    /// Output will be 4 u64's all in the range [0, 2^{32}P).
+    #[inline]
+    fn joint_sbox_vec(state: __m256i) -> __m256i {
+        joint_sbox(state)
+    }
+
+    /// Apply the s-box: x -> (x + rc)^s to a vector __m256i.
+    /// s0 is in [0, 2P], rc is in [0, P]
+    #[inline]
+    fn quad_internal_sbox(s0: __m256i, rc: u32) -> __m256i {
+        unsafe {
+            let constant = x86_64::_mm256_set1_epi64x(rc as i64);
+
+            // Need to get s0 into canonical form.
+            let sub = x86_64::_mm256_sub_epi64(s0, P_4XU64);
+            let red_s0 = x86_64::_mm256_min_epu32(s0, sub);
+
+            // Each entry of sum is <= 3P.
+            let sum = x86_64::_mm256_add_epi64(red_s0, constant);
+            let sub = x86_64::_mm256_sub_epi64(sum, P_4XU64);
+
+            // If overflow occurs in a subtraction, the result will be large.
+            let reduced = x86_64::_mm256_min_epu32(sum, sub);
+
+            joint_sbox(reduced)
+        }
+    }
+
+    /// Apply the s-box: x -> (x + rc)^s to a vector __m256i where we only care about the first 2 u64's
+    #[inline]
+    fn double_internal_sbox(s0: __m256i, rc: u32) -> __m256i {
+        unsafe {
+            // For now we do something identical to quad_internal_sbox.
+            // Long term there might be a better way.
+
+            // This could/should be replaced by a blend.
+            let full_broadcast = x86_64::_mm256_set1_epi64x(rc as i64);
+            let zero_second_elem = x86_64::_mm256_insert_epi64::<1>(full_broadcast, 0);
+            let constant = x86_64::_mm256_insert_epi64::<3>(zero_second_elem, 0);
+
+            // Need to get s0 into canonical form.
+            let sub = x86_64::_mm256_sub_epi64(s0, P_4XU64);
+            let red_s0 = x86_64::_mm256_min_epu32(s0, sub);
+
+            // Each entry of sum is < 2P.
+            let sum = x86_64::_mm256_add_epi64(red_s0, constant);
+            let sub = x86_64::_mm256_sub_epi64(sum, P_4XU64);
+
+            // If overflow occurs in a subtraction, the result will be large.
+            let reduced = x86_64::_mm256_min_epu32(sum, sub);
+
+            joint_sbox(reduced)
+        }
+    }
+
+    /// Apply the s-box: x -> x^s to a single u32.
+    #[inline]
+    fn scalar_internal_sbox(s0: __m256i, rc: u32) -> __m256i {
+        unsafe {
+            let s0 = x86_64::_mm256_extract_epi64::<0>(s0);
+            debug_assert!(s0 < (1 << 32));
+            let s0 = s0 as u32;
+            // Need to compute s0 -> (s0 + rc)^5
+            let (sum, over) = s0.overflowing_add(rc); // s0 + rc <= 3P, over detects if its > 2^32 - 1 = 2P + 1.
+            let (sum_corr, under) = sum.overflowing_sub(P << 1); // If over, sum_corr is in [0, P].
+                                                                 // Under is used to flag the unique sum = 2P + 1 case.
+            let sum_sub = sum.wrapping_sub(P) as i32; // If not over and under, sum_sub is in [-P, P].
+
+            let val = if over | !under {
+                sum_corr as i32
+            } else {
+                sum_sub
+            }; // -P - 1 <= val <= P
+
+            let sq = (val as i64) * (val as i64); // 0 <= sq <= P^2
+            let sq_red = ((sq as u32 & P) + ((sq >> 31) as u32)).wrapping_sub(P) as i32; // -P <= sq_red <= P
+
+            let quad = (sq_red as i64) * (sq_red as i64); // 0 <= quad <= P^2
+            let quad_red = ((quad as u32 & P) + ((quad >> 31) as u32)).wrapping_sub(P) as i32; // -P <= quad_red <= P
+
+            let fifth = (((quad_red as i64) * (val as i64)) + PSQ) as u64; // 0 <= fifth <= 2P^2
+            let fifth_red =
+                ((fifth as u32 & P) + ((fifth >> 31) as u32 & P) + ((fifth >> 62) as u32)) as u64;
+            // Note fifth_red <= 2P + 1 < 2^32.
+            let zeros = x86_64::_mm256_setzero_si256();
+            x86_64::_mm256_insert_epi64::<0>(zeros, fifth_red as i64)
+        }
+    }
+
+    const PACKED_3XPRIME: __m256i = unsafe { transmute([3 * (P as u64); 4]) };
+}
+
+impl Poseidon2AVX2Methods<1> for Poseidon2DataM31AVX2 {
+    type Field = Mersenne31;
+    type InputOutput = [PackedMersenne31AVX2; 2];
+    type ExternalConstantsInput = [Mersenne31; 16];
+
+    const INTERNAL_SHIFTS: Packed64bitM31Tensor<1> = unsafe {
+        transmute([
+            INTERNAL_SHIFTS0_T,
+            INTERNAL_SHIFTS1_T,
+            INTERNAL_SHIFTS2_T,
+            INTERNAL_SHIFTS3_T,
+        ])
+    };
+
+    fn from_input(input: Self::InputOutput) -> Packed64bitM31Tensor<1> {
+        unsafe {
+            let field_input: [Mersenne31; 16] = transmute(input);
+            let mut tensor: Packed64bitM31Tensor<1> =
+                transmute(field_input.map(|x| x.value as u64));
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn to_output(input: Packed64bitM31Tensor<1>) -> Self::InputOutput {
+        unsafe {
+            let mut tensor = input;
+            tensor.shuffle_data();
+            let result: [u32; 16] = transmute::<_, [u64; 16]>(tensor).map(|x| x as u32);
+            transmute(result)
+        }
+    }
+
+    fn manipulate_external_constants(
+        input: Self::ExternalConstantsInput,
+    ) -> Packed64bitM31Tensor<1> {
+        unsafe {
+            let mut tensor: Packed64bitM31Tensor<1> = transmute(input.map(|x| x.value as u64));
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn manipulate_internal_constants(input: Mersenne31) -> u32 {
+        input.value
+    }
+}
+
+impl Poseidon2AVX2Methods<2> for Poseidon2DataM31AVX2 {
+    type Field = Mersenne31;
+    type InputOutput = [PackedMersenne31AVX2; 4];
+    type ExternalConstantsInput = [Mersenne31; 16];
+
+    const INTERNAL_SHIFTS: Packed64bitM31Tensor<2> = unsafe {
+        transmute([
+            [[INTERNAL_SHIFTS0_T[0], INTERNAL_SHIFTS0_T[1]]; 2],
+            [[INTERNAL_SHIFTS1_T[0], INTERNAL_SHIFTS1_T[1]]; 2],
+            [[INTERNAL_SHIFTS2_T[0], INTERNAL_SHIFTS2_T[1]]; 2],
+            [[INTERNAL_SHIFTS3_T[0], INTERNAL_SHIFTS3_T[1]]; 2],
+            [[INTERNAL_SHIFTS0_T[2], INTERNAL_SHIFTS0_T[3]]; 2],
+            [[INTERNAL_SHIFTS1_T[2], INTERNAL_SHIFTS1_T[3]]; 2],
+            [[INTERNAL_SHIFTS2_T[2], INTERNAL_SHIFTS2_T[3]]; 2],
+            [[INTERNAL_SHIFTS3_T[2], INTERNAL_SHIFTS3_T[3]]; 2],
+        ])
+    };
+
+    fn from_input(input: Self::InputOutput) -> Packed64bitM31Tensor<2> {
+        unsafe {
+            let field_input: [Mersenne31; 32] = transmute(input);
+            let mut tensor: Packed64bitM31Tensor<2> =
+                transmute(field_input.map(|x| x.value as u64));
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn to_output(input: Packed64bitM31Tensor<2>) -> Self::InputOutput {
+        unsafe {
+            let mut tensor = input;
+            tensor.shuffle_data_inverse();
+            let result: [u32; 32] = transmute::<_, [u64; 32]>(tensor).map(|x| x as u32);
+            transmute(result)
+        }
+    }
+
+    fn manipulate_external_constants(
+        input: Self::ExternalConstantsInput,
+    ) -> Packed64bitM31Tensor<2> {
+        unsafe {
+            let mut tensor: Packed64bitM31Tensor<2> = transmute([input.map(|x| x.value as u64); 2]);
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn manipulate_internal_constants(input: Mersenne31) -> u32 {
+        input.value
+    }
+}
+
+impl Poseidon2AVX2Methods<4> for Poseidon2DataM31AVX2 {
+    type Field = Mersenne31;
+    type InputOutput = [PackedMersenne31AVX2; 8];
+    type ExternalConstantsInput = [Mersenne31; 16];
+
+    const INTERNAL_SHIFTS: Packed64bitM31Tensor<4> = unsafe {
+        transmute([
+            [INTERNAL_SHIFTS0[0]; 4],
+            [INTERNAL_SHIFTS0[1]; 4],
+            [INTERNAL_SHIFTS0[2]; 4],
+            [INTERNAL_SHIFTS0[3]; 4],
+            [INTERNAL_SHIFTS1[0]; 4],
+            [INTERNAL_SHIFTS1[1]; 4],
+            [INTERNAL_SHIFTS1[2]; 4],
+            [INTERNAL_SHIFTS1[3]; 4],
+            [INTERNAL_SHIFTS2[0]; 4],
+            [INTERNAL_SHIFTS2[1]; 4],
+            [INTERNAL_SHIFTS2[2]; 4],
+            [INTERNAL_SHIFTS2[3]; 4],
+            [INTERNAL_SHIFTS3[0]; 4],
+            [INTERNAL_SHIFTS3[1]; 4],
+            [INTERNAL_SHIFTS3[2]; 4],
+            [INTERNAL_SHIFTS3[3]; 4],
+        ])
+    };
+
+    fn from_input(input: Self::InputOutput) -> Packed64bitM31Tensor<4> {
+        unsafe {
+            let field_input: [Mersenne31; 64] = transmute(input);
+            let mut tensor: Packed64bitM31Tensor<4> =
+                transmute(field_input.map(|x| x.value as u64));
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn to_output(input: Packed64bitM31Tensor<4>) -> Self::InputOutput {
+        unsafe {
+            let mut tensor = input;
+            tensor.shuffle_data_inverse();
+            let result: [u32; 64] = transmute::<_, [u64; 64]>(tensor).map(|x| x as u32);
+            transmute(result)
+        }
+    }
+
+    fn manipulate_external_constants(
+        input: Self::ExternalConstantsInput,
+    ) -> Packed64bitM31Tensor<4> {
+        unsafe {
+            let mut tensor: Packed64bitM31Tensor<4> = transmute([input.map(
+                |x| x.value as u64); 4]);
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn manipulate_internal_constants(input: Mersenne31) -> u32 {
+        input.value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::mem::transmute;
 
     use p3_field::{AbstractField, PrimeField32};
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral, Poseidon2Fast};
+    use p3_poseidon2::{Poseidon2, Poseidon2AVX2, Poseidon2ExternalMatrixGeneral, Poseidon2Fast};
     use p3_symmetric::Permutation;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use crate::{
         final_external_rounds, initial_external_rounds, internal_rounds, DiffusionMatrixMersenne31,
-        Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2,
+        Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2, Poseidon2DataM31AVX2,
     };
 
     type F = Mersenne31;
@@ -515,6 +793,100 @@ mod tests {
         let avx2_output = vector_poseidon_2.permute(avx2_input);
 
         let output: [F; 16] = unsafe { transmute(avx2_output) };
+
+        assert_eq!(output, expected)
+    }
+
+    /// Test that the scalar and vectorized outputs are the same on a random input of length 16.
+    #[test]
+    fn test_avx2_vectorized_poseidon2_width_16_2() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        // Our Poseidon2 implementation.
+        let poseidon2 = Perm16::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixMersenne31,
+            &mut rng,
+        );
+
+        let input: [F; 16] = rng.gen();
+
+        let mut expected = input;
+        poseidon2.permute_mut(&mut expected);
+
+        let avx2_input: [PackedMersenne31AVX2; 2] = unsafe { transmute(input) };
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        let vector_poseidon_2: Poseidon2AVX2<1, Poseidon2DataM31AVX2> =
+            Poseidon2AVX2::new_from_rng_128::<Xoroshiro128Plus, 5>(&mut rng);
+
+        let avx2_output = vector_poseidon_2.permute(avx2_input);
+
+        let output: [F; 16] = unsafe { transmute(avx2_output) };
+
+        assert_eq!(output, expected)
+    }
+
+    /// Test that the scalar and vectorized outputs are the same on a random input of length 32.
+    #[test]
+    fn test_avx2_vectorized_poseidon2_2_x_width_16_2() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        // Our Poseidon2 implementation.
+        let poseidon2 = Perm16::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixMersenne31,
+            &mut rng,
+        );
+
+        let input: [[F; 16]; 2] = rng.gen();
+
+        let mut expected = input;
+        for row in expected.iter_mut() {
+            poseidon2.permute_mut(row);
+        }
+
+        let avx2_input: [PackedMersenne31AVX2; 4] = unsafe { transmute(input) };
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        let vector_poseidon_2: Poseidon2AVX2<2, Poseidon2DataM31AVX2> =
+            Poseidon2AVX2::new_from_rng_128::<Xoroshiro128Plus, 5>(&mut rng);
+
+        let avx2_output = vector_poseidon_2.permute(avx2_input);
+
+        let output: [[F; 16]; 2] = unsafe { transmute(avx2_output) };
+
+        assert_eq!(output, expected)
+    }
+
+    /// Test that the scalar and vectorized outputs are the same on a random input of length 32.
+    #[test]
+    fn test_avx2_vectorized_poseidon2_4_x_width_16_2() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        // Our Poseidon2 implementation.
+        let poseidon2 = Perm16::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixMersenne31,
+            &mut rng,
+        );
+
+        let input: [[F; 16]; 4] = rng.gen();
+
+        let mut expected = input;
+        for row in expected.iter_mut() {
+            poseidon2.permute_mut(row);
+        }
+
+        let avx2_input: [PackedMersenne31AVX2; 8] = unsafe { transmute(input) };
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        let vector_poseidon_2: Poseidon2AVX2<4, Poseidon2DataM31AVX2> =
+            Poseidon2AVX2::new_from_rng_128::<Xoroshiro128Plus, 5>(&mut rng);
+
+        let avx2_output = vector_poseidon_2.permute(avx2_input);
+
+        let output: [[F; 16]; 4] = unsafe { transmute(avx2_output) };
 
         assert_eq!(output, expected)
     }
