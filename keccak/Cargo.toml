@@ -19,3 +19,7 @@ harness = false
 name = "bench_avx2"
 harness = false
 
+[[bench]]
+name = "bench_avx2split"
+harness = false
+

@@ -1,0 +1,96 @@
+use criterion::{criterion_group, criterion_main, Criterion};
+use p3_keccak::avx2split;
+use tiny_keccak::keccakf;
+
+const STATES: [[u64; 25]; 2] = [
+    [
+        0xc22c4c11dbedc46a,
+        0x317f74268c4f5cd0,
+        0x838719da5aa295b6,
+        0x9e9b17211985a3ba,
+        0x92927b963ce29d69,
+        0xf9a7169e38cc7216,
+        0x639a594d6fbfe341,
+        0x2335ebd8d15777bd,
+        0x44e1abc0d022823b,
+        0xb3657f9d16b36c13,
+        0x26d9217c32b3010a,
+        0x6e73d6e9c7e5bcc8,
+        0x400aa469d130a391,
+        0x1aa7c8a2cb97188a,
+        0xdc3084a09bd0a6e3,
+        0xbcfe3b656841baea,
+        0x325f41887c840166,
+        0x844656e313674bfe,
+        0xd63de8bad19d156c,
+        0x49ef0ac0ab52e147,
+        0x8b92ee811c654ca9,
+        0x42a9310fedf09bda,
+        0x182dbdac03a5358e,
+        0x3b4692ce58af8cb5,
+        0x534da610f01b8fb3,
+    ],
+    [
+        0x1c322ff4aea07d26,
+        0xbd67bde061c97612,
+        0x517565bd02ab410a,
+        0xb251273ddc12a725,
+        0x24f0979fe4f4fedc,
+        0xc32d063a64f0bf03,
+        0xd33c6709a7b103d2,
+        0xaf33a8224b5c8828,
+        0x6544ca066e997f1c,
+        0xd53ad41e39f06d68,
+        0x67695f6fb71d77d9,
+        0xd6378cf19ee510f2,
+        0x49472ea57abcbd08,
+        0xcf3739df1eefbbb4,
+        0x0fac1bf30e8ef101,
+        0x7ff04c9b90de0f27,
+        0xf3d63ec0e64cb2ab,
+        0x76388c05f377d4bd,
+        0x7886dd8f5b14ef5b,
+        0xb036d289ba24a513,
+        0x011e8fd6be65a408,
+        0x695e2d20848eec67,
+        0x31f9e80c5f45f8ee,
+        0xcdf873daf7a5fdeb,
+        0xfe98ff5bf28d560a,
+    ],
+];
+
+fn hash_tiny_keccak(states: &mut [[u64; 25]; 2]) {
+    keccakf(&mut states[0]);
+    keccakf(&mut states[1]);
+}
+
+fn hash_avx2split(states: &mut [[u64; 25]; 2]) {
+    let mut states_struct = avx2split::State::from_arrs(*states);
+    avx2split::keccak_perm(&mut states_struct);
+    *states = states_struct.to_arrs();
+}
+
+fn bench_keccak_avx2split(c: &mut Criterion) {
+    c.bench_function("keccak_avx2split_baseline", |b| {
+        b.iter(|| {
+            let mut states = STATES;
+            for _ in 0..1000 {
+                hash_tiny_keccak(&mut states);
+            }
+            states
+        });
+    });
+
+    c.bench_function("keccak_avx2split_impl", |b| {
+        b.iter(|| {
+            let mut states = STATES;
+            for _ in 0..1000 {
+                hash_avx2split(&mut states);
+            }
+            states
+        });
+    });
+}
+
+criterion_group!(keccak_avx2split, bench_keccak_avx2split);
+criterion_main!(keccak_avx2split);
