@@ -11,6 +11,7 @@ p3-util = { path = "../util" }
 itertools = "0.13.0"
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
+transpose = "0.2.3"
 tracing = "0.1.37"
 
 [dev-dependencies]
