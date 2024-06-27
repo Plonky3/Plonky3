@@ -29,6 +29,7 @@ pub mod neon;
 pub mod avx512;
 
 pub mod avx2;
+pub mod avx2split;
 
 /// The Keccak-f permutation.
 #[derive(Copy, Clone, Debug)]
