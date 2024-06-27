@@ -94,7 +94,7 @@ fn rol_0_20(a: __m256i) -> __m256i {
 #[inline(always)]
 fn rol_44_3(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[44u64, 3u64]; 2]), transmute([[20u64, 63u64]; 2]))
+        rol_var(a, transmute([[44u64, 3u64]; 2]), transmute([[20u64, 61u64]; 2]))
     }
 }
 
