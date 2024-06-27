@@ -371,10 +371,7 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
 impl<T: Copy + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
     pub fn transpose(&self) -> Self {
         let nelts = self.height() * self.width();
-        let mut values = Vec::with_capacity(nelts);
-        unsafe {
-            values.set_len(nelts);
-        }
+        let mut values = vec![T::default(); nelts];
         transpose::transpose(&self.values, &mut values, self.width(), self.height());
         Self::new(values, self.height())
     }
