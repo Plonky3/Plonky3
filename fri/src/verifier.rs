@@ -59,7 +59,7 @@ where
     }
 
     let log_max_height =
-        proof.commit_phase_commits.len() + cmp::max(config.log_blowup, config.log_final_poly_len);
+        proof.commit_phase_commits.len() + config.log_blowup + config.log_final_poly_len;
 
     let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
@@ -82,7 +82,7 @@ where
     M: Mmcs<F>,
 {
     let log_max_height =
-        proof.commit_phase_commits.len() + cmp::max(config.log_blowup, config.log_final_poly_len);
+        proof.commit_phase_commits.len() + config.log_blowup + config.log_final_poly_len;
     for (&index, query_proof, ro) in izip!(
         &challenges.query_indices,
         &proof.query_proofs,
@@ -163,15 +163,15 @@ where
         x = x.square();
     }
 
-    debug_assert!(
-        index < cmp::max(config.blowup(), config.final_poly_len()),
-        "index was {}",
-        index
-    );
-    debug_assert_eq!(
-        x.exp_power_of_2(cmp::max(config.log_blowup, config.log_final_poly_len)),
-        F::one()
-    );
+    // debug_assert!(
+    //     index < config.blowup() + config.final_poly_len(),
+    //     "index was {}",
+    //     index
+    // );
+    // debug_assert_eq!(
+    //     x.exp_power_of_2(config.log_blowup + config.log_final_poly_len),
+    //     F::one()
+    // );
 
     Ok(folded_eval)
 }

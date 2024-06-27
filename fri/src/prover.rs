@@ -112,9 +112,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    for log_folded_height in
-        (cmp::max(config.log_blowup, config.log_final_poly_len)..log_max_height).rev()
-    {
+    for log_folded_height in (config.log_blowup + config.log_final_poly_len..log_max_height).rev() {
         let leaves = RowMajorMatrix::new(current.clone(), 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());

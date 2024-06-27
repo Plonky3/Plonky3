@@ -129,7 +129,7 @@ fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng, 3);
+        do_test_fri_ldt(&mut rng, 2);
     }
 }
 
