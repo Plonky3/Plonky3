@@ -118,7 +118,7 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 fn test_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
     let hash = MyHash::new(perm.clone());
@@ -152,7 +152,7 @@ fn test_public_value() {
 fn test_incorrect_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
     let hash = MyHash::new(perm.clone());

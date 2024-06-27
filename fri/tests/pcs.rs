@@ -176,7 +176,7 @@ mod babybear_fri_pcs {
     fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut seeded_rng(),
         );
         let hash = MyHash::new(perm.clone());

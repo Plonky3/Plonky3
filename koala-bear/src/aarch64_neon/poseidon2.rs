@@ -1,40 +1,3 @@
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
-
-use crate::{
-    DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearNeon, MONTY_INVERSE,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY,
-};
-
-// We need to change from the standard implementation as we are interpreting the matrix (1 + D(v)) as the monty form of the matrix not the raw form.
-// matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
-// These will be removed once we have architecture specific implementations.
-
-impl Permutation<[PackedKoalaBearNeon; 16]> for DiffusionMatrixKoalaBear {
-    fn permute_mut(&self, state: &mut [PackedKoalaBearNeon; 16]) {
-        matmul_internal::<KoalaBear, PackedKoalaBearNeon, 16>(
-            state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
-    }
-}
-
-impl DiffusionPermutation<PackedKoalaBearNeon, 16> for DiffusionMatrixKoalaBear {}
-
-impl Permutation<[PackedKoalaBearNeon; 24]> for DiffusionMatrixKoalaBear {
-    fn permute_mut(&self, state: &mut [PackedKoalaBearNeon; 24]) {
-        matmul_internal::<KoalaBear, PackedKoalaBearNeon, 24>(
-            state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
-    }
-}
-
-impl DiffusionPermutation<PackedKoalaBearNeon, 24> for DiffusionMatrixKoalaBear {}
-
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
@@ -57,7 +20,7 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixKoalaBear,
+            DiffusionMatrixKoalaBear::default(),
             &mut rng,
         );
 
@@ -82,7 +45,7 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixKoalaBear,
+            DiffusionMatrixKoalaBear::default(),
             &mut rng,
         );
 
