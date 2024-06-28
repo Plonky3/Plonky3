@@ -481,6 +481,12 @@ mod tests {
     type F = BabyBear;
 
     #[test]
+    fn make_ext_generators() {
+        let x = BabyBear::new(11);
+        assert_eq!(x.value, 939524073);
+    }
+
+    #[test]
     fn test_baby_bear_two_adicity_generators() {
         let base = BabyBear::from_canonical_u32(0x1a427a41);
         for bits in 0..=BabyBear::TWO_ADICITY {

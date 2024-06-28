@@ -217,3 +217,11 @@ impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder
         self.inner.permutation_randomness()
     }
 }
+
+impl<'a, AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues for FilteredAirBuilder<'a, AB> {
+    type PublicVar = AB::PublicVar;
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
+    }
+}

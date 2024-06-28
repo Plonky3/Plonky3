@@ -7,8 +7,8 @@ use p3_field::{AbstractField, Field};
 /// An affine function over columns in a PAIR.
 #[derive(Clone, Debug)]
 pub struct VirtualPairCol<F: Field> {
-    column_weights: Vec<(PairCol, F)>,
-    constant: F,
+    pub column_weights: Vec<(PairCol, F)>,
+    pub constant: F,
 }
 
 /// A column in a PAIR, i.e. either a preprocessed column or a main trace column.
