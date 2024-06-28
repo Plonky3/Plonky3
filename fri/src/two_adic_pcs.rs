@@ -417,15 +417,13 @@ where
                     for (z, ps_at_z) in mat_points_and_values {
                         let mut acc = Challenge::zero();
                         for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
-                            /**
-                             * Compute the value of ro:
-                             *
-                             * Original formula:
-                             *   ro = alpha^0 * (p(x)_{0} - p(z)_{0}) / (x - z) + alpha^1 * (p(x)_{1} -p(z)_{1}) / (x - z) + ... + alpha^i * (p(x)_{i} -p(z)_{i}) / (x - z)
-                             *
-                             * Optimized formula:
-                             *   ro = (alpha^0 * (p(x)_{0} - p(z)_{0}) + alpha^1 * (p(x)_{1} -p(z)_{1}) + ... + alpha^i * (p(x)_{i} -p(z)_{i})) / (x - z)
-                             */
+                            // Compute the value of ro:
+                            //
+                            // Original formula:
+                            //   ro = alpha^0 * (p(x)_{0} - p(z)_{0}) / (x - z) + alpha^1 * (p(x)_{1} -p(z)_{1}) / (x - z) + ... + alpha^i * (p(x)_{i} -p(z)_{i}) / (x - z)
+                            //
+                            // Optimized formula:
+                            //   ro = (alpha^0 * (p(x)_{0} - p(z)_{0}) + alpha^1 * (p(x)_{1} -p(z)_{1}) + ... + alpha^i * (p(x)_{i} -p(z)_{i})) / (x - z)
                             acc += *alpha_pow * (-p_at_z + p_at_x);
                             *alpha_pow *= alpha;
                         }
