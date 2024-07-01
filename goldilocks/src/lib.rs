@@ -256,7 +256,6 @@ impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
 
     fn two_adic_generator(bits: usize) -> Self {
-        // TODO: Consider a `match` which may speed this up.
         assert!(bits <= Self::TWO_ADICITY);
         let base = Self::new(1_753_635_133_440_165_772); // generates the whole 2^TWO_ADICITY group
         base.exp_power_of_2(Self::TWO_ADICITY - bits)

@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::{Cfft, CirclePcs};
 use p3_commit::ExtensionMmcs;
@@ -5,12 +7,10 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::FriConfig;
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
-use p3_util::log2_strict_usize;
+use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
@@ -20,7 +20,7 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 const NUM_HASHES: usize = 1365;
 
-fn main() -> Result<(), VerificationError> {
+fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
@@ -69,17 +69,9 @@ fn main() -> Result<(), VerificationError> {
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
 
-    dbg!(trace.height(), log2_strict_usize(trace.height()));
-
-    let air = KeccakAir {};
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-
-    let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
-
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &air, &mut challenger, &proof, &vec![])?;
-
-    println!("OK!!! 👍");
-    Ok(())
+    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
 }

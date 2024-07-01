@@ -31,7 +31,8 @@ pub trait PolynomialSpace: Copy {
     // for both prover/verifier determinism and LDE caching.
     fn create_disjoint_domain(&self, min_size: usize) -> Self;
 
-    // Split this domain into `num_chunks` even chunks.
+    /// Split this domain into `num_chunks` even chunks.
+    /// `num_chunks` is assumed to be a power of two.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self>;
     // Split the evals into chunks of evals, corresponding to each domain
     // from `split_domains`.
@@ -127,6 +128,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
         assert_eq!(self.shift, Val::one());
+        assert_ne!(coset.shift, Val::one());
         assert!(coset.log_n >= self.log_n);
         let rate_bits = coset.log_n - self.log_n;
 
@@ -142,7 +144,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             .collect_vec();
 
         let single_point_selector = |i: u64| {
-            let denoms = xs.iter().map(|&x| x - self.gen().exp_u64(i)).collect_vec();
+            let coset_i = self.gen().exp_u64(i);
+            let denoms = xs.iter().map(|&x| x - coset_i).collect_vec();
             let invs = batch_multiplicative_inverse(&denoms);
             evals
                 .iter()

@@ -70,8 +70,10 @@ pub(crate) fn eval_circle_polys<F: ComplexExtendable>(
 }
 
 /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
+/// ```ignore
 /// (x, y) = ((1-t^2)/(1+t^2), 2t/(1+t^2))
-/// Returns None if t^2 = -1 (corresponding to the point at infinity).
+/// ```
+/// Returns `None` if `t^2 = -1` (corresponding to the point at infinity).
 pub(crate) fn univariate_to_point<F: Field>(t: F) -> Option<Complex<F>> {
     let t2 = t.square();
     let inv_denom = (F::one() + t2).try_inverse()?;
@@ -82,7 +84,9 @@ pub(crate) fn univariate_to_point<F: Field>(t: F) -> Option<Complex<F>> {
 }
 
 /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
+/// ```ignore
 /// t = y / (x + 1)
+/// ```
 /// If F has i, this should return that instead, but we don't have access..
 pub(crate) fn point_to_univariate<F: Field>(p: Complex<F>) -> Option<F> {
     p.imag().try_div(p.real() + F::one())

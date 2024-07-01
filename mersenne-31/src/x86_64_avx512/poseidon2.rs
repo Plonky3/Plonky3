@@ -69,7 +69,7 @@ mod tests {
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
-    fn test_avx512_poseidon2_width_16() {
+    fn test_avx512_poseidon2_width_24() {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.

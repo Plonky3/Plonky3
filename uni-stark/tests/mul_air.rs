@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use itertools::Itertools;
@@ -20,7 +21,7 @@ use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
-use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val, VerificationError};
+use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
@@ -120,7 +121,7 @@ fn do_test<SC: StarkGenericConfig>(
     air: MulAir,
     log_height: usize,
     challenger: SC::Challenger,
-) -> Result<(), VerificationError>
+) -> Result<(), impl Debug>
 where
     SC::Challenger: Clone,
     Standard: Distribution<Val<SC>>,
@@ -146,21 +147,21 @@ where
     )
 }
 
-fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError> {
+fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
 
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 16>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     type Pcs = TrivialPcs<Val, Radix2DitParallel>;
     let pcs = TrivialPcs {
@@ -181,32 +182,28 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), VerificationError
 }
 
 #[test]
-fn prove_bb_trivial_deg2() -> Result<(), VerificationError> {
+fn prove_bb_trivial_deg2() -> Result<(), impl Debug> {
     do_test_bb_trivial(2, 8)
 }
 
 #[test]
-fn prove_bb_trivial_deg3() -> Result<(), VerificationError> {
+fn prove_bb_trivial_deg3() -> Result<(), impl Debug> {
     do_test_bb_trivial(3, 8)
 }
 
 #[test]
-fn prove_bb_trivial_deg4() -> Result<(), VerificationError> {
+fn prove_bb_trivial_deg4() -> Result<(), impl Debug> {
     do_test_bb_trivial(4, 8)
 }
 
-fn do_test_bb_twoadic(
-    log_blowup: usize,
-    degree: u64,
-    log_n: usize,
-) -> Result<(), VerificationError> {
+fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
 
@@ -231,7 +228,7 @@ fn do_test_bb_twoadic(
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = DuplexChallenger<Val, Perm, 16>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let fri_config = FriConfig {
         log_blowup,
@@ -254,30 +251,26 @@ fn do_test_bb_twoadic(
 }
 
 #[test]
-fn prove_bb_twoadic_deg2() -> Result<(), VerificationError> {
+fn prove_bb_twoadic_deg2() -> Result<(), impl Debug> {
     do_test_bb_twoadic(1, 2, 7)
 }
 
 #[test]
-fn prove_bb_twoadic_deg3() -> Result<(), VerificationError> {
+fn prove_bb_twoadic_deg3() -> Result<(), impl Debug> {
     do_test_bb_twoadic(1, 3, 7)
 }
 
 #[test]
-fn prove_bb_twoadic_deg4() -> Result<(), VerificationError> {
+fn prove_bb_twoadic_deg4() -> Result<(), impl Debug> {
     do_test_bb_twoadic(2, 4, 6)
 }
 
 #[test]
-fn prove_bb_twoadic_deg5() -> Result<(), VerificationError> {
+fn prove_bb_twoadic_deg5() -> Result<(), impl Debug> {
     do_test_bb_twoadic(2, 5, 6)
 }
 
-fn do_test_m31_circle(
-    log_blowup: usize,
-    degree: u64,
-    log_n: usize,
-) -> Result<(), VerificationError> {
+fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Val = Mersenne31;
     type Challenge = BinomialExtensionField<Val, 3>;
 
@@ -329,11 +322,11 @@ fn do_test_m31_circle(
 }
 
 #[test]
-fn prove_m31_circle_deg2() -> Result<(), VerificationError> {
+fn prove_m31_circle_deg2() -> Result<(), impl Debug> {
     do_test_m31_circle(1, 2, 8)
 }
 
 #[test]
-fn prove_m31_circle_deg3() -> Result<(), VerificationError> {
+fn prove_m31_circle_deg3() -> Result<(), impl Debug> {
     do_test_m31_circle(1, 3, 9)
 }

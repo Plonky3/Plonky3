@@ -109,7 +109,7 @@ type ValMmcs =
     FieldMerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-type Challenger = DuplexChallenger<Val, Perm, 16>;
+type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
@@ -118,7 +118,7 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 fn test_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
     let hash = MyHash::new(perm.clone());
@@ -152,7 +152,7 @@ fn test_public_value() {
 fn test_incorrect_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
     let hash = MyHash::new(perm.clone());

@@ -99,7 +99,7 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     /// product. The result can be reduced with respect to the modulus
     /// (of `F`), but it must have the same lower 10 bits as the dot
     /// product if all inputs are considered integers. See
-    /// `baby-bear/src/mds.rs::barret_red_babybear()` for an example
+    /// `monty-31/src/mds.rs::barrett_red_monty31()` for an example
     /// of how this can be implemented in practice.
     fn parity_dot<const N: usize>(lhs: [T; N], rhs: [U; N]) -> V;
 

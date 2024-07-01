@@ -5,7 +5,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
@@ -138,7 +138,7 @@ where
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
-        CanObserve<FriMmcs::Commitment> + CanSample<Challenge> + GrindingChallenger<Witness = Val>,
+        FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
@@ -212,7 +212,7 @@ where
         - Instead of computing all alpha^i, we just compute alpha^i for i up to the largest width
         of a matrix, then multiply by an "alpha offset" when accumulating.
               a^0 x0 + a^1 x1 + a^2 x2 + a^3 x3 + ...
-            = a^0 ( a^0 x0 + a^1 x1 ) + a^2 ( a^0 x0 + a^1 x1 ) + ...
+            = a^0 ( a^0 x0 + a^1 x1 ) + a^2 ( a^0 x2 + a^1 x3 ) + ...
             (see `alpha_pows`, `alpha_pow_offset`, `num_reduced`)
 
         - For each unique point z, we precompute 1/(X-z) for the largest subgroup opened at this point.
@@ -238,7 +238,7 @@ where
         */
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample();
+        let alpha: Challenge = challenger.sample_ext_element();
 
         let mats_and_points = rounds
             .iter()
@@ -361,7 +361,7 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample();
+        let alpha: Challenge = challenger.sample_ext_element();
 
         let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
 

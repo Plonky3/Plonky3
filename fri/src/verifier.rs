@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::{izip, Itertools};
-use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
@@ -18,27 +18,29 @@ pub enum FriError<CommitMmcsErr, InputError> {
     InvalidPowWitness,
 }
 
-pub fn verify<G, F, M, Challenger>(
+pub fn verify<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
-    proof: &FriProof<F, M, Challenger::Witness, G::InputProof>,
+    proof: &FriProof<Challenge, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize, &G::InputProof) -> Result<Vec<(usize, F)>, G::InputError>,
+    open_input: impl Fn(usize, &G::InputProof) -> Result<Vec<(usize, Challenge)>, G::InputError>,
 ) -> Result<(), FriError<M::Error, G::InputError>>
 where
-    F: Field,
-    M: Mmcs<F>,
-    Challenger: GrindingChallenger + CanObserve<M::Commitment> + CanSample<F>,
-    G: FriGenericConfig<F>,
+    Val: Field,
+    Challenge: ExtensionField<Val>,
+    M: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    G: FriGenericConfig<Challenge>,
 {
-    let betas: Vec<F> = proof
+    let betas: Vec<Challenge> = proof
         .commit_phase_commits
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            challenger.sample()
+            challenger.sample_ext_element()
         })
         .collect();
+    challenger.observe_ext_element(proof.final_poly);
 
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);

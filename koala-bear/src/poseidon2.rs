@@ -1,40 +1,41 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_field::PrimeField32;
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_monty_31::{
+    DiffusionMatrixMontyField31, DiffusionMatrixParameters, PackedFieldPoseidon2Helpers,
+};
 
-use crate::{monty_reduce, to_koalabear_array, KoalaBear};
+use crate::{KoalaBear, KoalaBearParameters};
 
-// Optimised Diffusion matrices for Koalabear16.
+// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+// Optimized Diffusion matrices for Koalabear16.
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17]
 // Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
 //                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    15]
-
-// Optimised Diffusion matrices for Koalabear24.
+//
+// Optimized Diffusion matrices for Koalabear24.
 // Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25]
 // Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 8388608]
 //                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    14,    15,    16,     17,     18,     19,      20,      21,      23]
-// Thuse can be verified by the following sage code (Changing vector/length as desired):
 //
-// field = GF(2^31 - 2^24 + 1);
-// length = 16;
-// vector = [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17];
-// const_mat = matrix(field, length, lambda i, j: 1);
-// diag_mat  = diagonal_matrix(field, vector);
-// assert (const_mat + diag_mat).characteristic_polynomial().is_irreducible()
-//
-// In order to use these to their fullest potential we need to slightly reimage what the matrix looks like.
-// Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
-// such that (1 + D(v)) is the monty form of the matrix. This allows for delayed reduction tricks.
+// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
+// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
+// such that (1 + Diag(vec)) is the monty form of the matrix. This allows for delayed reduction tricks.
 
-// Long term, MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY, POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY can all be removed.
+// Long term, INTERNAL_DIAG_MONTY will be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
-pub const MONTY_INVERSE: KoalaBear = KoalaBear { value: 1 };
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
-    to_koalabear_array([
+pub type DiffusionMatrixKoalaBear = DiffusionMatrixMontyField31<KoalaBearDiffusionMatrixParameters>;
+
+#[derive(Debug, Clone, Default)]
+pub struct KoalaBearDiffusionMatrixParameters;
+
+impl DiffusionMatrixParameters<KoalaBearParameters, 16> for KoalaBearDiffusionMatrixParameters {
+    type ArrayLike = [u8; 15];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = KoalaBear::new_array([
         KoalaBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -52,12 +53,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY: [KoalaBear; 16] =
         1 << 13,
         1 << 15,
     ]);
+}
 
-const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u8; 15] =
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+impl DiffusionMatrixParameters<KoalaBearParameters, 24> for KoalaBearDiffusionMatrixParameters {
+    type ArrayLike = [u8; 23];
+    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
+    ];
 
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
-    to_koalabear_array([
+    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = KoalaBear::new_array([
         KoalaBear::ORDER_U32 - 2,
         1,
         1 << 1,
@@ -83,62 +87,15 @@ pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY: [KoalaBear; 24] =
         1 << 21,
         1 << 23,
     ]);
-
-const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
-];
-
-#[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixKoalaBear;
-
-impl Permutation<[KoalaBear; 16]> for DiffusionMatrixKoalaBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; 16]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = KoalaBear {
-            value: monty_reduce(s0),
-        };
-        for i in 1..16 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
-            state[i] = KoalaBear {
-                value: monty_reduce(si),
-            };
-        }
-    }
 }
 
-impl DiffusionPermutation<KoalaBear, 16> for DiffusionMatrixKoalaBear {}
-
-impl Permutation<[KoalaBear; 24]> for DiffusionMatrixKoalaBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; 24]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = KoalaBear {
-            value: monty_reduce(s0),
-        };
-        for i in 1..24 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
-            state[i] = KoalaBear {
-                value: monty_reduce(si),
-            };
-        }
-    }
-}
-
-impl DiffusionPermutation<KoalaBear, 24> for DiffusionMatrixKoalaBear {}
+impl PackedFieldPoseidon2Helpers<KoalaBearParameters> for KoalaBearDiffusionMatrixParameters {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{DiffusionPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -185,7 +142,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear);
+        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
         assert_eq!(input, expected);
     }
 
@@ -211,7 +168,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear);
+        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
         assert_eq!(input, expected);
     }
 }

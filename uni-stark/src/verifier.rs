@@ -11,7 +11,7 @@ use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
-use crate::{Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
+use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
@@ -20,7 +20,7 @@ pub fn verify<SC, A>(
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
     public_values: &Vec<Val<SC>>,
-) -> Result<(), VerificationError>
+) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
@@ -54,6 +54,14 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
+    // Observe the instance.
+    challenger.observe(Val::<SC>::from_canonical_usize(proof.degree_bits));
+    // TODO: Might be best practice to include other instance data here in the transcript, like some
+    // encoding of the AIR. This protects against transcript collisions between distinct instances.
+    // Practically speaking though, the only related known attack is from failing to include public
+    // values. It's not clear if failing to include other instance data could enable a transcript
+    // collision, since most such changes would completely change the set of satisfying witnesses.
+
     challenger.observe(commitments.trace.clone());
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_ext_element();
@@ -86,7 +94,7 @@ where
         opening_proof,
         challenger,
     )
-    .map_err(|_| VerificationError::InvalidOpeningArgument)?;
+    .map_err(VerificationError::InvalidOpeningArgument)?;
 
     let zps = quotient_chunks_domains
         .iter()
@@ -145,10 +153,10 @@ where
 }
 
 #[derive(Debug)]
-pub enum VerificationError {
+pub enum VerificationError<PcsErr> {
     InvalidProofShape,
     /// An error occurred while verifying the claimed openings.
-    InvalidOpeningArgument,
+    InvalidOpeningArgument(PcsErr),
     /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
     /// `quotient(zeta) Z_H(zeta)`.
     OodEvaluationMismatch,

@@ -51,6 +51,10 @@ where
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
 
+    // Observe the instance.
+    challenger.observe(Val::<SC>::from_canonical_usize(log_degree));
+    // TODO: Might be best practice to include other instance data here; see verifier comment.
+
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_ext_element();
