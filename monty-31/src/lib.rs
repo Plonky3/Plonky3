@@ -9,6 +9,7 @@
 )]
 
 mod data_traits;
+pub mod dft;
 mod extension;
 mod mds;
 mod monty_31;

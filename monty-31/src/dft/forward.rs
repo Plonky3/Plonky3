@@ -1,9 +1,12 @@
+extern crate alloc;
+use alloc::vec::Vec;
+
 use p3_field::{AbstractField, TwoAdicField};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use super::{split_at_mut_unchecked, Real, P};
-use crate::BabyBear;
+use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 // TODO: Consider following Hexl and storing the roots in a single
 // array in bit-reversed order, but with duplicates for certain roots
@@ -28,11 +31,11 @@ const MONTY_ROOTS64: [u32; 31] = [
 ];
 
 /// FIXME: The (i-1)th vector contains the roots...
-pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Real>> {
+pub fn roots_of_unity_table<FP: FieldParameters + TwoAdicData>(n: usize) -> Vec<Vec<Real>> {
     let lg_n = log2_strict_usize(n);
     let half_n = 1 << (lg_n - 1);
     // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
-    let nth_roots: Vec<_> = BabyBear::two_adic_generator(lg_n)
+    let nth_roots: Vec<_> = MontyField31::<FP>::two_adic_generator(lg_n)
         .powers()
         .take(half_n)
         .skip(1)
@@ -326,6 +329,7 @@ fn transpose_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usi
     // divide matrix dimensions.
 }
 
+/*
 fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
     for i in 0..nrows {
         for j in 0..ncols {
@@ -335,6 +339,7 @@ fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
     }
     println!("");
 }
+*/
 
 // TODO: Write a proper out-of-place version
 fn slow_forward_fft(output: &mut [Real], input: &[Real], root_table: &[Vec<Real>]) {

@@ -1,4 +1,3 @@
-//#![no_std]
 #![cfg_attr(
     all(
         feature = "nightly-features",
@@ -11,7 +10,6 @@
 extern crate alloc;
 
 mod baby_bear;
-pub mod dft;
 mod extension;
 mod mds;
 mod poseidon2;

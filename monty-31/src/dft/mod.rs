@@ -98,10 +98,6 @@ mod tests {
             let mut ws = us.clone();
             four_step_fft(&mut ws, &root_table);
 
-            println!("roots = {:?}", root_table);
-            println!("us = {:?}", us);
-            println!("vs = {:?}", vs);
-            println!("ws = {:?}", ws);
             assert!(vs.iter().zip(ws).all(|(&v, w)| v == w));
         }
     }
@@ -115,8 +111,6 @@ mod tests {
             let root = root_table[0][0];
             let root_inv = BabyBear { value: root }.inverse().value;
 
-            println!("roots = {:?}", root_table);
-
             for _ in 0..NITERS {
                 let us = randvec(len);
                 let mut vs = us.clone();
@@ -128,7 +122,6 @@ mod tests {
                 let mut ws = vs.clone();
                 backward_fft(&mut ws, root_inv);
 
-                println!("us = {us:?};\nvs = {vs:?};\nws = {ws:?}");
                 assert!(us
                     .iter()
                     .zip(ws)
