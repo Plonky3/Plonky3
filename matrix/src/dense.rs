@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
@@ -10,6 +11,7 @@ use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::Matrix;
 
@@ -27,9 +29,32 @@ pub struct DenseMatrix<T, V = Vec<T>> {
 pub type RowMajorMatrix<T> = DenseMatrix<T, Vec<T>>;
 pub type RowMajorMatrixView<'a, T> = DenseMatrix<T, &'a [T]>;
 pub type RowMajorMatrixViewMut<'a, T> = DenseMatrix<T, &'a mut [T]>;
+pub type RowMajorMatrixCow<'a, T> = DenseMatrix<T, Cow<'a, [T]>>;
 
-pub trait DenseStorage<T>: Borrow<[T]> + Into<Vec<T>> + Send + Sync {}
-impl<T, S: Borrow<[T]> + Into<Vec<T>> + Send + Sync> DenseStorage<T> for S {}
+pub trait DenseStorage<T>: Borrow<[T]> + Send + Sync {
+    fn to_vec(self) -> Vec<T>;
+}
+// Cow doesn't impl IntoOwned so we can't blanket it
+impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
+    fn to_vec(self) -> Vec<T> {
+        self
+    }
+}
+impl<'a, T: Clone + Send + Sync> DenseStorage<T> for &'a [T] {
+    fn to_vec(self) -> Vec<T> {
+        <[T]>::to_vec(self)
+    }
+}
+impl<'a, T: Clone + Send + Sync> DenseStorage<T> for &'a mut [T] {
+    fn to_vec(self) -> Vec<T> {
+        <[T]>::to_vec(self)
+    }
+}
+impl<'a, T: Clone + Send + Sync> DenseStorage<T> for Cow<'a, [T]> {
+    fn to_vec(self) -> Vec<T> {
+        self.into_owned()
+    }
+}
 
 impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
     /// Create a new dense matrix of the given dimensions, backed by a `Vec`, and filled with
@@ -254,6 +279,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         )
     }
 
+    #[instrument(level = "debug", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
         T: Copy + Default + Send + Sync,
@@ -313,7 +339,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         Self: Sized,
         T: Clone,
     {
-        RowMajorMatrix::new(self.values.into(), self.width)
+        RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
 
     fn horizontally_packed_row<'a, P>(
@@ -349,6 +375,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
 }
 
 impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
+    pub fn as_cow<'a>(self) -> RowMajorMatrixCow<'a, T> {
+        RowMajorMatrixCow::new(Cow::Owned(self.values), self.width)
+    }
+
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         Standard: Distribution<T>,
@@ -368,6 +398,11 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
             .take(rows * cols)
             .collect();
         Self::new(values, cols)
+    }
+
+    pub fn pad_to_height(&mut self, new_height: usize, fill: T) {
+        assert!(new_height >= self.height());
+        self.values.resize(self.width * new_height, fill);
     }
 
     pub fn transpose(self) -> Self {
@@ -399,6 +434,12 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
             });
 
         transposed
+    }
+}
+
+impl<'a, T: Clone + Default + Send + Sync> DenseMatrix<T, &'a [T]> {
+    pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
+        RowMajorMatrixCow::new(Cow::Borrowed(self.values), self.width)
     }
 }
 

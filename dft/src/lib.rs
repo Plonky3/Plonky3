@@ -14,6 +14,7 @@ mod testing;
 mod traits;
 mod util;
 
+pub use butterflies::*;
 pub use naive::*;
 pub use radix_2_bowers::*;
 pub use radix_2_dit::*;

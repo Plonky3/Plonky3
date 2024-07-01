@@ -4,8 +4,10 @@ use core::borrow::BorrowMut;
 use p3_field::Field;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_matrix::Matrix;
+use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.
+#[instrument(skip_all, fields(dims = %mat.dimensions()))]
 pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
     mat: &mut DenseMatrix<F, S>,
 ) {

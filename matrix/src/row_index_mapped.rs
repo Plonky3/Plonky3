@@ -25,7 +25,7 @@ pub trait RowIndexMap: Send + Sync {
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct RowIndexMappedView<IndexMap, Inner> {
     pub index_map: IndexMap,
     pub inner: Inner,
