@@ -8,7 +8,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use ff::{Field as FFField, PrimeField as FFPrimeField, PrimeFieldBits};
+use ff::{Field as FFField, PrimeField as FFPrimeField};
 use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
@@ -43,13 +43,9 @@ impl<'de> Deserialize<'de> for Bn254Fr {
 
         let value = FFBn254Fr::from_raw_bytes(&bytes);
 
-        if value.is_some().into() {
-            Ok(Self {
-                value: value.unwrap(),
-            })
-        } else {
-            Err(serde::de::Error::custom("Invalid field element"))
-        }
+        value
+            .map(Self::new)
+            .ok_or(serde::de::Error::custom("Invalid field element"))
     }
 }
 
