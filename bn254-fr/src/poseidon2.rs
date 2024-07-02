@@ -45,7 +45,7 @@ mod tests {
 
         let mut res = <FFBn254Fr as PrimeField>::Repr::default();
 
-        for (i, digit) in res.0.as_mut().iter_mut().enumerate() {
+        for (i, digit) in res.as_mut().iter_mut().enumerate() {
             *digit = bytes[i];
         }
 

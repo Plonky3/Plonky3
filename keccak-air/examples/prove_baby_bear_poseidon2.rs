@@ -68,8 +68,8 @@ fn main() -> Result<(), impl Debug> {
     let trace = generate_trace_rows::<Val>(inputs);
 
     let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 100,
+        log_blowup: 3,
+        num_queries: 33,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
