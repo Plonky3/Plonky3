@@ -19,6 +19,7 @@ itertools = "0.13.0"
 serde = "1"
 
 [dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
 p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-mersenne-31 = { path = "../mersenne-31" }
@@ -29,3 +30,11 @@ p3-symmetric = { path = "../symmetric" }
 hashbrown = "0.14.3"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
+criterion = "0.5.1"
+
+tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
+tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
+
+[[bench]]
+name = "cfft"
+harness = false

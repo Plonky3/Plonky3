@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
-use p3_circle::{Cfft, CirclePcs};
+use p3_circle::CirclePcs;
 use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -154,7 +154,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
 
@@ -203,7 +203,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear,
+        DiffusionMatrixBabyBear::default(),
         &mut thread_rng(),
     );
 
@@ -299,9 +299,9 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
-        cfft: Cfft::default(),
         mmcs: val_mmcs,
         fri_config,
+        _phantom: PhantomData,
     };
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;

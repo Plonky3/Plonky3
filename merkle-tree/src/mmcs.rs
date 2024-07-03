@@ -11,7 +11,7 @@ use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
-use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize};
+use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight};
 
 /// A vector commitment scheme backed by a `FieldMerkleTree`.
 ///
@@ -129,14 +129,14 @@ where
         // }
 
         // TODO: Disabled for now, CirclePcs sometimes passes a height that's off by 1 bit.
-        // let max_height = dimensions.iter().map(|dim| dim.height).max().unwrap();
-        // let log_max_height = log2_ceil_usize(max_height);
-        // if proof.len() != log_max_height {
-        //     return Err(WrongHeight {
-        //         max_height,
-        //         num_siblings: proof.len(),
-        //     });
-        // }
+        let max_height = dimensions.iter().map(|dim| dim.height).max().unwrap();
+        let log_max_height = log2_ceil_usize(max_height);
+        if proof.len() != log_max_height {
+            return Err(WrongHeight {
+                max_height,
+                num_siblings: proof.len(),
+            });
+        }
 
         let mut heights_tallest_first = dimensions
             .iter()
@@ -223,7 +223,7 @@ mod tests {
     fn commit_single_1x8() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -260,7 +260,7 @@ mod tests {
     fn commit_single_2x2() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -286,7 +286,7 @@ mod tests {
     fn commit_single_2x3() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -320,7 +320,7 @@ mod tests {
     fn commit_mixed() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut thread_rng(),
         );
         let hash = MyHash::new(perm.clone());
@@ -385,7 +385,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -406,7 +406,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -428,7 +428,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -467,7 +467,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());
@@ -522,7 +522,7 @@ mod tests {
         let mut rng = thread_rng();
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear,
+            DiffusionMatrixBabyBear::default(),
             &mut rng,
         );
         let hash = MyHash::new(perm.clone());

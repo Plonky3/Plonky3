@@ -9,9 +9,11 @@ mod cfft;
 mod deep_quotient;
 mod domain;
 mod folding;
+mod ordering;
 mod pcs;
-mod twiddles;
-mod util;
+mod point;
 
 pub use cfft::*;
+pub use domain::*;
+pub use ordering::*;
 pub use pcs::*;

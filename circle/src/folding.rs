@@ -7,50 +7,11 @@ use p3_commit::Mmcs;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, ExtensionField};
 use p3_fri::FriGenericConfig;
-use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
 use crate::{InputError, InputProof};
-
-pub(crate) fn fold_bivariate<F: ComplexExtendable, EF: ExtensionField<F>>(
-    beta: EF,
-    evals: impl Matrix<EF>,
-) -> Vec<EF> {
-    let log_n = log2_strict_usize(evals.height() * evals.width());
-    let domain = CircleDomain::standard(log_n);
-    let mut twiddles = batch_multiplicative_inverse(
-        &domain
-            .points()
-            .take(evals.height())
-            .map(|p| p.imag())
-            .collect_vec(),
-    );
-    twiddles = circle_bitrev_permute(&twiddles);
-    fold(evals, beta, &twiddles)
-}
-
-pub(crate) fn fold_bivariate_row<F: ComplexExtendable, EF: ExtensionField<F>>(
-    index: usize,
-    log_folded_height: usize,
-    beta: EF,
-    evals: impl Iterator<Item = EF>,
-) -> EF {
-    let evals = evals.collect_vec();
-    assert_eq!(evals.len(), 2);
-    let log_arity = log2_strict_usize(evals.len());
-
-    let orig_index = circle_bitrev_idx(index, log_folded_height);
-    let t = CircleDomain::<F>::standard(log_folded_height + log_arity)
-        .nth_point(orig_index)
-        .imag()
-        .inverse();
-
-    let sum = evals[0] + evals[1];
-    let diff = (evals[0] - evals[1]) * t;
-    (sum + beta * diff).halve()
-}
 
 pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
     pub(crate) PhantomData<(F, InputProof, InputError)>,
@@ -72,6 +33,10 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         1
     }
 
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
+        fold_x(beta, m)
+    }
+
     fn fold_row(
         &self,
         index: usize,
@@ -79,35 +44,7 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         beta: EF,
         evals: impl Iterator<Item = EF>,
     ) -> EF {
-        let evals = evals.collect_vec();
-        assert_eq!(evals.len(), 2);
-        let log_arity = log2_strict_usize(evals.len());
-
-        let orig_index = circle_bitrev_idx(index, log_folded_height);
-        // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
-        let t = CircleDomain::<F>::standard(log_folded_height + log_arity + 1)
-            .nth_point(orig_index)
-            .real()
-            .inverse();
-
-        let sum = evals[0] + evals[1];
-        let diff = (evals[0] - evals[1]) * t;
-        (sum + beta * diff).halve()
-    }
-
-    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
-        let log_n = log2_strict_usize(m.width() * m.height());
-        // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
-        let domain = CircleDomain::standard(log_n + 1);
-        let mut twiddles = batch_multiplicative_inverse(
-            &domain
-                .points()
-                .take(m.height())
-                .map(|p| p.real())
-                .collect_vec(),
-        );
-        twiddles = circle_bitrev_permute(&twiddles);
-        fold(m, beta, &twiddles)
+        fold_x_row(index, log_folded_height, beta, evals)
     }
 }
 
@@ -128,151 +65,126 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
         .collect_vec()
 }
 
-// circlebitrev -> natural
-// can make faster with:
-// https://lemire.me/blog/2018/02/21/iterating-over-set-bits-quickly/
-pub fn circle_bitrev_idx(mut idx: usize, bits: usize) -> usize {
-    idx = reverse_bits_len(idx, bits);
-    for i in 0..bits {
-        if idx & (1 << i) != 0 {
-            idx ^= (1 << i) - 1;
-        }
-    }
-    idx
+pub(crate) fn fold_y<F: ComplexExtendable, EF: ExtensionField<F>>(
+    beta: EF,
+    evals: impl Matrix<EF>,
+) -> Vec<EF> {
+    assert_eq!(evals.width(), 2);
+    let log_n = log2_strict_usize(evals.height()) + 1;
+    fold(
+        evals,
+        beta,
+        &batch_multiplicative_inverse(&CircleDomain::standard(log_n).y_twiddles()),
+    )
 }
 
-// can do in place if use cycles? bitrev makes it harder
-pub(crate) fn circle_bitrev_permute<T: Clone>(xs: &[T]) -> Vec<T> {
-    let bits = log2_strict_usize(xs.len());
-    (0..xs.len())
-        .map(|i| xs[circle_bitrev_idx(i, bits)].clone())
-        .collect()
+pub(crate) fn fold_y_row<F: ComplexExtendable, EF: ExtensionField<F>>(
+    index: usize,
+    log_folded_height: usize,
+    beta: EF,
+    evals: impl Iterator<Item = EF>,
+) -> EF {
+    let evals = evals.collect_vec();
+    assert_eq!(evals.len(), 2);
+    let t = CircleDomain::<F>::standard(log_folded_height + 1)
+        .nth_y_twiddle(index)
+        .inverse();
+    let sum = evals[0] + evals[1];
+    let diff = (evals[0] - evals[1]) * t;
+    (sum + beta * diff).halve()
 }
 
-pub struct CircleBitrevPerm {
-    log_height: usize,
+pub(crate) fn fold_x<F: ComplexExtendable, EF: ExtensionField<F>>(
+    beta: EF,
+    evals: impl Matrix<EF>,
+) -> Vec<EF> {
+    let log_n = log2_strict_usize(evals.width() * evals.height());
+    // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
+    let domain = CircleDomain::standard(log_n + 1);
+    fold(
+        evals,
+        beta,
+        &batch_multiplicative_inverse(&domain.x_twiddles(0)),
+    )
 }
 
-pub type CircleBitrevView<M> = RowIndexMappedView<CircleBitrevPerm, M>;
+pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
+    index: usize,
+    log_folded_height: usize,
+    beta: EF,
+    evals: impl Iterator<Item = EF>,
+) -> EF {
+    let evals = evals.collect_vec();
+    assert_eq!(evals.len(), 2);
+    let log_arity = log2_strict_usize(evals.len());
 
-impl CircleBitrevPerm {
-    pub fn new<T: Send + Sync, M: Matrix<T>>(inner: M) -> RowIndexMappedView<CircleBitrevPerm, M> {
-        RowIndexMappedView {
-            index_map: CircleBitrevPerm {
-                log_height: log2_strict_usize(inner.height()),
-            },
-            inner,
-        }
-    }
-}
+    let t = CircleDomain::<F>::standard(log_folded_height + log_arity + 1)
+        .nth_x_twiddle(reverse_bits_len(index, log_folded_height))
+        .inverse();
 
-impl RowIndexMap for CircleBitrevPerm {
-    fn height(&self) -> usize {
-        1 << self.log_height
-    }
-    fn map_row_index(&self, r: usize) -> usize {
-        circle_bitrev_idx(r, self.log_height)
-    }
+    let sum = evals[0] + evals[1];
+    let diff = (evals[0] - evals[1]) * t;
+    (sum + beta * diff).halve()
 }
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashSet;
+    use itertools::iproduct;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::AbstractExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::{thread_rng, Rng};
+    use rand::{random, thread_rng};
 
     use super::*;
-    use crate::Cfft;
-
-    #[test]
-    fn test_circle_bitrev() {
-        assert_eq!(circle_bitrev_permute(&[0]), &[0]);
-        assert_eq!(circle_bitrev_permute(&[0, 1]), &[0, 1]);
-        assert_eq!(circle_bitrev_permute(&[0, 1, 2, 3]), &[0, 3, 1, 2]);
-        assert_eq!(
-            circle_bitrev_permute(&[0, 1, 2, 3, 4, 5, 6, 7]),
-            &[0, 7, 3, 4, 1, 6, 2, 5]
-        );
-    }
+    use crate::CircleEvaluations;
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
 
-    fn do_test_folding(log_n: usize, log_blowup: usize) {
-        let mut rng = thread_rng();
+    #[test]
+    fn fold_matrix_same_as_row() {
+        let log_folded_height = 5;
+        let m = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << log_folded_height, 2);
+        let beta: EF = random();
 
-        let mut evals: Vec<EF> = {
-            let evals = RowMajorMatrix::<F>::rand(
-                &mut rng,
-                1 << log_n,
-                <EF as AbstractExtensionField<F>>::D,
-            );
-            let lde = Cfft::default().lde(
-                evals,
-                CircleDomain::standard(log_n),
-                CircleDomain::standard(log_n + log_blowup),
-            );
-            lde.rows()
-                .map(|r| EF::from_base_slice(&r.collect_vec()))
-                .collect()
+        let mat_y_folded = fold_y::<F, EF>(beta, m.as_view());
+        let row_y_folded = (0..(1 << log_folded_height))
+            .map(|i| fold_y_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
+            .collect_vec();
+        assert_eq!(mat_y_folded, row_y_folded);
+
+        let mat_x_folded = fold_x::<F, EF>(beta, m.as_view());
+        let row_x_folded = (0..(1 << log_folded_height))
+            .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
+            .collect_vec();
+        assert_eq!(mat_x_folded, row_x_folded);
+    }
+
+    #[test]
+    fn folded_matrix_remains_low_degree() {
+        let vec_dim = |evals: &[F]| {
+            CircleEvaluations::from_cfft_order(
+                CircleDomain::standard(log2_strict_usize(evals.len())),
+                RowMajorMatrix::new_col(evals.to_vec()),
+            )
+            .dim()
         };
 
-        evals = circle_bitrev_permute(&evals);
+        for (log_n, log_blowup) in iproduct!(3..6, 1..4) {
+            let mut values = CircleEvaluations::evaluate(
+                CircleDomain::standard(log_n + log_blowup),
+                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1),
+            )
+            .to_cfft_order()
+            .values;
 
-        let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
-
-        evals = fold_bivariate::<F, _>(rng.gen(), RowMajorMatrix::new(evals, 2));
-        for i in log_blowup..(log_n + log_blowup - 1) {
-            evals = g.fold_matrix(rng.gen(), RowMajorMatrix::new(evals, 2));
-            if i != log_n + log_blowup - 2 {
-                // check that we aren't degenerate, we (probabilistically) should be unique before the final layer
-                assert_eq!(
-                    evals.iter().copied().collect::<HashSet<_>>().len(),
-                    evals.len()
-                );
+            values = fold_y(random(), RowMajorMatrix::new(values, 2));
+            assert_eq!(vec_dim(&values), values.len() >> log_blowup);
+            for _ in 0..(log_n - 1) {
+                values = fold_x(random(), RowMajorMatrix::new(values, 2));
+                assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             }
         }
-        assert_eq!(evals.len(), 1 << log_blowup);
-        assert!(evals.iter().all(|&x| x == evals[0]));
-    }
-
-    #[test]
-    fn test_folding() {
-        do_test_folding(4, 1);
-        do_test_folding(5, 2);
-    }
-
-    #[test]
-    fn test_fold_row_matrix_same() {
-        let mut rng = thread_rng();
-        let evals = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 5, 2);
-        let beta: EF = rng.gen();
-
-        let mat_folded = fold_bivariate::<F, EF>(beta, evals.clone());
-        let row_folded = evals
-            .rows()
-            .enumerate()
-            .map(|(index, evals)| fold_bivariate_row::<F, EF>(index, 5, beta, evals))
-            .collect_vec();
-        assert_eq!(
-            mat_folded, row_folded,
-            "bivariate fold_matrix and fold_row do not match"
-        );
-
-        let g: CircleFriGenericConfig<F, (), ()> = CircleFriGenericConfig(PhantomData);
-        let mat_folded = g.fold_matrix(beta, evals.clone());
-        let row_folded = evals
-            .rows()
-            .enumerate()
-            .map(|(index, evals)| g.fold_row(index, 5, beta, evals))
-            .collect_vec();
-        assert_eq!(
-            mat_folded, row_folded,
-            "univariate fold_matrix and fold_row do not match"
-        );
     }
 }
