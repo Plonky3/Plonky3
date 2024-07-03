@@ -98,11 +98,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let a_limb = local.a[y][x][limb];
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
-                        .fold(AB::Expr::zero(),
-                            |acc, z| {
-                                builder.assert_bool(local.a_prime[y][x][z]);
-                                acc.double() + get_bit(z)
-                    });
+                        .fold(AB::Expr::zero(), |acc, z| {
+                            builder.assert_bool(local.a_prime[y][x][z]);
+                            acc.double() + get_bit(z)
+                        });
                     builder.assert_eq(computed_limb, a_limb);
                 }
             }
