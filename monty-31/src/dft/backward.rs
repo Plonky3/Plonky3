@@ -1,4 +1,4 @@
-use super::{split_at_mut_unchecked, Real, P};
+use super::{split_at_mut_unchecked, P};
 
 const MONTY_BITS: u32 = 32;
 const MONTY_MU: u32 = 0x88000001;
@@ -17,7 +17,7 @@ fn monty_reduce(x: u64) -> u32 {
 
 /// Given x in [0, 2p), return the x mod p in [0, p)
 #[inline(always)]
-fn reduce_2p(x: Real) -> Real {
+fn reduce_2p(x: u32) -> u32 {
     if x < P {
         x
     } else {
@@ -26,7 +26,7 @@ fn reduce_2p(x: Real) -> Real {
 }
 
 #[inline]
-fn backward_pass(a: &mut [Real], root: Real) {
+fn backward_pass(a: &mut [u32], root: u32) {
     let half_n = a.len() / 2;
     let mut w = (1u64 << MONTY_BITS) % P as u64;
     for i in 0..half_n {
@@ -40,7 +40,7 @@ fn backward_pass(a: &mut [Real], root: Real) {
 }
 
 #[inline]
-pub fn backward_fft(a: &mut [Real], root: Real) {
+pub fn backward_fft(a: &mut [u32], root: u32) {
     let n = a.len();
 
     if n > 1 {

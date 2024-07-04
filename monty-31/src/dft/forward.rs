@@ -1,12 +1,13 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, TwoAdicField};
+use p3_field::{AbstractField, PrimeField32, TwoAdicField};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
-use super::{split_at_mut_unchecked, Real, P};
-use crate::{FieldParameters, MontyField31, TwoAdicData};
+use crate::{MontyParameters, TwoAdicData};
+
+use super::{split_at_mut_unchecked, P};
 
 // TODO: Consider following Hexl and storing the roots in a single
 // array in bit-reversed order, but with duplicates for certain roots
@@ -31,11 +32,11 @@ const MONTY_ROOTS64: [u32; 31] = [
 ];
 
 /// FIXME: The (i-1)th vector contains the roots...
-pub fn roots_of_unity_table<FP: FieldParameters + TwoAdicData>(n: usize) -> Vec<Vec<Real>> {
+pub fn roots_of_unity_table<F: TwoAdicField + PrimeField32>(n: usize) -> Vec<Vec<u32>> {
     let lg_n = log2_strict_usize(n);
     let half_n = 1 << (lg_n - 1);
     // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
-    let nth_roots: Vec<_> = MontyField31::<FP>::two_adic_generator(lg_n)
+    let nth_roots: Vec<_> = F::two_adic_generator(lg_n)
         .powers()
         .take(half_n)
         .skip(1)
@@ -81,7 +82,7 @@ pub fn partial_monty_reduce(x: u64) -> u32 {
 
 /// Given x in [0, 2p), return the representative of x mod p in [0, p)
 #[inline(always)]
-fn reduce_2p(x: Real) -> Real {
+fn reduce_2p(x: u32) -> u32 {
     debug_assert!(x < 2 * P);
 
     if x < P {
@@ -93,7 +94,7 @@ fn reduce_2p(x: Real) -> Real {
 
 /// Given x in [0, 4p), return the representative of x mod p in [0, p)
 #[inline(always)]
-fn reduce_4p(mut x: u64) -> Real {
+fn reduce_4p(mut x: u64) -> u32 {
     const PP: u64 = 0x78000001;
     debug_assert!(x < 4 * PP);
 
@@ -110,13 +111,13 @@ fn reduce_4p(mut x: u64) -> Real {
 }
 
 #[inline(always)]
-fn butterfly(x: Real, y: Real, w: Real) -> (Real, Real) {
+fn butterfly(x: u32, y: u32, w: u32) -> (u32, u32) {
     let t = P + x - y;
     (reduce_2p(x + y), monty_reduce(t as u64 * w as u64))
 }
 
 #[inline]
-fn forward_pass(a: &mut [Real], roots: &[Real]) {
+fn forward_pass(a: &mut [u32], roots: &[u32]) {
     let half_n = a.len() / 2;
     assert_eq!(roots.len(), half_n - 1);
 
@@ -134,7 +135,7 @@ fn forward_pass(a: &mut [Real], roots: &[Real]) {
 }
 
 #[inline(always)]
-fn forward_2(a: &mut [Real]) {
+fn forward_2(a: &mut [u32]) {
     assert_eq!(a.len(), 2);
 
     let s = reduce_2p(a[0] + a[1]);
@@ -144,7 +145,7 @@ fn forward_2(a: &mut [Real]) {
 }
 
 #[inline(always)]
-fn forward_4(a: &mut [Real]) {
+fn forward_4(a: &mut [u32]) {
     assert_eq!(a.len(), 4);
 
     const ROOT: u64 = MONTY_ROOTS8[1] as u64;
@@ -165,7 +166,7 @@ fn forward_4(a: &mut [Real]) {
 }
 
 #[inline(always)]
-pub fn forward_8(a: &mut [Real]) {
+pub fn forward_8(a: &mut [u32]) {
     assert_eq!(a.len(), 8);
 
     forward_pass(a, &MONTY_ROOTS8);
@@ -176,7 +177,7 @@ pub fn forward_8(a: &mut [Real]) {
 }
 
 #[inline(always)]
-pub fn forward_16(a: &mut [Real]) {
+pub fn forward_16(a: &mut [u32]) {
     assert_eq!(a.len(), 16);
 
     forward_pass(a, &MONTY_ROOTS16);
@@ -187,7 +188,7 @@ pub fn forward_16(a: &mut [Real]) {
 }
 
 #[inline(always)]
-pub fn forward_32(a: &mut [Real]) {
+pub fn forward_32(a: &mut [u32]) {
     assert_eq!(a.len(), 32);
 
     forward_pass(a, &MONTY_ROOTS32);
@@ -198,7 +199,7 @@ pub fn forward_32(a: &mut [Real]) {
 }
 
 #[inline(always)]
-pub fn forward_64(a: &mut [Real]) {
+pub fn forward_64(a: &mut [u32]) {
     assert_eq!(a.len(), 64);
 
     forward_pass(a, &MONTY_ROOTS64);
@@ -209,7 +210,7 @@ pub fn forward_64(a: &mut [Real]) {
 }
 
 #[inline(always)]
-pub fn forward_128(a: &mut [Real], roots: &[Real]) {
+pub fn forward_128(a: &mut [u32], roots: &[u32]) {
     assert_eq!(a.len(), 128);
 
     forward_pass(a, roots);
@@ -220,7 +221,7 @@ pub fn forward_128(a: &mut [Real], roots: &[Real]) {
 }
 
 #[inline(always)]
-pub fn forward_256(a: &mut [Real], root_table: &[Vec<Real>]) {
+pub fn forward_256(a: &mut [u32], root_table: &[Vec<u32>]) {
     assert_eq!(a.len(), 256);
 
     forward_pass(a, &root_table[0]);
@@ -231,7 +232,7 @@ pub fn forward_256(a: &mut [Real], root_table: &[Vec<Real>]) {
 }
 
 #[inline]
-pub fn forward_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
+pub fn forward_fft(a: &mut [u32], root_table: &[Vec<u32>]) {
     let n = a.len();
     assert!(1 << (root_table.len() + 1) == n);
 
@@ -255,7 +256,7 @@ pub fn forward_fft(a: &mut [Real], root_table: &[Vec<Real>]) {
     }
 }
 
-pub fn batch_forward_fft(a: &mut [Vec<Real>], root_table: &[Vec<Real>]) {
+pub fn batch_forward_fft(a: &mut [Vec<u32>], root_table: &[Vec<u32>]) {
     a.par_iter_mut().for_each(|v| forward_fft(v, root_table));
 }
 
@@ -288,7 +289,7 @@ fn _isqrt(s: usize) -> usize {
 const TRANSPOSE_BLOCK_SIZE: usize = 64; // TODO: 64 is better for u32
 
 #[inline(always)]
-fn transpose_scalar_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usize) {
+fn transpose_scalar_block(output: &mut [u32], input: &[u32], nrows: usize, ncols: usize) {
     for i in 0..TRANSPOSE_BLOCK_SIZE {
         for j in 0..TRANSPOSE_BLOCK_SIZE {
             // Ensure the generated code doesn't do bounds checks:
@@ -301,7 +302,7 @@ fn transpose_scalar_block(output: &mut [Real], input: &[Real], nrows: usize, nco
 }
 
 #[inline]
-fn transpose_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usize) {
+fn transpose_block(output: &mut [u32], input: &[u32], nrows: usize, ncols: usize) {
     debug_assert_eq!(nrows % TRANSPOSE_BLOCK_SIZE, 0);
     debug_assert_eq!(ncols % TRANSPOSE_BLOCK_SIZE, 0);
 
@@ -330,7 +331,7 @@ fn transpose_block(output: &mut [Real], input: &[Real], nrows: usize, ncols: usi
 }
 
 /*
-fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
+fn _printmat(a: &[u32], nrows: usize, ncols: usize) {
     for i in 0..nrows {
         for j in 0..ncols {
             print!("{} ", a[i * ncols + j]);
@@ -342,7 +343,7 @@ fn _printmat(a: &[Real], nrows: usize, ncols: usize) {
 */
 
 // TODO: Write a proper out-of-place version
-fn slow_forward_fft(output: &mut [Real], input: &[Real], root_table: &[Vec<Real>]) {
+fn slow_forward_fft(output: &mut [u32], input: &[u32], root_table: &[Vec<u32>]) {
     output.copy_from_slice(input);
     forward_fft(output, root_table);
     reverse_slice_index_bits(output);
@@ -351,7 +352,7 @@ fn slow_forward_fft(output: &mut [Real], input: &[Real], root_table: &[Vec<Real>
 /// Size of FFT above which we parallelise the FFT.
 const FFT_PARALLEL_THRESHOLD: usize = 2; //TODO: Use 1024 or something
 
-fn four_step_fft_inner(output: &mut [Real], input: &mut [Real], root_table: &[Vec<Real>]) {
+fn four_step_fft_inner(output: &mut [u32], input: &mut [u32], root_table: &[Vec<u32>]) {
     let n = input.len();
     if n <= FFT_PARALLEL_THRESHOLD {
         slow_forward_fft(output, input, root_table);
@@ -421,7 +422,7 @@ fn four_step_fft_inner(output: &mut [Real], input: &mut [Real], root_table: &[Ve
     transpose_block(buf2, buf1, nrows, ncols);
 }
 
-pub fn four_step_fft(input: &mut [Real], root_table: &[Vec<Real>]) {
+pub fn four_step_fft(input: &mut [u32], root_table: &[Vec<u32>]) {
     // TODO: Don't do this copy
     let mut output = Vec::with_capacity(input.len());
     unsafe {
