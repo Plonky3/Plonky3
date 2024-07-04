@@ -9,10 +9,10 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use ff::{Field as FFField, PrimeField as FFPrimeField};
-use halo2curves::bn256::Fr as FFBn254Fr;
+pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{AbstractField, Field, Packable, PrimeField};
+use p3_field::{AbstractField, Field, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::DiffusionMatrixBN254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -266,6 +266,18 @@ impl Distribution<Bn254Fr> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
         Bn254Fr::new(FFBn254Fr::random(rng))
+    }
+}
+
+impl TwoAdicField for Bn254Fr {
+    const TWO_ADICITY: usize = FFBn254Fr::S as usize;
+
+    fn two_adic_generator(bits: usize) -> Self {
+        let mut omega = FFBn254Fr::ROOT_OF_UNITY;
+        for _ in bits..Self::TWO_ADICITY {
+            omega = omega.square();
+        }
+        Self::new(omega)
     }
 }
 
