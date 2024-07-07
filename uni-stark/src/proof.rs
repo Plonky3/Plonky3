@@ -13,6 +13,10 @@ type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
     <SC as StarkGenericConfig>::Challenger,
 >>::Proof;
+pub type PcsProverData<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
+    <SC as StarkGenericConfig>::Challenge,
+    <SC as StarkGenericConfig>::Challenger,
+>>::ProverData;
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -31,7 +35,20 @@ pub struct Commitments<Com> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenedValues<Challenge> {
+    pub(crate) preprocessed_local: Vec<Challenge>,
+    pub(crate) preprocessed_next: Vec<Challenge>,
     pub(crate) trace_local: Vec<Challenge>,
     pub(crate) trace_next: Vec<Challenge>,
     pub(crate) quotient_chunks: Vec<Vec<Challenge>>,
+}
+
+pub struct StarkProvingKey<SC: StarkGenericConfig> {
+    pub preprocessed_commit: Com<SC>,
+    pub preprocessed_data: PcsProverData<SC>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct StarkVerifyingKey<SC: StarkGenericConfig> {
+    pub preprocessed_commit: Com<SC>,
 }

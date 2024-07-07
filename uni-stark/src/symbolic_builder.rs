@@ -12,18 +12,13 @@ use crate::symbolic_variable::SymbolicVariable;
 use crate::Entry;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
-pub fn get_log_quotient_degree<F, A>(
-    air: &A,
-    preprocessed_width: usize,
-    num_public_values: usize,
-) -> usize
+pub fn get_log_quotient_degree<F, A>(air: &A, num_public_values: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree =
-        get_max_constraint_degree(air, preprocessed_width, num_public_values).max(2);
+    let constraint_degree = get_max_constraint_degree(air, num_public_values).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the zerofier.
@@ -32,16 +27,12 @@ where
 }
 
 #[instrument(name = "infer constraint degree", skip_all, level = "debug")]
-pub fn get_max_constraint_degree<F, A>(
-    air: &A,
-    preprocessed_width: usize,
-    num_public_values: usize,
-) -> usize
+pub fn get_max_constraint_degree<F, A>(air: &A, num_public_values: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    get_symbolic_constraints(air, preprocessed_width, num_public_values)
+    get_symbolic_constraints(air, num_public_values)
         .iter()
         .map(|c| c.degree_multiple())
         .max()
@@ -51,14 +42,14 @@ where
 #[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
 pub fn get_symbolic_constraints<F, A>(
     air: &A,
-    preprocessed_width: usize,
     num_public_values: usize,
 ) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder = SymbolicAirBuilder::new(preprocessed_width, air.width(), num_public_values);
+    let mut builder =
+        SymbolicAirBuilder::new(air.preprocessed_width(), air.width(), num_public_values);
     air.eval(&mut builder);
     builder.constraints()
 }

@@ -16,7 +16,7 @@ use tracing::{info_span, instrument};
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof, ProverConstraintFolder,
-    StarkGenericConfig, Val,
+    StarkGenericConfig, StarkProvingKey, Val,
 };
 
 #[instrument(skip_all)]
@@ -36,13 +36,40 @@ where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
+    prove_with_key(config, None, air, challenger, trace, public_values)
+}
+
+#[instrument(skip_all)]
+#[allow(clippy::multiple_bound_locations)] // cfg not supported in where clauses?
+pub fn prove_with_key<
+    SC,
+    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
+    #[cfg(not(debug_assertions))] A,
+>(
+    config: &SC,
+    proving_key: Option<&StarkProvingKey<SC>>,
+    air: &A,
+    challenger: &mut SC::Challenger,
+    trace: RowMajorMatrix<Val<SC>>,
+    public_values: &Vec<Val<SC>>,
+) -> Proof<SC>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+{
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, public_values);
+    crate::check_constraints::check_constraints(
+        air,
+        &air.preprocessed_trace()
+            .unwrap_or(RowMajorMatrix::new(vec![], 0)),
+        &trace,
+        public_values,
+    );
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -62,6 +89,10 @@ where
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
 
+    let preprocessed_on_quotient_domain = proving_key.map(|proving_key| {
+        pcs.get_evaluations_on_domain(&proving_key.preprocessed_data, 0, quotient_domain)
+    });
+
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
 
     let quotient_values = quotient_values(
@@ -69,6 +100,7 @@ where
         public_values,
         trace_domain,
         quotient_domain,
+        preprocessed_on_quotient_domain,
         trace_on_quotient_domain,
         alpha,
     );
@@ -89,22 +121,54 @@ where
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let (opened_values, opening_proof) = pcs.open(
-        vec![
-            (&trace_data, vec![vec![zeta, zeta_next]]),
-            (
-                &quotient_data,
-                // open every chunk at zeta
-                (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
-            ),
-        ],
+        iter::empty()
+            .chain(
+                proving_key
+                    .map(|proving_key| {
+                        (&proving_key.preprocessed_data, vec![vec![zeta, zeta_next]])
+                    })
+                    .into_iter(),
+            )
+            .chain([
+                (&trace_data, vec![vec![zeta, zeta_next]]),
+                (
+                    &quotient_data,
+                    // open every chunk at zeta
+                    (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                ),
+            ])
+            .collect_vec(),
         challenger,
     );
-    let trace_local = opened_values[0][0][0].clone();
-    let trace_next = opened_values[0][0][1].clone();
-    let quotient_chunks = opened_values[1].iter().map(|v| v[0].clone()).collect_vec();
+    let mut opened_values = opened_values.iter();
+
+    // maybe get values for the preprocessed columns
+    let (preprocessed_local, preprocessed_next) = if proving_key.is_some() {
+        let value = opened_values.next().unwrap();
+        assert_eq!(value.len(), 1);
+        assert_eq!(value[0].len(), 2);
+        (value[0][0].clone(), value[0][1].clone())
+    } else {
+        (vec![], vec![])
+    };
+
+    // get values for the trace
+    let value = opened_values.next().unwrap();
+    assert_eq!(value.len(), 1);
+    assert_eq!(value[0].len(), 2);
+    let trace_local = value[0][0].clone();
+    let trace_next = value[0][1].clone();
+
+    // get values for the quotient
+    let value = opened_values.next().unwrap();
+    assert_eq!(value.len(), quotient_degree);
+    let quotient_chunks = value.iter().map(|v| v[0].clone()).collect_vec();
+
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
+        preprocessed_local,
+        preprocessed_next,
         quotient_chunks,
     };
     Proof {
@@ -121,6 +185,7 @@ fn quotient_values<SC, A, Mat>(
     public_values: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
+    preprocessed_on_quotient_domain: Option<Mat>,
     trace_on_quotient_domain: Mat,
     alpha: SC::Challenge,
 ) -> Vec<SC::Challenge>
@@ -130,6 +195,10 @@ where
     Mat: Matrix<Val<SC>> + Sync,
 {
     let quotient_size = quotient_domain.size();
+    let preprocessed_width = preprocessed_on_quotient_domain
+        .as_ref()
+        .map(Matrix::width)
+        .unwrap_or_default();
     let width = trace_on_quotient_domain.width();
     let mut sels = trace_domain.selectors_on_coset(quotient_domain);
 
@@ -156,6 +225,23 @@ where
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
+            let preprocessed = RowMajorMatrix::new(
+                iter::empty()
+                    .chain(preprocessed_on_quotient_domain.iter().flat_map(
+                        |preprocessed_on_quotient_domain| {
+                            preprocessed_on_quotient_domain.vertically_packed_row(i_start)
+                        },
+                    ))
+                    .chain(preprocessed_on_quotient_domain.iter().flat_map(
+                        |preprocessed_on_quotient_domain| {
+                            preprocessed_on_quotient_domain
+                                .vertically_packed_row(i_start + next_step)
+                        },
+                    ))
+                    .collect_vec(),
+                preprocessed_width,
+            );
+
             let main = RowMajorMatrix::new(
                 iter::empty()
                     .chain(trace_on_quotient_domain.vertically_packed_row(i_start))
@@ -166,6 +252,7 @@ where
 
             let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {
+                preprocessed,
                 main,
                 public_values,
                 is_first_row,

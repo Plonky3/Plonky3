@@ -12,6 +12,11 @@ pub trait BaseAir<F>: Sync {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
+
+    /// The number of preprocessed columns in this AIR
+    fn preprocessed_width(&self) -> usize {
+        0
+    }
 }
 
 /// An AIR that works with a particular `AirBuilder`.

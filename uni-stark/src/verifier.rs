@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir};
@@ -11,11 +12,29 @@ use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
-use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
+use crate::{
+    PcsError, Proof, StarkGenericConfig, StarkVerifyingKey, Val, VerifierConstraintFolder,
+};
 
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
     config: &SC,
+    air: &A,
+    challenger: &mut SC::Challenger,
+    proof: &Proof<SC>,
+    public_values: &Vec<Val<SC>>,
+) -> Result<(), VerificationError<PcsError<SC>>>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+{
+    verify_with_key(config, None, air, challenger, proof, public_values)
+}
+
+#[instrument(skip_all)]
+pub fn verify_with_key<SC, A>(
+    config: &SC,
+    verifying_key: Option<&StarkVerifyingKey<SC>>,
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
@@ -33,7 +52,7 @@ where
     } = proof;
 
     let degree = 1 << degree_bits;
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -71,26 +90,44 @@ where
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     pcs.verify(
-        vec![
-            (
-                commitments.trace.clone(),
-                vec![(
-                    trace_domain,
-                    vec![
-                        (zeta, opened_values.trace_local.clone()),
-                        (zeta_next, opened_values.trace_next.clone()),
-                    ],
-                )],
-            ),
-            (
-                commitments.quotient_chunks.clone(),
-                quotient_chunks_domains
-                    .iter()
-                    .zip(&opened_values.quotient_chunks)
-                    .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-                    .collect_vec(),
-            ),
-        ],
+        iter::empty()
+            .chain(
+                verifying_key
+                    .map(|verifying_key| {
+                        (
+                            verifying_key.preprocessed_commit.clone(),
+                            (vec![(
+                                trace_domain,
+                                vec![
+                                    (zeta, opened_values.preprocessed_local.clone()),
+                                    (zeta_next, opened_values.preprocessed_next.clone()),
+                                ],
+                            )]),
+                        )
+                    })
+                    .into_iter(),
+            )
+            .chain([
+                (
+                    commitments.trace.clone(),
+                    vec![(
+                        trace_domain,
+                        vec![
+                            (zeta, opened_values.trace_local.clone()),
+                            (zeta_next, opened_values.trace_next.clone()),
+                        ],
+                    )],
+                ),
+                (
+                    commitments.quotient_chunks.clone(),
+                    quotient_chunks_domains
+                        .iter()
+                        .zip(&opened_values.quotient_chunks)
+                        .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+                        .collect_vec(),
+                ),
+            ])
+            .collect_vec(),
         opening_proof,
         challenger,
     )
@@ -126,12 +163,18 @@ where
 
     let sels = trace_domain.selectors_at_point(zeta);
 
+    let preprocessed = VerticalPair::new(
+        RowMajorMatrixView::new_row(&opened_values.preprocessed_local),
+        RowMajorMatrixView::new_row(&opened_values.preprocessed_next),
+    );
+
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(&opened_values.trace_local),
         RowMajorMatrixView::new_row(&opened_values.trace_next),
     );
 
     let mut folder = VerifierConstraintFolder {
+        preprocessed,
         main,
         public_values,
         is_first_row: sels.is_first_row,
