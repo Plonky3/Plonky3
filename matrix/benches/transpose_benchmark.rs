@@ -1,39 +1,27 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use p3_matrix::dense::RowMajorMatrix;
 
 fn transpose_benchmark(c: &mut Criterion) {
-    const WIDTH_10: usize = 10;
-    const HEIGHT_10: usize = 10;
+    const SMALL_DIMS: [(usize, usize); 4] = [(4, 4), (8, 8), (10, 10), (12, 12)];
+    const LARGE_DIMS: [(usize, usize); 4] = [(20, 8), (21, 8), (22, 8), (23, 8)];
 
-    let matrix_10x10 = RowMajorMatrix::new(vec![0; WIDTH_10 * HEIGHT_10], WIDTH_10);
-    c.bench_function("transpose 10x10", |b| {
-        b.iter(|| matrix_10x10.clone().transpose())
-    });
+    let inner = |g: &mut BenchmarkGroup<_>, dims: &[(usize, usize)]| {
+        for (lg_nrows, lg_ncols) in dims {
+            let nrows = 1 << lg_nrows;
+            let ncols = 1 << lg_ncols;
+            let matrix = RowMajorMatrix::new(vec![0u32; nrows * ncols], ncols);
+            let name = format!("2^{lg_nrows} x 2^{lg_ncols}");
+            g.throughput(Throughput::Bytes(
+                (nrows * ncols * core::mem::size_of::<u32>()) as u64,
+            ));
+            g.bench_function(&name, |b| b.iter(|| matrix.transpose()));
+        }
+    };
 
-    const WIDTH_100: usize = 100;
-    const HEIGHT_100: usize = 100;
-
-    let matrix_100x100 = RowMajorMatrix::new(vec![0; WIDTH_100 * HEIGHT_100], WIDTH_100);
-    c.bench_function("transpose 100x100", |b| {
-        b.iter(|| matrix_100x100.clone().transpose())
-    });
-
-    const WIDTH_1024: usize = 1024;
-    const HEIGHT_1024: usize = 1024;
-
-    let matrix_1024x1024 = RowMajorMatrix::new(vec![0; WIDTH_1024 * HEIGHT_1024], WIDTH_1024);
-    c.bench_function("transpose 1024x1024", |b| {
-        b.iter(|| matrix_1024x1024.clone().transpose())
-    });
-
-    const WIDTH_10_000: usize = 10_000;
-    const HEIGHT_10_000: usize = 10_000;
-
-    let matrix_10_000x10_000 =
-        RowMajorMatrix::new(vec![0; WIDTH_10_000 * HEIGHT_10_000], WIDTH_10_000);
-    c.bench_function("transpose 10_000x10_000", |b| {
-        b.iter(|| matrix_10_000x10_000.clone().transpose())
-    });
+    let mut g = c.benchmark_group("transpose");
+    inner(&mut g, &SMALL_DIMS);
+    g.sample_size(10);
+    inner(&mut g, &LARGE_DIMS);
 }
 
 criterion_group!(benches, transpose_benchmark);

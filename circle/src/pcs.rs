@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
-use p3_field::extension::{Complex, ComplexExtendable};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriConfig, FriProof};
@@ -17,26 +17,17 @@ use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
-use crate::cfft::Cfft;
-use crate::deep_quotient::{deep_quotient_reduce_matrix, deep_quotient_reduce_row, extract_lambda};
+use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
-use crate::folding::{
-    circle_bitrev_idx, circle_bitrev_permute, fold_bivariate, fold_bivariate_row, CircleBitrevPerm,
-    CircleBitrevView, CircleFriConfig, CircleFriGenericConfig,
-};
-use crate::util::{univariate_to_point, v_n};
+use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
+use crate::point::Point;
+use crate::{cfft_permute_index, CfftPermutable, CircleEvaluations};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
-    pub cfft: Cfft<Val>,
     pub mmcs: InputMmcs,
     pub fri_config: FriConfig<FriMmcs>,
-}
-
-#[derive(Debug)]
-pub struct ProverData<Val, MmcsData> {
-    committed_domains: Vec<CircleDomain<Val>>,
-    mmcs_data: MmcsData,
+    pub _phantom: PhantomData<Val>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -90,7 +81,7 @@ where
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = ProverData<Val, InputMmcs::ProverData<CircleBitrevView<RowMajorMatrix<Val>>>>;
+    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
 
@@ -102,7 +93,7 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let (committed_domains, ldes): (Vec<_>, Vec<_>) = evaluations
+        let ldes = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
@@ -110,21 +101,15 @@ where
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );
-                let committed_domain =
-                    CircleDomain::standard(domain.log_n + self.fri_config.log_blowup);
-                let lde = self.cfft.lde(evals, domain, committed_domain);
-                let perm_lde = CircleBitrevPerm::new(lde);
-                (committed_domain, perm_lde)
+                CircleEvaluations::from_natural_order(domain, evals)
+                    .extrapolate(CircleDomain::standard(
+                        domain.log_n + self.fri_config.log_blowup,
+                    ))
+                    .to_cfft_order()
             })
-            .unzip();
+            .collect_vec();
         let (comm, mmcs_data) = self.mmcs.commit(ldes);
-        (
-            comm,
-            ProverData {
-                committed_domains,
-                mmcs_data,
-            },
-        )
+        (comm, mmcs_data)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -133,11 +118,17 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
-        // TODO do this correctly
-        let mat = self.mmcs.get_matrices(&data.mmcs_data)[idx];
-        assert_eq!(mat.height(), 1 << domain.log_n);
-        assert_eq!(domain, data.committed_domains[idx]);
-        mat.inner.as_view()
+        let mat = self.mmcs.get_matrices(data)[idx].as_view();
+        let committed_domain = CircleDomain::standard(log2_strict_usize(mat.height()));
+        if domain == committed_domain {
+            mat.as_cow().cfft_perm_rows()
+        } else {
+            CircleEvaluations::from_cfft_order(committed_domain, mat)
+                .extrapolate(domain)
+                .to_cfft_order()
+                .as_cow()
+                .cfft_perm_rows()
+        }
     }
 
     #[instrument(skip_all)]
@@ -173,47 +164,35 @@ where
         let values: OpenedValues<Challenge> = rounds
             .iter()
             .map(|(data, points_for_mats)| {
-                let mats = self.mmcs.get_matrices(&data.mmcs_data);
-                izip!(&data.committed_domains, mats, points_for_mats)
-                    .map(|(lde_domain, permuted_mat, points_for_mat)| {
-                        // Get the unpermuted matrix.
-                        let mat = &permuted_mat.inner;
-
+                let mats = self.mmcs.get_matrices(data);
+                izip!(mats, points_for_mats)
+                    .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
+                        // It was committed in cfft order.
+                        let evals = CircleEvaluations::from_cfft_order(
+                            CircleDomain::standard(log_height),
+                            mat.as_view(),
+                        );
+
                         let (alpha_offset, reduced_opening_for_log_height) =
                             reduced_openings.entry(log_height).or_insert_with(|| {
-                                (Challenge::one(), vec![Challenge::zero(); mat.height()])
+                                (Challenge::one(), vec![Challenge::zero(); 1 << log_height])
                             });
 
                         points_for_mat
                             .iter()
                             .map(|&zeta| {
-                                let zeta_point = univariate_to_point(zeta).unwrap();
+                                let zeta = Point::from_projective_line(zeta);
 
                                 // Staying in evaluation form, we lagrange interpolate to get the value of
                                 // each p at zeta.
                                 // todo: we only need half of the values to interpolate, but how?
                                 let ps_at_zeta: Vec<Challenge> =
                                     info_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| {
-                                            // todo: cache basis
-                                            let basis: Vec<Challenge> =
-                                                lde_domain.lagrange_basis(zeta_point);
-                                            let v_n_at_zeta = lde_domain.zp_at_point(zeta);
-                                            mat.columnwise_dot_product(&basis)
-                                                .into_iter()
-                                                .map(|x| x * v_n_at_zeta)
-                                                .collect()
-                                        });
+                                        .in_scope(|| evals.evaluate_at_point(zeta));
 
                                 // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                                let mat_ros = deep_quotient_reduce_matrix(
-                                    alpha,
-                                    lde_domain,
-                                    mat,
-                                    zeta_point,
-                                    &ps_at_zeta,
-                                );
+                                let mat_ros = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
 
                                 // Fold it into our running reduction, offset by alpha_offset.
                                 reduced_opening_for_log_height
@@ -224,7 +203,7 @@ where
                                     });
 
                                 // Update alpha_offset from α^i -> α^(i + 2 * width)
-                                *alpha_offset *= alpha.exp_u64(2 * mat.width() as u64);
+                                *alpha_offset *= alpha.exp_u64(2 * evals.values.width() as u64);
 
                                 ps_at_zeta
                             })
@@ -244,17 +223,10 @@ where
             .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
                 log_heights.push(log_height);
-                // Todo: use domain methods more intelligently
-                let lambda = extract_lambda(
-                    CircleDomain::standard(log_height - self.fri_config.log_blowup),
-                    CircleDomain::standard(log_height),
-                    &mut ro,
-                );
+                let lambda = extract_lambda(&mut ro, self.fri_config.log_blowup);
                 lambdas.push(lambda);
-                // We have been working with reduced openings in natural order, but now we are ready
-                // to start FRI, so go to circle bitrev order, and prepare for first layer fold
-                // with 2 siblings per leaf.
-                RowMajorMatrix::new(circle_bitrev_permute(&ro), 2)
+                // Prepare for first layer fold with 2 siblings per leaf.
+                RowMajorMatrix::new(ro, 2)
             })
             .collect();
         let log_max_height = log_heights.iter().max().copied().unwrap();
@@ -276,7 +248,7 @@ where
             .mmcs
             .get_matrices(&first_layer_data)
             .into_iter()
-            .map(|m| fold_bivariate(bivariate_beta, m.as_view()))
+            .map(|m| fold_y(bivariate_beta, m.as_view()))
             // Reverse, because FRI expects descending by height
             .rev()
             .collect();
@@ -294,11 +266,10 @@ where
                     .iter()
                     .map(|(data, _)| {
                         let log_max_batch_height =
-                            log2_strict_usize(self.mmcs.get_max_height(&data.mmcs_data));
-                        let (opened_values, opening_proof) = self.mmcs.open_batch(
-                            index >> (log_max_height - log_max_batch_height),
-                            &data.mmcs_data,
-                        );
+                            log2_strict_usize(self.mmcs.get_max_height(data));
+                        let reduced_index = index >> (log_max_height - log_max_batch_height);
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_batch(reduced_index, data);
                         BatchOpening {
                             opened_values,
                             opening_proof,
@@ -313,7 +284,11 @@ where
                     .mmcs
                     .open_batch(index >> 1, &first_layer_data);
                 let first_layer_siblings = izip!(&first_layer_values, &log_heights)
-                    .map(|(v, log_height)| v[((index >> (log_max_height - log_height)) & 1) ^ 1])
+                    .map(|(v, log_height)| {
+                        let reduced_index = index >> (log_max_height - log_height);
+                        let sibling_index = (reduced_index & 1) ^ 1;
+                        v[sibling_index]
+                    })
                     .collect();
                 InputProof {
                     input_openings,
@@ -409,7 +384,7 @@ where
                     {
                         let log_height = mat_domain.log_n + self.fri_config.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
-                        let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
+                        let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
                         let committed_domain = CircleDomain::standard(log_height);
                         let x = committed_domain.nth_point(orig_idx);
@@ -420,7 +395,7 @@ where
                         let alpha_pow_width_2 = alpha.exp_u64(ps_at_x.len() as u64).square();
 
                         for (zeta_uni, ps_at_zeta) in mat_points_and_values {
-                            let zeta = univariate_to_point(*zeta_uni).unwrap();
+                            let zeta = Point::from_projective_line(*zeta_uni);
 
                             *ro += *alpha_offset
                                 * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta);
@@ -439,14 +414,12 @@ where
 
                             let orig_size = log_height - self.fri_config.log_blowup;
                             let bits_reduced = log_global_max_height - log_height;
-                            let orig_idx = circle_bitrev_idx(index >> bits_reduced, log_height);
+                            let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
                             let lde_domain = CircleDomain::standard(log_height);
-                            let x: Complex<Val> = lde_domain.nth_point(orig_idx);
+                            let p: Point<Val> = lde_domain.nth_point(orig_idx);
 
-                            let v_n_at_x = v_n(x.real(), orig_size);
-
-                            let lambda_corrected = ro - lambda * v_n_at_x;
+                            let lambda_corrected = ro - lambda * p.v_n(orig_size);
 
                             let mut fl_values = vec![lambda_corrected; 2];
                             fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;
@@ -454,7 +427,7 @@ where
                             let fri_input = (
                                 // - 1 here is because we have already folded a layer.
                                 log_height - 1,
-                                fold_bivariate_row(
+                                fold_y_row(
                                     index >> (bits_reduced + 1),
                                     // - 1 here is log_arity.
                                     log_height - 1,
@@ -465,7 +438,7 @@ where
 
                             let fl_dims = Dimensions {
                                 width: 0,
-                                height: 1 << log_height,
+                                height: 1 << (log_height - 1),
                             };
 
                             (fri_input, fl_dims, fl_values)
@@ -540,9 +513,9 @@ mod tests {
 
         type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
         let pcs = Pcs {
-            cfft: Cfft::default(),
             mmcs: val_mmcs,
             fri_config,
+            _phantom: PhantomData,
         };
 
         let log_n = 10;

@@ -1,16 +1,16 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
+use itertools::{iterate, Itertools};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
-use p3_field::extension::{Complex, ComplexExtendable};
-use p3_field::{batch_multiplicative_inverse, AbstractField, ExtensionField};
+use p3_field::extension::ComplexExtendable;
+use p3_field::ExtensionField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
-use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
+use crate::point::Point;
 
 /// A twin-coset of the circle group on F. It has a power-of-two size and an arbitrary shift.
 ///
@@ -41,59 +41,55 @@ use crate::util::{point_to_univariate, s_p_at_p, univariate_to_point, v_0, v_n};
 pub struct CircleDomain<F> {
     // log_n corresponds to the log size of the WHOLE domain
     pub(crate) log_n: usize,
-    pub(crate) shift: Complex<F>,
+    pub(crate) shift: Point<F>,
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
-    pub(crate) const fn new(log_n: usize, shift: Complex<F>) -> Self {
+    pub const fn new(log_n: usize, shift: Point<F>) -> Self {
         Self { log_n, shift }
     }
-    pub(crate) fn standard(log_n: usize) -> Self {
+    pub fn standard(log_n: usize) -> Self {
         Self {
             log_n,
-            shift: F::circle_two_adic_generator(log_n + 1),
+            shift: Point::generator(log_n + 1),
         }
     }
     fn is_standard(&self) -> bool {
-        self.shift == F::circle_two_adic_generator(self.log_n + 1)
+        self.shift == Point::generator(self.log_n + 1)
     }
-    pub(crate) fn points(&self) -> impl Iterator<Item = Complex<F>> {
-        let half_gen = F::circle_two_adic_generator(self.log_n - 1);
-        let coset0 = half_gen.shifted_powers(self.shift);
-        let coset1 = half_gen.shifted_powers(half_gen / self.shift);
-        coset0.interleave(coset1).take(1 << self.log_n)
+    pub(crate) fn gen(&self) -> Point<F> {
+        Point::generator(self.log_n - 1)
     }
-    pub(crate) fn nth_point(&self, idx: usize) -> Complex<F> {
-        // Only implemented for standard position.
-        assert!(self.is_standard());
-        let gen = F::circle_two_adic_generator(self.log_n);
-        self.shift * gen.exp_u64(idx as u64)
+    pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> {
+        let g = self.gen();
+        iterate(self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
+    }
+    fn coset1(&self) -> impl Iterator<Item = Point<F>> {
+        let g = self.gen();
+        iterate(g - self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
+    }
+    pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> {
+        self.coset0().interleave(self.coset1())
+    }
+    pub(crate) fn nth_point(&self, idx: usize) -> Point<F> {
+        let (idx, lsb) = (idx >> 1, idx & 1);
+        if lsb == 0 {
+            self.shift + self.gen() * idx
+        } else {
+            -self.shift + self.gen() * (idx + 1)
+        }
     }
 
-    /// Computes the lagrange basis at point, not yet normalized by the value of the domain
-    /// vanishing poly, since that is more efficient to compute after the dot product.
-    #[instrument(skip_all, fields(log_n = %self.log_n))]
-    pub(crate) fn lagrange_basis<EF: ExtensionField<F>>(&self, point: Complex<EF>) -> Vec<EF> {
-        let domain = self.points().collect_vec();
+    pub(crate) fn zeroifier<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
+        at.v_n(self.log_n) - self.shift.v_n(self.log_n)
+    }
 
-        // the denominator so that the lagrange basis is normalized to 1
-        // TODO: this depends only on domain, so should be precomputed
-        let lagrange_normalizer: Vec<F> = domain
-            .iter()
-            .map(|p| s_p_at_p(p.real(), p.imag(), self.log_n))
-            .collect();
+    pub(crate) fn s_p<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
+        self.zeroifier(at) / p.v_tilde_p(at)
+    }
 
-        let basis = domain
-            .into_iter()
-            .zip(&lagrange_normalizer)
-            .map(|(p, &ln)| {
-                // ext * base
-                // TODO: this can be sped up
-                v_0(p.conjugate().rotate(point)) * ln
-            })
-            .collect_vec();
-
-        batch_multiplicative_inverse(&basis)
+    pub(crate) fn s_p_normalized<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
+        self.zeroifier(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
     }
 }
 
@@ -105,14 +101,17 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     }
 
     fn first_point(&self) -> Self::Val {
-        point_to_univariate(self.shift).unwrap()
+        self.shift.to_projective_line().unwrap()
     }
 
     fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext> {
         // Only in standard position do we have an algebraic expression to access the next point.
         if self.is_standard() {
-            let gen = F::circle_two_adic_generator(self.log_n);
-            Some(point_to_univariate(gen.rotate(univariate_to_point(x).unwrap())).unwrap())
+            Some(
+                (Point::from_projective_line(x) + Point::generator(self.log_n))
+                    .to_projective_line()
+                    .unwrap(),
+            )
         } else {
             None
         }
@@ -137,36 +136,29 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     }
 
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
-        v_n(univariate_to_point(point).unwrap().real(), self.log_n)
-            - v_n(self.shift.real(), self.log_n)
+        self.zeroifier(Point::from_projective_line(point))
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
     ) -> LagrangeSelectors<Ext> {
-        let zeroifier = self.zp_at_point(point);
-        let p = univariate_to_point(point).unwrap();
+        let point = Point::from_projective_line(point);
         LagrangeSelectors {
-            is_first_row: zeroifier / v_0(self.shift.conjugate().rotate(p)),
-            is_last_row: zeroifier / v_0(self.shift.rotate(p)),
-            // This is the transition selector from the paper, but seems to send
-            // the quotient out of FFT space. It has a simple zero at the last point
-            // and a simple pole at the negation of the last point.
-            // is_transition: v_0(self.shift.rotate(p)),
-            // Instead we use this selector which has two zeros at the last point,
-            // which seems to work. TODO: More investigation is needed.
-            is_transition: self.shift.rotate(p).real() - Ext::one(),
-            inv_zeroifier: zeroifier.inverse(),
+            is_first_row: self.s_p(self.shift, point),
+            is_last_row: self.s_p(-self.shift, point),
+            is_transition: Ext::one() - self.s_p_normalized(-self.shift, point),
+            inv_zeroifier: self.zeroifier(point).inverse(),
         }
     }
 
     // wow, really slow!
+    // todo: batch inverses
     #[instrument(skip_all, fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
         let sels = coset
             .points()
-            .map(|p| self.selectors_at_point(point_to_univariate(p).unwrap()))
+            .map(|p| self.selectors_at_point(p.to_projective_line().unwrap()))
             .collect_vec();
         LagrangeSelectors {
             is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
@@ -237,20 +229,22 @@ fn forward_backward_index(mut i: usize, len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
+
     use hashbrown::HashSet;
     use itertools::izip;
+    use p3_field::{batch_multiplicative_inverse, AbstractField};
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng};
+    use rand::thread_rng;
 
     use super::*;
-    use crate::util::eval_circle_polys;
-    use crate::Cfft;
+    use crate::CircleEvaluations;
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
         let pts = d.points().collect_vec();
         let half_n = pts.len() >> 1;
-        for (l, r) in izip!(&pts[..half_n], pts[half_n..].iter().rev()) {
-            assert_eq!(*l, r.conjugate());
+        for (&l, &r) in izip!(&pts[..half_n], pts[half_n..].iter().rev()) {
+            assert_eq!(l, -r);
         }
     }
 
@@ -263,7 +257,9 @@ mod tests {
         // we can move around the circle and end up where we started
         let p0 = d.first_point();
         let mut p1 = p0;
-        for _ in 0..(n - 1) {
+        for i in 0..(n - 1) {
+            // nth_point is correct
+            assert_eq!(Point::from_projective_line(p1), d.nth_point(i));
             p1 = d.next_point(p1).unwrap();
             assert_ne!(p1, p0);
         }
@@ -272,12 +268,12 @@ mod tests {
         // .points() is the same as first_point -> next_point
         let mut uni_point = d.first_point();
         for p in d.points() {
-            assert_eq!(univariate_to_point(uni_point), Some(p));
+            assert_eq!(Point::from_projective_line(uni_point), p);
             uni_point = d.next_point(uni_point).unwrap();
         }
 
         // disjoint domain is actually disjoint, and large enough
-        let seen: HashSet<Complex<F>> = d.points().collect();
+        let seen: HashSet<Point<F>> = d.points().collect();
         for disjoint_size in [10, 100, n - 5, n + 15] {
             let dd = d.create_disjoint_domain(disjoint_size);
             assert!(dd.size() >= disjoint_size);
@@ -288,12 +284,12 @@ mod tests {
 
         // zp is zero
         for p in d.points() {
-            assert_eq!(d.zp_at_point(point_to_univariate(p).unwrap()), F::zero());
+            assert_eq!(d.zp_at_point(p.to_projective_line().unwrap()), F::zero());
         }
 
         // split domains
         let evals = RowMajorMatrix::rand(&mut thread_rng(), n, width);
-        let orig: Vec<(Complex<F>, Vec<F>)> = d
+        let orig: Vec<(Point<F>, Vec<F>)> = d
             .points()
             .zip(evals.rows().map(|r| r.collect_vec()))
             .collect();
@@ -333,39 +329,76 @@ mod tests {
     }
 
     #[test]
-    fn test_circle_domain() {
-        do_test_circle_domain(4, 32);
-        do_test_circle_domain(10, 32);
+    fn selectors() {
+        type F = Mersenne31;
+        let log_n = 8;
+        let n = 1 << log_n;
+
+        let d = CircleDomain::<F>::standard(log_n);
+        let coset = d.create_disjoint_domain(n);
+        let sels = d.selectors_on_coset(coset);
+
+        // selectors_on_coset matches selectors_at_point
+        let mut pt = coset.first_point();
+        for i in 0..coset.size() {
+            let pt_sels = d.selectors_at_point(pt);
+            assert_eq!(sels.is_first_row[i], pt_sels.is_first_row);
+            assert_eq!(sels.is_last_row[i], pt_sels.is_last_row);
+            assert_eq!(sels.is_transition[i], pt_sels.is_transition);
+            assert_eq!(sels.inv_zeroifier[i], pt_sels.inv_zeroifier);
+            pt = coset.next_point(pt).unwrap();
+        }
+
+        let coset_to_d = |evals: &[F]| {
+            let evals = CircleEvaluations::from_natural_order(
+                coset,
+                RowMajorMatrix::new_col(evals.to_vec()),
+            );
+            let coeffs = evals.interpolate().to_row_major_matrix();
+            let (lo, hi) = coeffs.split_rows(n);
+            assert_eq!(hi.values, vec![F::zero(); n]);
+            CircleEvaluations::evaluate(d, lo.to_row_major_matrix())
+                .to_natural_order()
+                .to_row_major_matrix()
+                .values
+        };
+
+        // Nonzero at first point, zero everywhere else on domain
+        let is_first_row = coset_to_d(&sels.is_first_row);
+        assert_ne!(is_first_row[0], F::zero());
+        assert_eq!(&is_first_row[1..], &vec![F::zero(); n - 1]);
+
+        // Nonzero at last point, zero everywhere else on domain
+        let is_last_row = coset_to_d(&sels.is_last_row);
+        assert_eq!(&is_last_row[..n - 1], &vec![F::zero(); n - 1]);
+        assert_ne!(is_last_row[n - 1], F::zero());
+
+        // Nonzero everywhere on domain but last point
+        let is_transition = coset_to_d(&sels.is_transition);
+        assert_ne!(&is_transition[..n - 1], &vec![F::zero(); n - 1]);
+        assert_eq!(is_transition[n - 1], F::zero());
+
+        // Zeroifier coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
+        let z_coeffs = CircleEvaluations::from_natural_order(
+            coset,
+            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_zeroifier)),
+        )
+        .interpolate()
+        .to_row_major_matrix()
+        .values;
+        assert_eq!(
+            z_coeffs,
+            iter::empty()
+                .chain(iter::repeat(F::zero()).take(n))
+                .chain(iter::once(F::one()))
+                .chain(iter::repeat(F::zero()).take(n - 1))
+                .collect_vec()
+        );
     }
 
     #[test]
-    fn test_barycentric() {
-        let log_n = 10;
-        let n = 1 << log_n;
-
-        type F = Mersenne31;
-
-        let evals = RowMajorMatrix::<F>::rand(&mut thread_rng(), n, 16);
-
-        let cfft = Cfft::default();
-
-        let shift: Complex<F> = univariate_to_point(random()).unwrap();
-        let d = CircleDomain { shift, log_n };
-
-        let coeffs = cfft.coset_cfft_batch(evals.clone(), shift);
-
-        // simple barycentric
-        let zeta: Complex<F> = univariate_to_point(random()).unwrap();
-
-        let basis = d.lagrange_basis(zeta);
-        let v_n_at_zeta = v_n(zeta.real(), log_n) - v_n(shift.real(), log_n);
-
-        let ys = evals
-            .columnwise_dot_product(&basis)
-            .into_iter()
-            .map(|x| x * v_n_at_zeta)
-            .collect_vec();
-
-        assert_eq!(ys, eval_circle_polys(&coeffs, zeta));
+    fn test_circle_domain() {
+        do_test_circle_domain(4, 8);
+        do_test_circle_domain(10, 32);
     }
 }

@@ -68,6 +68,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
         for x in 0..5 {
             for z in 0..64 {
+                builder.assert_bool(local.c[x][z]);
                 let xor = xor3_gen::<AB::Expr>(
                     local.c[x][z].into(),
                     local.c[(x + 4) % 5][z].into(),
@@ -97,7 +98,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let a_limb = local.a[y][x][limb];
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
-                        .fold(AB::Expr::zero(), |acc, z| acc.double() + get_bit(z));
+                        .fold(AB::Expr::zero(), |acc, z| {
+                            builder.assert_bool(local.a_prime[y][x][z]);
+                            acc.double() + get_bit(z)
+                        });
                     builder.assert_eq(computed_limb, a_limb);
                 }
             }
@@ -142,6 +146,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::zero(), |acc, z| {
+                    builder.assert_bool(local.a_prime_prime_0_0_bits[z]);
                     acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
             let a_prime_prime_0_0_limb = local.a_prime_prime[0][0][limb];

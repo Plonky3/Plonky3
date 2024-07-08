@@ -111,15 +111,16 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_equal() {
             let p = $p;
-            for i in 2..5 {
+            for i in 5..8 {
                 $crate::do_test_fri_pcs(&p, &[&[i; 5]]);
+                println!("{i} ok");
             }
         }
 
         #[test]
         fn many_different() {
             let p = $p;
-            for i in 2..4 {
+            for i in 3..8 {
                 let degrees = (3..3 + i).collect::<Vec<_>>();
                 $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
@@ -128,7 +129,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_different_rev() {
             let p = $p;
-            for i in 2..4 {
+            for i in 3..8 {
                 let degrees = (3..3 + i).rev().collect::<Vec<_>>();
                 $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
@@ -205,8 +206,10 @@ mod babybear_fri_pcs {
 }
 
 mod m31_fri_pcs {
+    use std::marker::PhantomData;
+
     use p3_challenger::{HashChallenger, SerializingChallenger32};
-    use p3_circle::{Cfft, CirclePcs};
+    use p3_circle::CirclePcs;
     use p3_keccak::Keccak256Hash;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
@@ -242,9 +245,9 @@ mod m31_fri_pcs {
             mmcs: challenge_mmcs,
         };
         let pcs = Pcs {
-            cfft: Cfft::default(),
             mmcs: val_mmcs,
             fri_config,
+            _phantom: PhantomData,
         };
         (pcs, Challenger::from_hasher(vec![], byte_hash))
     }

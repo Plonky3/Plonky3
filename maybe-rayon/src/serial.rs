@@ -175,3 +175,7 @@ where
     let result_b = oper_b();
     (result_a, result_b)
 }
+
+pub fn current_num_threads() -> usize {
+    1
+}
