@@ -1,5 +1,6 @@
-use super::{split_at_mut_unchecked, P};
+use super::split_at_mut_unchecked;
 
+const P: u32 = 0x78000001;
 const MONTY_BITS: u32 = 32;
 const MONTY_MU: u32 = 0x88000001;
 

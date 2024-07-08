@@ -1,13 +1,13 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, PrimeField32, TwoAdicField};
+use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+use p3_util::log2_strict_usize;
 
-use crate::{MontyParameters, TwoAdicData};
+use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
-use super::{split_at_mut_unchecked, P};
+use super::split_at_mut_unchecked;
 
 // TODO: Consider following Hexl and storing the roots in a single
 // array in bit-reversed order, but with duplicates for certain roots
@@ -31,233 +31,227 @@ const MONTY_ROOTS64: [u32; 31] = [
     12128229, 48337049, 377028776, 270522423, 1626304099, 434501889, 741605237,
 ];
 
-/// FIXME: The (i-1)th vector contains the roots...
-pub fn roots_of_unity_table<F: TwoAdicField + PrimeField32>(n: usize) -> Vec<Vec<u32>> {
-    let lg_n = log2_strict_usize(n);
-    let half_n = 1 << (lg_n - 1);
-    // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
-    let nth_roots: Vec<_> = F::two_adic_generator(lg_n)
-        .powers()
-        .take(half_n)
-        .skip(1)
-        .map(|x| x.value)
-        .collect();
+impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+    /// FIXME: The (i-1)th vector contains the roots...
+    fn make_table(gen: Self, lg_n: usize) -> Vec<Vec<u32>> {
+        let half_n = 1 << (lg_n - 1);
+        // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
+        let nth_roots: Vec<_> = gen.powers().take(half_n).skip(1).map(|x| x.value).collect();
 
-    (0..(lg_n - 1))
-        .map(|i| {
-            nth_roots
-                .iter()
-                .skip((1 << i) - 1)
-                .step_by(1 << i)
-                .copied()
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
+        (0..(lg_n - 1))
+            .map(|i| {
+                nth_roots
+                    .iter()
+                    .skip((1 << i) - 1)
+                    .step_by(1 << i)
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
 
-const MONTY_BITS: u32 = 32;
-const MONTY_MU: u32 = 0x88000001;
+    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<u32>> {
+        let lg_n = log2_strict_usize(n);
+        Self::make_table(Self::two_adic_generator(lg_n), lg_n)
+    }
 
-/// Montgomery reduction of a value in `0..P << MONTY_BITS` to a value in `0..P`.
-#[inline(always)]
-fn monty_reduce(x: u64) -> u32 {
-    let t = x.wrapping_mul(MONTY_MU as u64) as u32 as u64;
-    let u = t * (P as u64);
-
-    let (x_sub_u, over) = x.overflowing_sub(u);
-    let x_sub_u_hi = (x_sub_u >> MONTY_BITS) as u32;
-    let corr = if over { P } else { 0 };
-    x_sub_u_hi.wrapping_add(corr)
-}
-
-/// Given x in `0..P << MONTY_BITS`, return x mod P in [0, 2p).
-/// TODO: Double-check the ranges above.
-#[inline(always)]
-pub fn partial_monty_reduce(x: u64) -> u32 {
-    let q = MONTY_MU.wrapping_mul(x as u32);
-    let h = ((q as u64 * P as u64) >> 32) as u32;
-    let r = P - h + (x >> 32) as u32;
-    r
-}
-
-/// Given x in [0, 2p), return the representative of x mod p in [0, p)
-#[inline(always)]
-fn reduce_2p(x: u32) -> u32 {
-    debug_assert!(x < 2 * P);
-
-    if x < P {
-        x
-    } else {
-        x - P
+    pub fn inv_roots_of_unity_table(n: usize) -> Vec<Vec<u32>> {
+        let lg_n = log2_strict_usize(n);
+        Self::make_table(Self::two_adic_generator(lg_n).inverse(), lg_n)
     }
 }
 
-/// Given x in [0, 4p), return the representative of x mod p in [0, p)
-#[inline(always)]
-fn reduce_4p(mut x: u64) -> u32 {
-    const PP: u64 = 0x78000001;
-    debug_assert!(x < 4 * PP);
-
-    if x > PP {
-        x -= PP;
+impl<MP: MontyParameters> MontyField31<MP> {
+    /// Given x in `0..P << MONTY_BITS`, return x mod P in [0, 2p).
+    /// TODO: Double-check the ranges above.
+    #[inline(always)]
+    fn partial_monty_reduce(x: u64) -> u32 {
+        let q = MP::MONTY_MU.wrapping_mul(x as u32);
+        let h = ((q as u64 * MP::PRIME as u64) >> 32) as u32;
+        let r = MP::PRIME - h + (x >> 32) as u32;
+        r
     }
-    if x > PP {
-        x -= PP;
-    }
-    if x > PP {
-        x -= PP;
-    }
-    x as u32
-}
 
-#[inline(always)]
-fn butterfly(x: u32, y: u32, w: u32) -> (u32, u32) {
-    let t = P + x - y;
-    (reduce_2p(x + y), monty_reduce(t as u64 * w as u64))
-}
+    /// Given x in [0, 2p), return the representative of x mod p in [0, p)
+    #[inline(always)]
+    fn reduce_2p(x: u32) -> u32 {
+        debug_assert!(x < 2 * MP::PRIME);
 
-#[inline]
-fn forward_pass(a: &mut [u32], roots: &[u32]) {
-    let half_n = a.len() / 2;
-    assert_eq!(roots.len(), half_n - 1);
-
-    let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
-
-    let x = top[0];
-    let y = tail[0];
-
-    top[0] = reduce_2p(x + y);
-    tail[0] = reduce_2p(P + x - y);
-
-    for i in 1..half_n {
-        (top[i], tail[i]) = butterfly(top[i], tail[i], roots[i - 1]);
-    }
-}
-
-#[inline(always)]
-fn forward_2(a: &mut [u32]) {
-    assert_eq!(a.len(), 2);
-
-    let s = reduce_2p(a[0] + a[1]);
-    let t = reduce_2p(P + a[0] - a[1]);
-    a[0] = s;
-    a[1] = t;
-}
-
-#[inline(always)]
-fn forward_4(a: &mut [u32]) {
-    assert_eq!(a.len(), 4);
-
-    const ROOT: u64 = MONTY_ROOTS8[1] as u64;
-
-    let t1 = (P + a[1] - a[3]) as u64;
-    let t5 = (a[1] + a[3]) as u64;
-    let t3 = partial_monty_reduce(t1 * ROOT) as u64;
-    let t4 = (a[0] + a[2]) as u64;
-    let t2 = (P + a[0] - a[2]) as u64;
-
-    const TWO_P: u64 = 2 * P as u64;
-
-    // Return in bit-reversed order
-    a[0] = reduce_4p(t4 + t5); // b0
-    a[2] = reduce_4p(t2 + t3); // b1
-    a[1] = reduce_4p(TWO_P + t4 - t5); // b2
-    a[3] = reduce_4p(TWO_P + t2 - t3); // b3
-}
-
-#[inline(always)]
-pub fn forward_8(a: &mut [u32]) {
-    assert_eq!(a.len(), 8);
-
-    forward_pass(a, &MONTY_ROOTS8);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-    forward_4(a0);
-    forward_4(a1);
-}
-
-#[inline(always)]
-pub fn forward_16(a: &mut [u32]) {
-    assert_eq!(a.len(), 16);
-
-    forward_pass(a, &MONTY_ROOTS16);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-    forward_8(a0);
-    forward_8(a1);
-}
-
-#[inline(always)]
-pub fn forward_32(a: &mut [u32]) {
-    assert_eq!(a.len(), 32);
-
-    forward_pass(a, &MONTY_ROOTS32);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-    forward_16(a0);
-    forward_16(a1);
-}
-
-#[inline(always)]
-pub fn forward_64(a: &mut [u32]) {
-    assert_eq!(a.len(), 64);
-
-    forward_pass(a, &MONTY_ROOTS64);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-    forward_32(a0);
-    forward_32(a1);
-}
-
-#[inline(always)]
-pub fn forward_128(a: &mut [u32], roots: &[u32]) {
-    assert_eq!(a.len(), 128);
-
-    forward_pass(a, roots);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-    forward_64(a0);
-    forward_64(a1);
-}
-
-#[inline(always)]
-pub fn forward_256(a: &mut [u32], root_table: &[Vec<u32>]) {
-    assert_eq!(a.len(), 256);
-
-    forward_pass(a, &root_table[0]);
-
-    let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-    forward_128(a0, &root_table[1]);
-    forward_128(a1, &root_table[1]);
-}
-
-#[inline]
-pub fn forward_fft(a: &mut [u32], root_table: &[Vec<u32>]) {
-    let n = a.len();
-    assert!(1 << (root_table.len() + 1) == n);
-
-    match n {
-        256 => forward_256(a, &root_table),
-        128 => forward_128(a, &root_table[0]),
-        64 => forward_64(a),
-        32 => forward_32(a),
-        16 => forward_16(a),
-        8 => forward_8(a),
-        4 => forward_4(a),
-        2 => forward_2(a),
-        _ => {
-            debug_assert!(n > 64);
-            forward_pass(a, &root_table[0]);
-            let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
-
-            forward_fft(a0, &root_table[1..]);
-            forward_fft(a1, &root_table[1..]);
+        if x < MP::PRIME {
+            x
+        } else {
+            x - MP::PRIME
         }
     }
-}
 
-pub fn batch_forward_fft(a: &mut [Vec<u32>], root_table: &[Vec<u32>]) {
-    a.par_iter_mut().for_each(|v| forward_fft(v, root_table));
+    /// Given x in [0, 4p), return the representative of x mod p in [0, p)
+    #[inline(always)]
+    fn reduce_4p(mut x: u64) -> u32 {
+        debug_assert!(x < 4 * (MP::PRIME as u64));
+
+        if x > (MP::PRIME as u64) {
+            x -= MP::PRIME as u64;
+        }
+        if x > (MP::PRIME as u64) {
+            x -= MP::PRIME as u64;
+        }
+        if x > (MP::PRIME as u64) {
+            x -= MP::PRIME as u64;
+        }
+        x as u32
+    }
+
+    #[inline(always)]
+    fn butterfly(x: u32, y: u32, w: u32) -> (u32, u32) {
+        let t = MP::PRIME + x - y;
+        (
+            Self::reduce_2p(x + y),
+            monty_reduce::<MP>(t as u64 * w as u64),
+        )
+    }
+
+    #[inline]
+    fn forward_pass(a: &mut [u32], roots: &[u32]) {
+        let half_n = a.len() / 2;
+        assert_eq!(roots.len(), half_n - 1);
+
+        let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
+
+        let x = top[0];
+        let y = tail[0];
+
+        top[0] = Self::reduce_2p(x + y);
+        tail[0] = Self::reduce_2p(MP::PRIME + x - y);
+
+        for i in 1..half_n {
+            (top[i], tail[i]) = Self::butterfly(top[i], tail[i], roots[i - 1]);
+        }
+    }
+
+    #[inline(always)]
+    fn forward_2(a: &mut [u32]) {
+        assert_eq!(a.len(), 2);
+
+        let s = Self::reduce_2p(a[0] + a[1]);
+        let t = Self::reduce_2p(MP::PRIME + a[0] - a[1]);
+        a[0] = s;
+        a[1] = t;
+    }
+
+    #[inline(always)]
+    fn forward_4(a: &mut [u32]) {
+        assert_eq!(a.len(), 4);
+
+        const ROOT: u64 = MONTY_ROOTS8[1] as u64;
+
+        let t1 = (MP::PRIME + a[1] - a[3]) as u64;
+        let t5 = (a[1] + a[3]) as u64;
+        let t3 = Self::partial_monty_reduce(t1 * ROOT) as u64;
+        let t4 = (a[0] + a[2]) as u64;
+        let t2 = (MP::PRIME + a[0] - a[2]) as u64;
+
+        // Return in bit-reversed order
+        a[0] = Self::reduce_4p(t4 + t5); // b0
+        a[2] = Self::reduce_4p(t2 + t3); // b1
+        a[1] = Self::reduce_4p((2 * MP::PRIME as u64) + t4 - t5); // b2
+        a[3] = Self::reduce_4p((2 * MP::PRIME as u64) + t2 - t3); // b3
+    }
+
+    #[inline(always)]
+    fn forward_8(a: &mut [u32]) {
+        assert_eq!(a.len(), 8);
+
+        Self::forward_pass(a, &MONTY_ROOTS8);
+
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        Self::forward_4(a0);
+        Self::forward_4(a1);
+    }
+
+    #[inline(always)]
+    fn forward_16(a: &mut [u32]) {
+        assert_eq!(a.len(), 16);
+
+        Self::forward_pass(a, &MONTY_ROOTS16);
+
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        Self::forward_8(a0);
+        Self::forward_8(a1);
+    }
+
+    #[inline(always)]
+    fn forward_32(a: &mut [u32]) {
+        assert_eq!(a.len(), 32);
+
+        Self::forward_pass(a, &MONTY_ROOTS32);
+
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        Self::forward_16(a0);
+        Self::forward_16(a1);
+    }
+
+    #[inline(always)]
+    fn forward_64(a: &mut [u32]) {
+        assert_eq!(a.len(), 64);
+
+        Self::forward_pass(a, &MONTY_ROOTS64);
+
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        Self::forward_32(a0);
+        Self::forward_32(a1);
+    }
+
+    #[inline(always)]
+    fn forward_128(a: &mut [u32], roots: &[u32]) {
+        assert_eq!(a.len(), 128);
+
+        Self::forward_pass(a, roots);
+
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        Self::forward_64(a0);
+        Self::forward_64(a1);
+    }
+
+    #[inline(always)]
+    fn forward_256(a: &mut [u32], root_table: &[Vec<u32>]) {
+        assert_eq!(a.len(), 256);
+
+        Self::forward_pass(a, &root_table[0]);
+
+        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        Self::forward_128(a0, &root_table[1]);
+        Self::forward_128(a1, &root_table[1]);
+    }
+
+    #[inline]
+    pub fn forward_fft(a: &mut [u32], root_table: &[Vec<u32>]) {
+        let n = a.len();
+        assert!(1 << (root_table.len() + 1) == n);
+
+        match n {
+            256 => Self::forward_256(a, &root_table),
+            128 => Self::forward_128(a, &root_table[0]),
+            64 => Self::forward_64(a),
+            32 => Self::forward_32(a),
+            16 => Self::forward_16(a),
+            8 => Self::forward_8(a),
+            4 => Self::forward_4(a),
+            2 => Self::forward_2(a),
+            _ => {
+                debug_assert!(n > 64);
+                Self::forward_pass(a, &root_table[0]);
+                let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
+
+                Self::forward_fft(a0, &root_table[1..]);
+                Self::forward_fft(a1, &root_table[1..]);
+            }
+        }
+    }
+
+    pub fn batch_forward_fft(a: &mut [Vec<u32>], root_table: &[Vec<u32>]) {
+        a.par_iter_mut()
+            .for_each(|v| Self::forward_fft(v, root_table));
+    }
 }
 
 /// Square root of an integer
@@ -340,7 +334,6 @@ fn _printmat(a: &[u32], nrows: usize, ncols: usize) {
     }
     println!("");
 }
-*/
 
 // TODO: Write a proper out-of-place version
 fn slow_forward_fft(output: &mut [u32], input: &[u32], root_table: &[Vec<u32>]) {
@@ -431,3 +424,5 @@ pub fn four_step_fft(input: &mut [u32], root_table: &[Vec<u32>]) {
     four_step_fft_inner(&mut output, input, root_table);
     input.copy_from_slice(&output);
 }
+
+*/

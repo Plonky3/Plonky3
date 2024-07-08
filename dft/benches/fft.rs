@@ -1,7 +1,7 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use p3_baby_bear::{BabyBear, BabyBearParameters};
+use p3_baby_bear::BabyBear;
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::Complex;
 use p3_field::TwoAdicField;
@@ -21,7 +21,7 @@ fn bench_fft(c: &mut Criterion) {
     const BATCH_SIZE: usize = 256;
 
     monty31_fft::<BATCH_SIZE>(c, log_sizes);
-    four_step_fft::<BATCH_SIZE>(c, log_sizes);
+    //four_step_fft::<BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
@@ -54,7 +54,7 @@ where
     let mut rng = thread_rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
-        let root_table = p3_monty_31::dft::roots_of_unity_table::<BabyBearParameters>(n);
+        let root_table = p3_baby_bear::BabyBear::roots_of_unity_table(n);
 
         let mut u: Vec<Vec<u32>> = (0..BATCH_SIZE)
             .into_iter()
@@ -66,12 +66,13 @@ where
         let i = 0;
         group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
             b.iter(|| {
-                p3_monty_31::dft::batch_forward_fft(&mut u, &root_table);
+                p3_baby_bear::BabyBear::batch_forward_fft(&mut u, &root_table);
             });
         });
     }
 }
 
+/*
 fn four_step_fft<const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     Standard: Distribution<i64>,
@@ -94,6 +95,7 @@ where
         });
     }
 }
+*/
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
