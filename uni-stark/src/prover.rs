@@ -82,6 +82,9 @@ where
     challenger.observe(Val::<SC>::from_canonical_usize(log_degree));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
+    if let Some(proving_key) = proving_key {
+        challenger.observe(proving_key.preprocessed_commit.clone())
+    };
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_ext_element();
@@ -226,19 +229,15 @@ where
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
             let preprocessed = RowMajorMatrix::new(
-                iter::empty()
-                    .chain(preprocessed_on_quotient_domain.iter().flat_map(
-                        |preprocessed_on_quotient_domain| {
-                            preprocessed_on_quotient_domain.vertically_packed_row(i_start)
-                        },
-                    ))
-                    .chain(preprocessed_on_quotient_domain.iter().flat_map(
-                        |preprocessed_on_quotient_domain| {
-                            preprocessed_on_quotient_domain
-                                .vertically_packed_row(i_start + next_step)
-                        },
-                    ))
-                    .collect_vec(),
+                preprocessed_on_quotient_domain
+                    .as_ref()
+                    .map(|on_quotient_domain| {
+                        iter::empty()
+                            .chain(on_quotient_domain.vertically_packed_row(i_start))
+                            .chain(on_quotient_domain.vertically_packed_row(i_start + next_step))
+                            .collect_vec()
+                    })
+                    .unwrap_or_default(),
                 preprocessed_width,
             );
 

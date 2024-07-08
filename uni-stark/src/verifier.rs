@@ -62,7 +62,10 @@ where
     let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
 
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
-    let valid_shape = opened_values.trace_local.len() == air_width
+    let air_fixed_width = <A as BaseAir<Val<SC>>>::preprocessed_width(air);
+    let valid_shape = opened_values.preprocessed_local.len() == air_fixed_width
+        && opened_values.preprocessed_next.len() == air_fixed_width
+        && opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
         && opened_values.quotient_chunks.len() == quotient_degree
         && opened_values
@@ -81,6 +84,9 @@ where
     // values. It's not clear if failing to include other instance data could enable a transcript
     // collision, since most such changes would completely change the set of satisfying witnesses.
 
+    if let Some(verifying_key) = verifying_key {
+        challenger.observe(verifying_key.preprocessed_commit.clone())
+    };
     challenger.observe(commitments.trace.clone());
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_ext_element();
