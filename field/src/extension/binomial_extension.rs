@@ -214,7 +214,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         match D {
-            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::w()))),
+            2 => Some(Self::from_base_slice(&quadratic_inv(&self.value, F::w()))),
             3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::w()))),
             _ => Some(self.frobenius_inv()),
         }
@@ -562,7 +562,7 @@ impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn qudratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
+pub fn quadratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
     let scalar = (a[0].square() - w * a[1].square()).inverse();
     [a[0] * scalar, -a[1] * scalar]
 }
