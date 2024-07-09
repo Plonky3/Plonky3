@@ -8,7 +8,7 @@ use p3_field::{AbstractField, Field};
 use crate::symbolic_variable::SymbolicVariable;
 
 /// An expression over `SymbolicVariable`s.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum SymbolicExpression<F: Field> {
     Variable(SymbolicVariable<F>),
     IsFirstRow,
