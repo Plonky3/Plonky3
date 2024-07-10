@@ -14,10 +14,7 @@ pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenger,
 >>::Domain;
 
-pub type Val<SC> = <<<SC as StarkGenericConfig>::Pcs as Pcs<
-    <SC as StarkGenericConfig>::Challenge,
-    <SC as StarkGenericConfig>::Challenger,
->>::Domain as PolynomialSpace>::Val;
+pub type Val<SC> = <Domain<SC> as PolynomialSpace>::Val;
 
 pub type PackedVal<SC> = <Val<SC> as Field>::Packing;
 
