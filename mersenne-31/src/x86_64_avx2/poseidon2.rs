@@ -46,6 +46,10 @@ const INTERNAL_SHIFTS1_T: [u64; 4] = [0, 4, 8, 14];
 const INTERNAL_SHIFTS2_T: [u64; 4] = [1, 5, 10, 15];
 const INTERNAL_SHIFTS3_T: [u64; 4] = [2, 6, 12, 16];
 
+const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u64; 24] = [
+    0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+];
+
 /// A 4x4 Matrix of M31 elements with each element stored in 64-bits and each row saved as 256bit packed vector.
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -628,6 +632,98 @@ impl Poseidon2AVX2Methods<2> for Poseidon2DataM31AVX2 {
     }
 }
 
+impl Poseidon2AVX2Methods<3> for Poseidon2DataM31AVX2 {
+    type Field = Mersenne31;
+    type InputOutput = [PackedMersenne31AVX2; 6];
+    type ExternalConstantsInput = [Mersenne31; 24];
+
+    const INTERNAL_SHIFTS: Packed64bitM31Tensor<3> = unsafe {
+        transmute([
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[0],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[4],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[1],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[5],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[2],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[6],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[3],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[7],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[8],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[12],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[9],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[13],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[10],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[14],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[11],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[15],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[16],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[20],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[17],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[21],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[18],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[22],
+            ]; 2],
+            [[
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[19],
+                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[23],
+            ]; 2],
+        ])
+    };
+
+    fn from_input(input: Self::InputOutput) -> Packed64bitM31Tensor<3> {
+        unsafe {
+            let field_input: [Mersenne31; 48] = transmute(input);
+            let mut tensor: Packed64bitM31Tensor<3> =
+                transmute(field_input.map(|x| x.value as u64));
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn to_output(input: Packed64bitM31Tensor<3>) -> Self::InputOutput {
+        unsafe {
+            let mut tensor = input;
+            tensor.shuffle_data_inverse();
+            let result: [u32; 48] = transmute::<_, [u64; 48]>(tensor).map(|x| x as u32);
+            transmute(result)
+        }
+    }
+
+    fn manipulate_external_constants(
+        input: Self::ExternalConstantsInput,
+    ) -> Packed64bitM31Tensor<3> {
+        unsafe {
+            let mut tensor: Packed64bitM31Tensor<3> = transmute([input.map(|x| x.value as u64); 2]);
+            tensor.shuffle_data();
+            tensor
+        }
+    }
+
+    fn manipulate_internal_constants(input: Mersenne31) -> u32 {
+        input.value
+    }
+}
+
 impl Poseidon2AVX2Methods<4> for Poseidon2DataM31AVX2 {
     type Field = Mersenne31;
     type InputOutput = [PackedMersenne31AVX2; 8];
@@ -677,8 +773,7 @@ impl Poseidon2AVX2Methods<4> for Poseidon2DataM31AVX2 {
         input: Self::ExternalConstantsInput,
     ) -> Packed64bitM31Tensor<4> {
         unsafe {
-            let mut tensor: Packed64bitM31Tensor<4> = transmute([input.map(
-                |x| x.value as u64); 4]);
+            let mut tensor: Packed64bitM31Tensor<4> = transmute([input.map(|x| x.value as u64); 4]);
             tensor.shuffle_data();
             tensor
         }
@@ -859,7 +954,39 @@ mod tests {
         assert_eq!(output, expected)
     }
 
-    /// Test that the scalar and vectorized outputs are the same on a random input of length 32.
+    /// Test that the scalar and vectorized outputs are the same on a random input of length 48.
+    #[test]
+    fn test_avx2_vectorized_poseidon2_2_x_width_24() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        // Our Poseidon2 implementation.
+        let poseidon2 = Perm24::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixMersenne31,
+            &mut rng,
+        );
+
+        let input: [[F; 24]; 2] = rng.gen();
+
+        let mut expected = input;
+        for row in expected.iter_mut() {
+            poseidon2.permute_mut(row);
+        }
+
+        let avx2_input: [PackedMersenne31AVX2; 6] = unsafe { transmute(input) };
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
+
+        let vector_poseidon_2: Poseidon2AVX2<3, Poseidon2DataM31AVX2> =
+            Poseidon2AVX2::new_from_rng_128::<Xoroshiro128Plus, 5>(&mut rng);
+
+        let avx2_output = vector_poseidon_2.permute(avx2_input);
+
+        let output: [[F; 24]; 2] = unsafe { transmute(avx2_output) };
+
+        assert_eq!(output, expected)
+    }
+
+    /// Test that the scalar and vectorized outputs are the same on a random input of length 64.
     #[test]
     fn test_avx2_vectorized_poseidon2_4_x_width_16_2() {
         let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);

@@ -32,6 +32,11 @@ use crate::poseidon2_round_numbers_128;
 //                          [w1, x1, y1, z1] [w5, x5, y5, z5] [w9, x9, y9, z9]     [w13, x13, y13, z13]
 //                          [w2, x2, y2, z2] [w6, x6, y6, z6] [w10, x10, y10, z10] [w14, x14, y14, z14]
 //                          [w3, x3, y3, z3] [w7, x7, y7, z7] [w11, x11, y11, z11] [w15, x15, y15, z15]
+//
+// 4 Poseidon 24 instance:  [w0, x0, y0, z0] [w4, x4, y4, z4] [w8, x8, y8, z8]     [w12, x12, y12, z12] [w16, x16, y16, z16] [w20, x20, y20, z20]
+//                          [w1, x1, y1, z1] [w5, x5, y5, z5] [w9, x9, y9, z9]     [w13, x13, y13, z13] [w17, x17, y17, z17] [w21, x21, y21, z21]
+//                          [w2, x2, y2, z2] [w6, x6, y6, z6] [w10, x10, y10, z10] [w14, x14, y14, z14] [w18, x18, y18, z18] [w22, x22, y22, z22]
+//                          [w3, x3, y3, z3] [w7, x7, y7, z7] [w11, x11, y11, z11] [w15, x15, y15, z15] [w19, x19, y19, z19] [w23, x23, y23, z23]
 // This necessitates some data manipulation. <Long term we can make this faster by instead assuming a more natural form for the matrices and letting the scalar code deal with the data manipulation.
 
 // The design mentality is that that poseidon2.permute and transmute should commute for all of the following: [[F; 16]; 4], [[PF; 2]; 4], [[PF; 4]; 2], [PF; 8].
