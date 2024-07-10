@@ -13,11 +13,7 @@ ff = { version = "0.13", features = ["derive", "derive_bits"] }
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
-halo2curves = { version = "0.6.1", features = [
-    "bits",
-    "bn256-table",
-    "derive_serde",
-] }
+halo2curves = { version = "0.6.1", features = ["bits", "derive_serde"] }
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
@@ -29,6 +25,9 @@ zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
 [features]
 default = []
+table = [
+    "halo2curves/bn256-table",
+] # Generate cached table of [0, 2^16) in Bn254Fr at compile time
 asm = ["halo2curves/asm"]
 
 [[bench]]
