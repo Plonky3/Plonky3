@@ -334,19 +334,19 @@ fn right_mat_mul_i_plus_1_dim_4<const HEIGHT: usize>(input: &mut Packed64bitM31T
 #[inline]
 fn split<const HEIGHT: usize>(input: __m256i) -> (__m256i, __m256i) {
     unsafe {
-        let zeros = x86_64::_mm256_setzero_si256();
+        const ZEROS: __m256i = unsafe { transmute::<[u64; 4], _>([0; 4]) };
         match HEIGHT {
             1 => {
-                let initial_elems = x86_64::_mm256_blend_epi32::<0b11111100>(input, zeros);
-                let remainder = x86_64::_mm256_blend_epi32::<0b00000011>(input, zeros);
+                let initial_elems = x86_64::_mm256_blend_epi32::<0b11111100>(input, ZEROS);
+                let remainder = x86_64::_mm256_blend_epi32::<0b00000011>(input, ZEROS);
                 (initial_elems, remainder)
             }
             2 | 3 => {
-                let initial_elems = x86_64::_mm256_blend_epi32::<0b11001100>(input, zeros);
-                let remainder = x86_64::_mm256_blend_epi32::<0b00110011>(input, zeros);
+                let initial_elems = x86_64::_mm256_blend_epi32::<0b11001100>(input, ZEROS);
+                let remainder = x86_64::_mm256_blend_epi32::<0b00110011>(input, ZEROS);
                 (initial_elems, remainder)
             }
-            4 => (input, zeros),
+            4 => (input, ZEROS),
             _ => unreachable!(),
         }
     }
@@ -410,7 +410,7 @@ pub trait Poseidon2AVX2Helpers {
     /// Apply the s-box: x -> x^s to a single u32.
     fn scalar_internal_sbox(s0: __m256i, rc: u32) -> __m256i;
 
-    const PACKED_3XPRIME: __m256i;
+    const PACKED_8XPRIME: __m256i;
 }
 
 pub trait Poseidon2AVX2Methods<const HEIGHT: usize>: Clone + Sync + Poseidon2AVX2Helpers {
@@ -483,9 +483,9 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize>: Clone + Sync + Poseidon2AVX
 }
 
 /// Compute a single internal Poseidon2 round.
-/// State must be < 2^32, but may not be canonical.
+/// Input must be < 2P < 2^32 but does not need to be canonical.
 /// Round Constant is assumed to be in canonical form.
-/// Output will be < 2^32, but may not be canonical.
+/// Output will be < 2P.
 #[inline]
 fn internal_round<const HEIGHT: usize, P2AVX2>(state: &mut Packed64bitM31Tensor<HEIGHT>, rc: u32)
 where
@@ -511,10 +511,10 @@ where
         state.left_shift(P2AVX2::INTERNAL_SHIFTS);
 
         // Need to multiply s0_post_sbox by -2.
-        // s0_post_sbox < 2^32 so the easiest will be to do
-        // 3P - s0_post_sbox to get the negative, then shift left by 1.
-        // This will add 6P to some other terms in state but this doesn't matter as we work mod P.
-        let neg_s0 = x86_64::_mm256_sub_epi64(P2AVX2::PACKED_3XPRIME, s0_post_sbox);
+        // s0_post_sbox < 2^33 so the easiest will be to do
+        // 8P - s0_post_sbox to get the negative, then shift left by 1.
+        // This will add 16P to some other terms in state but this doesn't matter as we work mod P.
+        let neg_s0 = x86_64::_mm256_sub_epi64(P2AVX2::PACKED_8XPRIME, s0_post_sbox);
         let neg_2_s0 = x86_64::_mm256_add_epi64(neg_s0, neg_s0);
 
         state.0[0][0] = x86_64::_mm256_add_epi64(neg_2_s0, state.0[0][0]);
@@ -535,8 +535,8 @@ where
 
 /// A single External Round.
 /// Note that we change the order to be mat_mul -> RC -> S-box (instead of RC -> S-box -> mat_mul in the paper).
-/// Input does not need to be in canonical form, < 2^50 is fine.
-/// Output will be < 2^33.
+/// Input does not need to be in canonical form but must be < 2^56.
+/// Output will be < 2^34.
 #[inline]
 fn rotated_external_round<const HEIGHT: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
@@ -544,14 +544,18 @@ fn rotated_external_round<const HEIGHT: usize, P2AVX2>(
 ) where
     P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
 {
-    state.mat_mul_aes();
-    state.right_mat_mul_i_plus_1();
-    state.add(*round_constant);
-    P2AVX2::full_reduce(state);
-    P2AVX2::joint_sbox(state);
+    // Assume input state < L
+
+    state.mat_mul_aes(); // state < 7L
+    state.right_mat_mul_i_plus_1(); // state < 49L (or 35L depending on HEIGHT)
+    state.add(*round_constant); // state < 49L + (2^31 - 1)
+    P2AVX2::partial_reduce(state); // We need state < 2^62 for this. => L < (2^62)/50 < 2^56.
+    P2AVX2::joint_sbox(state); // state is now < 2^34.
 }
 
 /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
+/// Inputs will always be canonical though in principal only need to be < 2^56.
+/// Output will be < 2P.
 #[inline]
 pub fn initial_external_rounds<const HEIGHT: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
@@ -565,10 +569,12 @@ pub fn initial_external_rounds<const HEIGHT: usize, P2AVX2>(
 
     state.mat_mul_aes();
     state.right_mat_mul_i_plus_1();
-    P2AVX2::full_reduce(state); // Might be able to get away with not doing this.
+    P2AVX2::partial_reduce(state); // Input to internal_rounds only needs to be < 2^32.
 }
 
 /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
+/// Inputs should be < 2P.
+/// Output will be < 2P.
 #[inline]
 pub fn internal_rounds<const HEIGHT: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
@@ -589,8 +595,9 @@ pub fn final_external_rounds<const HEIGHT: usize, P2AVX2>(
 ) where
     P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
 {
+    // Input is < 2P
     state.add(round_constants[0]);
-    P2AVX2::full_reduce(state); // Can possibly do something cheaper than full reduce here?
+    P2AVX2::partial_reduce(state);
     P2AVX2::joint_sbox(state);
 
     for round_constant in round_constants.iter().skip(1) {
@@ -698,7 +705,7 @@ where
         );
         internal_rounds::<HEIGHT, P2AVX2>(&mut internal_rep, &self.internal_constants);
         final_external_rounds::<HEIGHT, P2AVX2>(&mut internal_rep, &self.final_external_constants);
-        P2AVX2::full_reduce(&mut internal_rep); // Can do a simpler reduction than this
+        P2AVX2::full_reduce(&mut internal_rep); // TODO: Can maybe do a simpler reduction than this?
         P2AVX2::to_output(internal_rep)
     }
 

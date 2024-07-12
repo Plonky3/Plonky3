@@ -184,8 +184,8 @@ impl Packed64bitM31Matrix {
         self.0[3] = full_reduce(self.0[3]);
     }
 
-    /// Computex x -> x^5 for each element of the vector.
-    /// The input must be in canoncial form.
+    /// Compute x -> x^5 for each element of the vector.
+    /// The input must be in canonical form.
     #[inline]
     fn joint_sbox(&mut self) {
         self.0[0] = joint_sbox(self.0[0]);
@@ -279,26 +279,26 @@ impl Packed64bitM31Matrix {
 }
 
 /// Do a single round of M31 reduction on each element.
+/// No restrictions on input size
+/// Output is < max(2^{-30} * input, 2^32)
 #[inline]
 fn reduce(x: __m256i) -> __m256i {
     unsafe {
-        // Safety: If inputs are < L, output is < max(2^{-30}L, 2^32)
+        // Get the top 33 bits shifted down.
+        let high_bits = x86_64::_mm256_srli_epi64::<31>(x);
 
-        // Get the high 31 bits shifted down
-        let high_bits_lo = x86_64::_mm256_srli_epi64::<31>(x);
+        // Zero out the top 33 bits.
+        const MASK: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
+        let low_bits = x86_64::_mm256_and_si256(x, MASK);
 
         // Add the high bits back to the value
-        let input_plus_high_lo = x86_64::_mm256_add_epi64(x, high_bits_lo);
-
-        // Clear the bottom 31 bits of the x's
-        let high_bits_hi = x86_64::_mm256_slli_epi64::<31>(high_bits_lo);
-
-        // subtract off the high bits
-        x86_64::_mm256_sub_epi64(input_plus_high_lo, high_bits_hi)
+        x86_64::_mm256_add_epi64(low_bits, high_bits)
     }
 }
 
 /// Do a full reduction on each element, returning something in [0, 2^31 - 1]
+/// Input are assumed to be < 2^62.
+/// Output will be in canonical form.
 #[inline]
 fn full_reduce(x: __m256i) -> __m256i {
     unsafe {
@@ -308,7 +308,7 @@ fn full_reduce(x: __m256i) -> __m256i {
         // Then we subtract P. If that subtraction overflows our reduced value is correct.
         // Otherwise, the new subtracted value is right.
         let x_red = reduce(x);
-        let x_red_sub_p = x86_64::_mm256_sub_epi64(x_red, P_4XU64);
+        let x_red_sub_p = x86_64::_mm256_sub_epi32(x_red, P_4XU64);
 
         // Note its fine to the use u32 version here as the top 32 bits of x_red are always 0.
         x86_64::_mm256_min_epu32(x_red, x_red_sub_p)
@@ -332,19 +332,23 @@ fn hsum(input: __m256i) -> __m256i {
 }
 
 /// Compute x -> x^5 for each element of the vector.
-/// The input must be in canonical form.
-/// The output will not be in canonical form.
+/// The input must be < 2P < 2^32.
+/// The output will be < 2^34.
 #[inline]
 fn joint_sbox(x: __m256i) -> __m256i {
     unsafe {
-        // Safety: If input is in canonical form, no overflow will occur and the output will be < 2^33.
+        // Safety: If input is < 2P < 2^32, no overflow will occur and the output will be < 2^34.
 
-        // Square x. If it starts in canonical form then x^2 < 2^62
-        let x2 = x86_64::_mm256_mul_epu32(x, x);
+        // Subtract p to get something in [-P, P].
+        // This is unnecessary if the input already lies in [0, P], and so 1 operation could be saved there.
+        let x_sub_p = x86_64::_mm256_sub_epi32(x, P_4XU64);
+
+        // Square x_sub_p. As |x| < P, x^2 < P^2 < 2^62
+        let x2 = x86_64::_mm256_mul_epi32(x_sub_p, x_sub_p);
 
         // Reduce and then subtract P. The result will then lie in (-2^31, 2^31).
         let x2_red = reduce(x2);
-        let x2_red_sub_p = x86_64::_mm256_sub_epi64(x2_red, P_4XU64);
+        let x2_red_sub_p = x86_64::_mm256_sub_epi32(x2_red, P_4XU64);
 
         // Square again. The result is again < 2^62.
         let x4 = x86_64::_mm256_mul_epi32(x2_red_sub_p, x2_red_sub_p);
@@ -352,11 +356,14 @@ fn joint_sbox(x: __m256i) -> __m256i {
         // Reduce again so the result is < 2^32
         let x4_red = reduce(x4);
 
-        // Now when we multiply our result is < 2^63
+        // Now when we multiply our result is < 2^64
         let x5 = x86_64::_mm256_mul_epu32(x, x4_red);
 
-        // Now we reduce again and return the result which is < 2^33.
+        // Now we reduce again and return the result which is < 2^34.
         reduce(x5)
+
+        // Currently this requires 13 operations. (Each reduce expands to 3 ops.) Can we do better?
+        // The MUL ops all have high latency
     }
 }
 
@@ -369,7 +376,7 @@ fn rotated_external_round(state: &mut Packed64bitM31Matrix, round_constant: &Pac
     state.mat_mul_aes();
     state.right_mat_mul_i_plus_1();
     state.add_rc(*round_constant);
-    state.full_reduce();
+    state.reduce();
     state.joint_sbox();
 }
 
@@ -403,7 +410,7 @@ pub fn final_external_rounds(
     round_constants: &[Packed64bitM31Matrix],
 ) {
     state.add_rc(round_constants[0]);
-    state.full_reduce(); // Can possibly do something cheaper than full reduce here?
+    state.reduce(); // Can possibly do something cheaper than full reduce here?
     state.joint_sbox();
 
     for round_constant in round_constants.iter().skip(1) {
@@ -446,25 +453,23 @@ impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
         joint_sbox(state)
     }
 
-    /// Apply the s-box: x -> (x + rc)^s to a vector __m256i.
+    /// Apply the s-box: x -> (x + rc)^5 to a vector __m256i.
     /// s0 is in [0, 2P], rc is in [0, P]
     #[inline]
     fn quad_internal_sbox(s0: __m256i, rc: u32) -> __m256i {
         unsafe {
-            let constant = x86_64::_mm256_set1_epi64x(rc as i64);
+            // We set all u32 registers but we will ignore the top ones later.
+            // Seems to make compiler "slightly?" happier than using set1_epi64x.
+            let constant = x86_64::_mm256_set1_epi32(rc as i32);
 
             // Need to get s0 into canonical form.
-            let sub = x86_64::_mm256_sub_epi64(s0, P_4XU64);
+            let sub = x86_64::_mm256_sub_epi32(s0, P_4XU64);
             let red_s0 = x86_64::_mm256_min_epu32(s0, sub);
 
-            // Each entry of sum is <= 3P.
-            let sum = x86_64::_mm256_add_epi64(red_s0, constant);
-            let sub = x86_64::_mm256_sub_epi64(sum, P_4XU64);
+            // Each entry of sum is <= 2P.
+            let sum = x86_64::_mm256_add_epi32(red_s0, constant);
 
-            // If overflow occurs in a subtraction, the result will be large.
-            let reduced = x86_64::_mm256_min_epu32(sum, sub);
-
-            joint_sbox(reduced)
+            joint_sbox(sum)
         }
     }
 
@@ -476,22 +481,18 @@ impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
             // Long term there might be a better way.
 
             // This could/should be replaced by a blend.
-            let full_broadcast = x86_64::_mm256_set1_epi64x(rc as i64);
-            let zero_second_elem = x86_64::_mm256_insert_epi64::<1>(full_broadcast, 0);
-            let constant = x86_64::_mm256_insert_epi64::<3>(zero_second_elem, 0);
+            let full_broadcast = x86_64::_mm256_set1_epi32(rc as i32);
+            let zeros = x86_64::_mm256_setzero_si256();
+            let constant = x86_64::_mm256_blend_epi32::<0b01000100>(full_broadcast, zeros);
 
             // Need to get s0 into canonical form.
-            let sub = x86_64::_mm256_sub_epi64(s0, P_4XU64);
+            let sub = x86_64::_mm256_sub_epi32(s0, P_4XU64);
             let red_s0 = x86_64::_mm256_min_epu32(s0, sub);
 
             // Each entry of sum is < 2P.
             let sum = x86_64::_mm256_add_epi64(red_s0, constant);
-            let sub = x86_64::_mm256_sub_epi64(sum, P_4XU64);
 
-            // If overflow occurs in a subtraction, the result will be large.
-            let reduced = x86_64::_mm256_min_epu32(sum, sub);
-
-            joint_sbox(reduced)
+            joint_sbox(sum)
         }
     }
 
@@ -529,7 +530,7 @@ impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
         }
     }
 
-    const PACKED_3XPRIME: __m256i = unsafe { transmute([3 * (P as u64); 4]) };
+    const PACKED_8XPRIME: __m256i = unsafe { transmute([(P as u64) << 3; 4]) };
 }
 
 impl Poseidon2AVX2Methods<1> for Poseidon2DataM31AVX2 {
