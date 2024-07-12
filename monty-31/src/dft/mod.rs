@@ -1,11 +1,24 @@
-//! An implementation of the FFT for `BabyBear`
+//! An implementation of the FFT for `MontyField31`
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::cell::RefCell;
+
+use p3_dft::TwoAdicSubgroupDft;
+use p3_field::TwoAdicField;
+use p3_matrix::bitrev::BitReversableMatrix;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
+
 mod backward;
 mod forward;
 
-pub use crate::dft::backward::backward_fft;
+use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
 // TODO: These are only pub for benches at the moment...
 //pub mod backward;
+
+// TODO: These two functions belong somewhere else
 
 /// Copied from Rust nightly sources
 #[inline(always)]
@@ -31,160 +44,63 @@ pub(crate) unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut
     }
 }
 
-#[cfg(test)]
-mod tests {
-    extern crate alloc;
+/// The DIT FFT algorithm.
+#[derive(Default, Clone, Debug)]
+pub struct Radix2Dit<F> {
+    /// Memoized twiddle factors for each length log_n.
+    ///
+    /// TODO: The use of RefCell means this can't be shared across
+    /// threads; consider using RwLock or finding a better design
+    /// instead.
+    twiddles: RefCell<Vec<Vec<F>>>,
+}
 
-    use alloc::vec::Vec;
-    use core::iter::repeat_with;
-
-    use p3_baby_bear::BabyBear;
-    use p3_field::{AbstractField, PrimeField32};
-    use rand::{thread_rng, Rng};
-
-    use crate::dft::*;
-
-    fn _naive_convolve(us: &[BabyBear], vs: &[BabyBear]) -> Vec<BabyBear> {
-        let n = us.len();
-        assert_eq!(n, vs.len());
-
-        let mut conv = Vec::with_capacity(n);
-        for i in 0..n {
-            let mut t = BabyBear::zero();
-            for j in 0..n {
-                t = t + us[j] * vs[(n + i - j) % n];
-            }
-            conv.push(t);
-        }
-        conv
-    }
-
-    fn randcomplex() -> u32 {
-        let mut rng = thread_rng();
-        rng.gen::<u32>() % BabyBear::ORDER_U32
-    }
-
-    fn randvec(n: usize) -> Vec<u32> {
-        repeat_with(randcomplex).take(n).collect::<Vec<_>>()
-    }
-
-    /*
-    #[test]
-    fn test_forward_16() {
-        const NITERS: usize = 100;
-        let len = 16;
-        let root_table = BabyBear::roots_of_unity_table(len);
-
-        for _ in 0..NITERS {
-            let us = randvec(len);
-            /*
-            //let us = vec![0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            // monty form of [0..16)
-            let us = vec![
-                0, 268435454, 536870908, 805306362, 1073741816, 1342177270, 1610612724, 1879048178,
-                134217711, 402653165, 671088619, 939524073, 1207959527, 1476394981, 1744830435,
-                2013265889,
-            ];
-            */
-
-            let mut vs = us.clone();
-            BabyBear::forward_fft(&mut vs, &root_table);
-            reverse_slice_index_bits(&mut vs);
-
-            let mut ws = us.clone();
-            BabyBear::four_step_fft(&mut ws, &root_table);
-
-            assert!(vs.iter().zip(ws).all(|(&v, w)| v == w));
+impl<MP: FieldParameters + TwoAdicData> Radix2Dit<MontyField31<MP>> {
+    pub fn new(n: usize) -> Self {
+        Self {
+            twiddles: RefCell::new(MontyField31::roots_of_unity_table(n)),
         }
     }
-    */
+}
 
-    #[test]
-    fn forward_backward_is_identity() {
-        const NITERS: usize = 100;
-        let mut len = 16;
-        loop {
-            let root_table = BabyBear::roots_of_unity_table(len);
-            let inv_root_table = BabyBear::inv_roots_of_unity_table(len);
-            let root_inv = inv_root_table[0][0];
+impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<MontyField31<MP>>
+    for Radix2Dit<MontyField31<MP>>
+{
+    type Evaluations = RowMajorMatrix<MontyField31<MP>>;
 
-            for _ in 0..NITERS {
-                let us = randvec(len);
-                let mut vs = us.clone();
-                BabyBear::forward_fft(&mut vs, &root_table);
+    fn dft_batch(
+        &self,
+        mut mat: RowMajorMatrix<MontyField31<MP>>,
+    ) -> RowMajorMatrix<MontyField31<MP>>
+    where
+        MP: MontyParameters + FieldParameters + TwoAdicData,
+    {
+        let mut scratch = RowMajorMatrix::default(mat.height(), mat.width());
 
-                // FIXME: Need this for four-step
-                //p3_util::reverse_slice_index_bits(&mut vs);
+        // transpose input
+        mat.transpose_into(&mut scratch);
 
-                let mut ws = vs.clone();
-                backward_fft(&mut ws, root_inv);
-
-                assert!(us.iter().zip(ws).all(
-                    |(&u, w)| w as u64 == (u as u64 * len as u64) % BabyBear::ORDER_U32 as u64
-                ));
-            }
-            len *= 2;
-            if len > 8192 {
-                break;
-            }
+        // Compute twiddle factors, or take memoized ones if already available.
+        let curr_max_fft_len = 1 << self.twiddles.borrow().len();
+        if mat.height() > curr_max_fft_len {
+            let new_twiddles = MontyField31::roots_of_unity_table(mat.height());
+            self.twiddles.replace(new_twiddles);
         }
+
+        scratch
+            .par_rows_mut()
+            .for_each(|v| MontyField31::forward_fft(v, &self.twiddles.borrow()));
+
+        // FIXME: depending on what the result is being used for, we
+        // can potentially avoid one or both of the final transpose
+        // and bit reversal.
+
+        // transpose output
+        scratch.transpose_into(&mut mat);
+
+        // FIXME: Either do bit reversal or don't do inplace
+        //mat.bit_reverse_rows();
+
+        mat
     }
-
-    /*
-    #[test]
-    fn convolution() {
-        const NITERS: usize = 4;
-        let mut len = 4;
-        loop {
-            let root_table = BabyBear::roots_of_unity_table(len);
-            let inv_root_table = BabyBear::inv_roots_of_unity_table(len);
-            let root_inv = inv_root_table[0][0];
-
-            for _ in 0..NITERS {
-                let us = randvec(len);
-                let vs = randvec(len);
-
-                let mut fft_us = us.clone();
-                BabyBear::forward_fft(&mut fft_us, &root_table);
-
-                let mut fft_vs = vs.clone();
-                BabyBear::forward_fft(&mut fft_vs, &root_table);
-
-                let mut pt_prods = fft_us
-                    .iter()
-                    .zip(fft_vs)
-                    .map(|(&u, v)| {
-                        let prod = BabyBear { value: u } * BabyBear { value: v };
-                        prod.value
-                    })
-                    .collect::<Vec<_>>();
-
-                backward_fft(&mut pt_prods, root_inv);
-
-                let bus = us
-                    .iter()
-                    .map(|&u| BabyBear { value: u })
-                    .collect::<Vec<_>>();
-                let bvs = vs
-                    .iter()
-                    .map(|&v| BabyBear { value: v })
-                    .collect::<Vec<_>>();
-                let bconv = naive_convolve(&bus, &bvs);
-                let conv = bconv
-                    .iter()
-                    .map(|&BabyBear { value }| value)
-                    .collect::<Vec<_>>();
-
-                assert!(conv
-                    .iter()
-                    .zip(pt_prods)
-                    .all(|(&c, p)| p as u64 == (c as u64 * len as u64) % P as u64));
-            }
-            len *= 2;
-            if len > 8192 {
-                break;
-            }
-        }
-    }
-    */
 }

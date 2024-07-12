@@ -54,48 +54,17 @@ where
     let mut rng = thread_rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
-        let root_table = p3_baby_bear::BabyBear::roots_of_unity_table(n);
+        let dft = p3_monty_31::dft::Radix2Dit::new(n);
 
-        let mut u: Vec<Vec<u32>> = (0..BATCH_SIZE)
-            .into_iter()
-            .map(|_| Standard.sample_iter(&mut rng).take(n).collect())
-            .collect();
-        assert_eq!(u.len(), BATCH_SIZE);
-        assert!(u.iter().map(|v| v.len()).all(|l| l == n));
-
+        let u = RowMajorMatrix::<BabyBear>::rand(&mut rng, n, BATCH_SIZE);
         let i = 0;
         group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
             b.iter(|| {
-                p3_baby_bear::BabyBear::batch_forward_fft(&mut u, &root_table);
+                dft.dft_batch(u.clone());
             });
         });
     }
 }
-
-/*
-fn four_step_fft<const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
-where
-    Standard: Distribution<i64>,
-{
-    let mut group = c.benchmark_group(&format!("fs_fft::<{}>", BATCH_SIZE));
-    group.sample_size(10);
-
-    let mut rng = thread_rng();
-    for n_log in log_sizes {
-        let n = 1 << n_log;
-        let root_table = p3_monty_31::dft::roots_of_unity_table::<BabyBearParameters>(n);
-
-        let mut u: Vec<u32> = Standard.sample_iter(&mut rng).take(n).collect();
-
-        let i = 0;
-        group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
-            b.iter(|| {
-                p3_monty_31::dft::four_step_fft(&mut u, &root_table);
-            });
-        });
-    }
-}
-*/
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
