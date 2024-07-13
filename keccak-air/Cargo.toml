@@ -25,8 +25,9 @@ p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
-p3-poseidon = {path = "../poseidon"}
+p3-poseidon = { path = "../poseidon" }
 p3-poseidon2 = { path = "../poseidon2" }
+p3-sha256 = { path = "../sha256", features = ["asm"] }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
 rand = "0.8.5"
