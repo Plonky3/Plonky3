@@ -42,6 +42,7 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
     let fri_config = FriConfig {
         log_blowup: 1,
         num_queries: 10,
+        max_final_poly_len: 0,
         proof_of_work_bits: 8,
         mmcs,
     };

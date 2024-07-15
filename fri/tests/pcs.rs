@@ -174,7 +174,7 @@ mod babybear_fri_pcs {
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
-    fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
+    fn get_pcs(log_blowup: usize, max_final_poly_len: usize) -> (MyPcs, Challenger) {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
             DiffusionMatrixBabyBear::default(),
@@ -189,6 +189,7 @@ mod babybear_fri_pcs {
         let fri_config = FriConfig {
             log_blowup,
             num_queries: 10,
+            max_final_poly_len,
             proof_of_work_bits: 8,
             mmcs: challenge_mmcs,
         };
@@ -197,11 +198,17 @@ mod babybear_fri_pcs {
         (pcs, Challenger::new(perm.clone()))
     }
 
-    mod blowup_1 {
-        make_tests_for_pcs!(super::get_pcs(1));
+    mod blowup_1_finalpoly_0 {
+        make_tests_for_pcs!(super::get_pcs(1, 0));
     }
-    mod blowup_2 {
-        make_tests_for_pcs!(super::get_pcs(2));
+    mod blowup_1_finalpoly_8 {
+        make_tests_for_pcs!(super::get_pcs(1, 8));
+    }
+    mod blowup_2_finalpoly_0 {
+        make_tests_for_pcs!(super::get_pcs(2, 0));
+    }
+    mod blowup_2_finalpoly_8 {
+        make_tests_for_pcs!(super::get_pcs(2, 8));
     }
 }
 
@@ -241,6 +248,7 @@ mod m31_fri_pcs {
         let fri_config = FriConfig {
             log_blowup,
             num_queries: 10,
+            max_final_poly_len: 0,
             proof_of_work_bits: 8,
             mmcs: challenge_mmcs,
         };

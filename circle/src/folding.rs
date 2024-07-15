@@ -46,6 +46,21 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
     ) -> EF {
         fold_x_row(index, log_folded_height, beta, evals)
     }
+
+    fn decode(&self, codeword: &[EF], blowup: usize) -> Vec<EF> {
+        assert!(
+            codeword.iter().all(|x| *x == codeword[0]),
+            "non-constant final poly"
+        );
+        codeword.split_at(codeword.len() / blowup).0.to_vec()
+    }
+    fn encode(&self, message: &[EF], blowup: usize) -> Vec<EF> {
+        assert!(
+            message.iter().all(|x| *x == message[0]),
+            "non-constant final poly"
+        );
+        (0..blowup).flat_map(|_| message).copied().collect()
+    }
 }
 
 fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(

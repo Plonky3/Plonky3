@@ -6,6 +6,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
+use p3_util::log2_strict_usize;
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
@@ -40,7 +41,11 @@ where
             challenger.sample_ext_element()
         })
         .collect();
-    challenger.observe_ext_element(proof.final_poly);
+
+    for &symbol in &proof.final_poly {
+        challenger.observe_ext_element(symbol);
+    }
+    let codeword = g.encode(&proof.final_poly, config.blowup());
 
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
@@ -51,10 +56,10 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    let index_bits = proof.commit_phase_commits.len() + log2_strict_usize(codeword.len());
 
     for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
+        let index = challenger.sample_bits(index_bits + g.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
         debug_assert!(
@@ -62,20 +67,23 @@ where
             "reduced openings sorted by height descending"
         );
 
+        let input_index = index >> g.extra_query_index_bits();
+
         let folded_eval = verify_query(
             g,
             config,
-            index >> g.extra_query_index_bits(),
+            input_index,
             izip!(
                 &betas,
                 &proof.commit_phase_commits,
                 &qp.commit_phase_openings
             ),
             ro,
-            log_max_height,
         )?;
 
-        if folded_eval != proof.final_poly {
+        let final_index = input_index >> proof.commit_phase_commits.len();
+
+        if codeword[final_index] != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }
     }
@@ -95,20 +103,17 @@ fn verify_query<'a, G, F, M>(
     mut index: usize,
     steps: impl Iterator<Item = CommitStep<'a, F, M>>,
     reduced_openings: Vec<(usize, F)>,
-    log_max_height: usize,
 ) -> Result<F, FriError<M::Error, G::InputError>>
 where
     F: Field,
     M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
-    let mut folded_eval = F::zero();
     let mut ro_iter = reduced_openings.into_iter().peekable();
+    let (mut log_height, mut folded_eval) = ro_iter.next().unwrap();
 
-    for (log_folded_height, (&beta, comm, opening)) in izip!((0..log_max_height).rev(), steps) {
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
-            folded_eval += ro;
-        }
+    for (&beta, comm, opening) in steps {
+        log_height -= 1;
 
         let index_sibling = index ^ 1;
         let index_pair = index >> 1;
@@ -118,7 +123,7 @@ where
 
         let dims = &[Dimensions {
             width: 2,
-            height: 1 << log_folded_height,
+            height: 1 << log_height,
         }];
         config
             .mmcs
@@ -132,14 +137,16 @@ where
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         index = index_pair;
+        folded_eval = g.fold_row(index, log_height, beta, evals.into_iter());
 
-        folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_height) {
+            folded_eval += ro;
+        }
     }
 
-    debug_assert!(index < config.blowup(), "index was {}", index);
     debug_assert!(
         ro_iter.next().is_none(),
-        "verifier reduced_openings were not in descending order?"
+        "verifier reduced_openings were not in descending order?",
     );
 
     Ok(folded_eval)

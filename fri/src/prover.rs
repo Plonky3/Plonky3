@@ -1,6 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
+use core::{cmp, iter};
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -64,7 +64,7 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
-    final_poly: F,
+    final_poly: Vec<F>,
 }
 
 #[instrument(name = "commit phase", skip_all)]
@@ -86,7 +86,9 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.blowup() {
+    while inputs_iter.peek().is_some()
+        || folded.len() > cmp::max(config.blowup(), config.max_final_poly_len)
+    {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
@@ -104,13 +106,12 @@ where
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(folded.len(), config.blowup());
-    let final_poly = folded[0];
-    for x in folded {
-        assert_eq!(x, final_poly);
+    debug_assert!(inputs_iter.next().is_none());
+
+    let final_poly = g.decode(&folded, config.blowup());
+    for &symbol in &final_poly {
+        challenger.observe_ext_element(symbol);
     }
-    challenger.observe_ext_element(final_poly);
 
     CommitPhaseResult {
         commits,

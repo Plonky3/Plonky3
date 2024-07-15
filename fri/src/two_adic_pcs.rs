@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
-use p3_dft::TwoAdicSubgroupDft;
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, dot_product, ExtensionField,
     Field, TwoAdicField,
@@ -126,6 +126,24 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
                 (one_half + power) * lo + (one_half - power) * hi
             })
             .collect()
+    }
+
+    fn decode(&self, evals: &[F], blowup: usize) -> Vec<F> {
+        let mut evals = evals.to_vec();
+        reverse_slice_index_bits(&mut evals);
+        let dft = Radix2Dit::default();
+        let mut coeffs = dft.idft(evals);
+        let n = coeffs.len() / blowup;
+        assert!(coeffs.drain(n..).all(|x| x.is_zero()));
+        coeffs
+    }
+    fn encode(&self, coeffs: &[F], blowup: usize) -> Vec<F> {
+        let dft = Radix2Dit::default();
+        let mut coeffs = coeffs.to_vec();
+        coeffs.resize(coeffs.len() * blowup, F::zero());
+        let mut evals = dft.dft(coeffs.to_vec());
+        reverse_slice_index_bits(&mut evals);
+        evals
     }
 }
 
@@ -363,7 +381,18 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_ext_element();
 
-        let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
+        // let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
+
+        let log_global_max_height = log2_strict_usize(
+            rounds
+                .iter()
+                .flat_map(|(_, mats)| {
+                    mats.iter()
+                        .map(|(domain, _)| domain.size() << self.fri.log_blowup)
+                })
+                .max()
+                .unwrap(),
+        );
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);

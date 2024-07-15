@@ -9,6 +9,7 @@ pub struct FriConfig<M> {
     pub log_blowup: usize,
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
+    pub max_final_poly_len: usize,
     pub mmcs: M,
 }
 
@@ -50,4 +51,7 @@ pub trait FriGenericConfig<F: Field> {
 
     /// Same as applying fold_row to every row, possibly faster.
     fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
+
+    fn decode(&self, codeword: &[F], blowup: usize) -> Vec<F>;
+    fn encode(&self, message: &[F], blowup: usize) -> Vec<F>;
 }
