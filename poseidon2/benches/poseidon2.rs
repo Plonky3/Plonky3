@@ -54,10 +54,10 @@ fn bench_poseidon2(c: &mut Criterion) {
     >(c);
     poseidon2_avx2_m31(c);
 
-    poseidon2_avx2_m31_all::<1, 2, 8, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
-    poseidon2_avx2_m31_all::<2, 4, 4, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
-    poseidon2_avx2_m31_all::<3, 6, 4, 24, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
-    poseidon2_avx2_m31_all::<4, 8, 2, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    // poseidon2_avx2_m31_all::<1, 2, 8, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    poseidon2_avx2_m31_all::<2, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    // poseidon2_avx2_m31_all::<3, 6, 4, 24, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    poseidon2_avx2_m31_all::<4, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
 
     poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>(c);
     poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 12, 7>(
@@ -174,43 +174,25 @@ fn poseidon2_avx2_m31(c: &mut Criterion) {
     });
 }
 
-fn poseidon2_avx2_m31_all<
-    const HEIGHT: usize,
-    const WIDTH: usize,
-    const REPEATS: usize,
-    const PERMWIDTH: usize,
-    Poseidon2Data,
-    PF,
->(
+fn poseidon2_avx2_m31_all<const HEIGHT: usize, const WIDTH: usize, Poseidon2Data, PF>(
     c: &mut Criterion,
 ) where
     PF: PackedField,
     PF::Scalar: PrimeField32,
-    Poseidon2Data: Poseidon2AVX2Methods<
-        HEIGHT,
-        Field = PF::Scalar,
-        InputOutput = [PF; WIDTH],
-        ExternalConstantsInput = [PF::Scalar; PERMWIDTH],
-    >,
+    Poseidon2Data: Poseidon2AVX2Methods<HEIGHT, WIDTH, PF = PF>,
     Standard: Distribution<PF> + Distribution<[PF; WIDTH]>,
     Standard: Distribution<PF::Scalar> + Distribution<[PF::Scalar; WIDTH]>,
 {
     let mut rng = thread_rng();
 
-    let poseidon_2: Poseidon2AVX2<HEIGHT, Poseidon2Data> =
+    let poseidon_2: Poseidon2AVX2<HEIGHT, WIDTH, Poseidon2Data> =
         Poseidon2AVX2::new_from_rng_128::<_, 5>(&mut rng);
 
-    let avx2_input: [[PF; WIDTH]; REPEATS] = rng.gen();
-    let name = format!("poseidon2_AVX2_Mersenne31::<{}, {}>", HEIGHT, PERMWIDTH);
+    let avx2_input: [PF; WIDTH] = rng.gen();
+    let name = format!("poseidon2_AVX2_Mersenne31::<{}, {}>", HEIGHT, WIDTH);
     let id = BenchmarkId::new(name, HEIGHT);
     c.bench_with_input(id, &avx2_input, |b, &avx2_input| {
-        b.iter(|| {
-            let mut output: [[PF; WIDTH]; REPEATS] = [[PF::zero(); WIDTH]; REPEATS];
-            for i in 0..REPEATS {
-                output[i] = poseidon_2.permute(avx2_input[i]);
-            }
-            output
-        })
+        b.iter(|| poseidon_2.permute(avx2_input))
     });
 }
 

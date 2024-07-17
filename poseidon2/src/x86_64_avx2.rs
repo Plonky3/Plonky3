@@ -9,6 +9,10 @@ use rand::Rng;
 
 use crate::poseidon2_round_numbers_128;
 
+// We need the proof output to be independent of the architecture hence it's important to consider what the input will look like.
+// As the nature of the vectorization code is to perform horizontal parallelization, if the scalar code inputs [F; 16], the
+// packed field code will input [PF; 16] = [[F; N]; 16] and we should perform the poseidon2 permutation on the columns of length 16.
+
 // Internally, we represent our state as a tensor of size 4x4x1, 4x4x2, 4x4x3, 4x4x4 corresponding respectively to a single Poseidon-16 instance, 2 instances of Poseidon16, 2 instances of Poseidon24, or 4 instances of Poseidon 16.
 // This may be reduced in future once we determine which versions are fastest.
 // Currently the mapping from the standard [F; 16], [[F; 16]; 2], [[F; 24]; 2] to the internal 4xN matrix form looks like:
@@ -37,9 +41,7 @@ use crate::poseidon2_round_numbers_128;
 //                          [w1, x1, y1, z1] [w5, x5, y5, z5] [w9, x9, y9, z9]     [w13, x13, y13, z13] [w17, x17, y17, z17] [w21, x21, y21, z21]
 //                          [w2, x2, y2, z2] [w6, x6, y6, z6] [w10, x10, y10, z10] [w14, x14, y14, z14] [w18, x18, y18, z18] [w22, x22, y22, z22]
 //                          [w3, x3, y3, z3] [w7, x7, y7, z7] [w11, x11, y11, z11] [w15, x15, y15, z15] [w19, x19, y19, z19] [w23, x23, y23, z23]
-// This necessitates some data manipulation. <Long term we can make this faster by instead assuming a more natural form for the matrices and letting the scalar code deal with the data manipulation.
-
-// The design mentality is that that poseidon2.permute and transmute should commute for all of the following: [[F; 16]; 4], [[PF; 2]; 4], [[PF; 4]; 2], [PF; 8].
+// This necessitates some data manipulation.
 
 /// A 4x4xN Matrix of 31-bit field elements with each element stored in 64-bits and each row saved as (multiple) 256bit packed vectors.
 /// Used for the internal representations for vectorized AVX2 implementations for Poseidon2
@@ -49,105 +51,105 @@ use crate::poseidon2_round_numbers_128;
 pub struct Packed64bitM31Tensor<const HEIGHT: usize>([[__m256i; 4]; HEIGHT]);
 
 impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
-    /// Convert data from the form produced by transmute::<[u64; N], [[__m256i; 4]; 4]; N/16]>
-    /// into the form expected by the Poseidon2 implementation.
-    #[inline]
-    pub fn shuffle_data(&mut self) {
-        match HEIGHT {
-            1 => self.0[0] = transpose(self.0[0]),
-            2 => {
-                let mat0 = transpose([self.0[0][0], self.0[0][1], self.0[1][0], self.0[1][1]]);
-                let mat1 = transpose([self.0[0][2], self.0[0][3], self.0[1][2], self.0[1][3]]);
+    // /// Convert data from the form produced by transmute::<[u64; N], [[__m256i; 4]; 4]; N/16]>
+    // /// into the form expected by the Poseidon2 implementation.
+    // #[inline]
+    // pub fn shuffle_data(&mut self) {
+    //     match HEIGHT {
+    //         1 => self.0[0] = transpose(self.0[0]),
+    //         2 => {
+    //             let mat0 = transpose([self.0[0][0], self.0[0][1], self.0[1][0], self.0[1][1]]);
+    //             let mat1 = transpose([self.0[0][2], self.0[0][3], self.0[1][2], self.0[1][3]]);
 
-                self.0[0] = mat0;
-                self.0[1] = mat1;
-            }
-            3 => {
-                let mat0 = transpose([self.0[0][0], self.0[0][1], self.0[1][2], self.0[1][3]]);
-                let mat1 = transpose([self.0[0][2], self.0[0][3], self.0[2][0], self.0[2][1]]);
-                let mat2 = transpose([self.0[1][0], self.0[1][1], self.0[2][2], self.0[2][3]]);
+    //             self.0[0] = mat0;
+    //             self.0[1] = mat1;
+    //         }
+    //         3 => {
+    //             let mat0 = transpose([self.0[0][0], self.0[0][1], self.0[1][2], self.0[1][3]]);
+    //             let mat1 = transpose([self.0[0][2], self.0[0][3], self.0[2][0], self.0[2][1]]);
+    //             let mat2 = transpose([self.0[1][0], self.0[1][1], self.0[2][2], self.0[2][3]]);
 
-                self.0[0] = mat0;
-                self.0[1] = mat1;
-                self.0[2] = mat2;
-            }
-            4 => {
-                let mat0 = transpose([self.0[0][0], self.0[1][0], self.0[2][0], self.0[3][0]]);
-                let mat1 = transpose([self.0[0][1], self.0[1][1], self.0[2][1], self.0[3][1]]);
-                let mat2 = transpose([self.0[0][2], self.0[1][2], self.0[2][2], self.0[3][2]]);
-                let mat3 = transpose([self.0[0][3], self.0[1][3], self.0[2][3], self.0[3][3]]);
+    //             self.0[0] = mat0;
+    //             self.0[1] = mat1;
+    //             self.0[2] = mat2;
+    //         }
+    //         4 => {
+    //             let mat0 = transpose([self.0[0][0], self.0[1][0], self.0[2][0], self.0[3][0]]);
+    //             let mat1 = transpose([self.0[0][1], self.0[1][1], self.0[2][1], self.0[3][1]]);
+    //             let mat2 = transpose([self.0[0][2], self.0[1][2], self.0[2][2], self.0[3][2]]);
+    //             let mat3 = transpose([self.0[0][3], self.0[1][3], self.0[2][3], self.0[3][3]]);
 
-                self.0[0] = mat0;
-                self.0[1] = mat1;
-                self.0[2] = mat2;
-                self.0[3] = mat3;
-            }
-            _ => unreachable!(),
-        };
-    }
+    //             self.0[0] = mat0;
+    //             self.0[1] = mat1;
+    //             self.0[2] = mat2;
+    //             self.0[3] = mat3;
+    //         }
+    //         _ => unreachable!(),
+    //     };
+    // }
 
-    /// The inverse of the shuffle_data transformation.
-    #[inline]
-    pub fn shuffle_data_inverse(&mut self) {
-        match HEIGHT {
-            1 => self.0[0] = transpose(self.0[0]),
-            2 => {
-                let mat0 = transpose(self.0[0]);
-                let mat1 = transpose(self.0[1]);
+    // /// The inverse of the shuffle_data transformation.
+    // #[inline]
+    // pub fn shuffle_data_inverse(&mut self) {
+    //     match HEIGHT {
+    //         1 => self.0[0] = transpose(self.0[0]),
+    //         2 => {
+    //             let mat0 = transpose(self.0[0]);
+    //             let mat1 = transpose(self.0[1]);
 
-                self.0[0][0] = mat0[0];
-                self.0[0][1] = mat0[1];
-                self.0[1][0] = mat0[2];
-                self.0[1][1] = mat0[3];
-                self.0[0][2] = mat1[0];
-                self.0[0][3] = mat1[1];
-                self.0[1][2] = mat1[2];
-                self.0[1][3] = mat1[3];
-            }
-            3 => {
-                let mat0 = transpose(self.0[0]);
-                let mat1 = transpose(self.0[1]);
-                let mat2 = transpose(self.0[2]);
+    //             self.0[0][0] = mat0[0];
+    //             self.0[0][1] = mat0[1];
+    //             self.0[1][0] = mat0[2];
+    //             self.0[1][1] = mat0[3];
+    //             self.0[0][2] = mat1[0];
+    //             self.0[0][3] = mat1[1];
+    //             self.0[1][2] = mat1[2];
+    //             self.0[1][3] = mat1[3];
+    //         }
+    //         3 => {
+    //             let mat0 = transpose(self.0[0]);
+    //             let mat1 = transpose(self.0[1]);
+    //             let mat2 = transpose(self.0[2]);
 
-                self.0[0][0] = mat0[0];
-                self.0[0][1] = mat0[1];
-                self.0[1][2] = mat0[2];
-                self.0[1][3] = mat0[3];
-                self.0[0][2] = mat1[0];
-                self.0[0][3] = mat1[1];
-                self.0[2][0] = mat1[2];
-                self.0[2][1] = mat1[3];
-                self.0[1][0] = mat2[0];
-                self.0[1][1] = mat2[1];
-                self.0[2][2] = mat2[2];
-                self.0[2][3] = mat2[3];
-            }
-            4 => {
-                let mat0 = transpose(self.0[0]);
-                let mat1 = transpose(self.0[1]);
-                let mat2 = transpose(self.0[2]);
-                let mat3 = transpose(self.0[3]);
+    //             self.0[0][0] = mat0[0];
+    //             self.0[0][1] = mat0[1];
+    //             self.0[1][2] = mat0[2];
+    //             self.0[1][3] = mat0[3];
+    //             self.0[0][2] = mat1[0];
+    //             self.0[0][3] = mat1[1];
+    //             self.0[2][0] = mat1[2];
+    //             self.0[2][1] = mat1[3];
+    //             self.0[1][0] = mat2[0];
+    //             self.0[1][1] = mat2[1];
+    //             self.0[2][2] = mat2[2];
+    //             self.0[2][3] = mat2[3];
+    //         }
+    //         4 => {
+    //             let mat0 = transpose(self.0[0]);
+    //             let mat1 = transpose(self.0[1]);
+    //             let mat2 = transpose(self.0[2]);
+    //             let mat3 = transpose(self.0[3]);
 
-                self.0[0][0] = mat0[0];
-                self.0[1][0] = mat0[1];
-                self.0[2][0] = mat0[2];
-                self.0[3][0] = mat0[3];
-                self.0[0][1] = mat1[0];
-                self.0[1][1] = mat1[1];
-                self.0[2][1] = mat1[2];
-                self.0[3][1] = mat1[3];
-                self.0[0][2] = mat2[0];
-                self.0[1][2] = mat2[1];
-                self.0[2][2] = mat2[2];
-                self.0[3][2] = mat2[3];
-                self.0[0][3] = mat3[0];
-                self.0[1][3] = mat3[1];
-                self.0[2][3] = mat3[2];
-                self.0[3][3] = mat3[3];
-            }
-            _ => unreachable!(),
-        };
-    }
+    //             self.0[0][0] = mat0[0];
+    //             self.0[1][0] = mat0[1];
+    //             self.0[2][0] = mat0[2];
+    //             self.0[3][0] = mat0[3];
+    //             self.0[0][1] = mat1[0];
+    //             self.0[1][1] = mat1[1];
+    //             self.0[2][1] = mat1[2];
+    //             self.0[3][1] = mat1[3];
+    //             self.0[0][2] = mat2[0];
+    //             self.0[1][2] = mat2[1];
+    //             self.0[2][2] = mat2[2];
+    //             self.0[3][2] = mat2[3];
+    //             self.0[0][3] = mat3[0];
+    //             self.0[1][3] = mat3[1];
+    //             self.0[2][3] = mat3[2];
+    //             self.0[3][3] = mat3[3];
+    //         }
+    //         _ => unreachable!(),
+    //     };
+    // }
 
     /// Left Multiply by the AES matrix:
     /// [ 2 3 1 1 ]
@@ -413,27 +415,26 @@ pub trait Poseidon2AVX2Helpers {
     const PACKED_8XPRIME: __m256i;
 }
 
-pub trait Poseidon2AVX2Methods<const HEIGHT: usize>: Clone + Sync + Poseidon2AVX2Helpers {
-    // Field = F = PF::Scalar
-    type Field;
+pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
+    Clone + Sync + Poseidon2AVX2Helpers
+{
+    // PackField = PF;
+    type PF: PackedField;
 
-    // InputOutput should be [PF; WIDTH] where WIDTH*PF::WIDTH = 16*HEIGHT
-    type InputOutput;
-
-    // ExternalConstantsInput should be [F; PERMWIDTH] where F = PF::Scalar and PERMWIDTH = 16 or 24.
-    type ExternalConstantsInput;
+    // InternalRep should be [Packed64bitM31Tensor<HEIGHT>; N] with N = (WIDTH * PF::WIDTH)/(16 * HEIGHT)
+    type InternalRep: AsMut<[Packed64bitM31Tensor<HEIGHT>]>;
 
     // Convert data to and from [PF; WIDTH], Packed64bitM31Tensor<HEIGHT>.
-    fn from_input(input: Self::InputOutput) -> Packed64bitM31Tensor<HEIGHT>;
-    fn to_output(output: Packed64bitM31Tensor<HEIGHT>) -> Self::InputOutput;
+    fn from_input(input: [Self::PF; WIDTH]) -> Self::InternalRep;
+    fn to_output(output: Self::InternalRep) -> [Self::PF; WIDTH];
 
     // Convert a set of external constants [F; PERMWIDTH] into the right form.
     fn manipulate_external_constants(
-        input: Self::ExternalConstantsInput,
+        input: [<Self::PF as PackedField>::Scalar; WIDTH],
     ) -> Packed64bitM31Tensor<HEIGHT>;
 
     // Given a field element, pull out the u32 stored inside.
-    fn manipulate_internal_constants(input: Self::Field) -> u32;
+    fn manipulate_internal_constants(input: <Self::PF as PackedField>::Scalar) -> u32;
 
     /// Apply full_reduce_vec to every __m256i in the matrix.
     #[inline]
@@ -487,9 +488,11 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize>: Clone + Sync + Poseidon2AVX
 /// Round Constant is assumed to be in canonical form.
 /// Output will be < 2P.
 #[inline]
-fn internal_round<const HEIGHT: usize, P2AVX2>(state: &mut Packed64bitM31Tensor<HEIGHT>, rc: u32)
-where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+fn internal_round<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
+    state: &mut Packed64bitM31Tensor<HEIGHT>,
+    rc: u32,
+) where
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
     unsafe {
         // We do two things simultaneously.
@@ -505,13 +508,13 @@ where
 
         // Can do part of the sum vertically.
         let vec_sum = state.vec_sum();
-        // still need to do the horizontal part of the sum but this can wait until after we do the s-box.
+        // still need to do the horizontal part of the sum but this can wait until later.
 
         // Doing the diagonal multiplication.
         state.left_shift(P2AVX2::INTERNAL_SHIFTS);
 
         // Need to multiply s0_post_sbox by -2.
-        // s0_post_sbox < 2^33 so the easiest will be to do
+        // s0_post_sbox < 2^34 so the easiest will be to do
         // 8P - s0_post_sbox to get the negative, then shift left by 1.
         // This will add 16P to some other terms in state but this doesn't matter as we work mod P.
         let neg_s0 = x86_64::_mm256_sub_epi64(P2AVX2::PACKED_8XPRIME, s0_post_sbox);
@@ -538,11 +541,11 @@ where
 /// Input does not need to be in canonical form but must be < 2^56.
 /// Output will be < 2^34.
 #[inline]
-fn rotated_external_round<const HEIGHT: usize, P2AVX2>(
+fn rotated_external_round<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constant: &Packed64bitM31Tensor<HEIGHT>,
 ) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
     // Assume input state < L
 
@@ -557,14 +560,14 @@ fn rotated_external_round<const HEIGHT: usize, P2AVX2>(
 /// Inputs will always be canonical though in principal only need to be < 2^56.
 /// Output will be < 2P.
 #[inline]
-pub fn initial_external_rounds<const HEIGHT: usize, P2AVX2>(
+pub fn initial_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constants: &[Packed64bitM31Tensor<HEIGHT>],
 ) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
     for round_constant in round_constants.iter() {
-        rotated_external_round::<HEIGHT, P2AVX2>(state, round_constant)
+        rotated_external_round::<HEIGHT, WIDTH, P2AVX2>(state, round_constant)
     }
 
     state.mat_mul_aes();
@@ -576,24 +579,24 @@ pub fn initial_external_rounds<const HEIGHT: usize, P2AVX2>(
 /// Inputs should be < 2P.
 /// Output will be < 2P.
 #[inline]
-pub fn internal_rounds<const HEIGHT: usize, P2AVX2>(
+pub fn internal_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constants: &[u32],
 ) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
     for round_constant in round_constants.iter() {
-        internal_round::<HEIGHT, P2AVX2>(state, *round_constant)
+        internal_round::<HEIGHT, WIDTH, P2AVX2>(state, *round_constant)
     }
 }
 
 /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
 #[inline]
-pub fn final_external_rounds<const HEIGHT: usize, P2AVX2>(
+pub fn final_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
     round_constants: &[Packed64bitM31Tensor<HEIGHT>],
 ) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT>,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
     // Input is < 2P
     state.add(round_constants[0]);
@@ -601,7 +604,7 @@ pub fn final_external_rounds<const HEIGHT: usize, P2AVX2>(
     P2AVX2::joint_sbox(state);
 
     for round_constant in round_constants.iter().skip(1) {
-        rotated_external_round::<HEIGHT, P2AVX2>(state, round_constant)
+        rotated_external_round::<HEIGHT, WIDTH, P2AVX2>(state, round_constant)
     }
 
     state.mat_mul_aes();
@@ -615,7 +618,7 @@ pub fn final_external_rounds<const HEIGHT: usize, P2AVX2>(
 /// TODO: THIS WILL NEED CHANGES AS IMPLEMENTATIONS DEMAND.
 /// EVENTUALLY WILL REPLACE MAIN POSEIDON2 TYPE
 #[derive(Clone, Debug)]
-pub struct Poseidon2AVX2<const HEIGHT: usize, P2AVX2> {
+pub struct Poseidon2AVX2<const HEIGHT: usize, const WIDTH: usize, P2AVX2> {
     /// The external round constants for the initial set of external rounds.
     initial_external_constants: Vec<Packed64bitM31Tensor<HEIGHT>>,
 
@@ -628,17 +631,11 @@ pub struct Poseidon2AVX2<const HEIGHT: usize, P2AVX2> {
     _phantom: PhantomData<P2AVX2>,
 }
 
-impl<const HEIGHT: usize, const WIDTH: usize, const PERMWIDTH: usize, P2AVX2, PF>
-    Poseidon2AVX2<HEIGHT, P2AVX2>
+impl<const HEIGHT: usize, const WIDTH: usize, P2AVX2, PF> Poseidon2AVX2<HEIGHT, WIDTH, P2AVX2>
 where
     PF: PackedField,
     PF::Scalar: PrimeField32,
-    P2AVX2: Poseidon2AVX2Methods<
-        HEIGHT,
-        Field = PF::Scalar,
-        InputOutput = [PF; WIDTH],
-        ExternalConstantsInput = [PF::Scalar; PERMWIDTH],
-    >,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH, PF = PF>,
 {
     /// Create a new Poseidon2 configuration.
     pub fn new(
@@ -662,7 +659,7 @@ where
         Standard: Distribution<PF> + Distribution<[PF; WIDTH]>,
         Standard: Distribution<PF::Scalar> + Distribution<[PF::Scalar; WIDTH]>,
     {
-        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<PF::Scalar>(PERMWIDTH, D);
+        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<PF::Scalar>(WIDTH, D);
         let half_f = rounds_f / 2;
 
         let initial_external_constants = rng
@@ -692,21 +689,27 @@ where
 }
 
 impl<const HEIGHT: usize, const WIDTH: usize, P2AVX2, PF> Permutation<[PF; WIDTH]>
-    for Poseidon2AVX2<HEIGHT, P2AVX2>
+    for Poseidon2AVX2<HEIGHT, WIDTH, P2AVX2>
 where
     PF: PackedField,
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, InputOutput = [PF; WIDTH]>,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH, PF = PF>,
 {
     fn permute(&self, state: [PF; WIDTH]) -> [PF; WIDTH] {
-        let mut internal_rep = P2AVX2::from_input(state);
-        initial_external_rounds::<HEIGHT, P2AVX2>(
-            &mut internal_rep,
-            &self.initial_external_constants,
-        );
-        internal_rounds::<HEIGHT, P2AVX2>(&mut internal_rep, &self.internal_constants);
-        final_external_rounds::<HEIGHT, P2AVX2>(&mut internal_rep, &self.final_external_constants);
-        P2AVX2::full_reduce(&mut internal_rep); // TODO: Can maybe do a simpler reduction than this?
-        P2AVX2::to_output(internal_rep)
+        let mut internal_reps = P2AVX2::from_input(state);
+        for internal_rep in internal_reps.as_mut() {
+            initial_external_rounds::<HEIGHT, WIDTH, P2AVX2>(
+                internal_rep,
+                &self.initial_external_constants,
+            );
+            internal_rounds::<HEIGHT, WIDTH, P2AVX2>(internal_rep, &self.internal_constants);
+            final_external_rounds::<HEIGHT, WIDTH, P2AVX2>(
+                internal_rep,
+                &self.final_external_constants,
+            );
+            P2AVX2::full_reduce(internal_rep); // TODO: Can maybe do a simpler reduction than this?
+        }
+
+        P2AVX2::to_output(internal_reps)
     }
 
     fn permute_mut(&self, input: &mut [PF; WIDTH]) {
@@ -715,10 +718,10 @@ where
     }
 }
 
-impl<const HEIGHT: usize, const WIDTH: usize, P2AVX2, F> CryptographicPermutation<[F; WIDTH]>
-    for Poseidon2AVX2<HEIGHT, P2AVX2>
+impl<const HEIGHT: usize, const WIDTH: usize, P2AVX2, PF> CryptographicPermutation<[PF; WIDTH]>
+    for Poseidon2AVX2<HEIGHT, WIDTH, P2AVX2>
 where
-    F: PackedField,
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, InputOutput = [F; WIDTH]>,
+    PF: PackedField,
+    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH, PF = PF>,
 {
 }

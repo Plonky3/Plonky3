@@ -11,6 +11,7 @@ use crate::Mersenne31;
 
 const WIDTH: usize = 8;
 const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+const P_U64: __m256i = unsafe { transmute::<[u64; WIDTH / 2], _>([0x7fffffff; WIDTH / 2]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +211,90 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
+#[inline]
+#[must_use]
+fn interleave(lhs: __m256i, rhs: __m256i) -> __m256i {
+    unsafe {
+        let rhs_shift = x86_64::_mm256_slli_epi64::<32>(rhs);
+        x86_64::_mm256_blend_epi32::<0b10101010>(lhs, rhs_shift)
+    }
+}
+
+/// Perform a modular reduction to a vector of 4 elements lying in {0, ..., P^2} to ones in {0, ..., 2P}.
+/// If an input is greater than P^2, the output may be greater than 2P but will still represent the same modulo class.
+///
+#[inline]
+#[must_use]
+fn partial_reduce(x: __m256i) -> __m256i {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Output is < max(P + 2^{-31} * input, 2P)
+
+        let high_bits = x86_64::_mm256_srli_epi64::<31>(x);
+
+        // Zero out the top 33 bits.
+        const MASK: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
+        let low_bits = x86_64::_mm256_and_si256(x, MASK);
+
+        // Add the high bits back to the value
+        x86_64::_mm256_add_epi64(low_bits, high_bits)
+    }
+}
+
+/// Compute x -> x^5 for elements in the even positions of a vector of Mersenne-31 field elements.
+/// The values in the even positions must lie in {0, ..., P}. The values in the odd positions are unrestrained.
+/// Each u64 in the output will be the corresponding 5'th power and lie in {0, ..., P^2}.
+/// If the inputs do not conform to this representation, the result is undefined.
+#[inline]
+fn fifth_pow(x: __m256i) -> __m256i {
+    unsafe {
+        // Safety: If even parts of the input are < P, no overflow will occur and the output will be < P^2.
+
+        // Square x. Clearly x^2 < P^2.
+        // _mm256_mul_epi32 only reads the bottom 32 bits of every 64-bit quadword so values in odd positions are ignored.
+        let x2 = x86_64::_mm256_mul_epu32(x, x);
+
+        // Reduce and then subtract P. The result will then lie in (-2^31, 2^31).
+        let x2_red = partial_reduce(x2);
+        let x2_red_sub_p = x86_64::_mm256_sub_epi32(x2_red, P_U64); // Can use _mm256_sub_epi32 as the odd parts are all 0.
+
+        // Square again. The result is again < 2^62.
+        let x4 = x86_64::_mm256_mul_epi32(x2_red_sub_p, x2_red_sub_p);
+
+        // Reduce again so the result is <= 2P
+        let x4_red = partial_reduce(x4);
+
+        // Now reduce to a value <= P.
+        let x4_red_sub_p = x86_64::_mm256_sub_epi32(x4_red, P_U64);
+        let x4_full_red = x86_64::_mm256_min_epu32(x4_red, x4_red_sub_p); // This works as x4_red, x4_red_sub_p < 2^32.
+
+        // Now when we multiply our result is < P^2
+        x86_64::_mm256_mul_epu32(x4_full_red, x)
+    }
+}
+
+/// Compute x -> x^5 for a vector of Mersenne-31 field elements represented as values in {0, ..., P}.
+/// If the inputs do not conform to this representation, the result is undefined.
+#[inline]
+#[must_use]
+fn pow_5(x: __m256i) -> __m256i {
+    unsafe {
+        let even_powers = fifth_pow(x);
+        let odd_vals = x86_64::_mm256_srli_epi64::<32>(x);
+        let odd_powers = fifth_pow(odd_vals);
+
+        // First need to reduce even_powers and odd_powers to u32's.
+        // As even_powers, odd_powers < P^2, even_red, odd_red < 2P = 2^32.
+        let even_red = partial_reduce(even_powers);
+        let odd_red = partial_reduce(odd_powers);
+
+        // Now we can interleave and reduce to a value in {0, ..., P}
+        let x5 = interleave(even_red, odd_red);
+        let x5_sub_p = x86_64::_mm256_sub_epi32(x5, P);
+        x86_64::_mm256_min_epu32(x5, x5_sub_p)
+    }
+}
+
 /// Negate a vector of Mersenne-31 field elements represented as values in {0, ..., P}.
 /// If the input does not conform to this representation, the result is undefined.
 #[inline]
@@ -375,6 +460,33 @@ impl AbstractField for PackedMersenne31AVX2 {
     #[inline]
     fn generator() -> Self {
         Mersenne31::generator().into()
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::one(),
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            // We hardcode a faster method for x -> x^5 as gcd(5, P - 1) = 1 and so x -> x^5 is a permutation used in arithmetic hashes.
+            5 => unsafe {
+                // Safety: `pow_5` returns values in canonical form when given values in canonical form.
+                let x = self.to_vector();
+                let x5 = pow_5(x);
+                Self::from_vector(x5)
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 }
 
@@ -643,9 +755,10 @@ unsafe impl PackedField for PackedMersenne31AVX2 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::AbstractField;
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, WIDTH};
+    use super::{Mersenne31, PackedMersenne31AVX2, WIDTH};
     use crate::to_mersenne31_array;
 
     /// Zero has a redundant representation, so let's test both.
@@ -664,4 +777,39 @@ mod tests {
         crate::PackedMersenne31AVX2(super::ZEROS),
         crate::PackedMersenne31AVX2(super::SPECIAL_VALS)
     );
+
+    #[test]
+    fn test_5th_pow_vs_mul() {
+        let vec = PackedMersenne31AVX2(to_mersenne31_array([
+            0x4efd5eaf, 0x311b8e0c, 0x74dd27c1, 0x449613f0, 0x4efd5ebf, 0x311b8e1c, 0x74dd27c2,
+            0x449613f1,
+        ]));
+        let res0 = vec * vec * vec * vec * vec;
+        let res1 = vec.exp_const_u64::<5>();
+        assert_eq!(res0, res1);
+    }
+
+    // #[test]
+    // fn test_5th_pow_vs_scalar() {
+    //     let arr = to_babybear_array([0x57155037, 0x71bdcc8e, 0x301f94d, 0x435938a6]);
+
+    //     let vec = PackedBabyBearNeon(arr);
+    //     let vec_res = vec.cube();
+
+    //     #[allow(clippy::needless_range_loop)]
+    //     for i in 0..WIDTH {
+    //         assert_eq!(vec_res.0[i], arr[i].cube());
+    //     }
+    // }
+
+    // #[test]
+    // fn test_5th_pow_vs_scalar_special_vals() {
+    //     let vec = PackedMersenne31AVX2(SPECIAL_VALS);
+    //     let vec_res = vec.cube();
+
+    //     #[allow(clippy::needless_range_loop)]
+    //     for i in 0..WIDTH {
+    //         assert_eq!(vec_res.0[i], SPECIAL_VALS[i].cube());
+    //     }
+    // }
 }
