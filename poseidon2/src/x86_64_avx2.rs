@@ -45,6 +45,12 @@ use crate::poseidon2_round_numbers_128;
 #[repr(transparent)]
 pub struct Packed64bitM31Tensor<const HEIGHT: usize>([[__m256i; 4]; HEIGHT]);
 
+impl From<[__m256i; 4]> for Packed64bitM31Tensor<1> {
+    fn from(value: [__m256i; 4]) -> Self {
+        Packed64bitM31Tensor([value])
+    }
+}
+
 impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     /// Left Multiply by the AES matrix:
     /// [ 2 3 1 1 ]
@@ -87,8 +93,7 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
         match HEIGHT {
             2 => right_mat_mul_i_plus_1_dim_2(self),
             3 => right_mat_mul_i_plus_1_dim_3(self),
-            4 => right_mat_mul_i_plus_1_dim_4(self),
-            6 => right_mat_mul_i_plus_1_dim_6(self),
+            4 | 6 => right_mat_mul_i_plus_1_separated(self),
             _ => unreachable!(),
         };
     }
@@ -108,12 +113,12 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
         }
     }
 
-    /// Compute the sum of all vectors.
+    /// Compute the sum of all __m256i vectors in the tensor.
     #[inline]
     fn vec_sum(&self) -> __m256i {
         unsafe {
             // Safety: Elements of self should be small enough such that overflow is impossible.
-            // If all inputs are < L, then outputs are <= 4*N*L
+            // If all inputs are < L, then outputs are <= 4*HEIGHT*L
             let mut output = x86_64::_mm256_setzero_si256();
             for mat in self.0 {
                 let t01 = x86_64::_mm256_add_epi64(mat[0], mat[1]);
@@ -123,6 +128,19 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
             }
             output
         }
+    }
+
+    /// Compute the sum of all [__m256i; 4] matrices in the tensor.
+    /// A sum across the height dimension
+    #[inline]
+    fn mat_sum(&self) -> [__m256i; 4] {
+        // Safety: Elements of self should be small enough such that overflow is impossible.
+        // If all inputs are < L, then outputs are <= HEIGHT*L
+        let mut output: Packed64bitM31Tensor<1> = self.0[0].into();
+        for mat in self.0.iter().skip(1) {
+            output.add((*mat).into())
+        }
+        output.0[0]
     }
 
     /// Left shift each element in self by the corresponding shift in HEIGHT;
@@ -137,26 +155,6 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
                 self.0[i][3] = x86_64::_mm256_sllv_epi64(self.0[i][3], shifts.0[i][3]);
             }
         }
-    }
-}
-
-/// Compute the transpose of a m 4x4 matrix.
-/// Used to get data into the right form.
-#[inline]
-pub fn transpose(input: [__m256i; 4]) -> [__m256i; 4] {
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let i0 = x86_64::_mm256_unpacklo_epi64(input[0], input[1]);
-        let i1 = x86_64::_mm256_unpackhi_epi64(input[0], input[1]);
-        let i2 = x86_64::_mm256_unpacklo_epi64(input[2], input[3]);
-        let i3 = x86_64::_mm256_unpackhi_epi64(input[2], input[3]);
-
-        let out0 = x86_64::_mm256_permute2x128_si256::<0x20>(i0, i2);
-        let out1 = x86_64::_mm256_permute2x128_si256::<0x20>(i1, i3);
-        let out2 = x86_64::_mm256_permute2x128_si256::<0x31>(i0, i2);
-        let out3 = x86_64::_mm256_permute2x128_si256::<0x31>(i1, i3);
-
-        [out0, out1, out2, out3]
     }
 }
 
@@ -198,40 +196,16 @@ fn right_mat_mul_i_plus_1_dim_3<const HEIGHT: usize>(input: &mut Packed64bitM31T
 }
 
 #[inline]
-fn right_mat_mul_i_plus_1_dim_4<const HEIGHT: usize>(input: &mut Packed64bitM31Tensor<HEIGHT>) {
+fn right_mat_mul_i_plus_1_separated<const HEIGHT: usize>(input: &mut Packed64bitM31Tensor<HEIGHT>) {
     unsafe {
         // Safety: If the inputs are <= L, the outputs are <= 5L.
-        for i in 0..4 {
-            let acc01 = x86_64::_mm256_add_epi64(input.0[0][i], input.0[1][i]);
-            let acc23 = x86_64::_mm256_add_epi64(input.0[2][i], input.0[3][i]);
-            let sum = x86_64::_mm256_add_epi64(acc01, acc23);
+        let total = input.mat_sum();
 
-            input.0[0][i] = x86_64::_mm256_add_epi64(input.0[0][i], sum);
-            input.0[1][i] = x86_64::_mm256_add_epi64(input.0[1][i], sum);
-            input.0[2][i] = x86_64::_mm256_add_epi64(input.0[2][i], sum);
-            input.0[3][i] = x86_64::_mm256_add_epi64(input.0[3][i], sum);
-        }
-    }
-}
-
-// TODO: Merge this function with the one above.
-#[inline]
-fn right_mat_mul_i_plus_1_dim_6<const HEIGHT: usize>(input: &mut Packed64bitM31Tensor<HEIGHT>) {
-    unsafe {
-        // Safety: If the inputs are <= L, the outputs are <= 5L.
-        for i in 0..4 {
-            let acc01 = x86_64::_mm256_add_epi64(input.0[0][i], input.0[1][i]);
-            let acc23 = x86_64::_mm256_add_epi64(input.0[2][i], input.0[3][i]);
-            let acc45 = x86_64::_mm256_add_epi64(input.0[4][i], input.0[5][i]);
-            let sum0123 = x86_64::_mm256_add_epi64(acc01, acc23);
-            let sum = x86_64::_mm256_add_epi64(sum0123, acc45);
-
-            input.0[0][i] = x86_64::_mm256_add_epi64(input.0[0][i], sum);
-            input.0[1][i] = x86_64::_mm256_add_epi64(input.0[1][i], sum);
-            input.0[2][i] = x86_64::_mm256_add_epi64(input.0[2][i], sum);
-            input.0[3][i] = x86_64::_mm256_add_epi64(input.0[3][i], sum);
-            input.0[4][i] = x86_64::_mm256_add_epi64(input.0[4][i], sum);
-            input.0[5][i] = x86_64::_mm256_add_epi64(input.0[5][i], sum);
+        for mat in input.0.iter_mut() {
+            mat[0] = x86_64::_mm256_add_epi64(mat[0], total[0]);
+            mat[1] = x86_64::_mm256_add_epi64(mat[1], total[1]);
+            mat[2] = x86_64::_mm256_add_epi64(mat[2], total[2]);
+            mat[3] = x86_64::_mm256_add_epi64(mat[3], total[3]);
         }
     }
 }
