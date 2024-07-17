@@ -17,11 +17,6 @@ use crate::poseidon2_round_numbers_128;
 // This may be reduced in future once we determine which versions are fastest.
 // Currently the mapping from the standard [F; 16], [[F; 16]; 2], [[F; 24]; 2] to the internal 4xN matrix form looks like:
 //
-// 1 Poseidon 16 instance:  [x0, x4, x8, x12]
-//                          [x1, x5, x9, x13]
-//                          [x2, x6, x10, x14]
-//                          [x3, x7, x11, x15]
-//
 // 2 Poseidon 16 instance:  [x0, x4, y0, y4] [x8, x12, y8, y12]
 //                          [x1, x5, y1, y5] [x9, x13, y9, y13]
 //                          [x2, x6, y2, y6] [x10, x14, y10, y14]
@@ -51,106 +46,6 @@ use crate::poseidon2_round_numbers_128;
 pub struct Packed64bitM31Tensor<const HEIGHT: usize>([[__m256i; 4]; HEIGHT]);
 
 impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
-    // /// Convert data from the form produced by transmute::<[u64; N], [[__m256i; 4]; 4]; N/16]>
-    // /// into the form expected by the Poseidon2 implementation.
-    // #[inline]
-    // pub fn shuffle_data(&mut self) {
-    //     match HEIGHT {
-    //         1 => self.0[0] = transpose(self.0[0]),
-    //         2 => {
-    //             let mat0 = transpose([self.0[0][0], self.0[0][1], self.0[1][0], self.0[1][1]]);
-    //             let mat1 = transpose([self.0[0][2], self.0[0][3], self.0[1][2], self.0[1][3]]);
-
-    //             self.0[0] = mat0;
-    //             self.0[1] = mat1;
-    //         }
-    //         3 => {
-    //             let mat0 = transpose([self.0[0][0], self.0[0][1], self.0[1][2], self.0[1][3]]);
-    //             let mat1 = transpose([self.0[0][2], self.0[0][3], self.0[2][0], self.0[2][1]]);
-    //             let mat2 = transpose([self.0[1][0], self.0[1][1], self.0[2][2], self.0[2][3]]);
-
-    //             self.0[0] = mat0;
-    //             self.0[1] = mat1;
-    //             self.0[2] = mat2;
-    //         }
-    //         4 => {
-    //             let mat0 = transpose([self.0[0][0], self.0[1][0], self.0[2][0], self.0[3][0]]);
-    //             let mat1 = transpose([self.0[0][1], self.0[1][1], self.0[2][1], self.0[3][1]]);
-    //             let mat2 = transpose([self.0[0][2], self.0[1][2], self.0[2][2], self.0[3][2]]);
-    //             let mat3 = transpose([self.0[0][3], self.0[1][3], self.0[2][3], self.0[3][3]]);
-
-    //             self.0[0] = mat0;
-    //             self.0[1] = mat1;
-    //             self.0[2] = mat2;
-    //             self.0[3] = mat3;
-    //         }
-    //         _ => unreachable!(),
-    //     };
-    // }
-
-    // /// The inverse of the shuffle_data transformation.
-    // #[inline]
-    // pub fn shuffle_data_inverse(&mut self) {
-    //     match HEIGHT {
-    //         1 => self.0[0] = transpose(self.0[0]),
-    //         2 => {
-    //             let mat0 = transpose(self.0[0]);
-    //             let mat1 = transpose(self.0[1]);
-
-    //             self.0[0][0] = mat0[0];
-    //             self.0[0][1] = mat0[1];
-    //             self.0[1][0] = mat0[2];
-    //             self.0[1][1] = mat0[3];
-    //             self.0[0][2] = mat1[0];
-    //             self.0[0][3] = mat1[1];
-    //             self.0[1][2] = mat1[2];
-    //             self.0[1][3] = mat1[3];
-    //         }
-    //         3 => {
-    //             let mat0 = transpose(self.0[0]);
-    //             let mat1 = transpose(self.0[1]);
-    //             let mat2 = transpose(self.0[2]);
-
-    //             self.0[0][0] = mat0[0];
-    //             self.0[0][1] = mat0[1];
-    //             self.0[1][2] = mat0[2];
-    //             self.0[1][3] = mat0[3];
-    //             self.0[0][2] = mat1[0];
-    //             self.0[0][3] = mat1[1];
-    //             self.0[2][0] = mat1[2];
-    //             self.0[2][1] = mat1[3];
-    //             self.0[1][0] = mat2[0];
-    //             self.0[1][1] = mat2[1];
-    //             self.0[2][2] = mat2[2];
-    //             self.0[2][3] = mat2[3];
-    //         }
-    //         4 => {
-    //             let mat0 = transpose(self.0[0]);
-    //             let mat1 = transpose(self.0[1]);
-    //             let mat2 = transpose(self.0[2]);
-    //             let mat3 = transpose(self.0[3]);
-
-    //             self.0[0][0] = mat0[0];
-    //             self.0[1][0] = mat0[1];
-    //             self.0[2][0] = mat0[2];
-    //             self.0[3][0] = mat0[3];
-    //             self.0[0][1] = mat1[0];
-    //             self.0[1][1] = mat1[1];
-    //             self.0[2][1] = mat1[2];
-    //             self.0[3][1] = mat1[3];
-    //             self.0[0][2] = mat2[0];
-    //             self.0[1][2] = mat2[1];
-    //             self.0[2][2] = mat2[2];
-    //             self.0[3][2] = mat2[3];
-    //             self.0[0][3] = mat3[0];
-    //             self.0[1][3] = mat3[1];
-    //             self.0[2][3] = mat3[2];
-    //             self.0[3][3] = mat3[3];
-    //         }
-    //         _ => unreachable!(),
-    //     };
-    // }
-
     /// Left Multiply by the AES matrix:
     /// [ 2 3 1 1 ]
     /// [ 1 2 3 1 ]
@@ -190,10 +85,10 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     fn right_mat_mul_i_plus_1(&mut self) {
         // The code looks slightly different for different heights.
         match HEIGHT {
-            1 => right_mat_mul_i_plus_1_dim_1(&mut self.0[0]),
             2 => right_mat_mul_i_plus_1_dim_2(self),
             3 => right_mat_mul_i_plus_1_dim_3(self),
             4 => right_mat_mul_i_plus_1_dim_4(self),
+            6 => right_mat_mul_i_plus_1_dim_6(self),
             _ => unreachable!(),
         };
     }
@@ -266,17 +161,6 @@ pub fn transpose(input: [__m256i; 4]) -> [__m256i; 4] {
 }
 
 #[inline]
-fn right_mat_mul_i_plus_1_dim_1(mat: &mut [__m256i; 4]) {
-    unsafe {
-        // Safety: If the inputs are <= L, the outputs are <= 5L.
-        mat[0] = x86_64::_mm256_add_epi64(mat[0], hsum(mat[0]));
-        mat[1] = x86_64::_mm256_add_epi64(mat[1], hsum(mat[1]));
-        mat[2] = x86_64::_mm256_add_epi64(mat[2], hsum(mat[2]));
-        mat[3] = x86_64::_mm256_add_epi64(mat[3], hsum(mat[3]));
-    }
-}
-
-#[inline]
 fn right_mat_mul_i_plus_1_dim_2<const HEIGHT: usize>(input: &mut Packed64bitM31Tensor<HEIGHT>) {
     unsafe {
         // Safety: If the inputs are <= L, the outputs are <= 5L.
@@ -293,6 +177,7 @@ fn right_mat_mul_i_plus_1_dim_2<const HEIGHT: usize>(input: &mut Packed64bitM31T
     }
 }
 
+// TODO: Merge this function with the one above.
 #[inline]
 fn right_mat_mul_i_plus_1_dim_3<const HEIGHT: usize>(input: &mut Packed64bitM31Tensor<HEIGHT>) {
     unsafe {
@@ -329,60 +214,63 @@ fn right_mat_mul_i_plus_1_dim_4<const HEIGHT: usize>(input: &mut Packed64bitM31T
     }
 }
 
+// TODO: Merge this function with the one above.
+#[inline]
+fn right_mat_mul_i_plus_1_dim_6<const HEIGHT: usize>(input: &mut Packed64bitM31Tensor<HEIGHT>) {
+    unsafe {
+        // Safety: If the inputs are <= L, the outputs are <= 5L.
+        for i in 0..4 {
+            let acc01 = x86_64::_mm256_add_epi64(input.0[0][i], input.0[1][i]);
+            let acc23 = x86_64::_mm256_add_epi64(input.0[2][i], input.0[3][i]);
+            let acc45 = x86_64::_mm256_add_epi64(input.0[4][i], input.0[5][i]);
+            let sum0123 = x86_64::_mm256_add_epi64(acc01, acc23);
+            let sum = x86_64::_mm256_add_epi64(sum0123, acc45);
+
+            input.0[0][i] = x86_64::_mm256_add_epi64(input.0[0][i], sum);
+            input.0[1][i] = x86_64::_mm256_add_epi64(input.0[1][i], sum);
+            input.0[2][i] = x86_64::_mm256_add_epi64(input.0[2][i], sum);
+            input.0[3][i] = x86_64::_mm256_add_epi64(input.0[3][i], sum);
+            input.0[4][i] = x86_64::_mm256_add_epi64(input.0[4][i], sum);
+            input.0[5][i] = x86_64::_mm256_add_epi64(input.0[5][i], sum);
+        }
+    }
+}
+
 /// Given the initial vector __m256i, split into 2 vectors as follows:
-/// HEIGHT = 1:      [x0, x4, x8, x12] ->    [x0, 0, 0, 0],    [0, x4, x8, x12]
 /// HEIGHT = 2, 3:   [x0, x4, y0, y4]  ->    [x0, 0, y0, 0],   [0, x4, 0, y4]
 /// HEIGHT = 4:      [w0, x0, y0, z0]  ->    [w0, x0, y0, z0], [0, 0, 0, 0]
 #[inline]
 fn split<const HEIGHT: usize>(input: __m256i) -> (__m256i, __m256i) {
     unsafe {
-        const ZEROS: __m256i = unsafe { transmute::<[u64; 4], _>([0; 4]) };
+        const ZEROS: __m256i = unsafe { transmute::<[u64; 4], _>([0; 4]) }; // TODO: Use same definition of ZEROS everywhere. Maybe make it a global constant?
         match HEIGHT {
-            1 => {
-                let initial_elems = x86_64::_mm256_blend_epi32::<0b11111100>(input, ZEROS);
-                let remainder = x86_64::_mm256_blend_epi32::<0b00000011>(input, ZEROS);
-                (initial_elems, remainder)
-            }
             2 | 3 => {
                 let initial_elems = x86_64::_mm256_blend_epi32::<0b11001100>(input, ZEROS);
                 let remainder = x86_64::_mm256_blend_epi32::<0b00110011>(input, ZEROS);
                 (initial_elems, remainder)
             }
-            4 => (input, ZEROS),
+            4 | 6 => (input, ZEROS),
             _ => unreachable!(),
         }
     }
 }
 
 /// Perform a horizontal sum:
-/// HEIGHT = 1:      [x0, x4, x8, x12] ->    [x0 + x4 + x8 + x12; 4]
 /// HEIGHT = 2, 3:   [x0, x4, y0, y4]  ->    [x0 + x4, x0 + x4, y0 + y4, y0 + y4]
 /// HEIGHT = 4:      [w0, x0, y0, z0]  ->    [w0, x0, y0, z0]
 #[inline]
 fn horizontal_sum<const HEIGHT: usize>(input: __m256i) -> __m256i {
     unsafe {
         match HEIGHT {
-            1 => hsum(input),
             2 | 3 => {
                 let shuffled = x86_64::_mm256_castpd_si256(x86_64::_mm256_permute_pd::<0b0101>(
                     x86_64::_mm256_castsi256_pd(input),
                 ));
                 x86_64::_mm256_add_epi64(input, shuffled)
             }
-            4 => input,
+            4 | 6 => input,
             _ => unreachable!(),
         }
-    }
-}
-
-/// Compute the horizontal sum.
-/// Outputs a constant __m256i vector with each element equal to the sum.
-#[inline]
-fn hsum(input: __m256i) -> __m256i {
-    unsafe {
-        let t0: [u64; 4] = transmute(input);
-        let total = t0[0] + t0[1] + t0[2] + t0[3];
-        x86_64::_mm256_set1_epi64x(total as i64)
     }
 }
 
@@ -408,9 +296,6 @@ pub trait Poseidon2AVX2Helpers {
 
     /// Apply the s-box: x -> (x + rc)^s to a vector __m256i where we only care about the first 2 u64's
     fn double_internal_sbox(s0: __m256i, rc: u32) -> __m256i;
-
-    /// Apply the s-box: x -> x^s to a single u32.
-    fn scalar_internal_sbox(s0: __m256i, rc: u32) -> __m256i;
 
     const PACKED_8XPRIME: __m256i;
 }
@@ -471,9 +356,8 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
 
     fn internal_sbox(s0: __m256i, rc: u32) -> __m256i {
         match HEIGHT {
-            1 => Self::scalar_internal_sbox(s0, rc),
             2 | 3 => Self::double_internal_sbox(s0, rc),
-            4 => Self::quad_internal_sbox(s0, rc),
+            4 | 6 => Self::quad_internal_sbox(s0, rc),
             _ => unreachable!(),
         }
     }
