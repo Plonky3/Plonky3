@@ -5,7 +5,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::hint::unreachable_unchecked;
+use core::{hint::unreachable_unchecked, ops::Deref};
 
 pub mod array_serialization;
 pub mod linear_map;
@@ -129,10 +129,6 @@ pub trait VecExt<T> {
     fn pushed_ref(&mut self, elem: T) -> &T;
     /// Push `elem` and return a mutable reference to it.
     fn pushed_mut(&mut self, elem: T) -> &mut T;
-
-    /// `log2_strict_usize(self.len())`.
-    /// Panics if `self.len()` not a power of two.
-    fn log_strict_len(&self) -> usize;
 }
 
 impl<T> VecExt<T> for alloc::vec::Vec<T> {
@@ -143,6 +139,26 @@ impl<T> VecExt<T> for alloc::vec::Vec<T> {
     fn pushed_mut(&mut self, elem: T) -> &mut T {
         self.push(elem);
         self.last_mut().unwrap()
+    }
+}
+
+pub trait SliceExt {
+    /// `log2(self.len())`. `None` if not a power of two.
+    fn log_len(&self) -> Option<usize>;
+
+    /// `log2_strict_usize(self.len())`.
+    /// Panics if `self.len()` not a power of two.
+    fn log_strict_len(&self) -> usize;
+}
+
+impl<T, S: Deref<Target = [T]>> SliceExt for S {
+    fn log_len(&self) -> Option<usize> {
+        let res = self.len().trailing_zeros();
+        if self.len().wrapping_shr(res) == 1 {
+            Some(res as usize)
+        } else {
+            None
+        }
     }
     fn log_strict_len(&self) -> usize {
         log2_strict_usize(self.len())

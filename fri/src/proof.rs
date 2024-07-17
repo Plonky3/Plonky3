@@ -1,7 +1,10 @@
+use std::fmt::Debug;
+
 use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_field::Field;
+use p3_util::VecExt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -33,4 +36,23 @@ pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
     pub openings: Vec<Vec<F>>,
     pub proof: M::Proof,
+}
+
+impl<F: Field, M: Mmcs<F>, InputProof> QueryProof<F, M, InputProof> {
+    pub fn log_folding_arities(&self) -> Vec<usize> {
+        self.commit_phase_openings
+            .iter()
+            .map(|step| step.log_folding_arity())
+            .collect()
+    }
+}
+
+impl<F: Field, M: Mmcs<F>> CommitPhaseProofStep<F, M> {
+    pub fn log_folding_arity(&self) -> usize {
+        self.openings
+            .iter()
+            .map(|o| o.log_strict_len())
+            .max()
+            .unwrap()
+    }
 }

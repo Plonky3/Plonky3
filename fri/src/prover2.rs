@@ -1,9 +1,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt::Debug;
-use core::{cmp, iter, mem};
+use core::{iter, mem};
 use p3_matrix::Matrix;
-use p3_util::VecExt;
+use p3_util::SliceExt;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -16,11 +15,11 @@ use tracing::{info_span, instrument};
 use crate::{CommitPhaseProofStep, FoldableLinearCode, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<Code, Val, Challenge, M, Challenger, InputProof, InputError>(
+pub fn prove<Code, Val, Challenge, M, Challenger, InputProof>(
     config: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize) -> InputProof,
+    prove_input: impl Fn(usize) -> InputProof,
 ) -> FriProof<Challenge, M, Challenger::Witness, InputProof>
 where
     Val: Field,
@@ -28,9 +27,8 @@ where
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Code: FoldableLinearCode<Challenge>,
-    InputError: Debug,
 {
-    // check sorted descending
+    // check sorted strictly decreasing
     assert!(inputs
         .iter()
         .tuple_windows()
@@ -46,7 +44,7 @@ where
         iter::repeat_with(|| challenger.sample_bits(log_max_height))
             .take(config.num_queries)
             .map(|index| QueryProof {
-                input_proof: open_input(index),
+                input_proof: prove_input(index),
                 commit_phase_openings: answer_query(config, &commit_phase_result.data, index),
             })
             .collect()
@@ -85,8 +83,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while inputs.peek().is_some()
-        || log_height > cmp::max(config.log_final_poly_len, config.log_blowup)
+    while inputs.peek().is_some() || log_height > config.log_max_final_poly_len + config.log_blowup
     {
         let log_folded_height = log_height - config.log_folding_arity;
 
@@ -176,7 +173,7 @@ mod tests {
     use std::marker::PhantomData;
 
     use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{CanSample, CanSampleBits, DuplexChallenger};
     use p3_commit::ExtensionMmcs;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
     use p3_field::{extension::BinomialExtensionField, TwoAdicField};
@@ -189,6 +186,8 @@ mod tests {
         Rng, SeedableRng,
     };
     use rand_chacha::ChaCha20Rng;
+
+    use crate::verifier::verify;
 
     use super::*;
 
@@ -236,7 +235,6 @@ mod tests {
             reverse_slice_index_bits(&mut evals);
             assert_eq!(evals.log_strict_len(), self.log_height);
             let mut coeffs = Radix2Dit::default().idft(evals);
-            dbg!(&coeffs);
             assert!(coeffs
                 .drain((1 << (self.log_height - self.log_blowup))..)
                 .all(|x| x.is_zero()));
@@ -305,32 +303,60 @@ mod tests {
         let compress = MyCompress::new(perm.clone());
         let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
 
-        let fri_config = MyFriConfig {
+        let config = MyFriConfig {
             log_blowup: 1,
-            log_folding_arity: 1,
-            log_final_poly_len: 4,
+            log_max_final_poly_len: 3,
+            log_folding_arity: 2,
             num_queries: 1,
             proof_of_work_bits: 8,
             mmcs,
         };
 
-        let mut chal = Challenger::new(perm.clone());
+        let chal = Challenger::new(perm.clone());
 
-        let messages = rands(&mut rng, &[8, 7]);
+        let messages = rands(&mut rng, &[8, 7, 6, 5]);
         let inputs = messages
             .into_iter()
             .map(|m| {
-                RsCode::new(
-                    m.log_strict_len() + fri_config.log_blowup,
-                    fri_config.log_blowup,
-                )
-                .encode(&m)
+                RsCode::new(m.log_strict_len() + config.log_blowup, config.log_blowup).encode(&m)
             })
             .collect();
+
         // let result = commit_phase::<RsCode<Challenge>, _, _, _, _>(&fri_config, inputs, &mut chal);
 
+        let mut p_chal = chal.clone();
         let proof =
-            prove::<RsCode<Challenge>, _, _, _, _, (), ()>(&fri_config, inputs, &mut chal, |_| ());
+            prove::<RsCode<Challenge>, _, _, _, _, ()>(&config, inputs, &mut p_chal, |_| ());
+
+        for (qi, qp) in proof.query_proofs.iter().enumerate() {
+            println!("query {qi}:");
+            for (si, step) in qp.commit_phase_openings.iter().enumerate() {
+                println!("  step {si}:");
+                for (oi, opening) in step.openings.iter().enumerate() {
+                    println!("    opening {oi}:");
+                    for (vi, val) in opening.iter().enumerate() {
+                        println!("      val {vi}: {val}");
+                    }
+                }
+            }
+        }
+
+        // dbg!(&proof.query_proofs[0].commit_phase_openings[0].openings);
+
+        let mut v_chal = chal.clone();
+        verify::<RsCode<Challenge>, _, _, _, _, (), ()>(
+            &config,
+            &proof,
+            &mut v_chal,
+            |_index, _p| Err(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            <Challenger as CanSample<Val>>::sample(&mut p_chal),
+            v_chal.sample()
+        );
+
         // dbg!(&proof);
     }
 }

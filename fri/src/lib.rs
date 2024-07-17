@@ -10,7 +10,7 @@ mod proof;
 // pub mod prover;
 pub mod prover2;
 // mod two_adic_pcs;
-// pub mod verifier;
+pub mod verifier;
 
 pub use config::*;
 // pub use fold_even_odd::*;

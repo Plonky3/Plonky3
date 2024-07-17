@@ -1,14 +1,15 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
+use itertools::Itertools;
+use p3_util::SliceExt;
 
 use p3_field::Field;
-use p3_matrix::Matrix;
 
 #[derive(Debug)]
 pub struct FriConfig<M> {
     pub log_blowup: usize,
     pub log_folding_arity: usize,
-    pub log_final_poly_len: usize,
+    pub log_max_final_poly_len: usize,
 
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
@@ -30,59 +31,115 @@ impl<M> FriConfig<M> {
     }
 }
 
-/// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
-/// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
-pub trait FriGenericConfig<F: Field> {
-    type InputProof;
-    type InputError: Debug;
-
-    /// We can ask FRI to sample extra query bits (LSB) for our own purposes.
-    /// They will be passed to our callbacks, but ignored (shifted off) by FRI.
-    fn extra_query_index_bits(&self) -> usize;
-
-    /// Fold a row, returning a single column.
-    /// Right now the input row will always be 2 columns wide,
-    /// but we may support higher folding arity in the future.
-    fn fold_row(
-        &self,
-        index: usize,
-        log_height: usize,
-        beta: F,
-        evals: impl Iterator<Item = F>,
-    ) -> F;
-
-    /// Same as applying fold_row to every row, possibly faster.
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
-
-    fn decode(&self, codeword: &[F], blowup: usize) -> Vec<F>;
-    fn encode(&self, message: &[F], blowup: usize) -> Vec<F>;
-}
-
-pub trait FoldableLinearCode<F: Field>: Eq + Debug {
+pub trait FoldableLinearCode<F: Field>: Sized + Eq + Debug {
     fn new(log_height: usize, log_blowup: usize) -> Self;
 
     fn encode(&self, message: &[F]) -> Vec<F>;
     fn decode(&self, codeword: &[F]) -> Vec<F>;
 
-    fn fold_once(&mut self, beta: F, codeword: &mut Vec<F>);
+    fn folded_code(&self) -> Self;
+    fn fold_word_at_point(&self, beta: F, pair_index: usize, values: (F, F)) -> F;
 
-    fn fold(&mut self, log_arity: usize, mut beta: F, codeword: &mut Vec<F>) {
+    /*
+    fn fold_word(&self, beta: F, codeword: &[F]) -> Vec<F> {
+        codeword
+            .iter()
+            .copied()
+            .tuples()
+            .enumerate()
+            .map(|(i, values)| self.fold_word_at_point(beta, i, values))
+            .collect()
+    }
+
+    fn repeatedly_folded_code(&self, log_arity: usize) -> Self {
+        assert_ne!(log_arity, 0);
+        let mut fc = self.folded_code();
+        for _ in 1..log_arity {
+            fc = fc.folded_code();
+        }
+        fc
+    }
+
+    fn repeatedly_fold_word_at_point(&self, beta: F, reduced_index: usize, values: &[F]) -> F {
+        todo!()
+    }
+
+    fn repeatedly_fold_word(&self, log_arity: usize, mut beta: F, codeword: &[F]) -> Vec<F> {
+        assert_ne!(log_arity, 0);
+        let mut fw = self.fold_word(beta, codeword);
+        let mut fc = self.folded_code();
+        for _ in 1..log_arity {
+            beta = beta.square();
+            fw = fc.fold_word(beta, &fw);
+            fc = fc.folded_code();
+        }
+        fw
+    }
+    */
+
+    /*
+    fn fold_at_point(&self, mut beta: F, reduced_index: usize, values: &[F]) -> F {
+        let log_arity = values.log_strict_len();
+        assert_ne!(log_arity, 0);
+        if log_arity == 1 {
+            self.fold_at_point_once(beta, pair_index, values)
+        }
+    }
+
+    fn fold_once(&self, beta: F, codeword: &mut Vec<F>) {
+        *codeword = codeword
+            .drain(..)
+            .tuples::<(F, F)>()
+            .enumerate()
+            .map(|(pair_index, values)| self.fold_at_point_once(beta, pair_index, values))
+            .collect();
+    }
+
+    fn fold(&self, log_arity: usize, mut beta: F, codeword: &mut Vec<F>) {
         for _ in 0..log_arity {
             self.fold_once(beta, codeword);
             beta = beta.square();
         }
     }
+    */
+
+    /*
+    fn fold_at_point(&mut self, beta: F, reduced_index: usize, values: &[F]) -> F {
+        let log_arity = values.log_len();
+
+        todo!()
+    }
+    */
 }
 
-/*
 pub struct Codeword<F, C> {
     pub code: C,
     pub word: Vec<F>,
 }
 
-impl<F, C> Codeword<F, C> {
-    pub fn log_len(&self) -> usize {
-        log2_strict_usize(self.word.len())
+impl<F: Field, C: FoldableLinearCode<F>> Codeword<F, C> {
+    pub fn fold(&mut self, beta: F) {
+        self.word = self
+            .word
+            .drain(..)
+            .tuples()
+            .enumerate()
+            .map(|(i, values)| self.code.fold_word_at_point(beta, i, values))
+            .collect();
+        self.code = self.code.folded_code();
+    }
+    pub fn repeatedly_fold(&mut self, log_arity: usize, mut beta: F) {
+        for _ in 0..log_arity {
+            self.fold(beta);
+            beta = beta.square();
+        }
     }
 }
-*/
+
+pub struct CodewordSegment<F, C> {
+    pub code: C,
+    pub index: usize,
+    pub segment: Vec<F>,
+}
+
+impl<F: Field, C: FoldableLinearCode<F>> Codeword<F, C> {}
