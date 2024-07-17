@@ -141,7 +141,6 @@ where
     <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
     type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
-    type LdeOwned = BitReversedMatrixView<RowMajorMatrix<C::Val>>;
 
     fn coset_shift(&self) -> C::Val {
         C::Val::generator()
@@ -163,24 +162,22 @@ where
             .collect()
     }
 
-    fn compute_ldes_batches(
+    fn compute_coset_ldes_batches(
         &self,
         polynomials: Vec<In>,
-        coset_shifts: &[C::Val],
-    ) -> Vec<Self::LdeOwned> {
+        coset_shifts: Vec<C::Val>,
+    ) -> Vec<RowMajorMatrix<C::Val>> {
         info_span!("compute all coset LDEs").in_scope(|| {
             polynomials
                 .par_iter()
                 .zip_eq(coset_shifts)
                 .map(|(poly, coset_shift)| {
-                    let shift = C::Val::generator() / *coset_shift;
+                    let shift = C::Val::generator() / coset_shift;
                     let input = ((*poly).clone()).to_row_major_matrix();
                     self.dft
                         .coset_lde_batch(input, self.fri.log_blowup, shift)
-                        .bit_reverse_rows()
                         .to_row_major_matrix()
                 })
-                .map(BitReversedMatrixView::new)
                 .collect()
         })
     }
@@ -191,9 +188,9 @@ where
         coset_shifts: &[C::Val],
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = self
-            .compute_ldes_batches(polynomials, coset_shifts)
+            .compute_coset_ldes_batches(polynomials, coset_shifts.to_vec())
             .into_iter()
-            .map(|x| x.to_row_major_matrix())
+            .map(|x| x.bit_reverse_rows().to_row_major_matrix())
             .collect();
 
         self.mmcs.commit(ldes)
