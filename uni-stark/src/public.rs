@@ -55,7 +55,7 @@ where
 
 // In the case that the public values are a vector rather than a matrix,
 // we view it as a matrix with a single row repeated as many times as desired.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PublicRow<F>(pub Vec<F>);
 
 impl<T> Matrix<T> for PublicRow<T> {

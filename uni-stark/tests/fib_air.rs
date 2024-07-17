@@ -9,11 +9,11 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field, PrimeField64};
 use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{MatrixRowSlices, MatrixRows};
+use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig};
+use p3_uni_stark::{prove, verify, PublicRow, StarkConfig};
 use rand::thread_rng;
 
 /// For testing the public values feature
@@ -29,13 +29,13 @@ impl<F> BaseAir<F> for FibonacciAir {
 impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
+        let public_values = builder.public_values();
         // Only one row of public inputs
-        let pis_matrix = builder.public_values().to_row_major_matrix();
-        let pis = pis_matrix.rows().flatten().collect::<Vec<_>>();
+        let pis = public_values.row_slice(0);
 
-        let a = *pis[0];
-        let b = *pis[1];
-        let x = *pis[2];
+        let a = pis[0];
+        let b = pis[1];
+        let x = pis[2];
 
         let local: &FibonacciRow<AB::Var> = main.row_slice(0).borrow();
         let next: &FibonacciRow<AB::Var> = main.row_slice(1).borrow();
@@ -134,14 +134,11 @@ fn test_public_value() {
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     // Public inputs are just one row
-    let pis = RowMajorMatrix::new(
-        vec![
-            BabyBear::from_canonical_u64(0),
-            BabyBear::from_canonical_u64(1),
-            BabyBear::from_canonical_u64(21),
-        ],
-        3,
-    );
+    let pis = PublicRow(vec![
+        BabyBear::from_canonical_u64(0),
+        BabyBear::from_canonical_u64(1),
+        BabyBear::from_canonical_u64(21),
+    ]);
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
@@ -166,13 +163,12 @@ fn test_incorrect_public_value() {
     let pcs = Pcs::new(fri_config, dft, val_mmcs);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let pis = RowMajorMatrix::new(
-        vec![
-            BabyBear::from_canonical_u64(0),
-            BabyBear::from_canonical_u64(1),
-            BabyBear::from_canonical_u64(123_123), // incorrect result
-        ],
-        3,
-    );
-    prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    let pis = PublicRow(vec![
+        BabyBear::from_canonical_u64(0),
+        BabyBear::from_canonical_u64(1),
+        BabyBear::from_canonical_u64(123_123), // incorrect result
+    ]);
+    let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    let mut challenger = Challenger::new(perm.clone());
+    verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
 }

@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, verify, PublicRow, StarkConfig, VerificationError};
 use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
@@ -70,12 +70,12 @@ fn main() -> Result<(), VerificationError> {
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
-    let proof = prove::<MyConfig, _>(
+    let proof = prove::<MyConfig, _, PublicRow<Val>>(
         &config,
         &KeccakAir {},
         &mut challenger,
         trace,
-        &RowMajorMatrix::new(vec![], 0),
+        &PublicRow::default(),
     );
 
     let mut challenger = Challenger::new(perm);

@@ -113,7 +113,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
         &MulAir,
         &mut challenger,
         trace,
-        &RowMajorMatrix::new(vec![], 0),
+        &PublicRow::default(),
     );
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
@@ -128,7 +128,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
         &MulAir,
         &mut challenger,
         &deserialized_proof,
-        &RowMajorMatrix::new(vec![], 0),
+        &PublicRow::default(),
     )
 }
 

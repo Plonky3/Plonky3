@@ -84,7 +84,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
         Self {
             main: RowMajorMatrix::new(values, width),
             // TODO replace zeros once we have SymbolicExpression::PublicValue
-            public_values: RowMajorMatrix::new(public_values, width),
+            public_values: RowMajorMatrix::new(public_values, public_width.max(1)),
             constraints: vec![],
         }
     }

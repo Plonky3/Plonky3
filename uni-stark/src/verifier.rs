@@ -5,24 +5,25 @@ use p3_air::{Air, BaseAir, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::UnivariatePcs;
 use p3_field::{AbstractExtensionField, AbstractField, Field, TwoAdicField};
-use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
+use p3_matrix::Dimensions;
 use p3_util::reverse_slice_index_bits;
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
-use crate::{Proof, StarkGenericConfig, VerifierConstraintFolder};
+use crate::{Proof, PublicValues, StarkGenericConfig, VerifierConstraintFolder};
 
 #[instrument(skip_all)]
-pub fn verify<SC, A>(
+pub fn verify<SC, A, P>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
-    public_values: &RowMajorMatrix<SC::Val>,
+    public_values: &P,
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    P: PublicValues<SC::Val, SC::Challenge>,
 {
     let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.width());
     let quotient_degree = 1 << log_quotient_degree;
@@ -46,7 +47,9 @@ where
     let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
     challenger.observe(commitments.trace.clone());
-    challenger.observe_slice(public_values.values.as_slice());
+    for i in 0..public_values.height() {
+        challenger.observe_slice(public_values.row_slice(i));
+    }
     let alpha: SC::Challenge = challenger.sample_ext_element();
     challenger.observe(commitments.quotient_chunks.clone());
     let zeta: SC::Challenge = challenger.sample_ext_element();
@@ -108,9 +111,10 @@ where
     let is_last_row = z_h / (zeta - g_subgroup.inverse());
     let is_transition = zeta - g_subgroup.inverse();
 
-    //TODO: derive these by interpolating the public values matrix
-    let public_local = vec![];
-    let public_next = vec![];
+    let (public_local, public_next) = (
+        public_values.interpolate(zeta, 0),
+        public_values.interpolate(zeta, 1),
+    );
 
     let mut folder = VerifierConstraintFolder {
         main: TwoRowMatrixView {

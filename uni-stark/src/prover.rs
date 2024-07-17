@@ -6,11 +6,11 @@ use p3_air::{Air, TwoRowMatrixView};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, UnivariatePcs, UnivariatePcsWithLde};
 use p3_field::{
-    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, Field, PackedField,
-    TwoAdicField,
+    cyclic_subgroup_coset_known_order, AbstractExtensionField, AbstractField, ExtensionField,
+    Field, PackedField, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixGet, MatrixRowSlices, MatrixRows};
+use p3_matrix::{Matrix, MatrixGet, MatrixRows};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
@@ -18,7 +18,7 @@ use tracing::{info_span, instrument};
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     decompose_and_flatten, Commitments, OpenedValues, PackedChallenge, PackedVal, Proof,
-    ProverConstraintFolder, StarkGenericConfig, ZerofierOnCoset,
+    ProverConstraintFolder, PublicValues, StarkGenericConfig, ZerofierOnCoset,
 };
 
 #[allow(clippy::multiple_bound_locations)]
@@ -38,7 +38,7 @@ pub fn prove<
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-    P: MatrixRowSlices<SC::Val> + MatrixGet<SC::Val> + Sync,
+    P: PublicValues<SC::Val, SC::Challenge> + Sync,
 {
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);
@@ -64,13 +64,18 @@ where
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
 
+    let public_trace_lde = public_values.get_ldes(config);
+
     let log_stride_for_quotient = pcs.log_blowup() - log_quotient_degree;
     let trace_lde_for_quotient = trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);
+
+    let public_trace_lde_for_quotient =
+        public_trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);
 
     let quotient_values = quotient_values(
         config,
         air,
-        public_values,
+        &public_trace_lde_for_quotient,
         log_degree,
         log_quotient_degree,
         trace_lde_for_quotient,
@@ -126,7 +131,7 @@ where
 fn quotient_values<SC, A, Mat, PubMat>(
     config: &SC,
     air: &A,
-    public_values: &PubMat,
+    public_trace_lde: &PubMat,
     degree_bits: usize,
     quotient_degree_bits: usize,
     trace_lde: Mat,
@@ -196,19 +201,19 @@ where
                 })
                 .collect();
 
-            let public_local: Vec<_> = (0..public_values.width())
+            let public_local: Vec<_> = (0..public_trace_lde.width())
                 .map(|col| {
                     PackedVal::<SC>::from_fn(|offset| {
                         let row = wrap(i_local_start + offset);
-                        trace_lde.get(row, col)
+                        public_trace_lde.get(row, col)
                     })
                 })
                 .collect();
-            let public_next: Vec<_> = (0..public_values.width())
+            let public_next: Vec<_> = (0..public_trace_lde.width())
                 .map(|col| {
                     PackedVal::<SC>::from_fn(|offset| {
                         let row = wrap(i_next_start + offset);
-                        trace_lde.get(row, col)
+                        public_trace_lde.get(row, col)
                     })
                 })
                 .collect();
