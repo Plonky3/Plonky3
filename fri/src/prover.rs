@@ -87,7 +87,7 @@ where
     let mut data = vec![];
 
     while inputs_iter.peek().is_some()
-        || folded.len() > cmp::max(config.blowup(), config.max_final_poly_len)
+        || folded.len() > cmp::max(config.blowup(), 1 << config.log_final_poly_len)
     {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);

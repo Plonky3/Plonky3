@@ -7,9 +7,11 @@ use p3_matrix::Matrix;
 #[derive(Debug)]
 pub struct FriConfig<M> {
     pub log_blowup: usize,
+    pub log_folding_arity: usize,
+    pub log_final_poly_len: usize,
+
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
-    pub max_final_poly_len: usize,
     pub mmcs: M,
 }
 
@@ -55,3 +57,32 @@ pub trait FriGenericConfig<F: Field> {
     fn decode(&self, codeword: &[F], blowup: usize) -> Vec<F>;
     fn encode(&self, message: &[F], blowup: usize) -> Vec<F>;
 }
+
+pub trait FoldableLinearCode<F: Field>: Eq + Debug {
+    fn new(log_height: usize, log_blowup: usize) -> Self;
+
+    fn encode(&self, message: &[F]) -> Vec<F>;
+    fn decode(&self, codeword: &[F]) -> Vec<F>;
+
+    fn fold_once(&mut self, beta: F, codeword: &mut Vec<F>);
+
+    fn fold(&mut self, log_arity: usize, mut beta: F, codeword: &mut Vec<F>) {
+        for _ in 0..log_arity {
+            self.fold_once(beta, codeword);
+            beta = beta.square();
+        }
+    }
+}
+
+/*
+pub struct Codeword<F, C> {
+    pub code: C,
+    pub word: Vec<F>,
+}
+
+impl<F, C> Codeword<F, C> {
+    pub fn log_len(&self) -> usize {
+        log2_strict_usize(self.word.len())
+    }
+}
+*/

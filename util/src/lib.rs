@@ -129,6 +129,10 @@ pub trait VecExt<T> {
     fn pushed_ref(&mut self, elem: T) -> &T;
     /// Push `elem` and return a mutable reference to it.
     fn pushed_mut(&mut self, elem: T) -> &mut T;
+
+    /// `log2_strict_usize(self.len())`.
+    /// Panics if `self.len()` not a power of two.
+    fn log_strict_len(&self) -> usize;
 }
 
 impl<T> VecExt<T> for alloc::vec::Vec<T> {
@@ -139,6 +143,9 @@ impl<T> VecExt<T> for alloc::vec::Vec<T> {
     fn pushed_mut(&mut self, elem: T) -> &mut T {
         self.push(elem);
         self.last_mut().unwrap()
+    }
+    fn log_strict_len(&self) -> usize {
+        log2_strict_usize(self.len())
     }
 }
 

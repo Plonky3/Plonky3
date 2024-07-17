@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "Witness: Serialize, InputProof: Serialize",
-    deserialize = "Witness: Deserialize<'de>, InputProof: Deserialize<'de>"
+    serialize = "PowWitness: Serialize, InputProof: Serialize",
+    deserialize = "PowWitness: Deserialize<'de>, InputProof: Deserialize<'de>"
 ))]
-pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
+pub struct FriProof<F: Field, M: Mmcs<F>, PowWitness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
-    pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
     pub final_poly: Vec<F>,
-    pub pow_witness: Witness,
+    pub pow_witness: PowWitness,
+    pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -31,10 +31,6 @@ pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
-    /// The opening of the commit phase codeword at the sibling location.
-    // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI
-    // folding arities besides 2, meaning that there can be multiple siblings.
-    pub sibling_value: F,
-
-    pub opening_proof: M::Proof,
+    pub openings: Vec<Vec<F>>,
+    pub proof: M::Proof,
 }
