@@ -36,15 +36,13 @@ const PX4: u64 = (P as u64) << 2;
 const PSQ: i64 = (P as i64) * (P as i64);
 const P_4XU64: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
 
-pub const INTERNAL_SHIFTS0: [u64; 4] = [0, 0, 1, 2];
-pub const INTERNAL_SHIFTS1: [u64; 4] = [3, 4, 5, 6];
-pub const INTERNAL_SHIFTS2: [u64; 4] = [7, 8, 10, 12];
-pub const INTERNAL_SHIFTS3: [u64; 4] = [13, 14, 15, 16];
-
 const INTERNAL_SHIFTS0_T: [u64; 4] = [0, 3, 7, 13];
 const INTERNAL_SHIFTS1_T: [u64; 4] = [0, 4, 8, 14];
 const INTERNAL_SHIFTS2_T: [u64; 4] = [1, 5, 10, 15];
 const INTERNAL_SHIFTS3_T: [u64; 4] = [2, 6, 12, 16];
+
+const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u64; 16] =
+    [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u64; 24] = [
     0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
@@ -421,6 +419,37 @@ pub fn final_external_rounds(
     // Output is not reduced.
 }
 
+const fn expand_constant<const N: usize>(input: [u64; N]) -> [[u64; 4]; N] {
+    let mut output = [[0; 4]; N];
+    let mut acc = 0;
+    loop {
+        output[acc] = [input[acc]; 4];
+        acc += 1;
+        if acc == N {
+            break;
+        }
+    }
+    output
+}
+
+const fn expand_interleave_constant<const N: usize, const M: usize>(
+    input: [u64; N],
+) -> [[[u64; 2]; 2]; M] {
+    let mut output = [[[0; 2]; 2]; M];
+    let mut acc = 0;
+    loop {
+        output[acc / 2] = [[input[acc], input[acc + 4]]; 2];
+        output[acc / 2 + 1] = [[input[acc + 1], input[acc + 5]]; 2];
+        output[acc / 2 + 2] = [[input[acc + 2], input[acc + 6]]; 2];
+        output[acc / 2 + 3] = [[input[acc + 3], input[acc + 7]]; 2];
+        acc += 8;
+        if acc == N {
+            break;
+        }
+    }
+    output
+}
+
 use p3_poseidon2::{Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods};
 
 #[derive(Clone)]
@@ -503,16 +532,9 @@ impl Poseidon2AVX2Methods<2, 16> for Poseidon2DataM31AVX2 {
     type InternalRep = [Packed64bitM31Tensor<2>; 4];
 
     const INTERNAL_SHIFTS: Packed64bitM31Tensor<2> = unsafe {
-        transmute([
-            [[INTERNAL_SHIFTS0[0], INTERNAL_SHIFTS1[0]]; 2],
-            [[INTERNAL_SHIFTS0[1], INTERNAL_SHIFTS1[1]]; 2],
-            [[INTERNAL_SHIFTS0[2], INTERNAL_SHIFTS1[2]]; 2],
-            [[INTERNAL_SHIFTS0[3], INTERNAL_SHIFTS1[3]]; 2],
-            [[INTERNAL_SHIFTS2[0], INTERNAL_SHIFTS3[0]]; 2],
-            [[INTERNAL_SHIFTS2[1], INTERNAL_SHIFTS3[1]]; 2],
-            [[INTERNAL_SHIFTS2[2], INTERNAL_SHIFTS3[2]]; 2],
-            [[INTERNAL_SHIFTS2[3], INTERNAL_SHIFTS3[3]]; 2],
-        ])
+        transmute(expand_interleave_constant::<16, 8>(
+            POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS,
+        ))
     };
 
     /// In memory, [PF; 16] = [[u32; 8]; 16] and we label the elements as:
@@ -603,56 +625,9 @@ impl Poseidon2AVX2Methods<3, 24> for Poseidon2DataM31AVX2 {
     type InternalRep = [Packed64bitM31Tensor<3>; 4];
 
     const INTERNAL_SHIFTS: Packed64bitM31Tensor<3> = unsafe {
-        transmute([
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[0],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[4],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[1],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[5],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[2],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[6],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[3],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[7],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[8],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[12],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[9],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[13],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[10],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[14],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[11],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[15],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[16],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[20],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[17],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[21],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[18],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[22],
-            ]; 2],
-            [[
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[19],
-                POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[23],
-            ]; 2],
-        ])
+        transmute(expand_interleave_constant::<24, 12>(
+            POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS,
+        ))
     };
 
     /// In memory, [PF; 24] = [[u32; 8]; 24] and we label the elements as:
@@ -742,26 +717,8 @@ impl Poseidon2AVX2Methods<4, 16> for Poseidon2DataM31AVX2 {
     type PF = PackedMersenne31AVX2;
     type InternalRep = [Packed64bitM31Tensor<4>; 2];
 
-    const INTERNAL_SHIFTS: Packed64bitM31Tensor<4> = unsafe {
-        transmute([
-            [INTERNAL_SHIFTS0[0]; 4],
-            [INTERNAL_SHIFTS0[1]; 4],
-            [INTERNAL_SHIFTS0[2]; 4],
-            [INTERNAL_SHIFTS0[3]; 4],
-            [INTERNAL_SHIFTS1[0]; 4],
-            [INTERNAL_SHIFTS1[1]; 4],
-            [INTERNAL_SHIFTS1[2]; 4],
-            [INTERNAL_SHIFTS1[3]; 4],
-            [INTERNAL_SHIFTS2[0]; 4],
-            [INTERNAL_SHIFTS2[1]; 4],
-            [INTERNAL_SHIFTS2[2]; 4],
-            [INTERNAL_SHIFTS2[3]; 4],
-            [INTERNAL_SHIFTS3[0]; 4],
-            [INTERNAL_SHIFTS3[1]; 4],
-            [INTERNAL_SHIFTS3[2]; 4],
-            [INTERNAL_SHIFTS3[3]; 4],
-        ])
-    };
+    const INTERNAL_SHIFTS: Packed64bitM31Tensor<4> =
+        unsafe { transmute(expand_constant(POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS)) };
 
     /// In memory, [PF; 16] = [[u32; 8]; 16] and we label the elements as:
     /// [[a_{0, 0}, ..., a_{0, 7}], ..., [a_{15, 0}, ..., a_{15, 7}]].
@@ -816,34 +773,8 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataM31AVX2 {
     type PF = PackedMersenne31AVX2;
     type InternalRep = [Packed64bitM31Tensor<6>; 2];
 
-    const INTERNAL_SHIFTS: Packed64bitM31Tensor<6> = unsafe {
-        transmute([
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[0]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[1]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[2]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[3]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[4]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[5]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[6]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[7]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[8]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[9]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[10]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[11]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[12]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[13]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[14]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[15]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[16]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[17]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[18]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[19]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[20]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[21]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[22]; 4],
-            [POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[23]; 4],
-        ])
-    };
+    const INTERNAL_SHIFTS: Packed64bitM31Tensor<6> =
+        unsafe { transmute(expand_constant(POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS)) };
 
     /// In memory, [PF; 24] = [[u32; 8]; 24] and we label the elements as:
     /// [[a_{0, 0}, ..., a_{0, 7}], ..., [a_{23, 0}, ..., a_{23, 7}]].
