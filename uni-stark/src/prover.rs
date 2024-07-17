@@ -10,7 +10,7 @@ use p3_field::{
     TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixGet, MatrixRows};
+use p3_matrix::{Matrix, MatrixGet, MatrixRowSlices, MatrixRows};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
@@ -21,30 +21,32 @@ use crate::{
     ProverConstraintFolder, StarkGenericConfig, ZerofierOnCoset,
 };
 
+#[allow(clippy::multiple_bound_locations)]
 #[instrument(skip_all)]
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, SC::Val>>,
     #[cfg(not(debug_assertions))] A,
+    P,
 >(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
-    public_values: &RowMajorMatrix<SC::Val>,
+    public_values: &P,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    P: MatrixRowSlices<SC::Val> + MatrixGet<SC::Val> + Sync,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, &public_values);
+    crate::check_constraints::check_constraints(air, &trace, public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree =
-        get_log_quotient_degree::<SC::Val, A>(air, public_values.values.len());
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.width());
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 
@@ -53,7 +55,9 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
     challenger.observe(trace_commit.clone());
-    challenger.observe_slice(public_values.values.as_slice());
+    for i in 0..public_values.height() {
+        challenger.observe_slice(public_values.row_slice(i));
+    }
     let alpha: SC::Challenge = challenger.sample_ext_element();
 
     let mut trace_ldes = pcs.get_ldes(&trace_data);

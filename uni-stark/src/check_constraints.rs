@@ -5,13 +5,11 @@ use p3_matrix::{Matrix, MatrixRowSlices};
 use tracing::instrument;
 
 #[instrument(name = "check constraints", skip_all)]
-pub(crate) fn check_constraints<F, A>(
-    air: &A,
-    main: &RowMajorMatrix<F>,
-    public_values: &RowMajorMatrix<F>,
-) where
+pub(crate) fn check_constraints<F, A, P>(air: &A, main: &RowMajorMatrix<F>, public_values: &P)
+where
     F: Field,
     A: for<'a> Air<DebugConstraintBuilder<'a, F>>,
+    P: MatrixRowSlices<F>,
 {
     let height = main.height();
 
