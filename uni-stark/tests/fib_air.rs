@@ -1,20 +1,19 @@
 use std::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabybear};
+use p3_baby_bear::BabyBear;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{AbstractField, Field, PrimeField64};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, MatrixRowSlices};
+use p3_matrix::{MatrixRowSlices, MatrixRows};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2::Poseidon2;
+use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use p3_util::log2_ceil_usize;
 use rand::thread_rng;
 
 /// For testing the public values feature
@@ -30,11 +29,13 @@ impl<F> BaseAir<F> for FibonacciAir {
 impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let pis = builder.public_values();
+        // Only one row of public inputs
+        let pis_matrix = builder.public_values().to_row_major_matrix();
+        let pis = pis_matrix.rows().flatten().collect::<Vec<_>>();
 
-        let a = pis[0];
-        let b = pis[1];
-        let x = pis[2];
+        let a = *pis[0];
+        let b = *pis[1];
+        let x = *pis[2];
 
         let local: &FibonacciRow<AB::Var> = main.row_slice(0).borrow();
         let next: &FibonacciRow<AB::Var> = main.row_slice(1).borrow();
@@ -105,14 +106,14 @@ type Val = BabyBear;
 type Perm = Poseidon2<Val, DiffusionMatrixBabybear, 16, 7>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type ValMmcs =
-    FieldMerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+type ValMmcs = FieldMerkleTreeMmcs<<Val as Field>::Packing, MyHash, MyCompress, 8>;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16>;
 type Dft = Radix2DitParallel;
-type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+type MyFriConfig = TwoAdicFriPcsConfig<Val, Challenge, Challenger, Dft, ValMmcs, ChallengeMmcs>;
+type Pcs = TwoAdicFriPcs<MyFriConfig>;
+type MyConfig = StarkConfig<Val, Challenge, Pcs, Challenger>;
 
 #[test]
 fn test_public_value() {
@@ -129,14 +130,18 @@ fn test_public_value() {
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };
-    let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(fri_config, dft, val_mmcs);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(21),
-    ];
+    // Public inputs are just one row
+    let pis = RowMajorMatrix::new(
+        vec![
+            BabyBear::from_canonical_u64(0),
+            BabyBear::from_canonical_u64(1),
+            BabyBear::from_canonical_u64(21),
+        ],
+        3,
+    );
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
@@ -158,13 +163,16 @@ fn test_incorrect_public_value() {
         mmcs: challenge_mmcs,
     };
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
-    let pcs = Pcs::new(log2_ceil_usize(trace.height()), dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(fri_config, dft, val_mmcs);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(123_123), // incorrect result
-    ];
+    let pis = RowMajorMatrix::new(
+        vec![
+            BabyBear::from_canonical_u64(0),
+            BabyBear::from_canonical_u64(1),
+            BabyBear::from_canonical_u64(123_123), // incorrect result
+        ],
+        3,
+    );
     prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
 }

@@ -108,7 +108,13 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
 
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
-    let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace, &vec![]);
+    let proof = prove::<MyConfig, _>(
+        &config,
+        &MulAir,
+        &mut challenger,
+        trace,
+        &RowMajorMatrix::new(vec![], 0),
+    );
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -122,7 +128,7 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
         &MulAir,
         &mut challenger,
         &deserialized_proof,
-        &vec![],
+        &RowMajorMatrix::new(vec![], 0),
     )
 }
 

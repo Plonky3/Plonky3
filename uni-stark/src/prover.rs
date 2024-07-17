@@ -31,7 +31,7 @@ pub fn prove<
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
-    public_values: RowMajorMatrix<SC::Val>,
+    public_values: &RowMajorMatrix<SC::Val>,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
@@ -122,7 +122,7 @@ where
 fn quotient_values<SC, A, Mat, PubMat>(
     config: &SC,
     air: &A,
-    public_values: PubMat,
+    public_values: &PubMat,
     degree_bits: usize,
     quotient_degree_bits: usize,
     trace_lde: Mat,

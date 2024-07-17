@@ -217,6 +217,7 @@ mod tests {
 
     use crate::{Air, AirBuilder, BaseAir};
 
+    #[allow(dead_code)]
     struct FibonacciAir;
 
     impl<F> BaseAir<F> for FibonacciAir {

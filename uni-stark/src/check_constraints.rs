@@ -25,8 +25,8 @@ pub(crate) fn check_constraints<F, A>(
             next: main_next,
         };
 
-        let public_local = main.row_slice(i);
-        let public_next = main.row_slice(i_next);
+        let public_local = public_values.row_slice(i);
+        let public_next = public_values.row_slice(i_next);
         let public_values = TwoRowMatrixView {
             local: public_local,
             next: public_next,
