@@ -1,9 +1,11 @@
 use alloc::slice;
 use alloc::vec::Vec;
 use core::iter::Cloned;
+
 use p3_commit::UnivariatePcsWithLde;
 use p3_field::{ExtensionField, TwoAdicField};
-use p3_matrix::{dense::RowMajorMatrix, Matrix, MatrixGet, MatrixRowSlices, MatrixRows};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{Matrix, MatrixGet, MatrixRowSlices, MatrixRows};
 use p3_util::log2_strict_usize;
 
 use crate::StarkGenericConfig;

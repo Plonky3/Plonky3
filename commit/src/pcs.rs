@@ -3,10 +3,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use p3_matrix::dense::RowMajorMatrix;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, MatrixGet, MatrixRows};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
