@@ -13,9 +13,9 @@ use crate::poseidon2_round_numbers_128;
 // As the nature of the vectorization code is to perform horizontal parallelization, if the scalar code inputs [F; 16], the
 // packed field code will input [PF; 16] = [[F; N]; 16] and we should perform the poseidon2 permutation on the columns of length 16.
 
-// Internally, we represent our state as a tensor of size 4x4x1, 4x4x2, 4x4x3, 4x4x4 corresponding respectively to a single Poseidon-16 instance, 2 instances of Poseidon16, 2 instances of Poseidon24, or 4 instances of Poseidon 16.
+// Internally, we represent our state as a tensor of size 4x4x2, 4x4x3, 4x4x4, 4x4x6 corresponding respectively to a 2/4 instances of Poseidon16/24.
 // This may be reduced in future once we determine which versions are fastest.
-// Currently the mapping from the standard [F; 16], [[F; 16]; 2], [[F; 24]; 2] to the internal 4xN matrix form looks like:
+// Currently the mapping from the standard [[F; 16/24]; 2/4] to the internal 4xN matrix form looks like:
 //
 // 2 Poseidon 16 instance:  [x0, x4, y0, y4] [x8, x12, y8, y12]
 //                          [x1, x5, y1, y5] [x9, x13, y9, y13]
@@ -38,9 +38,11 @@ use crate::poseidon2_round_numbers_128;
 //                          [w3, x3, y3, z3] [w7, x7, y7, z7] [w11, x11, y11, z11] [w15, x15, y15, z15] [w19, x19, y19, z19] [w23, x23, y23, z23]
 // This necessitates some data manipulation.
 
-/// A 4x4xN Matrix of 31-bit field elements with each element stored in 64-bits and each row saved as (multiple) 256bit packed vectors.
-/// Used for the internal representations for vectorized AVX2 implementations for Poseidon2
-/// Should only be called with N = 1, 2, 3, 4
+// We assume that the input will always be given in the form [PF; 16/24] so depending on the internal rep chosen, we will need 2-4 repeats.
+
+/// A 4x4xN Matrix of field elements with each element stored in 64-bits values allowing for delayed reduction.
+/// Each row is saved as a 256bit packed vector allowing for vectorized operations.
+/// Should only be called with N = 2, 3, 4, 6.
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct Packed64bitM31Tensor<const HEIGHT: usize>([[__m256i; 4]; HEIGHT]);
