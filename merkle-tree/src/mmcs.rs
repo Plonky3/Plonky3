@@ -11,7 +11,7 @@ use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::FieldMerkleTree;
-use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight};
+use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight, WrongWidth};
 
 /// A vector commitment scheme backed by a `FieldMerkleTree`.
 ///
@@ -122,13 +122,12 @@ where
         }
 
         // TODO: Disabled for now since TwoAdicFriPcs and CirclePcs currently pass 0 for width.
-        // for (dims, opened_vals) in dimensions.iter().zip(opened_values) {
-        //     if opened_vals.len() != dims.width {
-        //         return Err(WrongWidth);
-        //     }
-        // }
+        for (dims, opened_vals) in dimensions.iter().zip(opened_values) {
+            if opened_vals.len() != dims.width {
+                return Err(WrongWidth);
+            }
+        }
 
-        // TODO: Disabled for now, CirclePcs sometimes passes a height that's off by 1 bit.
         let max_height = dimensions.iter().map(|dim| dim.height).max().unwrap();
         let log_max_height = log2_ceil_usize(max_height);
         if proof.len() != log_max_height {

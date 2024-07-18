@@ -6,9 +6,9 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
-use p3_util::{log2_strict_usize, VecExt};
+use p3_util::{bitmask, log2_strict_usize, SliceExt, VecExt};
 
-use crate::{CommitPhaseProofStep, FoldableLinearCode, FriConfig, FriProof};
+use crate::{Codeword, CommitPhaseProofStep, FoldableLinearCode, FriConfig, FriProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
@@ -23,7 +23,7 @@ pub fn verify<Code, Val, Challenge, M, Challenger, InputProof, InputError>(
     config: &FriConfig<M>,
     proof: &FriProof<Challenge, M, Challenger::Witness, InputProof>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize, &InputProof) -> Result<Vec<(usize, Challenge)>, InputError>,
+    open_input: impl Fn(usize, &InputProof) -> Result<Vec<Codeword<Challenge, Code>>, InputError>,
 ) -> Result<(), FriError<M::Error, InputError>>
 where
     Val: Field,
@@ -50,13 +50,6 @@ where
         .log_len()
         .ok_or(FriError::InvalidProofShape)?;
 
-    dbg!(log_final_poly_len);
-
-    let encoded_final_poly = Code::new(log_final_poly_len + config.log_blowup, config.log_blowup)
-        .encode(&proof.final_poly);
-
-    // let codeword = g.encode(&proof.final_poly, config.blowup());
-
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
     }
@@ -73,59 +66,81 @@ where
         .all_equal_value()
         .unwrap();
 
-    dbg!(&log_folding_arities);
+    assert_eq!(log_folding_arities.len(), betas.len());
 
-    let log_max_height =
-        config.log_blowup + log_final_poly_len + log_folding_arities.iter().sum::<usize>();
-
-    dbg!(log_max_height);
-
-    // let log_folding_arities = proof.query_proofs[0].log_folding_arities();
-    // assert!(proof.query_proofs.iter().all_equal_value(|qp| &qp.log_folding_arities() == &log_folding_arities))
-
-    // let index_bits = proof.commit_phase_commits.len() + log2_strict_usize(codeword.len());
+    let log_max_msg_len = log_final_poly_len + log_folding_arities.iter().sum::<usize>();
 
     for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height);
-        let mut log_height = log_max_height;
+        let mut index = challenger.sample_bits(config.log_blowup + log_max_msg_len);
+        let mut inputs = open_input(index, &qp.input_proof)
+            .map_err(FriError::InputError)?
+            .into_iter()
+            .peekable();
 
-        for step in &qp.commit_phase_openings {
-            let log_folded_height = log_height - step.log_folding_arity();
-            for o in &step.openings {
-                let code = Code::new(log_folded_height + o.log_strict_len(), config.log_blowup);
-            }
-            log_height = log_folded_height;
-        }
+        let mut log_msg_len = log_max_msg_len;
+        let mut folded_evals: Vec<Codeword<Challenge, Code>> = vec![];
 
-        /*
-        let index = challenger.sample_bits(index_bits + g.extra_query_index_bits());
-        let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
-
-        debug_assert!(
-            ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
-            "reduced openings sorted by height descending"
+        assert_eq!(proof.commit_phase_commits.len(), betas.len());
+        assert_eq!(proof.commit_phase_commits.len(), log_folding_arities.len());
+        assert_eq!(
+            proof.commit_phase_commits.len(),
+            qp.commit_phase_openings.len()
         );
 
-        let input_index = index >> g.extra_query_index_bits();
+        for (comm, &beta, &log_arity, step) in izip!(
+            &proof.commit_phase_commits,
+            &betas,
+            &log_folding_arities,
+            &qp.commit_phase_openings,
+        ) {
+            let log_folded_msg_len = log_msg_len - log_arity;
 
-        let folded_eval = verify_query(
-            g,
-            config,
-            input_index,
-            izip!(
-                &betas,
-                &proof.commit_phase_commits,
-                &qp.commit_phase_openings
-            ),
-            ro,
-        )?;
+            folded_evals
+                .extend(inputs.peeking_take_while(|cw| cw.code.log_msg_len() > log_folded_msg_len));
 
-        let final_index = input_index >> proof.commit_phase_commits.len();
+            let folded_index = index >> log_arity;
 
-        if codeword[final_index] != folded_eval {
-            return Err(FriError::FinalPolyMismatch);
+            assert_eq!(step.openings.len(), folded_evals.len());
+            for (eval, siblings) in izip!(&mut folded_evals, &step.openings) {
+                *eval = eval.expand(siblings.to_vec());
+            }
+
+            let openings = folded_evals
+                .iter()
+                .map(|eval| eval.word.clone())
+                .collect_vec();
+
+            let dims = folded_evals
+                .iter()
+                .map(|eval| Dimensions {
+                    width: eval.word.len(),
+                    height: 1 << eval.index_bits(),
+                })
+                .collect_vec();
+
+            config
+                .mmcs
+                .verify_batch(comm, &dims, folded_index, &openings, &step.proof)
+                .map_err(FriError::CommitPhaseMmcsError)?;
+
+            for eval in &mut folded_evals {
+                eval.fold_to_point(beta);
+            }
+
+            Codeword::sum_words_from_same_code(&mut folded_evals);
+
+            log_msg_len = log_folded_msg_len;
+            index = folded_index;
         }
-        */
+
+        assert_eq!(inputs.next(), None);
+        assert_eq!(folded_evals.len(), 1);
+        let eval = folded_evals.pop().unwrap();
+        assert_eq!(eval.word.len(), 1);
+        assert_eq!(
+            eval.code.encoded_at_point(&proof.final_poly, eval.index),
+            eval.word[0]
+        );
     }
 
     Ok(())

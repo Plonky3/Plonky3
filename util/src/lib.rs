@@ -5,7 +5,10 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::{hint::unreachable_unchecked, ops::Deref};
+use core::{
+    hint::unreachable_unchecked,
+    ops::{BitAnd, Deref, Shl, Shr, Sub},
+};
 
 pub mod array_serialization;
 pub mod linear_map;
@@ -80,6 +83,22 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
             vals.swap(i, j);
         }
     }
+}
+
+pub fn bitmask<T>(n_bits: T) -> T
+where
+    T: Copy + From<bool> + Shl<T, Output = T> + Sub<T, Output = T>,
+{
+    let one = T::from(true);
+    (one << n_bits) - one
+}
+
+/// (x >> n, x & mask(n))
+pub fn split_bits<T>(x: T, n: usize) -> (T, T)
+where
+    T: Copy + Shr<usize, Output = T> + BitAnd<usize, Output = T>,
+{
+    (x >> n, x & ((1 << n) - 1))
 }
 
 #[inline(always)]

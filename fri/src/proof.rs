@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_field::Field;
-use p3_util::VecExt;
+use p3_util::{log2_strict_usize, SliceExt, VecExt};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -51,7 +51,7 @@ impl<F: Field, M: Mmcs<F>> CommitPhaseProofStep<F, M> {
     pub fn log_folding_arity(&self) -> usize {
         self.openings
             .iter()
-            .map(|o| o.log_strict_len())
+            .map(|o| log2_strict_usize(o.len() + 1))
             .max()
             .unwrap()
     }
