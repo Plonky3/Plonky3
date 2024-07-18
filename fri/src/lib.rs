@@ -8,11 +8,13 @@ mod config;
 // mod fold_even_odd;
 mod proof;
 // pub mod prover;
-pub mod prover2;
+pub mod foldable_linear_code;
+pub mod prover;
 // mod two_adic_pcs;
 pub mod verifier;
 
 pub use config::*;
 // pub use fold_even_odd::*;
+pub use foldable_linear_code::*;
 pub use proof::*;
 // pub use two_adic_pcs::*;

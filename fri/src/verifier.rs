@@ -6,7 +6,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
-use p3_util::{bitmask, log2_strict_usize, SliceExt, VecExt};
+use p3_util::SliceExt;
 
 use crate::{Codeword, CommitPhaseProofStep, FoldableLinearCode, FriConfig, FriProof};
 
@@ -41,9 +41,7 @@ where
         })
         .collect();
 
-    for &symbol in &proof.final_poly {
-        challenger.observe_ext_element(symbol);
-    }
+    challenger.observe_ext_element_slice(&proof.final_poly);
 
     let log_final_poly_len = proof
         .final_poly
@@ -64,145 +62,105 @@ where
         .iter()
         .map(|qp| qp.log_folding_arities())
         .all_equal_value()
-        .unwrap();
+        .map_err(|_| FriError::InvalidProofShape)?;
 
     assert_eq!(log_folding_arities.len(), betas.len());
 
-    let log_max_msg_len = log_final_poly_len + log_folding_arities.iter().sum::<usize>();
+    let index_bits =
+        config.log_blowup + log_final_poly_len + log_folding_arities.iter().sum::<usize>();
 
     for qp in &proof.query_proofs {
-        let mut index = challenger.sample_bits(config.log_blowup + log_max_msg_len);
-        let mut inputs = open_input(index, &qp.input_proof)
-            .map_err(FriError::InputError)?
-            .into_iter()
-            .peekable();
+        let index = challenger.sample_bits(index_bits);
+        let inputs = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
-        let mut log_msg_len = log_max_msg_len;
-        let mut folded_evals: Vec<Codeword<Challenge, Code>> = vec![];
+        let final_sample = verify_query(
+            &config,
+            index_bits,
+            izip!(
+                &proof.commit_phase_commits,
+                &betas,
+                &qp.commit_phase_openings
+            ),
+            inputs,
+        )?;
 
-        assert_eq!(proof.commit_phase_commits.len(), betas.len());
-        assert_eq!(proof.commit_phase_commits.len(), log_folding_arities.len());
-        assert_eq!(
-            proof.commit_phase_commits.len(),
-            qp.commit_phase_openings.len()
-        );
-
-        for (comm, &beta, &log_arity, step) in izip!(
-            &proof.commit_phase_commits,
-            &betas,
-            &log_folding_arities,
-            &qp.commit_phase_openings,
-        ) {
-            let log_folded_msg_len = log_msg_len - log_arity;
-
-            folded_evals
-                .extend(inputs.peeking_take_while(|cw| cw.code.log_msg_len() > log_folded_msg_len));
-
-            let folded_index = index >> log_arity;
-
-            assert_eq!(step.openings.len(), folded_evals.len());
-            for (eval, siblings) in izip!(&mut folded_evals, &step.openings) {
-                *eval = eval.expand(siblings.to_vec());
-            }
-
-            let openings = folded_evals
-                .iter()
-                .map(|eval| eval.word.clone())
-                .collect_vec();
-
-            let dims = folded_evals
-                .iter()
-                .map(|eval| Dimensions {
-                    width: eval.word.len(),
-                    height: 1 << eval.index_bits(),
-                })
-                .collect_vec();
-
-            config
-                .mmcs
-                .verify_batch(comm, &dims, folded_index, &openings, &step.proof)
-                .map_err(FriError::CommitPhaseMmcsError)?;
-
-            for eval in &mut folded_evals {
-                eval.fold_to_point(beta);
-            }
-
-            Codeword::sum_words_from_same_code(&mut folded_evals);
-
-            log_msg_len = log_folded_msg_len;
-            index = folded_index;
+        debug_assert_eq!(final_sample.word.len(), 1);
+        if final_sample
+            .code
+            .encoded_at_point(&proof.final_poly, final_sample.index)
+            != final_sample.word[0]
+        {
+            return Err(FriError::FinalPolyMismatch);
         }
-
-        assert_eq!(inputs.next(), None);
-        assert_eq!(folded_evals.len(), 1);
-        let eval = folded_evals.pop().unwrap();
-        assert_eq!(eval.word.len(), 1);
-        assert_eq!(
-            eval.code.encoded_at_point(&proof.final_poly, eval.index),
-            eval.word[0]
-        );
     }
 
     Ok(())
 }
 
 type CommitStep<'a, F, M> = (
-    &'a F,
     &'a <M as Mmcs<F>>::Commitment,
+    &'a F,
     &'a CommitPhaseProofStep<F, M>,
 );
 
-fn verify_query<'a, F, M, InputError>(
+fn verify_query<'a, F, Code, M, InputError>(
     config: &FriConfig<M>,
-    mut index: usize,
+    mut log_word_len: usize,
     steps: impl Iterator<Item = CommitStep<'a, F, M>>,
-    reduced_openings: Vec<(usize, F)>,
-) -> Result<F, FriError<M::Error, InputError>>
+    inputs: Vec<Codeword<F, Code>>,
+) -> Result<Codeword<F, Code>, FriError<M::Error, InputError>>
 where
     F: Field,
+    Code: FoldableLinearCode<F>,
     M: Mmcs<F> + 'a,
 {
-    let mut ro_iter = reduced_openings.into_iter().peekable();
-    let (mut log_height, mut folded_eval) = ro_iter.next().unwrap();
+    let mut inputs = inputs.into_iter().peekable();
+    let mut samples: Vec<Codeword<F, Code>> = vec![];
 
-    /*
-    for (&beta, comm, opening) in steps {
-        log_height -= 1;
+    for (comm, &beta, step) in steps {
+        log_word_len -= config.log_folding_arity;
 
-        let index_sibling = index ^ 1;
-        let index_pair = index >> 1;
+        samples.extend(inputs.peeking_take_while(|cw| cw.code.log_word_len() > log_word_len));
 
-        let mut evals = vec![folded_eval; 2];
-        evals[index_sibling % 2] = opening.sibling_value;
+        for (sample, siblings) in izip!(&mut samples, &step.openings) {
+            *sample = sample.expand(siblings.to_vec());
+        }
 
-        let dims = &[Dimensions {
-            width: 2,
-            height: 1 << log_height,
-        }];
-        config
-            .mmcs
-            .verify_batch(
-                comm,
-                dims,
-                index_pair,
-                &[evals.clone()],
-                &opening.opening_proof,
-            )
+        verify_step(&config.mmcs, comm, &samples, &step.proof)
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        index = index_pair;
-        folded_eval = g.fold_row(index, log_height, beta, evals.into_iter());
-
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_height) {
-            folded_eval += ro;
+        for sample in &mut samples {
+            sample.fold_to_log_word_len(log_word_len, beta);
         }
+
+        Codeword::sum_words_from_same_code(&mut samples);
     }
 
-    debug_assert!(
-        ro_iter.next().is_none(),
-        "verifier reduced_openings were not in descending order?",
-    );
-    */
+    debug_assert_eq!(inputs.next(), None);
+    debug_assert_eq!(samples.len(), 1);
+    Ok(samples.pop().unwrap())
+}
 
-    Ok(folded_eval)
+fn verify_step<F, Code, M>(
+    mmcs: &M,
+    comm: &M::Commitment,
+    samples: &[Codeword<F, Code>],
+    proof: &M::Proof,
+) -> Result<(), M::Error>
+where
+    F: Field,
+    Code: FoldableLinearCode<F>,
+    M: Mmcs<F>,
+{
+    let index = samples.iter().map(|cw| cw.index).all_equal_value().unwrap();
+    let openings = samples.iter().map(|eval| eval.word.clone()).collect_vec();
+    let dims = samples
+        .iter()
+        .map(|sample| Dimensions {
+            width: sample.word.len(),
+            height: 1 << sample.index_bits(),
+        })
+        .collect_vec();
+
+    mmcs.verify_batch(comm, &dims, index, &openings, proof)
 }

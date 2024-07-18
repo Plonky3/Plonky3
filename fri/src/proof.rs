@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_field::Field;
-use p3_util::{log2_strict_usize, SliceExt, VecExt};
+use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
