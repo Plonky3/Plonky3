@@ -29,12 +29,25 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         let local: &KeccakCols<AB::Var> = (*local).borrow();
         let next: &KeccakCols<AB::Var> = (*next).borrow();
 
+        let first_step = local.step_flags[0];
+        let final_step = local.step_flags[NUM_ROUNDS - 1];
+        let not_final_step = AB::Expr::one() - final_step;
+
+        // If this is the first step, the input A must match the preimage.
+        for y in 0..5 {
+            for x in 0..5 {
+                for limb in 0..U64_LIMBS {
+                    builder
+                        .when(first_step)
+                        .assert_eq(local.preimage[y][x][limb], local.a[y][x][limb]);
+                }
+            }
+        }
+
         // The export flag must be 0 or 1.
         builder.assert_bool(local.export);
 
         // If this is not the final step, the export flag must be off.
-        let final_step = local.step_flags[NUM_ROUNDS - 1];
-        let not_final_step = AB::Expr::one() - final_step;
         builder
             .when(not_final_step.clone())
             .assert_zero(local.export);
@@ -44,8 +57,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for x in 0..5 {
                 for limb in 0..U64_LIMBS {
                     builder
-                        .when_transition()
                         .when(not_final_step.clone())
+                        .when_transition()
                         .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
                 }
             }
@@ -54,6 +67,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
         for x in 0..5 {
             for z in 0..64 {
+                builder.assert_bool(local.c[x][z]);
                 let xor = xor3_gen::<AB::Expr>(
                     local.c[x][z].into(),
                     local.c[(x + 4) % 5][z].into(),
@@ -83,7 +97,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let a_limb = local.a[y][x][limb];
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
-                        .fold(AB::Expr::zero(), |acc, z| acc.double() + get_bit(z));
+                        .fold(AB::Expr::zero(), |acc, z| {
+                            builder.assert_bool(local.a_prime[y][x][z]);
+                            acc.double() + get_bit(z)
+                        });
                     builder.assert_eq(computed_limb, a_limb);
                 }
             }
@@ -128,6 +145,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::zero(), |acc, z| {
+                    builder.assert_bool(local.a_prime_prime_0_0_bits[z]);
                     acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
             let a_prime_prime_0_0_limb = local.a_prime_prime[0][0][limb];
@@ -161,7 +179,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for x in 0..5 {
             for y in 0..5 {
                 for limb in 0..U64_LIMBS {
-                    let output = local.a_prime_prime_prime(x, y, limb);
+                    let output = local.a_prime_prime_prime(y, x, limb);
                     let input = next.a[y][x][limb];
                     builder
                         .when_transition()
