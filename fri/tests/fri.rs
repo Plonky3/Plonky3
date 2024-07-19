@@ -9,7 +9,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{dot_product, Field, TwoAdicField};
 use p3_fri::prover::prove;
 use p3_fri::verifier::verify;
-use p3_fri::{Codeword, FoldableLinearCode, FriConfig};
+use p3_fri::{Codeword, FoldableLinearCodeFamily, FriConfig};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -45,7 +45,7 @@ impl<F> RsCode<F> {
         }
     }
 }
-impl<F: TwoAdicField> FoldableLinearCode<F> for RsCode<F> {
+impl<F: TwoAdicField> FoldableLinearCodeFamily<F> for RsCode<F> {
     fn log_blowup(&self) -> usize {
         self.log_blowup
     }

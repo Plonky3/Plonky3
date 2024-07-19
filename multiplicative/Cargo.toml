@@ -1,0 +1,13 @@
+[package]
+name = "p3-multiplicative"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-dft = { path = "../dft" }
+p3-field = { path = "../field" }
+p3-fri = { path = "../fri" }
+p3-util = { path = "../util" }
+
+itertools = "0.13.0"

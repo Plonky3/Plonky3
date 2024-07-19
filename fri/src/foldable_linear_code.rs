@@ -4,46 +4,96 @@ use itertools::{izip, Itertools};
 use p3_field::Field;
 use p3_util::{log2_strict_usize, split_bits, SliceExt};
 
-pub trait FoldableLinearCode<F>: Sized + Clone + Eq + Debug {
-    // fn new(log_blowup: usize, log_msg_len: usize) -> Self;
-
-    fn log_blowup(&self) -> usize;
-    fn log_msg_len(&self) -> usize;
-    fn log_word_len(&self) -> usize {
-        self.log_blowup() + self.log_msg_len()
-    }
-
-    fn blowup(&self) -> usize {
-        1 << self.log_blowup()
-    }
-    fn msg_len(&self) -> usize {
-        1 << self.log_msg_len()
-    }
-    fn word_len(&self) -> usize {
-        1 << self.log_word_len()
-    }
-
-    fn encoded_at_point(&self, msg: &[F], index: usize) -> F;
-    fn encode(&self, msg: &[F]) -> Vec<F> {
-        (0..self.word_len())
-            .map(|i| self.encoded_at_point(msg, i))
-            .collect()
-    }
-
-    fn decode(&self, word: &[F]) -> Vec<F>;
-
-    fn folded_code(&self) -> Self;
-    fn fold_word_at_point(&self, beta: F, pair_index: usize, values: (F, F)) -> F;
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Codeword<F, C> {
+pub struct Codeword<C, F> {
     pub code: C,
     pub index: usize,
     pub word: Vec<F>,
 }
 
-impl<F: Field, C: FoldableLinearCode<F>> Codeword<F, C> {
+pub trait CodeFamily<F: Clone>: Sized + Clone + Eq + Debug {
+    fn log_blowup(&self) -> usize;
+    fn log_message_len(&self) -> usize;
+    fn log_word_len(&self) -> usize {
+        self.log_blowup() + self.log_message_len()
+    }
+
+    fn blowup(&self) -> usize {
+        1 << self.log_blowup()
+    }
+    fn message_len(&self) -> usize {
+        1 << self.log_message_len()
+    }
+    fn word_len(&self) -> usize {
+        1 << self.log_word_len()
+    }
+
+    fn is_linear(&self) -> bool {
+        false
+    }
+
+    // todo: encode/decode to Codeword instead?
+    fn encode(&self, message: &[F]) -> Vec<F>;
+    fn decode(&self, word: &[F]) -> Vec<F>;
+
+    fn encoded_at_index(&self, message: &[F], index: usize) -> F {
+        self.encode(message)[index].clone()
+    }
+}
+
+impl<F: Clone, C: CodeFamily<F>> Codeword<C, F> {
+    pub fn full(code: C, word: Vec<F>) -> Self {
+        Self {
+            code,
+            index: 0,
+            word,
+        }
+    }
+
+    pub fn index_bits(&self) -> usize {
+        self.code.log_word_len() - self.word.log_strict_len()
+    }
+    pub fn is_full(&self) -> bool {
+        self.index_bits() == 0
+    }
+    pub fn is_restricted(&self) -> bool {
+        self.index_bits() > 0
+    }
+
+    pub fn decode(&self) -> Vec<F> {
+        assert!(self.is_full());
+        self.code.decode(&self.word)
+    }
+}
+
+pub trait LinearCodeFamily<F: Clone>: CodeFamily<F> {}
+
+impl<F: Field, C: LinearCodeFamily<F>> Codeword<C, F> {}
+
+pub trait FoldableCodeFamily<F: Clone>: CodeFamily<F> {
+    fn folded_code(self) -> Self;
+    fn fold_word_at_index(&self, beta: F, pair_index: usize, values: (F, F)) -> F;
+
+    fn fold_word(&self, beta: F, word: Vec<F>) -> Vec<F> {
+        word.into_iter()
+            .tuples()
+            .enumerate()
+            .map(|(pair_index, values)| self.fold_word_at_index(beta.clone(), pair_index, values))
+            .collect()
+    }
+}
+
+impl<F: Field, C: FoldableCodeFamily<F>> Codeword<C, F> {}
+
+/*
+impl<F: Field, C: FoldableLinearCodeFamily<F>> Codeword<F, C> {
+    pub fn from_word(log_blowup: usize, word: Vec<F>) -> Self {
+        Self {
+            code: C::new(log_blowup, word.log_strict_len() - log_blowup),
+            index: 0,
+            word,
+        }
+    }
     pub fn index_bits(&self) -> usize {
         self.code.log_word_len() - self.word.log_strict_len()
     }
@@ -123,22 +173,24 @@ impl<F: Field, C: FoldableLinearCode<F>> Codeword<F, C> {
         }
     }
 }
+    */
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
-    use p3_mersenne_31::Mersenne31;
-    use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaCha20Rng;
-
     use super::*;
 
-    use std::marker::PhantomData;
+    use core::marker::PhantomData;
+    use p3_field::AbstractField;
+    use p3_mersenne_31::Mersenne31;
 
+    /*
     #[derive(Clone, PartialEq, Eq, Debug)]
     struct RepetitionCode<F: Field>(usize, usize, PhantomData<F>);
 
-    impl<F: Field> FoldableLinearCode<F> for RepetitionCode<F> {
+    impl<F: Field> FoldableLinearCodeFamily<F> for RepetitionCode<F> {
+        fn new(log_blowup: usize, log_msg_len: usize) -> Self {
+            Self(log_blowup, log_msg_len, PhantomData)
+        }
         fn log_blowup(&self) -> usize {
             self.0
         }
@@ -209,4 +261,5 @@ mod tests {
         assert_eq!(r.word, m31s([1]));
         assert_eq!(r.expand(m31s([123])).word, m31s([123, 1]));
     }
+    */
 }

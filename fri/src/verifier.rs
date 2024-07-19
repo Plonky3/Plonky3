@@ -1,36 +1,37 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
-use p3_util::SliceExt;
+use p3_util::{split_bits, SliceExt};
 
-use crate::{Codeword, CommitPhaseProofStep, FoldableLinearCode, FriConfig, FriProof};
+use crate::{Codeword, CommitPhaseProofStep, FoldableLinearCodeFamily, FriConfig, FriProof};
 
 #[derive(Debug)]
-pub enum FriError<CommitMmcsErr, InputError> {
+pub enum FriError<CommitMmcsErr> {
     InvalidProofShape,
-    CommitPhaseMmcsError(CommitMmcsErr),
-    InputError(InputError),
     FinalPolyMismatch,
     InvalidPowWitness,
+    CommitPhaseMmcsError(CommitMmcsErr),
 }
-
-pub fn verify<Code, Val, Challenge, M, Challenger, InputProof, InputError>(
+pub fn verify<Code, Val, Challenge, M, Challenger>(
     config: &FriConfig<M>,
-    proof: &FriProof<Challenge, M, Challenger::Witness, InputProof>,
+    proof: &FriProof<Challenge, M, Challenger::Witness>,
+    log_word_lens: &[usize],
+    query_inputs: &[Vec<Challenge>],
     challenger: &mut Challenger,
-    open_input: impl Fn(usize, &InputProof) -> Result<Vec<Codeword<Challenge, Code>>, InputError>,
-) -> Result<(), FriError<M::Error, InputError>>
+    // open_input: impl Fn(usize, &InputProof) -> Result<Vec<Codeword<Challenge, Code>>, InputError>,
+) -> Result<Vec<usize>, FriError<M::Error>>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Code: FoldableLinearCode<Challenge>,
+    Code: FoldableLinearCodeFamily<Challenge>,
 {
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
@@ -69,19 +70,24 @@ where
     let index_bits =
         config.log_blowup + log_final_poly_len + log_folding_arities.iter().sum::<usize>();
 
-    for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(index_bits);
-        let inputs = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
+    let query_indices: Vec<_> = iter::repeat_with(|| challenger.sample_bits(index_bits))
+        .take(config.num_queries)
+        .collect();
 
-        let final_sample = verify_query(
+    for (inputs, qp) in izip!(query_inputs, &proof.query_proofs) {
+        let index = challenger.sample_bits(index_bits);
+        // let inputs = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
+
+        let final_sample = verify_query::<Code, _, _, _>(
             &config,
-            index_bits,
+            // index_bits,
+            index,
+            izip!(log_word_lens.iter().copied(), inputs.iter().copied()),
             izip!(
                 &proof.commit_phase_commits,
                 &betas,
                 &qp.commit_phase_openings
             ),
-            inputs,
         )?;
 
         debug_assert_eq!(final_sample.word.len(), 1);
@@ -94,7 +100,7 @@ where
         }
     }
 
-    Ok(())
+    Ok(query_indices)
 }
 
 type CommitStep<'a, F, M> = (
@@ -103,35 +109,61 @@ type CommitStep<'a, F, M> = (
     &'a CommitPhaseProofStep<F, M>,
 );
 
-fn verify_query<'a, F, Code, M, InputError>(
+fn verify_query<'a, Code, F, M, InputError>(
     config: &FriConfig<M>,
-    mut log_word_len: usize,
+    mut index: usize,
+    // log_word_lens: &[usize],
+    // mut log_word_len: usize,
+    inputs: impl Iterator<Item = (usize, F)>,
     steps: impl Iterator<Item = CommitStep<'a, F, M>>,
-    inputs: Vec<Codeword<F, Code>>,
-) -> Result<Codeword<F, Code>, FriError<M::Error, InputError>>
+) -> Result<Codeword<F, Code>, FriError<M::Error>>
 where
     F: Field,
-    Code: FoldableLinearCode<F>,
+    Code: FoldableLinearCodeFamily<F>,
     M: Mmcs<F> + 'a,
 {
-    let mut inputs = inputs.into_iter().peekable();
-    let mut samples: Vec<Codeword<F, Code>> = vec![];
+    let mut inputs = inputs.peekable();
+    let mut log_word_len = inputs.peek().unwrap().0;
+    let mut prev_inputs: Vec<(usize, F)> = vec![];
 
     for (comm, &beta, step) in steps {
-        log_word_len -= config.log_folding_arity;
+        let log_folded_word_len = log_word_len - config.log_folding_arity;
+        let (folded_index, index_in_subgroup) = split_bits(index, config.log_folding_arity);
 
-        samples.extend(inputs.peeking_take_while(|cw| cw.code.log_word_len() > log_word_len));
+        // log_word_len -= config.log_folding_arity;
 
-        for (sample, siblings) in izip!(&mut samples, &step.openings) {
-            *sample = sample.expand(siblings.to_vec());
+        let openings: Vec<Vec<F>> = step
+            .siblings
+            .iter()
+            .zip(prev_inputs.drain(..).chain(&mut inputs))
+            .map(|(sibs, (log_input_word_len, sample))| {
+                let log_sibs_len = log_input_word_len - log_folded_word_len;
+                assert_eq!(sibs.len() + 1, 1 << log_sibs_len);
+                let mut sibs = sibs.to_vec();
+                sibs.insert(
+                    index_in_subgroup >> (config.log_folding_arity - log_sibs_len),
+                    sample,
+                );
+                sibs
+            })
+            .collect();
+
+        // samples.extend(inputs.peeking_take_while(|cw| cw.code.log_word_len() > log_word_len));
+
+        // for (sibs, sample) in
+
+        for (sample, sibs) in izip!(&mut samples, &step.siblings) {
+            *sample = sample.expand(sibs.to_vec());
         }
 
         verify_step(&config.mmcs, comm, &samples, &step.proof)
             .map_err(FriError::CommitPhaseMmcsError)?;
 
+        /*
         for sample in &mut samples {
             sample.fold_to_log_word_len(log_word_len, beta);
         }
+        */
 
         Codeword::sum_words_from_same_code(&mut samples);
     }
@@ -149,7 +181,7 @@ fn verify_step<F, Code, M>(
 ) -> Result<(), M::Error>
 where
     F: Field,
-    Code: FoldableLinearCode<F>,
+    Code: FoldableLinearCodeFamily<F>,
     M: Mmcs<F>,
 {
     let index = samples.iter().map(|cw| cw.index).all_equal_value().unwrap();

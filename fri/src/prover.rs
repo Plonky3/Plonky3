@@ -10,26 +10,28 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
 
-use crate::{Codeword, CommitPhaseProofStep, FoldableLinearCode, FriConfig, FriProof, QueryProof};
+use crate::{
+    Codeword, CommitPhaseProofStep, FoldableCodeFamily, FriConfig, FriProof, LinearCodeFamily,
+    QueryProof,
+};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<Code, Val, Challenge, M, Challenger, InputProof>(
+pub fn prove<Code, Val, Challenge, Challenger, M>(
     config: &FriConfig<M>,
-    inputs: Vec<Codeword<Challenge, Code>>,
+    inputs: Vec<Codeword<Code, Challenge>>,
     challenger: &mut Challenger,
-    prove_input: impl Fn(usize) -> InputProof,
-) -> FriProof<Challenge, M, Challenger::Witness, InputProof>
+) -> (FriProof<Challenge, M, Challenger::Witness>, Vec<usize>)
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
-    M: Mmcs<Challenge>,
+    Code: FoldableCodeFamily<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Code: FoldableLinearCode<Challenge>,
+    M: Mmcs<Challenge>,
 {
-    // all inputs are full codewords and have same blowup
-    assert!(inputs
-        .iter()
-        .all(|cw| !cw.is_restricted() && cw.code.log_blowup() == config.log_blowup));
+    let index_bits = inputs[0].code.log_word_len();
+
+    assert!(inputs.iter().all(|cw| cw.is_full()));
+
     // sorted strictly decreasing
     assert!(inputs
         .iter()
@@ -40,30 +42,33 @@ where
         commits: commit_phase_commits,
         data: commit_phase_data,
         final_poly,
-    } = info_span!("commit phase").in_scope(|| commit_phase(config, inputs, challenger));
+    } = info_span!("commit phase")
+        .in_scope(|| commit_phase::<Code, _, _, _, _>(config, inputs, challenger));
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
-    let index_bits = config.log_blowup
-        + final_poly.log_strict_len()
-        + config.log_folding_arity * commit_phase_commits.len();
+    let query_indices: Vec<_> = iter::repeat_with(|| challenger.sample_bits(index_bits))
+        .take(config.num_queries)
+        .collect();
 
     let query_proofs = info_span!("query phase").in_scope(|| {
-        iter::repeat_with(|| challenger.sample_bits(index_bits))
-            .take(config.num_queries)
-            .map(|index| QueryProof {
-                input_proof: prove_input(index),
+        query_indices
+            .iter()
+            .map(|&index| QueryProof {
                 commit_phase_openings: answer_query(config, &commit_phase_data, index),
             })
             .collect()
     });
 
-    FriProof {
-        commit_phase_commits,
-        query_proofs,
-        final_poly,
-        pow_witness,
-    }
+    (
+        FriProof {
+            commit_phase_commits,
+            query_proofs,
+            final_poly,
+            pow_witness,
+        },
+        query_indices,
+    )
 }
 
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
@@ -75,18 +80,18 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<Code, Val, Challenge, M, Challenger>(
     config: &FriConfig<M>,
-    inputs: Vec<Codeword<Challenge, Code>>,
+    inputs: Vec<Codeword<Code, Challenge>>,
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
+    Code: FoldableCodeFamily<Challenge>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
-    Code: FoldableLinearCode<Challenge>,
 {
     let mut inputs = inputs.into_iter().peekable();
-    let mut log_word_len = inputs.peek().unwrap().code.log_word_len();
+    let mut log_word_len = inputs.peek().unwrap().log_strict_len();
     let mut folded: Vec<Codeword<Challenge, Code>> = vec![];
     let mut commits_and_data = vec![];
 
@@ -95,7 +100,11 @@ where
     {
         log_word_len -= config.log_folding_arity;
 
-        folded.extend(inputs.peeking_take_while(|cw| cw.word.log_strict_len() > log_word_len));
+        folded.extend(
+            inputs
+                .peeking_take_while(|word| word.log_strict_len() > log_word_len)
+                .map(|word| Codeword::from_word(config.log_blowup, word)),
+        );
 
         let mats: Vec<_> = folded
             .iter()
@@ -107,8 +116,9 @@ where
             })
             .collect();
 
-        let (commit, _data) = commits_and_data.pushed_ref(config.mmcs.commit(mats));
+        let (commit, data) = config.mmcs.commit(mats);
         challenger.observe(commit.clone());
+        commits_and_data.push((commit, data));
 
         let beta: Challenge = challenger.sample_ext_element();
 
@@ -120,6 +130,7 @@ where
     }
 
     assert_eq!(folded.len(), 1);
+
     let final_poly = folded.pop().unwrap().decode();
     challenger.observe_ext_element_slice(&final_poly);
 
@@ -143,11 +154,11 @@ where
     let mut steps = vec![];
     for data in commit_phase_data {
         let (folded_index, index_in_subgroup) = split_bits(index, config.log_folding_arity);
-        let (mut openings, proof) = config.mmcs.open_batch(folded_index, data);
-        for o in &mut openings {
-            o.remove(index_in_subgroup >> (config.log_folding_arity - o.log_strict_len()));
+        let (mut siblings, proof) = config.mmcs.open_batch(folded_index, data);
+        for sibs in &mut siblings {
+            sibs.remove(index_in_subgroup >> (config.log_folding_arity - sibs.log_strict_len()));
         }
-        steps.push(CommitPhaseProofStep { openings, proof });
+        steps.push(CommitPhaseProofStep { siblings, proof });
         index = folded_index;
     }
     steps
