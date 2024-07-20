@@ -6,8 +6,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_symmetric::CryptographicHasher;
+use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use sha2::digest::generic_array::GenericArray;
+use sha2::digest::typenum::U64;
 use sha2::Digest;
+
+pub const H256_256: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
 
 /// The SHA2-256 hash function.
 #[derive(Copy, Clone, Debug)]
@@ -34,12 +40,32 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
     }
 }
 
+/// SHA2-256 without the padding (pre-processing), intended to be used
+/// as a 2-to-1 [PseudoCompressionFunction].
+#[derive(Copy, Clone, Debug)]
+pub struct Sha256Compress;
+
+impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
+    fn compress(&self, input: [[u8; 32]; 2]) -> [u8; 32] {
+        let mut state = H256_256;
+        // GenericArray<u8, U64> has same memory layout as [u8; 64]
+        let block: GenericArray<u8, U64> = unsafe { core::mem::transmute(input) };
+        sha2::compress256(&mut state, &[block]);
+
+        let mut output = [0u8; 32];
+        for (chunk, word) in output.chunks_exact_mut(4).zip(state) {
+            chunk.copy_from_slice(&word.to_be_bytes());
+        }
+        output
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hex_literal::hex;
-    use p3_symmetric::CryptographicHasher;
+    use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 
-    use crate::Sha256;
+    use crate::{Sha256, Sha256Compress};
 
     #[test]
     fn test_hello_world() {
@@ -52,5 +78,18 @@ mod tests {
 
         let sha256 = Sha256;
         assert_eq!(sha256.hash_iter(input.to_vec())[..], expected[..]);
+    }
+
+    #[test]
+    fn test_compress() {
+        let left = [0u8; 32];
+        // `right` will simulate the SHA256 padding
+        let mut right = [0u8; 32];
+        right[0] = 1 << 7;
+        right[30] = 1; // left has length 256 in bits, L = 0x100
+
+        let expected = Sha256.hash_iter(left);
+        let sha256_compress = Sha256Compress;
+        assert_eq!(sha256_compress.compress([left, right]), expected);
     }
 }

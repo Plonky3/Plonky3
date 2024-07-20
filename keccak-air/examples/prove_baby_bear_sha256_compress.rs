@@ -8,8 +8,8 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_sha256::Sha256;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+use p3_sha256::{Sha256, Sha256Compress};
+use p3_symmetric::SerializingHasher32;
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
 use tracing_forest::util::LevelFilter;
@@ -36,16 +36,16 @@ fn main() -> Result<(), impl Debug> {
     type ByteHash = Sha256;
     type FieldHash = SerializingHasher32<ByteHash>;
     let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(Sha256);
+    let field_hash = FieldHash::new(byte_hash);
 
-    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
-    let compress = MyCompress::new(byte_hash);
+    type MyCompress = Sha256Compress;
+    let compress = MyCompress {};
 
     type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
 
     type Dft = Radix2DitParallel;
     let dft = Dft {};
