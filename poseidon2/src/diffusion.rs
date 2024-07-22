@@ -28,11 +28,9 @@
 //      assert ((const_mat + diag_mat)^i).characteristic_polynomial().is_irreducible()
 
 use p3_field::{AbstractField, Field};
-use p3_symmetric::Permutation;
-
-pub trait DiffusionPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
 
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
+#[inline]
 pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
@@ -42,4 +40,31 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
         state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
         state[i] += sum.clone();
     }
+}
+
+#[inline]
+pub fn internal_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
+    state: &mut [AF; WIDTH],
+    diffusion_mat: fn(&mut [AF; WIDTH]),
+    internal_constants: &[AF::F],
+) {
+    for elem in internal_constants.iter() {
+        state[0] += AF::from_f(*elem);
+        state[0] = state[0].exp_const_u64::<D>();
+        diffusion_mat(state);
+    }
+}
+
+pub trait InternalLayer<AF: AbstractField, const WIDTH: usize, const D: u64>: Sync + Clone {
+    // In the basic case, InternalState = [AF; WIDTH] but we will use delayed reduction states in other cases.
+    type InternalState;
+
+    // In the basic case this is AF::F but more generally we should save constants in a way to avoid unneeded manipulations.
+    type InternalConstantsType;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    );
 }

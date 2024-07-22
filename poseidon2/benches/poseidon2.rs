@@ -8,12 +8,11 @@ use p3_field::{PackedField, PrimeField, PrimeField32, PrimeField64};
 use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{
-    final_external_rounds, initial_external_rounds, internal_rounds, DiffusionMatrixMersenne31,
-    Mersenne31, Packed64bitM31Matrix, PackedMersenne31AVX2, Poseidon2DataM31AVX2,
+    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, Poseidon2DataM31AVX2,
 };
 use p3_poseidon2::{
     DiffusionPermutation, MdsLightPermutation, Poseidon2, Poseidon2AVX2, Poseidon2AVX2Methods,
-    Poseidon2ExternalMatrixGeneral, Poseidon2Fast,
+    Poseidon2ExternalMatrixGeneral,
 };
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
@@ -52,7 +51,6 @@ fn bench_poseidon2(c: &mut Criterion) {
         24,
         5,
     >(c);
-    poseidon2_avx2_m31(c);
 
     poseidon2_avx2_m31_all::<2, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
     poseidon2_avx2_m31_all::<3, 24, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
@@ -148,30 +146,6 @@ where
     let name = format!("poseidon2::<{}, {}>", type_name::<PF>(), D);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
-}
-
-fn poseidon2_avx2_m31(c: &mut Criterion) {
-    const PACKED_WIDTH: usize = 2;
-
-    let mut rng = thread_rng();
-
-    let poseidon_2: Poseidon2Fast<PackedMersenne31AVX2, Packed64bitM31Matrix, u32, PACKED_WIDTH> =
-        Poseidon2Fast::new_from_rng_128::<_, 5>(
-            Packed64bitM31Matrix::from_packed_field_array,
-            Packed64bitM31Matrix::to_packed_field_array,
-            |x| x.as_canonical_u32(),
-            initial_external_rounds,
-            internal_rounds,
-            final_external_rounds,
-            &mut rng,
-        );
-
-    let avx2_input: [PackedMersenne31AVX2; PACKED_WIDTH] = rng.gen();
-    let name = "poseidon2_avx2_Mersenne31";
-    let id = BenchmarkId::new(name, 16);
-    c.bench_with_input(id, &avx2_input, |b, &avx2_input| {
-        b.iter(|| poseidon_2.permute(avx2_input))
-    });
 }
 
 fn poseidon2_avx2_m31_all<const HEIGHT: usize, const WIDTH: usize, Poseidon2Data, PF>(

@@ -1,5 +1,4 @@
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
+use p3_poseidon2::{internal_permute_state, matmul_internal, InternalLayer};
 
 use crate::{
     BabyBear, DiffusionMatrixBabyBear, PackedBabyBearAVX2, MONTY_INVERSE,
@@ -11,43 +10,69 @@ use crate::{
 // matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
 // These will be removed once we have architecture specific implementations.
 
-impl Permutation<[PackedBabyBearAVX2; 16]> for DiffusionMatrixBabyBear {
-    fn permute_mut(&self, state: &mut [PackedBabyBearAVX2; 16]) {
-        matmul_internal::<BabyBear, PackedBabyBearAVX2, 16>(
+impl InternalLayer<PackedBabyBearAVX2, 16, 7> for DiffusionMatrixBabyBear {
+    type InternalState = [PackedBabyBearAVX2; 16];
+
+    type InternalConstantsType = BabyBear;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<PackedBabyBearAVX2, 16, 7>(
             state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
+            |state| {
+                matmul_internal::<BabyBear, PackedBabyBearAVX2, 16>(
+                    state,
+                    POSEIDON2_INTERNAL_MATRIX_DIAG_16_BABYBEAR_MONTY,
+                );
+                state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
+            },
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<PackedBabyBearAVX2, 16> for DiffusionMatrixBabyBear {}
+impl InternalLayer<PackedBabyBearAVX2, 24, 7> for DiffusionMatrixBabyBear {
+    type InternalState = [PackedBabyBearAVX2; 24];
 
-impl Permutation<[PackedBabyBearAVX2; 24]> for DiffusionMatrixBabyBear {
-    fn permute_mut(&self, state: &mut [PackedBabyBearAVX2; 24]) {
-        matmul_internal::<BabyBear, PackedBabyBearAVX2, 24>(
+    type InternalConstantsType = BabyBear;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<PackedBabyBearAVX2, 24, 7>(
             state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
+            |state| {
+                matmul_internal::<BabyBear, PackedBabyBearAVX2, 24>(
+                    state,
+                    POSEIDON2_INTERNAL_MATRIX_DIAG_24_BABYBEAR_MONTY,
+                );
+                state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
+            },
+            internal_constants,
+        )
     }
 }
-
-impl DiffusionPermutation<PackedBabyBearAVX2, 24> for DiffusionMatrixBabyBear {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{BabyBear, DiffusionMatrixBabyBear, PackedBabyBearAVX2};
+    use crate::{
+        BabyBear, DiffusionMatrixBabyBear, MDSLightPermutationBabyBear, PackedBabyBearAVX2,
+    };
 
     type F = BabyBear;
     const D: u64 = 7;
-    type Perm16 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, D>;
-    type Perm24 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, D>;
+    type Perm16 = Poseidon2<F, MDSLightPermutationBabyBear, DiffusionMatrixBabyBear, 16, D>;
+    type Perm24 = Poseidon2<F, MDSLightPermutationBabyBear, DiffusionMatrixBabyBear, 24, D>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
@@ -56,7 +81,7 @@ mod tests {
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
+            MDSLightPermutationBabyBear,
             DiffusionMatrixBabyBear,
             &mut rng,
         );
@@ -81,7 +106,7 @@ mod tests {
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
+            MDSLightPermutationBabyBear,
             DiffusionMatrixBabyBear,
             &mut rng,
         );

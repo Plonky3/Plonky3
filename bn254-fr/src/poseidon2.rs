@@ -105,7 +105,6 @@ mod tests {
             ROUNDS_F,
             external_round_constants,
             Poseidon2ExternalMatrixHL,
-            ROUNDS_P,
             internal_round_constants,
             DiffusionMatrixBN254,
         );

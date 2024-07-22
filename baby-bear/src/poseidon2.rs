@@ -1,8 +1,10 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
-use p3_field::PrimeField32;
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_field::{AbstractField, PrimeField32};
+use p3_poseidon2::{
+    external_final_permute_state, external_initial_permute_state, internal_permute_state,
+    ExternalLayer, InternalLayer,
+};
 
 use crate::{monty_reduce, to_babybear_array, BabyBear};
 
@@ -79,57 +81,99 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
 ];
 
+fn permute_mut<const N: usize>(state: &mut [BabyBear; N], shifts: &[u8]) {
+    let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+    let full_sum = part_sum + (state[0].value as u64);
+    let s0 = part_sum + (-state[0]).value as u64;
+    state[0] = BabyBear {
+        value: monty_reduce(s0),
+    };
+    for i in 1..N {
+        let si = full_sum + ((state[i].value as u64) << shifts[i - 1]);
+        state[i] = BabyBear {
+            value: monty_reduce(si),
+        };
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixBabyBear;
 
-impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [BabyBear; 16]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = BabyBear {
-            value: monty_reduce(s0),
-        };
-        for i in 1..16 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
-            state[i] = BabyBear {
-                value: monty_reduce(si),
-            };
-        }
+impl InternalLayer<BabyBear, 16, 7> for DiffusionMatrixBabyBear {
+    type InternalState = [BabyBear; 16];
+
+    type InternalConstantsType = BabyBear;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<BabyBear, 16, 7>(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS),
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<BabyBear, 16> for DiffusionMatrixBabyBear {}
+impl InternalLayer<BabyBear, 24, 7> for DiffusionMatrixBabyBear {
+    type InternalState = [BabyBear; 24];
 
-impl Permutation<[BabyBear; 24]> for DiffusionMatrixBabyBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [BabyBear; 24]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = BabyBear {
-            value: monty_reduce(s0),
-        };
-        for i in 1..24 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
-            state[i] = BabyBear {
-                value: monty_reduce(si),
-            };
-        }
+    type InternalConstantsType = BabyBear;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<BabyBear, 24, 7>(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS),
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<BabyBear, 24> for DiffusionMatrixBabyBear {}
+#[derive(Debug, Clone, Default)]
+pub struct MDSLightPermutationBabyBear;
+
+impl<const WIDTH: usize, AF: AbstractField<F = BabyBear>> ExternalLayer<AF, WIDTH, 7>
+    for MDSLightPermutationBabyBear
+{
+    type InternalState = [AF; WIDTH];
+    type ArrayState = [[AF; WIDTH]; 1];
+
+    fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState {
+        [state]
+    }
+
+    fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH] {
+        state[0].clone()
+    }
+
+    fn permute_state_initial(
+        &self,
+        state: &mut [AF; WIDTH],
+        initial_external_constants: &[[BabyBear; WIDTH]],
+    ) {
+        external_initial_permute_state::<AF, WIDTH, 7>(state, initial_external_constants);
+    }
+
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        final_external_constants: &[[BabyBear; WIDTH]],
+    ) {
+        external_final_permute_state::<AF, WIDTH, 7>(state, final_external_constants);
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::Poseidon2;
+    use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -141,17 +185,36 @@ mod tests {
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for BabyBear
-    fn poseidon2_babybear<const WIDTH: usize, const D: u64, DiffusionMatrix>(
-        input: &mut [F; WIDTH],
-        diffusion_matrix: DiffusionMatrix,
-    ) where
-        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
+    fn poseidon2_babybear<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
+    where
+        MDSLightPermutationBabyBear: ExternalLayer<BabyBear, WIDTH, D>,
+        DiffusionMatrixBabyBear:
+            InternalLayer<
+                BabyBear,
+                WIDTH,
+                D,
+                InternalState = <MDSLightPermutationBabyBear as ExternalLayer<
+                    BabyBear,
+                    WIDTH,
+                    D,
+                >>::InternalState,
+                InternalConstantsType = BabyBear,
+            >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
+        let poseidon2: Poseidon2<
+            F,
+            MDSLightPermutationBabyBear,
+            DiffusionMatrixBabyBear,
+            WIDTH,
+            D,
+        > = Poseidon2::new_from_rng_128(
+            MDSLightPermutationBabyBear,
+            DiffusionMatrixBabyBear,
+            &mut rng,
+        );
 
         poseidon2.permute_mut(input);
     }
@@ -176,7 +239,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<16, 7, _>(&mut input, DiffusionMatrixBabyBear);
+        poseidon2_babybear::<16, 7>(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -202,7 +265,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<24, 7, _>(&mut input, DiffusionMatrixBabyBear);
+        poseidon2_babybear::<24, 7>(&mut input);
         assert_eq!(input, expected);
     }
 }

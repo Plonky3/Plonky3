@@ -1,4 +1,4 @@
-use p3_field::{AbstractField, PrimeField};
+use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
@@ -88,7 +88,11 @@ impl<AF: AbstractField> Permutation<[AF; 4]> for MDSMat4 {
 }
 impl<AF: AbstractField> MdsPermutation<AF, 4> for MDSMat4 {}
 
-fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, const WIDTH: usize>(
+pub fn mds_light_permutation<
+    AF: AbstractField,
+    MdsPerm4: MdsPermutation<AF, 4>,
+    const WIDTH: usize,
+>(
     state: &mut [AF; WIDTH],
     mdsmat: MdsPerm4,
 ) {
@@ -143,42 +147,57 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
     }
 }
 
-#[derive(Default, Clone)]
-pub struct Poseidon2ExternalMatrixGeneral;
-
-impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixGeneral
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
-    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        mds_light_permutation::<AF, MDSMat4, WIDTH>(state, MDSMat4)
+#[inline]
+pub fn external_initial_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
+    state: &mut [AF; WIDTH],
+    initial_external_constants: &[[AF::F; WIDTH]],
+) {
+    mds_light_permutation(state, MDSMat4);
+    for elem in initial_external_constants.iter() {
+        state
+            .iter_mut()
+            .zip(elem.iter())
+            .for_each(|(s, rc)| *s += AF::from_f(*rc));
+        state.iter_mut().for_each(|s| *s = s.exp_const_u64::<D>());
+        mds_light_permutation(state, MDSMat4);
     }
 }
 
-impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixGeneral
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
-}
-
-#[derive(Default, Clone)]
-pub struct Poseidon2ExternalMatrixHL;
-
-impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixHL
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
-    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        mds_light_permutation::<AF, HLMDSMat4, WIDTH>(state, HLMDSMat4)
+pub fn external_final_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
+    state: &mut [AF; WIDTH],
+    final_external_constants: &[[AF::F; WIDTH]],
+) {
+    for elem in final_external_constants.iter() {
+        state
+            .iter_mut()
+            .zip(elem.iter())
+            .for_each(|(s, rc)| *s += AF::from_f(*rc));
+        state.iter_mut().for_each(|s| *s = s.exp_const_u64::<D>());
+        mds_light_permutation(state, MDSMat4);
     }
 }
 
-impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixHL
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
+pub trait ExternalLayer<AF: AbstractField, const WIDTH: usize, const D: u64>: Sync + Clone {
+    // In the basic case, InternalState = [AF; WIDTH] but we will use delayed reduction states in other cases.
+    type InternalState;
+
+    // In the basic case, ArrayState = [InternalState; 1] = [[AF; WIDTH]; 1].
+    // But delayed reduction strategies sometimes require working with a smaller state;
+    type ArrayState: AsMut<[Self::InternalState]>;
+
+    fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState;
+
+    fn permute_state_initial(
+        &self,
+        state: &mut Self::InternalState,
+        initial_external_constants: &[[AF::F; WIDTH]],
+    );
+
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        final_external_constants: &[[AF::F; WIDTH]],
+    );
+
+    fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH];
 }

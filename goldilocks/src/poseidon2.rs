@@ -279,7 +279,6 @@ mod tests {
                 .map(to_goldilocks_array)
                 .to_vec(),
             Poseidon2ExternalMatrixHL,
-            ROUNDS_P,
             to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
             DiffusionMatrixGoldilocks,
         );

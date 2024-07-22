@@ -1,5 +1,5 @@
 use p3_field::PrimeField32;
-use p3_poseidon2::DiffusionPermutation;
+use p3_poseidon2::{mds_light_permutation, DiffusionPermutation, MDSMat4, MdsLightPermutation};
 use p3_symmetric::Permutation;
 
 use crate::{from_u62, to_mersenne31_array, Mersenne31};
@@ -108,10 +108,24 @@ impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
 
 impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
 
+#[derive(Default, Clone)]
+pub struct Poseidon2ExternalMatrixMersenne31;
+
+impl<const WIDTH: usize> Permutation<[Mersenne31; WIDTH]> for Poseidon2ExternalMatrixMersenne31 {
+    fn permute_mut(&self, state: &mut [Mersenne31; WIDTH]) {
+        mds_light_permutation::<Mersenne31, MDSMat4, WIDTH>(state, MDSMat4)
+    }
+}
+
+impl<const WIDTH: usize> MdsLightPermutation<Mersenne31, WIDTH>
+    for Poseidon2ExternalMatrixMersenne31
+{
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::Poseidon2;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -132,8 +146,12 @@ mod tests {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
+        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixMersenne31, DiffusionMatrix, WIDTH, D> =
+            Poseidon2::new_from_rng_128(
+                Poseidon2ExternalMatrixMersenne31,
+                diffusion_matrix,
+                &mut rng,
+            );
 
         poseidon2.permute_mut(input);
     }
