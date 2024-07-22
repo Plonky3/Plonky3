@@ -5,7 +5,7 @@ use p3_field::Field;
 use p3_util::{log2_strict_usize, split_bits, SliceExt};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Codeword<C, F> {
+pub struct Codeword<F, C> {
     pub code: C,
     pub index: usize,
     pub word: Vec<F>,
@@ -41,7 +41,7 @@ pub trait CodeFamily<F: Clone>: Sized + Clone + Eq + Debug {
     }
 }
 
-impl<F: Clone, C: CodeFamily<F>> Codeword<C, F> {
+impl<F: Clone, C: CodeFamily<F>> Codeword<F, C> {
     pub fn full(code: C, word: Vec<F>) -> Self {
         Self {
             code,
@@ -68,7 +68,7 @@ impl<F: Clone, C: CodeFamily<F>> Codeword<C, F> {
 
 pub trait LinearCodeFamily<F: Clone>: CodeFamily<F> {}
 
-impl<F: Field, C: LinearCodeFamily<F>> Codeword<C, F> {}
+impl<F: Field, C: LinearCodeFamily<F>> Codeword<F, C> {}
 
 pub trait FoldableCodeFamily<F: Clone>: CodeFamily<F> {
     fn folded_code(self) -> Self;
@@ -83,7 +83,7 @@ pub trait FoldableCodeFamily<F: Clone>: CodeFamily<F> {
     }
 }
 
-impl<F: Field, C: FoldableCodeFamily<F>> Codeword<C, F> {}
+impl<F: Field, C: FoldableCodeFamily<F>> Codeword<F, C> {}
 
 /*
 impl<F: Field, C: FoldableLinearCodeFamily<F>> Codeword<F, C> {

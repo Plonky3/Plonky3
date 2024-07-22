@@ -3,7 +3,7 @@ use core::fmt::Debug;
 #[derive(Debug)]
 pub struct FriConfig<M> {
     pub log_folding_arity: usize,
-    pub log_max_final_poly_len: usize,
+    pub log_max_final_word_len: usize,
 
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
@@ -28,17 +28,3 @@ impl<M> FriConfig<M> {
     }
     */
 }
-
-/*
-pub enum FriFoldingStrategy {
-    ConstantArity(usize, usize),
-}
-
-impl FriFoldingStrategy {
-    pub fn log_arities(&self, log_word_lens: impl Iterator<Item = usize>) -> Vec<usize> {
-        match self {
-            FriFoldingStrategy::ConstantArity(log_arity, log_max_final_poly_len) => todo!(),
-        }
-    }
-}
-*/

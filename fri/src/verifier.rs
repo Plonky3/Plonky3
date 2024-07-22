@@ -9,7 +9,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
 use p3_util::{split_bits, SliceExt};
 
-use crate::{Codeword, CommitPhaseProofStep, FoldableLinearCodeFamily, FriConfig, FriProof};
+use crate::{Codeword, CommitPhaseProofStep, FoldableCodeFamily, FriConfig, FriProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr> {
@@ -21,7 +21,7 @@ pub enum FriError<CommitMmcsErr> {
 pub fn verify<Code, Val, Challenge, M, Challenger>(
     config: &FriConfig<M>,
     proof: &FriProof<Challenge, M, Challenger::Witness>,
-    log_word_lens: &[usize],
+    codes: &[Code],
     query_inputs: &[Vec<Challenge>],
     challenger: &mut Challenger,
     // open_input: impl Fn(usize, &InputProof) -> Result<Vec<Codeword<Challenge, Code>>, InputError>,
@@ -31,7 +31,7 @@ where
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Code: FoldableLinearCodeFamily<Challenge>,
+    Code: FoldableCodeFamily<Challenge>,
 {
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
@@ -119,7 +119,7 @@ fn verify_query<'a, Code, F, M, InputError>(
 ) -> Result<Codeword<F, Code>, FriError<M::Error>>
 where
     F: Field,
-    Code: FoldableLinearCodeFamily<F>,
+    Code: FoldableCodeFamily<F>,
     M: Mmcs<F> + 'a,
 {
     let mut inputs = inputs.peekable();
@@ -181,7 +181,7 @@ fn verify_step<F, Code, M>(
 ) -> Result<(), M::Error>
 where
     F: Field,
-    Code: FoldableLinearCodeFamily<F>,
+    Code: FoldableCodeFamily<F>,
     M: Mmcs<F>,
 {
     let index = samples.iter().map(|cw| cw.index).all_equal_value().unwrap();

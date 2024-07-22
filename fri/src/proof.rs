@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 ))]
 pub struct FriProof<F: Field, M: Mmcs<F>, PowWitness> {
     pub commit_phase_commits: Vec<M::Commitment>,
-    pub final_poly: Vec<F>,
+    pub final_polys: Vec<Vec<F>>,
     pub pow_witness: PowWitness,
     pub query_proofs: Vec<QueryProof<F, M>>,
 }

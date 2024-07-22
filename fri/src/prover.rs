@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 use p3_util::{split_bits, SliceExt, VecExt};
+use std::collections::VecDeque;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -18,7 +19,7 @@ use crate::{
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<Code, Val, Challenge, Challenger, M>(
     config: &FriConfig<M>,
-    inputs: Vec<Codeword<Code, Challenge>>,
+    inputs: Vec<Codeword<Challenge, Code>>,
     challenger: &mut Challenger,
 ) -> (FriProof<Challenge, M, Challenger::Witness>, Vec<usize>)
 where
@@ -28,8 +29,6 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     M: Mmcs<Challenge>,
 {
-    let index_bits = inputs[0].code.log_word_len();
-
     assert!(inputs.iter().all(|cw| cw.is_full()));
 
     // sorted strictly decreasing
@@ -38,12 +37,14 @@ where
         .tuple_windows()
         .all(|(l, r)| l.code.log_word_len() > r.code.log_word_len()));
 
+    let index_bits = inputs[0].code.log_word_len();
+
     let CommitPhaseResult {
         commits: commit_phase_commits,
         data: commit_phase_data,
-        final_poly,
+        final_polys,
     } = info_span!("commit phase")
-        .in_scope(|| commit_phase::<Code, _, _, _, _>(config, inputs, challenger));
+        .in_scope(|| commit_phase::<Code, _, _, _, _>(&config, inputs, challenger));
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
@@ -64,7 +65,7 @@ where
         FriProof {
             commit_phase_commits,
             query_proofs,
-            final_poly,
+            final_polys,
             pow_witness,
         },
         query_indices,
@@ -74,13 +75,13 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
-    final_poly: Vec<F>,
+    final_polys: Vec<Vec<F>>,
 }
 
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<Code, Val, Challenge, M, Challenger>(
     config: &FriConfig<M>,
-    inputs: Vec<Codeword<Code, Challenge>>,
+    inputs: Vec<Codeword<Challenge, Code>>,
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
 where
@@ -90,33 +91,44 @@ where
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
 {
+    let mut log_word_len = inputs[0].code.log_word_len();
     let mut inputs = inputs.into_iter().peekable();
-    let mut log_word_len = inputs.peek().unwrap().log_strict_len();
     let mut folded: Vec<Codeword<Challenge, Code>> = vec![];
-    let mut commits_and_data = vec![];
 
-    while inputs.peek().is_some()
-        || log_word_len > config.log_blowup + config.log_max_final_poly_len
+    // let mut commits_and_data = vec![];
+    // let mut final_polys = vec![];
+
+    while log_word_len > config.log_max_final_word_len {
+        let log_folded_word_len = log_word_len - config.log_folding_arity;
+
+        log_word_len = log_folded_word_len;
+    }
+
+    while let Some(log_word_len) = inputs
+        .peek()
+        .map(|cw| cw.code.log_word_len())
+        .filter(|&l| l > config.log_max_final_word_len)
     {
-        log_word_len -= config.log_folding_arity;
+        let log_folded_word_len = log_word_len - config.log_folding_arity;
+    }
 
-        folded.extend(
-            inputs
-                .peeking_take_while(|word| word.log_strict_len() > log_word_len)
-                .map(|word| Codeword::from_word(config.log_blowup, word)),
-        );
+    todo!()
+
+    /*
+    for log_word_len in step_log_word_lens {
+        folded.extend(inputs.peeking_take_while(|cw| cw.code.log_word_len() > log_word_len));
 
         let mats: Vec<_> = folded
             .iter()
             .map(|cw| {
                 RowMajorMatrix::new(
                     cw.word.clone(),
-                    1 << (cw.word.log_strict_len() - log_word_len),
+                    1 << (cw.code.log_word_len() - log_word_len),
                 )
             })
             .collect();
 
-        let (commit, data) = config.mmcs.commit(mats);
+        let (commit, data) = mmcs.commit(mats);
         challenger.observe(commit.clone());
         commits_and_data.push((commit, data));
 
@@ -140,6 +152,7 @@ where
         data,
         final_poly,
     }
+    */
 }
 
 fn answer_query<F, M>(
