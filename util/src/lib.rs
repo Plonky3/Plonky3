@@ -148,6 +148,8 @@ pub trait VecExt<T> {
     fn pushed_ref(&mut self, elem: T) -> &T;
     /// Push `elem` and return a mutable reference to it.
     fn pushed_mut(&mut self, elem: T) -> &mut T;
+
+    fn extract<F: FnMut(&mut T) -> bool>(&mut self, pred: F) -> ExtractIf<'_, T, F>;
 }
 
 impl<T> VecExt<T> for alloc::vec::Vec<T> {
@@ -158,6 +160,13 @@ impl<T> VecExt<T> for alloc::vec::Vec<T> {
     fn pushed_mut(&mut self, elem: T) -> &mut T {
         self.push(elem);
         self.last_mut().unwrap()
+    }
+    fn extract<F: FnMut(&mut T) -> bool>(&mut self, pred: F) -> ExtractIf<'_, T, F> {
+        ExtractIf {
+            v: self,
+            pred,
+            idx: 0,
+        }
     }
 }
 
@@ -196,4 +205,38 @@ pub fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
                 .collect::<Vec<T>>()
         })
         .collect()
+}
+
+pub struct ExtractIf<'a, T, F>
+where
+    F: FnMut(&mut T) -> bool,
+{
+    v: &'a mut Vec<T>,
+    pred: F,
+    idx: usize,
+}
+
+impl<T, F> Iterator for ExtractIf<'_, T, F>
+where
+    F: FnMut(&mut T) -> bool,
+{
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.v.len() {
+            if (self.pred)(&mut self.v[self.idx]) {
+                return Some(self.v.remove(self.idx));
+            }
+            self.idx += 1;
+        }
+        None
+    }
+}
+
+impl<T, F> Drop for ExtractIf<'_, T, F>
+where
+    F: FnMut(&mut T) -> bool,
+{
+    fn drop(&mut self) {
+        self.for_each(|_| {})
+    }
 }

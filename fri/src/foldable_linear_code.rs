@@ -49,6 +49,13 @@ impl<F: Clone, C: CodeFamily<F>> Codeword<F, C> {
             word,
         }
     }
+    pub fn sample(code: C, index: usize, value: F) -> Self {
+        Self {
+            code,
+            index,
+            word: vec![value],
+        }
+    }
 
     pub fn index_bits(&self) -> usize {
         self.code.log_word_len() - self.word.log_strict_len()
@@ -81,9 +88,20 @@ pub trait FoldableCodeFamily<F: Clone>: CodeFamily<F> {
             .map(|(pair_index, values)| self.fold_word_at_index(beta.clone(), pair_index, values))
             .collect()
     }
+
+    fn repeatedly_folded_code(mut self, n_times: usize) -> Self {
+        for _ in 0..n_times {
+            self = self.folded_code();
+        }
+        self
+    }
 }
 
-impl<F: Field, C: FoldableCodeFamily<F>> Codeword<F, C> {}
+impl<F: Field, C: FoldableCodeFamily<F>> Codeword<F, C> {
+    pub fn fold_repeatedly(&mut self, n_times: usize, beta: F) {
+        todo!()
+    }
+}
 
 /*
 impl<F: Field, C: FoldableLinearCodeFamily<F>> Codeword<F, C> {
