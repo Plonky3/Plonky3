@@ -52,8 +52,6 @@ fn bench_poseidon2(c: &mut Criterion) {
         5,
     >(c);
 
-    poseidon2_avx2_m31_all::<2, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
-    poseidon2_avx2_m31_all::<3, 24, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
     poseidon2_avx2_m31_all::<4, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
     poseidon2_avx2_m31_all::<6, 24, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
 

@@ -31,11 +31,8 @@ const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 /// The Basic Poseidon2 permutation.
 #[derive(Clone, Debug)]
 pub struct Poseidon2<F, MdsLightLayer, DiffusionLayer, const WIDTH: usize, const D: u64> {
-    /// The number of external rounds.
-    rounds_f: usize,
-
     /// The external round constants.
-    external_constants: Vec<[F; WIDTH]>,
+    external_constants: [Vec<[F; WIDTH]>; 2],
 
     /// The linear layer used in External Rounds. Should be either MDS or a
     /// circulant matrix based off an MDS matrix of size 4.
@@ -52,18 +49,17 @@ impl<F, MdsLightLayer, DiffusionLayer, const WIDTH: usize, const D: u64>
     Poseidon2<F, MdsLightLayer, DiffusionLayer, WIDTH, D>
 where
     F: PrimeField,
+    MdsLightLayer: ExternalLayer<F, WIDTH, D>,
 {
     /// Create a new Poseidon2 configuration.
     pub fn new(
-        rounds_f: usize,
-        external_constants: Vec<[F; WIDTH]>,
+        external_constants: [Vec<[F; WIDTH]>; 2],
         external_layer: MdsLightLayer,
         internal_constants: Vec<F>,
         internal_layer: DiffusionLayer,
     ) -> Self {
         assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
         Self {
-            rounds_f,
             external_constants,
             external_layer,
             internal_constants,
@@ -82,14 +78,13 @@ where
     where
         Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
-        let external_constants = rng
-            .sample_iter(Standard)
-            .take(rounds_f)
-            .collect::<Vec<[F; WIDTH]>>();
+        let half_f = rounds_f / 2;
+        let init_external_constants = rng.sample_iter(Standard).take(half_f).collect();
+        let final_external_constants = rng.sample_iter(Standard).take(half_f).collect();
+        let external_constants = [init_external_constants, final_external_constants];
         let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
 
         Self {
-            rounds_f,
             external_constants,
             external_layer,
             internal_constants,
@@ -102,6 +97,7 @@ impl<F, MdsLightLayer, DiffusionLayer, const WIDTH: usize, const D: u64>
     Poseidon2<F, MdsLightLayer, DiffusionLayer, WIDTH, D>
 where
     F: PrimeField64,
+    MdsLightLayer: ExternalLayer<F, WIDTH, D>,
 {
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
     pub fn new_from_rng_128<R: Rng>(
@@ -113,15 +109,14 @@ where
         Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
+        let half_f = rounds_f / 2;
+        let init_external_constants = rng.sample_iter(Standard).take(half_f).collect();
+        let final_external_constants = rng.sample_iter(Standard).take(half_f).collect();
 
-        let external_constants = rng
-            .sample_iter(Standard)
-            .take(rounds_f)
-            .collect::<Vec<[F; WIDTH]>>();
+        let external_constants = [init_external_constants, final_external_constants];
         let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
 
         Self {
-            rounds_f,
             external_constants,
             external_layer,
             internal_constants,
@@ -146,12 +141,11 @@ where
 {
     fn permute(&self, state: [AF; WIDTH]) -> [AF; WIDTH] {
         let mut internal_state = self.external_layer.to_internal_rep(state.clone());
-        let rounds_f_half = self.rounds_f / 2;
 
         for sub_state in internal_state.as_mut() {
             // The first half of the external rounds.
             self.external_layer
-                .permute_state_initial(sub_state, &self.external_constants[..rounds_f_half]);
+                .permute_state_initial(sub_state, &self.external_constants[0]);
 
             // The internal rounds.
             self.internal_layer
@@ -159,7 +153,7 @@ where
 
             // The second half of the external rounds.
             self.external_layer
-                .permute_state_final(sub_state, &self.external_constants[rounds_f_half..]);
+                .permute_state_final(sub_state, &self.external_constants[1]);
         }
 
         self.external_layer.to_output_rep(internal_state)

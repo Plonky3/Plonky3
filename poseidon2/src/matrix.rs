@@ -182,7 +182,7 @@ pub trait ExternalLayer<AF: AbstractField, const WIDTH: usize, const D: u64>: Sy
     type InternalState;
 
     // In the basic case, ArrayState = [InternalState; 1] = [[AF; WIDTH]; 1].
-    // But delayed reduction strategies sometimes require working with a smaller state;
+    // But delayed reduction strategies sometimes require working with a different state;
     type ArrayState: AsMut<[Self::InternalState]>;
 
     fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState;

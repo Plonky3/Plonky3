@@ -1,35 +1,58 @@
 use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
+use p3_poseidon2::{internal_permute_state, matmul_internal, InternalLayer};
 
 use crate::{
-    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, Poseidon2ExternalMatrixMersenne31,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_16, POSEIDON2_INTERNAL_MATRIX_DIAG_24,
+    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, POSEIDON2_INTERNAL_MATRIX_DIAG_16,
+    POSEIDON2_INTERNAL_MATRIX_DIAG_24,
 };
 
-impl Permutation<[PackedMersenne31AVX2; 16]> for DiffusionMatrixMersenne31 {
-    fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 16]) {
-        matmul_internal::<Mersenne31, PackedMersenne31AVX2, 16>(
+impl InternalLayer<PackedMersenne31AVX2, 16, 5> for DiffusionMatrixMersenne31 {
+    type InternalState = [PackedMersenne31AVX2; 16];
+
+    type InternalConstantsType = Mersenne31;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<PackedMersenne31AVX2, 16, 5>(
             state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_16,
-        );
+            |state| {
+                matmul_internal::<Mersenne31, PackedMersenne31AVX2, 16>(
+                    state,
+                    POSEIDON2_INTERNAL_MATRIX_DIAG_16,
+                );
+            },
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<PackedMersenne31AVX2, 16> for DiffusionMatrixMersenne31 {}
+impl InternalLayer<PackedMersenne31AVX2, 24, 5> for DiffusionMatrixMersenne31 {
+    type InternalState = [PackedMersenne31AVX2; 24];
 
-impl Permutation<[PackedMersenne31AVX2; 24]> for DiffusionMatrixMersenne31 {
-    fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 24]) {
-        matmul_internal::<Mersenne31, PackedMersenne31AVX2, 24>(
+    type InternalConstantsType = Mersenne31;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<PackedMersenne31AVX2, 24, 5>(
             state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_24,
-        );
+            |state| {
+                matmul_internal::<Mersenne31, PackedMersenne31AVX2, 24>(
+                    state,
+                    POSEIDON2_INTERNAL_MATRIX_DIAG_24,
+                );
+            },
+            internal_constants,
+        )
     }
 }
-
-impl DiffusionPermutation<PackedMersenne31AVX2, 24> for DiffusionMatrixMersenne31 {}
 
 const P: u32 = 0x7fffffff;
 const P_4XU64: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
@@ -178,7 +201,7 @@ impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
     /// Apply the s-box: x -> (x + rc)^5 to a vector __m256i.
     /// s0 is in [0, 2P], rc is in [0, P]
     #[inline]
-    fn quad_internal_sbox(s0: __m256i, rc: u32) -> __m256i {
+    fn internal_rc_sbox(s0: __m256i, rc: u32) -> __m256i {
         unsafe {
             // We set all u32 registers but we will ignore the top ones later.
             // Seems to make compiler "slightly?" happier than using set1_epi64x.
@@ -190,29 +213,6 @@ impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
 
             // Each entry of sum is <= 2P.
             let sum = x86_64::_mm256_add_epi32(red_s0, constant);
-
-            joint_sbox(sum)
-        }
-    }
-
-    /// Apply the s-box: x -> (x + rc)^s to a vector __m256i where we only care about the first 2 u64's
-    #[inline]
-    fn double_internal_sbox(s0: __m256i, rc: u32) -> __m256i {
-        unsafe {
-            // For now we do something identical to quad_internal_sbox.
-            // Long term there might be a better way.
-
-            // This could/should be replaced by a blend.
-            let full_broadcast = x86_64::_mm256_set1_epi32(rc as i32);
-            let zeros = x86_64::_mm256_setzero_si256();
-            let constant = x86_64::_mm256_blend_epi32::<0b01000100>(full_broadcast, zeros);
-
-            // Need to get s0 into canonical form.
-            let sub = x86_64::_mm256_sub_epi32(s0, P_4XU64);
-            let red_s0 = x86_64::_mm256_min_epu32(s0, sub);
-
-            // Each entry of sum is < 2P.
-            let sum = x86_64::_mm256_add_epi64(red_s0, constant);
 
             joint_sbox(sum)
         }
@@ -524,19 +524,20 @@ mod tests {
     use core::mem::transmute;
 
     use p3_field::{AbstractField, PrimeField32};
-    use p3_poseidon2::{Poseidon2, Poseidon2AVX2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{Poseidon2, Poseidon2AVX2};
     use p3_symmetric::Permutation;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use crate::{
-        DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, Poseidon2DataM31AVX2,
+        DiffusionMatrixMersenne31, MDSLightPermutationMersenne31, Mersenne31, PackedMersenne31AVX2,
+        Poseidon2DataM31AVX2,
     };
 
     type F = Mersenne31;
     const D: u64 = 5;
-    type Perm16 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 16, D>;
-    type Perm24 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 24, D>;
+    type Perm16 = Poseidon2<F, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 16, D>;
+    type Perm24 = Poseidon2<F, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 24, D>;
 
     // A very simple function which performs a transpose.
     fn transpose<F, const N: usize, const M: usize>(input: [[F; N]; M]) -> [[F; M]; N]
@@ -559,7 +560,7 @@ mod tests {
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
+            MDSLightPermutationMersenne31,
             DiffusionMatrixMersenne31,
             &mut rng,
         );
@@ -584,7 +585,7 @@ mod tests {
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
+            MDSLightPermutationMersenne31,
             DiffusionMatrixMersenne31,
             &mut rng,
         );
@@ -602,76 +603,6 @@ mod tests {
         assert_eq!(avx2_output, expected);
     }
 
-    /// Test that the scalar and vectorized outputs are the same on a random input of length 32.
-    #[test]
-    fn test_avx2_vectorized_poseidon2_2_x_width_16_2() {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
-
-        // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixMersenne31,
-            &mut rng,
-        );
-
-        let input: [[F; 16]; 8] = rng.gen();
-
-        let mut expected = input;
-        for row in expected.iter_mut() {
-            poseidon2.permute_mut(row);
-        }
-
-        let input_transpose: [[F; 8]; 16] = transpose(input);
-        let avx2_input: [PackedMersenne31AVX2; 16] = unsafe { transmute(input_transpose) };
-
-        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
-
-        let vector_poseidon_2: Poseidon2AVX2<2, 16, Poseidon2DataM31AVX2> =
-            Poseidon2AVX2::new_from_rng_128::<Xoroshiro128Plus, 5>(&mut rng);
-
-        let avx2_output = vector_poseidon_2.permute(avx2_input);
-
-        let output_transpose: [[F; 8]; 16] = unsafe { transmute(avx2_output) };
-        let output = transpose(output_transpose);
-
-        assert_eq!(output, expected)
-    }
-
-    /// Test that the scalar and vectorized outputs are the same on a random input of length 48.
-    #[test]
-    fn test_avx2_vectorized_poseidon2_2_x_width_24() {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
-
-        // Our Poseidon2 implementation.
-        let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixMersenne31,
-            &mut rng,
-        );
-
-        let input: [[F; 24]; 8] = rng.gen();
-
-        let mut expected = input;
-        for row in expected.iter_mut() {
-            poseidon2.permute_mut(row);
-        }
-
-        let input_transpose: [[F; 8]; 24] = transpose(input);
-        let avx2_input: [PackedMersenne31AVX2; 24] = unsafe { transmute(input_transpose) };
-
-        let mut rng = Xoroshiro128Plus::seed_from_u64(0x123456789);
-
-        let vector_poseidon_2: Poseidon2AVX2<3, 24, Poseidon2DataM31AVX2> =
-            Poseidon2AVX2::new_from_rng_128::<Xoroshiro128Plus, 5>(&mut rng);
-
-        let avx2_output = vector_poseidon_2.permute(avx2_input);
-
-        let output_transpose: [[F; 8]; 24] = unsafe { transmute(avx2_output) };
-        let output = transpose(output_transpose);
-
-        assert_eq!(output, expected)
-    }
-
     /// Test that the scalar and vectorized outputs are the same on a random input of length 64.
     #[test]
     fn test_avx2_vectorized_poseidon2_4_x_width_16_2() {
@@ -679,7 +610,7 @@ mod tests {
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
+            MDSLightPermutationMersenne31,
             DiffusionMatrixMersenne31,
             &mut rng,
         );
@@ -714,7 +645,7 @@ mod tests {
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
+            MDSLightPermutationMersenne31,
             DiffusionMatrixMersenne31,
             &mut rng,
         );
