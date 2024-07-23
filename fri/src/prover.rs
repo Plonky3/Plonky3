@@ -1,19 +1,17 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::convert::Infallible;
 use core::iter;
 use p3_util::{split_bits, SliceExt, VecExt};
 
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
 
-use crate::{
-    Codeword, CommitPhaseProofStep, FoldableCodeFamily, FriConfig, FriProof, LinearCodeFamily,
-    QueryProof,
-};
+use crate::{Codeword, CommitPhaseProofStep, FoldableCodeFamily, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<Code, Val, Challenge, Challenger, M>(
@@ -40,8 +38,7 @@ where
         commits: commit_phase_commits,
         data: commit_phase_data,
         final_polys,
-    } = info_span!("commit phase")
-        .in_scope(|| commit_phase::<Code, _, _, _, _>(&config, codewords, challenger));
+    } = info_span!("commit phase").in_scope(|| commit_phase(&config, codewords, challenger));
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
@@ -91,17 +88,22 @@ where
     let mut commits_and_data = vec![];
 
     let final_polys = config
-        .fold_codewords::<_, _, _, ()>(codewords, |to_fold| {
-            let mats: Vec<_> = to_fold
-                .iter()
-                .map(|(log_folding_arity, cw)| {
-                    RowMajorMatrix::new(cw.word.clone(), 1 << log_folding_arity)
-                })
-                .collect();
-            let (commit, data) = config.mmcs.commit(mats);
+        .fold_codewords(codewords, |log_folded_word_len, to_fold| {
+            let (commit, _data) = commits_and_data.pushed_ref(
+                config.mmcs.commit(
+                    to_fold
+                        .iter()
+                        .map(|cw| {
+                            RowMajorMatrix::new(
+                                cw.word.clone(),
+                                1 << (cw.code.log_word_len() - log_folded_word_len),
+                            )
+                        })
+                        .collect(),
+                ),
+            );
             challenger.observe(commit.clone());
-            commits_and_data.push((commit, data));
-            Ok(challenger.sample_ext_element())
+            Result::<_, Infallible>::Ok(challenger.sample_ext_element())
         })
         .unwrap()
         .into_iter()

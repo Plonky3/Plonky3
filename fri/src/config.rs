@@ -42,7 +42,7 @@ impl<M> FriConfig<M> {
     where
         F: Field,
         Code: FoldableCodeFamily<F>,
-        Commit: FnMut(&[(usize, Codeword<F, Code>)]) -> Result<F, E>,
+        Commit: FnMut(usize, &mut [Codeword<F, Code>]) -> Result<F, E>,
     {
         while let Some(log_max_word_len) = codewords
             .iter()
@@ -51,79 +51,22 @@ impl<M> FriConfig<M> {
             .filter(|&l| l > self.log_max_final_word_len)
         {
             let log_folded_word_len = log_max_word_len - self.log_folding_arity;
-            let to_fold = codewords
+            let mut to_fold = codewords
                 .extract(|cw| cw.code.log_word_len() > log_folded_word_len)
-                .map(|cw| (cw.code.log_word_len() - log_folded_word_len, cw))
                 .collect_vec();
 
-            let beta = commit(&to_fold)?;
+            let beta = commit(log_folded_word_len, &mut to_fold)?;
 
-            for (log_folding_arity, mut cw) in to_fold {
-                cw.fold_repeatedly(log_folding_arity, beta);
-                // todo: check is_linear
-                if let Some(cw2) = codewords.iter_mut().find(|cw2| cw2.code == cw.code) {
-                    izip!(&mut cw2.word, cw.word).for_each(|(l, r)| *l += r);
+            for cw in to_fold {
+                let log_folding_arity = cw.code.log_word_len() - log_folded_word_len;
+                let fcw = cw.fold_repeatedly(log_folding_arity, beta);
+                if let Some(cw2) = codewords.iter_mut().find(|cw2| cw2.code == fcw.code) {
+                    izip!(&mut cw2.word, fcw.word).for_each(|(l, r)| *l += r);
                 } else {
-                    codewords.push(cw);
+                    codewords.push(fcw);
                 }
             }
         }
         Ok(codewords)
-    }
-}
-
-pub struct CommitStep(Vec<Fold>);
-
-pub struct Fold {
-    pub log_arity: usize,
-    pub add_to: Option<usize>,
-}
-
-#[derive(Clone, Debug)]
-pub enum FriFoldingStrategy {
-    ConstantArity(usize, usize),
-}
-
-impl FriFoldingStrategy {
-    pub fn seq<F: Field, Code: FoldableCodeFamily<F>>(
-        &self,
-        mut codes: Vec<Code>,
-    ) -> Vec<CommitStep> {
-        match self {
-            &FriFoldingStrategy::ConstantArity(log_arity, log_max_final_word_len) => {
-                let mut steps = vec![];
-
-                while let Some(log_word_len) = codes
-                    .last()
-                    .map(|c| c.log_word_len())
-                    .filter(|&l| l > log_max_final_word_len)
-                {
-                    let log_folded_word_len = log_word_len - log_arity;
-
-                    let pos = codes
-                        .iter()
-                        .position(|c| c.log_word_len() > log_folded_word_len)
-                        .unwrap();
-
-                    steps.push(CommitStep(
-                        codes
-                            .split_off(pos)
-                            .into_iter()
-                            .map(|c| {
-                                let log_arity = c.log_word_len() - log_folded_word_len;
-                                let fc = c.repeatedly_folded_code(log_arity);
-                                let add_to = codes.iter().position(|c| c == &fc);
-                                if add_to.is_none() {
-                                    codes.push(fc);
-                                }
-                                Fold { log_arity, add_to }
-                            })
-                            .collect(),
-                    ));
-                }
-
-                steps
-            }
-        }
     }
 }

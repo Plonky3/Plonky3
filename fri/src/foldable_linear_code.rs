@@ -28,10 +28,6 @@ pub trait CodeFamily<F: Clone>: Sized + Clone + Eq + Debug {
         1 << self.log_word_len()
     }
 
-    fn is_linear(&self) -> bool {
-        false
-    }
-
     // todo: encode/decode to Codeword instead?
     fn encode(&self, message: &[F]) -> Vec<F>;
     fn decode(&self, word: &[F]) -> Vec<F>;
@@ -49,7 +45,7 @@ impl<F: Clone, C: CodeFamily<F>> Codeword<F, C> {
             word,
         }
     }
-    pub fn sample(code: C, index: usize, value: F) -> Self {
+    pub fn point_sample(code: C, index: usize, value: F) -> Self {
         Self {
             code,
             index,
@@ -71,13 +67,23 @@ impl<F: Clone, C: CodeFamily<F>> Codeword<F, C> {
         assert!(self.is_full());
         self.code.decode(&self.word)
     }
+
+    pub fn expand(&mut self, mut siblings: Vec<F>) {
+        assert_eq!(self.word.len(), 1);
+        let removed_index_bits = log2_strict_usize(siblings.len() + 1);
+        let (new_index, index_within_segment) = split_bits(self.index, removed_index_bits);
+        siblings.insert(index_within_segment, self.word[0].clone());
+
+        self.index = new_index;
+        self.word = siblings;
+    }
 }
 
 pub trait LinearCodeFamily<F: Clone>: CodeFamily<F> {}
 
 impl<F: Field, C: LinearCodeFamily<F>> Codeword<F, C> {}
 
-pub trait FoldableCodeFamily<F: Clone>: CodeFamily<F> {
+pub trait FoldableCodeFamily<F: Clone>: LinearCodeFamily<F> {
     fn folded_code(self) -> Self;
     fn fold_word_at_index(&self, beta: F, pair_index: usize, values: (F, F)) -> F;
 
@@ -88,18 +94,34 @@ pub trait FoldableCodeFamily<F: Clone>: CodeFamily<F> {
             .map(|(pair_index, values)| self.fold_word_at_index(beta.clone(), pair_index, values))
             .collect()
     }
-
-    fn repeatedly_folded_code(mut self, n_times: usize) -> Self {
-        for _ in 0..n_times {
-            self = self.folded_code();
-        }
-        self
-    }
 }
 
 impl<F: Field, C: FoldableCodeFamily<F>> Codeword<F, C> {
-    pub fn fold_repeatedly(&mut self, n_times: usize, beta: F) {
-        todo!()
+    pub fn fold(self, beta: F) -> Self {
+        let Codeword { code, index, word } = self;
+        let log_folded_len = word.log_strict_len() - 1;
+
+        let new_word = word
+            .into_iter()
+            .tuples()
+            .enumerate()
+            .map(|(pair_index, values)| {
+                code.fold_word_at_index(beta, (index << log_folded_len) | pair_index, values)
+            })
+            .collect();
+
+        Self {
+            code: code.folded_code(),
+            index,
+            word: new_word,
+        }
+    }
+    pub fn fold_repeatedly(mut self, n_times: usize, mut beta: F) -> Self {
+        for _ in 0..n_times {
+            self = self.fold(beta);
+            beta = beta.square();
+        }
+        self
     }
 }
 

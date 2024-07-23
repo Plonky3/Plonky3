@@ -11,3 +11,20 @@ p3-fri = { path = "../fri" }
 p3-util = { path = "../util" }
 
 itertools = "0.13.0"
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+# p3-circle = { path = "../circle" }
+p3-challenger = { path = "../challenger" }
+p3-commit = { path = "../commit" }
+p3-dft = { path = "../dft" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-keccak = { path = "../keccak" }
+p3-mersenne-31 = { path = "../mersenne-31" }
+p3-mds = { path = "../mds" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-poseidon2 = { path = "../poseidon2" }
+p3-symmetric = { path = "../symmetric" }
+criterion = "0.5.1"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
