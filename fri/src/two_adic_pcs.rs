@@ -264,6 +264,7 @@ where
         let global_max_width = mats.iter().map(|m| m.width()).max().unwrap();
         let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
         let log_global_max_height = log2_strict_usize(global_max_height);
+        println!("prover log_global_max_height: {log_global_max_height}");
 
         let alpha_reducer = PowersReducer::<C::Val, C::Challenge>::new(alpha, global_max_width);
 
@@ -353,15 +354,20 @@ where
 
         let (fri_proof, query_indices) = prover::prove(&self.fri, &reduced_openings, challenger);
 
+        println!("query_indices.len(): {}", query_indices.len());
         let query_openings = query_indices
             .into_iter()
             .map(|index| {
+                println!("index: {index}");
                 prover_data_and_points
                     .iter()
                     .map(|(data, _)| {
+                        println!("max_height: {}", self.mmcs.get_max_height(data));
                         let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                        println!("log_max_height: {log_max_height}");
                         let bits_reduced = log_global_max_height - log_max_height;
                         let reduced_index = index >> bits_reduced;
+                        println!("reduced_index: {reduced_index}");
                         let (opened_values, opening_proof) =
                             self.mmcs.open_batch(reduced_index, data);
                         BatchOpening {
@@ -390,6 +396,7 @@ where
         proof: &Self::Proof,
         challenger: &mut C::Challenger,
     ) -> Result<(), Self::Error> {
+        println!("verify_multi_batches");
         // Batch combination challenge
         let alpha = <C::Challenger as CanSample<C::Challenge>>::sample(challenger);
 
@@ -399,7 +406,6 @@ where
 
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri.log_blowup;
-
         let reduced_openings: Vec<[C::Challenge; 32]> = proof
             .query_openings
             .iter()
@@ -412,7 +418,7 @@ where
                 {
                     let batch_max_height = batch_dims
                         .iter()
-                        .map(|dims| dims.height)
+                        .map(|dims| dims.height << self.fri.log_blowup)
                         .max()
                         .expect("Empty batch?");
                     let log_batch_max_height = log2_strict_usize(batch_max_height);
