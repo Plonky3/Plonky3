@@ -17,13 +17,13 @@ pub enum FriError<CommitMmcsErr> {
     CommitPhaseMmcsError(CommitMmcsErr),
 }
 
-pub fn verify<Code, Val, Challenge, M, Challenger>(
+pub fn verify<Code, Val, Challenge, M, Challenger, InputProof>(
     config: &FriConfig<M>,
     codes: &[Code],
-    query_samples: &[Vec<Challenge>],
-    proof: &FriProof<Challenge, M, Challenger::Witness>,
+    proof: &FriProof<Challenge, M, Challenger::Witness, InputProof>,
     challenger: &mut Challenger,
-) -> Result<Vec<usize>, FriError<M::Error>>
+    open_input: impl Fn(usize, &InputProof) -> Vec<Challenge>,
+) -> Result<(), FriError<M::Error>>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
@@ -59,10 +59,11 @@ where
         .take(config.num_queries)
         .collect();
 
-    for (&index, samples, query_proof) in izip!(&query_indices, query_samples, &proof.query_proofs)
-    {
+    for (&index, query_proof) in izip!(&query_indices, &proof.query_proofs) {
+        let samples = open_input(index, &query_proof.input_proof);
+
         let codewords = izip!(codes, samples)
-            .map(|(c, &s)| Codeword::point_sample(c.clone(), index, s))
+            .map(|(c, s)| Codeword::point_sample(c.clone(), index, s))
             .collect_vec();
 
         let mut steps = izip!(
@@ -106,5 +107,5 @@ where
         }
     }
 
-    Ok(query_indices)
+    Ok(())
 }

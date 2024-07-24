@@ -14,11 +14,12 @@ use tracing::{info_span, instrument};
 use crate::{Codeword, CommitPhaseProofStep, FoldableCodeFamily, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<Code, Val, Challenge, Challenger, M>(
+pub fn prove<Code, Val, Challenge, Challenger, M, InputProof>(
     config: &FriConfig<M>,
     codewords: Vec<Codeword<Challenge, Code>>,
     challenger: &mut Challenger,
-) -> (FriProof<Challenge, M, Challenger::Witness>, Vec<usize>)
+    prove_input: impl Fn(usize) -> InputProof,
+) -> FriProof<Challenge, M, Challenger::Witness, InputProof>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
@@ -50,20 +51,18 @@ where
         query_indices
             .iter()
             .map(|&index| QueryProof {
+                input_proof: prove_input(index),
                 commit_phase_openings: answer_query(config, &commit_phase_data, index),
             })
             .collect()
     });
 
-    (
-        FriProof {
-            commit_phase_commits,
-            query_proofs,
-            final_polys,
-            pow_witness,
-        },
-        query_indices,
-    )
+    FriProof {
+        commit_phase_commits,
+        query_proofs,
+        final_polys,
+        pow_witness,
+    }
 }
 
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {

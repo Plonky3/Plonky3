@@ -9,19 +9,23 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "PowWitness: Serialize",
-    deserialize = "PowWitness: Deserialize<'de>"
+    serialize = "InputProof: Serialize, PowWitness: Serialize",
+    deserialize = "InputProof: Deserialize<'de>, PowWitness: Deserialize<'de>"
 ))]
-pub struct FriProof<F: Field, M: Mmcs<F>, PowWitness> {
+pub struct FriProof<F: Field, M: Mmcs<F>, PowWitness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub final_polys: Vec<Vec<F>>,
     pub pow_witness: PowWitness,
-    pub query_proofs: Vec<QueryProof<F, M>>,
+    pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(bound = "")]
-pub struct QueryProof<F: Field, M: Mmcs<F>> {
+#[serde(bound(
+    serialize = "InputProof: Serialize",
+    deserialize = "InputProof: Deserialize<'de>"
+))]
+pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
+    pub input_proof: InputProof,
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
     /// queried location, along with an opening proof.
     pub commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
@@ -34,7 +38,7 @@ pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
     pub proof: M::Proof,
 }
 
-impl<F: Field, M: Mmcs<F>> QueryProof<F, M> {
+impl<F: Field, M: Mmcs<F>, InputProof> QueryProof<F, M, InputProof> {
     pub fn log_folding_arities(&self) -> Vec<usize> {
         self.commit_phase_openings
             .iter()

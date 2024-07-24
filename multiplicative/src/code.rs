@@ -12,15 +12,15 @@ use p3_fri::{CodeFamily, FoldableCodeFamily, LinearCodeFamily};
 pub struct RsCode<F> {
     log_blowup: usize,
     log_message_len: usize,
-    _phantom: PhantomData<F>,
+    shift: F,
 }
 
 impl<F> RsCode<F> {
-    pub fn new(log_blowup: usize, log_message_len: usize) -> Self {
+    pub fn new(log_blowup: usize, log_message_len: usize, shift: F) -> Self {
         Self {
             log_blowup,
             log_message_len,
-            _phantom: PhantomData,
+            shift,
         }
     }
 }
@@ -61,6 +61,7 @@ impl<F: TwoAdicField> LinearCodeFamily<F> for RsCode<F> {}
 impl<F: TwoAdicField> FoldableCodeFamily<F> for RsCode<F> {
     fn folded_code(mut self) -> Self {
         self.log_message_len -= 1;
+        self.shift = self.shift.square();
         self
     }
     fn fold_word_at_index(&self, beta: F, pair_index: usize, (e0, e1): (F, F)) -> F {
@@ -82,7 +83,7 @@ mod tests {
     use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_commit::ExtensionMmcs;
-    use p3_field::{extension::BinomialExtensionField, Field};
+    use p3_field::{extension::BinomialExtensionField, AbstractField, Field};
     use p3_fri::{Codeword, FriConfig};
     use p3_merkle_tree::FieldMerkleTreeMmcs;
     use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
@@ -137,7 +138,7 @@ mod tests {
         let config = default_cfg();
         let chal = Challenger::new(default_perm());
 
-        let code = RsCode::new(1, 5);
+        let code = RsCode::new(1, 5, Challenge::generator());
 
         let mut rng = ChaCha20Rng::seed_from_u64(0);
         let msg: Vec<Challenge> = (0..(1 << code.log_message_len()))
