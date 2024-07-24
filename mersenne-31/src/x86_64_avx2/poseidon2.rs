@@ -1,58 +1,15 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
-use p3_poseidon2::{internal_permute_state, matmul_internal, InternalLayer};
-
-use crate::{
-    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31AVX2, POSEIDON2_INTERNAL_MATRIX_DIAG_16,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_24,
+use p3_poseidon2::{
+    final_external_rounds, initial_external_rounds, internal_rounds, ExternalLayer, InternalLayer,
+    Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
 };
 
-impl InternalLayer<PackedMersenne31AVX2, 16, 5> for DiffusionMatrixMersenne31 {
-    type InternalState = [PackedMersenne31AVX2; 16];
-
-    type InternalConstantsType = Mersenne31;
-
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
-    ) {
-        internal_permute_state::<PackedMersenne31AVX2, 16, 5>(
-            state,
-            |state| {
-                matmul_internal::<Mersenne31, PackedMersenne31AVX2, 16>(
-                    state,
-                    POSEIDON2_INTERNAL_MATRIX_DIAG_16,
-                );
-            },
-            internal_constants,
-        )
-    }
-}
-
-impl InternalLayer<PackedMersenne31AVX2, 24, 5> for DiffusionMatrixMersenne31 {
-    type InternalState = [PackedMersenne31AVX2; 24];
-
-    type InternalConstantsType = Mersenne31;
-
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
-    ) {
-        internal_permute_state::<PackedMersenne31AVX2, 24, 5>(
-            state,
-            |state| {
-                matmul_internal::<Mersenne31, PackedMersenne31AVX2, 24>(
-                    state,
-                    POSEIDON2_INTERNAL_MATRIX_DIAG_24,
-                );
-            },
-            internal_constants,
-        )
-    }
-}
+use crate::{
+    DiffusionMatrixMersenne31, MDSLightPermutationMersenne31, Mersenne31, PackedMersenne31AVX2,
+};
 
 const P: u32 = 0x7fffffff;
 const P_4XU64: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
@@ -149,26 +106,6 @@ const fn expand_constant<const N: usize>(input: [u64; N]) -> [[u64; 4]; N] {
     output
 }
 
-const fn expand_interleave_constant<const N: usize, const M: usize>(
-    input: [u64; N],
-) -> [[[u64; 2]; 2]; M] {
-    let mut output = [[[0; 2]; 2]; M];
-    let mut acc = 0;
-    loop {
-        output[acc / 2] = [[input[acc], input[acc + 4]]; 2];
-        output[acc / 2 + 1] = [[input[acc + 1], input[acc + 5]]; 2];
-        output[acc / 2 + 2] = [[input[acc + 2], input[acc + 6]]; 2];
-        output[acc / 2 + 3] = [[input[acc + 3], input[acc + 7]]; 2];
-        acc += 8;
-        if acc == N {
-            break;
-        }
-    }
-    output
-}
-
-use p3_poseidon2::{Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods};
-
 #[derive(Clone)]
 pub struct Poseidon2DataM31AVX2();
 
@@ -221,192 +158,6 @@ impl Poseidon2AVX2Helpers for Poseidon2DataM31AVX2 {
     const PACKED_8XPRIME: __m256i = unsafe { transmute([(P as u64) << 3; 4]) };
 }
 
-impl Poseidon2AVX2Methods<2, 16> for Poseidon2DataM31AVX2 {
-    type PF = PackedMersenne31AVX2;
-    type InternalRep = [Packed64bitM31Tensor<2>; 4];
-
-    const INTERNAL_SHIFTS: Packed64bitM31Tensor<2> = unsafe {
-        transmute(expand_interleave_constant::<16, 8>(
-            POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS,
-        ))
-    };
-
-    /// In memory, [PF; 16] = [[u32; 8]; 16] and we label the elements as:
-    /// [[a_{0, 0}, ..., a_{0, 7}], ..., [a_{15, 0}, ..., a_{15, 7}]].
-    /// We split each row in 4, expand each element to a u64 and then return vector of __mm256 elements arranged into a tensor.
-    fn from_input(input: [Self::PF; 16]) -> Self::InternalRep {
-        unsafe {
-            // Safety: Nothing unsafe to worry about.
-
-            let zeros = x86_64::_mm256_setzero_si256();
-            let vector_input: [__m256i; 16] = transmute(input);
-            let mut output = [[[zeros; 4]; 2]; 4];
-            for j in 0..2 {
-                for i in 0..4 {
-                    let splicedlhs = x86_64::_mm256_unpacklo_epi32(
-                        vector_input[8 * j + i],
-                        vector_input[8 * j + i + 4],
-                    );
-                    let splicedrhs = x86_64::_mm256_unpackhi_epi32(
-                        vector_input[8 * j + i],
-                        vector_input[8 * j + i + 4],
-                    );
-                    output[0][j][i] = x86_64::_mm256_unpacklo_epi32(splicedlhs, zeros);
-                    output[1][j][i] = x86_64::_mm256_unpackhi_epi32(splicedlhs, zeros);
-                    output[2][j][i] = x86_64::_mm256_unpacklo_epi32(splicedrhs, zeros);
-                    output[3][j][i] = x86_64::_mm256_unpackhi_epi32(splicedrhs, zeros);
-                }
-            }
-
-            transmute(output)
-        }
-    }
-
-    /// Essentially inverts from_input
-    fn to_output(input: Self::InternalRep) -> [Self::PF; 16] {
-        unsafe {
-            // Safety: Each __m256i must be made up of 4 values lying in [0, ... P).
-            // Otherwise the result is undefined.
-
-            let zeros = x86_64::_mm256_setzero_si256();
-            let mut output = [zeros; 16];
-            let tensor_input: [[[__m256i; 4]; 2]; 4] = transmute(input);
-
-            for j in 0..2 {
-                for i in 0..4 {
-                    let comblhs = x86_64::_mm256_shuffle_ps::<0b10001000>(
-                        transmute(tensor_input[0][j][i]),
-                        transmute(tensor_input[1][j][i]),
-                    );
-                    let combrhs = x86_64::_mm256_shuffle_ps::<0b10001000>(
-                        transmute(tensor_input[2][j][i]),
-                        transmute(tensor_input[3][j][i]),
-                    );
-                    output[8 * j + i] =
-                        transmute(x86_64::_mm256_shuffle_ps::<0b10001000>(comblhs, combrhs));
-                    output[8 * j + i + 4] =
-                        transmute(x86_64::_mm256_shuffle_ps::<0b11011101>(comblhs, combrhs));
-                }
-            }
-
-            transmute(output)
-        }
-    }
-
-    fn manipulate_external_constants(input: [Mersenne31; 16]) -> Packed64bitM31Tensor<2> {
-        unsafe {
-            let mut output = [[[0_u64; 4]; 4]; 2];
-            for j in 0..2 {
-                for i in 0..4 {
-                    let firstval = input[8 * j + i].value as u64;
-                    let secondval = input[8 * j + i + 4].value as u64;
-
-                    output[j][i] = [firstval, secondval, firstval, secondval]
-                }
-            }
-
-            transmute(output)
-        }
-    }
-
-    fn manipulate_internal_constants(input: Mersenne31) -> u32 {
-        input.value
-    }
-}
-
-impl Poseidon2AVX2Methods<3, 24> for Poseidon2DataM31AVX2 {
-    type PF = PackedMersenne31AVX2;
-    type InternalRep = [Packed64bitM31Tensor<3>; 4];
-
-    const INTERNAL_SHIFTS: Packed64bitM31Tensor<3> = unsafe {
-        transmute(expand_interleave_constant::<24, 12>(
-            POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS,
-        ))
-    };
-
-    /// In memory, [PF; 24] = [[u32; 8]; 24] and we label the elements as:
-    /// [[a_{0, 0}, ..., a_{0, 7}], ..., [a_{23, 0}, ..., a_{23, 7}]].
-    /// We split each row in 4, expand each element to a u64 and then return vector of __mm256 elements arranged into a tensor.
-    fn from_input(input: [Self::PF; 24]) -> Self::InternalRep {
-        unsafe {
-            // Safety: Nothing unsafe to worry about.
-
-            let zeros = x86_64::_mm256_setzero_si256();
-            let vector_input: [__m256i; 24] = transmute(input);
-            let mut output = [[[zeros; 4]; 3]; 4];
-            for j in 0..3 {
-                for i in 0..4 {
-                    let splicedlhs = x86_64::_mm256_unpacklo_epi32(
-                        vector_input[8 * j + i],
-                        vector_input[8 * j + i + 4],
-                    );
-                    let splicedrhs = x86_64::_mm256_unpackhi_epi32(
-                        vector_input[8 * j + i],
-                        vector_input[8 * j + i + 4],
-                    );
-                    output[0][j][i] = x86_64::_mm256_unpacklo_epi32(splicedlhs, zeros);
-                    output[1][j][i] = x86_64::_mm256_unpackhi_epi32(splicedlhs, zeros);
-                    output[2][j][i] = x86_64::_mm256_unpacklo_epi32(splicedrhs, zeros);
-                    output[3][j][i] = x86_64::_mm256_unpackhi_epi32(splicedrhs, zeros);
-                }
-            }
-
-            transmute(output)
-        }
-    }
-
-    /// Essentially inverts from_input
-    fn to_output(input: Self::InternalRep) -> [Self::PF; 24] {
-        unsafe {
-            // Safety: Each __m256i must be made up of 4 values lying in [0, ... P).
-            // Otherwise the result is undefined.
-
-            let zeros = x86_64::_mm256_setzero_si256();
-            let mut output = [zeros; 24];
-            let tensor_input: [[[__m256i; 4]; 3]; 4] = transmute(input);
-
-            for j in 0..3 {
-                for i in 0..4 {
-                    let comblhs = x86_64::_mm256_shuffle_ps::<0b10001000>(
-                        transmute(tensor_input[0][j][i]),
-                        transmute(tensor_input[1][j][i]),
-                    );
-                    let combrhs = x86_64::_mm256_shuffle_ps::<0b10001000>(
-                        transmute(tensor_input[2][j][i]),
-                        transmute(tensor_input[3][j][i]),
-                    );
-                    output[8 * j + i] =
-                        transmute(x86_64::_mm256_shuffle_ps::<0b10001000>(comblhs, combrhs));
-                    output[8 * j + i + 4] =
-                        transmute(x86_64::_mm256_shuffle_ps::<0b11011101>(comblhs, combrhs));
-                }
-            }
-
-            transmute(output)
-        }
-    }
-
-    fn manipulate_external_constants(input: [Mersenne31; 24]) -> Packed64bitM31Tensor<3> {
-        unsafe {
-            let mut output = [[[0_u64; 4]; 4]; 3];
-            for j in 0..3 {
-                for i in 0..4 {
-                    let firstval = input[8 * j + i].value as u64;
-                    let secondval = input[8 * j + i + 4].value as u64;
-
-                    output[j][i] = [firstval, secondval, firstval, secondval]
-                }
-            }
-
-            transmute(output)
-        }
-    }
-
-    fn manipulate_internal_constants(input: Mersenne31) -> u32 {
-        input.value
-    }
-}
-
 impl Poseidon2AVX2Methods<4, 16> for Poseidon2DataM31AVX2 {
     type PF = PackedMersenne31AVX2;
     type InternalRep = [Packed64bitM31Tensor<4>; 2];
@@ -443,8 +194,8 @@ impl Poseidon2AVX2Methods<4, 16> for Poseidon2DataM31AVX2 {
             let vector_input: [[__m256i; 16]; 2] = transmute(input);
             let mut output = [zeros; 16];
 
-            for i in 0..16 {
-                output[i] = transmute(x86_64::_mm256_shuffle_ps::<136>(
+            for (i, item) in output.iter_mut().enumerate() {
+                *item = transmute(x86_64::_mm256_shuffle_ps::<136>(
                     transmute(vector_input[0][i]),
                     transmute(vector_input[1][i]),
                 ));
@@ -499,8 +250,8 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataM31AVX2 {
             let vector_input: [[__m256i; 24]; 2] = transmute(input);
             let mut output = [zeros; 24];
 
-            for i in 0..24 {
-                output[i] = transmute(x86_64::_mm256_shuffle_ps::<136>(
+            for (i, item) in output.iter_mut().enumerate() {
+                *item = transmute(x86_64::_mm256_shuffle_ps::<136>(
                     transmute(vector_input[0][i]),
                     transmute(vector_input[1][i]),
                 ));
@@ -516,6 +267,188 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataM31AVX2 {
 
     fn manipulate_internal_constants(input: Mersenne31) -> u32 {
         input.value
+    }
+}
+
+impl InternalLayer<PackedMersenne31AVX2, 16, 5> for DiffusionMatrixMersenne31 {
+    type InternalState = Packed64bitM31Tensor<4>;
+
+    type InternalConstantsType = Mersenne31;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        let internal_constants_u32 = internal_constants
+            .iter()
+            .map(|x| x.value)
+            .collect::<Vec<u32>>();
+        internal_rounds::<4, 16, Poseidon2DataM31AVX2>(state, &internal_constants_u32);
+    }
+}
+
+impl InternalLayer<PackedMersenne31AVX2, 24, 5> for DiffusionMatrixMersenne31 {
+    type InternalState = Packed64bitM31Tensor<6>;
+
+    type InternalConstantsType = Mersenne31;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        let internal_constants_u32 = internal_constants
+            .iter()
+            .map(|x| x.value)
+            .collect::<Vec<u32>>();
+        internal_rounds::<6, 24, Poseidon2DataM31AVX2>(state, &internal_constants_u32);
+    }
+}
+
+fn manipulate_external_constants_16_4(input: [Mersenne31; 16]) -> Packed64bitM31Tensor<4> {
+    unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
+}
+
+fn manipulate_external_constants_24_6(input: [Mersenne31; 24]) -> Packed64bitM31Tensor<6> {
+    unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
+}
+
+impl ExternalLayer<PackedMersenne31AVX2, 16, 5> for MDSLightPermutationMersenne31 {
+    type InternalState = Packed64bitM31Tensor<4>;
+    type ArrayState = [Packed64bitM31Tensor<4>; 2];
+
+    fn to_internal_rep(&self, state: [PackedMersenne31AVX2; 16]) -> Self::ArrayState {
+        unsafe {
+            // Safety: Nothing unsafe to worry about.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [__m256i; 16] = transmute(state);
+            let mut output_0 = [zeros; 16];
+            let mut output_1 = [zeros; 16];
+            for i in 0..16 {
+                output_0[i] = x86_64::_mm256_unpacklo_epi32(vector_input[i], zeros);
+                output_1[i] = x86_64::_mm256_unpackhi_epi32(vector_input[i], zeros);
+            }
+            [transmute(output_0), transmute(output_1)]
+        }
+    }
+
+    fn to_output_rep(&self, state: Self::ArrayState) -> [PackedMersenne31AVX2; 16] {
+        unsafe {
+            // Safety: Each __m256i must be made up of 4 values lying in [0, ... P).
+            // Otherwise the result is undefined.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [[__m256i; 16]; 2] = transmute(state);
+            let mut output = [zeros; 16];
+
+            for (i, item) in output.iter_mut().enumerate() {
+                *item = transmute(x86_64::_mm256_shuffle_ps::<136>(
+                    transmute(vector_input[0][i]),
+                    transmute(vector_input[1][i]),
+                ));
+            }
+
+            transmute(output)
+        }
+    }
+
+    fn permute_state_initial(
+        &self,
+        state: &mut Self::InternalState,
+        initial_external_constants: &[[Mersenne31; 16]],
+    ) {
+        let initial_external_constants_mat = initial_external_constants
+            .iter()
+            .map(|x| manipulate_external_constants_16_4(*x))
+            .collect::<Vec<Packed64bitM31Tensor<4>>>();
+        initial_external_rounds::<4, 16, Poseidon2DataM31AVX2>(
+            state,
+            &initial_external_constants_mat,
+        );
+    }
+
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        final_external_constants: &[[Mersenne31; 16]],
+    ) {
+        let final_external_constants_mat = final_external_constants
+            .iter()
+            .map(|x| manipulate_external_constants_16_4(*x))
+            .collect::<Vec<Packed64bitM31Tensor<4>>>();
+        final_external_rounds::<4, 16, Poseidon2DataM31AVX2>(state, &final_external_constants_mat);
+        Poseidon2DataM31AVX2::full_reduce(state);
+    }
+}
+
+impl ExternalLayer<PackedMersenne31AVX2, 24, 5> for MDSLightPermutationMersenne31 {
+    type InternalState = Packed64bitM31Tensor<6>;
+    type ArrayState = [Packed64bitM31Tensor<6>; 2];
+
+    fn to_internal_rep(&self, state: [PackedMersenne31AVX2; 24]) -> Self::ArrayState {
+        unsafe {
+            // Safety: Nothing unsafe to worry about.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [__m256i; 24] = transmute(state);
+            let mut output_0 = [zeros; 24];
+            let mut output_1 = [zeros; 24];
+            for i in 0..24 {
+                output_0[i] = x86_64::_mm256_unpacklo_epi32(vector_input[i], zeros);
+                output_1[i] = x86_64::_mm256_unpackhi_epi32(vector_input[i], zeros);
+            }
+            [transmute(output_0), transmute(output_1)]
+        }
+    }
+
+    fn to_output_rep(&self, state: Self::ArrayState) -> [PackedMersenne31AVX2; 24] {
+        unsafe {
+            // Safety: Each __m256i must be made up of 4 values lying in [0, ... P).
+            // Otherwise the result is undefined.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [[__m256i; 24]; 2] = transmute(state);
+            let mut output = [zeros; 24];
+
+            for (i, item) in output.iter_mut().enumerate() {
+                *item = transmute(x86_64::_mm256_shuffle_ps::<136>(
+                    transmute(vector_input[0][i]),
+                    transmute(vector_input[1][i]),
+                ));
+            }
+
+            transmute(output)
+        }
+    }
+
+    fn permute_state_initial(
+        &self,
+        state: &mut Self::InternalState,
+        initial_external_constants: &[[Mersenne31; 24]],
+    ) {
+        let initial_external_constants_mat = initial_external_constants
+            .iter()
+            .map(|x| manipulate_external_constants_24_6(*x))
+            .collect::<Vec<Packed64bitM31Tensor<6>>>();
+        initial_external_rounds::<6, 24, Poseidon2DataM31AVX2>(
+            state,
+            &initial_external_constants_mat,
+        );
+    }
+
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        final_external_constants: &[[Mersenne31; 24]],
+    ) {
+        let final_external_constants_mat = final_external_constants
+            .iter()
+            .map(|x| manipulate_external_constants_24_6(*x))
+            .collect::<Vec<Packed64bitM31Tensor<6>>>();
+        final_external_rounds::<6, 24, Poseidon2DataM31AVX2>(state, &final_external_constants_mat);
+        Poseidon2DataM31AVX2::full_reduce(state);
     }
 }
 
@@ -545,6 +478,7 @@ mod tests {
         F: PrimeField32,
     {
         let mut output = [[F::zero(); M]; N];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             for j in 0..M {
                 output[i][j] = input[j][i]

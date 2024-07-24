@@ -1,4 +1,4 @@
-use p3_field::{AbstractField, PrimeField32};
+use p3_field::PrimeField32;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
     ExternalLayer, InternalLayer,
@@ -126,26 +126,24 @@ impl InternalLayer<Mersenne31, 24, 5> for DiffusionMatrixMersenne31 {
 #[derive(Default, Clone)]
 pub struct MDSLightPermutationMersenne31;
 
-impl<const WIDTH: usize, AF: AbstractField<F = Mersenne31>> ExternalLayer<AF, WIDTH, 5>
-    for MDSLightPermutationMersenne31
-{
-    type InternalState = [AF; WIDTH];
-    type ArrayState = [[AF; WIDTH]; 1];
+impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for MDSLightPermutationMersenne31 {
+    type InternalState = [Mersenne31; WIDTH];
+    type ArrayState = [[Mersenne31; WIDTH]; 1];
 
-    fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState {
+    fn to_internal_rep(&self, state: [Mersenne31; WIDTH]) -> Self::ArrayState {
         [state]
     }
 
-    fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH] {
-        state[0].clone()
+    fn to_output_rep(&self, state: Self::ArrayState) -> [Mersenne31; WIDTH] {
+        state[0]
     }
 
     fn permute_state_initial(
         &self,
-        state: &mut [AF; WIDTH],
+        state: &mut [Mersenne31; WIDTH],
         initial_external_constants: &[[Mersenne31; WIDTH]],
     ) {
-        external_initial_permute_state::<AF, WIDTH, 5>(state, initial_external_constants);
+        external_initial_permute_state::<Mersenne31, WIDTH, 5>(state, initial_external_constants);
     }
 
     fn permute_state_final(
@@ -153,7 +151,7 @@ impl<const WIDTH: usize, AF: AbstractField<F = Mersenne31>> ExternalLayer<AF, WI
         state: &mut Self::InternalState,
         final_external_constants: &[[Mersenne31; WIDTH]],
     ) {
-        external_final_permute_state::<AF, WIDTH, 5>(state, final_external_constants);
+        external_final_permute_state::<Mersenne31, WIDTH, 5>(state, final_external_constants);
     }
 }
 
