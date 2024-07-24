@@ -26,6 +26,7 @@ members = [
     "poseidon",
     "poseidon2",
     "rescue",
+    "sha256",
     "symmetric",
     "util",
     "uni-stark",
