@@ -218,7 +218,7 @@ mod tests {
 
         loop {
             let monty_dft = Radix2Dit::<KoalaBear>::default();
-            let naive_dft = NaiveDft::default();
+            let naive_dft = NaiveDft;
 
             for _ in 0..NITERS {
                 let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);

@@ -175,7 +175,13 @@ unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T] {
     unsafe { &mut *core::ptr::slice_from_raw_parts_mut(data, len) }
 }
 
-/// Copied from Rust nightly sources
+/// Divides one mutable slice into two at an index, without doing bounds checking.
+///
+/// NB: Copied from Rust nightly sources
+///
+/// # Safety
+///
+/// Causes undefined behaviour if mid > v.len().
 #[inline(always)]
 pub unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut [T], &mut [T]) {
     let len = v.len();

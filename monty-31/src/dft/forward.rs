@@ -42,8 +42,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     fn partial_monty_reduce(x: u64) -> u32 {
         let q = MP::MONTY_MU.wrapping_mul(x as u32);
         let h = ((q as u64 * MP::PRIME as u64) >> 32) as u32;
-        let r = MP::PRIME - h + (x >> 32) as u32;
-        r
+        MP::PRIME - h + (x >> 32) as u32
     }
 
     /// Given x in [0, 2p), return the representative of x mod p in [0, p)
@@ -208,10 +207,10 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert!(1 << (root_table.len() + 1) == n);
 
         match n {
-            256 => Self::forward_256(a, &root_table),
-            128 => Self::forward_128(a, &root_table),
-            64 => Self::forward_64(a, &root_table),
-            32 => Self::forward_32(a, &root_table),
+            256 => Self::forward_256(a, root_table),
+            128 => Self::forward_128(a, root_table),
+            64 => Self::forward_64(a, root_table),
+            32 => Self::forward_32(a, root_table),
             16 => Self::forward_16(a),
             8 => Self::forward_8(a),
             4 => Self::forward_4(a),
