@@ -131,6 +131,10 @@ where
     reverse_slice_index_bits(&mut final_poly);
     final_poly = Radix2Dit::default().idft(final_poly);
 
+    println!("final_poly[16]: {:?}", &final_poly[16..final_poly.len()]);
+    println!("final_poly_len: {}", final_poly.len());
+    println!("log_max_final_poly_len: {}", config.log_final_poly_len);
+
     final_poly
         .iter()
         .for_each(|x| challenger.observe_ext_element(*x));
