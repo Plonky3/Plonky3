@@ -8,6 +8,7 @@ use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
+use p3_util::pretty_name;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
@@ -73,9 +74,8 @@ where
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
-        "fft::<{}, {}, {}>",
-        type_name::<F>(),
-        type_name::<Dft>(),
+        "fft/{}/ncols={}",
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
@@ -102,7 +102,7 @@ where
 {
     let mut group = c.benchmark_group(&format!(
         "m31_fft::<{}, {}>",
-        type_name::<Dft>(),
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
@@ -128,9 +128,8 @@ where
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
-        "ifft::<{}, {}, {}>",
-        type_name::<F>(),
-        type_name::<Dft>(),
+        "ifft/{}/ncols={}",
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
@@ -157,9 +156,8 @@ where
     Standard: Distribution<F>,
 {
     let mut group = c.benchmark_group(&format!(
-        "coset_lde::<{}, {}, {}>",
-        type_name::<F>(),
-        type_name::<Dft>(),
+        "coset_lde/{}/ncols={}",
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
