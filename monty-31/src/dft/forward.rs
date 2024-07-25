@@ -33,11 +33,6 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let lg_n = log2_strict_usize(n);
         Self::make_table(Self::two_adic_generator(lg_n), lg_n)
     }
-
-    pub fn inv_roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
-        let lg_n = log2_strict_usize(n);
-        Self::make_table(Self::two_adic_generator(lg_n).inverse(), lg_n)
-    }
 }
 
 impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {

@@ -10,13 +10,9 @@ use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 
-mod backward;
 mod forward;
 
 use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
-
-// TODO: These are only pub for benches at the moment...
-//pub mod backward;
 
 // TODO: These two functions belong somewhere else
 
