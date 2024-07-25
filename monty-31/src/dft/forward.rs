@@ -1,7 +1,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{AbstractField, TwoAdicField};
 use p3_util::log2_strict_usize;
 
 use super::split_at_mut_unchecked;

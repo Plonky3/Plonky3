@@ -9,36 +9,11 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
+use p3_util::split_at_mut_unchecked;
 
 mod forward;
 
 use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
-
-// TODO: These two functions belong somewhere else
-
-/// Copied from Rust nightly sources
-#[inline(always)]
-unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T] {
-    unsafe { &mut *core::ptr::slice_from_raw_parts_mut(data, len) }
-}
-
-/// Copied from Rust nightly sources
-#[inline(always)]
-pub(crate) unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut [T], &mut [T]) {
-    let len = v.len();
-    let ptr = v.as_mut_ptr();
-
-    // SAFETY: Caller has to check that `0 <= mid <= self.len()`.
-    //
-    // `[ptr; mid]` and `[mid; len]` are not overlapping, so returning
-    // a mutable reference is fine.
-    unsafe {
-        (
-            from_raw_parts_mut(ptr, mid),
-            from_raw_parts_mut(ptr.add(mid), len - mid),
-        )
-    }
-}
 
 /// The DIT FFT algorithm.
 #[derive(Clone, Debug, Default)]
@@ -58,6 +33,7 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dit<MontyField31<MP>> {
         }
     }
 
+    // FIXME: Remove this but make versions available that don't require transpose/bit-reversal.
     pub fn dft_batch2(
         &self,
         mat: &mut RowMajorMatrix<MontyField31<MP>>,
