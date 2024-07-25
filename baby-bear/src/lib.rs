@@ -1,3 +1,4 @@
+#![no_std]
 #![cfg_attr(
     all(
         feature = "nightly-features",
