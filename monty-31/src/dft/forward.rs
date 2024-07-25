@@ -2,32 +2,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_field::{AbstractField, Field, TwoAdicField};
-use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use super::split_at_mut_unchecked;
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters, TwoAdicData};
-
-// TODO: Work out whether having these as explicit constants actually improves performance
-/*
-const MONTY_ROOTS8: [u32; 3] = [1032137103, 473486609, 1964242958];
-
-const MONTY_ROOTS16: [u32; 7] = [
-    1594287233, 1032137103, 1173759574, 473486609, 1844575452, 1964242958, 270522423,
-];
-
-const MONTY_ROOTS32: [u32; 15] = [
-    1063008748, 1594287233, 1648228672, 1032137103, 24220877, 1173759574, 1310027008, 473486609,
-    518723214, 1844575452, 964210272, 1964242958, 48337049, 270522423, 434501889,
-];
-
-const MONTY_ROOTS64: [u32; 31] = [
-    1427548538, 1063008748, 19319570, 1594287233, 292252822, 1648228672, 1754391076, 1032137103,
-    1419020303, 24220877, 1848478141, 1173759574, 1270902541, 1310027008, 992470346, 473486609,
-    690559708, 518723214, 1398247489, 1844575452, 1272476677, 964210272, 486600511, 1964242958,
-    12128229, 48337049, 377028776, 270522423, 1626304099, 434501889, 741605237,
-];
-*/
 
 // TODO: Consider following Hexl and storing the roots in a single
 // array in bit-reversed order, but with duplicates for certain roots
@@ -62,7 +40,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 }
 
-impl<MP: MontyParameters> MontyField31<MP> {
+impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     /// Given x in `0..P << MONTY_BITS`, return x mod P in [0, 2p).
     /// TODO: Double-check the ranges above.
     #[inline(always)]
@@ -142,14 +120,12 @@ impl<MP: MontyParameters> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_4(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_4(a: &mut [Self]) {
         assert_eq!(a.len(), 4);
-
-        let root = root_table[0][0];
 
         let t1 = (MP::PRIME + a[1].value - a[3].value) as u64;
         let t5 = (a[1].value + a[3].value) as u64;
-        let t3 = Self::partial_monty_reduce(t1 * root.value as u64) as u64;
+        let t3 = Self::partial_monty_reduce(t1 * MP::ROOTS_8.as_ref()[1].value as u64) as u64;
         let t4 = (a[0].value + a[2].value) as u64;
         let t2 = (MP::PRIME + a[0].value - a[2].value) as u64;
 
@@ -166,25 +142,25 @@ impl<MP: MontyParameters> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_8(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_8(a: &mut [Self]) {
         assert_eq!(a.len(), 8);
 
-        Self::forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, MP::ROOTS_8.as_ref());
 
         let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-        Self::forward_4(a0, &root_table[1..]);
-        Self::forward_4(a1, &root_table[1..]);
+        Self::forward_4(a0);
+        Self::forward_4(a1);
     }
 
     #[inline(always)]
-    fn forward_16(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_16(a: &mut [Self]) {
         assert_eq!(a.len(), 16);
 
-        Self::forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, MP::ROOTS_16.as_ref());
 
         let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-        Self::forward_8(a0, &root_table[1..]);
-        Self::forward_8(a1, &root_table[1..]);
+        Self::forward_8(a0);
+        Self::forward_8(a1);
     }
 
     #[inline(always)]
@@ -194,8 +170,8 @@ impl<MP: MontyParameters> MontyField31<MP> {
         Self::forward_pass(a, &root_table[0]);
 
         let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
-        Self::forward_16(a0, &root_table[1..]);
-        Self::forward_16(a1, &root_table[1..]);
+        Self::forward_16(a0);
+        Self::forward_16(a1);
     }
 
     #[inline(always)]
@@ -241,9 +217,9 @@ impl<MP: MontyParameters> MontyField31<MP> {
             128 => Self::forward_128(a, &root_table),
             64 => Self::forward_64(a, &root_table),
             32 => Self::forward_32(a, &root_table),
-            16 => Self::forward_16(a, &root_table),
-            8 => Self::forward_8(a, &root_table),
-            4 => Self::forward_4(a, &root_table),
+            16 => Self::forward_16(a),
+            8 => Self::forward_8(a),
+            4 => Self::forward_4(a),
             2 => Self::forward_2(a),
             _ => {
                 debug_assert!(n > 64);

@@ -66,13 +66,19 @@ impl FieldParameters for KoalaBearParameters {
 impl TwoAdicData for KoalaBearParameters {
     const TWO_ADICITY: usize = 24;
 
-    type ArrayLike = [KoalaBear; Self::TWO_ADICITY + 1];
+    type ArrayLike = &'static [KoalaBear];
 
-    const TWO_ADIC_GENERATORS: Self::ArrayLike = KoalaBear::new_array([
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = &KoalaBear::new_array([
         0x1, 0x7f000000, 0x7e010002, 0x6832fe4a, 0x8dbd69c, 0xa28f031, 0x5c4a5b99, 0x29b75a80,
         0x17668b8a, 0x27ad539b, 0x334d48c7, 0x7744959c, 0x768fc6fa, 0x303964b2, 0x3e687d4d,
         0x45a60e61, 0x6e2f4d7a, 0x163bd499, 0x6c4a8a45, 0x143ef899, 0x514ddcad, 0x484ef19b,
         0x205d63c3, 0x68e7dd49, 0x6ac49f88,
+    ]);
+
+    const ROOTS_8: Self::ArrayLike = &KoalaBear::new_array([0x6832fe4a, 0x7e010002, 0x174e3650]);
+
+    const ROOTS_16: Self::ArrayLike = &KoalaBear::new_array([
+        0x8dbd69c, 0x6832fe4a, 0x27ae21e2, 0x7e010002, 0x3a89a025, 0x174e3650, 0x27dfce22,
     ]);
 }
 
@@ -195,4 +201,60 @@ mod tests {
 
     test_field!(crate::KoalaBear);
     test_two_adic_field!(crate::KoalaBear);
+
+    // TODO: Refactor these FFT tests with macros as for test_field! etc above.
+    use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_monty_31::dft::Radix2Dit;
+    use rand::thread_rng;
+
+    #[test]
+    fn dft_correctness() {
+        const NITERS: usize = 10;
+        // This is smaller than we'd like because NaiveDft is so slow
+        const NCOLS: usize = 5;
+        let mut len = 4;
+        let mut rng = thread_rng();
+
+        loop {
+            let monty_dft = Radix2Dit::<KoalaBear>::default();
+            let naive_dft = NaiveDft::default();
+
+            for _ in 0..NITERS {
+                let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
+                let v_monty = monty_dft.dft_batch(u.clone());
+                let v_naive = naive_dft.dft_batch(u.clone());
+
+                assert_eq!(v_monty, v_naive);
+            }
+            len *= 2;
+            // This is smaller than we'd like because NaiveDft is so slow
+            if len > 2048 {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn dft_forward_backward_is_identity() {
+        const NITERS: usize = 10;
+        const NCOLS: usize = 23;
+        let mut len = 4;
+        let mut rng = thread_rng();
+
+        loop {
+            let dft = Radix2Dit::<KoalaBear>::default();
+
+            for _ in 0..NITERS {
+                let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
+                let v = dft.dft_batch(u.clone());
+                let w = dft.idft_batch(v);
+                assert_eq!(u, w);
+            }
+            len *= 2;
+            if len > 8192 {
+                break;
+            }
+        }
+    }
 }

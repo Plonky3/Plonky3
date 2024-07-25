@@ -16,14 +16,13 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[14, 16, 18, 20, 22, 24];
+    let log_sizes = &[14, 16, 18, 20, 22];
     let log_half_sizes = &[13, 15, 17];
 
     const BATCH_SIZE: usize = 256;
 
-    monty31_fft::<BATCH_SIZE>(c, log_sizes);
-    //four_step_fft::<BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, p3_monty_31::dft::Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -43,28 +42,6 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c);
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c);
     coset_lde::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c);
-}
-
-fn monty31_fft<const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
-where
-    Standard: Distribution<i64>,
-{
-    let mut group = c.benchmark_group(&format!("monty_fft::<{}>", BATCH_SIZE));
-    group.sample_size(10);
-
-    let mut rng = thread_rng();
-    for n_log in log_sizes {
-        let n = 1 << n_log;
-        let dft = p3_monty_31::dft::Radix2Dit::new(n);
-
-        let u = RowMajorMatrix::<BabyBear>::rand(&mut rng, n, BATCH_SIZE);
-        let i = 0;
-        group.bench_with_input(BenchmarkId::from_parameter(n), &i, |b, _| {
-            b.iter(|| {
-                dft.dft_batch(u.clone());
-            });
-        });
-    }
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])

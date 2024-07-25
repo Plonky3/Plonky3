@@ -66,13 +66,19 @@ impl FieldParameters for BabyBearParameters {
 impl TwoAdicData for BabyBearParameters {
     const TWO_ADICITY: usize = 27;
 
-    type ArrayLike = [BabyBear; Self::TWO_ADICITY + 1];
+    type ArrayLike = &'static [BabyBear];
 
-    const TWO_ADIC_GENERATORS: Self::ArrayLike = BabyBear::new_array([
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = &BabyBear::new_array([
         0x1, 0x78000000, 0x67055c21, 0x5ee99486, 0xbb4c4e4, 0x2d4cc4da, 0x669d6090, 0x17b56c64,
         0x67456167, 0x688442f9, 0x145e952d, 0x4fe61226, 0x4c734715, 0x11c33e2a, 0x62c3d2b1,
         0x77cad399, 0x54c131f4, 0x4cabd6a6, 0x5cf5713f, 0x3e9430e8, 0xba067a3, 0x18adc27d,
         0x21fd55bc, 0x4b859b3d, 0x3bd57996, 0x4483d85a, 0x3a26eef8, 0x1a427a41,
+    ]);
+
+    const ROOTS_8: Self::ArrayLike = &BabyBear::new_array([0x5ee99486, 0x67055c21, 0xc9ea3ba]);
+
+    const ROOTS_16: Self::ArrayLike = &BabyBear::new_array([
+        0xbb4c4e4, 0x5ee99486, 0x4b49e08, 0x67055c21, 0x5376917a, 0xc9ea3ba, 0x563112a7,
     ]);
 }
 
@@ -217,149 +223,53 @@ mod tests {
     test_two_adic_field!(crate::BabyBear);
 
     // TODO: Refactor these FFT tests with macros as for test_field! etc above.
-    use p3_dft::TwoAdicSubgroupDft;
+    use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_monty_31::dft::Radix2Dit;
-    use rand::distributions::{Distribution, Standard};
-    use rand::{thread_rng, Rng};
-
-    fn _naive_convolve(us: &[BabyBear], vs: &[BabyBear]) -> Vec<BabyBear> {
-        let n = us.len();
-        assert_eq!(n, vs.len());
-
-        let mut conv = Vec::with_capacity(n);
-        for i in 0..n {
-            let mut t = BabyBear::zero();
-            for j in 0..n {
-                t = t + us[j] * vs[(n + i - j) % n];
-            }
-            conv.push(t);
-        }
-        conv
-    }
-
-    fn randvec(n: usize) -> Vec<BabyBear>
-    where
-        Standard: Distribution<BabyBear>,
-    {
-        thread_rng()
-            .sample_iter(Standard)
-            .take(n)
-            .collect::<Vec<_>>()
-    }
-
-    /*
-    #[test]
-    fn test_forward_16() {
-        const NITERS: usize = 100;
-        let len = 16;
-        let root_table = BabyBear::roots_of_unity_table(len);
-
-        for _ in 0..NITERS {
-            let us = randvec(len);
-            /*
-            //let us = vec![0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            // monty form of [0..16)
-            let us = vec![
-                0, 268435454, 536870908, 805306362, 1073741816, 1342177270, 1610612724, 1879048178,
-                134217711, 402653165, 671088619, 939524073, 1207959527, 1476394981, 1744830435,
-                2013265889,
-            ];
-            */
-
-            let mut vs = us.clone();
-            BabyBear::forward_fft(&mut vs, &root_table);
-            reverse_slice_index_bits(&mut vs);
-
-            let mut ws = us.clone();
-            BabyBear::four_step_fft(&mut ws, &root_table);
-
-            assert!(vs.iter().zip(ws).all(|(&v, w)| v == w));
-        }
-    }
-    */
+    use rand::thread_rng;
 
     #[test]
-    fn forward_backward_is_identity() {
-        const NITERS: usize = 100;
-        let mut len = 16;
-        loop {
-            let dft = Radix2Dit::default();
-
-            let inv_root_table = BabyBear::inv_roots_of_unity_table(len);
-            let root_inv = inv_root_table[0][0];
-
-            for _ in 0..NITERS {
-                let us = randvec(len);
-                let vs = RowMajorMatrix::new_col(us.clone());
-                let vs = dft.dft_batch(vs);
-
-                // FIXME: Need this for four-step
-                //p3_util::reverse_slice_index_bits(&mut vs);
-
-                let mut ws = vs.values.clone();
-                BabyBear::backward_fft(&mut ws, root_inv);
-
-                let scale = BabyBear::new(len as u32);
-                let scaled_us = us.iter().map(|&u| u * scale).collect::<Vec<_>>();
-                assert_eq!(scaled_us, ws);
-            }
-            len *= 2;
-            if len > 8192 {
-                break;
-            }
-        }
-    }
-
-    /*
-    #[test]
-    fn convolution() {
-        const NITERS: usize = 4;
+    fn dft_correctness() {
+        const NITERS: usize = 10;
+        // This is smaller than we'd like because NaiveDft is so slow
+        const NCOLS: usize = 5;
         let mut len = 4;
+        let mut rng = thread_rng();
+
         loop {
-            let root_table = BabyBear::roots_of_unity_table(len);
-            let inv_root_table = BabyBear::inv_roots_of_unity_table(len);
-            let root_inv = inv_root_table[0][0];
+            let monty_dft = Radix2Dit::<BabyBear>::default();
+            let naive_dft = NaiveDft::default();
 
             for _ in 0..NITERS {
-                let us = randvec(len);
-                let vs = randvec(len);
+                let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
+                let v_monty = monty_dft.dft_batch(u.clone());
+                let v_naive = naive_dft.dft_batch(u.clone());
 
-                let mut fft_us = us.clone();
-                BabyBear::forward_fft(&mut fft_us, &root_table);
+                assert_eq!(v_monty, v_naive);
+            }
+            len *= 2;
+            // This is smaller than we'd like because NaiveDft is so slow
+            if len > 2048 {
+                break;
+            }
+        }
+    }
 
-                let mut fft_vs = vs.clone();
-                BabyBear::forward_fft(&mut fft_vs, &root_table);
+    #[test]
+    fn dft_forward_backward_is_identity() {
+        const NITERS: usize = 10;
+        const NCOLS: usize = 23;
+        let mut len = 4;
+        let mut rng = thread_rng();
 
-                let mut pt_prods = fft_us
-                    .iter()
-                    .zip(fft_vs)
-                    .map(|(&u, v)| {
-                        let prod = BabyBear { value: u } * BabyBear { value: v };
-                        prod.value
-                    })
-                    .collect::<Vec<_>>();
+        loop {
+            let dft = Radix2Dit::<BabyBear>::default();
 
-                backward_fft(&mut pt_prods, root_inv);
-
-                let bus = us
-                    .iter()
-                    .map(|&u| BabyBear { value: u })
-                    .collect::<Vec<_>>();
-                let bvs = vs
-                    .iter()
-                    .map(|&v| BabyBear { value: v })
-                    .collect::<Vec<_>>();
-                let bconv = naive_convolve(&bus, &bvs);
-                let conv = bconv
-                    .iter()
-                    .map(|&BabyBear { value }| value)
-                    .collect::<Vec<_>>();
-
-                assert!(conv
-                    .iter()
-                    .zip(pt_prods)
-                    .all(|(&c, p)| p as u64 == (c as u64 * len as u64) % P as u64));
+            for _ in 0..NITERS {
+                let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
+                let v = dft.dft_batch(u.clone());
+                let w = dft.idft_batch(v);
+                assert_eq!(u, w);
             }
             len *= 2;
             if len > 8192 {
@@ -367,5 +277,4 @@ mod tests {
             }
         }
     }
-    */
 }

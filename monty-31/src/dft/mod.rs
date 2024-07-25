@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::TwoAdicField;
-use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
+use p3_maybe_rayon::prelude::*;
 
 mod backward;
 mod forward;
@@ -45,7 +45,7 @@ pub(crate) unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut
 }
 
 /// The DIT FFT algorithm.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Radix2Dit<F> {
     /// Memoized twiddle factors for each length log_n.
     ///
@@ -60,6 +60,29 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dit<MontyField31<MP>> {
         Self {
             twiddles: RefCell::new(MontyField31::roots_of_unity_table(n)),
         }
+    }
+
+    pub fn dft_batch2(
+        &self,
+        mat: &mut RowMajorMatrix<MontyField31<MP>>,
+        scratch: &mut RowMajorMatrix<MontyField31<MP>>,
+    ) where
+        MP: MontyParameters + FieldParameters + TwoAdicData,
+    {
+        mat.transpose_into(scratch);
+
+        // FIXME: We're only cloning because of the RefCell; it shouldn't be necessary
+        let twiddles = self.twiddles.borrow().clone();
+        scratch
+            .par_rows_mut()
+            .for_each(|v| MontyField31::forward_fft(v, &twiddles));
+
+        scratch.transpose_into(mat);
+
+        // TODO:
+        // - don't do this when fft is used for convolution
+        // - check whether it's faster to do this as part of the fft
+        reverse_matrix_index_bits(mat);
     }
 }
 
@@ -79,7 +102,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose input
         mat.transpose_into(&mut scratch);
-
         // Compute twiddle factors, or take memoized ones if already available.
         let curr_max_fft_len = 1 << self.twiddles.borrow().len();
         if mat.height() > curr_max_fft_len {
@@ -87,9 +109,10 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             self.twiddles.replace(new_twiddles);
         }
 
+        let twiddles = self.twiddles.borrow().clone();
         scratch
             .par_rows_mut()
-            .for_each(|v| MontyField31::forward_fft(v, &self.twiddles.borrow()));
+            .for_each(|v| MontyField31::forward_fft(v, &twiddles));
 
         // FIXME: depending on what the result is being used for, we
         // can potentially avoid one or both of the final transpose
@@ -99,8 +122,10 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         scratch.transpose_into(&mut mat);
 
         // FIXME: Either do bit reversal or don't do inplace
-        //mat.bit_reverse_rows();
 
+        // FIXME: Pick one!
+        //mat.bit_reverse_rows();
+        reverse_matrix_index_bits(&mut mat);
         mat
     }
 }

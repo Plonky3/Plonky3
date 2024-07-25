@@ -95,6 +95,12 @@ pub trait TwoAdicData: MontyParameters {
     /// A list of generators of 2-adic subgroups.
     /// The i'th element must be a 2^i root of unity and the i'th element squared must be the i-1'th element.
     const TWO_ADIC_GENERATORS: Self::ArrayLike;
+
+    /// Precomputation of 8th-roots of unity
+    const ROOTS_8: Self::ArrayLike;
+
+    /// Precomputation of 16th-roots of unity
+    const ROOTS_16: Self::ArrayLike;
 }
 
 /// TODO: This should be deleted long term once we have improved our API for defining extension fields.
