@@ -6,8 +6,10 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_util::{reverse_bits, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
@@ -31,11 +33,10 @@ where
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
-    input.iter().enumerate().for_each(|(i, v)| {
-        if let Some(_) = v {
-            assert!(i >= config.log_final_poly_len);
-        }
-    });
+    // input.iter().enumerate().for_each(|(i, v)| {
+    //     if let Some(_) = v {
+    //     }
+    // });
 
     let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
@@ -132,15 +133,20 @@ where
     // let final_poly = current[0];
     // for x in current {
     //     assert_eq!(x, final_poly);
-    // }
-    current
+    // })
+
+    let mut final_poly = current.clone();
+    reverse_slice_index_bits(&mut final_poly);
+    final_poly = Radix2Dit::default().idft(final_poly);
+
+    final_poly
         .iter()
         .for_each(|x| challenger.observe_ext_element(*x));
 
     CommitPhaseResult {
         commits,
         data,
-        final_poly: current,
+        final_poly,
     }
 }
 

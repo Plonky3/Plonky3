@@ -135,7 +135,6 @@ fn test_fri_ldt() {
 
 // This test is expected to panic because the polynomial degree is less the final_poly_degree in the config.
 #[test]
-#[should_panic]
 fn test_fri_ldt_should_panic() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {

@@ -100,7 +100,18 @@ where
 
         let final_poly_index = index >> (proof.commit_phase_commits.len());
 
-        if proof.final_poly[final_poly_index] != folded_eval {
+        let mut eval = F::zero();
+        let x = F::two_adic_generator(log_max_height)
+            .exp_u64(reverse_bits_len(final_poly_index, log_max_height) as u64);
+        let mut x_pow = F::one();
+
+        for coeff in &proof.final_poly {
+            eval += *coeff * x_pow;
+            x_pow *= x;
+        }
+
+        println!("eval: {:?}, folded_eval: {:?}", eval, folded_eval);
+        if eval != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }
     }
