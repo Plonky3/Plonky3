@@ -1,5 +1,3 @@
-use core::cmp;
-
 use alloc::vec;
 use alloc::vec::Vec;
 

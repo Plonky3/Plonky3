@@ -1,5 +1,3 @@
-use core::cmp;
-
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -9,7 +7,7 @@ use p3_commit::Mmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_util::{reverse_bits, reverse_slice_index_bits};
+use p3_util::reverse_slice_index_bits;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
