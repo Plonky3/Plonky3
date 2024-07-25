@@ -29,6 +29,8 @@ where
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
+    assert!(log_max_height >= config.log_blowup + config.log_final_poly_len);
+
     let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);

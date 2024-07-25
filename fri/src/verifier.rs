@@ -110,7 +110,6 @@ where
             x_pow *= x;
         }
 
-        println!("eval: {:?}, folded_eval: {:?}", eval, folded_eval);
         if eval != folded_eval {
             return Err(FriError::FinalPolyMismatch);
         }

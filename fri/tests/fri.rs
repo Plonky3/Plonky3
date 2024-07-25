@@ -49,7 +49,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 
     let shift = Val::generator();
 
-    let ldes: Vec<RowMajorMatrix<Val>> = (3..10)
+    let ldes: Vec<RowMajorMatrix<Val>> = (5..10)
         .map(|deg_bits| {
             let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
             let mut lde = dft.coset_lde_batch(evals, 1, shift);
@@ -129,12 +129,13 @@ fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng, 2);
+        do_test_fri_ldt(&mut rng, 4);
     }
 }
 
-// This test is expected to panic because the polynomial degree is less the final_poly_degree in the config.
+// This test is expected to panic because the polynomial degree is less than the final_poly_degree in the config.
 #[test]
+#[should_panic]
 fn test_fri_ldt_should_panic() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
