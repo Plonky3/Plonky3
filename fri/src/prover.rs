@@ -126,14 +126,15 @@ where
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
     let mut final_poly = current.clone();
+
+    // Switch from the evaluation basis to the coefficient basis.
     reverse_slice_index_bits(&mut final_poly);
     final_poly = Radix2Dit::default().idft(final_poly);
 
-    println!("final_poly[16]: {:?}", &final_poly[16..final_poly.len()]);
-    println!("final_poly_len: {}", final_poly.len());
-    println!("log_max_final_poly_len: {}", config.log_final_poly_len);
+    debug_assert!(final_poly
+        .drain((1 << (config.log_final_poly_len))..)
+        .all(|x| x.is_zero()));
 
     final_poly
         .iter()

@@ -47,6 +47,7 @@ where
         .final_poly
         .iter()
         .for_each(|x| challenger.observe_ext_element(*x));
+
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
     }
@@ -103,6 +104,7 @@ where
             .exp_u64(reverse_bits_len(final_poly_index, log_max_height) as u64);
         let mut x_pow = F::one();
 
+        // Evaluate the final polynomial at x.
         for coeff in &proof.final_poly {
             eval += *coeff * x_pow;
             x_pow *= x;
