@@ -189,13 +189,21 @@ pub trait Poseidon2AVX2Helpers {
     }
 
     /// Reduce from an element in [-P, P) to [0, P)
+    /// The input can be saved as either a 32 or 64 bit number.
     #[inline]
     fn final_reduce_signed_vec(x: __m256i) -> __m256i {
         unsafe {
-            // Safety: Inputs must be -P < x < P.
+            // Safety: Inputs must be -P < x < P in which case the output z will be in [0, P).
 
-            // Note the top 32 bits of x, x_red and PRIME are all 0 so we can just work i32 arithmetic.
-            let x_plus_p = x86_64::_mm256_add_epi64(x, Self::PRIME); // Needs to be 64 here.
+            // Let us split the values as x = x_32 + 2^32 x_64 with everything interpreted as a u32 unless said otherwise.
+            // There are 3 cases to consider.
+            // P > (x_32 as i32) > 0, x_64 = 0,  => z_64 = 0, x + p = (x + p)_32 > x_32 so z_32 = x_32.
+            // -P < (x_32 as i32) < 0, x_64 = 0, => z_64 = 0, x_32 > P > (x + p)_32 > 0 so z_32 = x as i32 + p.
+            // -P < (x_32 as i32) < 0, x_64 = (2^32 - 1), => (x + p)_64 = 0, so z_64 = 0, so x_32 > P > (x + p)_32 > 0 so z_32 = x as i32 + p.
+
+            // In all cases we see the output is equal to the input mod P and in [0, P).
+            let x_plus_p = x86_64::_mm256_add_epi64(x, Self::PRIME);
+
             x86_64::_mm256_min_epu32(x, x_plus_p)
         }
     }

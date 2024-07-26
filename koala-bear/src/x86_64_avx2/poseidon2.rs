@@ -172,13 +172,13 @@ pub struct Poseidon2DataKoalaBearAVX2();
 impl Poseidon2AVX2Helpers for Poseidon2DataKoalaBearAVX2 {
     /// Given a vector of elements __m256i apply a monty reduction to each u64.
     /// Each u64 input must lie in [-P^2, P^2)
-    /// Each output will be a u64 lying in [-P, P)
+    /// Each output will be a u64 lying in [0, P)
     #[inline]
     fn monty_reduce_vec(state: __m256i) -> __m256i {
         unsafe {
             let red = monty_red_signed(state);
-            let red2 = x86_64::_mm256_srli_epi64::<32>(red); //srli shifts in 0's. Need to shift in sign bits. Not possible in AVX2 unfortunately.
-            Self::final_reduce_signed_vec(red2)
+            let red_shift = x86_64::_mm256_srli_epi64::<32>(red); //srli shifts in 0's. Need to shift in sign bits. Not possible in AVX2 unfortunately.
+            x86_64::_mm256_add_epi32(red_shift, Self::PRIME)
         }
     }
 
@@ -205,13 +205,13 @@ impl Poseidon2AVX2Helpers for Poseidon2DataKoalaBearAVX2 {
     fn internal_rc_sbox(s0: __m256i, rc: __m256i) -> __m256i {
         unsafe {
             // Need to get s0 into canonical form.
-            let red_s0 = Self::final_reduce_signed_vec(s0);
+            let red_s0 = Self::final_reduce_pos_vec(s0);
 
             // Each entry of sum is <= 2P < 2^32.
             let sum = x86_64::_mm256_add_epi32(red_s0, rc);
 
-            let sbox = joint_sbox(sum);
-            Self::final_reduce_signed_vec(sbox)
+            let sbox = joint_sbox(sum); // sbox is in (-P, P) as a u32 with all top bits 0.
+            x86_64::_mm256_add_epi32(sbox, Self::PRIME) // Output is now in [0, 2P) so can be used as a 64 bit number.
         }
     }
 
@@ -370,7 +370,7 @@ impl Poseidon2AVX2Methods<4, 16> for Poseidon2DataKoalaBearAVX2 {
         for round_constant in round_constants {
             Self::internal_round(state, *round_constant)
         }
-        Self::final_reduce_signed(state); // Input to final_external_rounds needs to be in [0, P].
+        Self::final_reduce_pos(state); // Input to final_external_rounds needs to be in [0, P].
     }
 
     /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
@@ -495,7 +495,7 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataKoalaBearAVX2 {
                 mat[3] = x86_64::_mm256_add_epi64(mat[3], total_sum);
             }
 
-            Self::monty_reduce(state); // Output, non canonical in [-P, P].
+            Self::monty_reduce(state); // Output, non canonical in [0, 2P].
         }
     }
 
@@ -533,7 +533,6 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataKoalaBearAVX2 {
         state.mat_mul_aes();
         state.right_mat_mul_i_plus_1();
         Self::partial_reduce(state);
-        Self::final_reduce_pos(state); // Input to internal_rounds needs to be [-P, P]. // Can just subtract P here, don't need the min operation.
     }
 
     /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
@@ -544,7 +543,7 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataKoalaBearAVX2 {
         for round_constant in round_constants {
             Self::internal_round(state, *round_constant)
         }
-        Self::final_reduce_signed(state); // Input to final_external_rounds needs to be in [0, P].
+        Self::final_reduce_pos(state); // Input to final_external_rounds needs to be in [0, P].
     }
 
     /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
