@@ -166,18 +166,27 @@ fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-fn monty_d(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) fn monty_red(input: __m256i) -> __m256i {
     unsafe {
-        let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
-        let q = x86_64::_mm256_mul_epu32(prod, MU);
+        let q = x86_64::_mm256_mul_epu32(input, MU);
         let q_P = x86_64::_mm256_mul_epu32(q, P);
-        x86_64::_mm256_sub_epi64(prod, q_P)
+        x86_64::_mm256_sub_epi64(input, q_P)
     }
 }
 
 #[inline]
 #[must_use]
-fn movehdup_epi32(x: __m256i) -> __m256i {
+#[allow(non_snake_case)]
+fn monty_d(lhs: __m256i, rhs: __m256i) -> __m256i {
+    unsafe {
+        let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
+        monty_red(prod)
+    }
+}
+
+#[inline]
+#[must_use]
+pub(crate) fn movehdup_epi32(x: __m256i) -> __m256i {
     // This instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
     unsafe {

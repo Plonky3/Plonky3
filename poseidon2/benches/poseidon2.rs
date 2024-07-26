@@ -4,6 +4,7 @@ use std::any::type_name;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{
     BabyBear, DiffusionMatrixBabyBear, MDSLightPermutationBabyBear, PackedBabyBearAVX2,
+    Poseidon2DataBabyBearAVX2,
 };
 // use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{PackedField, PrimeField, PrimeField32, PrimeField64};
@@ -42,10 +43,13 @@ fn bench_poseidon2(c: &mut Criterion) {
         7,
     >(c);
 
-    // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>(c);
+    poseidon2_avx2_all::<4, 16, 7, Poseidon2DataBabyBearAVX2, PackedBabyBearAVX2>(c);
+    poseidon2_avx2_all::<6, 24, 7, Poseidon2DataBabyBearAVX2, PackedBabyBearAVX2>(c);
+
+    poseidon2_p64::<KoalaBear, MDSLightPermutationKoalaBear, DiffusionMatrixKoalaBear, 16, 3>(c);
     // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 5>(c);
     // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 7>(c);
-    // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 3>(c);
+    poseidon2_p64::<KoalaBear, MDSLightPermutationKoalaBear, DiffusionMatrixKoalaBear, 24, 3>(c);
     // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 5>(c);
     // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 7>(c);
 
@@ -66,8 +70,8 @@ fn bench_poseidon2(c: &mut Criterion) {
         3,
     >(c);
 
-    poseidon2_avx2_all::<4, 16, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
-    poseidon2_avx2_all::<6, 24, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
+    poseidon2_avx2_all::<4, 16, 3, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
+    poseidon2_avx2_all::<6, 24, 3, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
 
     poseidon2_p64::<Mersenne31, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 16, 5>(c);
     poseidon2_p64::<Mersenne31, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 24, 5>(c);
@@ -88,8 +92,8 @@ fn bench_poseidon2(c: &mut Criterion) {
         5,
     >(c);
 
-    poseidon2_avx2_all::<4, 16, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
-    poseidon2_avx2_all::<6, 24, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    poseidon2_avx2_all::<4, 16, 5, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
+    poseidon2_avx2_all::<6, 24, 5, Poseidon2DataM31AVX2, PackedMersenne31AVX2>(c);
 
     // poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>(c);
     // poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 12, 7>(
@@ -203,8 +207,9 @@ where
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
 }
 
-fn poseidon2_avx2_all<const HEIGHT: usize, const WIDTH: usize, Poseidon2Data, PF>(c: &mut Criterion)
-where
+fn poseidon2_avx2_all<const HEIGHT: usize, const WIDTH: usize, const D: u64, Poseidon2Data, PF>(
+    c: &mut Criterion,
+) where
     PF: PackedField,
     PF::Scalar: PrimeField32,
     Poseidon2Data: Poseidon2AVX2Methods<HEIGHT, WIDTH, PF = PF>,
@@ -214,7 +219,7 @@ where
     let mut rng = thread_rng();
 
     let poseidon_2: Poseidon2AVX2<HEIGHT, WIDTH, Poseidon2Data> =
-        Poseidon2AVX2::new_from_rng_128::<_, 5>(&mut rng);
+        Poseidon2AVX2::new_from_rng_128::<_, D>(&mut rng);
 
     let avx2_input: [PF; WIDTH] = rng.gen();
     let name = format!(
