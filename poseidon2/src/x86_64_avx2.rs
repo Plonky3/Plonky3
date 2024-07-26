@@ -35,7 +35,7 @@ use crate::poseidon2_round_numbers_128;
 /// Should only be called with N = 4, 6.
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
-pub struct Packed64bitM31Tensor<const HEIGHT: usize>([[__m256i; 4]; HEIGHT]);
+pub struct Packed64bitM31Tensor<const HEIGHT: usize>(pub [[__m256i; 4]; HEIGHT]);
 
 impl From<[__m256i; 4]> for Packed64bitM31Tensor<1> {
     fn from(value: [__m256i; 4]) -> Self {
@@ -50,7 +50,7 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     /// [ 1 1 2 3 ]
     /// [ 3 1 1 2 ].
     #[inline]
-    fn mat_mul_aes(&mut self) {
+    pub fn mat_mul_aes(&mut self) {
         unsafe {
             // Safety: If the inputs are <= L, the outputs are <= 7L.
             // Hence if L < 2^61, overflow will not occur.
@@ -80,7 +80,7 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     ///                         [x3 x7 ...]
     /// We are performing a right multiplication by the matrix I + 1.
     #[inline]
-    fn right_mat_mul_i_plus_1(&mut self) {
+    pub fn right_mat_mul_i_plus_1(&mut self) {
         unsafe {
             let total = self.mat_sum();
 
@@ -95,7 +95,7 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
 
     /// Add together two tensors element wise.
     #[inline]
-    fn add(&mut self, rhs: Self) {
+    pub fn add(&mut self, rhs: &Self) {
         unsafe {
             // Safety: element of rhs must be in canonical form.
             // Elements of self should be small enough such that overflow is impossible.
@@ -110,7 +110,7 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
 
     /// Compute the sum of all __m256i vectors in the tensor.
     #[inline]
-    fn vec_sum(&self) -> __m256i {
+    pub fn vec_sum(&self) -> __m256i {
         unsafe {
             // Safety: Elements of self should be small enough such that overflow is impossible.
             // If all inputs are < L, then outputs are <= 4*HEIGHT*L
@@ -128,19 +128,19 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     /// Compute the sum of all [__m256i; 4] matrices in the tensor.
     /// A sum across the height dimension
     #[inline]
-    fn mat_sum(&self) -> [__m256i; 4] {
+    pub fn mat_sum(&self) -> [__m256i; 4] {
         // Safety: Elements of self should be small enough such that overflow is impossible.
         // If all inputs are < L, then outputs are <= HEIGHT*L
         let mut output: Packed64bitM31Tensor<1> = self.0[0].into();
         for mat in self.0.iter().skip(1) {
-            output.add((*mat).into())
+            output.add(&(*mat).into())
         }
         output.0[0]
     }
 
     /// Left shift each element in self by the corresponding shift in HEIGHT;
     #[inline]
-    fn left_shift(&mut self, shifts: Packed64bitM31Tensor<HEIGHT>) {
+    pub fn left_shift(&mut self, shifts: Packed64bitM31Tensor<HEIGHT>) {
         unsafe {
             // Safety: Elements of self, shifts should be small enough such that overflow is impossible.
             for i in 0..HEIGHT {
@@ -155,14 +155,14 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
 
 pub trait Poseidon2AVX2Helpers {
     /// Given a vector of elements __m256i apply a monty reduction to each u64.
-    /// Each u64 input must lie in [0, 2^{32}P)
-    /// Each output will be a u64 lying in [0, P)
-    fn full_reduce_vec(state: __m256i) -> __m256i;
+    /// In some fields (E.g. M31) this will be the same as partial_reduce_vec.
+    /// Depending on input field, inputs will either be in [-P^2, P^2] or [0, P^2]
+    /// Similarly outputs will either be in [-P, P] or [0, 2P]
+    fn monty_reduce_vec(state: __m256i) -> __m256i;
 
-    /// Given a vector of elements __m256i apply a partial monty reduction to each u64
-    /// Each u64 input must lie in [0, 2^{32}P)
+    /// Given a vector of elements __m256i apply a partial reduction to each u64
+    /// Inputs should be positive with size depending on the field.
     /// Each output will be a u64 lying in [0, 2P)
-    /// Slightly cheaper than full_reduce
     fn partial_reduce_vec(state: __m256i) -> __m256i;
 
     /// Apply the s-box: x -> x^s for some small s coprime to p - 1 to a vector __m256i.
@@ -171,9 +171,34 @@ pub trait Poseidon2AVX2Helpers {
     fn joint_sbox_vec(state: __m256i) -> __m256i;
 
     /// Apply the s-box: x -> (x + rc)^s to a vector __m256i.
-    fn internal_rc_sbox(s0: __m256i, rc: u32) -> __m256i;
+    fn internal_rc_sbox(s0: __m256i, rc: __m256i) -> __m256i;
 
-    const PACKED_8XPRIME: __m256i;
+    const PRIME: __m256i; // The appropriate prime number.
+    const PACKED_8XPRIME: __m256i; // 8 times the prime.
+
+    /// Reduce from an element in [0, 2P) to [0, P)
+    #[inline]
+    fn final_reduce_pos_vec(x: __m256i) -> __m256i {
+        unsafe {
+            // Safety: Inputs must be < 2P.
+
+            // Note the top 32 bits of x, x_red and PRIME are all 0 so we can just work i32 arithmetic.
+            let x_sub_p = x86_64::_mm256_sub_epi32(x, Self::PRIME);
+            x86_64::_mm256_min_epu32(x, x_sub_p)
+        }
+    }
+
+    /// Reduce from an element in [-P, P) to [0, P)
+    #[inline]
+    fn final_reduce_signed_vec(x: __m256i) -> __m256i {
+        unsafe {
+            // Safety: Inputs must be -P < x < P.
+
+            // Note the top 32 bits of x, x_red and PRIME are all 0 so we can just work i32 arithmetic.
+            let x_plus_p = x86_64::_mm256_add_epi64(x, Self::PRIME); // Needs to be 64 here.
+            x86_64::_mm256_min_epu32(x, x_plus_p)
+        }
+    }
 }
 
 pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
@@ -195,16 +220,16 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
     ) -> Packed64bitM31Tensor<HEIGHT>;
 
     // Given a field element, pull out the u32 stored inside.
-    fn manipulate_internal_constants(input: <Self::PF as PackedField>::Scalar) -> u32;
+    fn manipulate_internal_constants(input: <Self::PF as PackedField>::Scalar) -> __m256i;
 
     /// Apply full_reduce_vec to every __m256i in the matrix.
     #[inline]
-    fn full_reduce(state: &mut Packed64bitM31Tensor<HEIGHT>) {
+    fn monty_reduce(state: &mut Packed64bitM31Tensor<HEIGHT>) {
         for mat in state.0.iter_mut() {
-            mat[0] = Self::full_reduce_vec(mat[0]);
-            mat[1] = Self::full_reduce_vec(mat[1]);
-            mat[2] = Self::full_reduce_vec(mat[2]);
-            mat[3] = Self::full_reduce_vec(mat[3]);
+            mat[0] = Self::monty_reduce_vec(mat[0]);
+            mat[1] = Self::monty_reduce_vec(mat[1]);
+            mat[2] = Self::monty_reduce_vec(mat[2]);
+            mat[3] = Self::monty_reduce_vec(mat[3]);
         }
     }
 
@@ -230,95 +255,159 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
         }
     }
 
+    /// Apply final_reduce_pos_vec to every __m256i in the matrix.
+    #[inline]
+    fn final_reduce_pos(state: &mut Packed64bitM31Tensor<HEIGHT>) {
+        for mat in state.0.iter_mut() {
+            mat[0] = Self::final_reduce_pos_vec(mat[0]);
+            mat[1] = Self::final_reduce_pos_vec(mat[1]);
+            mat[2] = Self::final_reduce_pos_vec(mat[2]);
+            mat[3] = Self::final_reduce_pos_vec(mat[3]);
+        }
+    }
+
+    /// Apply final_reduce_signed_vec to every __m256i in the matrix.
+    #[inline]
+    fn final_reduce_signed(state: &mut Packed64bitM31Tensor<HEIGHT>) {
+        for mat in state.0.iter_mut() {
+            mat[0] = Self::final_reduce_signed_vec(mat[0]);
+            mat[1] = Self::final_reduce_signed_vec(mat[1]);
+            mat[2] = Self::final_reduce_signed_vec(mat[2]);
+            mat[3] = Self::final_reduce_signed_vec(mat[3]);
+        }
+    }
+
     // Constants for the matrix used in the internal linear layer.
     // Gives the diagonal elements of the matrix arranged in the appropriate way.
     const INTERNAL_SHIFTS: Packed64bitM31Tensor<HEIGHT>;
-}
 
-/// Compute a single internal Poseidon2 round.
-/// Input must be < 2P < 2^32 but does not need to be canonical.
-/// Round Constant is assumed to be in canonical form.
-/// Output will be < 2P.
-#[inline]
-fn internal_round<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
-    state: &mut Packed64bitM31Tensor<HEIGHT>,
-    rc: u32,
-) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
-{
-    unsafe {
-        // We do two things simultaneously.
-        // Take the first value, add rc and compute the s-box.
-        // Do a matrix multiplication on the remaining elements.
-        // We will then move the first element back in later.
+    /// Compute a single internal Poseidon2 round.
+    /// Input must be < 2P < 2^32 but does not need to be canonical.
+    /// Round Constant is assumed to be in canonical form.
+    /// Output will be < 2P.
+    #[inline]
+    fn internal_round(state: &mut Packed64bitM31Tensor<HEIGHT>, rc: __m256i) {
+        unsafe {
+            // We do two things simultaneously.
+            // Take the first value, add rc and compute the s-box.
+            // Do a matrix multiplication on the remaining elements.
+            // We will then move the first element back in later.
 
-        const ZEROS: __m256i = unsafe { transmute::<[u64; 4], _>([0; 4]) };
+            const ZEROS: __m256i = unsafe { transmute::<[u64; 4], _>([0; 4]) };
 
-        let s0_post_sbox = P2AVX2::internal_rc_sbox(state.0[0][0], rc); // Need to do something different to the first element.
+            let s0_post_sbox = Self::internal_rc_sbox(state.0[0][0], rc); // Need to do something different to the first element.
 
-        state.0[0][0] = ZEROS;
+            state.0[0][0] = ZEROS;
 
-        // Can do part of the sum vertically.
-        let vec_sum = state.vec_sum();
-        // still need to do the horizontal part of the sum but this can wait until later.
+            // Can do part of the sum vertically.
+            let vec_sum = state.vec_sum();
+            // still need to do the horizontal part of the sum but this can wait until later.
 
-        // Doing the diagonal multiplication.
-        state.left_shift(P2AVX2::INTERNAL_SHIFTS);
+            // Doing the diagonal multiplication.
+            state.left_shift(Self::INTERNAL_SHIFTS);
 
-        // Need to multiply s0_post_sbox by -2.
-        // s0_post_sbox < 2^34 so the easiest will be to do
-        // 8P - s0_post_sbox to get the negative, then shift left by 1.
-        // This will add 16P to some other terms in state but this doesn't matter as we work mod P.
-        let neg_s0 = x86_64::_mm256_sub_epi64(P2AVX2::PACKED_8XPRIME, s0_post_sbox);
-        let neg_2_s0 = x86_64::_mm256_add_epi64(neg_s0, neg_s0);
+            // Need to multiply s0_post_sbox by -2.
+            // s0_post_sbox < 2^34 so the easiest will be to do
+            // 8P - s0_post_sbox to get the negative, then shift left by 1.
+            // This will add 16P to some other terms in state but this doesn't matter as we work mod P.
+            let neg_s0 = x86_64::_mm256_sub_epi64(Self::PACKED_8XPRIME, s0_post_sbox);
+            let neg_2_s0 = x86_64::_mm256_add_epi64(neg_s0, neg_s0);
 
-        state.0[0][0] = x86_64::_mm256_add_epi64(neg_2_s0, state.0[0][0]);
+            state.0[0][0] = x86_64::_mm256_add_epi64(neg_2_s0, state.0[0][0]);
 
-        let total_sum = x86_64::_mm256_add_epi64(vec_sum, s0_post_sbox);
+            let total_sum = x86_64::_mm256_add_epi64(vec_sum, s0_post_sbox);
 
-        for mat in state.0.iter_mut() {
-            mat[0] = x86_64::_mm256_add_epi64(mat[0], total_sum);
-            mat[1] = x86_64::_mm256_add_epi64(mat[1], total_sum);
-            mat[2] = x86_64::_mm256_add_epi64(mat[2], total_sum);
-            mat[3] = x86_64::_mm256_add_epi64(mat[3], total_sum);
+            for mat in state.0.iter_mut() {
+                mat[0] = x86_64::_mm256_add_epi64(mat[0], total_sum);
+                mat[1] = x86_64::_mm256_add_epi64(mat[1], total_sum);
+                mat[2] = x86_64::_mm256_add_epi64(mat[2], total_sum);
+                mat[3] = x86_64::_mm256_add_epi64(mat[3], total_sum);
+            }
+
+            Self::partial_reduce(state); // Output, non canonical in [0, 2^32 - 2].
+        }
+    }
+
+    /// A single External Round.
+    /// Note that we change the order to be mat_mul -> RC -> S-box (instead of RC -> S-box -> mat_mul in the paper).
+    /// Input does not need to be in canonical form but must be < 2^56.
+    /// Output will be < 2^34.
+    #[inline]
+    fn rotated_external_round(
+        state: &mut Packed64bitM31Tensor<HEIGHT>,
+        round_constant: &Packed64bitM31Tensor<HEIGHT>,
+    ) {
+        // Assume input state < L
+
+        state.mat_mul_aes(); // state < 7L
+        state.right_mat_mul_i_plus_1(); // state < 49L (or 35L depending on HEIGHT)
+        state.add(round_constant); // state < 49L + (2^31 - 1) < 50L
+        Self::partial_reduce(state); // We need state < 2^62 for this. => L < (2^62)/50 < 2^56.
+        Self::joint_sbox(state); // state is now < 2^34.
+    }
+
+    /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
+    /// Inputs will always be canonical though in principal only need to be < 2^56.
+    /// Output will be < 2P.
+    #[inline]
+    fn initial_external_rounds(
+        state: &mut Packed64bitM31Tensor<HEIGHT>,
+        round_constants: &[Packed64bitM31Tensor<HEIGHT>],
+    ) {
+        for round_constant in round_constants {
+            Self::rotated_external_round(state, round_constant)
         }
 
-        P2AVX2::partial_reduce(state); // Output, non canonical in [0, 2^32 - 2].
+        state.mat_mul_aes();
+        state.right_mat_mul_i_plus_1();
+        Self::partial_reduce(state); // Input to internal_rounds only needs to be < 2^32.
     }
-}
 
-/// A single External Round.
-/// Note that we change the order to be mat_mul -> RC -> S-box (instead of RC -> S-box -> mat_mul in the paper).
-/// Input does not need to be in canonical form but must be < 2^56.
-/// Output will be < 2^34.
-#[inline]
-fn rotated_external_round<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
-    state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constant: &Packed64bitM31Tensor<HEIGHT>,
-) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
-{
-    // Assume input state < L
+    /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
+    /// Inputs should be < 2P.
+    /// Output will be < 2P.
+    #[inline]
+    fn internal_rounds(state: &mut Packed64bitM31Tensor<HEIGHT>, round_constants: &[__m256i]) {
+        for round_constant in round_constants {
+            Self::internal_round(state, *round_constant)
+        }
+    }
 
-    state.mat_mul_aes(); // state < 7L
-    state.right_mat_mul_i_plus_1(); // state < 49L (or 35L depending on HEIGHT)
-    state.add(*round_constant); // state < 49L + (2^31 - 1)
-    P2AVX2::partial_reduce(state); // We need state < 2^62 for this. => L < (2^62)/50 < 2^56.
-    P2AVX2::joint_sbox(state); // state is now < 2^34.
+    /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
+    /// Output is returned reduced.
+    #[inline]
+    fn final_external_rounds(
+        state: &mut Packed64bitM31Tensor<HEIGHT>,
+        round_constants: &[Packed64bitM31Tensor<HEIGHT>],
+    ) {
+        // Input is < 2P
+        Self::final_reduce_pos(state);
+        state.add(&round_constants[0]);
+        Self::joint_sbox(state);
+
+        for round_constant in round_constants[1..].iter() {
+            Self::rotated_external_round(state, round_constant)
+        }
+
+        state.mat_mul_aes();
+        state.right_mat_mul_i_plus_1();
+        Self::partial_reduce(state);
+        Self::final_reduce_pos(state);
+    }
 }
 
 /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
 /// Inputs will always be canonical though in principal only need to be < 2^56.
 /// Output will be < 2P.
 #[inline]
-pub fn initial_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
+pub fn initial_external_rounds_iter<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constants: &[Packed64bitM31Tensor<HEIGHT>],
+    round_constants: impl Iterator<Item = Packed64bitM31Tensor<HEIGHT>>,
 ) where
     P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
-    for round_constant in round_constants.iter() {
-        rotated_external_round::<HEIGHT, WIDTH, P2AVX2>(state, round_constant)
+    for round_constant in round_constants {
+        P2AVX2::rotated_external_round(state, &round_constant)
     }
 
     state.mat_mul_aes();
@@ -330,37 +419,39 @@ pub fn initial_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
 /// Inputs should be < 2P.
 /// Output will be < 2P.
 #[inline]
-pub fn internal_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
+pub fn internal_rounds_iter<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constants: &[u32],
+    round_constants: impl Iterator<Item = __m256i>,
 ) where
     P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
-    for round_constant in round_constants.iter() {
-        internal_round::<HEIGHT, WIDTH, P2AVX2>(state, *round_constant)
+    for round_constant in round_constants {
+        P2AVX2::internal_round(state, round_constant)
     }
 }
 
 /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
+/// Output is reduced.
 #[inline]
-pub fn final_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
+pub fn final_external_rounds_iter<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
     state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constants: &[Packed64bitM31Tensor<HEIGHT>],
+    mut round_constants: impl Iterator<Item = Packed64bitM31Tensor<HEIGHT>>,
 ) where
     P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
 {
     // Input is < 2P
-    state.add(round_constants[0]);
-    P2AVX2::partial_reduce(state);
+    P2AVX2::final_reduce_pos(state);
+    state.add(&round_constants.next().unwrap());
     P2AVX2::joint_sbox(state);
 
-    for round_constant in round_constants.iter().skip(1) {
-        rotated_external_round::<HEIGHT, WIDTH, P2AVX2>(state, round_constant)
+    for round_constant in round_constants {
+        P2AVX2::rotated_external_round(state, &round_constant)
     }
 
     state.mat_mul_aes();
     state.right_mat_mul_i_plus_1();
-    // Output is not reduced.
+    P2AVX2::partial_reduce(state);
+    P2AVX2::final_reduce_pos(state);
 }
 
 /// A Poseidon2 abstraction allowing for fast Packed Field implementations.
@@ -374,7 +465,7 @@ pub struct Poseidon2AVX2<const HEIGHT: usize, const WIDTH: usize, P2AVX2> {
     initial_external_constants: Vec<Packed64bitM31Tensor<HEIGHT>>,
 
     /// The internal round constants.
-    internal_constants: Vec<u32>,
+    internal_constants: Vec<__m256i>,
 
     /// The external round constants for the final set of external rounds.
     final_external_constants: Vec<Packed64bitM31Tensor<HEIGHT>>,
@@ -391,7 +482,7 @@ where
     /// Create a new Poseidon2 configuration.
     pub fn new(
         initial_external_constants: Vec<Packed64bitM31Tensor<HEIGHT>>,
-        internal_constants: Vec<u32>,
+        internal_constants: Vec<__m256i>,
         final_external_constants: Vec<Packed64bitM31Tensor<HEIGHT>>,
     ) -> Self {
         // Need to determine supported widths later.
@@ -448,16 +539,9 @@ where
     fn permute(&self, state: [PF; WIDTH]) -> [PF; WIDTH] {
         let mut internal_reps = P2AVX2::from_input(state);
         for internal_rep in internal_reps.as_mut() {
-            initial_external_rounds::<HEIGHT, WIDTH, P2AVX2>(
-                internal_rep,
-                &self.initial_external_constants,
-            );
-            internal_rounds::<HEIGHT, WIDTH, P2AVX2>(internal_rep, &self.internal_constants);
-            final_external_rounds::<HEIGHT, WIDTH, P2AVX2>(
-                internal_rep,
-                &self.final_external_constants,
-            );
-            P2AVX2::full_reduce(internal_rep); // TODO: Can maybe do a simpler reduction than this?
+            P2AVX2::initial_external_rounds(internal_rep, &self.initial_external_constants);
+            P2AVX2::internal_rounds(internal_rep, &self.internal_constants);
+            P2AVX2::final_external_rounds(internal_rep, &self.final_external_constants);
         }
 
         P2AVX2::to_output(internal_reps)

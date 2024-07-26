@@ -1,8 +1,10 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
-use p3_field::PrimeField32;
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_field::{AbstractField, PrimeField32};
+use p3_poseidon2::{
+    external_final_permute_state, external_initial_permute_state, internal_permute_state,
+    ExternalLayer, InternalLayer,
+};
 
 use crate::{monty_reduce, to_koalabear_array, KoalaBear};
 
@@ -17,7 +19,7 @@ use crate::{monty_reduce, to_koalabear_array, KoalaBear};
 // Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 8388608]
 //                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    14,    15,    16,     17,     18,     19,      20,      21,      23]
 //
-// In order to use these to their fullest potential we need to slightly reimage what the matrix looks like.
+// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
 // Note that if (1 + D(v)) is a valid matrix then so is r(1 + D(v)) for any constant scalar r. Hence we should operate
 // such that (1 + D(v)) is the monty form of the matrix. This allows for delayed reduction tricks.
 
@@ -81,57 +83,99 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
 ];
 
+fn permute_mut<const N: usize>(state: &mut [KoalaBear; N], shifts: &[u8]) {
+    let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+    let full_sum = part_sum + (state[0].value as u64);
+    let s0 = part_sum + (-state[0]).value as u64;
+    state[0] = KoalaBear {
+        value: monty_reduce(s0),
+    };
+    for i in 1..N {
+        let si = full_sum + ((state[i].value as u64) << shifts[i - 1]);
+        state[i] = KoalaBear {
+            value: monty_reduce(si),
+        };
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixKoalaBear;
 
-impl Permutation<[KoalaBear; 16]> for DiffusionMatrixKoalaBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; 16]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = KoalaBear {
-            value: monty_reduce(s0),
-        };
-        for i in 1..16 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS[i - 1]);
-            state[i] = KoalaBear {
-                value: monty_reduce(si),
-            };
-        }
+impl<const D: u64> InternalLayer<KoalaBear, 16, D> for DiffusionMatrixKoalaBear {
+    type InternalState = [KoalaBear; 16];
+
+    type InternalConstantsType = KoalaBear;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<KoalaBear, 16, D>(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS),
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<KoalaBear, 16> for DiffusionMatrixKoalaBear {}
+impl<const D: u64> InternalLayer<KoalaBear, 24, D> for DiffusionMatrixKoalaBear {
+    type InternalState = [KoalaBear; 24];
 
-impl Permutation<[KoalaBear; 24]> for DiffusionMatrixKoalaBear {
-    #[inline]
-    fn permute_mut(&self, state: &mut [KoalaBear; 24]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = KoalaBear {
-            value: monty_reduce(s0),
-        };
-        for i in 1..24 {
-            let si = full_sum
-                + ((state[i].value as u64)
-                    << POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS[i - 1]);
-            state[i] = KoalaBear {
-                value: monty_reduce(si),
-            };
-        }
+    type InternalConstantsType = KoalaBear;
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Self::InternalConstantsType],
+    ) {
+        internal_permute_state::<KoalaBear, 24, D>(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS),
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<KoalaBear, 24> for DiffusionMatrixKoalaBear {}
+#[derive(Debug, Clone, Default)]
+pub struct MDSLightPermutationKoalaBear;
+
+impl<AF: AbstractField<F = KoalaBear>, const WIDTH: usize, const D: u64> ExternalLayer<AF, WIDTH, D>
+    for MDSLightPermutationKoalaBear
+{
+    type InternalState = [AF; WIDTH];
+    type ArrayState = [[AF; WIDTH]; 1];
+
+    fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState {
+        [state]
+    }
+
+    fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH] {
+        state[0].clone()
+    }
+
+    fn permute_state_initial(
+        &self,
+        state: &mut [AF; WIDTH],
+        initial_external_constants: &[[KoalaBear; WIDTH]],
+    ) {
+        external_initial_permute_state::<AF, WIDTH, D>(state, initial_external_constants);
+    }
+
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        final_external_constants: &[[KoalaBear; WIDTH]],
+    ) {
+        external_final_permute_state::<AF, WIDTH, D>(state, final_external_constants);
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::Poseidon2;
+    use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -143,17 +187,36 @@ mod tests {
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for KoalaBear
-    fn poseidon2_koalabear<const WIDTH: usize, const D: u64, DiffusionMatrix>(
-        input: &mut [F; WIDTH],
-        diffusion_matrix: DiffusionMatrix,
-    ) where
-        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
+    fn poseidon2_koalabear<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
+    where
+        MDSLightPermutationKoalaBear: ExternalLayer<KoalaBear, WIDTH, D>,
+        DiffusionMatrixKoalaBear:
+            InternalLayer<
+                KoalaBear,
+                WIDTH,
+                D,
+                InternalState = <MDSLightPermutationKoalaBear as ExternalLayer<
+                    KoalaBear,
+                    WIDTH,
+                    D,
+                >>::InternalState,
+                InternalConstantsType = KoalaBear,
+            >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
+        let poseidon2: Poseidon2<
+            F,
+            MDSLightPermutationKoalaBear,
+            DiffusionMatrixKoalaBear,
+            WIDTH,
+            D,
+        > = Poseidon2::new_from_rng_128(
+            MDSLightPermutationKoalaBear,
+            DiffusionMatrixKoalaBear,
+            &mut rng,
+        );
 
         poseidon2.permute_mut(input);
     }
@@ -178,7 +241,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear);
+        poseidon2_koalabear::<16, 3>(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -204,7 +267,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear);
+        poseidon2_koalabear::<24, 3>(&mut input);
         assert_eq!(input, expected);
     }
 }

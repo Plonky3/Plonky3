@@ -49,7 +49,6 @@ impl<F, MdsLightLayer, DiffusionLayer, const WIDTH: usize, const D: u64>
     Poseidon2<F, MdsLightLayer, DiffusionLayer, WIDTH, D>
 where
     F: PrimeField,
-    MdsLightLayer: ExternalLayer<F, WIDTH, D>,
 {
     /// Create a new Poseidon2 configuration.
     pub fn new(
@@ -97,7 +96,6 @@ impl<F, MdsLightLayer, DiffusionLayer, const WIDTH: usize, const D: u64>
     Poseidon2<F, MdsLightLayer, DiffusionLayer, WIDTH, D>
 where
     F: PrimeField64,
-    MdsLightLayer: ExternalLayer<F, WIDTH, D>,
 {
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
     pub fn new_from_rng_128<R: Rng>(
