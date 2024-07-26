@@ -6,6 +6,7 @@ use p3_matrix::MatrixRows;
 
 use crate::pcs::UnivariatePcs;
 
+#[allow(dead_code)]
 pub struct MultiFromUniPcs<Val, EF, In, U, Challenger>
 where
     Val: Field,
