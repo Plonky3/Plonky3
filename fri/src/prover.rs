@@ -28,7 +28,7 @@ where
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
     input.iter().enumerate().for_each(|(i, v)| {
-        if let Some(_) = v {
+        if v.is_some() {
             assert!(i >= config.log_final_poly_len);
         }
     });
