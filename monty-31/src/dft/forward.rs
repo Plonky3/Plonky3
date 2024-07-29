@@ -7,14 +7,17 @@ use p3_util::log2_strict_usize;
 use super::split_at_mut_unchecked;
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
-// TODO: Consider following Hexl and storing the roots in a single
-// array in bit-reversed order, but with duplicates for certain roots
-// to avoid computing permutations in the inner loop.
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
-    /// FIXME: The (i-1)th vector contains the roots...
-    fn make_table(gen: Self, lg_n: usize) -> Vec<Vec<Self>> {
+    /// FIXME: Document the structure of the return value
+    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
+        // TODO: Consider following Hexl and storing the roots in a single
+        // array in bit-reversed order, but with duplicates for certain roots
+        // to avoid computing permutations in the inner loop.
+
+        let lg_n = log2_strict_usize(n);
         let half_n = 1 << (lg_n - 1);
         // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
+        let gen = Self::two_adic_generator(lg_n);
         let nth_roots: Vec<_> = gen.powers().take(half_n).skip(1).collect();
 
         (0..(lg_n - 1))
@@ -27,11 +30,6 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                     .collect::<Vec<_>>()
             })
             .collect()
-    }
-
-    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
-        let lg_n = log2_strict_usize(n);
-        Self::make_table(Self::two_adic_generator(lg_n), lg_n)
     }
 }
 
