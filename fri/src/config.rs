@@ -11,4 +11,7 @@ impl<M> FriConfig<M> {
     pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
     }
+    pub const fn arity(&self) -> usize {
+        1 << self.log_arity
+    }
 }

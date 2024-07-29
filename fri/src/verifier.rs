@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use core::iter::zip;
-use itertools::izip;
+use itertools::{izip, Itertools};
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
@@ -104,6 +104,8 @@ where
             log_max_height,
         )?;
 
+        println!("Verifier phase folded_eval: {:?}", folded_eval);
+
         if folded_eval != proof.final_poly {
             return Err(FriError::FinalPolyMismatch);
         }
@@ -125,21 +127,28 @@ where
     F: TwoAdicField,
     M: Mmcs<F>,
 {
-    let mut folded_eval = F::zero();
+    let mut folded_eval = reduced_openings[log_max_height];
     let mut x = F::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
 
+    let mut phase_counter = 0;
+
+    for i in 0..32 {
+        if reduced_openings[i] != F::zero() {
+            println!("Reduced opening non-zero at index: {}", i);
+        }
+    }
+
     // TODO: Log_folded_height is a misnomer now, should rename.
-    for ((i, log_folded_height), commit, step, &beta) in izip!(
-        (config.log_blowup + config.log_arity - 1..(log_max_height))
+    for (log_folded_height, commit, step, &beta) in izip!(
+        (config.log_blowup..log_max_height + 1 - config.log_arity)
             .rev()
-            .step_by(config.log_arity)
-            .enumerate(),
+            .step_by(config.log_arity),
         commit_phase_commits,
         &proof.commit_phase_openings,
         betas,
     ) {
-        folded_eval += reduced_openings[log_folded_height + 1];
+        phase_counter += 1;
 
         println!("Verifier phase log_folded_height: {}", log_folded_height);
 
@@ -162,7 +171,7 @@ where
 
         let dims = &[Dimensions {
             width: 1 << config.log_arity,
-            height: 1 << (log_folded_height + 1 - config.log_arity),
+            height: 1 << (log_folded_height),
         }];
 
         println!("Dims: {:?}", dims);
@@ -182,23 +191,36 @@ where
             })?;
         let g = F::two_adic_generator(config.log_arity);
 
-        let mut xs = vec![x; 1 << config.log_arity];
-        for (i, y) in g.powers().take(1 << config.log_arity).enumerate() {
-            let index_of_x_times_y = ...;
-            xs[index_of_x_times_y] *=y;
+        let mut ord_idx = index_self_in_siblings;
+        let mut ord_evals = vec![];
+
+        let xs = g.powers().take(config.arity()).map(|y| x * y).collect_vec();
+        for _ in 0..config.arity() {
+            ord_evals.push(evals[ord_idx]);
+            ord_idx = next_index_in_coset(ord_idx, config.log_arity);
         }
 
         // interpolate and evaluate at beta
-        folded_eval = interpolate_lagrange_and_evaluate(&xs, &evals, beta);
+        folded_eval = interpolate_lagrange_and_evaluate(&xs, &ord_evals, beta);
 
         index = index_set;
         x = x.exp_power_of_2(config.log_arity);
+        println!("Folded_eval after folding: {:?}", folded_eval);
+
+        folded_eval += reduced_openings[log_folded_height];
     }
+    println!("Number of verify query steps: {}", phase_counter);
 
     // debug_assert!(index < config.blowup(), "index was {}", index);
     // debug_assert_eq!(x.exp_power_of_2(config.log_blowup), F::one());
 
     Ok(folded_eval)
+}
+
+fn next_index_in_coset(index: usize, log_arity: usize) -> usize {
+    let mut result = reverse_bits_len(index, log_arity);
+    result += 1;
+    reverse_bits_len(result, log_arity)
 }
 
 fn interpolate_lagrange_and_evaluate<F: TwoAdicField>(xs: &[F], ys: &[F], beta: F) -> F {

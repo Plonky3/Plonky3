@@ -10,7 +10,6 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
-use crate::fold_even_odd::fold_even_odd;
 use crate::{fold, CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
@@ -34,6 +33,8 @@ where
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
     println!("Prover log_max_height: {}", log_max_height);
 
+    let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
+
     let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
@@ -50,6 +51,11 @@ where
             .map(|&index| answer_query(config, &commit_phase_result.data, index))
             .collect()
     });
+
+    println!(
+        "Prover commit_phase_commits: {:?}",
+        commit_phase_result.commits.len()
+    );
 
     (
         FriProof {
@@ -93,7 +99,8 @@ where
             );
             // println!("Opened row: {:?}", opened_row);
 
-            opened_row.remove(index_self);
+            let tmp = opened_row.remove(index_self);
+            println!("Eval for prover: {}", tmp);
             let siblings = opened_row;
 
             println!("Opening at index: {}", index_i);
@@ -129,11 +136,13 @@ where
 
     let mut commits = vec![];
     let mut data = vec![];
+    let mut phase_counter = 0;
 
     for log_folded_height in (config.log_blowup..(log_max_height + 1 - config.log_arity))
         .rev()
         .step_by(config.log_arity)
     {
+        phase_counter += 1;
         println!("Commit phase log_folded_height: {}", log_folded_height);
         let leaves = RowMajorMatrix::new(current.clone(), 1 << config.log_arity);
         println!("Dimensions: {:?}, {}", leaves.width(), leaves.height());
@@ -150,9 +159,16 @@ where
         }
     }
 
+    println!("Did {} commit phase steps", phase_counter);
+
+    println!("Current: {:?}", current);
+
     // We should be left with `blowup` evaluations of a constant polynomial.
     assert_eq!(current.len(), config.blowup());
+
     let final_poly = current[0];
+
+    println!("Final poly: {}", final_poly);
     for x in current {
         assert_eq!(x, final_poly);
     }
