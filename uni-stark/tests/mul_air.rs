@@ -235,6 +235,7 @@ fn do_test_bb_twoadic(
 
     let fri_config = FriConfig {
         log_blowup,
+        log_arity: 1,
         num_queries: 40,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
@@ -301,6 +302,7 @@ fn do_test_m31_circle(
     let _fri_config = FriConfig {
         log_blowup,
         num_queries: 40,
+        log_arity: 1,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };

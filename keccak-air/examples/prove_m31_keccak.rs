@@ -51,6 +51,7 @@ fn main() -> Result<(), VerificationError> {
 
     let _fri_config = FriConfig {
         log_blowup: 1,
+        log_arity: 1,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
