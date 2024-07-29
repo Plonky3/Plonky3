@@ -20,7 +20,7 @@ fn bench_fft(c: &mut Criterion) {
     const BATCH_SIZE: usize = 256;
 
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    fft::<BabyBear, p3_monty_31::dft::Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, p3_monty_31::dft::Radix2Dif<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);

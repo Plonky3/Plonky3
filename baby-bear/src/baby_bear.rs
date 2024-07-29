@@ -225,7 +225,7 @@ mod tests {
     // TODO: Refactor these FFT tests with macros as for test_field! etc above.
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_matrix::dense::RowMajorMatrix;
-    use p3_monty_31::dft::Radix2Dit;
+    use p3_monty_31::dft::Radix2Dif;
     use rand::thread_rng;
 
     #[test]
@@ -237,7 +237,7 @@ mod tests {
         let mut rng = thread_rng();
 
         loop {
-            let monty_dft = Radix2Dit::<BabyBear>::default();
+            let monty_dft = Radix2Dif::<BabyBear>::default();
             let naive_dft = NaiveDft;
 
             for _ in 0..NITERS {
@@ -263,7 +263,7 @@ mod tests {
         let mut rng = thread_rng();
 
         loop {
-            let dft = Radix2Dit::<BabyBear>::default();
+            let dft = Radix2Dif::<BabyBear>::default();
 
             for _ in 0..NITERS {
                 let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
