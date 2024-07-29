@@ -4,8 +4,10 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_util::reverse_slice_index_bits;
 use tracing::{info_span, instrument};
 
 use crate::fold_even_odd::fold_even_odd;
@@ -25,6 +27,12 @@ where
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
+    // We do not allow the prover to send polynomials in the clear.
+    input.iter().for_each(|v| {
+        if let Some(v) = v {
+            assert!(v.len() > config.log_final_poly_len + config.log_blowup);
+        }
+    });
     let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
@@ -104,7 +112,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    for log_folded_height in (config.log_blowup..log_max_height).rev() {
+    for log_folded_height in (config.log_blowup + config.log_final_poly_len..log_max_height).rev() {
         let leaves = RowMajorMatrix::new(current.clone(), 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
@@ -119,13 +127,22 @@ where
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(current.len(), config.blowup());
-    let final_poly = current[0];
-    for x in current {
-        assert_eq!(x, final_poly);
-    }
-    challenger.observe_ext_element(final_poly);
+    let mut final_poly = current.clone();
+
+    // Switch from the evaluation basis to the coefficient basis.
+    reverse_slice_index_bits(&mut final_poly);
+    final_poly = Radix2Dit::default().idft(final_poly);
+
+    // The evaluation domain is blown-up relative to the polynomial degree of `final_poly`, so all
+    // coefficients after the first `final_poly_len` should be zero.
+    debug_assert!(final_poly
+        .drain((1 << (config.log_final_poly_len))..)
+        .all(|x| x.is_zero()));
+
+    // Observe all coefficients of the final polynomial.
+    final_poly
+        .iter()
+        .for_each(|x| challenger.observe_ext_element(*x));
 
     CommitPhaseResult {
         commits,
@@ -137,5 +154,5 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
-    final_poly: F,
+    final_poly: Vec<F>,
 }
