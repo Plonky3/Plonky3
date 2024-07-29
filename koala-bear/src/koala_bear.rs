@@ -205,6 +205,7 @@ mod tests {
     // TODO: Refactor these FFT tests with macros as for test_field! etc above.
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::Matrix;
     use p3_monty_31::dft::Radix2Dif;
     use rand::thread_rng;
 
@@ -225,7 +226,7 @@ mod tests {
                 let v_monty = monty_dft.dft_batch(u.clone());
                 let v_naive = naive_dft.dft_batch(u.clone());
 
-                assert_eq!(v_monty, v_naive);
+                assert_eq!(v_monty.to_row_major_matrix(), v_naive);
             }
             len *= 2;
             // This is smaller than we'd like because NaiveDft is so slow
@@ -248,7 +249,7 @@ mod tests {
             for _ in 0..NITERS {
                 let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
                 let v = dft.dft_batch(u.clone());
-                let w = dft.idft_batch(v);
+                let w = dft.idft_batch(v.to_row_major_matrix());
                 assert_eq!(u, w);
             }
             len *= 2;

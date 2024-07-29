@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use p3_dft::TwoAdicSubgroupDft;
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::split_at_mut_unchecked;
@@ -33,47 +33,16 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         }
     }
 
-    // FIXME: Remove this but make versions available that don't require transpose/bit-reversal.
-    pub fn dft_batch2(
+    pub fn dft_batch_transposed_bitrevd_with_scratch(
         &self,
         mat: &mut RowMajorMatrix<MontyField31<MP>>,
         scratch: &mut RowMajorMatrix<MontyField31<MP>>,
     ) where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
+        // transpose input
         mat.transpose_into(scratch);
 
-        // FIXME: We're only cloning because of the RefCell; it shouldn't be necessary
-        let twiddles = self.twiddles.borrow().clone();
-        scratch
-            .par_rows_mut()
-            .for_each(|v| MontyField31::forward_fft(v, &twiddles));
-
-        scratch.transpose_into(mat);
-
-        // TODO:
-        // - don't do this when fft is used for convolution
-        // - check whether it's faster to do this as part of the fft
-        reverse_matrix_index_bits(mat);
-    }
-}
-
-impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<MontyField31<MP>>
-    for Radix2Dif<MontyField31<MP>>
-{
-    type Evaluations = RowMajorMatrix<MontyField31<MP>>;
-
-    fn dft_batch(
-        &self,
-        mut mat: RowMajorMatrix<MontyField31<MP>>,
-    ) -> RowMajorMatrix<MontyField31<MP>>
-    where
-        MP: MontyParameters + FieldParameters + TwoAdicData,
-    {
-        let mut scratch = RowMajorMatrix::default(mat.height(), mat.width());
-
-        // transpose input
-        mat.transpose_into(&mut scratch);
         // Compute twiddle factors, or take memoized ones if already available.
         let curr_max_fft_len = 1 << self.twiddles.borrow().len();
         if mat.height() > curr_max_fft_len {
@@ -81,23 +50,42 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             self.twiddles.replace(new_twiddles);
         }
 
+        // TODO: We're only cloning because of the RefCell; it shouldn't be necessary
         let twiddles = self.twiddles.borrow().clone();
         scratch
             .par_rows_mut()
             .for_each(|v| MontyField31::forward_fft(v, &twiddles));
+    }
 
-        // FIXME: depending on what the result is being used for, we
-        // can potentially avoid one or both of the final transpose
-        // and bit reversal.
+    pub fn dft_batch_bitrevd_with_scratch(
+        &self,
+        mat: &mut RowMajorMatrix<MontyField31<MP>>,
+        scratch: &mut RowMajorMatrix<MontyField31<MP>>,
+    ) where
+        MP: MontyParameters + FieldParameters + TwoAdicData,
+    {
+        self.dft_batch_transposed_bitrevd_with_scratch(mat, scratch);
 
         // transpose output
-        scratch.transpose_into(&mut mat);
+        scratch.transpose_into(mat);
+    }
+}
 
-        // FIXME: Either do bit reversal or don't do inplace
+impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<MontyField31<MP>>
+    for Radix2Dif<MontyField31<MP>>
+{
+    type Evaluations = BitReversedMatrixView<RowMajorMatrix<MontyField31<MP>>>;
 
-        // FIXME: Pick one!
-        //mat.bit_reverse_rows();
-        reverse_matrix_index_bits(&mut mat);
-        mat
+    fn dft_batch(&self, mut mat: RowMajorMatrix<MontyField31<MP>>) -> Self::Evaluations
+    where
+        MP: MontyParameters + FieldParameters + TwoAdicData,
+    {
+        let mut scratch = RowMajorMatrix::default(mat.height(), mat.width());
+        self.dft_batch_bitrevd_with_scratch(&mut mat, &mut scratch);
+
+        // TODO: In principle bit reversal shouldn't be necessary when
+        // doing the transform inplace, though it might still be
+        // beneficial for memory coherence.
+        mat.bit_reverse_rows()
     }
 }
