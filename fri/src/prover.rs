@@ -27,9 +27,10 @@ where
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
 
-    input.iter().enumerate().for_each(|(i, v)| {
-        if v.is_some() {
-            assert!(i >= config.log_final_poly_len);
+    // We do not allow the prover to send polynomials in the clear.
+    input.iter().for_each(|v| {
+        if let Some(v) = v {
+            assert!(v.len() > config.log_final_poly_len + config.log_blowup);
         }
     });
     let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
@@ -132,10 +133,13 @@ where
     reverse_slice_index_bits(&mut final_poly);
     final_poly = Radix2Dit::default().idft(final_poly);
 
+    // The evaluation domain is blown-up relative to the polynomial degree of `final_poly`, so all
+    // coefficients after the first `final_poly_len` should be zero.
     debug_assert!(final_poly
         .drain((1 << (config.log_final_poly_len))..)
         .all(|x| x.is_zero()));
 
+    // Observe all coefficients of the final polynomial.
     final_poly
         .iter()
         .for_each(|x| challenger.observe_ext_element(*x));

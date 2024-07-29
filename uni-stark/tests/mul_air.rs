@@ -301,7 +301,7 @@ fn do_test_m31_circle(
 
     let _fri_config = FriConfig {
         log_blowup,
-        log_final_poly_len: 5,
+        log_final_poly_len: 0,
         num_queries: 40,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,

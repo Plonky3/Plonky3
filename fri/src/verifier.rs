@@ -43,6 +43,8 @@ where
             challenger.sample_ext_element()
         })
         .collect();
+
+    // Observe all coefficients of the final polynomial.
     proof
         .final_poly
         .iter()
@@ -100,6 +102,10 @@ where
         let final_poly_index = index >> (proof.commit_phase_commits.len());
 
         let mut eval = F::zero();
+
+        // We open the final polynomial at index `final_poly_index`, which corresponds to evaluating
+        // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
+        // `reverse_bits_len(final_poly_index, log_max_height)`.
         let x = F::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(final_poly_index, log_max_height) as u64);
         let mut x_pow = F::one();
@@ -173,15 +179,15 @@ where
         x = x.square();
     }
 
-    // debug_assert!(
-    //     index < config.blowup() + config.final_poly_len(),
-    //     "index was {}",
-    //     index
-    // );
-    // debug_assert_eq!(
-    //     x.exp_power_of_2(config.log_blowup + config.log_final_poly_len),
-    //     F::one()
-    // );
+    debug_assert!(
+        index < config.blowup() * config.final_poly_len(),
+        "index was {}",
+        index,
+    );
+    debug_assert_eq!(
+        x.exp_power_of_2(config.log_blowup + config.log_final_poly_len),
+        F::one()
+    );
 
     Ok(folded_eval)
 }
