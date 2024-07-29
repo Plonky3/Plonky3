@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use p3_symmetric::{CompressionFunction, CryptographicHasher, PseudoCompressionFunction};
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum::U64;
 use sha2::Digest;
@@ -59,6 +59,8 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
         output
     }
 }
+
+impl CompressionFunction<[u8; 32], 2> for Sha256Compress {}
 
 #[cfg(test)]
 mod tests {
