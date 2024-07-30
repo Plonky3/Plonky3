@@ -81,7 +81,7 @@ fn barrett_red_monty31<BP: BarrettParameters>(input: i128) -> i64 {
     // I, input_high are i64's so this multiplication can't overflow.
     let quot = (((input_high as i128) * (BP::PSEUDO_INV as i128)) >> BP::N) as i64;
 
-    // Replace quot by a close value which is divisible by 2^10.
+    // Replace quote by a close value which is divisible by 2^10.
     let quot_2adic = quot & BP::MASK;
 
     // quot_2adic, P are i64's so this can't overflow.
