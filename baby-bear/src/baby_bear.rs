@@ -225,9 +225,5 @@ mod tests {
     test_field_dft!(radix2dit, crate::BabyBear, p3_dft::Radix2Dit<_>);
     test_field_dft!(bowers, crate::BabyBear, p3_dft::Radix2Bowers);
     test_field_dft!(parallel, crate::BabyBear, p3_dft::Radix2DitParallel);
-    test_field_dft!(
-        radix2dif,
-        crate::BabyBear,
-        p3_monty_31::dft::Radix2Dif<crate::BabyBear>
-    );
+    test_field_dft!(radix2dif, crate::BabyBear, p3_monty_31::dft::Radix2Dif<_>);
 }
