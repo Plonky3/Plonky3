@@ -9,8 +9,6 @@ mod naive;
 mod radix_2_bowers;
 mod radix_2_dit;
 mod radix_2_dit_parallel;
-#[cfg(test)]
-mod testing;
 mod traits;
 mod util;
 

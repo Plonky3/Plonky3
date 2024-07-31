@@ -453,7 +453,7 @@ pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Gol
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::{test_field, test_two_adic_field};
+    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
 
     use super::*;
 
@@ -543,4 +543,8 @@ mod tests {
 
     test_field!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);
+
+    test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);
+    test_field_dft!(bowers, crate::Goldilocks, p3_dft::Radix2Bowers);
+    test_field_dft!(parallel, crate::Goldilocks, p3_dft::Radix2DitParallel);
 }

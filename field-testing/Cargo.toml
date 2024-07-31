@@ -5,7 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+p3-dft = { path="../dft" }
 p3-field = { path = "../field" }
+p3-matrix = { path="../matrix" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 rand_chacha = "0.3.1"
 criterion = "0.5.1"

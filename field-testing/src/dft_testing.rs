@@ -1,12 +1,11 @@
+use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
-use crate::{NaiveDft, TwoAdicSubgroupDft};
-
-pub(crate) fn test_dft_matches_naive<F, Dft>()
+pub fn test_dft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -23,7 +22,7 @@ where
     }
 }
 
-pub(crate) fn test_coset_dft_matches_naive<F, Dft>()
+pub fn test_coset_dft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -41,7 +40,7 @@ where
     }
 }
 
-pub(crate) fn test_idft_matches_naive<F, Dft>()
+pub fn test_idft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -58,7 +57,7 @@ where
     }
 }
 
-pub(crate) fn test_coset_idft_matches_naive<F, Dft>()
+pub fn test_coset_idft_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -76,7 +75,7 @@ where
     }
 }
 
-pub(crate) fn test_lde_matches_naive<F, Dft>()
+pub fn test_lde_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -93,7 +92,7 @@ where
     }
 }
 
-pub(crate) fn test_coset_lde_matches_naive<F, Dft>()
+pub fn test_coset_lde_matches_naive<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -111,7 +110,7 @@ where
     }
 }
 
-pub(crate) fn test_dft_idft_consistency<F, Dft>()
+pub fn test_dft_idft_consistency<F, Dft>()
 where
     F: TwoAdicField,
     Standard: Distribution<F>,
@@ -126,4 +125,46 @@ where
         let idft_output = dft.idft_batch(dft_output.to_row_major_matrix());
         assert_eq!(original, idft_output);
     }
+}
+
+#[macro_export]
+macro_rules! test_field_dft {
+    ($mod:ident, $field:ty, $dft:ty) => {
+        mod $mod {
+            #[test]
+            fn dft_matches_naive() {
+                $crate::test_dft_matches_naive::<$field, $dft>();
+            }
+
+            #[test]
+            fn coset_dft_matches_naive() {
+                $crate::test_coset_dft_matches_naive::<$field, $dft>();
+            }
+
+            #[test]
+            fn idft_matches_naive() {
+                $crate::test_idft_matches_naive::<$field, $dft>();
+            }
+
+            #[test]
+            fn coset_idft_matches_naive() {
+                $crate::test_coset_idft_matches_naive::<$field, $dft>();
+            }
+
+            #[test]
+            fn lde_matches_naive() {
+                $crate::test_lde_matches_naive::<$field, $dft>();
+            }
+
+            #[test]
+            fn coset_lde_matches_naive() {
+                $crate::test_coset_lde_matches_naive::<$field, $dft>();
+            }
+
+            #[test]
+            fn dft_idft_consistency() {
+                $crate::test_dft_idft_consistency::<$field, $dft>();
+            }
+        }
+    };
 }

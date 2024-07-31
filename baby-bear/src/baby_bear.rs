@@ -108,7 +108,7 @@ mod tests {
     use core::array;
 
     use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
-    use p3_field_testing::{test_field, test_two_adic_field};
+    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
 
     use super::*;
 
@@ -222,60 +222,12 @@ mod tests {
     test_field!(crate::BabyBear);
     test_two_adic_field!(crate::BabyBear);
 
-    // TODO: Refactor these FFT tests with macros as for test_field! etc above.
-    use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_matrix::dense::RowMajorMatrix;
-    use p3_matrix::Matrix;
-    use p3_monty_31::dft::Radix2Dif;
-    use rand::thread_rng;
-
-    #[test]
-    fn dft_correctness() {
-        const NITERS: usize = 10;
-        // This is smaller than we'd like because NaiveDft is so slow
-        const NCOLS: usize = 5;
-        let mut len = 4;
-        let mut rng = thread_rng();
-
-        loop {
-            let monty_dft = Radix2Dif::<BabyBear>::default();
-            let naive_dft = NaiveDft;
-
-            for _ in 0..NITERS {
-                let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
-                let v_monty = monty_dft.dft_batch(u.clone());
-                let v_naive = naive_dft.dft_batch(u.clone());
-
-                assert_eq!(v_monty.to_row_major_matrix(), v_naive);
-            }
-            len *= 2;
-            // This is smaller than we'd like because NaiveDft is so slow
-            if len > 2048 {
-                break;
-            }
-        }
-    }
-
-    #[test]
-    fn dft_forward_backward_is_identity() {
-        const NITERS: usize = 10;
-        const NCOLS: usize = 23;
-        let mut len = 4;
-        let mut rng = thread_rng();
-
-        loop {
-            let dft = Radix2Dif::<BabyBear>::default();
-
-            for _ in 0..NITERS {
-                let u = RowMajorMatrix::rand(&mut rng, len, NCOLS);
-                let v = dft.dft_batch(u.clone());
-                let w = dft.idft_batch(v.to_row_major_matrix());
-                assert_eq!(u, w);
-            }
-            len *= 2;
-            if len > 8192 {
-                break;
-            }
-        }
-    }
+    test_field_dft!(radix2dit, crate::BabyBear, p3_dft::Radix2Dit<_>);
+    test_field_dft!(bowers, crate::BabyBear, p3_dft::Radix2Bowers);
+    test_field_dft!(parallel, crate::BabyBear, p3_dft::Radix2DitParallel);
+    test_field_dft!(
+        radix2dif,
+        crate::BabyBear,
+        p3_monty_31::dft::Radix2Dif<crate::BabyBear>
+    );
 }

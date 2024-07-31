@@ -202,8 +202,11 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline]
     pub fn forward_fft(a: &mut [Self], root_table: &[Vec<Self>]) {
         let n = a.len();
-        assert!(1 << (root_table.len() + 1) == n);
+        if n == 1 {
+            return;
+        }
 
+        assert_eq!(n, 1 << (root_table.len() + 1));
         match n {
             256 => Self::forward_256(a, root_table),
             128 => Self::forward_128(a, root_table),

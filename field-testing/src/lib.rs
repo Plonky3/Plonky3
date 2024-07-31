@@ -5,9 +5,11 @@
 extern crate alloc;
 
 pub mod bench_func;
+pub mod dft_testing;
 pub mod packedfield_testing;
 
 pub use bench_func::*;
+pub use dft_testing::*;
 use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
