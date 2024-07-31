@@ -6,8 +6,18 @@ use p3_matrix::MatrixRowSlices;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
-    /// The number of columns (a.k.a. registers) in this AIR.
+    /// The number of private columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
+
+    /// The number of preprocessed columns in this AIR.
+    fn preprocessed_width(&self) -> usize {
+        0
+    }
+
+    /// The number of public columns in this AIR.
+    fn public_width(&self) -> usize {
+        0
+    }
 
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
@@ -106,6 +116,10 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::one()));
     }
+}
+
+pub trait AirBuilderWithPublicValues: AirBuilder {
+    fn public_values(&self) -> Self::M;
 }
 
 pub trait PairBuilder: AirBuilder {
@@ -213,6 +227,7 @@ mod tests {
 
     use crate::{Air, AirBuilder, BaseAir};
 
+    #[allow(dead_code)]
     struct FibonacciAir;
 
     impl<F> BaseAir<F> for FibonacciAir {

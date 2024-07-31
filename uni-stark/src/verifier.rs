@@ -10,20 +10,22 @@ use p3_util::reverse_slice_index_bits;
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
-use crate::{Proof, StarkGenericConfig, VerifierConstraintFolder};
+use crate::{Proof, PublicValues, StarkGenericConfig, VerifierConstraintFolder};
 
 #[instrument(skip_all)]
-pub fn verify<SC, A>(
+pub fn verify<SC, A, P>(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
+    public_values: &P,
 ) -> Result<(), VerificationError>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC::Challenge>>,
+    A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    P: PublicValues<SC::Val, SC::Challenge>,
 {
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.width());
     let quotient_degree = 1 << log_quotient_degree;
 
     let Proof {
@@ -45,6 +47,9 @@ where
     let g_subgroup = SC::Val::two_adic_generator(*degree_bits);
 
     challenger.observe(commitments.trace.clone());
+    for i in 0..public_values.height() {
+        challenger.observe_slice(public_values.row_slice(i));
+    }
     let alpha: SC::Challenge = challenger.sample_ext_element();
     challenger.observe(commitments.quotient_chunks.clone());
     let zeta: SC::Challenge = challenger.sample_ext_element();
@@ -105,10 +110,20 @@ where
     let is_first_row = z_h / (zeta - SC::Val::one());
     let is_last_row = z_h / (zeta - g_subgroup.inverse());
     let is_transition = zeta - g_subgroup.inverse();
+
+    let (public_local, public_next) = (
+        public_values.interpolate(zeta, 0),
+        public_values.interpolate(zeta, 1),
+    );
+
     let mut folder = VerifierConstraintFolder {
         main: TwoRowMatrixView {
             local: &opened_values.trace_local,
             next: &opened_values.trace_next,
+        },
+        public_values: TwoRowMatrixView {
+            local: &public_local,
+            next: &public_next,
         },
         is_first_row,
         is_last_row,

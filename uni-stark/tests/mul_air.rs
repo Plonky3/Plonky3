@@ -12,7 +12,7 @@ use p3_matrix::MatrixRowSlices;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, verify, PublicRow, StarkConfig, VerificationError};
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 use tracing_forest::ForestLayer;
@@ -108,7 +108,13 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
 
     let mut challenger = Challenger::new(perm.clone());
     let trace = random_valid_trace::<Val>(HEIGHT);
-    let proof = prove::<MyConfig, _>(&config, &MulAir, &mut challenger, trace);
+    let proof = prove::<MyConfig, _, PublicRow<Val>>(
+        &config,
+        &MulAir,
+        &mut challenger,
+        trace,
+        &PublicRow::default(),
+    );
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -117,7 +123,13 @@ fn test_prove_baby_bear() -> Result<(), VerificationError> {
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
     let mut challenger = Challenger::new(perm);
-    verify(&config, &MulAir, &mut challenger, &deserialized_proof)
+    verify(
+        &config,
+        &MulAir,
+        &mut challenger,
+        &deserialized_proof,
+        &PublicRow::default(),
+    )
 }
 
 #[test]

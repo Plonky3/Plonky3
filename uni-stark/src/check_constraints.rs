@@ -1,14 +1,15 @@
-use p3_air::{Air, AirBuilder, TwoRowMatrixView};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, TwoRowMatrixView};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices};
 use tracing::instrument;
 
 #[instrument(name = "check constraints", skip_all)]
-pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>)
+pub(crate) fn check_constraints<F, A, P>(air: &A, main: &RowMajorMatrix<F>, public_values: &P)
 where
     F: Field,
     A: for<'a> Air<DebugConstraintBuilder<'a, F>>,
+    P: MatrixRowSlices<F>,
 {
     let height = main.height();
 
@@ -22,9 +23,17 @@ where
             next: main_next,
         };
 
+        let public_local = public_values.row_slice(i);
+        let public_next = public_values.row_slice(i_next);
+        let public_values = TwoRowMatrixView {
+            local: public_local,
+            next: public_next,
+        };
+
         let mut builder = DebugConstraintBuilder {
             row_index: i,
             main,
+            public_values,
             is_first_row: F::from_bool(i == 0),
             is_last_row: F::from_bool(i == height - 1),
             is_transition: F::from_bool(i != height - 1),
@@ -39,6 +48,7 @@ where
 pub struct DebugConstraintBuilder<'a, F: Field> {
     row_index: usize,
     main: TwoRowMatrixView<'a, F>,
+    public_values: TwoRowMatrixView<'a, F>,
     is_first_row: F,
     is_last_row: F,
     is_transition: F,
@@ -90,5 +100,11 @@ where
             "values didn't match on row {}: {} != {}",
             self.row_index, x, y
         );
+    }
+}
+
+impl<'a, F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'a, F> {
+    fn public_values(&self) -> Self::M {
+        self.public_values
     }
 }

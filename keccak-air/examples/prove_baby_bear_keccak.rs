@@ -6,10 +6,11 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs, TwoAdicFriPcsConfig};
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_poseidon2::{DiffusionMatrixBabybear, Poseidon2};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
-use p3_uni_stark::{prove, verify, StarkConfig, VerificationError};
+use p3_uni_stark::{prove, verify, PublicRow, StarkConfig, VerificationError};
 use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
@@ -69,8 +70,20 @@ fn main() -> Result<(), VerificationError> {
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
-    let proof = prove::<MyConfig, _>(&config, &KeccakAir {}, &mut challenger, trace);
+    let proof = prove::<MyConfig, _, PublicRow<Val>>(
+        &config,
+        &KeccakAir {},
+        &mut challenger,
+        trace,
+        &PublicRow::default(),
+    );
 
     let mut challenger = Challenger::new(perm);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof)
+    verify(
+        &config,
+        &KeccakAir {},
+        &mut challenger,
+        &proof,
+        &RowMajorMatrix::new(vec![], 0),
+    )
 }

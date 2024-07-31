@@ -18,31 +18,35 @@ use tracing::{info_span, instrument};
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
     decompose_and_flatten, Commitments, OpenedValues, PackedChallenge, PackedVal, Proof,
-    ProverConstraintFolder, StarkGenericConfig, ZerofierOnCoset,
+    ProverConstraintFolder, PublicValues, StarkGenericConfig, ZerofierOnCoset,
 };
 
+#[allow(clippy::multiple_bound_locations)]
 #[instrument(skip_all)]
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, SC::Val>>,
     #[cfg(not(debug_assertions))] A,
+    P,
 >(
     config: &SC,
     air: &A,
     challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<SC::Val>,
+    public_values: &P,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<SC::Val>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    P: PublicValues<SC::Val, SC::Challenge> + Sync,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace);
+    crate::check_constraints::check_constraints(air, &trace, public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air);
+    let log_quotient_degree = get_log_quotient_degree::<SC::Val, A>(air, public_values.width());
 
     let g_subgroup = SC::Val::two_adic_generator(log_degree);
 
@@ -51,18 +55,27 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit_batch(trace));
 
     challenger.observe(trace_commit.clone());
+    for i in 0..public_values.height() {
+        challenger.observe_slice(public_values.row_slice(i));
+    }
     let alpha: SC::Challenge = challenger.sample_ext_element();
 
     let mut trace_ldes = pcs.get_ldes(&trace_data);
     assert_eq!(trace_ldes.len(), 1);
     let trace_lde = trace_ldes.pop().unwrap();
 
+    let public_trace_lde = public_values.get_ldes(config);
+
     let log_stride_for_quotient = pcs.log_blowup() - log_quotient_degree;
     let trace_lde_for_quotient = trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);
+
+    let public_trace_lde_for_quotient =
+        public_trace_lde.vertically_strided(1 << log_stride_for_quotient, 0);
 
     let quotient_values = quotient_values(
         config,
         air,
+        &public_trace_lde_for_quotient,
         log_degree,
         log_quotient_degree,
         trace_lde_for_quotient,
@@ -115,9 +128,10 @@ where
 }
 
 #[instrument(name = "compute quotient polynomial", skip_all)]
-fn quotient_values<SC, A, Mat>(
+fn quotient_values<SC, A, Mat, PubMat>(
     config: &SC,
     air: &A,
+    public_trace_lde: &PubMat,
     degree_bits: usize,
     quotient_degree_bits: usize,
     trace_lde: Mat,
@@ -126,6 +140,7 @@ fn quotient_values<SC, A, Mat>(
 where
     SC: StarkGenericConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    PubMat: MatrixGet<SC::Val> + Sync,
     Mat: MatrixGet<SC::Val> + Sync,
 {
     let degree = 1 << degree_bits;
@@ -186,11 +201,32 @@ where
                 })
                 .collect();
 
+            let public_local: Vec<_> = (0..public_trace_lde.width())
+                .map(|col| {
+                    PackedVal::<SC>::from_fn(|offset| {
+                        let row = wrap(i_local_start + offset);
+                        public_trace_lde.get(row, col)
+                    })
+                })
+                .collect();
+            let public_next: Vec<_> = (0..public_trace_lde.width())
+                .map(|col| {
+                    PackedVal::<SC>::from_fn(|offset| {
+                        let row = wrap(i_next_start + offset);
+                        public_trace_lde.get(row, col)
+                    })
+                })
+                .collect();
+
             let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {
                 main: TwoRowMatrixView {
                     local: &local,
                     next: &next,
+                },
+                public_values: TwoRowMatrixView {
+                    local: &public_local,
+                    next: &public_next,
                 },
                 is_first_row,
                 is_last_row,
