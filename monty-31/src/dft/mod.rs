@@ -40,21 +40,32 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
     ) where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
+        if mat.height() <= 1 {
+            scratch.values.copy_from_slice(&mat.values);
+            return;
+        }
+
         // transpose input
         mat.transpose_into(scratch);
 
         // Compute twiddle factors, or take memoized ones if already available.
+        // TODO: This recomputes the entire table from scratch if we
+        // need it to be bigger, which is wasteful.
         let curr_max_fft_len = 1 << self.twiddles.borrow().len();
         if mat.height() > curr_max_fft_len {
             let new_twiddles = MontyField31::roots_of_unity_table(mat.height());
             self.twiddles.replace(new_twiddles);
         }
 
+        let lg_fft_len = p3_util::log2_ceil_usize(mat.height());
+
         // TODO: We're only cloning because of the RefCell; it shouldn't be necessary
         let twiddles = self.twiddles.borrow().clone();
+        let roots_idx = (twiddles.len() + 1) - lg_fft_len;
+        let twiddles = &twiddles[roots_idx..];
         scratch
             .par_rows_mut()
-            .for_each(|v| MontyField31::forward_fft(v, &twiddles));
+            .for_each(|v| MontyField31::forward_fft(v, twiddles));
     }
 
     pub fn dft_batch_bitrevd_with_scratch(
