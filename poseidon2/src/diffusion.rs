@@ -29,6 +29,8 @@
 
 use p3_field::{AbstractField, Field};
 
+use crate::Poseidon2PackedTypesAndConstants;
+
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
 #[inline]
 pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
@@ -55,16 +57,19 @@ pub fn internal_permute_state<AF: AbstractField, const WIDTH: usize, const D: u6
     }
 }
 
-pub trait InternalLayer<AF: AbstractField, const WIDTH: usize, const D: u64>: Sync + Clone {
-    // In the basic case, InternalState = [AF; WIDTH] but we will use delayed reduction states in other cases.
+pub trait InternalLayer<AF, PackedConstants, const WIDTH: usize, const D: u64>:
+    Sync + Clone
+where
+    AF: AbstractField,
+    PackedConstants: Poseidon2PackedTypesAndConstants<AF::F, WIDTH>,
+{
+    // In the scalar case, InternalState = [AF; WIDTH] but it may be different for PackedFields.
     type InternalState;
-
-    // In the basic case this is AF::F but more generally we should save constants in a way to avoid unneeded manipulations.
-    type InternalConstantsType;
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        internal_constants: &[AF::F],
+        internal_packed_constants: &[PackedConstants::InternalConstantsType],
     );
 }

@@ -2,7 +2,7 @@ use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-extern crate alloc;
+use crate::Poseidon2PackedTypesAndConstants;
 
 /// For the external layers we use a matrix of the form circ(2M_4, M_4, ..., M_4)
 /// Where M_4 is a 4 x 4 MDS matrix. This leads to a permutation which has slightly weaker properties to MDS
@@ -177,12 +177,18 @@ pub fn external_final_permute_state<AF: AbstractField, const WIDTH: usize, const
     }
 }
 
-pub trait ExternalLayer<AF: AbstractField, const WIDTH: usize, const D: u64>: Sync + Clone {
-    // In the basic case, InternalState = [AF; WIDTH] but we will use delayed reduction states in other cases.
+pub trait ExternalLayer<AF, PackedConstants, const WIDTH: usize, const D: u64>:
+    Sync + Clone
+where
+    AF: AbstractField,
+    PackedConstants: Poseidon2PackedTypesAndConstants<AF::F, WIDTH>,
+{
+    // In the scalar case, InternalState = [AF; WIDTH] but it may be different for PackedFields.
     type InternalState;
 
     // In the basic case, ArrayState = [InternalState; 1] = [[AF; WIDTH]; 1].
-    // But delayed reduction strategies sometimes require working with a different state;
+    // But delayed reduction strategies sometimes require splitting a Poseidon2 call
+    // into several sub calls.
     type ArrayState: AsMut<[Self::InternalState]>;
 
     fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState;
@@ -191,12 +197,14 @@ pub trait ExternalLayer<AF: AbstractField, const WIDTH: usize, const D: u64>: Sy
         &self,
         state: &mut Self::InternalState,
         initial_external_constants: &[[AF::F; WIDTH]],
+        initial_external_packed_constants: &[PackedConstants::ExternalConstantsType],
     );
 
     fn permute_state_final(
         &self,
         state: &mut Self::InternalState,
         final_external_constants: &[[AF::F; WIDTH]],
+        final_external_packed_constants: &[PackedConstants::ExternalConstantsType],
     );
 
     fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH];

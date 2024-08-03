@@ -2,12 +2,14 @@ use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
 use p3_poseidon2::{
-    final_external_rounds_iter, initial_external_rounds_iter, internal_rounds_iter, ExternalLayer,
-    InternalLayer, Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
+    final_external_rounds, initial_external_rounds, internal_rounds, ExternalLayer, InternalLayer,
+    Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
+    Poseidon2PackedTypesAndConstants,
 };
 
 use crate::{
     DiffusionMatrixMersenne31, MDSLightPermutationMersenne31, Mersenne31, PackedMersenne31AVX2,
+    Poseidon2Mersenne31PackedConstants,
 };
 
 const P: u32 = 0x7fffffff;
@@ -19,6 +21,42 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u64; 16] =
 const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u64; 24] = [
     0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ];
+
+impl Poseidon2PackedTypesAndConstants<Mersenne31, 16> for Poseidon2Mersenne31PackedConstants {
+    // In the scalar case this is AF::F but it may be different for PackedFields.
+    type InternalConstantsType = __m256i;
+
+    // In the scalar case, ExternalConstantsType = [AF::F; WIDTH] but it may be different for PackedFields.
+    type ExternalConstantsType = Packed64bitM31Tensor<4>;
+
+    #[inline]
+    fn manipulate_external_constants(input: &[Mersenne31; 16]) -> Packed64bitM31Tensor<4> {
+        unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
+    }
+
+    #[inline]
+    fn manipulate_internal_constants(input: &Mersenne31) -> __m256i {
+        unsafe { transmute([input.value as u64; 4]) }
+    }
+}
+
+impl Poseidon2PackedTypesAndConstants<Mersenne31, 24> for Poseidon2Mersenne31PackedConstants {
+    // In the scalar case this is AF::F but it may be different for PackedFields.
+    type InternalConstantsType = __m256i;
+
+    // In the scalar case, ExternalConstantsType = [AF::F; WIDTH] but it may be different for PackedFields.
+    type ExternalConstantsType = Packed64bitM31Tensor<6>;
+
+    #[inline]
+    fn manipulate_external_constants(input: &[Mersenne31; 24]) -> Packed64bitM31Tensor<6> {
+        unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
+    }
+
+    #[inline]
+    fn manipulate_internal_constants(input: &Mersenne31) -> __m256i {
+        unsafe { transmute([input.value as u64; 4]) }
+    }
+}
 
 /// Do a single round of M31 reduction on each element.
 /// No restrictions on input size
@@ -37,6 +75,20 @@ fn partial_reduce(x: __m256i) -> __m256i {
     }
 }
 
+#[inline]
+fn partial_reduce_signed(x: __m256i) -> __m256i {
+    unsafe {
+        // Get the top 33 bits shifted down.
+        let high_bits = x86_64::_mm256_srli_epi64::<31>(x);
+
+        // Zero out the top 33 bits.
+        let low_bits = x86_64::_mm256_andnot_si256(x, P_4XU64);
+
+        // Add the high bits back to the value
+        x86_64::_mm256_sub_epi64(high_bits, low_bits)
+    }
+}
+
 /// Compute x -> x^5 for each element of the vector.
 /// The input must be < 2P < 2^32.
 /// The output will be < 2^34.
@@ -52,12 +104,11 @@ fn joint_sbox(x: __m256i) -> __m256i {
         // Square x_sub_p. As |x| < P, x^2 < P^2 < 2^62
         let x2 = x86_64::_mm256_mul_epi32(x_sub_p, x_sub_p);
 
-        // Reduce and then subtract P. The result will then lie in (-2^31, 2^31).
-        let x2_red = partial_reduce(x2);
-        let x2_red_sub_p = x86_64::_mm256_sub_epi32(x2_red, P_4XU64);
+        // Do a reduction with output a value in (-2^31, 2^31).
+        let x2_red = partial_reduce_signed(x2);
 
         // Square again. The result is again < 2^62.
-        let x4 = x86_64::_mm256_mul_epi32(x2_red_sub_p, x2_red_sub_p);
+        let x4 = x86_64::_mm256_mul_epi32(x2_red, x2_red);
 
         // Reduce again so the result is < 2^32
         let x4_red = partial_reduce(x4);
@@ -253,57 +304,43 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataM31AVX2 {
     }
 }
 
-impl InternalLayer<PackedMersenne31AVX2, 16, 5> for DiffusionMatrixMersenne31 {
+impl InternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 16, 5>
+    for DiffusionMatrixMersenne31
+{
     type InternalState = Packed64bitM31Tensor<4>;
 
-    type InternalConstantsType = Mersenne31;
-
     #[inline]
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        _internal_constants: &[Mersenne31],
+        packed_internal_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::InternalConstantsType],
     ) {
-        unsafe {
-            let internal_constants_vec = internal_constants
-                .iter()
-                .map(|x| x86_64::_mm256_set1_epi64x(x.value as i64));
-            internal_rounds_iter::<4, 16, Poseidon2DataM31AVX2>(state, internal_constants_vec);
-        }
+        internal_rounds::<4, 16, Poseidon2DataM31AVX2>(state, packed_internal_constants);
     }
 }
 
-impl InternalLayer<PackedMersenne31AVX2, 24, 5> for DiffusionMatrixMersenne31 {
+// const fn modify_constants()
+
+impl InternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 24, 5>
+    for DiffusionMatrixMersenne31
+{
     type InternalState = Packed64bitM31Tensor<6>;
 
-    type InternalConstantsType = Mersenne31;
-
     #[inline]
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        _internal_constants: &[Mersenne31],
+        packed_internal_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::InternalConstantsType],
     ) {
-        unsafe {
-            let internal_constants_vec = internal_constants
-                .iter()
-                .map(|x| x86_64::_mm256_set1_epi64x(x.value as i64));
-            internal_rounds_iter::<6, 24, Poseidon2DataM31AVX2>(state, internal_constants_vec);
-        }
+        internal_rounds::<6, 24, Poseidon2DataM31AVX2>(state, packed_internal_constants);
     }
 }
 
-#[inline]
-fn manipulate_external_constants_16_4(input: [Mersenne31; 16]) -> Packed64bitM31Tensor<4> {
-    unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
-}
-
-#[inline]
-fn manipulate_external_constants_24_6(input: [Mersenne31; 24]) -> Packed64bitM31Tensor<6> {
-    unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
-}
-
-impl ExternalLayer<PackedMersenne31AVX2, 16, 5> for MDSLightPermutationMersenne31 {
+impl ExternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 16, 5>
+    for MDSLightPermutationMersenne31
+{
     type InternalState = Packed64bitM31Tensor<4>;
     type ArrayState = [Packed64bitM31Tensor<4>; 2];
 
@@ -349,14 +386,12 @@ impl ExternalLayer<PackedMersenne31AVX2, 16, 5> for MDSLightPermutationMersenne3
     fn permute_state_initial(
         &self,
         state: &mut Self::InternalState,
-        initial_external_constants: &[[Mersenne31; 16]],
+        _initial_external_constants: &[[Mersenne31; 16]],
+        packed_initial_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::ExternalConstantsType],
     ) {
-        let initial_external_constants_mat = initial_external_constants
-            .iter()
-            .map(|x| manipulate_external_constants_16_4(*x));
-        initial_external_rounds_iter::<4, 16, Poseidon2DataM31AVX2>(
+        initial_external_rounds::<4, 16, Poseidon2DataM31AVX2>(
             state,
-            initial_external_constants_mat,
+            packed_initial_external_constants,
         );
     }
 
@@ -364,19 +399,19 @@ impl ExternalLayer<PackedMersenne31AVX2, 16, 5> for MDSLightPermutationMersenne3
     fn permute_state_final(
         &self,
         state: &mut Self::InternalState,
-        final_external_constants: &[[Mersenne31; 16]],
+        _final_external_constants: &[[Mersenne31; 16]],
+        packed_final_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::ExternalConstantsType],
     ) {
-        let final_external_constants_mat = final_external_constants
-            .iter()
-            .map(|x| manipulate_external_constants_16_4(*x));
-        final_external_rounds_iter::<4, 16, Poseidon2DataM31AVX2>(
+        final_external_rounds::<4, 16, Poseidon2DataM31AVX2>(
             state,
-            final_external_constants_mat,
+            packed_final_external_constants,
         );
     }
 }
 
-impl ExternalLayer<PackedMersenne31AVX2, 24, 5> for MDSLightPermutationMersenne31 {
+impl ExternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 24, 5>
+    for MDSLightPermutationMersenne31
+{
     type InternalState = Packed64bitM31Tensor<6>;
     type ArrayState = [Packed64bitM31Tensor<6>; 2];
 
@@ -422,14 +457,12 @@ impl ExternalLayer<PackedMersenne31AVX2, 24, 5> for MDSLightPermutationMersenne3
     fn permute_state_initial(
         &self,
         state: &mut Self::InternalState,
-        initial_external_constants: &[[Mersenne31; 24]],
+        _initial_external_constants: &[[Mersenne31; 24]],
+        packed_initial_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::ExternalConstantsType],
     ) {
-        let initial_external_constants_mat = initial_external_constants
-            .iter()
-            .map(|x| manipulate_external_constants_24_6(*x));
-        initial_external_rounds_iter::<6, 24, Poseidon2DataM31AVX2>(
+        initial_external_rounds::<6, 24, Poseidon2DataM31AVX2>(
             state,
-            initial_external_constants_mat,
+            packed_initial_external_constants,
         );
     }
 
@@ -437,14 +470,12 @@ impl ExternalLayer<PackedMersenne31AVX2, 24, 5> for MDSLightPermutationMersenne3
     fn permute_state_final(
         &self,
         state: &mut Self::InternalState,
-        final_external_constants: &[[Mersenne31; 24]],
+        _final_external_constants: &[[Mersenne31; 24]],
+        packed_final_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::ExternalConstantsType],
     ) {
-        let final_external_constants_mat = final_external_constants
-            .iter()
-            .map(|x| manipulate_external_constants_24_6(*x));
-        final_external_rounds_iter::<6, 24, Poseidon2DataM31AVX2>(
+        final_external_rounds::<6, 24, Poseidon2DataM31AVX2>(
             state,
-            final_external_constants_mat,
+            packed_final_external_constants,
         );
     }
 }
@@ -461,13 +492,27 @@ mod tests {
 
     use crate::{
         DiffusionMatrixMersenne31, MDSLightPermutationMersenne31, Mersenne31, PackedMersenne31AVX2,
-        Poseidon2DataM31AVX2,
+        Poseidon2DataM31AVX2, Poseidon2Mersenne31PackedConstants,
     };
 
     type F = Mersenne31;
     const D: u64 = 5;
-    type Perm16 = Poseidon2<F, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 16, D>;
-    type Perm24 = Poseidon2<F, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 24, D>;
+    type Perm16 = Poseidon2<
+        F,
+        MDSLightPermutationMersenne31,
+        DiffusionMatrixMersenne31,
+        Poseidon2Mersenne31PackedConstants,
+        16,
+        D,
+    >;
+    type Perm24 = Poseidon2<
+        F,
+        MDSLightPermutationMersenne31,
+        DiffusionMatrixMersenne31,
+        Poseidon2Mersenne31PackedConstants,
+        24,
+        D,
+    >;
 
     // A very simple function which performs a transpose.
     fn transpose<F, const N: usize, const M: usize>(input: [[F; N]; M]) -> [[F; M]; N]

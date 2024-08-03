@@ -1,7 +1,7 @@
 use p3_field::PrimeField32;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer,
+    ExternalLayer, InternalLayer, Poseidon2PackedTypesAndConstants,
 };
 
 use crate::{from_u62, to_mersenne31_array, Mersenne31};
@@ -85,17 +85,21 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct Poseidon2Mersenne31PackedConstants;
+
+#[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixMersenne31;
 
-impl InternalLayer<Mersenne31, 16, 5> for DiffusionMatrixMersenne31 {
+impl InternalLayer<Mersenne31, Poseidon2Mersenne31PackedConstants, 16, 5>
+    for DiffusionMatrixMersenne31
+{
     type InternalState = [Mersenne31; 16];
-
-    type InternalConstantsType = Mersenne31;
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        internal_constants: &[Mersenne31],
+        _packed_internal_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::InternalConstantsType],
     ) {
         internal_permute_state::<Mersenne31, 16, 5>(
             state,
@@ -105,15 +109,16 @@ impl InternalLayer<Mersenne31, 16, 5> for DiffusionMatrixMersenne31 {
     }
 }
 
-impl InternalLayer<Mersenne31, 24, 5> for DiffusionMatrixMersenne31 {
+impl InternalLayer<Mersenne31, Poseidon2Mersenne31PackedConstants, 24, 5>
+    for DiffusionMatrixMersenne31
+{
     type InternalState = [Mersenne31; 24];
-
-    type InternalConstantsType = Mersenne31;
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        internal_constants: &[Mersenne31],
+        _packed_internal_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::InternalConstantsType],
     ) {
         internal_permute_state::<Mersenne31, 24, 5>(
             state,
@@ -126,7 +131,11 @@ impl InternalLayer<Mersenne31, 24, 5> for DiffusionMatrixMersenne31 {
 #[derive(Default, Clone)]
 pub struct MDSLightPermutationMersenne31;
 
-impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for MDSLightPermutationMersenne31 {
+impl<const WIDTH: usize> ExternalLayer<Mersenne31, Poseidon2Mersenne31PackedConstants, WIDTH, 5>
+    for MDSLightPermutationMersenne31
+where
+    Poseidon2Mersenne31PackedConstants: Poseidon2PackedTypesAndConstants<Mersenne31, WIDTH>,
+{
     type InternalState = [Mersenne31; WIDTH];
     type ArrayState = [[Mersenne31; WIDTH]; 1];
 
@@ -142,6 +151,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for MDSLightPermuta
         &self,
         state: &mut [Mersenne31; WIDTH],
         initial_external_constants: &[[Mersenne31; WIDTH]],
+        _packed_initial_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, WIDTH>>::ExternalConstantsType],
     ) {
         external_initial_permute_state::<Mersenne31, WIDTH, 5>(state, initial_external_constants);
     }
@@ -150,6 +160,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for MDSLightPermuta
         &self,
         state: &mut Self::InternalState,
         final_external_constants: &[[Mersenne31; WIDTH]],
+        _packed_final_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, WIDTH>>::ExternalConstantsType],
     ) {
         external_final_permute_state::<Mersenne31, WIDTH, 5>(state, final_external_constants);
     }
@@ -173,17 +184,20 @@ mod tests {
     // Our Poseidon2 Implementation for Mersenne31
     fn poseidon2_mersenne31<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
     where
-        MDSLightPermutationMersenne31: ExternalLayer<Mersenne31, WIDTH, D>,
+        Poseidon2Mersenne31PackedConstants: Poseidon2PackedTypesAndConstants<Mersenne31, WIDTH>,
+        MDSLightPermutationMersenne31:
+            ExternalLayer<Mersenne31, Poseidon2Mersenne31PackedConstants, WIDTH, D>,
         DiffusionMatrixMersenne31: InternalLayer<
             Mersenne31,
+            Poseidon2Mersenne31PackedConstants,
             WIDTH,
             D,
             InternalState = <MDSLightPermutationMersenne31 as ExternalLayer<
                 Mersenne31,
+                Poseidon2Mersenne31PackedConstants,
                 WIDTH,
                 D,
             >>::InternalState,
-            InternalConstantsType = Mersenne31,
         >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
@@ -193,6 +207,7 @@ mod tests {
             F,
             MDSLightPermutationMersenne31,
             DiffusionMatrixMersenne31,
+            Poseidon2Mersenne31PackedConstants,
             WIDTH,
             D,
         > = Poseidon2::new_from_rng_128(
