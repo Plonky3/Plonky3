@@ -9,10 +9,10 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 // use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{PackedField, PrimeField, PrimeField32, PrimeField64};
 // use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
-// use p3_koala_bear::{
-//     DiffusionMatrixKoalaBear, KoalaBear, MDSLightPermutationKoalaBear, PackedKoalaBearAVX2,
-//     Poseidon2DataKoalaBearAVX2,
-// };
+use p3_koala_bear::{
+    DiffusionMatrixKoalaBear, KoalaBear, MDSLightPermutationKoalaBear, PackedKoalaBearAVX2,
+    Poseidon2DataKoalaBearAVX2, Poseidon2KoalaBearPackedConstants,
+};
 use p3_mersenne_31::{
     DiffusionMatrixMersenne31, MDSLightPermutationMersenne31, Mersenne31, PackedMersenne31AVX2,
     Poseidon2DataM31AVX2, Poseidon2Mersenne31PackedConstants,
@@ -56,25 +56,27 @@ fn bench_poseidon2(c: &mut Criterion) {
     // // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 5>(c);
     // // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 7>(c);
 
-    // poseidon2_p64_pf::<
-    //     KoalaBear,
-    //     PackedKoalaBearAVX2,
-    //     MDSLightPermutationKoalaBear,
-    //     DiffusionMatrixKoalaBear,
-    //     16,
-    //     3,
-    // >(c);
-    // poseidon2_p64_pf::<
-    //     KoalaBear,
-    //     PackedKoalaBearAVX2,
-    //     MDSLightPermutationKoalaBear,
-    //     DiffusionMatrixKoalaBear,
-    //     24,
-    //     3,
-    // >(c);
+    poseidon2_p64_pf::<
+        KoalaBear,
+        PackedKoalaBearAVX2,
+        MDSLightPermutationKoalaBear,
+        DiffusionMatrixKoalaBear,
+        Poseidon2KoalaBearPackedConstants,
+        16,
+        3,
+    >(c);
+    poseidon2_p64_pf::<
+        KoalaBear,
+        PackedKoalaBearAVX2,
+        MDSLightPermutationKoalaBear,
+        DiffusionMatrixKoalaBear,
+        Poseidon2KoalaBearPackedConstants,
+        24,
+        3,
+    >(c);
 
-    // poseidon2_avx2_all::<4, 16, 3, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
-    // poseidon2_avx2_all::<6, 24, 3, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
+    poseidon2_avx2_all::<4, 16, 3, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
+    poseidon2_avx2_all::<6, 24, 3, Poseidon2DataKoalaBearAVX2, PackedKoalaBearAVX2>(c);
 
     // poseidon2_p64::<Mersenne31, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 16, 5>(c);
     // poseidon2_p64::<Mersenne31, MDSLightPermutationMersenne31, DiffusionMatrixMersenne31, 24, 5>(c);

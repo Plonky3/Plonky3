@@ -2,8 +2,7 @@ use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
 use p3_poseidon2::{
-    final_external_rounds, initial_external_rounds, internal_rounds, ExternalLayer, InternalLayer,
-    Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
+    ExternalLayer, InternalLayer, Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
     Poseidon2PackedTypesAndConstants,
 };
 
@@ -75,17 +74,19 @@ fn partial_reduce(x: __m256i) -> __m256i {
     }
 }
 
+/// TODO: ADD comments for this.
 #[inline]
 fn partial_reduce_signed(x: __m256i) -> __m256i {
     unsafe {
         // Get the top 33 bits shifted down.
         let high_bits = x86_64::_mm256_srli_epi64::<31>(x);
 
-        // Zero out the top 33 bits.
-        let low_bits = x86_64::_mm256_andnot_si256(x, P_4XU64);
+        // Zero out the top 33 bits and negate.
+        // Note that for x < 2^31, x -> P - x acts identically to a not on the bottom 31 bits of x.
+        let neg_low_bits = x86_64::_mm256_andnot_si256(x, P_4XU64);
 
-        // Add the high bits back to the value
-        x86_64::_mm256_sub_epi64(high_bits, low_bits)
+        // Subtract the negative low bits from the high_bits.
+        x86_64::_mm256_sub_epi64(high_bits, neg_low_bits)
     }
 }
 
@@ -316,11 +317,9 @@ impl InternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 16,
         _internal_constants: &[Mersenne31],
         packed_internal_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::InternalConstantsType],
     ) {
-        internal_rounds::<4, 16, Poseidon2DataM31AVX2>(state, packed_internal_constants);
+        Poseidon2DataM31AVX2::internal_rounds(state, packed_internal_constants);
     }
 }
-
-// const fn modify_constants()
 
 impl InternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 24, 5>
     for DiffusionMatrixMersenne31
@@ -334,7 +333,7 @@ impl InternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 24,
         _internal_constants: &[Mersenne31],
         packed_internal_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::InternalConstantsType],
     ) {
-        internal_rounds::<6, 24, Poseidon2DataM31AVX2>(state, packed_internal_constants);
+        Poseidon2DataM31AVX2::internal_rounds(state, packed_internal_constants);
     }
 }
 
@@ -389,10 +388,7 @@ impl ExternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 16,
         _initial_external_constants: &[[Mersenne31; 16]],
         packed_initial_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::ExternalConstantsType],
     ) {
-        initial_external_rounds::<4, 16, Poseidon2DataM31AVX2>(
-            state,
-            packed_initial_external_constants,
-        );
+        Poseidon2DataM31AVX2::initial_external_rounds(state, packed_initial_external_constants);
     }
 
     #[inline]
@@ -402,10 +398,7 @@ impl ExternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 16,
         _final_external_constants: &[[Mersenne31; 16]],
         packed_final_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 16>>::ExternalConstantsType],
     ) {
-        final_external_rounds::<4, 16, Poseidon2DataM31AVX2>(
-            state,
-            packed_final_external_constants,
-        );
+        Poseidon2DataM31AVX2::final_external_rounds(state, packed_final_external_constants);
     }
 }
 
@@ -460,10 +453,7 @@ impl ExternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 24,
         _initial_external_constants: &[[Mersenne31; 24]],
         packed_initial_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::ExternalConstantsType],
     ) {
-        initial_external_rounds::<6, 24, Poseidon2DataM31AVX2>(
-            state,
-            packed_initial_external_constants,
-        );
+        Poseidon2DataM31AVX2::initial_external_rounds(state, packed_initial_external_constants);
     }
 
     #[inline]
@@ -473,10 +463,7 @@ impl ExternalLayer<PackedMersenne31AVX2, Poseidon2Mersenne31PackedConstants, 24,
         _final_external_constants: &[[Mersenne31; 24]],
         packed_final_external_constants: &[<Poseidon2Mersenne31PackedConstants as Poseidon2PackedTypesAndConstants<Mersenne31, 24>>::ExternalConstantsType],
     ) {
-        final_external_rounds::<6, 24, Poseidon2DataM31AVX2>(
-            state,
-            packed_final_external_constants,
-        );
+        Poseidon2DataM31AVX2::final_external_rounds(state, packed_final_external_constants);
     }
 }
 

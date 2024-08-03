@@ -294,7 +294,6 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
     /// Input must be < 2P < 2^32 but does not need to be canonical.
     /// Round Constant is assumed to be in canonical form.
     /// Output will be < 2P.
-    #[inline]
     fn internal_round(state: &mut Packed64bitM31Tensor<HEIGHT>, rc: __m256i) {
         unsafe {
             // We do two things simultaneously.
@@ -334,6 +333,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
             }
 
             Self::partial_reduce(state); // Output, non canonical in [0, 2^32 - 2].
+                                         // Potentially do some sort of signed reduce here?
         }
     }
 
@@ -358,7 +358,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
     /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
     /// Inputs will always be canonical though in principal only need to be < 2^56.
     /// Output will be < 2P.
-    #[inline]
+
     fn initial_external_rounds(
         state: &mut Packed64bitM31Tensor<HEIGHT>,
         round_constants: &[Packed64bitM31Tensor<HEIGHT>],
@@ -375,7 +375,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
     /// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
     /// Inputs should be < 2P.
     /// Output will be < 2P.
-    #[inline]
+
     fn internal_rounds(state: &mut Packed64bitM31Tensor<HEIGHT>, round_constants: &[__m256i]) {
         for round_constant in round_constants {
             Self::internal_round(state, *round_constant)
@@ -384,7 +384,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
 
     /// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
     /// Output is returned reduced.
-    #[inline]
+
     fn final_external_rounds(
         state: &mut Packed64bitM31Tensor<HEIGHT>,
         round_constants: &[Packed64bitM31Tensor<HEIGHT>],
@@ -403,64 +403,6 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
         Self::partial_reduce(state);
         Self::final_reduce_pos(state);
     }
-}
-
-/// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
-/// Inputs will always be canonical though in principal only need to be < 2^56.
-/// Output will be < 2P.
-#[inline]
-pub fn initial_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
-    state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constants: &[Packed64bitM31Tensor<HEIGHT>],
-) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
-{
-    for round_constant in round_constants {
-        P2AVX2::rotated_external_round(state, round_constant)
-    }
-
-    state.mat_mul_aes();
-    state.right_mat_mul_i_plus_1();
-    P2AVX2::partial_reduce(state);
-}
-
-/// The initial set of external rounds. This consists of rf/2 external rounds followed by a mat_mul
-/// Inputs should be < 2P.
-/// Output will be < 2P.
-#[inline]
-pub fn internal_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
-    state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constants: &[__m256i],
-) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
-{
-    for round_constant in round_constants {
-        P2AVX2::internal_round(state, *round_constant)
-    }
-}
-
-/// The final set of external rounds. Due to an ordering change it starts by doing a "half round" and finish by a mat_mul.
-/// Output is reduced.
-#[inline]
-pub fn final_external_rounds<const HEIGHT: usize, const WIDTH: usize, P2AVX2>(
-    state: &mut Packed64bitM31Tensor<HEIGHT>,
-    round_constants: &[Packed64bitM31Tensor<HEIGHT>],
-) where
-    P2AVX2: Poseidon2AVX2Methods<HEIGHT, WIDTH>,
-{
-    // Input is < 2P
-    P2AVX2::final_reduce_pos(state);
-    state.add(&round_constants[0]);
-    P2AVX2::joint_sbox(state);
-
-    for round_constant in round_constants[1..].iter() {
-        P2AVX2::rotated_external_round(state, round_constant)
-    }
-
-    state.mat_mul_aes();
-    state.right_mat_mul_i_plus_1();
-    P2AVX2::partial_reduce(state);
-    P2AVX2::final_reduce_pos(state);
 }
 
 /// A Poseidon2 abstraction allowing for fast Packed Field implementations.

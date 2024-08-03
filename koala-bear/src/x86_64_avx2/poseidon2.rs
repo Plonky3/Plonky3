@@ -1,14 +1,13 @@
 use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 use p3_poseidon2::{
-    internal_permute_state, matmul_internal, InternalLayer, Packed64bitM31Tensor,
-    Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
+    ExternalLayer, InternalLayer, Packed64bitM31Tensor, Poseidon2AVX2Helpers, Poseidon2AVX2Methods,
+    Poseidon2PackedTypesAndConstants,
 };
 
 use crate::{
-    monty_red, movehdup_epi32, DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearAVX2,
-    MONTY_INVERSE, POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY,
+    monty_red, movehdup_epi32, DiffusionMatrixKoalaBear, KoalaBear, MDSLightPermutationKoalaBear,
+    PackedKoalaBearAVX2, Poseidon2KoalaBearPackedConstants,
 };
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_16_MONTY_SHIFTS: [u64; 16] =
@@ -18,55 +17,39 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u64; 24] = [
     0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
 ];
 
-// We need to change from the standard implementation as we are interpreting the matrix (1 + D(v)) as the monty form of the matrix not the raw form.
-// matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
-// These will be removed once we have architecture specific implementations.
+impl Poseidon2PackedTypesAndConstants<KoalaBear, 16> for Poseidon2KoalaBearPackedConstants {
+    // In the scalar case this is AF::F but it may be different for PackedFields.
+    type InternalConstantsType = __m256i;
 
-impl<const D: u64> InternalLayer<PackedKoalaBearAVX2, 16, D> for DiffusionMatrixKoalaBear {
-    type InternalState = [PackedKoalaBearAVX2; 16];
+    // In the scalar case, ExternalConstantsType = [AF::F; WIDTH] but it may be different for PackedFields.
+    type ExternalConstantsType = Packed64bitM31Tensor<4>;
 
-    type InternalConstantsType = KoalaBear;
+    #[inline]
+    fn manipulate_external_constants(input: &[KoalaBear; 16]) -> Packed64bitM31Tensor<4> {
+        unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
+    }
 
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
-    ) {
-        internal_permute_state::<PackedKoalaBearAVX2, 16, D>(
-            state,
-            |state| {
-                matmul_internal::<KoalaBear, PackedKoalaBearAVX2, 16>(
-                    state,
-                    POSEIDON2_INTERNAL_MATRIX_DIAG_16_KOALABEAR_MONTY,
-                );
-                state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
-            },
-            internal_constants,
-        )
+    #[inline]
+    fn manipulate_internal_constants(input: &KoalaBear) -> __m256i {
+        unsafe { transmute([input.value as u64; 4]) }
     }
 }
 
-impl<const D: u64> InternalLayer<PackedKoalaBearAVX2, 24, D> for DiffusionMatrixKoalaBear {
-    type InternalState = [PackedKoalaBearAVX2; 24];
+impl Poseidon2PackedTypesAndConstants<KoalaBear, 24> for Poseidon2KoalaBearPackedConstants {
+    // In the scalar case this is AF::F but it may be different for PackedFields.
+    type InternalConstantsType = __m256i;
 
-    type InternalConstantsType = KoalaBear;
+    // In the scalar case, ExternalConstantsType = [AF::F; WIDTH] but it may be different for PackedFields.
+    type ExternalConstantsType = Packed64bitM31Tensor<6>;
 
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
-    ) {
-        internal_permute_state::<PackedKoalaBearAVX2, 24, D>(
-            state,
-            |state| {
-                matmul_internal::<KoalaBear, PackedKoalaBearAVX2, 24>(
-                    state,
-                    POSEIDON2_INTERNAL_MATRIX_DIAG_24_KOALABEAR_MONTY,
-                );
-                state.iter_mut().for_each(|i| *i *= MONTY_INVERSE);
-            },
-            internal_constants,
-        )
+    #[inline]
+    fn manipulate_external_constants(input: &[KoalaBear; 24]) -> Packed64bitM31Tensor<6> {
+        unsafe { transmute(input.map(|x| [x.value as u64; 4])) }
+    }
+
+    #[inline]
+    fn manipulate_internal_constants(input: &KoalaBear) -> __m256i {
+        unsafe { transmute([input.value as u64; 4]) }
     }
 }
 
@@ -568,6 +551,174 @@ impl Poseidon2AVX2Methods<6, 24> for Poseidon2DataKoalaBearAVX2 {
     }
 }
 
+impl InternalLayer<PackedKoalaBearAVX2, Poseidon2KoalaBearPackedConstants, 16, 3>
+    for DiffusionMatrixKoalaBear
+{
+    type InternalState = Packed64bitM31Tensor<4>;
+
+    #[inline]
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        _internal_constants: &[KoalaBear],
+        packed_internal_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 16>>::InternalConstantsType],
+    ) {
+        Poseidon2DataKoalaBearAVX2::internal_rounds(state, packed_internal_constants);
+    }
+}
+
+impl InternalLayer<PackedKoalaBearAVX2, Poseidon2KoalaBearPackedConstants, 24, 3>
+    for DiffusionMatrixKoalaBear
+{
+    type InternalState = Packed64bitM31Tensor<6>;
+
+    #[inline]
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        _internal_constants: &[KoalaBear],
+        packed_internal_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 24>>::InternalConstantsType],
+    ) {
+        Poseidon2DataKoalaBearAVX2::internal_rounds(state, packed_internal_constants);
+    }
+}
+
+impl ExternalLayer<PackedKoalaBearAVX2, Poseidon2KoalaBearPackedConstants, 16, 3>
+    for MDSLightPermutationKoalaBear
+{
+    type InternalState = Packed64bitM31Tensor<4>;
+    type ArrayState = [Packed64bitM31Tensor<4>; 2];
+
+    #[inline]
+    fn to_internal_rep(&self, state: [PackedKoalaBearAVX2; 16]) -> Self::ArrayState {
+        unsafe {
+            // Safety: Nothing unsafe to worry about.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [__m256i; 16] = transmute(state);
+            let mut output_0 = [zeros; 16];
+            let mut output_1 = [zeros; 16];
+            for i in 0..16 {
+                output_0[i] = x86_64::_mm256_unpacklo_epi32(vector_input[i], zeros);
+                output_1[i] = x86_64::_mm256_unpackhi_epi32(vector_input[i], zeros);
+            }
+            [transmute(output_0), transmute(output_1)]
+        }
+    }
+
+    #[inline]
+    fn to_output_rep(&self, state: Self::ArrayState) -> [PackedKoalaBearAVX2; 16] {
+        unsafe {
+            // Safety: Each __m256i must be made up of 4 values lying in [0, ... P).
+            // Otherwise the result is undefined.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [[__m256i; 16]; 2] = transmute(state);
+            let mut output = [zeros; 16];
+
+            for (i, item) in output.iter_mut().enumerate() {
+                *item = x86_64::_mm256_castps_si256(x86_64::_mm256_shuffle_ps::<136>(
+                    x86_64::_mm256_castsi256_ps(vector_input[0][i]),
+                    x86_64::_mm256_castsi256_ps(vector_input[1][i]),
+                ));
+            }
+
+            transmute(output)
+        }
+    }
+
+    #[inline]
+    fn permute_state_initial(
+        &self,
+        state: &mut Self::InternalState,
+        _initial_external_constants: &[[KoalaBear; 16]],
+        packed_initial_external_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 16>>::ExternalConstantsType],
+    ) {
+        Poseidon2DataKoalaBearAVX2::initial_external_rounds(
+            state,
+            packed_initial_external_constants,
+        );
+    }
+
+    #[inline]
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        _final_external_constants: &[[KoalaBear; 16]],
+        packed_final_external_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 16>>::ExternalConstantsType],
+    ) {
+        Poseidon2DataKoalaBearAVX2::final_external_rounds(state, packed_final_external_constants);
+    }
+}
+
+impl ExternalLayer<PackedKoalaBearAVX2, Poseidon2KoalaBearPackedConstants, 24, 3>
+    for MDSLightPermutationKoalaBear
+{
+    type InternalState = Packed64bitM31Tensor<6>;
+    type ArrayState = [Packed64bitM31Tensor<6>; 2];
+
+    #[inline]
+    fn to_internal_rep(&self, state: [PackedKoalaBearAVX2; 24]) -> Self::ArrayState {
+        unsafe {
+            // Safety: Nothing unsafe to worry about.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [__m256i; 24] = transmute(state);
+            let mut output_0 = [zeros; 24];
+            let mut output_1 = [zeros; 24];
+            for i in 0..24 {
+                output_0[i] = x86_64::_mm256_unpacklo_epi32(vector_input[i], zeros);
+                output_1[i] = x86_64::_mm256_unpackhi_epi32(vector_input[i], zeros);
+            }
+            [transmute(output_0), transmute(output_1)]
+        }
+    }
+
+    #[inline]
+    fn to_output_rep(&self, state: Self::ArrayState) -> [PackedKoalaBearAVX2; 24] {
+        unsafe {
+            // Safety: Each __m256i must be made up of 4 values lying in [0, ... P).
+            // Otherwise the result is undefined.
+
+            let zeros = x86_64::_mm256_setzero_si256();
+            let vector_input: [[__m256i; 24]; 2] = transmute(state);
+            let mut output = [zeros; 24];
+
+            for (i, item) in output.iter_mut().enumerate() {
+                *item = x86_64::_mm256_castps_si256(x86_64::_mm256_shuffle_ps::<136>(
+                    x86_64::_mm256_castsi256_ps(vector_input[0][i]),
+                    x86_64::_mm256_castsi256_ps(vector_input[1][i]),
+                ));
+            }
+
+            transmute(output)
+        }
+    }
+
+    #[inline]
+    fn permute_state_initial(
+        &self,
+        state: &mut Self::InternalState,
+        _initial_external_constants: &[[KoalaBear; 24]],
+        packed_initial_external_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 24>>::ExternalConstantsType],
+    ) {
+        Poseidon2DataKoalaBearAVX2::initial_external_rounds(
+            state,
+            packed_initial_external_constants,
+        );
+    }
+
+    #[inline]
+    fn permute_state_final(
+        &self,
+        state: &mut Self::InternalState,
+        _final_external_constants: &[[KoalaBear; 24]],
+        packed_final_external_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 24>>::ExternalConstantsType],
+    ) {
+        Poseidon2DataKoalaBearAVX2::final_external_rounds(state, packed_final_external_constants);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::mem::transmute;
@@ -580,13 +731,27 @@ mod tests {
 
     use crate::{
         DiffusionMatrixKoalaBear, KoalaBear, MDSLightPermutationKoalaBear, PackedKoalaBearAVX2,
-        Poseidon2DataKoalaBearAVX2,
+        Poseidon2DataKoalaBearAVX2, Poseidon2KoalaBearPackedConstants,
     };
 
     type F = KoalaBear;
     const D: u64 = 3;
-    type Perm16 = Poseidon2<F, MDSLightPermutationKoalaBear, DiffusionMatrixKoalaBear, 16, D>;
-    type Perm24 = Poseidon2<F, MDSLightPermutationKoalaBear, DiffusionMatrixKoalaBear, 24, D>;
+    type Perm16 = Poseidon2<
+        F,
+        MDSLightPermutationKoalaBear,
+        DiffusionMatrixKoalaBear,
+        Poseidon2KoalaBearPackedConstants,
+        16,
+        D,
+    >;
+    type Perm24 = Poseidon2<
+        F,
+        MDSLightPermutationKoalaBear,
+        DiffusionMatrixKoalaBear,
+        Poseidon2KoalaBearPackedConstants,
+        24,
+        D,
+    >;
 
     // A very simple function which performs a transpose.
     fn transpose<F, const N: usize, const M: usize>(input: [[F; N]; M]) -> [[F; M]; N]

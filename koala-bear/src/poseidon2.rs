@@ -1,9 +1,8 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
-
-use p3_field::{AbstractField, PrimeField32};
+use p3_field::PrimeField32;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer,
+    ExternalLayer, InternalLayer, Poseidon2PackedTypesAndConstants,
 };
 
 use crate::{monty_reduce, to_koalabear_array, KoalaBear};
@@ -99,17 +98,21 @@ fn permute_mut<const N: usize>(state: &mut [KoalaBear; N], shifts: &[u8]) {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct Poseidon2KoalaBearPackedConstants;
+
+#[derive(Debug, Clone, Default)]
 pub struct DiffusionMatrixKoalaBear;
 
-impl<const D: u64> InternalLayer<KoalaBear, 16, D> for DiffusionMatrixKoalaBear {
+impl<const D: u64> InternalLayer<KoalaBear, Poseidon2KoalaBearPackedConstants, 16, D>
+    for DiffusionMatrixKoalaBear
+{
     type InternalState = [KoalaBear; 16];
-
-    type InternalConstantsType = KoalaBear;
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        internal_constants: &[KoalaBear],
+        _packed_internal_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 16>>::InternalConstantsType],
     ) {
         internal_permute_state::<KoalaBear, 16, D>(
             state,
@@ -119,15 +122,16 @@ impl<const D: u64> InternalLayer<KoalaBear, 16, D> for DiffusionMatrixKoalaBear 
     }
 }
 
-impl<const D: u64> InternalLayer<KoalaBear, 24, D> for DiffusionMatrixKoalaBear {
+impl<const D: u64> InternalLayer<KoalaBear, Poseidon2KoalaBearPackedConstants, 24, D>
+    for DiffusionMatrixKoalaBear
+{
     type InternalState = [KoalaBear; 24];
-
-    type InternalConstantsType = KoalaBear;
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
-        internal_constants: &[Self::InternalConstantsType],
+        internal_constants: &[KoalaBear],
+        _packed_internal_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, 24>>::InternalConstantsType],
     ) {
         internal_permute_state::<KoalaBear, 24, D>(
             state,
@@ -140,34 +144,39 @@ impl<const D: u64> InternalLayer<KoalaBear, 24, D> for DiffusionMatrixKoalaBear 
 #[derive(Debug, Clone, Default)]
 pub struct MDSLightPermutationKoalaBear;
 
-impl<AF: AbstractField<F = KoalaBear>, const WIDTH: usize, const D: u64> ExternalLayer<AF, WIDTH, D>
+impl<const WIDTH: usize, const D: u64>
+    ExternalLayer<KoalaBear, Poseidon2KoalaBearPackedConstants, WIDTH, D>
     for MDSLightPermutationKoalaBear
+where
+    Poseidon2KoalaBearPackedConstants: Poseidon2PackedTypesAndConstants<KoalaBear, WIDTH>,
 {
-    type InternalState = [AF; WIDTH];
-    type ArrayState = [[AF; WIDTH]; 1];
+    type InternalState = [KoalaBear; WIDTH];
+    type ArrayState = [[KoalaBear; WIDTH]; 1];
 
-    fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState {
+    fn to_internal_rep(&self, state: [KoalaBear; WIDTH]) -> Self::ArrayState {
         [state]
     }
 
-    fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH] {
-        state[0].clone()
+    fn to_output_rep(&self, state: Self::ArrayState) -> [KoalaBear; WIDTH] {
+        state[0]
     }
 
     fn permute_state_initial(
         &self,
-        state: &mut [AF; WIDTH],
+        state: &mut [KoalaBear; WIDTH],
         initial_external_constants: &[[KoalaBear; WIDTH]],
+        _packed_initial_external_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, WIDTH>>::ExternalConstantsType],
     ) {
-        external_initial_permute_state::<AF, WIDTH, D>(state, initial_external_constants);
+        external_initial_permute_state::<KoalaBear, WIDTH, D>(state, initial_external_constants);
     }
 
     fn permute_state_final(
         &self,
         state: &mut Self::InternalState,
         final_external_constants: &[[KoalaBear; WIDTH]],
+        _packed_final_external_constants: &[<Poseidon2KoalaBearPackedConstants as Poseidon2PackedTypesAndConstants<KoalaBear, WIDTH>>::ExternalConstantsType],
     ) {
-        external_final_permute_state::<AF, WIDTH, D>(state, final_external_constants);
+        external_final_permute_state::<KoalaBear, WIDTH, D>(state, final_external_constants);
     }
 }
 
@@ -189,19 +198,21 @@ mod tests {
     // Our Poseidon2 Implementation for KoalaBear
     fn poseidon2_koalabear<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
     where
-        MDSLightPermutationKoalaBear: ExternalLayer<KoalaBear, WIDTH, D>,
-        DiffusionMatrixKoalaBear:
-            InternalLayer<
+        Poseidon2KoalaBearPackedConstants: Poseidon2PackedTypesAndConstants<KoalaBear, WIDTH>,
+        MDSLightPermutationKoalaBear:
+            ExternalLayer<KoalaBear, Poseidon2KoalaBearPackedConstants, WIDTH, D>,
+        DiffusionMatrixKoalaBear: InternalLayer<
+            KoalaBear,
+            Poseidon2KoalaBearPackedConstants,
+            WIDTH,
+            D,
+            InternalState = <MDSLightPermutationKoalaBear as ExternalLayer<
                 KoalaBear,
+                Poseidon2KoalaBearPackedConstants,
                 WIDTH,
                 D,
-                InternalState = <MDSLightPermutationKoalaBear as ExternalLayer<
-                    KoalaBear,
-                    WIDTH,
-                    D,
-                >>::InternalState,
-                InternalConstantsType = KoalaBear,
-            >,
+            >>::InternalState,
+        >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
@@ -210,6 +221,7 @@ mod tests {
             F,
             MDSLightPermutationKoalaBear,
             DiffusionMatrixKoalaBear,
+            Poseidon2KoalaBearPackedConstants,
             WIDTH,
             D,
         > = Poseidon2::new_from_rng_128(
