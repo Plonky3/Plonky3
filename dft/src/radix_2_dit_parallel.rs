@@ -146,19 +146,19 @@ fn dit_layer<F: Field>(
     twiddles: &[F],
 ) {
     let layer_rev = log_h - 1 - layer;
+    let layer_pow = 1 << layer_rev;
 
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
     debug_assert!(submat.height() >= block_size);
 
     for block_start in (0..submat.height()).step_by(block_size) {
-        for i in 0..half_block_size {
+        for (i, twiddle) in twiddles.iter().step_by(layer_pow).enumerate() {
             let hi = block_start + i;
             let lo = hi + half_block_size;
-            let twiddle = twiddles[i << layer_rev];
 
             let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
-            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
+            DitButterfly(*twiddle).apply_to_rows(hi_chunk, lo_chunk);
         }
     }
 }
