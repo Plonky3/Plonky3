@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use itertools::izip;
 
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
@@ -150,15 +151,18 @@ fn dit_layer<F: Field>(
 
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
+    let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for block_start in (0..submat.height()).step_by(block_size) {
-        for (i, &twiddle) in twiddles.iter().step_by(layer_pow).enumerate() {
-            let hi = block_start + i;
-            let lo = hi + half_block_size;
+    for block in submat.values.chunks_mut(block_size * width) {
+        let (lows, highs) = block.split_at_mut(half_block_size * width);
 
-            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
-            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
+        for (lo, hi, &twiddle) in izip!(
+            lows.chunks_mut(width),
+            highs.chunks_mut(width),
+            twiddles.iter().step_by(layer_pow)
+        ) {
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     }
 }
