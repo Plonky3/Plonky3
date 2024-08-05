@@ -61,7 +61,7 @@ where
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
-    println!("Verifier query_indices: {:?}", query_indices);
+    // println!("Verifier query_indices: {:?}", query_indices);
 
     Ok(FriChallenges {
         query_indices,
@@ -79,16 +79,16 @@ where
     F: TwoAdicField,
     M: Mmcs<F>,
 {
-    println!(
-        "Number of commit phase stesp: {}",
-        proof.commit_phase_commits.len()
-    );
+    // println!(
+    //     "Number of commit phase stesp: {}",
+    //     proof.commit_phase_commits.len()
+    // );
     let log_max_height = config.log_arity * proof.commit_phase_commits.len() + config.log_blowup;
-    println!("Verifier phase log_max_height: {}", log_max_height);
-    println!(
-        "Verify Challenges Query indices: {:?}",
-        challenges.query_indices
-    );
+    // println!("Verifier phase log_max_height: {}", log_max_height);
+    // println!(
+    //     "Verify Challenges Query indices: {:?}",
+    //     challenges.query_indices
+    // );
     for (&index, query_proof, ro) in izip!(
         &challenges.query_indices,
         &proof.query_proofs,
@@ -104,7 +104,7 @@ where
             log_max_height,
         )?;
 
-        println!("Verifier phase folded_eval: {:?}", folded_eval);
+        // println!("Verifier phase folded_eval: {:?}", folded_eval);
 
         if folded_eval != proof.final_poly {
             return Err(FriError::FinalPolyMismatch);
@@ -133,11 +133,11 @@ where
 
     let mut phase_counter = 0;
 
-    for i in 0..32 {
-        if reduced_openings[i] != F::zero() {
-            println!("Reduced opening non-zero at index: {}", i);
-        }
-    }
+    // for i in 0..32 {
+    //     if reduced_openings[i] != F::zero() {
+    //         // println!("Reduced opening non-zero at index: {}", i);
+    //     }
+    // }
 
     // TODO: Log_folded_height is a misnomer now, should rename.
     for (log_folded_height, commit, step, &beta) in izip!(
@@ -150,20 +150,21 @@ where
     ) {
         phase_counter += 1;
 
-        println!("Verifier phase log_folded_height: {}", log_folded_height);
+        // println!("Verifier phase log_folded_height: {}", log_folded_height);
 
-        println!("Verifier phase index: {}", index);
+        // println!("Verifier phase index: {}", index);
         let mask = (1 << config.log_arity) - 1;
         let index_self_in_siblings = index & mask;
-        println!("verifier phase index self: {}", index_self_in_siblings);
+        // println!("verifier phase index self: {}", index_self_in_siblings);
         let index_set = index >> config.log_arity;
-        println!("verifier phase index set: {}", index_set);
+        // println!("verifier phase index set: {}", index_set);
 
         // println!("sibling vals: {:?}", step.siblings);
-        println!("folded eval: {:?}", folded_eval);
+        // println!("folded eval: {:?}", folded_eval);
 
-        let mut evals: Vec<F> = step.siblings.clone();
-        evals.insert(index_self_in_siblings, folded_eval);
+        let evals: Vec<F> = step.siblings.clone();
+        // evals.insert(index_self_in_siblings, folded_eval);
+        assert_eq!(evals[index_self_in_siblings], folded_eval);
 
         // println!("evals: {:?}", evals);
 
@@ -174,7 +175,7 @@ where
             height: 1 << (log_folded_height),
         }];
 
-        println!("Dims: {:?}", dims);
+        // println!("Dims: {:?}", dims);
 
         config
             .mmcs
@@ -205,11 +206,11 @@ where
 
         index = index_set;
         x = x.exp_power_of_2(config.log_arity);
-        println!("Folded_eval after folding: {:?}", folded_eval);
+        // println!("Folded_eval after folding: {:?}", folded_eval);
 
         folded_eval += reduced_openings[log_folded_height];
     }
-    println!("Number of verify query steps: {}", phase_counter);
+    // println!("Number of verify query steps: {}", phase_counter);
 
     // debug_assert!(index < config.blowup(), "index was {}", index);
     // debug_assert_eq!(x.exp_power_of_2(config.log_blowup), F::one());

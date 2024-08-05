@@ -33,7 +33,7 @@ where
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
     println!("Prover log_max_height: {}", log_max_height);
 
-    let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
+    // let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
 
     let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
 
@@ -91,7 +91,7 @@ where
             let (mut opened_rows, opening_proof) = config.mmcs.open_batch(folded_index, commit);
             println!("Folded index: {}", folded_index);
             assert_eq!(opened_rows.len(), 1);
-            let mut opened_row = opened_rows.pop().unwrap();
+            let opened_row = opened_rows.pop().unwrap();
             assert_eq!(
                 opened_row.len(),
                 1 << log_arity,
@@ -99,8 +99,8 @@ where
             );
             // println!("Opened row: {:?}", opened_row);
 
-            let tmp = opened_row.remove(index_self);
-            println!("Eval for prover: {}", tmp);
+            // let tmp = opened_row.remove(index_self);
+            // println!("Eval for prover: {}", tmp);
             let siblings = opened_row;
 
             println!("Opening at index: {}", index_i);
