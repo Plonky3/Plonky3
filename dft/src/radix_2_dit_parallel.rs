@@ -178,10 +178,7 @@ fn dit_layer_rev<F: Field>(
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for (block_start, &twiddle) in (0..submat.height())
-        .step_by(block_size)
-        .zip(twiddles_rev.iter())
-    {
+    for (block_start, &twiddle) in (0..submat.height()).step_by(block_size).zip(twiddles_rev) {
         let block = &mut submat.values[block_start * width..(block_start + block_size) * width];
         let (lo, hi) = block.split_at_mut(half_block_size * width);
         DitButterfly(twiddle).apply_to_rows(lo, hi)
