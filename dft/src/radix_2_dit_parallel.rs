@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
-use itertools::izip;
 
+use itertools::izip;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
