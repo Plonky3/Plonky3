@@ -31,7 +31,7 @@ where
             == 0));
 
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
-    println!("Prover log_max_height: {}", log_max_height);
+    // println!("Prover log_max_height: {}", log_max_height);
 
     // let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
 
@@ -43,7 +43,7 @@ where
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
-    println!("Prover query_indices: {:?}", query_indices);
+    // println!("Prover query_indices: {:?}", query_indices);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         query_indices
@@ -52,10 +52,10 @@ where
             .collect()
     });
 
-    println!(
-        "Prover commit_phase_commits: {:?}",
-        commit_phase_result.commits.len()
-    );
+    // println!(
+    //     "Prover commit_phase_commits: {:?}",
+    //     commit_phase_result.commits.len()
+    // );
 
     (
         FriProof {
@@ -89,7 +89,7 @@ where
             // let index_pair = index_i >> 1;
 
             let (mut opened_rows, opening_proof) = config.mmcs.open_batch(folded_index, commit);
-            println!("Folded index: {}", folded_index);
+            // println!("Folded index: {}", folded_index);
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
             assert_eq!(
@@ -103,9 +103,9 @@ where
             // println!("Eval for prover: {}", tmp);
             let siblings = opened_row;
 
-            println!("Opening at index: {}", index_i);
-            println!("Folded index: {}", folded_index);
-            println!("The index-self: {}", index_self);
+            // println!("Opening at index: {}", index_i);
+            // println!("Folded index: {}", folded_index);
+            // println!("The index-self: {}", index_self);
 
             CommitPhaseProofStep {
                 siblings,
@@ -143,9 +143,9 @@ where
         .step_by(config.log_arity)
     {
         phase_counter += 1;
-        println!("Commit phase log_folded_height: {}", log_folded_height);
+        // println!("Commit phase log_folded_height: {}", log_folded_height);
         let leaves = RowMajorMatrix::new(current.clone(), 1 << config.log_arity);
-        println!("Dimensions: {:?}, {}", leaves.width(), leaves.height());
+        // println!("Dimensions: {:?}, {}", leaves.width(), leaves.height());
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
@@ -159,16 +159,16 @@ where
         }
     }
 
-    println!("Did {} commit phase steps", phase_counter);
+    // println!("Did {} commit phase steps", phase_counter);
 
-    println!("Current: {:?}", current);
+    // println!("Current: {:?}", current);
 
     // We should be left with `blowup` evaluations of a constant polynomial.
     assert_eq!(current.len(), config.blowup());
 
     let final_poly = current[0];
 
-    println!("Final poly: {}", final_poly);
+    // println!("Final poly: {}", final_poly);
     for x in current {
         assert_eq!(x, final_poly);
     }
