@@ -273,7 +273,6 @@ pub fn circle_basis<F: Field>(p: Point<F>, log_n: usize) -> Vec<F> {
 mod tests {
     use itertools::iproduct;
     use p3_field::extension::BinomialExtensionField;
-    use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
 

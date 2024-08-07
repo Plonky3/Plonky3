@@ -101,7 +101,7 @@ impl BinomialExtensionData<5> for BabyBearParameters {
 mod tests {
     use core::array;
 
-    use p3_field::{AbstractField, Field, PrimeField32, PrimeField64, TwoAdicField};
+    use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;

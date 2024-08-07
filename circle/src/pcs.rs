@@ -468,7 +468,7 @@ where
 #[cfg(test)]
 mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
-    use p3_commit::{ExtensionMmcs, Pcs};
+    use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::FieldMerkleTreeMmcs;
