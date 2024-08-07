@@ -131,7 +131,6 @@ where
         }
     }
 
-    #[instrument(skip_all)]
     fn open(
         &self,
         // For each round,
