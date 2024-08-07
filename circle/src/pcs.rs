@@ -15,7 +15,7 @@ use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
-use tracing::{info_span, instrument};
+use tracing::info_span;
 
 use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
