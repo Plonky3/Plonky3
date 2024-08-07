@@ -50,7 +50,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!(
+    let mut group = c.benchmark_group(format!(
         "fft/{}/{}/ncols={}",
         pretty_name::<F>(),
         pretty_name::<Dft>(),
@@ -78,7 +78,7 @@ where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
     Standard: Distribution<Mersenne31>,
 {
-    let mut group = c.benchmark_group(&format!(
+    let mut group = c.benchmark_group(format!(
         "m31_fft::<{}, {}>",
         pretty_name::<Dft>(),
         BATCH_SIZE
@@ -105,7 +105,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!(
+    let mut group = c.benchmark_group(format!(
         "ifft/{}/{}/ncols={}",
         pretty_name::<F>(),
         pretty_name::<Dft>(),
@@ -134,7 +134,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!(
+    let mut group = c.benchmark_group(format!(
         "coset_lde/{}/{}/ncols={}",
         pretty_name::<F>(),
         pretty_name::<Dft>(),
