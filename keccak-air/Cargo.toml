@@ -27,7 +27,7 @@ p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-poseidon = { path = "../poseidon" }
 p3-poseidon2 = { path = "../poseidon2" }
-p3-sha256 = { path = "../sha256", features = ["asm"] }
+p3-sha256 = { path = "../sha256" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
 rand = "0.8.5"
@@ -39,3 +39,4 @@ tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 # We should be able to enable p3-maybe-rayon/parallel directly; this just doesn't
 # seem to work when using cargo with the -p or --package option.
 parallel = ["p3-maybe-rayon/parallel"]
+asm = ["p3-sha256/asm"]
