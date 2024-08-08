@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, AirBuilderWithPublicValues};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, PairBuilder};
 use p3_field::AbstractField;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -10,6 +10,7 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: RowMajorMatrix<PackedVal<SC>>,
+    pub preprocessed: RowMajorMatrix<PackedVal<SC>>,
     pub public_values: &'a Vec<Val<SC>>,
     pub is_first_row: PackedVal<SC>,
     pub is_last_row: PackedVal<SC>,
@@ -23,6 +24,7 @@ type ViewPair<'a, T> = VerticalPair<RowMajorMatrixView<'a, T>, RowMajorMatrixVie
 #[derive(Debug)]
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: ViewPair<'a, SC::Challenge>,
+    pub preprocessed: ViewPair<'a, SC::Challenge>,
     pub public_values: &'a Vec<Val<SC>>,
     pub is_first_row: SC::Challenge,
     pub is_last_row: SC::Challenge,
@@ -72,6 +74,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraint
     }
 }
 
+impl<'a, SC: StarkGenericConfig> PairBuilder for ProverConstraintFolder<'a, SC> {
+    fn preprocessed(&self) -> Self::M {
+        self.preprocessed.clone()
+    }
+}
+
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
@@ -110,5 +118,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstrai
 
     fn public_values(&self) -> &[Self::F] {
         self.public_values
+    }
+}
+
+impl<'a, SC: StarkGenericConfig> PairBuilder for VerifierConstraintFolder<'a, SC> {
+    fn preprocessed(&self) -> Self::M {
+        self.preprocessed
     }
 }
