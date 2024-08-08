@@ -161,6 +161,7 @@ where
     // with the initial rounds involving an extra matrix multiplication.
 
     /// Compute the initial external permutation.
+    /// Implementations will usually not use both constants fields.
     fn permute_state_initial(
         &self,
         state: &mut Self::InternalState,
@@ -169,6 +170,7 @@ where
     );
 
     /// Compute the final external permutation.
+    /// Implementations will usually not use both constants fields.
     fn permute_state_final(
         &self,
         state: &mut Self::InternalState,
@@ -180,8 +182,8 @@ where
     fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH];
 }
 
-// A pair of helper methods which allow any field to easily implement External Layer.
-// These should be used in places where performance is not critical.
+/// A helper method which allow any field to easily implement the final External Layer.
+/// This should only be used in places where performance is not critical.
 #[inline]
 pub fn external_final_permute_state<
     AF: AbstractField,
@@ -203,6 +205,8 @@ pub fn external_final_permute_state<
     }
 }
 
+/// A helper method which allow any field to easily implement the initial External Layer.
+/// This should only be used in places where performance is not critical.
 #[inline]
 pub fn external_initial_permute_state<
     AF: AbstractField,

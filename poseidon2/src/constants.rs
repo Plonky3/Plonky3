@@ -24,14 +24,16 @@ pub trait Poseidon2ExternalPackedConstants<F, const WIDTH: usize>: Sync + Clone 
 pub struct NoPackedImplementation;
 
 impl<F> Poseidon2InternalPackedConstants<F> for NoPackedImplementation {
-    // In the scalar case this is AF::F but it may be different for PackedFields.
+    // If there is no specialised implementation, the Internal Packed Constants will never be read.
+    // So we set it to the empty type.
     type InternalConstantsType = ();
 
     fn manipulate_internal_constants(_internal_constants: &F) -> Self::InternalConstantsType {}
 }
 
 impl<F, const WIDTH: usize> Poseidon2ExternalPackedConstants<F, WIDTH> for NoPackedImplementation {
-    // In the scalar case this is AF::F but it may be different for PackedFields.
+    // If there is no specialised implementation, the External Packed Constants will never be read.
+    // So we set it to the empty type.
     type ExternalConstantsType = ();
 
     fn manipulate_external_constants(

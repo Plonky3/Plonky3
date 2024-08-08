@@ -55,6 +55,7 @@ where
     type InternalState;
 
     /// Compute the internal part of the Poseidon2 permutation.
+    /// Implementations will usually not use both constants fields.
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
@@ -63,8 +64,8 @@ where
     );
 }
 
-// A helper method which allows any field to easily implement Internal Layer.
-// This should be used in places where performance is not critical.
+/// A helper method which allows any field to easily implement Internal Layer.
+/// This should only be used in places where performance is not critical.
 #[inline]
 pub fn internal_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
     state: &mut [AF; WIDTH],
