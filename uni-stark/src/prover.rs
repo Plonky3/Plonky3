@@ -88,17 +88,19 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
-    let (opened_values, opening_proof) = pcs.open(
-        vec![
-            (&trace_data, vec![vec![zeta, zeta_next]]),
-            (
-                &quotient_data,
-                // open every chunk at zeta
-                (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
-            ),
-        ],
-        challenger,
-    );
+    let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
+        pcs.open(
+            vec![
+                (&trace_data, vec![vec![zeta, zeta_next]]),
+                (
+                    &quotient_data,
+                    // open every chunk at zeta
+                    (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                ),
+            ],
+            challenger,
+        )
+    });
     let trace_local = opened_values[0][0][0].clone();
     let trace_next = opened_values[0][0][1].clone();
     let quotient_chunks = opened_values[1].iter().map(|v| v[0].clone()).collect_vec();
