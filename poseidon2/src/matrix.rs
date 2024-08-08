@@ -87,7 +87,7 @@ impl<AF: AbstractField> MdsPermutation<AF, 4> for MDSMat4 {}
 
 fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
-    mdsmat: MdsPerm4,
+    mdsmat: &MdsPerm4,
 ) {
     match WIDTH {
         2 => {
@@ -183,9 +183,15 @@ where
 // A pair of helper methods which allow any field to easily implement External Layer.
 // These should be used in places where performance is not critical.
 #[inline]
-pub fn external_final_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
+pub fn external_final_permute_state<
+    AF: AbstractField,
+    MdsPerm4: MdsPermutation<AF, 4>,
+    const WIDTH: usize,
+    const D: u64,
+>(
     state: &mut [AF; WIDTH],
     final_external_constants: &[[AF::F; WIDTH]],
+    mat4: &MdsPerm4,
 ) {
     for elem in final_external_constants.iter() {
         state
@@ -193,17 +199,23 @@ pub fn external_final_permute_state<AF: AbstractField, const WIDTH: usize, const
             .zip(elem.iter())
             .for_each(|(s, rc)| *s += AF::from_f(*rc));
         state.iter_mut().for_each(|s| *s = s.exp_const_u64::<D>());
-        mds_light_permutation(state, MDSMat4);
+        mds_light_permutation(state, mat4);
     }
 }
 
 #[inline]
-pub fn external_initial_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
+pub fn external_initial_permute_state<
+    AF: AbstractField,
+    MdsPerm4: MdsPermutation<AF, 4>,
+    const WIDTH: usize,
+    const D: u64,
+>(
     state: &mut [AF; WIDTH],
     initial_external_constants: &[[AF::F; WIDTH]],
+    mat4: &MdsPerm4,
 ) {
-    mds_light_permutation(state, MDSMat4);
+    mds_light_permutation(state, mat4);
     // After the initial mds_light_permutation, the remaining layers are identical
     // to the final permutation simply with different constants.
-    external_final_permute_state::<AF, WIDTH, D>(state, initial_external_constants)
+    external_final_permute_state::<AF, MdsPerm4, WIDTH, D>(state, initial_external_constants, mat4)
 }

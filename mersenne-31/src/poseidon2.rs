@@ -1,8 +1,8 @@
 use p3_field::PrimeField32;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer, NoPackedImplementation, Poseidon2ExternalPackedConstants,
-    Poseidon2InternalPackedConstants,
+    ExternalLayer, InternalLayer, MDSMat4, NoPackedImplementation,
+    Poseidon2ExternalPackedConstants, Poseidon2InternalPackedConstants,
 };
 
 use crate::{from_u62, to_mersenne31_array, Mersenne31};
@@ -147,7 +147,11 @@ where
         initial_external_constants: &[[Mersenne31; WIDTH]],
         _packed_initial_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>>::ExternalConstantsType],
     ) {
-        external_initial_permute_state::<Mersenne31, WIDTH, 5>(state, initial_external_constants);
+        external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
+            state,
+            initial_external_constants,
+            &MDSMat4,
+        );
     }
 
     fn permute_state_final(
@@ -156,7 +160,11 @@ where
         final_external_constants: &[[Mersenne31; WIDTH]],
         _packed_final_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>>::ExternalConstantsType],
     ) {
-        external_final_permute_state::<Mersenne31, WIDTH, 5>(state, final_external_constants);
+        external_final_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
+            state,
+            final_external_constants,
+            &MDSMat4,
+        );
     }
 }
 
