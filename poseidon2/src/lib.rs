@@ -170,7 +170,7 @@ where
         InternalLayer<AF, PackedConstants, WIDTH, D, InternalState = MdsLightLayer::InternalState>,
 {
     fn permute(&self, state: [AF; WIDTH]) -> [AF; WIDTH] {
-        let mut internal_state = self.external_layer.to_internal_rep(state.clone());
+        let mut internal_state = self.external_layer.to_internal_rep(state);
 
         for sub_state in internal_state.as_mut() {
             // The first half of the external rounds.
