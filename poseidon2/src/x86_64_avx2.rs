@@ -53,7 +53,8 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     #[inline(always)]
     pub fn mat_mul_aes(&mut self) {
         unsafe {
-            // Safety: If the inputs are <= L, the outputs are <= 7L.
+            // Safety: If this code got compiled then AVX2 intrinsics are available.
+            // If the inputs are <= L, the outputs are <= 7L.
             // Hence if L < 2^61, overflow will not occur.
             for matrix in self.0.iter_mut() {
                 let t01 = x86_64::_mm256_add_epi64(matrix[0], matrix[1]);
@@ -79,10 +80,14 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     ///                         [x1 x5 ...]
     ///                         [x2 x6 ...]
     ///                         [x3 x7 ...]
-    /// We are performing a right multiplication by the matrix I + 1.
+    /// This is performing a right multiplication by the matrix I + 1.
     #[inline(always)]
     pub fn right_mat_mul_i_plus_1(&mut self) {
         unsafe {
+            // Safety: If this code got compiled then AVX2 intrinsics are available.
+            // If the inputs are <= L, the outputs are <= (Height + 1)L <= 7L.
+            // Hence provided L < 2^61, no overflow will occur.
+
             let total = self.mat_sum();
 
             for mat in self.0.iter_mut() {
@@ -98,8 +103,7 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     #[inline(always)]
     pub fn add(&mut self, rhs: &Self) {
         unsafe {
-            // Safety: element of rhs must be in canonical form.
-            // Elements of self should be small enough such that overflow is impossible.
+            // Safety: If this code got compiled then AVX2 intrinsics are available.
             for i in 0..HEIGHT {
                 self.0[i][0] = x86_64::_mm256_add_epi64(self.0[i][0], rhs.0[i][0]);
                 self.0[i][1] = x86_64::_mm256_add_epi64(self.0[i][1], rhs.0[i][1]);
@@ -113,7 +117,8 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     #[inline(always)]
     pub fn vec_sum(&self) -> __m256i {
         unsafe {
-            // Safety: Elements of self should be small enough such that overflow is impossible.
+            // Safety: If this code got compiled then AVX2 intrinsics are available.
+            // Elements of self should be small enough such that overflow is impossible.
             // If all inputs are < L, then outputs are <= 4*HEIGHT*L
             let mut output = x86_64::_mm256_setzero_si256();
             for mat in self.0 {
@@ -130,7 +135,8 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     /// A sum across the height dimension
     #[inline(always)]
     pub fn mat_sum(&self) -> [__m256i; 4] {
-        // Safety: Elements of self should be small enough such that overflow is impossible.
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Elements of self should be small enough such that overflow is impossible.
         // If all inputs are < L, then outputs are <= HEIGHT*L
         let mut output: Packed64bitM31Tensor<1> = self.0[0].into();
         for mat in self.0.iter().skip(1) {
@@ -143,7 +149,8 @@ impl<const HEIGHT: usize> Packed64bitM31Tensor<HEIGHT> {
     #[inline(always)]
     pub fn left_shift(&mut self, shifts: Packed64bitM31Tensor<HEIGHT>) {
         unsafe {
-            // Safety: Elements of self, shifts should be small enough such that overflow is impossible.
+            // Safety: If this code got compiled then AVX2 intrinsics are available.
+            // User needs to ensure that overflow will not occur impossible.
             for i in 0..HEIGHT {
                 self.0[i][0] = x86_64::_mm256_sllv_epi64(self.0[i][0], shifts.0[i][0]);
                 self.0[i][1] = x86_64::_mm256_sllv_epi64(self.0[i][1], shifts.0[i][1]);
@@ -177,7 +184,7 @@ pub trait Poseidon2AVX2Helpers {
     const PRIME: __m256i; // The appropriate prime number.
     const PACKED_8XPRIME: __m256i; // 8 times the prime.
 
-    /// Reduce from an element in [0, 2P) to [0, P)
+    /// Reduce an element in [0, 2P) to [0, P)
     #[inline]
     fn final_reduce_pos_vec(x: __m256i) -> __m256i {
         unsafe {
@@ -189,7 +196,7 @@ pub trait Poseidon2AVX2Helpers {
         }
     }
 
-    /// Reduce from an element in [-P, P) to [0, P)
+    /// Reduce an element in [-P, P) to [0, P)
     /// The input can be saved as either a 32 or 64 bit number.
     #[inline]
     fn final_reduce_signed_vec(x: __m256i) -> __m256i {
@@ -231,7 +238,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
     // Given a field element, pull out the u32 stored inside.
     fn manipulate_internal_constants(input: <Self::PF as PackedField>::Scalar) -> __m256i;
 
-    /// Apply full_reduce_vec to every __m256i in the matrix.
+    /// Apply full_reduce_vec to every __m256i in the tensor.
     #[inline]
     fn monty_reduce(state: &mut Packed64bitM31Tensor<HEIGHT>) {
         for mat in state.0.iter_mut() {
@@ -242,7 +249,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
         }
     }
 
-    /// Apply partial_reduce_vec to every __m256i in the matrix.
+    /// Apply partial_reduce_vec to every __m256i in the tensor.
     #[inline]
     fn partial_reduce(state: &mut Packed64bitM31Tensor<HEIGHT>) {
         for mat in state.0.iter_mut() {
@@ -253,7 +260,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
         }
     }
 
-    /// Apply joint_sbox_vec to every __m256i in the matrix.
+    /// Apply joint_sbox_vec to every __m256i in the tensor.
     #[inline]
     fn joint_sbox(state: &mut Packed64bitM31Tensor<HEIGHT>) {
         for mat in state.0.iter_mut() {
@@ -264,7 +271,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
         }
     }
 
-    /// Apply final_reduce_pos_vec to every __m256i in the matrix.
+    /// Apply final_reduce_pos_vec to every __m256i in the tensor.
     #[inline]
     fn final_reduce_pos(state: &mut Packed64bitM31Tensor<HEIGHT>) {
         for mat in state.0.iter_mut() {
@@ -275,7 +282,7 @@ pub trait Poseidon2AVX2Methods<const HEIGHT: usize, const WIDTH: usize>:
         }
     }
 
-    /// Apply final_reduce_signed_vec to every __m256i in the matrix.
+    /// Apply final_reduce_signed_vec to every __m256i in the tensor.
     #[inline]
     fn final_reduce_signed(state: &mut Packed64bitM31Tensor<HEIGHT>) {
         for mat in state.0.iter_mut() {
