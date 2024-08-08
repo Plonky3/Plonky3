@@ -19,6 +19,7 @@ pub trait Poseidon2ExternalPackedConstants<F, const WIDTH: usize>: Sync + Clone 
     ) -> Self::ExternalConstantsType;
 }
 
+/// We prove a simple default option for fields which do not have a specialised Poseidon2 Packed implementation.
 #[derive(Debug, Clone, Default)]
 pub struct NoPackedImplementation;
 

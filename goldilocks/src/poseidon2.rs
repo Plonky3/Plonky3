@@ -8,13 +8,11 @@
 
 //! Long term we will use more optimised internal and external linear layers.
 
-use p3_field::AbstractField;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
     matmul_internal, ExternalLayer, HLMDSMat4, InternalLayer, MDSMat4, NoPackedImplementation,
-    Poseidon2ExternalPackedConstants, Poseidon2InternalPackedConstants,
+    Poseidon2ExternalPackedConstants,
 };
-use p3_symmetric::Permutation;
 
 use crate::{to_goldilocks_array, Goldilocks};
 
@@ -96,7 +94,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 8, 7> for Poseidon2Intern
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Goldilocks],
-        _packed_internal_constants: &[<NoPackedImplementation as Poseidon2InternalPackedConstants<Goldilocks>>::InternalConstantsType],
+        _packed_internal_constants: &[()],
     ) {
         internal_permute_state::<Goldilocks, 8, 7>(
             state,
@@ -113,7 +111,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 12, 7> for Poseidon2Inter
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Goldilocks],
-        _packed_internal_constants: &[<NoPackedImplementation as Poseidon2InternalPackedConstants<Goldilocks>>::InternalConstantsType],
+        _packed_internal_constants: &[()],
     ) {
         internal_permute_state::<Goldilocks, 12, 7>(
             state,
@@ -130,7 +128,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 16, 7> for Poseidon2Inter
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Goldilocks],
-        _packed_internal_constants: &[<NoPackedImplementation as Poseidon2InternalPackedConstants<Goldilocks>>::InternalConstantsType],
+        _packed_internal_constants: &[()],
     ) {
         internal_permute_state::<Goldilocks, 16, 7>(
             state,
@@ -147,7 +145,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 20, 7> for Poseidon2Inter
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Goldilocks],
-        _packed_internal_constants: &[<NoPackedImplementation as Poseidon2InternalPackedConstants<Goldilocks>>::InternalConstantsType],
+        _packed_internal_constants: &[()],
     ) {
         internal_permute_state::<Goldilocks, 20, 7>(
             state,
@@ -163,7 +161,8 @@ pub struct Poseidon2ExternalLayerGoldilocks;
 impl<const WIDTH: usize> ExternalLayer<Goldilocks, NoPackedImplementation, WIDTH, 7>
     for Poseidon2ExternalLayerGoldilocks
 where
-    NoPackedImplementation: Poseidon2ExternalPackedConstants<Goldilocks, WIDTH>,
+    NoPackedImplementation:
+        Poseidon2ExternalPackedConstants<Goldilocks, WIDTH, ExternalConstantsType = ()>,
 {
     type InternalState = [Goldilocks; WIDTH];
     type ArrayState = [[Goldilocks; WIDTH]; 1];
@@ -180,7 +179,7 @@ where
         &self,
         state: &mut [Goldilocks; WIDTH],
         initial_external_constants: &[[Goldilocks; WIDTH]],
-        _packed_initial_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Goldilocks, WIDTH>>::ExternalConstantsType],
+        _packed_initial_external_constants: &[()],
     ) {
         external_initial_permute_state::<_, _, WIDTH, 7>(
             state,
@@ -193,7 +192,7 @@ where
         &self,
         state: &mut Self::InternalState,
         final_external_constants: &[[Goldilocks; WIDTH]],
-        _packed_final_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Goldilocks, WIDTH>>::ExternalConstantsType],
+        _packed_final_external_constants: &[()],
     ) {
         external_final_permute_state::<_, _, WIDTH, 7>(state, final_external_constants, &MDSMat4);
     }
@@ -356,7 +355,9 @@ pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
 mod tests {
     use core::array;
 
+    use p3_field::AbstractField;
     use p3_poseidon2::Poseidon2;
+    use p3_symmetric::Permutation;
 
     use super::*;
 
