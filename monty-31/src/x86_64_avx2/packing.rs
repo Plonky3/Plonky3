@@ -174,7 +174,7 @@ fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
         let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
         let q = x86_64::_mm256_mul_epu32(prod, MPAVX2::PACKED_MU);
         let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
-        x86_64::_mm256_sub_epi64(prod, q_P)
+        x86_64::_mm256_sub_epi32(prod, q_P)
     }
 }
 
