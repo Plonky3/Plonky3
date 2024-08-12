@@ -43,10 +43,10 @@ fn bench_packedfield(c: &mut Criterion) {
     const REPS: usize = 100;
     const L_REPS: usize = 10 * REPS;
 
-    // benchmark_add_latency::<<F as Field>::Packing, L_REPS>(c, &name);
-    // benchmark_add_throughput::<<F as Field>::Packing, REPS>(c, &name);
-    // benchmark_sub_latency::<<F as Field>::Packing, L_REPS>(c, &name);
-    // benchmark_sub_throughput::<<F as Field>::Packing, REPS>(c, &name);
+    benchmark_add_latency::<<F as Field>::Packing, L_REPS>(c, &name);
+    benchmark_add_throughput::<<F as Field>::Packing, REPS>(c, &name);
+    benchmark_sub_latency::<<F as Field>::Packing, L_REPS>(c, &name);
+    benchmark_sub_throughput::<<F as Field>::Packing, REPS>(c, &name);
     benchmark_mul_latency::<<F as Field>::Packing, L_REPS>(c, &name);
     benchmark_mul_throughput::<<F as Field>::Packing, REPS>(c, &name);
 }
