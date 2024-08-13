@@ -24,7 +24,6 @@ where
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + FieldChallenger<F>,
 {
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
-    // println!("Prover log_max_height: {}", log_max_height);
 
     let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
 
@@ -40,16 +39,8 @@ where
         .map(|_| challenger.sample_bits(log_max_height))
         .collect();
 
-    // println!("Prover query_indices: {:?}", query_indices);
-
-    let query_proofs = info_span!("query phase").in_scope(|| {
-        let shift = (log_max_height - config.log_blowup) % config.log_arity;
-        query_indices
-            .iter()
-            .map(|&index| answer_query(config, &commit_phase_result.data, index >> shift))
-            .collect()
-    });
-
+    // Fold the inputs which do not conform to the standardized shape and provide the proofs
+    // necessary to evaluate the folded polynomials at the appropriate query indices.
     let normalize_query_proofs = info_span!("normalize query phase").in_scope(|| {
         query_indices
             .iter()
@@ -77,10 +68,16 @@ where
             .collect()
     });
 
-    println!(
-        "Prover num commit phase steps: {}",
-        commit_phase_result.commits.len()
-    );
+    // The query proofs are as for log_arity = 1 but the index may have too many bits because the normalized
+    // max height may not be the same as the original max height.
+    let query_proofs = info_span!("query phase").in_scope(|| {
+        let shift = (log_max_height - config.log_blowup) % config.log_arity;
+        query_indices
+            .iter()
+            .map(|&index| answer_query(config, &commit_phase_result.data, index >> shift))
+            .collect()
+    });
+
     (
         FriProof {
             commit_phase_commits: commit_phase_result.commits,
@@ -94,6 +91,7 @@ where
     )
 }
 
+/// A function to answer a single step of the query phase.
 fn answer_query_single_step<F: Field, M: Mmcs<F>>(
     config: &FriConfig<M>,
     commit: &M::ProverData<RowMajorMatrix<F>>,
@@ -156,8 +154,6 @@ where
     M: Mmcs<EF>,
     Challenger: CanObserve<M::Commitment> + FieldChallenger<F>,
 {
-    // let mut current = input[log_max_height].as_ref().unwrap().clone();
-
     let mut commits = vec![];
     let mut data = vec![];
 
@@ -168,9 +164,6 @@ where
             None
         }
     });
-
-    // let new_log_max_height =
-    //     log_max_height - ((log_max_height - config.log_blowup) % config.log_arity);
 
     for log_height in (config.log_blowup..log_max_height + 1)
         .rev()
@@ -234,7 +227,8 @@ where
         .rev()
         .step_by(config.log_arity)
     {
-        // The verifier will query this polynomial at
+        // A row of `leaves` is the information necessary to open the folded polynomial at a given
+        // index.
         let leaves = RowMajorMatrix::new(current.clone(), 1 << config.log_arity);
 
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
@@ -255,7 +249,6 @@ where
 
     let final_poly = current[0];
 
-    // println!("Final poly: {}", final_poly);
     for x in current {
         assert_eq!(x, final_poly);
     }

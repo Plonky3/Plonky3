@@ -52,7 +52,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
         .collect()
 }
 
-/// Fold a polynomial by a higher arity than 2. For now, this is just repeated `fold_even_odd`.
+/// Fold a polynomial by an arity higher than 2. For now, this is just repeated `fold_even_odd`.
 /// In the future, we will use a more efficient/GPU-friendly algorithm.
 pub fn fold<F: TwoAdicField>(poly: Vec<F>, beta: F, log_arity: usize) -> Vec<F> {
     let mut result = poly;
