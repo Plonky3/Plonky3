@@ -51,7 +51,7 @@ where
             .collect()
     });
 
-    let normalize_query_proof = info_span!("normalize query phase").in_scope(|| {
+    let normalize_query_proofs = info_span!("normalize query phase").in_scope(|| {
         query_indices
             .iter()
             .map(|&index| NormalizeQueryProof {
@@ -78,11 +78,15 @@ where
             .collect()
     });
 
+    println!(
+        "Prover num commit phase steps: {}",
+        commit_phase_result.commits.len()
+    );
     (
         FriProof {
             commit_phase_commits: commit_phase_result.commits,
             normalize_phase_commits: normalize_phase_result.commits,
-            normalize_query_proof,
+            normalize_query_proofs,
             query_proofs,
             final_poly: commit_phase_result.final_poly,
             pow_witness,

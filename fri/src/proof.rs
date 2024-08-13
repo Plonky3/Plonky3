@@ -14,7 +14,7 @@ pub struct FriProof<F: Field, M: Mmcs<F>, Witness> {
     pub query_proofs: Vec<QueryProof<F, M>>,
 
     pub normalize_phase_commits: Vec<(M::Commitment, usize)>,
-    pub normalize_query_proof: Vec<NormalizeQueryProof<F, M>>,
+    pub normalize_query_proofs: Vec<NormalizeQueryProof<F, M>>,
 
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
