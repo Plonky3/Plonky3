@@ -1,10 +1,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
-
 use core::iter::zip;
-use itertools::{izip, Itertools};
 use std::iter::once;
 
+use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
