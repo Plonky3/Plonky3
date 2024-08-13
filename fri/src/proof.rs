@@ -42,9 +42,8 @@ pub struct NormalizeQueryProof<F: Field, M: Mmcs<F>> {
 // #[serde(bound(serialize = "F: Serialize"))]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
-    /// The opening of the commit phase codeword at the sibling location.
-    // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI
-    // folding arities besides 2, meaning that there can be multiple siblings.
+    /// The opening of the commit phase codeword at the sibling locations (usually has length
+    /// 1<<config.log_arity).
     pub siblings: Vec<F>,
 
     pub opening_proof: M::Proof,

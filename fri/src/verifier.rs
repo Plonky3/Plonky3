@@ -121,7 +121,7 @@ where
         // The function `verify_query` expects its `reduced_openings` argument to have a "normalized"
         // shape (all non-zero entries must be at indices that are multiples of `config.log_arity`
         // added to the log blowup factor), so we first normalize the openings.
-        let normalized_openings = normalize_openings(
+        let normalized_openings = verify_normalization_step(
             config,
             &proof.normalize_phase_commits,
             index,
@@ -149,7 +149,7 @@ where
     Ok(())
 }
 
-fn normalize_openings<F: TwoAdicField, M: Mmcs<F>>(
+fn verify_normalization_step<F: TwoAdicField, M: Mmcs<F>>(
     config: &FriConfig<M>,
     normalize_phase_commits: &[(M::Commitment, usize)],
     index: usize,

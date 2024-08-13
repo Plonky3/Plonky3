@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
+use core::iter::once;
 use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
@@ -333,9 +334,19 @@ where
             verifier::verify_shape_and_sample_challenges(&self.fri, &proof.fri_proof, challenger)
                 .map_err(VerificationError::FriError)?;
 
-        let log_global_max_height = self.fri_config().log_arity
-            * proof.fri_proof.commit_phase_commits.len()
-            + self.fri.log_blowup;
+        let log_global_max_height = once(
+            self.fri_config().log_arity * proof.fri_proof.commit_phase_commits.len()
+                + self.fri.log_blowup,
+        )
+        .chain(
+            proof
+                .fri_proof
+                .normalize_phase_commits
+                .iter()
+                .map(|(_, l)| *l),
+        )
+        .max()
+        .unwrap();
 
         let reduced_openings: Vec<[Challenge; 32]> = proof
             .query_openings
