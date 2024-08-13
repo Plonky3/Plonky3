@@ -235,18 +235,6 @@ fn verify_fold_step<F: TwoAdicField, M: Mmcs<F>>(
     let index_self_in_siblings = index & mask;
     let index_set = index >> num_folds;
 
-    // Fold in the normalized phase commits between log_folded_height and log_folded_height +
-    // config.log_arity.
-    // for i in 1..config.log_arity {
-    //     let evals = normalize_phase_commits.iter().filter_map(|(commit, h)| {
-    //         if h == log_folded_height + i {
-    //             Some()
-    //         } else {
-    //             None
-    //         }
-    //     });
-    // }
-
     let evals: Vec<F> = step.siblings.clone();
     assert_eq!(evals[index_self_in_siblings], folded_eval);
 
