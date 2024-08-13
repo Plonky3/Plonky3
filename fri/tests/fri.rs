@@ -109,19 +109,19 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
         (proof, reduced_openings, chal.sample_bits(8))
     };
 
-    // let mut v_challenger = Challenger::new(perm);
-    // let _alpha: Challenge = v_challenger.sample_ext_element();
-    // let fri_challenges =
-    //     verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
-    //         .expect("failed verify shape and sample");
-    // verifier::verify_challenges(&fc, &proof, &fri_challenges, &reduced_openings)
-    //     .expect("failed verify challenges");
+    let mut v_challenger = Challenger::new(perm);
+    let _alpha: Challenge = v_challenger.sample_ext_element();
+    let fri_challenges =
+        verifier::verify_shape_and_sample_challenges(&fc, &proof, &mut v_challenger)
+            .expect("failed verify shape and sample");
+    verifier::verify_challenges(&fc, &proof, &fri_challenges, &reduced_openings)
+        .expect("failed verify challenges");
 
-    // assert_eq!(
-    //     p_sample,
-    //     v_challenger.sample_bits(8),
-    //     "prover and verifier transcript have same state after FRI"
-    // );
+    assert_eq!(
+        p_sample,
+        v_challenger.sample_bits(8),
+        "prover and verifier transcript have same state after FRI"
+    );
 }
 
 #[test]

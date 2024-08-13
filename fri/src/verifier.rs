@@ -219,6 +219,7 @@ fn normalize_openings<F: TwoAdicField, M: Mmcs<F>>(
     Ok(new_openings)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_fold_step<F: TwoAdicField, M: Mmcs<F>>(
     folded_eval: F,
     beta: F,
@@ -266,7 +267,7 @@ fn verify_fold_step<F: TwoAdicField, M: Mmcs<F>>(
         &[evals.clone()],
         &step.opening_proof,
     )
-    .map_err(|e| FriError::CommitPhaseMmcsError(e))?;
+    .map_err(FriError::CommitPhaseMmcsError)?;
 
     let g = F::two_adic_generator(num_folds);
 
@@ -329,7 +330,7 @@ where
             &config.mmcs,
             x,
         )?;
-        index = index >> config.log_arity;
+        index >>= config.log_arity;
         x = x.exp_power_of_2(config.log_arity);
 
         folded_eval += reduced_openings[log_folded_height];
@@ -357,7 +358,7 @@ fn interpolate_lagrange_and_evaluate<F: TwoAdicField>(xs: &[F], ys: &[F], beta: 
 
         for (j, &xj) in xs.iter().enumerate() {
             if i != j {
-                normalizing_factor = normalizing_factor * (xi - xj);
+                normalizing_factor *= xi - xj;
             }
         }
 
@@ -368,11 +369,11 @@ fn interpolate_lagrange_and_evaluate<F: TwoAdicField>(xs: &[F], ys: &[F], beta: 
 
         for (j, &xj) in xs.iter().enumerate() {
             if i != j {
-                term = term * (beta - xj);
+                term *= beta - xj;
             }
         }
 
-        result = result + term;
+        result += term;
     }
 
     result

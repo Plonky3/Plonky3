@@ -6,7 +6,6 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
@@ -199,12 +198,6 @@ where
         }
     }
 
-    for i in 0..normalized_inputs.len() {
-        if normalized_inputs[i].is_some() {
-            println!("Normalized input at log-height: {}", i);
-        }
-    }
-
     NormalizePhaseResult {
         commits,
         data,
@@ -224,18 +217,14 @@ where
     M: Mmcs<EF>,
     Challenger: CanObserve<M::Commitment> + FieldChallenger<F>,
 {
-    for i in 0..input.len() {
-        if input[i].is_some() {
-            println!("In commit phase, Input at log-height: {}", i);
-            println!("Input length: {}", input[i].as_ref().unwrap().len());
-        }
-    }
     // By the time the prover gets to this phase, the `Some` inputs must all come from polynomials
     // whose log-degree is a multiple of `config.log_arity`.
     assert!(input.iter().all(|x| x.is_none()
         || (log2_strict_usize(x.as_ref().unwrap().len()) - config.log_blowup) % config.log_arity
             == 0));
+
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
+
     let mut current = input[log_max_height].as_ref().unwrap().clone();
 
     let mut commits = vec![];
@@ -245,9 +234,9 @@ where
         .rev()
         .step_by(config.log_arity)
     {
-        // println!("Commit phase log_folded_height: {}", log_folded_height);
+        // The verifier will query this polynomial at
         let leaves = RowMajorMatrix::new(current.clone(), 1 << config.log_arity);
-        // println!("Dimensions: {:?}, {}", leaves.width(), leaves.height());
+
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
