@@ -248,7 +248,6 @@ where
     assert_eq!(current.len(), config.blowup());
 
     let final_poly = current[0];
-
     for x in current {
         assert_eq!(x, final_poly);
     }
