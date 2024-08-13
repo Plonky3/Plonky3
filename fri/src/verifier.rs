@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter::zip;
-use std::iter::once;
+use core::iter::{once, zip};
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -71,11 +70,6 @@ where
     if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
-
-    println!(
-        "Number of commit phase steps: {}",
-        proof.commit_phase_commits.len(),
-    );
 
     // The max height passed into `verify_challenges` can be computed from the config and the number
     // of commit phase steps.
@@ -165,7 +159,7 @@ fn normalize_openings<F: TwoAdicField, M: Mmcs<F>>(
     log_max_height: usize,
 ) -> Result<[F; 32], FriError<M::Error>> {
     // Populate the return value with zeros, or with the reduced openings at the correct indices.
-    let mut new_openings: [F; 32] = std::array::from_fn(|i| {
+    let mut new_openings: [F; 32] = core::array::from_fn(|i| {
         if i >= config.log_blowup && (i - config.log_blowup) % config.log_arity == 0 {
             reduced_openings[i]
         } else {

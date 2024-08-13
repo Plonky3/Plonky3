@@ -157,7 +157,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    let mut normalized_inputs = std::array::from_fn(|i| {
+    let mut normalized_inputs = core::array::from_fn(|i| {
         if i >= config.log_blowup && (i - config.log_blowup) % config.log_arity == 0 {
             input[i].clone()
         } else {
