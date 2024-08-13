@@ -37,6 +37,15 @@ where
     M: Mmcs<EF>,
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + FieldChallenger<F>,
 {
+    let normalize_betas: Vec<EF> = proof
+        .normalize_phase_commits
+        .iter()
+        .map(|(comm, _)| {
+            challenger.observe(comm.clone());
+            challenger.sample_ext_element()
+        })
+        .collect();
+
     let betas: Vec<EF> = proof
         .commit_phase_commits
         .iter()
@@ -49,6 +58,17 @@ where
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
     }
+
+    if proof.normalize_query_proof.len() != config.num_queries {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // // For each query, we must open the same number of commitments as appear in the shape.
+    // for query_proof in &proof.normalize_query_proof {
+    //     if query_proof.normalize_phase_openings.len() != proof.shape.len() {
+    //         return Err(FriError::InvalidProofShape);
+    //     }
+    // }
 
     // Check PoW.
     if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
@@ -114,6 +134,106 @@ where
     Ok(())
 }
 
+fn verify_normalize_phase<F, M>(
+    config: &FriConfig<M>,
+    normalize_phase_commits: &[M::Commitment],
+    mut index: usize,
+    proof: &QueryProof<F, M>,
+    betas: &[F],
+    reduced_openings: &[F; 32],
+    log_max_height: usize,
+) -> Result<F, FriError<M::Error>>
+where
+    F: TwoAdicField,
+    M: Mmcs<F>,
+{
+    let mut folded_eval = reduced_openings[log_max_height];
+    let mut x = F::two_adic_generator(log_max_height)
+        .exp_u64(reverse_bits_len(index, log_max_height) as u64);
+
+    // for i in 0..32 {
+    //     if reduced_openings[i] != F::zero() {
+    //         // println!("Reduced opening non-zero at index: {}", i);
+    //     }
+    // }
+
+    // TODO: Log_folded_height is a misnomer now, should rename.
+    // for (log_folded_height, commit, step, &beta) in izip!(
+    //     (config.log_blowup..log_max_height + 1 - config.log_arity)
+    //         .rev()
+    //         .step_by(config.log_arity),
+    //     commit_phase_commits,
+    //     &proof.commit_phase_openings,
+    //     betas,
+    // ) {
+    // println!("Verifier phase log_folded_height: {}", log_folded_height);
+
+    // println!("Verifier phase index: {}", index);
+    //     let mask = (1 << config.log_arity) - 1;
+    //     let index_self_in_siblings = index & mask;
+    //     // println!("verifier phase index self: {}", index_self_in_siblings);
+    //     let index_set = index >> config.log_arity;
+    //     // println!("verifier phase index set: {}", index_set);
+
+    //     // println!("sibling vals: {:?}", step.siblings);
+    //     // println!("folded eval: {:?}", folded_eval);
+
+    //     let evals: Vec<F> = step.siblings.clone();
+    //     // evals.insert(index_self_in_siblings, folded_eval);
+    //     assert_eq!(evals[index_self_in_siblings], folded_eval);
+
+    //     // println!("evals: {:?}", evals);
+
+    //     assert_eq!(evals.len(), 1 << config.log_arity);
+
+    //     let dims = &[Dimensions {
+    //         width: 1 << config.log_arity,
+    //         height: 1 << (log_folded_height),
+    //     }];
+
+    //     // println!("Dims: {:?}", dims);
+
+    //     config
+    //         .mmcs
+    //         .verify_batch(
+    //             commit,
+    //             dims,
+    //             index_set,
+    //             &[evals.clone()],
+    //             &step.opening_proof,
+    //         )
+    //         .map_err(|e| {
+    //             println!("ERROR: {:?},", e);
+    //             FriError::CommitPhaseMmcsError(e)
+    //         })?;
+    //     let g = F::two_adic_generator(config.log_arity);
+
+    //     let mut ord_idx = index_self_in_siblings;
+    //     let mut ord_evals = vec![];
+
+    //     let xs = g.powers().take(config.arity()).map(|y| x * y).collect_vec();
+    //     for _ in 0..config.arity() {
+    //         ord_evals.push(evals[ord_idx]);
+    //         ord_idx = next_index_in_coset(ord_idx, config.log_arity);
+    //     }
+
+    //     // interpolate and evaluate at beta
+    //     folded_eval = interpolate_lagrange_and_evaluate(&xs, &ord_evals, beta);
+
+    //     index = index_set;
+    //     x = x.exp_power_of_2(config.log_arity);
+    //     // println!("Folded_eval after folding: {:?}", folded_eval);
+
+    //     folded_eval += reduced_openings[log_folded_height];
+    // }
+    // // println!("Number of verify query steps: {}", phase_counter);
+
+    // // debug_assert!(index < config.blowup(), "index was {}", index);
+    // // debug_assert_eq!(x.exp_power_of_2(config.log_blowup), F::one());
+    // }
+    Ok(folded_eval)
+}
+
 fn verify_query<F, M>(
     config: &FriConfig<M>,
     commit_phase_commits: &[M::Commitment],
@@ -131,8 +251,6 @@ where
     let mut x = F::two_adic_generator(log_max_height)
         .exp_u64(reverse_bits_len(index, log_max_height) as u64);
 
-    let mut phase_counter = 0;
-
     // for i in 0..32 {
     //     if reduced_openings[i] != F::zero() {
     //         // println!("Reduced opening non-zero at index: {}", i);
@@ -148,25 +266,12 @@ where
         &proof.commit_phase_openings,
         betas,
     ) {
-        phase_counter += 1;
-
-        // println!("Verifier phase log_folded_height: {}", log_folded_height);
-
-        // println!("Verifier phase index: {}", index);
         let mask = (1 << config.log_arity) - 1;
         let index_self_in_siblings = index & mask;
-        // println!("verifier phase index self: {}", index_self_in_siblings);
         let index_set = index >> config.log_arity;
-        // println!("verifier phase index set: {}", index_set);
-
-        // println!("sibling vals: {:?}", step.siblings);
-        // println!("folded eval: {:?}", folded_eval);
 
         let evals: Vec<F> = step.siblings.clone();
-        // evals.insert(index_self_in_siblings, folded_eval);
         assert_eq!(evals[index_self_in_siblings], folded_eval);
-
-        // println!("evals: {:?}", evals);
 
         assert_eq!(evals.len(), 1 << config.log_arity);
 
@@ -174,8 +279,6 @@ where
             width: 1 << config.log_arity,
             height: 1 << (log_folded_height),
         }];
-
-        // println!("Dims: {:?}", dims);
 
         config
             .mmcs
@@ -186,10 +289,7 @@ where
                 &[evals.clone()],
                 &step.opening_proof,
             )
-            .map_err(|e| {
-                println!("ERROR: {:?},", e);
-                FriError::CommitPhaseMmcsError(e)
-            })?;
+            .map_err(|e| FriError::CommitPhaseMmcsError(e))?;
         let g = F::two_adic_generator(config.log_arity);
 
         let mut ord_idx = index_self_in_siblings;
@@ -201,19 +301,14 @@ where
             ord_idx = next_index_in_coset(ord_idx, config.log_arity);
         }
 
-        // interpolate and evaluate at beta
+        // Interpolate and evaluate at beta
         folded_eval = interpolate_lagrange_and_evaluate(&xs, &ord_evals, beta);
 
         index = index_set;
         x = x.exp_power_of_2(config.log_arity);
-        // println!("Folded_eval after folding: {:?}", folded_eval);
 
         folded_eval += reduced_openings[log_folded_height];
     }
-    // println!("Number of verify query steps: {}", phase_counter);
-
-    // debug_assert!(index < config.blowup(), "index was {}", index);
-    // debug_assert_eq!(x.exp_power_of_2(config.log_blowup), F::one());
 
     Ok(folded_eval)
 }
@@ -224,6 +319,7 @@ fn next_index_in_coset(index: usize, log_arity: usize) -> usize {
     reverse_bits_len(result, log_arity)
 }
 
+// Inefficient algorithm for interpolation and evaluation of a polynomial at a point.
 fn interpolate_lagrange_and_evaluate<F: TwoAdicField>(xs: &[F], ys: &[F], beta: F) -> F {
     assert_eq!(xs.len(), ys.len());
 

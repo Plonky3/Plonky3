@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 pub struct FriProof<F: Field, M: Mmcs<F>, Witness> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub query_proofs: Vec<QueryProof<F, M>>,
+
+    pub normalize_phase_commits: Vec<(M::Commitment, usize)>,
+    pub normalize_query_proof: Vec<NormalizeQueryProof<F, M>>,
+
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
     pub final_poly: F,
@@ -24,6 +28,14 @@ pub struct QueryProof<F: Field, M: Mmcs<F>> {
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
     /// queried location, along with an opening proof.
     pub commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound = "")]
+pub struct NormalizeQueryProof<F: Field, M: Mmcs<F>> {
+    /// For each of the words that needs to be normalized, we do a single FRI fold step and open the
+    /// commitment at the queried index.
+    pub normalize_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

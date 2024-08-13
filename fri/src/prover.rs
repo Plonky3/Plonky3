@@ -10,7 +10,7 @@ use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
-use crate::{fold, CommitPhaseProofStep, FriConfig, FriProof, QueryProof};
+use crate::{fold, CommitPhaseProofStep, FriConfig, FriProof, NormalizeQueryProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<F, EF, M, Challenger>(
@@ -24,18 +24,16 @@ where
     M: Mmcs<EF>,
     Challenger: GrindingChallenger + CanObserve<M::Commitment> + FieldChallenger<F>,
 {
-    // For now, the `Some` inputs must all come from polynomials whose log-degree is a multiple of
-    // `config.log_arity`.
-    assert!(input.iter().all(|x| x.is_none()
-        || (log2_strict_usize(x.as_ref().unwrap().len()) - config.log_blowup) % config.log_arity
-            == 0));
-
     let log_max_height = input.iter().rposition(Option::is_some).unwrap();
     // println!("Prover log_max_height: {}", log_max_height);
 
-    // let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
+    let normalize_phase_result = normalize_phase(config, input, log_max_height, challenger);
 
-    let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
+    let commit_phase_result = commit_phase(
+        config,
+        &normalize_phase_result.normalized_inputs,
+        challenger,
+    );
 
     let pow_witness = challenger.grind(config.proof_of_work_bits);
 
@@ -46,26 +44,75 @@ where
     // println!("Prover query_indices: {:?}", query_indices);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
+        let shift = (log_max_height - config.log_blowup) % config.log_arity;
         query_indices
             .iter()
-            .map(|&index| answer_query(config, &commit_phase_result.data, index))
+            .map(|&index| answer_query(config, &commit_phase_result.data, index >> shift))
             .collect()
     });
 
-    // println!(
-    //     "Prover commit_phase_commits: {:?}",
-    //     commit_phase_result.commits.len()
-    // );
+    let normalize_query_proof = info_span!("normalize query phase").in_scope(|| {
+        query_indices
+            .iter()
+            .map(|&index| NormalizeQueryProof {
+                normalize_phase_openings: normalize_phase_result
+                    .data
+                    .iter()
+                    .zip_eq(
+                        normalize_phase_result
+                            .commits
+                            .iter()
+                            .map(|(_, height)| *height),
+                    )
+                    .map(|(commitment, height)| {
+                        let shift = (height - config.log_blowup) % config.log_arity;
+                        answer_query_single_step(
+                            config,
+                            commitment,
+                            index >> (shift + log_max_height - height),
+                            shift,
+                        )
+                    })
+                    .collect(),
+            })
+            .collect()
+    });
 
     (
         FriProof {
             commit_phase_commits: commit_phase_result.commits,
+            normalize_phase_commits: normalize_phase_result.commits,
+            normalize_query_proof,
             query_proofs,
             final_poly: commit_phase_result.final_poly,
             pow_witness,
         },
         query_indices,
     )
+}
+
+fn answer_query_single_step<F: Field, M: Mmcs<F>>(
+    config: &FriConfig<M>,
+    commit: &M::ProverData<RowMajorMatrix<F>>,
+    index: usize,
+    log_num_leaves: usize,
+) -> CommitPhaseProofStep<F, M> {
+    let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index, commit);
+
+    assert_eq!(opened_rows.len(), 1);
+    let opened_row = opened_rows.pop().unwrap();
+    assert_eq!(
+        opened_row.len(),
+        1 << log_num_leaves,
+        "Committed data should be in tuples of size arity."
+    );
+
+    let siblings = opened_row;
+
+    CommitPhaseProofStep {
+        siblings,
+        opening_proof,
+    }
 }
 
 fn answer_query<F, M>(
@@ -83,34 +130,8 @@ where
         .enumerate()
         .map(|(i, commit)| {
             let index_i = index >> (i * log_arity);
-            let mask = (1 << log_arity) - 1;
             let folded_index = index_i >> log_arity;
-            let index_self = index_i & mask;
-            // let index_pair = index_i >> 1;
-
-            let (mut opened_rows, opening_proof) = config.mmcs.open_batch(folded_index, commit);
-            // println!("Folded index: {}", folded_index);
-            assert_eq!(opened_rows.len(), 1);
-            let opened_row = opened_rows.pop().unwrap();
-            assert_eq!(
-                opened_row.len(),
-                1 << log_arity,
-                "Committed data should be in tuples of size arity."
-            );
-            // println!("Opened row: {:?}", opened_row);
-
-            // let tmp = opened_row.remove(index_self);
-            // println!("Eval for prover: {}", tmp);
-            let siblings = opened_row;
-
-            // println!("Opening at index: {}", index_i);
-            // println!("Folded index: {}", folded_index);
-            // println!("The index-self: {}", index_self);
-
-            CommitPhaseProofStep {
-                siblings,
-                opening_proof,
-            }
+            answer_query_single_step(config, commit, folded_index, config.log_arity)
         })
         .collect();
 
@@ -120,10 +141,77 @@ where
 }
 
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<F, EF, M, Challenger>(
+fn normalize_phase<F, EF, M, Challenger>(
     config: &FriConfig<M>,
     input: &[Option<Vec<EF>>; 32],
     log_max_height: usize,
+    challenger: &mut Challenger,
+) -> NormalizePhaseResult<EF, M>
+where
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
+    Challenger: CanObserve<M::Commitment> + FieldChallenger<F>,
+{
+    // let mut current = input[log_max_height].as_ref().unwrap().clone();
+
+    let mut commits = vec![];
+    let mut data = vec![];
+
+    let mut normalized_inputs = std::array::from_fn(|i| {
+        if i >= config.log_blowup && (i - config.log_blowup) % config.log_arity == 0 {
+            input[i].clone()
+        } else {
+            None
+        }
+    });
+
+    // let new_log_max_height =
+    //     log_max_height - ((log_max_height - config.log_blowup) % config.log_arity);
+
+    for log_height in (config.log_blowup..log_max_height + 1)
+        .rev()
+        .filter(|&i| (i - config.log_blowup) % config.log_arity != 0 && input[i].is_some())
+    {
+        let current = input[log_height].as_ref().unwrap().clone();
+        let num_folds = (log_height - config.log_blowup) % config.log_arity;
+        let leaves = RowMajorMatrix::new(current.clone(), 1 << num_folds);
+
+        let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
+        challenger.observe(commit.clone());
+        commits.push((commit, log_height));
+        data.push(prover_data);
+
+        let beta: EF = challenger.sample_ext_element();
+        match &mut normalized_inputs[log_height - num_folds] {
+            Some(v) => {
+                v.iter_mut()
+                    .zip_eq(fold(current, beta, num_folds))
+                    .for_each(|(v_elem, c_elem)| *v_elem += c_elem);
+            }
+            None => {
+                normalized_inputs[log_height - num_folds] = Some(fold(current, beta, num_folds));
+            }
+        }
+    }
+
+    for i in 0..normalized_inputs.len() {
+        if normalized_inputs[i].is_some() {
+            println!("Normalized input at log-height: {}", i);
+        }
+    }
+
+    NormalizePhaseResult {
+        commits,
+        data,
+        normalized_inputs,
+    }
+}
+
+#[instrument(name = "commit phase", skip_all)]
+fn commit_phase<F, EF, M, Challenger>(
+    config: &FriConfig<M>,
+    input: &[Option<Vec<EF>>; 32],
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<EF, M>
 where
@@ -132,17 +220,27 @@ where
     M: Mmcs<EF>,
     Challenger: CanObserve<M::Commitment> + FieldChallenger<F>,
 {
+    for i in 0..input.len() {
+        if input[i].is_some() {
+            println!("In commit phase, Input at log-height: {}", i);
+            println!("Input length: {}", input[i].as_ref().unwrap().len());
+        }
+    }
+    // By the time the prover gets to this phase, the `Some` inputs must all come from polynomials
+    // whose log-degree is a multiple of `config.log_arity`.
+    assert!(input.iter().all(|x| x.is_none()
+        || (log2_strict_usize(x.as_ref().unwrap().len()) - config.log_blowup) % config.log_arity
+            == 0));
+    let log_max_height = input.iter().rposition(Option::is_some).unwrap();
     let mut current = input[log_max_height].as_ref().unwrap().clone();
 
     let mut commits = vec![];
     let mut data = vec![];
-    let mut phase_counter = 0;
 
     for log_folded_height in (config.log_blowup..(log_max_height + 1 - config.log_arity))
         .rev()
         .step_by(config.log_arity)
     {
-        phase_counter += 1;
         // println!("Commit phase log_folded_height: {}", log_folded_height);
         let leaves = RowMajorMatrix::new(current.clone(), 1 << config.log_arity);
         // println!("Dimensions: {:?}, {}", leaves.width(), leaves.height());
@@ -158,10 +256,6 @@ where
             current.iter_mut().zip_eq(v).for_each(|(c, v)| *c += *v);
         }
     }
-
-    // println!("Did {} commit phase steps", phase_counter);
-
-    // println!("Current: {:?}", current);
 
     // We should be left with `blowup` evaluations of a constant polynomial.
     assert_eq!(current.len(), config.blowup());
@@ -185,4 +279,10 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
     final_poly: F,
+}
+
+struct NormalizePhaseResult<F: Field, M: Mmcs<F>> {
+    commits: Vec<(M::Commitment, usize)>,
+    data: Vec<M::ProverData<RowMajorMatrix<F>>>,
+    normalized_inputs: [Option<Vec<F>>; 32],
 }

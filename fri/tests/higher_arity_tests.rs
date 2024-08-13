@@ -53,7 +53,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let shift = Val::generator();
 
     let ldes: Vec<RowMajorMatrix<Val>> = (0..10)
-        .step_by(FRI_LOG_ARITY)
+        .step_by(FRI_LOG_ARITY - 1)
         .map(|deg_bits| {
             let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
             let mut lde = dft.coset_lde_batch(evals, FRI_LOG_BLOWUP, shift);
