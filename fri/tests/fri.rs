@@ -162,14 +162,3 @@ fn test_fri_higher_arity() {
         do_test_fri_ldt(&mut rng, &[0, 4], 3, 4);
     }
 }
-
-#[test]
-fn bench_fri_log_arity() {
-    for i in 0..4 {
-        let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng, &[7, 18, 19, 21], 1, 1);
-        do_test_fri_ldt(&mut rng, &[7, 18, 19, 21], 2, 1);
-        do_test_fri_ldt(&mut rng, &[7, 18, 19, 21], 3, 1);
-        do_test_fri_ldt(&mut rng, &[7, 18, 19, 21], 4, 1);
-    }
-}

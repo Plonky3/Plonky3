@@ -141,7 +141,7 @@ where
     }
 }
 
-#[instrument(name = "commit phase", skip_all)]
+#[instrument(name = "normalize phase", skip_all)]
 fn normalize_phase<F, EF, M, Challenger>(
     config: &FriConfig<M>,
     input: &[Option<Vec<EF>>; 32],
