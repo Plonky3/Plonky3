@@ -121,7 +121,7 @@ where
         // The function `verify_query` expects its `reduced_openings` argument to have a "normalized"
         // shape (all non-zero entries must be at indices that are multiples of `config.log_arity`
         // added to the log blowup factor), so we first normalize the openings.
-        let normalized_openings = verify_normalization_step(
+        let normalized_openings = verify_normalization_phase(
             config,
             &proof.normalize_phase_commits,
             index,
@@ -149,7 +149,7 @@ where
     Ok(())
 }
 
-fn verify_normalization_step<F: TwoAdicField, M: Mmcs<F>>(
+fn verify_normalization_phase<F: TwoAdicField, M: Mmcs<F>>(
     config: &FriConfig<M>,
     normalize_phase_commits: &[(M::Commitment, usize)],
     index: usize,
@@ -200,6 +200,7 @@ fn verify_normalization_step<F: TwoAdicField, M: Mmcs<F>>(
             new_x,
         )?;
     }
+    println!("normalization successful!!");
 
     Ok(new_openings)
 }
@@ -223,10 +224,8 @@ fn verify_fold_step<F: TwoAdicField, M: Mmcs<F>>(
     let index_self_in_siblings = index & mask;
     let index_set = index >> num_folds;
 
-    let evals: Vec<F> = step.siblings.clone();
-    // The prover sends slightly redundant information, so we need to check that the prover has sent
-    // foled_eval at the correct index.
-    debug_assert_eq!(evals[index_self_in_siblings], folded_eval);
+    let mut evals: Vec<F> = step.siblings.clone();
+    evals.insert(index_self_in_siblings, folded_eval);
 
     // `commit` should be a commitment to a matrix with 2^num_folds columns and 2^log_folded_height
     // rows.

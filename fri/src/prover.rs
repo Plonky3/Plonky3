@@ -59,7 +59,7 @@ where
                         answer_query_single_step(
                             config,
                             commitment,
-                            index >> (shift + log_max_height - height),
+                            index >> (log_max_height - height),
                             shift,
                         )
                     })
@@ -98,7 +98,7 @@ fn answer_query_single_step<F: Field, M: Mmcs<F>>(
     index: usize,
     log_num_leaves: usize,
 ) -> CommitPhaseProofStep<F, M> {
-    let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index, commit);
+    let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index >> log_num_leaves, commit);
 
     assert_eq!(opened_rows.len(), 1);
     let opened_row = opened_rows.pop().unwrap();
@@ -108,7 +108,8 @@ fn answer_query_single_step<F: Field, M: Mmcs<F>>(
         "Committed data should be in tuples of size arity."
     );
 
-    let siblings = opened_row;
+    let mut siblings = opened_row;
+    siblings.remove(index & ((1 << log_num_leaves) - 1));
 
     CommitPhaseProofStep {
         siblings,
@@ -131,8 +132,7 @@ where
         .enumerate()
         .map(|(i, commit)| {
             let index_i = index >> (i * log_arity);
-            let folded_index = index_i >> log_arity;
-            answer_query_single_step(config, commit, folded_index, config.log_arity)
+            answer_query_single_step(config, commit, index_i, config.log_arity)
         })
         .collect();
 
