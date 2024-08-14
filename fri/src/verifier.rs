@@ -204,65 +204,6 @@ fn verify_normalization_phase<F: TwoAdicField, M: Mmcs<F>>(
     Ok(new_openings)
 }
 
-/// Verify a single FRI fold consistency check.
-///
-/// The functions `verify_query` and `normalize_openings` both call this function.
-#[allow(clippy::too_many_arguments)]
-fn verify_fold_step<F: TwoAdicField, M: Mmcs<F>>(
-    folded_eval: F,
-    beta: F,
-    num_folds: usize,
-    step: &CommitPhaseProofStep<F, M>,
-    commit: &M::Commitment,
-    index: usize,
-    log_folded_height: usize,
-    mmcs: &M,
-    x: F,
-) -> Result<F, FriError<M::Error>> {
-    let mask = (1 << num_folds) - 1;
-    let index_self_in_siblings = index & mask;
-    let index_set = index >> num_folds;
-
-    let mut evals: Vec<F> = step.siblings.clone();
-    evals.insert(index_self_in_siblings, folded_eval);
-
-    // `commit` should be a commitment to a matrix with 2^num_folds columns and 2^log_folded_height
-    // rows.
-    debug_assert_eq!(evals.len(), 1 << num_folds);
-    let dims = &[Dimensions {
-        width: 1 << num_folds,
-        height: 1 << (log_folded_height),
-    }];
-
-    mmcs.verify_batch(
-        commit,
-        dims,
-        index_set,
-        &[evals.clone()],
-        &step.opening_proof,
-    )
-    .map_err(FriError::CommitPhaseMmcsError)?;
-
-    // For the case of log_arity = 1, g = -1. We need g to compute the coset of x of
-    // of order 2^num_folds.
-    let g = F::two_adic_generator(num_folds);
-
-    // `evals` is ordered so that evals[i] is the evaluation of the commitment at x * g^{bit_reversed(i)}.
-    // We construct a vector of evaluations ordered so that the entry at index i is the evaluation
-    // at x * g^i.
-    let mut ord_idx = index_self_in_siblings;
-    let mut ord_evals = vec![];
-
-    let xs = g.powers().take(1 << num_folds).map(|y| x * y).collect_vec();
-    for _ in 0..(1 << num_folds) {
-        ord_evals.push(evals[ord_idx]);
-        ord_idx = next_index_in_coset(ord_idx, num_folds);
-    }
-
-    // Interpolate and evaluate at beta.
-    Ok(interpolate_lagrange_and_evaluate(&xs, &ord_evals, beta))
-}
-
 fn verify_query<F, M>(
     config: &FriConfig<M>,
     commit_phase_commits: &[M::Commitment],
@@ -317,6 +258,65 @@ where
     }
 
     Ok(folded_eval)
+}
+
+/// Verify a single FRI fold consistency check.
+///
+/// The functions `verify_query` and `verify_normalization_phase` both call this function.
+#[allow(clippy::too_many_arguments)]
+fn verify_fold_step<F: TwoAdicField, M: Mmcs<F>>(
+    folded_eval: F,
+    beta: F,
+    num_folds: usize,
+    step: &CommitPhaseProofStep<F, M>,
+    commit: &M::Commitment,
+    index: usize,
+    log_folded_height: usize,
+    mmcs: &M,
+    x: F,
+) -> Result<F, FriError<M::Error>> {
+    let mask = (1 << num_folds) - 1;
+    let index_self_in_siblings = index & mask;
+    let index_set = index >> num_folds;
+
+    let mut evals: Vec<F> = step.siblings.clone();
+    evals.insert(index_self_in_siblings, folded_eval);
+
+    // `commit` should be a commitment to a matrix with 2^num_folds columns and 2^log_folded_height
+    // rows.
+    debug_assert_eq!(evals.len(), 1 << num_folds);
+    let dims = &[Dimensions {
+        width: 1 << num_folds,
+        height: 1 << (log_folded_height),
+    }];
+
+    mmcs.verify_batch(
+        commit,
+        dims,
+        index_set,
+        &[evals.clone()],
+        &step.opening_proof,
+    )
+    .map_err(FriError::CommitPhaseMmcsError)?;
+
+    // For the case of log_arity = 1, g = -1. We need g to compute the coset of x of
+    // of order 2^num_folds.
+    let g = F::two_adic_generator(num_folds);
+
+    // `evals` is ordered so that evals[i] is the evaluation of the commitment at x * g^{bit_reversed(i)}.
+    // We construct a vector of evaluations ordered so that the entry at index i is the evaluation
+    // at x * g^i.
+    let mut ord_idx = index_self_in_siblings;
+    let mut ord_evals = vec![];
+
+    let xs = g.powers().take(1 << num_folds).map(|y| x * y).collect_vec();
+    for _ in 0..(1 << num_folds) {
+        ord_evals.push(evals[ord_idx]);
+        ord_idx = next_index_in_coset(ord_idx, num_folds);
+    }
+
+    // Interpolate and evaluate at beta.
+    Ok(interpolate_lagrange_and_evaluate(&xs, &ord_evals, beta))
 }
 
 fn next_index_in_coset(index: usize, log_arity: usize) -> usize {

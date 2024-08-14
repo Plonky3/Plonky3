@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -53,15 +53,53 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
 }
 
 /// Fold a polynomial by an arity higher than 2. For now, this is just repeated `fold_even_odd`.
-/// In the future, we will use a more efficient/GPU-friendly algorithm.
+/// In the future, we will use a more efficient algorithm.
 pub fn fold<F: TwoAdicField>(poly: Vec<F>, beta: F, log_arity: usize) -> Vec<F> {
-    let mut result = poly;
-    let mut new_beta = beta;
-    for _ in 0..log_arity {
-        result = fold_even_odd(result, new_beta);
-        new_beta = new_beta.square();
-    }
-    result
+    // We use the fact that
+    //     p_e(x^2) = (p(x) + p(-x)) / 2
+    //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
+    // that is,
+    //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
+    //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
+    // so
+    //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
+    //                    = (1/2 + beta/2 g_inv^i) p(g^i)
+    //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
+    let m = RowMajorMatrix::new(poly, 1 << log_arity);
+    let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + log_arity).inverse();
+    let normalizing_factor = F::from_canonical_u32(1 << log_arity).inverse();
+
+    // TODO: vectorize this (after we have packed extension fields)
+
+    // successive powers of g_inv
+    let mut g_powers = g_inv.powers().take(m.height()).collect_vec();
+    reverse_slice_index_bits(&mut g_powers);
+
+    let root_of_unity = F::two_adic_generator(log_arity);
+    let mut roots_of_unity = root_of_unity
+        .inverse()
+        .powers()
+        .take(1 << log_arity)
+        .collect_vec();
+    reverse_slice_index_bits(&mut roots_of_unity);
+
+    m.par_rows()
+        .zip(g_powers)
+        .map(|(row, power)| {
+            row.zip(roots_of_unity.iter())
+                .map(|(r, root)| {
+                    r * normalizing_factor
+                        * izip!(
+                            beta.powers().take(1 << log_arity),
+                            root.powers(),
+                            power.powers()
+                        )
+                        .map(|(a, b, c)| a * b * c)
+                        .sum()
+                })
+                .sum()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -69,6 +107,7 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+    use p3_field::AbstractField;
     use rand::{thread_rng, Rng};
 
     use super::*;
@@ -104,5 +143,34 @@ mod tests {
         reverse_slice_index_bits(&mut folded);
 
         assert_eq!(expected, folded);
+    }
+
+    #[test]
+    fn test_higher_arity_fold() {
+        type F = BabyBear;
+
+        let mut rng = thread_rng();
+
+        let log_arity = 2;
+        let log_n = 10;
+        let n = 1 << log_n;
+        let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
+
+        let dft = Radix2Dit::default();
+        let evals = dft.dft(coeffs.clone());
+
+        let beta = rng.gen::<F>();
+        let mut result = evals;
+        let mut new_beta = beta;
+        for _ in 0..log_arity {
+            result = fold_even_odd(result, new_beta);
+            new_beta = new_beta.square();
+        }
+
+        let folded = fold(coeffs, beta, log_arity);
+
+        assert_eq!(result.len(), folded.len());
+
+        assert_eq!(result, folded);
     }
 }
