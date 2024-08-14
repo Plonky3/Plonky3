@@ -200,7 +200,6 @@ fn verify_normalization_phase<F: TwoAdicField, M: Mmcs<F>>(
             new_x,
         )?;
     }
-    println!("normalization successful!!");
 
     Ok(new_openings)
 }
