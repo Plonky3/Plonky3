@@ -52,19 +52,17 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
         .collect()
 }
 
-/// Fold a polynomial by an arity higher than 2. For now, this is just repeated `fold_even_odd`.
-/// In the future, we will use a more efficient algorithm.
+/// Fold a polynomial by an arity higher than 2.
 pub fn fold<F: TwoAdicField>(poly: Vec<F>, beta: F, log_arity: usize) -> Vec<F> {
-    // We use the fact that
-    //     p_e(x^2) = (p(x) + p(-x)) / 2
-    //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
-    // that is,
-    //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
-    //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
-    // so
-    //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
-    //                    = (1/2 + beta/2 g_inv^i) p(g^i)
-    //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
+    // Let h = 2^log_arity. Write a polynomial p(x) as sum_{i=0}^{h-1} x^i p_i(x^h).
+    // We seek a vector of evaluations of the polynomial p'(x) = sum_{i=1}^{h-1} beta^i p_i(x), given
+    // evaluations of p(x).
+    //
+    // Let z be an h-th root of unity. We use the formula:
+    // p_j(x) = 1/(h x^j) sum_{k=0}^{h-1} z^{-i*j}p(z^i*x), which is basically an inverse Fourier transform.
+    // Plugging this in to the expression for p'(x) gives:
+    // p'(x) = sum_{i,j=1}^{h-1} beta^i p(z^i * x) * beta^j * z^{-i*j} / (h x^j).
+
     let m = RowMajorMatrix::new(poly, 1 << log_arity);
     let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + log_arity).inverse();
     let normalizing_factor = F::from_canonical_u32(1 << log_arity).inverse();
@@ -86,6 +84,7 @@ pub fn fold<F: TwoAdicField>(poly: Vec<F>, beta: F, log_arity: usize) -> Vec<F> 
     m.par_rows()
         .zip(g_powers)
         .map(|(row, power)| {
+            assert!(row.len() == 1 << log_arity);
             row.zip(roots_of_unity.iter())
                 .map(|(r, root)| {
                     r * normalizing_factor
@@ -151,7 +150,7 @@ mod tests {
 
         let mut rng = thread_rng();
 
-        let log_arity = 2;
+        let log_arity = 4;
         let log_n = 10;
         let n = 1 << log_n;
         let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
@@ -160,14 +159,14 @@ mod tests {
         let evals = dft.dft(coeffs.clone());
 
         let beta = rng.gen::<F>();
-        let mut result = evals;
+        let mut result = evals.clone();
         let mut new_beta = beta;
         for _ in 0..log_arity {
             result = fold_even_odd(result, new_beta);
             new_beta = new_beta.square();
         }
 
-        let folded = fold(coeffs, beta, log_arity);
+        let folded = fold(evals, beta, log_arity);
 
         assert_eq!(result.len(), folded.len());
 
