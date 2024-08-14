@@ -156,3 +156,13 @@ fn test_fri_higher_arity() {
         do_test_fri_ldt(&mut rng, &[0, 4], 3, 4);
     }
 }
+
+#[test]
+fn bench_fri_log_arity_one() {
+    let now = std::time::Instant::now();
+    for i in 0..4 {
+        let mut rng = ChaCha20Rng::seed_from_u64(i);
+        do_test_fri_ldt(&mut rng, &[0, 7, 18, 19, 21], 1, 1);
+    }
+    println!("Test took {:?}", now.elapsed().as_secs_f32());
+}
