@@ -1,27 +1,28 @@
 [package]
 name = "p3-merkle-tree"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 Merkle tree logic."
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-symmetric = { path = "../symmetric" }
-p3-commit = { path = "../commit" }
-p3-util = { path = "../util" }
+p3-field = "0.2.0"
+p3-matrix = "0.2.0"
+p3-maybe-rayon = "0.2.0"
+p3-symmetric = "0.2.0"
+p3-commit = "0.2.0"
+p3-util = "0.2.0"
 itertools = "0.13.0"
 tracing = "0.1.37"
 serde = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-p3-blake3 = { path = "../blake3" }
-p3-keccak = { path = "../keccak" }
-p3-baby-bear = { path = "../baby-bear" }
-p3-mds = { path = "../mds" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-rescue = { path = "../rescue" }
+p3-blake3 = "0.2.0"
+p3-keccak = "0.2.0"
+p3-baby-bear = "0.2.0"
+p3-mds = "0.2.0"
+p3-poseidon2 = "0.2.0"
+p3-rescue = "0.2.0"
 criterion = "0.5.1"
 rand = "0.8.5"
 

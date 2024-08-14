@@ -1,16 +1,17 @@
 [package]
 name = "p3-monolith"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 implementation of the Monolith permutation."
 
 [dependencies]
+p3-field = "0.2.0"
+p3-goldilocks = "0.2.0"
+p3-mersenne-31 = "0.2.0"
+p3-mds = "0.2.0"
+p3-symmetric = "0.2.0"
 generic-array = "1.0"
-p3-field = { path = "../field" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
-p3-mds = { path = "../mds" }
-p3-symmetric = { path = "../symmetric" }
 sha3 = "0.10"
 
 [dev-dependencies]

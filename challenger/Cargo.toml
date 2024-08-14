@@ -1,15 +1,16 @@
 [package]
 name = "p3-challenger"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 logic for Fiat-Shamir."
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-util = { path = "../util" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-symmetric = { path = "../symmetric" }
+p3-field = "0.2.0"
+p3-util = "0.2.0"
+p3-maybe-rayon = "0.2.0"
+p3-symmetric = "0.2.0"
 tracing = "0.1.37"
 
 [dev-dependencies]
-p3-goldilocks = { path = "../goldilocks" }
+p3-goldilocks = "0.2.0"

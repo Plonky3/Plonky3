@@ -1,13 +1,14 @@
 [package]
 name = "p3-interpolation"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 interpolation logic."
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-util = { path = "../util" }
+p3-field = "0.2.0"
+p3-matrix = "0.2.0"
+p3-util = "0.2.0"
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
+p3-baby-bear = "0.2.0"

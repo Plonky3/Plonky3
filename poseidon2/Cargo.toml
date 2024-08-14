@@ -1,22 +1,23 @@
 [package]
 name = "p3-poseidon2"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 implementation of the Poseidon2 permutation."
 
 [dependencies]
 gcd = "2.3.0"
-p3-field = { path = "../field" }
-p3-symmetric = { path = "../symmetric" }
-p3-mds = { path = "../mds" }
+p3-field = "0.2.0"
+p3-symmetric = "0.2.0"
+p3-mds = "0.2.0"
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 
 [dev-dependencies]
-p3-mersenne-31 = { path = "../mersenne-31" }
-p3-baby-bear = { path = "../baby-bear" }
-p3-koala-bear = { path = "../koala-bear" }
-p3-bn254-fr = { path = "../bn254-fr" }
-p3-goldilocks = { path = "../goldilocks" }
+p3-mersenne-31 = "0.2.0"
+p3-baby-bear = "0.2.0"
+p3-koala-bear = "0.2.0"
+p3-bn254-fr = "0.2.0"
+p3-goldilocks = "0.2.0"
 criterion = "0.5.1"
 
 [[bench]]

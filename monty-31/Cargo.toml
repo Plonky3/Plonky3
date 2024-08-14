@@ -1,17 +1,18 @@
 [package]
 name = "p3-monty-31"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 utilities for implementing 31-bit Montgomery fields."
 
 [features]
 nightly-features = []
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-mds = { path = "../mds" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-symmetric = { path = "../symmetric" }
+p3-field = "0.2.0"
+p3-mds = "0.2.0"
+p3-poseidon2 = "0.2.0"
+p3-symmetric = "0.2.0"
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }

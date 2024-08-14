@@ -1,26 +1,27 @@
 [package]
 name = "p3-rescue"
-version = "0.0.1"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 implementation of the Rescue permutation."
 
 [dependencies]
+p3-field = "0.2.0"
+p3-mds = "0.2.0"
+p3-symmetric = "0.2.0"
+p3-util = "0.2.0"
 gcd = "2.3.0"
 itertools = "0.13.0"
 modinverse = "0.1.1"
 num = "0.4.0"
 num-integer = "0.1.45"
-p3-field = { path = "../field" }
-p3-mds = { path = "../mds" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
 rand = "0.8.5"
 sha3 = "0.10.8"
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
+p3-baby-bear = "0.2.0"
+p3-goldilocks = "0.2.0"
+p3-mersenne-31 = "0.2.0"
 criterion = "0.5.1"
 
 [[bench]]
