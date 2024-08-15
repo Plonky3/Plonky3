@@ -10,7 +10,7 @@ use rand::Rng;
 use crate::Mersenne31;
 
 const WIDTH: usize = 8;
-const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,7 +21,7 @@ impl PackedMersenne31AVX2 {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    pub(crate) fn to_vector(self) -> __m256i {
         unsafe {
             // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -38,7 +38,7 @@ impl PackedMersenne31AVX2 {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `Mersenne31` values. We must only reason about memory representations. `__m256i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
@@ -147,6 +147,14 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
     }
 }
 
+fn moveldup_epi32(x: __m256i) -> __m256i {
+    // This instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
+    unsafe {
+        x86_64::_mm256_castps_si256(x86_64::_mm256_moveldup_ps(x86_64::_mm256_castsi256_ps(x)))
+    }
+}
+
 /// Multiply vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
@@ -252,6 +260,64 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
         let t = x86_64::_mm256_sub_epi32(lhs, rhs);
         let u = x86_64::_mm256_add_epi32(t, P);
         x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
+// Output is in [-P, P]
+// If input is > 2^62, it still works but output is now just < 2^34 and might still be negative.
+#[inline(always)]
+fn partial_reduce_neg(x: __m256i) -> __m256i {
+    unsafe {
+        // Get the top 31 bits shifted down.
+        let hi = x86_64::_mm256_srli_epi64::<31>(x);
+
+        const LOW31: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
+        // nand instead of and means this returns P - lo.
+        let lo = x86_64::_mm256_andnot_si256(x, LOW31);
+
+        x86_64::_mm256_sub_epi32(hi, lo)
+    }
+}
+
+#[inline(always)]
+fn square_unred(x: __m256i) -> __m256i {
+    unsafe {
+        let x2 = x86_64::_mm256_mul_epi32(x, x);
+        partial_reduce_neg(x2)
+    }
+}
+
+// Input in [-P, P], output in [0, P].
+#[inline(always)]
+fn sbox(x: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
+    unsafe {
+        let input = x.to_vector();
+        let input_evn = input;
+        let input_odd = movehdup_epi32(input);
+
+        let evn_sq = square_unred(input_evn);
+        let odd_sq = square_unred(input_odd);
+
+        let evn_4 = square_unred(evn_sq);
+        let odd_4 = square_unred(odd_sq);
+
+        let evn_5 = x86_64::_mm256_mul_epi32(evn_4, input_evn);
+        let odd_5 = x86_64::_mm256_mul_epi32(odd_4, input_odd);
+
+        let odd_5_lo_dirty = moveldup_epi32(odd_5);
+        let odd_5_hi = x86_64::_mm256_add_epi64(odd_5, odd_5);
+        let evn_5_hi = x86_64::_mm256_srli_epi64::<31>(evn_5);
+
+        let lo_dirty = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5, odd_5_lo_dirty);
+        let hi = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5_hi, odd_5_hi);
+        let lo = x86_64::_mm256_and_si256(lo_dirty, P);
+        let corr = x86_64::_mm256_sign_epi32(P, hi);
+        let t = x86_64::_mm256_add_epi32(hi, lo);
+        let u = x86_64::_mm256_sub_epi32(t, corr);
+
+        let output = x86_64::_mm256_min_epu32(t, u);
+
+        PackedMersenne31AVX2::from_vector(output)
     }
 }
 
@@ -375,6 +441,27 @@ impl AbstractField for PackedMersenne31AVX2 {
     #[inline]
     fn generator() -> Self {
         Mersenne31::generator().into()
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::one(),
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => sbox(*self),
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 }
 
