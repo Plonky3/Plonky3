@@ -87,7 +87,9 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = to_goldilocks_array([
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerGoldilocks;
 
-impl InternalLayer<Goldilocks, NoPackedImplementation, 8, 7> for Poseidon2InternalLayerGoldilocks {
+impl NoPackedImplementation for Poseidon2InternalLayerGoldilocks {}
+
+impl InternalLayer<Goldilocks, 8, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 8];
 
     fn permute_state(
@@ -104,7 +106,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 8, 7> for Poseidon2Intern
     }
 }
 
-impl InternalLayer<Goldilocks, NoPackedImplementation, 12, 7> for Poseidon2InternalLayerGoldilocks {
+impl InternalLayer<Goldilocks, 12, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 12];
 
     fn permute_state(
@@ -121,7 +123,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 12, 7> for Poseidon2Inter
     }
 }
 
-impl InternalLayer<Goldilocks, NoPackedImplementation, 16, 7> for Poseidon2InternalLayerGoldilocks {
+impl InternalLayer<Goldilocks, 16, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 16];
 
     fn permute_state(
@@ -138,7 +140,7 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 16, 7> for Poseidon2Inter
     }
 }
 
-impl InternalLayer<Goldilocks, NoPackedImplementation, 20, 7> for Poseidon2InternalLayerGoldilocks {
+impl InternalLayer<Goldilocks, 20, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 20];
 
     fn permute_state(
@@ -158,85 +160,76 @@ impl InternalLayer<Goldilocks, NoPackedImplementation, 20, 7> for Poseidon2Inter
 #[derive(Default, Clone)]
 pub struct Poseidon2ExternalLayerGoldilocks;
 
-impl<const WIDTH: usize> ExternalLayer<Goldilocks, NoPackedImplementation, WIDTH, 7>
-    for Poseidon2ExternalLayerGoldilocks
-where
-    NoPackedImplementation:
-        Poseidon2ExternalPackedConstants<Goldilocks, WIDTH, ExternalConstantsType = ()>,
-{
+impl NoPackedImplementation for Poseidon2ExternalLayerGoldilocks {}
+
+impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7> for Poseidon2ExternalLayerGoldilocks {
     type InternalState = [Goldilocks; WIDTH];
-    type ArrayState = [[Goldilocks; WIDTH]; 1];
-
-    fn to_internal_rep(&self, state: [Goldilocks; WIDTH]) -> Self::ArrayState {
-        [state]
-    }
-
-    fn to_output_rep(&self, state: Self::ArrayState) -> [Goldilocks; WIDTH] {
-        state[0]
-    }
 
     fn permute_state_initial(
         &self,
-        state: &mut [Goldilocks; WIDTH],
+        mut state: [Goldilocks; WIDTH],
         initial_external_constants: &[[Goldilocks; WIDTH]],
         _packed_initial_external_constants: &[()],
-    ) {
+    ) -> [Goldilocks; WIDTH] {
         external_initial_permute_state::<_, _, WIDTH, 7>(
-            state,
+            &mut state,
             initial_external_constants,
             &MDSMat4,
         );
+        state
     }
 
     fn permute_state_final(
         &self,
-        state: &mut Self::InternalState,
+        mut state: [Goldilocks; WIDTH],
         final_external_constants: &[[Goldilocks; WIDTH]],
         _packed_final_external_constants: &[()],
-    ) {
-        external_final_permute_state::<_, _, WIDTH, 7>(state, final_external_constants, &MDSMat4);
+    ) -> [Goldilocks; WIDTH] {
+        external_final_permute_state::<_, _, WIDTH, 7>(
+            &mut state,
+            final_external_constants,
+            &MDSMat4,
+        );
+        state
     }
 }
 
 #[derive(Default, Clone)]
 pub struct Poseidon2ExternalLayerGoldilocksHL;
 
-impl<const WIDTH: usize> ExternalLayer<Goldilocks, NoPackedImplementation, WIDTH, 7>
+impl NoPackedImplementation for Poseidon2ExternalLayerGoldilocksHL {}
+
+impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
     for Poseidon2ExternalLayerGoldilocksHL
-where
-    NoPackedImplementation: Poseidon2ExternalPackedConstants<Goldilocks, WIDTH>,
 {
     type InternalState = [Goldilocks; WIDTH];
-    type ArrayState = [[Goldilocks; WIDTH]; 1];
-
-    fn to_internal_rep(&self, state: [Goldilocks; WIDTH]) -> Self::ArrayState {
-        [state]
-    }
-
-    fn to_output_rep(&self, state: Self::ArrayState) -> [Goldilocks; WIDTH] {
-        state[0]
-    }
 
     fn permute_state_initial(
         &self,
-        state: &mut [Goldilocks; WIDTH],
+        mut state: [Goldilocks; WIDTH],
         initial_external_constants: &[[Goldilocks; WIDTH]],
-        _packed_initial_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Goldilocks, WIDTH>>::ExternalConstantsType],
-    ) {
+        _packed_initial_external_constants: &[()],
+    ) -> [Goldilocks; WIDTH] {
         external_initial_permute_state::<_, _, WIDTH, 7>(
-            state,
+            &mut state,
             initial_external_constants,
             &HLMDSMat4,
         );
+        state
     }
 
     fn permute_state_final(
         &self,
-        state: &mut Self::InternalState,
+        mut state: Self::InternalState,
         final_external_constants: &[[Goldilocks; WIDTH]],
-        _packed_final_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Goldilocks, WIDTH>>::ExternalConstantsType],
-    ) {
-        external_final_permute_state::<_, _, WIDTH, 7>(state, final_external_constants, &HLMDSMat4);
+        _packed_final_external_constants: &[()],
+    ) -> [Goldilocks; WIDTH] {
+        external_final_permute_state::<_, _, WIDTH, 7>(
+            &mut state,
+            final_external_constants,
+            &HLMDSMat4,
+        );
+        state
     }
 }
 
@@ -374,7 +367,6 @@ mod tests {
             Goldilocks,
             Poseidon2ExternalLayerGoldilocksHL,
             Poseidon2InternalLayerGoldilocks,
-            NoPackedImplementation,
             WIDTH,
             D,
         > = Poseidon2::new(

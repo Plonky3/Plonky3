@@ -140,46 +140,39 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
 }
 
 /// A trait containing all data needed to implement the external layers of Poseidon2.
-pub trait ExternalLayer<AF, PackedConstants, const WIDTH: usize, const D: u64>:
-    Sync + Clone
+pub trait ExternalLayer<AF, const WIDTH: usize, const D: u64>:
+    Poseidon2ExternalPackedConstants<AF::F, WIDTH>
 where
     AF: AbstractField,
-    PackedConstants: Poseidon2ExternalPackedConstants<AF::F, WIDTH>,
 {
     /// The type used internally by the Poseidon2 implementation.
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
     type InternalState;
-
-    /// ArrayState should be [InternalState; N] for some small value of N depending on the precise packed field.
-    /// The Poseidon2 permutation will be mapped across this array.
-    type ArrayState: AsMut<[Self::InternalState]>;
-
-    /// Convert data from input type which will always be [AF; WIDTH] into the internal representation.
-    fn to_internal_rep(&self, state: [AF; WIDTH]) -> Self::ArrayState;
 
     // permute_state_initial, permute_state_final are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.
 
     /// Compute the initial external permutation.
     /// Implementations will usually not use both constants fields.
+    /// Input state will be [AF; WIDTH], output state will be
+    /// in appropriate form to feed into the Internal Layer.
     fn permute_state_initial(
         &self,
-        state: &mut Self::InternalState,
+        state: [AF; WIDTH],
         initial_external_constants: &[[AF::F; WIDTH]],
-        initial_external_packed_constants: &[PackedConstants::ExternalConstantsType],
-    );
+        initial_external_packed_constants: &[Self::ConstantsType],
+    ) -> Self::InternalState;
 
     /// Compute the final external permutation.
     /// Implementations will usually not use both constants fields.
+    /// Input state will be in appropriate form from Internal Layer.
+    /// Output state will be [AF; WIDTH].
     fn permute_state_final(
         &self,
-        state: &mut Self::InternalState,
+        state: Self::InternalState,
         final_external_constants: &[[AF::F; WIDTH]],
-        final_external_packed_constants: &[PackedConstants::ExternalConstantsType],
-    );
-
-    /// Convert data back from the internal representation to the expected output type [AF; WIDTH].
-    fn to_output_rep(&self, state: Self::ArrayState) -> [AF; WIDTH];
+        final_external_packed_constants: &[Self::ConstantsType],
+    ) -> [AF; WIDTH];
 }
 
 /// A helper method which allow any field to easily implement the final External Layer.

@@ -3,8 +3,7 @@
 
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    matmul_internal, ExternalLayer, InternalLayer, MDSMat4, NoPackedImplementation,
-    Poseidon2ExternalPackedConstants, Poseidon2InternalPackedConstants,
+    matmul_internal, ExternalLayer, InternalLayer, MDSMat4,
 };
 
 use crate::{
@@ -13,16 +12,14 @@ use crate::{
     POSEIDON2_INTERNAL_MATRIX_DIAG_24,
 };
 
-impl InternalLayer<PackedMersenne31AVX2, NoPackedImplementation, 16, 5>
-    for Poseidon2InternalLayerMersenne31
-{
+impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [PackedMersenne31AVX2; 16];
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Mersenne31],
-        _packed_internal_constants: &[<NoPackedImplementation as Poseidon2InternalPackedConstants<Mersenne31>>::InternalConstantsType],
+        _packed_internal_constants: &[()],
     ) {
         internal_permute_state::<PackedMersenne31AVX2, 16, 5>(
             state,
@@ -32,16 +29,14 @@ impl InternalLayer<PackedMersenne31AVX2, NoPackedImplementation, 16, 5>
     }
 }
 
-impl InternalLayer<PackedMersenne31AVX2, NoPackedImplementation, 24, 5>
-    for Poseidon2InternalLayerMersenne31
-{
+impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [PackedMersenne31AVX2; 24];
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Mersenne31],
-        _packed_internal_constants: &[<NoPackedImplementation as Poseidon2InternalPackedConstants<Mersenne31>>::InternalConstantsType],
+        _packed_internal_constants: &[()],
     ) {
         internal_permute_state::<PackedMersenne31AVX2, 24, 5>(
             state,
@@ -51,42 +46,37 @@ impl InternalLayer<PackedMersenne31AVX2, NoPackedImplementation, 24, 5>
     }
 }
 
-impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, NoPackedImplementation, WIDTH, 5>
+impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31
-where
-    NoPackedImplementation: Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>,
 {
     type InternalState = [PackedMersenne31AVX2; WIDTH];
-    type ArrayState = [[PackedMersenne31AVX2; WIDTH]; 1];
-
-    fn to_internal_rep(&self, state: [PackedMersenne31AVX2; WIDTH]) -> Self::ArrayState {
-        [state]
-    }
-
-    fn to_output_rep(&self, state: Self::ArrayState) -> [PackedMersenne31AVX2; WIDTH] {
-        state[0]
-    }
 
     fn permute_state_initial(
         &self,
-        state: &mut Self::InternalState,
+        mut state: Self::InternalState,
         initial_external_constants: &[[Mersenne31; WIDTH]],
-        _packed_initial_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>>::ExternalConstantsType],
-    ) {
+        _packed_initial_external_constants: &[()],
+    ) -> [PackedMersenne31AVX2; WIDTH] {
         external_initial_permute_state::<_, _, WIDTH, 5>(
-            state,
+            &mut state,
             initial_external_constants,
             &MDSMat4,
         );
+        state
     }
 
     fn permute_state_final(
         &self,
-        state: &mut Self::InternalState,
+        mut state: Self::InternalState,
         final_external_constants: &[[Mersenne31; WIDTH]],
-        _packed_final_external_constants: &[<NoPackedImplementation as Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>>::ExternalConstantsType],
-    ) {
-        external_final_permute_state::<_, _, WIDTH, 5>(state, final_external_constants, &MDSMat4);
+        _packed_final_external_constants: &[()],
+    ) -> [PackedMersenne31AVX2; WIDTH] {
+        external_final_permute_state::<_, _, WIDTH, 5>(
+            &mut state,
+            final_external_constants,
+            &MDSMat4,
+        );
+        state
     }
 }
 
@@ -101,22 +91,10 @@ mod tests {
 
     type F = Mersenne31;
     const D: u64 = 5;
-    type Perm16 = Poseidon2<
-        F,
-        Poseidon2ExternalLayerMersenne31,
-        Poseidon2InternalLayerMersenne31,
-        NoPackedImplementation,
-        16,
-        D,
-    >;
-    type Perm24 = Poseidon2<
-        F,
-        Poseidon2ExternalLayerMersenne31,
-        Poseidon2InternalLayerMersenne31,
-        NoPackedImplementation,
-        24,
-        D,
-    >;
+    type Perm16 =
+        Poseidon2<F, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, 16, D>;
+    type Perm24 =
+        Poseidon2<F, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, 24, D>;
 
     /// Test that the output is the same as the scalar version on a random input of length 16.
     #[test]

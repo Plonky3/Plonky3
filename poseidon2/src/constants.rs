@@ -4,40 +4,37 @@
 /// Data needed to generate constants for the internal rounds of the Poseidon2 permutation.
 pub trait Poseidon2InternalPackedConstants<F>: Sync + Clone {
     // In the scalar case this is AF::F but it may be different for PackedFields.
-    type InternalConstantsType: Clone + core::fmt::Debug + Sync;
+    type ConstantsType: Clone + core::fmt::Debug + Sync;
 
-    fn manipulate_internal_constants(internal_constants: &F) -> Self::InternalConstantsType;
+    fn convert_from_field(internal_constants: &F) -> Self::ConstantsType;
 }
 
 /// Data needed to generate constants for the external rounds of the Poseidon2 permutation.
 pub trait Poseidon2ExternalPackedConstants<F, const WIDTH: usize>: Sync + Clone {
     // In the scalar case, ExternalConstantsType = [AF::F; WIDTH] but it may be different for PackedFields.
-    type ExternalConstantsType: Clone + core::fmt::Debug + Sync;
+    type ConstantsType: Clone + core::fmt::Debug + Sync;
 
-    fn manipulate_external_constants(
-        external_constants: &[F; WIDTH],
-    ) -> Self::ExternalConstantsType;
+    fn convert_from_field_array(external_constants: &[F; WIDTH]) -> Self::ConstantsType;
 }
 
-/// We prove a simple default option for fields which do not have a specialised Poseidon2 Packed implementation.
-#[derive(Debug, Clone, Default)]
-pub struct NoPackedImplementation;
+/// We prove a simple option for fields which do not have a specialised Poseidon2 Packed implementation.
+/// Any field which implements NoPackedImplementation automatically gets a trivial constants implementation.
+pub trait NoPackedImplementation: Sync + Clone {}
 
-impl<F> Poseidon2InternalPackedConstants<F> for NoPackedImplementation {
+impl<F, NoPacking: NoPackedImplementation> Poseidon2InternalPackedConstants<F> for NoPacking {
     // If there is no specialised implementation, the Internal Packed Constants will never be read.
     // So we set it to the empty type.
-    type InternalConstantsType = ();
+    type ConstantsType = ();
 
-    fn manipulate_internal_constants(_internal_constants: &F) -> Self::InternalConstantsType {}
+    fn convert_from_field(_internal_constants: &F) -> Self::ConstantsType {}
 }
 
-impl<F, const WIDTH: usize> Poseidon2ExternalPackedConstants<F, WIDTH> for NoPackedImplementation {
+impl<F, const WIDTH: usize, NoPacking: NoPackedImplementation>
+    Poseidon2ExternalPackedConstants<F, WIDTH> for NoPacking
+{
     // If there is no specialised implementation, the External Packed Constants will never be read.
     // So we set it to the empty type.
-    type ExternalConstantsType = ();
+    type ConstantsType = ();
 
-    fn manipulate_external_constants(
-        _external_constants: &[F; WIDTH],
-    ) -> Self::ExternalConstantsType {
-    }
+    fn convert_from_field_array(_external_constants: &[F; WIDTH]) -> Self::ConstantsType {}
 }

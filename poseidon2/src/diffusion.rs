@@ -43,11 +43,10 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
     }
 }
 
-pub trait InternalLayer<AF, PackedConstants, const WIDTH: usize, const D: u64>:
-    Sync + Clone
+pub trait InternalLayer<AF, const WIDTH: usize, const D: u64>:
+    Poseidon2InternalPackedConstants<AF::F>
 where
     AF: AbstractField,
-    PackedConstants: Poseidon2InternalPackedConstants<AF::F>,
 {
     /// The type used internally by the Poseidon2 implementation.
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
@@ -60,7 +59,7 @@ where
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[AF::F],
-        internal_packed_constants: &[PackedConstants::InternalConstantsType],
+        internal_packed_constants: &[Self::ConstantsType],
     );
 }
 
