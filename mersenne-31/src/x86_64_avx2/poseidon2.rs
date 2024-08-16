@@ -4,12 +4,13 @@ use p3_symmetric::Permutation;
 
 use crate::{DiffusionMatrixMersenne31, PackedMersenne31AVX2, P};
 
-// I + I_PRIME must be 31.
+/// In M31, multiplication by 2^n corresponds to a cyclic rotation which can be performed
+/// much faster than the naive multiplication method.
+/// Currently this requires 2 Generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
 #[inline(always)]
 fn left_shift_single<const I: i32, const I_PRIME: i32>(
     val: PackedMersenne31AVX2,
 ) -> PackedMersenne31AVX2 {
-    // Clearly there would be a nicer way to do this if const generics where better...
     unsafe {
         let input = val.to_vector();
         let hi_bits_dirty = x86_64::_mm256_slli_epi32::<I>(input);
@@ -20,13 +21,17 @@ fn left_shift_single<const I: i32, const I_PRIME: i32>(
     }
 }
 
-// [-2, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
+/// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
+/// In the Mersenne31, WIDTH = 16 case, the diagonal minus 1 is:
+/// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16]
+/// i.e. The first entry is -2 and all other entires a power of 2.
 #[inline(always)]
-fn left_shift_16(state: &mut [PackedMersenne31AVX2; 16]) {
-    // A little annoying how this has to be done manually.
+fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
+    // The first three entries involve multiplication by -2, 1, 2 which are simple:
     state[0] = -(state[0] + state[0]);
-    // State 1 shift is a shift by 0 which is free.
-    state[2] = state[2] + state[2];
+    state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
+
+    // For the remaining entires we use our fast shift code.
     state[3] = left_shift_single::<2, 29>(state[3]);
     state[4] = left_shift_single::<3, 28>(state[4]);
     state[5] = left_shift_single::<4, 27>(state[5]);
@@ -39,13 +44,13 @@ fn left_shift_16(state: &mut [PackedMersenne31AVX2; 16]) {
     state[12] = left_shift_single::<13, 18>(state[12]);
     state[13] = left_shift_single::<14, 17>(state[13]);
     state[14] = left_shift_single::<15, 16>(state[14]);
-    state[15] = left_shift_single::<16, 15>(state[15]);
+    state[15] = left_shift_single::<16, 15>(state[15]); // TODO: There is a faster method for 15.
 }
 
-// This looks slightly strange but the key idea is that we want to minimize dependency chains.
-// The compiler doesn't realize that add is still associative so we help it out.
-// Note that state[0] is involved in a large s-box immediately before this so we keep it
-// separate for as long as possible.
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+/// Note that state[0] is involved in a large s-box immediately before this
+/// so we keep it separate for as long as possible.
 #[inline(always)]
 fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
     let sum23 = state[2] + state[3];
@@ -69,13 +74,17 @@ fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
     sum_all_but_0 + state[0]
 }
 
-// [-2, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,];
+/// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
+/// In the Mersenne31, WIDTH = 16 case, the diagonal minus 1 is:
+/// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+/// i.e. The first entry is -2 and all other entires a power of 2.
 #[inline(always)]
-fn left_shift_24(state: &mut [PackedMersenne31AVX2; 24]) {
-    // A little annoying how this has to be done manually.
+fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
+    // The first three entries involve multiplication by -2, 1, 2 which are simple:
     state[0] = -(state[0] + state[0]);
-    // State 1 shift is a shift by 0 which is free.
-    state[2] = state[2] + state[2];
+    state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
+
+    // For the remaining entires we use our fast shift code.
     state[3] = left_shift_single::<2, 29>(state[3]);
     state[4] = left_shift_single::<3, 28>(state[4]);
     state[5] = left_shift_single::<4, 27>(state[5]);
@@ -88,7 +97,7 @@ fn left_shift_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[12] = left_shift_single::<11, 20>(state[12]);
     state[13] = left_shift_single::<12, 19>(state[13]);
     state[14] = left_shift_single::<13, 18>(state[14]);
-    state[15] = left_shift_single::<14, 17>(state[15]);
+    state[15] = left_shift_single::<14, 17>(state[15]); // TODO: There is a faster method for 15.
     state[16] = left_shift_single::<15, 16>(state[16]);
     state[17] = left_shift_single::<16, 15>(state[17]);
     state[18] = left_shift_single::<17, 14>(state[18]);
@@ -99,10 +108,10 @@ fn left_shift_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[23] = left_shift_single::<22, 9>(state[23]);
 }
 
-// This looks slightly strange but the key idea is that we want to minimize dependency chains.
-// The compiler doesn't realize that add is still associative so we help it out.
-// Note that state[0] is involved in a large s-box immediately before this so we keep it
-// separate for as long as possible.
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+/// Note that state[0] is involved in a large s-box immediately before this
+/// so we keep it separate for as long as possible.
 #[inline(always)]
 fn sum_24(state: &[PackedMersenne31AVX2; 24]) -> PackedMersenne31AVX2 {
     let sum23 = state[2] + state[3];
@@ -137,7 +146,7 @@ impl Permutation<[PackedMersenne31AVX2; 16]> for DiffusionMatrixMersenne31 {
     #[inline(always)]
     fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 16]) {
         let sum = sum_16(state);
-        left_shift_16(state);
+        diagonal_mul_16(state);
         state.iter_mut().for_each(|val| *val += sum);
     }
 }
@@ -148,7 +157,7 @@ impl Permutation<[PackedMersenne31AVX2; 24]> for DiffusionMatrixMersenne31 {
     #[inline(always)]
     fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 24]) {
         let sum = sum_24(state);
-        left_shift_24(state);
+        diagonal_mul_24(state);
         state.iter_mut().for_each(|val| *val += sum);
     }
 }
