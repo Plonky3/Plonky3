@@ -265,7 +265,7 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
 
 /// Reduce a representative in {0, ..., P^2}
 /// to a representative in [-P, P]. If the input is greater than P^2, the output will
-/// still correspond to the same modulo class will instead lie in [-P, 2^34].
+/// still correspond to the same class but will instead lie in [-P, 2^34].
 #[inline(always)]
 fn partial_reduce_neg(x: __m256i) -> __m256i {
     unsafe {
