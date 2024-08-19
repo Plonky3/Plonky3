@@ -1,20 +1,16 @@
-use p3_field::{AbstractField, PrimeField};
+use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-extern crate alloc;
+use crate::Poseidon2ExternalPackedConstants;
 
-/// For the external layers we use a matrix of the form circ(2M_4, M_4, ..., M_4)
-/// Where M_4 is a 4 x 4 MDS matrix. This leads to a permutation which has slightly weaker properties to MDS
-pub trait MdsLightPermutation<T: Clone, const WIDTH: usize>: Permutation<[T; WIDTH]> {}
-
-// Multiply a 4-element vector x by
-// [ 5 7 1 3 ]
-// [ 4 6 1 1 ]
-// [ 1 3 5 7 ]
-// [ 1 1 4 6 ].
-// This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
-// It is also the matrix used by the Horizon Labs implementation.
+/// Multiply a 4-element vector x by
+/// [ 5 7 1 3 ]
+/// [ 4 6 1 1 ]
+/// [ 1 3 5 7 ]
+/// [ 1 1 4 6 ].
+/// This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
+/// It is also the matrix used by the Horizon Labs implementation.
 fn apply_hl_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
@@ -33,12 +29,13 @@ where
     x[3] = t4;
 }
 
-// Multiply a 4-element vector x by:
-// [ 2 3 1 1 ]
-// [ 1 2 3 1 ]
-// [ 1 1 2 3 ]
-// [ 3 1 1 2 ].
-// This is more efficient than the previous matrix.
+// It turns out we can find a 4x4 matrix which is more efficient than the above.
+
+/// Multiply a 4-element vector x by:
+/// [ 2 3 1 1 ]
+/// [ 1 2 3 1 ]
+/// [ 1 1 2 3 ]
+/// [ 3 1 1 2 ].
 fn apply_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
@@ -61,7 +58,7 @@ pub struct HLMDSMat4;
 
 impl<AF: AbstractField> Permutation<[AF; 4]> for HLMDSMat4 {
     fn permute(&self, input: [AF; 4]) -> [AF; 4] {
-        let mut output = input.clone();
+        let mut output = input;
         self.permute_mut(&mut output);
         output
     }
@@ -77,7 +74,7 @@ pub struct MDSMat4;
 
 impl<AF: AbstractField> Permutation<[AF; 4]> for MDSMat4 {
     fn permute(&self, input: [AF; 4]) -> [AF; 4] {
-        let mut output = input.clone();
+        let mut output = input;
         self.permute_mut(&mut output);
         output
     }
@@ -90,7 +87,7 @@ impl<AF: AbstractField> MdsPermutation<AF, 4> for MDSMat4 {}
 
 fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
-    mdsmat: MdsPerm4,
+    mdsmat: &MdsPerm4,
 ) {
     match WIDTH {
         2 => {
@@ -110,7 +107,6 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
             // First, we apply M_4 to each consecutive four elements of the state.
             // In Appendix B's terminology, this replaces each x_i with x_i'.
             for i in (0..WIDTH).step_by(4) {
-                // Would be nice to find a better way to do this.
                 let mut state_4 = [
                     state[i].clone(),
                     state[i + 1].clone(),
@@ -143,42 +139,80 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
     }
 }
 
-#[derive(Default, Clone)]
-pub struct Poseidon2ExternalMatrixGeneral;
-
-impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixGeneral
+/// A trait containing all data needed to implement the external layers of Poseidon2.
+pub trait ExternalLayer<AF, const WIDTH: usize, const D: u64>:
+    Poseidon2ExternalPackedConstants<AF::F, WIDTH>
 where
     AF: AbstractField,
-    AF::F: PrimeField,
 {
-    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        mds_light_permutation::<AF, MDSMat4, WIDTH>(state, MDSMat4)
+    /// The type used internally by the Poseidon2 implementation.
+    /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
+    type InternalState;
+
+    // permute_state_initial, permute_state_final are split as the Poseidon2 specifications are slightly different
+    // with the initial rounds involving an extra matrix multiplication.
+
+    /// Compute the initial external permutation.
+    /// Implementations will usually not use both constants fields.
+    /// Input state will be [AF; WIDTH], output state will be
+    /// in appropriate form to feed into the Internal Layer.
+    fn permute_state_initial(
+        &self,
+        state: [AF; WIDTH],
+        initial_external_constants: &[[AF::F; WIDTH]],
+        initial_external_packed_constants: &[Self::ConstantsType],
+    ) -> Self::InternalState;
+
+    /// Compute the final external permutation.
+    /// Implementations will usually not use both constants fields.
+    /// Input state will be in appropriate form from Internal Layer.
+    /// Output state will be [AF; WIDTH].
+    fn permute_state_final(
+        &self,
+        state: Self::InternalState,
+        final_external_constants: &[[AF::F; WIDTH]],
+        final_external_packed_constants: &[Self::ConstantsType],
+    ) -> [AF; WIDTH];
+}
+
+/// A helper method which allow any field to easily implement the final External Layer.
+/// This should only be used in places where performance is not critical.
+#[inline]
+pub fn external_final_permute_state<
+    AF: AbstractField,
+    MdsPerm4: MdsPermutation<AF, 4>,
+    const WIDTH: usize,
+    const D: u64,
+>(
+    state: &mut [AF; WIDTH],
+    final_external_constants: &[[AF::F; WIDTH]],
+    mat4: &MdsPerm4,
+) {
+    for elem in final_external_constants.iter() {
+        state
+            .iter_mut()
+            .zip(elem.iter())
+            .for_each(|(s, rc)| *s += AF::from_f(*rc));
+        state.iter_mut().for_each(|s| *s = s.exp_const_u64::<D>());
+        mds_light_permutation(state, mat4);
     }
 }
 
-impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixGeneral
-where
+/// A helper method which allow any field to easily implement the initial External Layer.
+/// This should only be used in places where performance is not critical.
+#[inline]
+pub fn external_initial_permute_state<
     AF: AbstractField,
-    AF::F: PrimeField,
-{
-}
-
-#[derive(Default, Clone)]
-pub struct Poseidon2ExternalMatrixHL;
-
-impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixHL
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
-    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        mds_light_permutation::<AF, HLMDSMat4, WIDTH>(state, HLMDSMat4)
-    }
-}
-
-impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixHL
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
-{
+    MdsPerm4: MdsPermutation<AF, 4>,
+    const WIDTH: usize,
+    const D: u64,
+>(
+    state: &mut [AF; WIDTH],
+    initial_external_constants: &[[AF::F; WIDTH]],
+    mat4: &MdsPerm4,
+) {
+    mds_light_permutation(state, mat4);
+    // After the initial mds_light_permutation, the remaining layers are identical
+    // to the final permutation simply with different constants.
+    external_final_permute_state::<AF, MdsPerm4, WIDTH, D>(state, initial_external_constants, mat4)
 }

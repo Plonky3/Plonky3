@@ -1,6 +1,8 @@
 use p3_field::PrimeField32;
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_poseidon2::{
+    external_final_permute_state, external_initial_permute_state, internal_permute_state,
+    ExternalLayer, InternalLayer, MDSMat4, NoPackedImplementation,
+};
 
 use crate::{from_u62, to_mersenne31_array, Mersenne31};
 
@@ -71,47 +73,98 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ];
 
+fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
+    let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+    let full_sum = part_sum + (state[0].value as u64);
+    let s0 = part_sum + (-state[0]).value as u64;
+    state[0] = from_u62(s0);
+    for i in 1..N {
+        let si = full_sum + ((state[i].value as u64) << shifts[i - 1]);
+        state[i] = from_u62(si);
+    }
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixMersenne31;
+pub struct Poseidon2InternalLayerMersenne31;
 
-impl Permutation<[Mersenne31; 16]> for DiffusionMatrixMersenne31 {
-    #[inline]
-    fn permute_mut(&self, state: &mut [Mersenne31; 16]) {
-        let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = from_u62(s0);
-        for i in 1..16 {
-            let si = full_sum
-                + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS[i - 1]);
-            state[i] = from_u62(si);
-        }
+impl NoPackedImplementation for Poseidon2InternalLayerMersenne31 {}
+
+impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
+    type InternalState = [Mersenne31; 16];
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Mersenne31],
+        _packed_internal_constants: &[()],
+    ) {
+        internal_permute_state::<Mersenne31, 16, 5>(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<Mersenne31, 16> for DiffusionMatrixMersenne31 {}
+impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
+    type InternalState = [Mersenne31; 24];
 
-impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
-    #[inline]
-    fn permute_mut(&self, state: &mut [Mersenne31; 24]) {
-        let part_sum: u64 = state[1..].iter().map(|x| x.value as u64).sum();
-        let full_sum = part_sum + (state[0].value as u64);
-        let s0 = part_sum + (-state[0]).value as u64;
-        state[0] = from_u62(s0);
-        for i in 1..24 {
-            let si = full_sum
-                + ((state[i].value as u64) << POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS[i - 1]);
-            state[i] = from_u62(si);
-        }
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[Mersenne31],
+        _packed_internal_constants: &[()],
+    ) {
+        internal_permute_state::<Mersenne31, 24, 5>(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
+            internal_constants,
+        )
     }
 }
 
-impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
+#[derive(Default, Clone)]
+pub struct Poseidon2ExternalLayerMersenne31;
+
+impl NoPackedImplementation for Poseidon2ExternalLayerMersenne31 {}
+
+impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for Poseidon2ExternalLayerMersenne31 {
+    type InternalState = [Mersenne31; WIDTH];
+
+    fn permute_state_initial(
+        &self,
+        mut state: [Mersenne31; WIDTH],
+        initial_external_constants: &[[Mersenne31; WIDTH]],
+        _packed_initial_external_constants: &[()],
+    ) -> [Mersenne31; WIDTH] {
+        external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
+            &mut state,
+            initial_external_constants,
+            &MDSMat4,
+        );
+        state
+    }
+
+    fn permute_state_final(
+        &self,
+        mut state: Self::InternalState,
+        final_external_constants: &[[Mersenne31; WIDTH]],
+        _packed_final_external_constants: &[()],
+    ) -> [Mersenne31; WIDTH] {
+        external_final_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
+            &mut state,
+            final_external_constants,
+            &MDSMat4,
+        );
+        state
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::Poseidon2;
+    use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -123,17 +176,34 @@ mod tests {
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for Mersenne31
-    fn poseidon2_mersenne31<const WIDTH: usize, const D: u64, DiffusionMatrix>(
-        input: &mut [F; WIDTH],
-        diffusion_matrix: DiffusionMatrix,
-    ) where
-        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
+    fn poseidon2_mersenne31<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
+    where
+        Poseidon2ExternalLayerMersenne31: ExternalLayer<Mersenne31, WIDTH, D>,
+        Poseidon2InternalLayerMersenne31: InternalLayer<
+            Mersenne31,
+            WIDTH,
+            D,
+            InternalState = <Poseidon2ExternalLayerMersenne31 as ExternalLayer<
+                Mersenne31,
+                WIDTH,
+                D,
+            >>::InternalState,
+        >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
+        let poseidon2: Poseidon2<
+            F,
+            Poseidon2ExternalLayerMersenne31,
+            Poseidon2InternalLayerMersenne31,
+            WIDTH,
+            D,
+        > = Poseidon2::new_from_rng_128(
+            Poseidon2ExternalLayerMersenne31,
+            Poseidon2InternalLayerMersenne31,
+            &mut rng,
+        );
 
         poseidon2.permute_mut(input);
     }
@@ -158,7 +228,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_mersenne31::<16, 5, _>(&mut input, DiffusionMatrixMersenne31);
+        poseidon2_mersenne31::<16, 5>(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -184,7 +254,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_mersenne31::<24, 5, _>(&mut input, DiffusionMatrixMersenne31);
+        poseidon2_mersenne31::<24, 5>(&mut input);
         assert_eq!(input, expected);
     }
 }
