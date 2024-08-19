@@ -10,7 +10,7 @@ use rand::Rng;
 use crate::Mersenne31;
 
 const WIDTH: usize = 8;
-pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P_AVX2: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +132,7 @@ fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, P);
+        let u = x86_64::_mm256_sub_epi32(t, P_AVX2);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
@@ -211,7 +211,7 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
         // the odd values come from prod_odd_dbl.
         let prod_hi = x86_64::_mm256_blend_epi32::<0b10101010>(prod_evn_hi, prod_odd_dbl);
         // Clear the most significant bit.
-        let prod_lo = x86_64::_mm256_and_si256(prod_lo_dirty, P);
+        let prod_lo = x86_64::_mm256_and_si256(prod_lo_dirty, P_AVX2);
 
         // Standard addition of two 31-bit values.
         add(prod_lo, prod_hi)
@@ -232,7 +232,7 @@ fn neg(val: __m256i) -> __m256i {
     // ..., P}.
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
-        x86_64::_mm256_xor_si256(val, P)
+        x86_64::_mm256_xor_si256(val, P_AVX2)
     }
 }
 
@@ -258,7 +258,7 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, P);
+        let u = x86_64::_mm256_add_epi32(t, P_AVX2);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
@@ -320,8 +320,8 @@ pub(crate) fn sbox(x: __m256i) -> __m256i {
 
         let lo_dirty = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5, odd_5_lo_dirty);
         let hi = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5_hi, odd_5_hi);
-        let lo = x86_64::_mm256_and_si256(lo_dirty, P);
-        let corr = x86_64::_mm256_sign_epi32(P, hi);
+        let lo = x86_64::_mm256_and_si256(lo_dirty, P_AVX2);
+        let corr = x86_64::_mm256_sign_epi32(P_AVX2, hi);
         let t = x86_64::_mm256_add_epi32(hi, lo);
         let u = x86_64::_mm256_sub_epi32(t, corr);
 
