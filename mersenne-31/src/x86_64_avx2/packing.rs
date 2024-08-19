@@ -263,37 +263,47 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
-// Output is in [-P, P]
-// If input is > 2^62, it still works but output is now just < 2^34 and might still be negative.
+/// Perform a module reduction to reduce a modulo class representative in {0, ..., P^2}
+/// to a representative in [-P, P]. If the input is greater than P^2, the output will
+/// still correspond to the same modulo class will instead lie in [-P, 2^34].
 #[inline(always)]
 fn partial_reduce_neg(x: __m256i) -> __m256i {
     unsafe {
-        // Get the top 31 bits shifted down.
+        // Get the top bits shifted down.
         let hi = x86_64::_mm256_srli_epi64::<31>(x);
 
         const LOW31: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
         // nand instead of and means this returns P - lo.
-        let lo = x86_64::_mm256_andnot_si256(x, LOW31);
+        let neg_lo = x86_64::_mm256_andnot_si256(x, LOW31);
 
-        x86_64::_mm256_sub_epi32(hi, lo)
+        // TODO: Check if we can use sub_epi64. Currently this breaks for large inputs.
+        x86_64::_mm256_sub_epi32(hi, neg_lo)
     }
 }
 
+/// Compute the square of the Mersenne-31 field elements located in the even indices.
+/// These field elements are represented as values in {-P, ..., P}. If the even inputs
+/// do not conform to this representation, the result is undefined.
+/// Values in odd indices are ignored.
+/// Output will contain 0's in odd indices.
 #[inline(always)]
 fn square_unred(x: __m256i) -> __m256i {
     unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
         let x2 = x86_64::_mm256_mul_epi32(x, x);
         partial_reduce_neg(x2)
     }
 }
 
-// Input in [-P, P], output in [0, P].
+/// Compute the permutation x -> x^5 on Mersenne-31 field elements
+/// represented as values in {0, ..., P}. If the inputs do not conform
+/// to this representation, the result is undefined.
 #[inline(always)]
-fn sbox(x: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
+pub(crate) fn sbox(x: __m256i) -> __m256i {
     unsafe {
-        let input = x.to_vector();
-        let input_evn = input;
-        let input_odd = movehdup_epi32(input);
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let input_evn = x;
+        let input_odd = movehdup_epi32(x);
 
         let evn_sq = square_unred(input_evn);
         let odd_sq = square_unred(input_odd);
@@ -315,9 +325,7 @@ fn sbox(x: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
         let t = x86_64::_mm256_add_epi32(hi, lo);
         let u = x86_64::_mm256_sub_epi32(t, corr);
 
-        let output = x86_64::_mm256_min_epu32(t, u);
-
-        PackedMersenne31AVX2::from_vector(output)
+        x86_64::_mm256_min_epu32(t, u)
     }
 }
 
@@ -452,7 +460,10 @@ impl AbstractField for PackedMersenne31AVX2 {
             2 => self.square(),
             3 => self.cube(),
             4 => self.square().square(),
-            5 => sbox(*self),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(sbox(val))
+            },
             6 => self.square().cube(),
             7 => {
                 let x2 = self.square();

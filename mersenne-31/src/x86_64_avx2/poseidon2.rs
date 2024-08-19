@@ -1,8 +1,41 @@
-use core::arch::x86_64::{self};
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use core::arch::x86_64::{self, __m256i};
+use p3_poseidon2::{
+    mds_light_permutation, ExternalLayer, InternalLayer, MDSMat4, Poseidon2ExternalPackedConstants,
+    Poseidon2InternalPackedConstants,
+};
 
-use crate::{DiffusionMatrixMersenne31, PackedMersenne31AVX2, P};
+use crate::{
+    sbox, Mersenne31, PackedMersenne31AVX2, Poseidon2ExternalLayerMersenne31,
+    Poseidon2InternalLayerMersenne31, P,
+};
+
+impl Poseidon2InternalPackedConstants<Mersenne31> for Poseidon2InternalLayerMersenne31 {
+    type ConstantsType = __m256i;
+
+    fn convert_from_field(internal_constant: &Mersenne31) -> Self::ConstantsType {
+        let raw_value = internal_constant.value as i32;
+        unsafe {
+            let vector = x86_64::_mm256_set1_epi32(raw_value);
+            x86_64::_mm256_sub_epi32(vector, P)
+        }
+    }
+}
+
+impl<const WIDTH: usize> Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>
+    for Poseidon2ExternalLayerMersenne31
+{
+    type ConstantsType = [__m256i; WIDTH];
+
+    fn convert_from_field_array(external_constants: &[Mersenne31; WIDTH]) -> [__m256i; WIDTH] {
+        external_constants.map(|external_constant| {
+            let raw_value = external_constant.value as i32;
+            unsafe {
+                let vector = x86_64::_mm256_set1_epi32(raw_value);
+                x86_64::_mm256_sub_epi32(vector, P)
+            }
+        })
+    }
+}
 
 /// In M31, multiplication by 2^n corresponds to a cyclic rotation which can be performed
 /// much faster than the naive multiplication method.
@@ -142,23 +175,59 @@ fn sum_24(state: &[PackedMersenne31AVX2; 24]) -> PackedMersenne31AVX2 {
     sum_all_but_0 + state[0]
 }
 
-impl Permutation<[PackedMersenne31AVX2; 16]> for DiffusionMatrixMersenne31 {
-    #[inline(always)]
-    fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 16]) {
-        let sum = sum_16(state);
-        diagonal_mul_16(state);
-        state.iter_mut().for_each(|val| *val += sum);
+#[inline(always)]
+fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31AVX2 {
+    unsafe {
+        let input_vec = input.to_vector();
+        let input_plus_rc = x86_64::_mm256_add_epi32(input_vec, rc);
+        let input_post_sbox = sbox(input_plus_rc);
+        PackedMersenne31AVX2::from_vector(input_post_sbox)
     }
 }
 
-impl DiffusionPermutation<PackedMersenne31AVX2, 16> for DiffusionMatrixMersenne31 {}
+#[inline(always)]
+fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
+    state[0] = add_rc_and_sbox(state[0], rc);
+    let sum = sum_16(state);
+    diagonal_mul_16(state);
+    state.iter_mut().for_each(|x| *x += sum);
+}
 
-impl Permutation<[PackedMersenne31AVX2; 24]> for DiffusionMatrixMersenne31 {
-    #[inline(always)]
-    fn permute_mut(&self, state: &mut [PackedMersenne31AVX2; 24]) {
-        let sum = sum_24(state);
-        diagonal_mul_24(state);
-        state.iter_mut().for_each(|val| *val += sum);
+impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersenne31 {
+    type InternalState = [PackedMersenne31AVX2; 16];
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        _internal_constants: &[Mersenne31],
+        packed_internal_constants: &[__m256i],
+    ) {
+        packed_internal_constants
+            .iter()
+            .for_each(|&rc| internal_16(state, rc))
+    }
+}
+
+#[inline(always)]
+fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
+    state[0] = add_rc_and_sbox(state[0], rc);
+    let sum = sum_24(state);
+    diagonal_mul_24(state);
+    state.iter_mut().for_each(|x| *x += sum);
+}
+
+impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersenne31 {
+    type InternalState = [PackedMersenne31AVX2; 24];
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        _internal_constants: &[Mersenne31],
+        packed_internal_constants: &[__m256i],
+    ) {
+        packed_internal_constants
+            .iter()
+            .for_each(|&rc| internal_24(state, rc))
     }
 }
 
@@ -169,29 +238,38 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
 
     fn permute_state_initial(
         &self,
-        mut state: Self::InternalState,
-        initial_external_constants: &[[Mersenne31; WIDTH]],
-        _packed_initial_external_constants: &[()],
+        mut state: [PackedMersenne31AVX2; WIDTH],
+        _initial_external_constants: &[[Mersenne31; WIDTH]],
+        packed_initial_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMersenne31AVX2; WIDTH] {
-        external_initial_permute_state::<_, _, WIDTH, 5>(
-            &mut state,
-            initial_external_constants,
-            &MDSMat4,
-        );
+        mds_light_permutation(&mut state, &MDSMat4);
+        packed_initial_external_constants
+            .iter()
+            .for_each(|round_consts| {
+                state
+                    .iter_mut()
+                    .zip(round_consts.iter())
+                    .for_each(|(val, &rc)| *val = add_rc_and_sbox(*val, rc));
+                mds_light_permutation(&mut state, &MDSMat4);
+            });
         state
     }
 
     fn permute_state_final(
         &self,
-        mut state: Self::InternalState,
-        final_external_constants: &[[Mersenne31; WIDTH]],
-        _packed_final_external_constants: &[()],
+        mut state: [PackedMersenne31AVX2; WIDTH],
+        _final_external_constants: &[[Mersenne31; WIDTH]],
+        packed_final_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMersenne31AVX2; WIDTH] {
-        external_final_permute_state::<_, _, WIDTH, 5>(
-            &mut state,
-            final_external_constants,
-            &MDSMat4,
-        );
+        packed_final_external_constants
+            .iter()
+            .for_each(|round_consts| {
+                state
+                    .iter_mut()
+                    .zip(round_consts.iter())
+                    .for_each(|(val, &rc)| *val = add_rc_and_sbox(*val, rc));
+                mds_light_permutation(&mut state, &MDSMat4);
+            });
         state
     }
 }

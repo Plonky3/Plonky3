@@ -1,7 +1,8 @@
 use p3_field::PrimeField32;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer, MDSMat4, NoPackedImplementation,
+    ExternalLayer, InternalLayer, MDSMat4, Poseidon2ExternalPackedConstants,
+    Poseidon2InternalPackedConstants,
 };
 
 use crate::{from_u62, to_mersenne31_array, Mersenne31};
@@ -87,8 +88,6 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerMersenne31;
 
-impl NoPackedImplementation for Poseidon2InternalLayerMersenne31 {}
-
 impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [Mersenne31; 16];
 
@@ -96,7 +95,7 @@ impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Mersenne31],
-        _packed_internal_constants: &[()],
+        _packed_internal_constants: &[<Poseidon2InternalLayerMersenne31 as Poseidon2InternalPackedConstants::<Mersenne31>>::ConstantsType],
     ) {
         internal_permute_state::<Mersenne31, 16, 5>(
             state,
@@ -113,7 +112,7 @@ impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[Mersenne31],
-        _packed_internal_constants: &[()],
+        _packed_internal_constants: &[<Poseidon2InternalLayerMersenne31 as Poseidon2InternalPackedConstants::<Mersenne31>>::ConstantsType],
     ) {
         internal_permute_state::<Mersenne31, 24, 5>(
             state,
@@ -126,8 +125,6 @@ impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
 #[derive(Default, Clone)]
 pub struct Poseidon2ExternalLayerMersenne31;
 
-impl NoPackedImplementation for Poseidon2ExternalLayerMersenne31 {}
-
 impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for Poseidon2ExternalLayerMersenne31 {
     type InternalState = [Mersenne31; WIDTH];
 
@@ -135,7 +132,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for Poseidon2Extern
         &self,
         mut state: [Mersenne31; WIDTH],
         initial_external_constants: &[[Mersenne31; WIDTH]],
-        _packed_initial_external_constants: &[()],
+        _packed_initial_external_constants: &[<Poseidon2ExternalLayerMersenne31 as Poseidon2ExternalPackedConstants::<Mersenne31, WIDTH>>::ConstantsType],
     ) -> [Mersenne31; WIDTH] {
         external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
             &mut state,
@@ -149,7 +146,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5> for Poseidon2Extern
         &self,
         mut state: Self::InternalState,
         final_external_constants: &[[Mersenne31; WIDTH]],
-        _packed_final_external_constants: &[()],
+        _packed_final_external_constants: &[<Poseidon2ExternalLayerMersenne31 as Poseidon2ExternalPackedConstants::<Mersenne31, WIDTH>>::ConstantsType],
     ) -> [Mersenne31; WIDTH] {
         external_final_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
             &mut state,
