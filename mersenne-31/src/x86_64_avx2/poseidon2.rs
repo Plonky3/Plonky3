@@ -127,7 +127,7 @@ fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
 }
 
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
-/// In the Mersenne31, WIDTH = 16 case, the diagonal minus 1 is:
+/// In the Mersenne31, WIDTH = 24 case, the diagonal minus 1 is:
 /// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
 /// i.e. The first entry is -2 and all other entires a power of 2.
 #[inline(always)]
