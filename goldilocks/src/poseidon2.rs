@@ -11,7 +11,6 @@
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
     matmul_internal, ExternalLayer, HLMDSMat4, InternalLayer, MDSMat4, NoPackedImplementation,
-    Poseidon2ExternalPackedConstants,
 };
 
 use crate::{to_goldilocks_array, Goldilocks};

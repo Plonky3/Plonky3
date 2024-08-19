@@ -4,7 +4,9 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 // use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 // use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{AbstractField, PrimeField, PrimeField64};
-// use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
+use p3_goldilocks::{
+    Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
+};
 // use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{
     Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
@@ -39,13 +41,27 @@ fn bench_poseidon2(c: &mut Criterion) {
         5,
     >(c);
 
-    // poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>(c);
-    // poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 12, 7>(
-    //     c,
-    // );
-    // poseidon2_p64::<Goldilocks, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 16, 7>(
-    //     c,
-    // );
+    poseidon2_p64::<
+        Goldilocks,
+        Poseidon2ExternalLayerGoldilocks,
+        Poseidon2InternalLayerGoldilocks,
+        8,
+        7,
+    >(c);
+    poseidon2_p64::<
+        Goldilocks,
+        Poseidon2ExternalLayerGoldilocks,
+        Poseidon2InternalLayerGoldilocks,
+        12,
+        7,
+    >(c);
+    poseidon2_p64::<
+        Goldilocks,
+        Poseidon2ExternalLayerGoldilocks,
+        Poseidon2InternalLayerGoldilocks,
+        16,
+        7,
+    >(c);
 
     // poseidon2::<Bn254Fr, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBN254, 3, 5>(c, 8, 22);
 }
