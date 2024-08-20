@@ -28,14 +28,14 @@ fn bench_poseidon2(c: &mut Criterion) {
 
     poseidon2_p64::<
         Mersenne31,
-        Poseidon2ExternalLayerMersenne31,
+        Poseidon2ExternalLayerMersenne31<16>,
         Poseidon2InternalLayerMersenne31,
         16,
         5,
     >(c);
     poseidon2_p64::<
         Mersenne31,
-        Poseidon2ExternalLayerMersenne31,
+        Poseidon2ExternalLayerMersenne31<24>,
         Poseidon2InternalLayerMersenne31,
         24,
         5,
@@ -43,21 +43,21 @@ fn bench_poseidon2(c: &mut Criterion) {
 
     poseidon2_p64::<
         Goldilocks,
-        Poseidon2ExternalLayerGoldilocks,
+        Poseidon2ExternalLayerGoldilocks<8>,
         Poseidon2InternalLayerGoldilocks,
         8,
         7,
     >(c);
     poseidon2_p64::<
         Goldilocks,
-        Poseidon2ExternalLayerGoldilocks,
+        Poseidon2ExternalLayerGoldilocks<12>,
         Poseidon2InternalLayerGoldilocks,
         12,
         7,
     >(c);
     poseidon2_p64::<
         Goldilocks,
-        Poseidon2ExternalLayerGoldilocks,
+        Poseidon2ExternalLayerGoldilocks<16>,
         Poseidon2InternalLayerGoldilocks,
         16,
         7,
@@ -80,15 +80,9 @@ fn _poseidon2<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>(
         + Default,
 {
     let mut rng = thread_rng();
-    let external_linear_layer = ExternalPerm::default();
-    let internal_linear_layer = InternalPerm::default();
 
     let poseidon = Poseidon2::<F, ExternalPerm, InternalPerm, WIDTH, D>::new_from_rng(
-        rounds_f,
-        external_linear_layer,
-        rounds_p,
-        internal_linear_layer,
-        &mut rng,
+        rounds_f, rounds_p, &mut rng,
     );
     let input = [F::Packing::zero(); WIDTH];
     let name = format!(
@@ -114,14 +108,8 @@ where
         + Default,
 {
     let mut rng = thread_rng();
-    let external_linear_layer = ExternalPerm::default();
-    let internal_linear_layer = InternalPerm::default();
 
-    let poseidon = Poseidon2::<F, ExternalPerm, InternalPerm, WIDTH, D>::new_from_rng_128(
-        external_linear_layer,
-        internal_linear_layer,
-        &mut rng,
-    );
+    let poseidon = Poseidon2::<F, ExternalPerm, InternalPerm, WIDTH, D>::new_from_rng_128(&mut rng);
     let input = [F::Packing::zero(); WIDTH];
     let name = format!(
         "poseidon2::<{}, {}, {}>",
