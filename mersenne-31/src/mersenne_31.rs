@@ -14,7 +14,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 /// The Mersenne31 prime
-const P: u32 = (1 << 31) - 1;
+pub(crate) const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]

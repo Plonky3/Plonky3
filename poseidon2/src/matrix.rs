@@ -36,6 +36,7 @@ where
 /// [ 1 2 3 1 ]
 /// [ 1 1 2 3 ]
 /// [ 3 1 1 2 ].
+#[inline(always)]
 fn apply_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
@@ -73,19 +74,26 @@ impl<AF: AbstractField> MdsPermutation<AF, 4> for HLMDSMat4 {}
 pub struct MDSMat4;
 
 impl<AF: AbstractField> Permutation<[AF; 4]> for MDSMat4 {
+    #[inline(always)]
     fn permute(&self, input: [AF; 4]) -> [AF; 4] {
         let mut output = input;
         self.permute_mut(&mut output);
         output
     }
 
+    #[inline(always)]
     fn permute_mut(&self, input: &mut [AF; 4]) {
         apply_mat4(input)
     }
 }
 impl<AF: AbstractField> MdsPermutation<AF, 4> for MDSMat4 {}
 
-fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, const WIDTH: usize>(
+#[inline(always)]
+pub fn mds_light_permutation<
+    AF: AbstractField,
+    MdsPerm4: MdsPermutation<AF, 4>,
+    const WIDTH: usize,
+>(
     state: &mut [AF; WIDTH],
     mdsmat: &MdsPerm4,
 ) {
