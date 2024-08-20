@@ -147,6 +147,8 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
     }
 }
 
+#[inline]
+#[must_use]
 fn moveldup_epi32(x: __m256i) -> __m256i {
     // This instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
@@ -299,7 +301,7 @@ fn square_unred(x: __m256i) -> __m256i {
 /// represented as values in {0, ..., P}. If the inputs do not conform
 /// to this representation, the result is undefined.
 #[inline(always)]
-pub(crate) fn sbox(x: __m256i) -> __m256i {
+pub(crate) fn exp5(x: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let input_evn = x;
@@ -462,7 +464,7 @@ impl AbstractField for PackedMersenne31AVX2 {
             4 => self.square().square(),
             5 => unsafe {
                 let val = self.to_vector();
-                Self::from_vector(sbox(val))
+                Self::from_vector(exp5(val))
             },
             6 => self.square().cube(),
             7 => {

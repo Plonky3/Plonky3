@@ -5,7 +5,7 @@ use p3_poseidon2::{
 };
 
 use crate::{
-    sbox, Mersenne31, PackedMersenne31AVX2, Poseidon2ExternalLayerMersenne31,
+    exp5, Mersenne31, PackedMersenne31AVX2, Poseidon2ExternalLayerMersenne31,
     Poseidon2InternalLayerMersenne31, P, P_AVX2,
 };
 
@@ -47,9 +47,8 @@ impl<const WIDTH: usize> Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>
 /// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
 /// If the inputs do not conform to this representations, the result is undefined.
 #[inline(always)]
-fn left_rotation<const I: i32, const I_PRIME: i32>(
-    val: PackedMersenne31AVX2,
-) -> PackedMersenne31AVX2 {
+fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
+    assert!(I + I_PRIME == 31);
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let input = val.to_vector();
@@ -84,19 +83,19 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
-    state[3] = left_rotation::<2, 29>(state[3]);
-    state[4] = left_rotation::<3, 28>(state[4]);
-    state[5] = left_rotation::<4, 27>(state[5]);
-    state[6] = left_rotation::<5, 26>(state[6]);
-    state[7] = left_rotation::<6, 25>(state[7]);
-    state[8] = left_rotation::<7, 24>(state[8]);
-    state[9] = left_rotation::<8, 23>(state[9]);
-    state[10] = left_rotation::<10, 21>(state[10]);
-    state[11] = left_rotation::<12, 19>(state[11]);
-    state[12] = left_rotation::<13, 18>(state[12]);
-    state[13] = left_rotation::<14, 17>(state[13]);
-    state[14] = left_rotation::<15, 16>(state[14]);
-    state[15] = left_rotation::<16, 15>(state[15]); // TODO: There is a faster method for 15.
+    state[3] = mul_2exp_i::<2, 29>(state[3]);
+    state[4] = mul_2exp_i::<3, 28>(state[4]);
+    state[5] = mul_2exp_i::<4, 27>(state[5]);
+    state[6] = mul_2exp_i::<5, 26>(state[6]);
+    state[7] = mul_2exp_i::<6, 25>(state[7]);
+    state[8] = mul_2exp_i::<7, 24>(state[8]);
+    state[9] = mul_2exp_i::<8, 23>(state[9]);
+    state[10] = mul_2exp_i::<10, 21>(state[10]);
+    state[11] = mul_2exp_i::<12, 19>(state[11]);
+    state[12] = mul_2exp_i::<13, 18>(state[12]);
+    state[13] = mul_2exp_i::<14, 17>(state[13]);
+    state[14] = mul_2exp_i::<15, 16>(state[14]);
+    state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a faster method for 15.
 }
 
 /// The compiler doesn't realize that add is associative
@@ -137,27 +136,27 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
-    state[3] = left_rotation::<2, 29>(state[3]);
-    state[4] = left_rotation::<3, 28>(state[4]);
-    state[5] = left_rotation::<4, 27>(state[5]);
-    state[6] = left_rotation::<5, 26>(state[6]);
-    state[7] = left_rotation::<6, 25>(state[7]);
-    state[8] = left_rotation::<7, 24>(state[8]);
-    state[9] = left_rotation::<8, 23>(state[9]);
-    state[10] = left_rotation::<9, 22>(state[10]);
-    state[11] = left_rotation::<10, 21>(state[11]);
-    state[12] = left_rotation::<11, 20>(state[12]);
-    state[13] = left_rotation::<12, 19>(state[13]);
-    state[14] = left_rotation::<13, 18>(state[14]);
-    state[15] = left_rotation::<14, 17>(state[15]); // TODO: There is a faster method for 15.
-    state[16] = left_rotation::<15, 16>(state[16]);
-    state[17] = left_rotation::<16, 15>(state[17]);
-    state[18] = left_rotation::<17, 14>(state[18]);
-    state[19] = left_rotation::<18, 13>(state[19]);
-    state[20] = left_rotation::<19, 12>(state[20]);
-    state[21] = left_rotation::<20, 11>(state[21]);
-    state[22] = left_rotation::<21, 10>(state[22]);
-    state[23] = left_rotation::<22, 9>(state[23]);
+    state[3] = mul_2exp_i::<2, 29>(state[3]);
+    state[4] = mul_2exp_i::<3, 28>(state[4]);
+    state[5] = mul_2exp_i::<4, 27>(state[5]);
+    state[6] = mul_2exp_i::<5, 26>(state[6]);
+    state[7] = mul_2exp_i::<6, 25>(state[7]);
+    state[8] = mul_2exp_i::<7, 24>(state[8]);
+    state[9] = mul_2exp_i::<8, 23>(state[9]);
+    state[10] = mul_2exp_i::<9, 22>(state[10]);
+    state[11] = mul_2exp_i::<10, 21>(state[11]);
+    state[12] = mul_2exp_i::<11, 20>(state[12]);
+    state[13] = mul_2exp_i::<12, 19>(state[13]);
+    state[14] = mul_2exp_i::<13, 18>(state[14]);
+    state[15] = mul_2exp_i::<14, 17>(state[15]); // TODO: There is a faster method for 15.
+    state[16] = mul_2exp_i::<15, 16>(state[16]);
+    state[17] = mul_2exp_i::<16, 15>(state[17]);
+    state[18] = mul_2exp_i::<17, 14>(state[18]);
+    state[19] = mul_2exp_i::<18, 13>(state[19]);
+    state[20] = mul_2exp_i::<19, 12>(state[20]);
+    state[21] = mul_2exp_i::<20, 11>(state[21]);
+    state[22] = mul_2exp_i::<21, 10>(state[22]);
+    state[23] = mul_2exp_i::<22, 9>(state[23]);
 }
 
 /// The compiler doesn't realize that add is associative
@@ -208,7 +207,7 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31
 
         // Due to the representations of input and rc, input_plus_rc is in {-P, ..., P}.
         // This is exactly the required bound to apply sbox.
-        let input_post_sbox = sbox(input_plus_rc);
+        let input_post_sbox = exp5(input_plus_rc);
         PackedMersenne31AVX2::from_vector(input_post_sbox)
     }
 }
@@ -263,6 +262,22 @@ impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersen
     }
 }
 
+/// Compute a collection of Poseidon2 external layers.
+/// One layer for every constant supplied.
+#[inline]
+fn external_rounds<const WIDTH: usize>(
+    state: &mut [PackedMersenne31AVX2; WIDTH],
+    packed_external_constants: &[[__m256i; WIDTH]],
+) {
+    packed_external_constants.iter().for_each(|round_consts| {
+        state
+            .iter_mut()
+            .zip(round_consts.iter())
+            .for_each(|(val, &rc)| *val = add_rc_and_sbox(*val, rc));
+        mds_light_permutation(state, &MDSMat4);
+    });
+}
+
 impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31
 {
@@ -276,15 +291,7 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
         packed_initial_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMersenne31AVX2; WIDTH] {
         mds_light_permutation(&mut state, &MDSMat4);
-        packed_initial_external_constants
-            .iter()
-            .for_each(|round_consts| {
-                state
-                    .iter_mut()
-                    .zip(round_consts.iter())
-                    .for_each(|(val, &rc)| *val = add_rc_and_sbox(*val, rc));
-                mds_light_permutation(&mut state, &MDSMat4);
-            });
+        external_rounds(&mut state, packed_initial_external_constants);
         state
     }
 
@@ -295,15 +302,7 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
         _final_external_constants: &[[Mersenne31; WIDTH]],
         packed_final_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMersenne31AVX2; WIDTH] {
-        packed_final_external_constants
-            .iter()
-            .for_each(|round_consts| {
-                state
-                    .iter_mut()
-                    .zip(round_consts.iter())
-                    .for_each(|(val, &rc)| *val = add_rc_and_sbox(*val, rc));
-                mds_light_permutation(&mut state, &MDSMat4);
-            });
+        external_rounds(&mut state, packed_final_external_constants);
         state
     }
 }
