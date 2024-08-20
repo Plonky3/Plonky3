@@ -48,7 +48,7 @@ impl<const WIDTH: usize> Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>
 /// If the inputs do not conform to this representations, the result is undefined.
 #[inline(always)]
 fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-    assert!(I + I_PRIME == 31);
+    assert_eq!(I + I_PRIME, 31);
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let input = val.to_vector();
