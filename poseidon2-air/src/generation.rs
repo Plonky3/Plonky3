@@ -25,10 +25,8 @@ pub fn generate_trace_rows<
         n.is_power_of_two(),
         "Callers expected to pad inputs to a power of two"
     );
-    let mut trace = RowMajorMatrix::new(
-        vec![F::zero(); n],
-        num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(),
-    );
+    let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
+    let mut trace = RowMajorMatrix::new(vec![F::zero(); n * ncols], ncols);
     let (prefix, rows, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
             F,
