@@ -13,6 +13,7 @@ mod diffusion;
 mod matrix;
 mod round_numbers;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 pub use constants::*;
 pub use diffusion::*;
@@ -33,23 +34,13 @@ where
     ExternalPerm: Poseidon2ExternalPackedConstants<F, WIDTH>,
     InternalPerm: Poseidon2InternalPackedConstants<F>,
 {
-    /// The external round constants.
-    external_constants: [Vec<[F; WIDTH]>; 2],
-
-    /// The external round constants converted for optimal use with PackedFields.
-    external_packed_constants: [Vec<ExternalPerm::ConstantsType>; 2],
-
     /// The permutations used in External Rounds.
     external_layer: ExternalPerm,
 
-    /// The internal round constants.
-    internal_constants: Vec<F>,
-
-    /// The internal round constants converted for optimal use with PackedFields.
-    internal_packed_constants: Vec<InternalPerm::ConstantsType>,
-
     /// The permutation used in Internal Rounds.
     internal_layer: InternalPerm,
+
+    _phantom: PhantomData<F>,
 }
 
 impl<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
@@ -61,43 +52,20 @@ where
 {
     /// Create a new Poseidon2 configuration.
     /// This internally converts the given constants to the relevant packed versions.
-    pub fn new(
-        external_constants: [Vec<[F; WIDTH]>; 2],
-        external_layer: ExternalPerm,
-        internal_constants: Vec<F>,
-        internal_layer: InternalPerm,
-    ) -> Self {
+    pub fn new(external_constants: [Vec<[F; WIDTH]>; 2], internal_constants: Vec<F>) -> Self {
         assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
-        let external_packed_constants: [Vec<_>; 2] =
-            external_constants.clone().map(|constant_list| {
-                constant_list
-                    .iter()
-                    .map(|constants| ExternalPerm::convert_from_field_array(constants))
-                    .collect()
-            });
-        let internal_packed_constants: Vec<_> = internal_constants
-            .iter()
-            .map(|val| InternalPerm::convert_from_field(val))
-            .collect();
+        let external_layer = ExternalPerm::convert_from_field_array(external_constants);
+        let internal_layer = InternalPerm::convert_from_field(internal_constants);
 
         Self {
-            external_constants,
-            external_packed_constants,
             external_layer,
-            internal_constants,
-            internal_packed_constants,
             internal_layer,
+            _phantom: PhantomData,
         }
     }
 
     /// Create a new Poseidon2 configuration with random parameters.
-    pub fn new_from_rng<R: Rng>(
-        rounds_f: usize,
-        external_layer: ExternalPerm,
-        rounds_p: usize,
-        internal_layer: InternalPerm,
-        rng: &mut R,
-    ) -> Self
+    pub fn new_from_rng<R: Rng>(rounds_f: usize, rounds_p: usize, rng: &mut R) -> Self
     where
         Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
@@ -112,12 +80,7 @@ where
         let external_constants = [init_external_constants, final_external_constants];
         let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
 
-        Self::new(
-            external_constants,
-            external_layer,
-            internal_constants,
-            internal_layer,
-        )
+        Self::new(external_constants, internal_constants)
     }
 }
 
@@ -129,16 +92,12 @@ where
     InternalPerm: Poseidon2InternalPackedConstants<F>,
 {
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
-    pub fn new_from_rng_128<R: Rng>(
-        external_layer: ExternalPerm,
-        internal_layer: InternalPerm,
-        rng: &mut R,
-    ) -> Self
+    pub fn new_from_rng_128<R: Rng>(rng: &mut R) -> Self
     where
         Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
-        Self::new_from_rng(rounds_f, external_layer, rounds_p, internal_layer, rng)
+        Self::new_from_rng(rounds_f, rounds_p, rng)
     }
 }
 
@@ -151,23 +110,11 @@ where
     InternalPerm: InternalLayer<AF, WIDTH, D, InternalState = ExternalPerm::InternalState>,
 {
     fn permute(&self, state: [AF; WIDTH]) -> [AF; WIDTH] {
-        let mut internal_state = self.external_layer.permute_state_initial(
-            state,
-            &self.external_constants[0],
-            &self.external_packed_constants[0],
-        );
+        let mut internal_state = self.external_layer.permute_state_initial(state);
 
-        self.internal_layer.permute_state(
-            &mut internal_state,
-            &self.internal_constants,
-            &self.internal_packed_constants,
-        );
+        self.internal_layer.permute_state(&mut internal_state);
 
-        self.external_layer.permute_state_final(
-            internal_state,
-            &self.external_constants[1],
-            &self.external_packed_constants[1],
-        )
+        self.external_layer.permute_state_final(internal_state)
     }
 
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {

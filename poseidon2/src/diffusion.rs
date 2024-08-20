@@ -55,12 +55,7 @@ where
 
     /// Compute the internal part of the Poseidon2 permutation.
     /// Implementations will usually not use both constants fields.
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        internal_constants: &[AF::F],
-        internal_packed_constants: &[Self::ConstantsType],
-    );
+    fn permute_state(&self, state: &mut Self::InternalState);
 }
 
 /// A helper method which allows any field to easily implement Internal Layer.

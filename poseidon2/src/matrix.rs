@@ -164,23 +164,13 @@ where
     /// Implementations will usually not use both constants fields.
     /// Input state will be [AF; WIDTH], output state will be
     /// in appropriate form to feed into the Internal Layer.
-    fn permute_state_initial(
-        &self,
-        state: [AF; WIDTH],
-        initial_external_constants: &[[AF::F; WIDTH]],
-        initial_external_packed_constants: &[Self::ConstantsType],
-    ) -> Self::InternalState;
+    fn permute_state_initial(&self, state: [AF; WIDTH]) -> Self::InternalState;
 
     /// Compute the final external permutation.
     /// Implementations will usually not use both constants fields.
     /// Input state will be in appropriate form from Internal Layer.
     /// Output state will be [AF; WIDTH].
-    fn permute_state_final(
-        &self,
-        state: Self::InternalState,
-        final_external_constants: &[[AF::F; WIDTH]],
-        final_external_packed_constants: &[Self::ConstantsType],
-    ) -> [AF; WIDTH];
+    fn permute_state_final(&self, state: Self::InternalState) -> [AF; WIDTH];
 }
 
 /// A helper method which allow any field to easily implement the final External Layer.
