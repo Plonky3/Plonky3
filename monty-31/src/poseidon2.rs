@@ -1,7 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_poseidon2::DiffusionPermutation;
-use p3_symmetric::Permutation;
+use p3_poseidon2::{InternalLayer, NoPackedImplementation};
 
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters};
 
@@ -31,6 +30,8 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
             state[i + 1] = MontyField31::new_monty(monty_reduce::<FP>(si));
         }
     }
+
+    fn s_box(entry: MontyField31<FP>) -> MontyField31<FP>;
 }
 
 /// Some code needed by the PackedField implementation can be shared between the different WIDTHS and architectures.
@@ -40,29 +41,33 @@ pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixMontyField31<MP>
+pub struct Poseidon2InternalLayerMonty31<MP>
 where
     MP: Clone,
 {
     _phantom: PhantomData<MP>,
 }
 
-impl<FP, const WIDTH: usize, MP> Permutation<[MontyField31<FP>; WIDTH]>
-    for DiffusionMatrixMontyField31<MP>
-where
-    FP: FieldParameters,
-    MP: DiffusionMatrixParameters<FP, WIDTH>,
-{
-    #[inline]
-    fn permute_mut(&self, state: &mut [MontyField31<FP>; WIDTH]) {
-        MP::permute_state(state);
-    }
-}
+impl<MP> NoPackedImplementation for Poseidon2InternalLayerMonty31<MP> where MP: Clone + Sync {}
 
-impl<FP, const WIDTH: usize, MP> DiffusionPermutation<MontyField31<FP>, WIDTH>
-    for DiffusionMatrixMontyField31<MP>
+impl<FP, const WIDTH: usize, MP, const D: u64> InternalLayer<MontyField31<FP>, WIDTH, D>
+    for Poseidon2InternalLayerMonty31<MP>
 where
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
 {
+    type InternalState = [MontyField31<FP>; 16];
+
+    fn permute_state(
+        &self,
+        state: &mut Self::InternalState,
+        internal_constants: &[MontyField31<FP>],
+        _packed_internal_constants: &[()],
+    ) {
+        internal_constants.iter().for_each(|rc| {
+            state[0] = state[0] + rc;
+            state[0] = MP::s_box(state[0]);
+            MP::permute_state(state);
+        })
+    }
 }
