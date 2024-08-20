@@ -34,8 +34,6 @@ fn convert_to_vec_neg_form(input: i32) -> __m256i {
 /// We save the round constants in the {-P, ..., 0} representation instead of the standard
 /// {0, ..., P} one. This saves several instructions later.
 impl Poseidon2InternalPackedConstants<Mersenne31> for Poseidon2InternalLayerMersenne31 {
-    type ConstantsType = __m256i;
-
     fn convert_from_field(internal_constants: Vec<Mersenne31>) -> Poseidon2InternalLayerMersenne31 {
         let packed_internal_constants = internal_constants
             .iter()
@@ -53,8 +51,6 @@ impl Poseidon2InternalPackedConstants<Mersenne31> for Poseidon2InternalLayerMers
 impl<const WIDTH: usize> Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
-    type ConstantsType = [__m256i; WIDTH];
-
     /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0}.
     fn convert_from_field_array(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
         let [initial_external_constants, final_external_constants] = external_constants;

@@ -18,7 +18,7 @@ use core::marker::PhantomData;
 pub use constants::*;
 pub use diffusion::*;
 pub use matrix::*;
-use p3_field::{AbstractField, Field, PrimeField, PrimeField64};
+use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -28,12 +28,7 @@ const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
 /// The Poseidon2 permutation.
 #[derive(Clone, Debug)]
-pub struct Poseidon2<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-where
-    F: Field,
-    ExternalPerm: Poseidon2ExternalPackedConstants<F, WIDTH>,
-    InternalPerm: Poseidon2InternalPackedConstants<F>,
-{
+pub struct Poseidon2<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> {
     /// The permutations used in External Rounds.
     external_layer: ExternalPerm,
 
