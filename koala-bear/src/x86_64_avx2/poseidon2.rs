@@ -1,3 +1,11 @@
+use p3_monty_31::{InternalLayerParametersAVX2, ExternalLayerParametersAVX2}
+
+use crate::{Poseidon2ExternalLayerKoalaBear, Poseidon2InternalLayerKoalaBear};
+
+
+
+
+
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
