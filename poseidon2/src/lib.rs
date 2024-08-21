@@ -8,14 +8,12 @@
 
 extern crate alloc;
 
-mod constants;
 mod diffusion;
 mod matrix;
 mod round_numbers;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-pub use constants::*;
 pub use diffusion::*;
 pub use matrix::*;
 use p3_field::{AbstractField, PrimeField, PrimeField64};
@@ -38,19 +36,23 @@ pub struct Poseidon2<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D:
     _phantom: PhantomData<F>,
 }
 
-impl<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
+impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
+    Poseidon2<AF, ExternalPerm, InternalPerm, WIDTH, D>
 where
-    F: PrimeField,
-    ExternalPerm: Poseidon2ExternalPackedConstants<F, WIDTH>,
-    InternalPerm: Poseidon2InternalPackedConstants<F>,
+    AF: AbstractField,
+    AF::F: PrimeField,
+    ExternalPerm: ExternalLayer<AF, WIDTH, D>,
+    InternalPerm: InternalLayer<AF, WIDTH, D>,
 {
     /// Create a new Poseidon2 configuration.
     /// This internally converts the given constants to the relevant packed versions.
-    pub fn new(external_constants: [Vec<[F; WIDTH]>; 2], internal_constants: Vec<F>) -> Self {
+    pub fn new(
+        external_constants: [Vec<[AF::F; WIDTH]>; 2],
+        internal_constants: Vec<AF::F>,
+    ) -> Self {
         assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
-        let external_layer = ExternalPerm::convert_from_field_array(external_constants);
-        let internal_layer = InternalPerm::convert_from_field(internal_constants);
+        let external_layer = ExternalPerm::new_from_constants(external_constants);
+        let internal_layer = InternalPerm::new_from_constants(internal_constants);
 
         Self {
             external_layer,
@@ -62,7 +64,7 @@ where
     /// Create a new Poseidon2 configuration with random parameters.
     pub fn new_from_rng<R: Rng>(rounds_f: usize, rounds_p: usize, rng: &mut R) -> Self
     where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        Standard: Distribution<AF::F> + Distribution<[AF::F; WIDTH]>,
     {
         let half_f = rounds_f / 2;
         assert_eq!(
@@ -73,33 +75,34 @@ where
         let init_external_constants = rng.sample_iter(Standard).take(half_f).collect();
         let final_external_constants = rng.sample_iter(Standard).take(half_f).collect();
         let external_constants = [init_external_constants, final_external_constants];
-        let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect::<Vec<F>>();
+        let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect();
 
         Self::new(external_constants, internal_constants)
     }
 }
 
-impl<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
+impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
+    Poseidon2<AF, ExternalPerm, InternalPerm, WIDTH, D>
 where
-    F: PrimeField64,
-    ExternalPerm: Poseidon2ExternalPackedConstants<F, WIDTH>,
-    InternalPerm: Poseidon2InternalPackedConstants<F>,
+    AF: AbstractField,
+    AF::F: PrimeField64,
+    ExternalPerm: ExternalLayer<AF, WIDTH, D>,
+    InternalPerm: InternalLayer<AF, WIDTH, D>,
 {
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
     pub fn new_from_rng_128<R: Rng>(rng: &mut R) -> Self
     where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        Standard: Distribution<AF::F> + Distribution<[AF::F; WIDTH]>,
     {
-        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
+        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<AF::F>(WIDTH, D);
         Self::new_from_rng(rounds_f, rounds_p, rng)
     }
 }
 
 impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]>
-    for Poseidon2<AF::F, ExternalPerm, InternalPerm, WIDTH, D>
+    for Poseidon2<AF, ExternalPerm, InternalPerm, WIDTH, D>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
     ExternalPerm: ExternalLayer<AF, WIDTH, D>,
     InternalPerm: InternalLayer<AF, WIDTH, D, InternalState = ExternalPerm::InternalState>,
@@ -118,9 +121,9 @@ where
 }
 
 impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    CryptographicPermutation<[AF; WIDTH]> for Poseidon2<AF::F, ExternalPerm, InternalPerm, WIDTH, D>
+    CryptographicPermutation<[AF; WIDTH]> for Poseidon2<AF, ExternalPerm, InternalPerm, WIDTH, D>
 where
-    AF: AbstractField,
+    AF: AbstractField + Sync,
     AF::F: PrimeField,
     ExternalPerm: ExternalLayer<AF, WIDTH, D>,
     InternalPerm: InternalLayer<AF, WIDTH, D, InternalState = ExternalPerm::InternalState>,

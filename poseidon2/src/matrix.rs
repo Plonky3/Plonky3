@@ -1,8 +1,7 @@
+use alloc::vec::Vec;
 use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
-
-use crate::Poseidon2ExternalPackedConstants;
 
 /// Multiply a 4-element vector x by
 /// [ 5 7 1 3 ]
@@ -148,14 +147,17 @@ pub fn mds_light_permutation<
 }
 
 /// A trait containing all data needed to implement the external layers of Poseidon2.
-pub trait ExternalLayer<AF, const WIDTH: usize, const D: u64>:
-    Poseidon2ExternalPackedConstants<AF::F, WIDTH>
+pub trait ExternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
 where
     AF: AbstractField,
 {
     /// The type used internally by the Poseidon2 implementation.
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
     type InternalState;
+
+    /// A constructor which internally will convert the supplied
+    /// constants into the appropriate form for the implementation.
+    fn new_from_constants(external_constants: [Vec<[AF::F; WIDTH]>; 2]) -> Self;
 
     // permute_state_initial, permute_state_final are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.

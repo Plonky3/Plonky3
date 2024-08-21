@@ -1,13 +1,84 @@
-use p3_field::PrimeField32;
+use alloc::vec::Vec;
+
+use p3_field::{Field, PrimeField32};
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer, MDSMat4,
+    ExternalLayer, InternalLayer, MDSMat4, Poseidon2,
 };
 
-use crate::{
-    from_u62, to_mersenne31_array, Mersenne31, Poseidon2ExternalLayerMersenne31,
-    Poseidon2InternalLayerMersenne31,
-};
+use crate::{from_u62, to_mersenne31_array, Mersenne31};
+
+/// The basic Poseidon2 implementation which is always available and
+/// acts on arrays of the form [Mersenne31; WIDTH]
+pub type Poseidon2Mersenne31NoPacking<const WIDTH: usize> = Poseidon2<
+    Mersenne31,
+    crate::Poseidon2ExternalLayerMersenne31<WIDTH>,
+    crate::Poseidon2InternalLayerMersenne31,
+    WIDTH,
+    5,
+>;
+
+// Poseidon2Mersenne31 contains the implementations of Poseidon2
+// specialised to run on the current architecture. It acts on
+// arrays of the form [Mersenne31::Packing; WIDTH]
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
+    <Mersenne31 as Field>::Packing,
+    crate::Poseidon2ExternalLayerMersenne31NEON<WIDTH>,
+    crate::Poseidon2InternalLayerMersenne31NEON,
+    WIDTH,
+    5,
+>;
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
+    <Mersenne31 as Field>::Packing,
+    crate::Poseidon2ExternalLayerMersenne31AVX2<WIDTH>,
+    crate::Poseidon2InternalLayerMersenne31AVX2,
+    WIDTH,
+    5,
+>;
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
+    <Mersenne31 as Field>::Packing,
+    crate::Poseidon2ExternalLayerMersenne31AVX512<WIDTH>,
+    crate::Poseidon2InternalLayerMersenne31AVX512,
+    WIDTH,
+    5,
+>;
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ),
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+)))]
+pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2Mersenne31NoPacking<WIDTH>;
+
+#[derive(Debug, Clone, Default)]
+pub struct Poseidon2InternalLayerMersenne31 {
+    internal_constants: Vec<Mersenne31>,
+}
+
+#[derive(Default, Clone)]
+pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
+    initial_external_constants: Vec<[Mersenne31; WIDTH]>,
+    final_external_constants: Vec<[Mersenne31; WIDTH]>,
+}
 
 // See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 // Optimised diffusion matrices for Mersenne31/16:
@@ -90,6 +161,10 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
 impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [Mersenne31; 16];
 
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        Self { internal_constants }
+    }
+
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Mersenne31, 16, 5>(
             state,
@@ -101,6 +176,10 @@ impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
 
 impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [Mersenne31; 24];
+
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        Self { internal_constants }
+    }
 
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Mersenne31, 24, 5>(
@@ -115,6 +194,14 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     type InternalState = [Mersenne31; WIDTH];
+
+    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
+        let [initial_external_constants, final_external_constants] = external_constants;
+        Self {
+            initial_external_constants,
+            final_external_constants,
+        }
+    }
 
     fn permute_state_initial(&self, mut state: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
@@ -138,7 +225,6 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5>
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
@@ -151,30 +237,24 @@ mod tests {
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for Mersenne31
-    fn poseidon2_mersenne31<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
+    fn poseidon2_mersenne31<const WIDTH: usize>(input: &mut [F; WIDTH])
     where
-        Poseidon2ExternalLayerMersenne31<WIDTH>: ExternalLayer<Mersenne31, WIDTH, D>,
+        Poseidon2ExternalLayerMersenne31<WIDTH>: ExternalLayer<Mersenne31, WIDTH, 5>,
         Poseidon2InternalLayerMersenne31: InternalLayer<
             Mersenne31,
             WIDTH,
-            D,
+            5,
             InternalState = <Poseidon2ExternalLayerMersenne31<WIDTH> as ExternalLayer<
                 Mersenne31,
                 WIDTH,
-                D,
+                5,
             >>::InternalState,
         >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<
-            F,
-            Poseidon2ExternalLayerMersenne31<WIDTH>,
-            Poseidon2InternalLayerMersenne31,
-            WIDTH,
-            D,
-        > = Poseidon2::new_from_rng_128(&mut rng);
+        let poseidon2 = Poseidon2Mersenne31NoPacking::new_from_rng_128(&mut rng);
 
         poseidon2.permute_mut(input);
     }
@@ -199,7 +279,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_mersenne31::<16, 5>(&mut input);
+        poseidon2_mersenne31(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -225,7 +305,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_mersenne31::<24, 5>(&mut input);
+        poseidon2_mersenne31(&mut input);
         assert_eq!(input, expected);
     }
 }

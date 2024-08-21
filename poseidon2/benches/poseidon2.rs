@@ -3,113 +3,41 @@ use std::any::type_name;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 // use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 // use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
-use p3_field::{AbstractField, PrimeField, PrimeField64};
-use p3_goldilocks::{
-    Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
-};
+use p3_field::{AbstractField, Field};
+use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 // use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
-use p3_mersenne_31::{
-    Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
-};
-use p3_poseidon2::{
-    ExternalLayer, InternalLayer, Poseidon2, Poseidon2ExternalPackedConstants,
-    Poseidon2InternalPackedConstants,
-};
+use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::Permutation;
-use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
+    let mut rng = thread_rng();
     // poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>(c);
     // poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, 7>(c);
 
     // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>(c);
     // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 3>(c);
 
-    poseidon2_p64::<
-        Mersenne31,
-        Poseidon2ExternalLayerMersenne31<16>,
-        Poseidon2InternalLayerMersenne31,
-        16,
-        5,
-    >(c);
-    poseidon2_p64::<
-        Mersenne31,
-        Poseidon2ExternalLayerMersenne31<24>,
-        Poseidon2InternalLayerMersenne31,
-        24,
-        5,
-    >(c);
+    let poseidon2_m31_16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng);
+    poseidon2::<Mersenne31, Poseidon2Mersenne31<16>, 16, 5>(c, poseidon2_m31_16);
+    let poseidon2_m31_24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut rng);
+    poseidon2::<Mersenne31, Poseidon2Mersenne31<24>, 24, 5>(c, poseidon2_m31_24);
 
-    poseidon2_p64::<
-        Goldilocks,
-        Poseidon2ExternalLayerGoldilocks<8>,
-        Poseidon2InternalLayerGoldilocks,
-        8,
-        7,
-    >(c);
-    poseidon2_p64::<
-        Goldilocks,
-        Poseidon2ExternalLayerGoldilocks<12>,
-        Poseidon2InternalLayerGoldilocks,
-        12,
-        7,
-    >(c);
-    poseidon2_p64::<
-        Goldilocks,
-        Poseidon2ExternalLayerGoldilocks<16>,
-        Poseidon2InternalLayerGoldilocks,
-        16,
-        7,
-    >(c);
+    let poseidon2_gold_8 = Poseidon2Goldilocks::<8>::new_from_rng_128(&mut rng);
+    poseidon2::<Goldilocks, Poseidon2Goldilocks<8>, 8, 5>(c, poseidon2_gold_8);
+    let poseidon2_gold_12 = Poseidon2Goldilocks::<12>::new_from_rng_128(&mut rng);
+    poseidon2::<Goldilocks, Poseidon2Goldilocks<12>, 12, 5>(c, poseidon2_gold_12);
+    let poseidon2_gold_16 = Poseidon2Goldilocks::<16>::new_from_rng_128(&mut rng);
+    poseidon2::<Goldilocks, Poseidon2Goldilocks<16>, 16, 5>(c, poseidon2_gold_16);
 
     // poseidon2::<Bn254Fr, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBN254, 3, 5>(c, 8, 22);
 }
 
-fn _poseidon2<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>(
-    c: &mut Criterion,
-    rounds_f: usize,
-    rounds_p: usize,
-) where
-    F: PrimeField,
-    Standard: Distribution<F>,
-    ExternalPerm:
-        ExternalLayer<F::Packing, WIDTH, D> + Poseidon2ExternalPackedConstants<F, WIDTH> + Default,
-    InternalPerm: InternalLayer<F::Packing, WIDTH, D, InternalState = ExternalPerm::InternalState>
-        + Poseidon2InternalPackedConstants<F>
-        + Default,
-{
-    let mut rng = thread_rng();
-
-    let poseidon = Poseidon2::<F, ExternalPerm, InternalPerm, WIDTH, D>::new_from_rng(
-        rounds_f, rounds_p, &mut rng,
-    );
-    let input = [F::Packing::zero(); WIDTH];
-    let name = format!(
-        "poseidon2::<{}, {}, {}, {}>",
-        type_name::<F::Packing>(),
-        D,
-        rounds_f,
-        rounds_p
-    );
-    let id = BenchmarkId::new(name, WIDTH);
-    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
-}
-
-// For fields implementing PrimeField64 we should benchmark using the optimal round constants.
-fn poseidon2_p64<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>(c: &mut Criterion)
+fn poseidon2<F, Perm, const WIDTH: usize, const D: u64>(c: &mut Criterion, poseidon2: Perm)
 where
-    F: PrimeField64,
-    Standard: Distribution<F>,
-    ExternalPerm:
-        ExternalLayer<F::Packing, WIDTH, D> + Poseidon2ExternalPackedConstants<F, WIDTH> + Default,
-    InternalPerm: InternalLayer<F::Packing, WIDTH, D, InternalState = ExternalPerm::InternalState>
-        + Poseidon2InternalPackedConstants<F>
-        + Default,
+    F: Field,
+    Perm: Permutation<[F::Packing; WIDTH]>,
 {
-    let mut rng = thread_rng();
-
-    let poseidon = Poseidon2::<F, ExternalPerm, InternalPerm, WIDTH, D>::new_from_rng_128(&mut rng);
     let input = [F::Packing::zero(); WIDTH];
     let name = format!(
         "poseidon2::<{}, {}, {}>",
@@ -118,7 +46,7 @@ where
         WIDTH
     );
     let id = BenchmarkId::new(name, WIDTH);
-    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
+    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));
 }
 
 criterion_group!(benches, bench_poseidon2);
