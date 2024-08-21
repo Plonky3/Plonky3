@@ -1,11 +1,11 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
-use p3_field::PrimeField32;
 use p3_monty_31::{
-    DiffusionMatrixMontyField31, DiffusionMatrixParameters, PackedFieldPoseidon2Helpers,
+    InternalLayerParameters, PackedFieldPoseidon2Helpers, Poseidon2ExternalLayerMonty31,
+    Poseidon2InternalLayerMonty31,
 };
 
-use crate::{KoalaBear, KoalaBearParameters};
+use crate::KoalaBearParameters;
 
 // See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 // Optimized Diffusion matrices for Koalabear16.
@@ -25,81 +25,40 @@ use crate::{KoalaBear, KoalaBearParameters};
 // Long term, INTERNAL_DIAG_MONTY will be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
 
-pub type DiffusionMatrixKoalaBear = DiffusionMatrixMontyField31<KoalaBearDiffusionMatrixParameters>;
+pub type Poseidon2InternalLayerKoalaBear =
+    Poseidon2InternalLayerMonty31<KoalaBearInternalLayerParameters>;
+
+pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> = Poseidon2ExternalLayerMonty31<WIDTH>;
 
 #[derive(Debug, Clone, Default)]
-pub struct KoalaBearDiffusionMatrixParameters;
+pub struct KoalaBearInternalLayerParameters;
 
-impl DiffusionMatrixParameters<KoalaBearParameters, 16> for KoalaBearDiffusionMatrixParameters {
+impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [u8; 15];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
-
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = KoalaBear::new_array([
-        KoalaBear::ORDER_U32 - 2,
-        1,
-        1 << 1,
-        1 << 2,
-        1 << 3,
-        1 << 4,
-        1 << 5,
-        1 << 6,
-        1 << 7,
-        1 << 8,
-        1 << 9,
-        1 << 10,
-        1 << 11,
-        1 << 12,
-        1 << 13,
-        1 << 15,
-    ]);
 }
 
-impl DiffusionMatrixParameters<KoalaBearParameters, 24> for KoalaBearDiffusionMatrixParameters {
+impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [u8; 23];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
     ];
-
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = KoalaBear::new_array([
-        KoalaBear::ORDER_U32 - 2,
-        1,
-        1 << 1,
-        1 << 2,
-        1 << 3,
-        1 << 4,
-        1 << 5,
-        1 << 6,
-        1 << 7,
-        1 << 8,
-        1 << 9,
-        1 << 10,
-        1 << 11,
-        1 << 12,
-        1 << 13,
-        1 << 14,
-        1 << 15,
-        1 << 16,
-        1 << 17,
-        1 << 18,
-        1 << 19,
-        1 << 20,
-        1 << 21,
-        1 << 23,
-    ]);
 }
 
-impl PackedFieldPoseidon2Helpers<KoalaBearParameters> for KoalaBearDiffusionMatrixParameters {}
+impl PackedFieldPoseidon2Helpers<KoalaBearParameters> for KoalaBearInternalLayerParameters {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{DiffusionPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_poseidon2::{ExternalLayer, InternalLayer, Poseidon2};
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
+
+    use crate::KoalaBear;
 
     type F = KoalaBear;
 
@@ -107,17 +66,34 @@ mod tests {
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for KoalaBear
-    fn poseidon2_koalabear<const WIDTH: usize, const D: u64, DiffusionMatrix>(
-        input: &mut [F; WIDTH],
-        diffusion_matrix: DiffusionMatrix,
-    ) where
-        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
+    fn poseidon2_koalabear<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
+    where
+        Poseidon2ExternalLayerKoalaBear<WIDTH>: ExternalLayer<KoalaBear, WIDTH, D>,
+        Poseidon2InternalLayerKoalaBear: InternalLayer<
+            KoalaBear,
+            WIDTH,
+            D,
+            InternalState = <Poseidon2ExternalLayerKoalaBear<WIDTH> as ExternalLayer<
+                KoalaBear,
+                WIDTH,
+                D,
+            >>::InternalState,
+        >,
     {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
+        let poseidon2: Poseidon2<
+            F,
+            Poseidon2ExternalLayerKoalaBear<WIDTH>,
+            Poseidon2InternalLayerKoalaBear,
+            WIDTH,
+            D,
+        > = Poseidon2::new_from_rng_128(
+            Poseidon2ExternalLayerKoalaBear::default(),
+            Poseidon2InternalLayerKoalaBear::default(),
+            &mut rng,
+        );
 
         poseidon2.permute_mut(input);
     }
@@ -142,7 +118,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
+        poseidon2_koalabear::<16, 3>(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -168,7 +144,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
+        poseidon2_koalabear::<24, 3>(&mut input);
         assert_eq!(input, expected);
     }
 }
