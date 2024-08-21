@@ -1,6 +1,10 @@
 use core::marker::PhantomData;
 
-use p3_poseidon2::{ExternalLayer, InternalLayer, NoPackedImplementation};
+use p3_field::AbstractField;
+use p3_poseidon2::{
+    external_final_permute_state, external_initial_permute_state, ExternalLayer, InternalLayer,
+    MDSMat4,
+};
 
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters};
 
@@ -12,10 +16,6 @@ pub trait Poseidon2Parameters<FP: FieldParameters, const WIDTH: usize>: Clone + 
 
     // We only need to save the powers and can ignore the initial element.
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike;
-
-    // Long term INTERNAL_DIAG_MONTY will be removed.
-    // Currently it is needed for the Packed field implementations.
-    const INTERNAL_DIAG_MONTY: [MontyField31<FP>; WIDTH];
 
     /// Implements multiplication by the diffusion matrix 1 + Diag(vec) using a delayed reduction strategy.
     fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
@@ -30,8 +30,6 @@ pub trait Poseidon2Parameters<FP: FieldParameters, const WIDTH: usize>: Clone + 
             state[i + 1] = MontyField31::new_monty(monty_reduce::<FP>(si));
         }
     }
-
-    fn s_box(input: MontyField31<FP>) -> MontyField31<FP>;
 }
 
 /// Some code needed by the PackedField implementation can be shared between the different WIDTHS and architectures.
@@ -41,70 +39,76 @@ pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Poseidon2InternalLayerMonty31<MP>
+pub struct Poseidon2InternalLayerMonty31<P2P>
 where
-    MP: Clone,
+    P2P: Clone,
 {
-    _phantom: PhantomData<MP>,
+    _phantom: PhantomData<P2P>,
 }
 
-impl<MP> NoPackedImplementation for Poseidon2InternalLayerMonty31<MP> where MP: Clone + Sync {}
-
-impl<FP, const WIDTH: usize, MP, const D: u64> InternalLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon2InternalLayerMonty31<MP>
+impl<FP, const WIDTH: usize, P2P, const D: u64> InternalLayer<MontyField31<FP>, WIDTH, D>
+    for Poseidon2InternalLayerMonty31<P2P>
 where
     FP: FieldParameters,
-    MP: Poseidon2Parameters<FP, WIDTH>,
+    P2P: Poseidon2Parameters<FP, WIDTH>,
 {
-    type InternalState = [MontyField31<FP>; 16];
+    type InternalState = [MontyField31<FP>; WIDTH];
 
     fn permute_state(
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[MontyField31<FP>],
-        _packed_internal_constants: &[()],
+        _packed_internal_constants: &[Self::ConstantsType],
     ) {
         internal_constants.iter().for_each(|rc| {
-            state[0] = state[0] + rc;
-            state[0] = MP::s_box(state[0]);
-            MP::permute_state(state);
+            state[0] += *rc;
+            state[0] = state[0].exp_const_u64::<D>();
+            P2P::permute_state(state);
         })
     }
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Poseidon2ExternalLayerMonty31<MP>
+pub struct Poseidon2ExternalLayerMonty31<P2P, const WIDTH: usize>
 where
-    MP: Clone,
+    P2P: Clone,
 {
-    _phantom: PhantomData<MP>,
+    _phantom: PhantomData<P2P>,
 }
 
-impl<MP> NoPackedImplementation for Poseidon2ExternalLayerMonty31<MP> where MP: Clone + Sync {}
-
-impl<FP, const WIDTH: usize, MP, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon2InternalLayerMonty31<MP>
+impl<FP, const WIDTH: usize, P2P, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
+    for Poseidon2ExternalLayerMonty31<P2P, WIDTH>
 where
     FP: FieldParameters,
-    MP: Poseidon2Parameters<FP, WIDTH>,
+    P2P: Poseidon2Parameters<FP, WIDTH>,
 {
-    type InternalState = [MontyField31<FP>; 16];
+    type InternalState = [MontyField31<FP>; WIDTH];
 
     fn permute_state_initial(
         &self,
-        state: [MontyField31<FP>; WIDTH],
+        mut state: [MontyField31<FP>; WIDTH],
         initial_external_constants: &[[<MontyField31<FP> as p3_field::AbstractField>::F; WIDTH]],
-        initial_external_packed_constants: &[Self::ConstantsType],
+        _initial_external_packed_constants: &[Self::ConstantsType],
     ) -> Self::InternalState {
-        todo!()
+        external_initial_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, 5>(
+            &mut state,
+            initial_external_constants,
+            &MDSMat4,
+        );
+        state
     }
 
     fn permute_state_final(
         &self,
-        state: Self::InternalState,
+        mut state: Self::InternalState,
         final_external_constants: &[[<MontyField31<FP> as p3_field::AbstractField>::F; WIDTH]],
-        final_external_packed_constants: &[Self::ConstantsType],
+        _final_external_packed_constants: &[Self::ConstantsType],
     ) -> [MontyField31<FP>; WIDTH] {
-        todo!()
+        external_final_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, 5>(
+            &mut state,
+            final_external_constants,
+            &MDSMat4,
+        );
+        state
     }
 }
