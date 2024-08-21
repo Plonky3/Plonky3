@@ -59,7 +59,7 @@ where
         &self,
         state: &mut Self::InternalState,
         internal_constants: &[AF::F],
-        internal_packed_constants: &[Self::ConstantsType],
+        packed_internal_constants: &[Self::ConstantsType],
     );
 }
 

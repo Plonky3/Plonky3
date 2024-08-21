@@ -1,8 +1,7 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_monty_31::{
-    InternalLayerParameters, PackedFieldPoseidon2Helpers, Poseidon2ExternalLayerMonty31,
-    Poseidon2InternalLayerMonty31,
+    InternalLayerBaseParameters, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 
 use crate::KoalaBearParameters;
@@ -25,28 +24,30 @@ use crate::KoalaBearParameters;
 // Long term, INTERNAL_DIAG_MONTY will be removed.
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
 
-pub type Poseidon2InternalLayerKoalaBear =
-    Poseidon2InternalLayerMonty31<KoalaBearInternalLayerParameters>;
+pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
+    Poseidon2InternalLayerMonty31<KoalaBearInternalLayerParameters, WIDTH>;
 
-pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> = Poseidon2ExternalLayerMonty31<WIDTH>;
+pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
+    Poseidon2ExternalLayerMonty31<KoalaBearExternalLayerParameters, WIDTH>;
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
 
-impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
+impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [u8; 15];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 }
 
-impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
+impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [u8; 23];
     const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
     ];
 }
 
-impl PackedFieldPoseidon2Helpers<KoalaBearParameters> for KoalaBearInternalLayerParameters {}
+#[derive(Debug, Clone, Default)]
+pub struct KoalaBearExternalLayerParameters;
 
 #[cfg(test)]
 mod tests {
@@ -69,7 +70,7 @@ mod tests {
     fn poseidon2_koalabear<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
     where
         Poseidon2ExternalLayerKoalaBear<WIDTH>: ExternalLayer<KoalaBear, WIDTH, D>,
-        Poseidon2InternalLayerKoalaBear: InternalLayer<
+        Poseidon2InternalLayerKoalaBear<WIDTH>: InternalLayer<
             KoalaBear,
             WIDTH,
             D,
@@ -86,7 +87,7 @@ mod tests {
         let poseidon2: Poseidon2<
             F,
             Poseidon2ExternalLayerKoalaBear<WIDTH>,
-            Poseidon2InternalLayerKoalaBear,
+            Poseidon2InternalLayerKoalaBear<WIDTH>,
             WIDTH,
             D,
         > = Poseidon2::new_from_rng_128(

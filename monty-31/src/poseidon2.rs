@@ -3,14 +3,16 @@ use core::marker::PhantomData;
 use p3_field::AbstractField;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, ExternalLayer, InternalLayer,
-    MDSMat4, NoPackedImplementation,
+    MDSMat4,
 };
 
-use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters};
+use crate::{monty_reduce, FieldParameters, MontyField31};
 
 /// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + Diag(vec).
 /// vec is assumed to be of the form [-2, ...] with all entries after the first being small powers of 2.
-pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>: Clone + Sync {
+pub trait InternalLayerBaseParameters<FP: FieldParameters, const WIDTH: usize>:
+    Clone + Sync
+{
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
     type ArrayLike: AsRef<[u8]> + Sized;
 
@@ -32,18 +34,87 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>: Clon
     }
 }
 
-/// Some code needed by the PackedField implementation can be shared between the different WIDTHS and architectures.
-/// This will likely be deleted once we have vectorized implementations.
-pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
-    const MONTY_INVERSE: MontyField31<MP> = MontyField31::new_monty(1);
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
+    InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersNeon<WIDTH>
+{
+}
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
+    InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersAVX2<WIDTH>
+{
+}
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
+    InternalLayerBaseParameters<FP, WIDTH>
+    + crate::InternalLayerParametersAVX2<WIDTH>
+    + crate::InternalLayerParametersAVX512<WIDTH>
+{
+}
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ),
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+)))]
+pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
+    InternalLayerBaseParameters<FP, WIDTH>
+{
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct Poseidon2InternalLayerMonty31<P2P>
-where
-    P2P: Clone,
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub trait ExternalLayerParameters: crate::ExternalLayerParametersNeon {}
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+pub trait ExternalLayerParameters: crate::ExternalLayerParametersAVX2 {}
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub trait ExternalLayerParameters:
+    crate::ExternalLayerParametersAVX2 + crate::ExternalLayerParametersAVX512
 {
-    _phantom: PhantomData<P2P>,
+}
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ),
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+)))]
+pub trait ExternalLayerParameters {}
+
+#[derive(Debug, Clone, Default)]
+pub struct Poseidon2InternalLayerMonty31<ILP, const WIDTH: usize>
+where
+    ILP: Clone,
+{
+    _phantom: PhantomData<ILP>,
 }
 
 #[cfg(not(any(
@@ -59,10 +130,13 @@ where
         target_feature = "avx512f"
     ),
 )))]
-impl<P2P> NoPackedImplementation for Poseidon2InternalLayerMonty31<P2P> where P2P: Clone + Sync {}
+impl<P2P> p3_poseidon2::NoPackedImplementation for Poseidon2InternalLayerMonty31<P2P> where
+    P2P: Clone + Sync
+{
+}
 
 impl<FP, const WIDTH: usize, P2P, const D: u64> InternalLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon2InternalLayerMonty31<P2P>
+    for Poseidon2InternalLayerMonty31<P2P, WIDTH>
 where
     FP: FieldParameters,
     P2P: InternalLayerParameters<FP, WIDTH>,
@@ -84,7 +158,12 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Poseidon2ExternalLayerMonty31<const WIDTH: usize> {}
+pub struct Poseidon2ExternalLayerMonty31<ELP, const WIDTH: usize>
+where
+    ELP: Clone,
+{
+    _phantom: PhantomData<ELP>,
+}
 
 #[cfg(not(any(
     all(target_arch = "aarch64", target_feature = "neon"),
@@ -101,9 +180,10 @@ pub struct Poseidon2ExternalLayerMonty31<const WIDTH: usize> {}
 )))]
 impl<const WIDTH: usize> NoPackedImplementation for Poseidon2ExternalLayerMonty31<WIDTH> {}
 
-impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon2ExternalLayerMonty31<WIDTH>
+impl<FP, ELP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
+    for Poseidon2ExternalLayerMonty31<ELP, WIDTH>
 where
+    ELP: Sync + Clone,
     FP: FieldParameters,
 {
     type InternalState = [MontyField31<FP>; WIDTH];
