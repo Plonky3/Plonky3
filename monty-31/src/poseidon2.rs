@@ -3,14 +3,14 @@ use core::marker::PhantomData;
 use p3_field::AbstractField;
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, ExternalLayer, InternalLayer,
-    MDSMat4,
+    MDSMat4, NoPackedImplementation,
 };
 
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters};
 
 /// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + Diag(vec).
 /// vec is assumed to be of the form [-2, ...] with all entries after the first being small powers of 2.
-pub trait Poseidon2Parameters<FP: FieldParameters, const WIDTH: usize>: Clone + Sync {
+pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>: Clone + Sync {
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
     type ArrayLike: AsRef<[u8]> + Sized;
 
@@ -46,11 +46,26 @@ where
     _phantom: PhantomData<P2P>,
 }
 
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ),
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+)))]
+impl<P2P> NoPackedImplementation for Poseidon2InternalLayerMonty31<P2P> where P2P: Clone + Sync {}
+
 impl<FP, const WIDTH: usize, P2P, const D: u64> InternalLayer<MontyField31<FP>, WIDTH, D>
     for Poseidon2InternalLayerMonty31<P2P>
 where
     FP: FieldParameters,
-    P2P: Poseidon2Parameters<FP, WIDTH>,
+    P2P: InternalLayerParameters<FP, WIDTH>,
 {
     type InternalState = [MontyField31<FP>; WIDTH];
 
@@ -69,18 +84,27 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Poseidon2ExternalLayerMonty31<P2P, const WIDTH: usize>
-where
-    P2P: Clone,
-{
-    _phantom: PhantomData<P2P>,
-}
+pub struct Poseidon2ExternalLayerMonty31<const WIDTH: usize> {}
 
-impl<FP, const WIDTH: usize, P2P, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon2ExternalLayerMonty31<P2P, WIDTH>
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ),
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+)))]
+impl<const WIDTH: usize> NoPackedImplementation for Poseidon2ExternalLayerMonty31<WIDTH> {}
+
+impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
+    for Poseidon2ExternalLayerMonty31<WIDTH>
 where
     FP: FieldParameters,
-    P2P: Poseidon2Parameters<FP, WIDTH>,
 {
     type InternalState = [MontyField31<FP>; WIDTH];
 
@@ -90,7 +114,7 @@ where
         initial_external_constants: &[[<MontyField31<FP> as p3_field::AbstractField>::F; WIDTH]],
         _initial_external_packed_constants: &[Self::ConstantsType],
     ) -> Self::InternalState {
-        external_initial_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, 5>(
+        external_initial_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(
             &mut state,
             initial_external_constants,
             &MDSMat4,
@@ -104,7 +128,7 @@ where
         final_external_constants: &[[<MontyField31<FP> as p3_field::AbstractField>::F; WIDTH]],
         _final_external_packed_constants: &[Self::ConstantsType],
     ) -> [MontyField31<FP>; WIDTH] {
-        external_final_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, 5>(
+        external_final_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(
             &mut state,
             final_external_constants,
             &MDSMat4,

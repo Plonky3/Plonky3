@@ -5,9 +5,9 @@ use p3_poseidon2::{
 use p3_symmetric::Permutation;
 
 use crate::{
-    FieldParameters, MontyField31, MontyParameters, PackedFieldPoseidon2Helpers,
-    PackedMontyField31AVX2, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
-    Poseidon2Parameters,
+    FieldParameters, InternalLayerParameters, MontyField31, MontyParameters,
+    PackedFieldPoseidon2Helpers, PackedMontyField31AVX2, Poseidon2ExternalLayerMonty31,
+    Poseidon2InternalLayerMonty31,
 };
 
 /// A trait containing the specific information needed to
@@ -47,10 +47,9 @@ where
 
 /// We save the round constants in the {-P, ..., 0} representation instead of the standard
 /// {0, ..., P} one. This saves several instructions later.
-impl<P2P, MP, const WIDTH: usize> Poseidon2ExternalPackedConstants<MontyField31<MP>, WIDTH>
-    for Poseidon2ExternalLayerMonty31<P2P, WIDTH>
+impl<MP, const WIDTH: usize> Poseidon2ExternalPackedConstants<MontyField31<MP>, WIDTH>
+    for Poseidon2ExternalLayerMonty31<WIDTH>
 where
-    P2P: Clone + Sync,
     MP: MontyParameters,
 {
     type ConstantsType = [__m256i; WIDTH];
