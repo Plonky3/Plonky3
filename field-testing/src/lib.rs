@@ -60,6 +60,65 @@ where
     assert_eq!((x * y) / z, x * (y / z));
 }
 
+pub fn test_sqrt<F: Field>()
+where
+    Standard: Distribution<F>,
+{
+    let mut rng = rand::thread_rng();
+    let (x, y) = {
+        let t = rng.gen::<F>();
+        let gt = t*F::generator();
+        assert!(t.is_square() ^ gt.is_square());
+        if t.is_square() {
+            (t, gt)
+        } else {
+            (gt, t)
+        }
+    };
+    let x_sqrt = x.sqrt();
+    let y_sqrt = y.sqrt();
+
+    assert_eq!(x_sqrt.unwrap().square(), x);
+    assert_eq!(y_sqrt, None);
+
+    assert_eq!(x.legendre(), F::one());
+    assert_eq!(y.legendre(), F::neg_one());
+}
+
+pub fn test_pow<F: Field>()
+where
+    Standard: Distribution<F>,
+{
+    let mut rng = rand::thread_rng();
+    let x = rng.gen::<F>();
+    let x2 = x.square();
+    let x4 = x2.square();
+    let x8 = x4.square();
+    let x16 = x8.square();
+
+    let x23 = x16*x4*x2*x;
+
+    assert_eq!(x.pow(&BigUint::from(2u8)), x2);
+    assert_eq!(x.pow(&BigUint::from(4u8)), x4);
+    assert_eq!(x.pow(&BigUint::from(8u8)), x8);
+    assert_eq!(x.pow(&BigUint::from(16u8)), x16);
+    assert_eq!(x.pow(&BigUint::from(23u8)), x23);
+
+
+    let mut x_2_289 = x;
+    for _ in 0..289 {
+        x_2_289 = x_2_289.square();
+    }
+
+    let power_2_289  = BigUint::from(2u8).pow(289);
+    assert_eq!(x_2_289, x.pow(&power_2_289));
+
+    let x_2_289_plus_23 = x_2_289*x23;
+    let power_2_289_plus_23 = power_2_289+BigUint::from(23u8);
+    assert_eq!(x_2_289_plus_23, x.pow(&power_2_289_plus_23));
+
+}
+
 pub fn test_inverse<F: Field>()
 where
     Standard: Distribution<F>,
@@ -145,6 +204,16 @@ macro_rules! test_field {
             #[test]
             fn test_multiplicative_group_factors() {
                 $crate::test_multiplicative_group_factors::<$field>();
+            }
+
+            #[test]
+            fn test_sqrt() {
+                $crate::test_sqrt::<$field>();
+            }
+
+            #[test]
+            fn test_pow() {
+                $crate::test_pow::<$field>();
             }
         }
     };
