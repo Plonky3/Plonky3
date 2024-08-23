@@ -8,15 +8,38 @@ use p3_poseidon2::{
 };
 
 use crate::{
+    apply_func_to_even_odd, movehdup_epi32, packed_exp_3, packed_exp_5, packed_exp_7,
     ExternalLayerParameters, FieldParameters, InternalLayerParameters, MontyField31,
     MontyParameters, PackedMontyField31AVX2, PackedMontyParameters, Poseidon2ExternalLayerMonty31,
     Poseidon2InternalLayerMonty31,
 };
 
+fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
+    val: PackedMontyField31AVX2<PMP>,
+    rc: __m256i,
+) -> PackedMontyField31AVX2<PMP> {
+    unsafe {
+        let vec_val = transmute(val);
+        let val_plus_rc = x86_64::_mm256_add_epi32(vec_val, rc);
+        let func = match D {
+            3 => packed_exp_3::<PMP>,
+            5 => packed_exp_5::<PMP>,
+            7 => packed_exp_7::<PMP>,
+            _ => panic!("No exp function for given D"),
+        };
+        let output = apply_func_to_even_odd::<PMP>(val_plus_rc, func);
+        transmute(output)
+    }
+}
+
+fn apply_external_linear_layer<const WIDTH: usize>(_state: &[__m256i; WIDTH]) -> [__m256i; WIDTH]{
+    todo!()
+}
+
 /// A trait containing the specific information needed to
 /// implement the Poseidon2 Permutation for Monty31 Fields.
-pub trait ExternalLayerParametersAVX2: Clone + Sync {
-    fn add_rc_and_sbox(input: __m256i, rc: __m256i) -> __m256i;
+pub trait ExternalLayerParametersAVX2<const D: u64>: Clone + Sync {
+    // fn add_rc_and_sbox(input: __m256i, rc: __m256i) -> __m256i;
 
     // Possibly an extra couple of things? s_box internal/external might be different.
 }
@@ -127,33 +150,69 @@ where
 /// Compute a collection of Poseidon2 external layers.
 /// One layer for every constant supplied.
 #[inline]
-fn external_rounds<ELP, FP, const WIDTH: usize>(
+fn external_rounds<ELP, FP, const WIDTH: usize, const D: u64>(
     state: &mut [PackedMontyField31AVX2<FP>; WIDTH],
     packed_external_constants: &[[__m256i; WIDTH]],
 ) where
     FP: FieldParameters,
-    ELP: ExternalLayerParametersAVX2,
+    ELP: ExternalLayerParametersAVX2<D>,
 {
     packed_external_constants.iter().for_each(|round_consts| {
         state
             .iter_mut()
             .zip(round_consts.iter())
-            .for_each(|(val, &rc)| unsafe {
-                let vec_val = transmute(*val);
-                let vec_val_post_sbox = ELP::add_rc_and_sbox(vec_val, rc);
-                *val = transmute(vec_val_post_sbox);
+            .for_each(|(val, &rc)| {
+                *val = add_rc_and_sbox::<FP, D>(*val, rc);
             });
         mds_light_permutation(state, &MDSMat4);
     });
+}
+
+#[inline]
+fn final_initial_external_round<ELP, FP, const WIDTH: usize, const D: u64>(
+    state: [PackedMontyField31AVX2<FP>; WIDTH],
+    round_consts: &[__m256i; WIDTH],
+) -> [[__m256i; WIDTH]; 2]
+where
+    FP: FieldParameters,
+    ELP: ExternalLayerParametersAVX2<D>,
+{
+    unsafe {
+        let mut state_even: [__m256i; WIDTH] = state.map(|x| transmute(x));
+        state_even
+            .iter_mut()
+            .zip(round_consts.iter())
+            .for_each(|(val, &rc)| *val = x86_64::_mm256_add_epi32(*val, rc));
+
+        let state_odd = state_even.map(movehdup_epi32);
+
+        let post_sbox = match D {
+            3 => [
+                state_even.map(packed_exp_3::<FP>),
+                state_odd.map(packed_exp_3::<FP>),
+            ],
+            5 => [
+                state_even.map(packed_exp_5::<FP>),
+                state_odd.map(packed_exp_5::<FP>),
+            ],
+            7 => [
+                state_even.map(packed_exp_7::<FP>),
+                state_odd.map(packed_exp_7::<FP>),
+            ]
+            _ => panic!("No exp function for given D"),
+        };
+
+        [apply_external_linear_layer(&post_sbox[0]), apply_external_linear_layer(&post_sbox[1])]
+    }
 }
 
 impl<FP, ELP, const WIDTH: usize, const D: u64> ExternalLayer<PackedMontyField31AVX2<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<ELP, WIDTH>
 where
     FP: FieldParameters,
-    ELP: ExternalLayerParametersAVX2,
+    ELP: ExternalLayerParametersAVX2<D>,
 {
-    type InternalState = [PackedMontyField31AVX2<FP>; WIDTH];
+    type InternalState = [[__m256i; WIDTH]; 2];
 
     /// Compute the first half of the Poseidon2 external layers.
     fn permute_state_initial(
@@ -161,10 +220,18 @@ where
         mut state: [PackedMontyField31AVX2<FP>; WIDTH],
         _initial_external_constants: &[[MontyField31<FP>; WIDTH]],
         packed_initial_external_constants: &[[__m256i; WIDTH]],
-    ) -> [PackedMontyField31AVX2<FP>; WIDTH] {
+    ) -> [[__m256i; WIDTH]; 2] {
         mds_light_permutation(&mut state, &MDSMat4);
-        external_rounds::<ELP, FP, WIDTH>(&mut state, packed_initial_external_constants);
-        state
+        // We need to do something special for the last round as we want our output in a different form.
+        let num_constants = packed_initial_external_constants.len();
+        external_rounds::<ELP, FP, WIDTH, D>(
+            &mut state,
+            &(packed_initial_external_constants[..(num_constants - 1)]),
+        );
+        final_initial_external_round::<ELP, FP, WIDTH, D>(
+            state,
+            &packed_initial_external_constants[num_constants - 1],
+        )
     }
 
     /// Compute the second half of the Poseidon2 external layers.
@@ -174,7 +241,7 @@ where
         _final_external_constants: &[[MontyField31<FP>; WIDTH]],
         packed_final_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMontyField31AVX2<FP>; WIDTH] {
-        external_rounds::<ELP, FP, WIDTH>(&mut state, packed_final_external_constants);
+        external_rounds::<ELP, FP, WIDTH, D>(&mut state, packed_final_external_constants);
         state
     }
 }

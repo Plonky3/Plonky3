@@ -84,7 +84,7 @@ pub trait ExternalLayerParameters: crate::ExternalLayerParametersNeon {}
     target_feature = "avx2",
     not(all(feature = "nightly-features", target_feature = "avx512f"))
 ))]
-pub trait ExternalLayerParameters: crate::ExternalLayerParametersAVX2 {}
+pub trait ExternalLayerParameters<const D: u64>: crate::ExternalLayerParametersAVX2<D> {}
 #[cfg(all(
     feature = "nightly-features",
     target_arch = "x86_64",

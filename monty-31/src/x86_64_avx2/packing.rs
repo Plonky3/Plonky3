@@ -230,7 +230,7 @@ fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __
 
 #[inline]
 #[must_use]
-fn movehdup_epi32(x: __m256i) -> __m256i {
+pub(crate) fn movehdup_epi32(x: __m256i) -> __m256i {
     // This instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
     unsafe {
@@ -297,7 +297,7 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     monty_d_signed::<MPAVX2>(square, input)
 }
@@ -307,7 +307,7 @@ fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let quad = shifted_square::<MPAVX2>(square);
     monty_d_signed::<MPAVX2>(quad, input)
@@ -318,7 +318,7 @@ fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will also lie in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let cube = monty_d_signed::<MPAVX2>(square, input);
     let cube_shifted = movehdup_epi32(cube);
@@ -331,10 +331,11 @@ fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// func should only depend in the 32 bit entries in the even indices.
 /// The output of func must lie in (-P, ..., P) and be stored in the odd indices.
 /// The even indices of the output of func will not be read.
-/// the input should should conform to the requirements of func
+/// the input should should conform to the requirements of func.
+/// This outputs elements in [0, ..., P)
 #[inline]
 #[must_use]
-fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
+pub(crate) fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {
