@@ -14,6 +14,8 @@ use crate::{
     Poseidon2InternalLayerMonty31,
 };
 
+const ZEROS: __m256i = unsafe { transmute([0_i64; 4]) };
+
 fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
     val: PackedMontyField31AVX2<PMP>,
     rc: __m256i,
@@ -32,7 +34,7 @@ fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
     }
 }
 
-fn apply_external_linear_layer<const WIDTH: usize>(_state: &[__m256i; WIDTH]) -> [__m256i; WIDTH]{
+fn apply_external_linear_layer<const WIDTH: usize>(_state: &[__m256i; WIDTH]) -> [__m256i; WIDTH] {
     todo!()
 }
 
@@ -97,38 +99,13 @@ where
     }
 }
 
-#[inline(always)]
-fn sum_16<PMP: PackedMontyParameters>(
-    state: &[PackedMontyField31AVX2<PMP>; 16],
-) -> PackedMontyField31AVX2<PMP> {
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-    let sum1415 = state[14] + state[15];
-
-    let sum123 = state[1] + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum12131415 = sum1213 + sum1415;
-
-    let sum1234567 = sum123 + sum4567;
-    let sum_top_half = sum891011 + sum12131415;
-
-    let sum_all_but_0 = sum1234567 + sum_top_half;
-
-    sum_all_but_0 + state[0]
-}
-
 impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 16, D>
     for Poseidon2InternalLayerMonty31<ILP, 16>
 where
     FP: FieldParameters,
     ILP: InternalLayerParametersAVX2<16>,
 {
-    type InternalState = [PackedMontyField31AVX2<FP>; 16];
+    type InternalState = [[__m256i; 16]; 2];
 
     fn permute_state(
         &self,
@@ -136,14 +113,20 @@ where
         _internal_constants: &[<PackedMontyField31AVX2<FP> as p3_field::AbstractField>::F],
         packed_internal_constants: &[Self::ConstantsType],
     ) {
-        unsafe {
+        state.iter_mut().for_each(|sub_state| unsafe {
             packed_internal_constants.iter().for_each(|&rc| {
-                state[0] = transmute(ILP::add_rc_and_sbox(transmute(state[0]), rc));
-                let sum = sum_16::<FP>(state);
-                *state = transmute(ILP::diagonal_mul(transmute(*state)));
-                state.iter_mut().for_each(|elem| *elem += sum)
+                sub_state[0] = transmute(ILP::add_rc_and_sbox(transmute(sub_state[0]), rc));
+
+                let sum = sub_state
+                    .iter()
+                    .fold(ZEROS, |acc, &val| x86_64::_mm256_add_epi64(acc, val));
+
+                *sub_state = transmute(ILP::diagonal_mul(transmute(*sub_state)));
+                sub_state
+                    .iter_mut()
+                    .for_each(|elem| *elem = x86_64::_mm256_add_epi64(*elem, sum))
             })
-        }
+        })
     }
 }
 
@@ -198,11 +181,14 @@ where
             7 => [
                 state_even.map(packed_exp_7::<FP>),
                 state_odd.map(packed_exp_7::<FP>),
-            ]
+            ],
             _ => panic!("No exp function for given D"),
         };
 
-        [apply_external_linear_layer(&post_sbox[0]), apply_external_linear_layer(&post_sbox[1])]
+        [
+            apply_external_linear_layer(&post_sbox[0]),
+            apply_external_linear_layer(&post_sbox[1]),
+        ]
     }
 }
 
@@ -237,7 +223,7 @@ where
     /// Compute the second half of the Poseidon2 external layers.
     fn permute_state_final(
         &self,
-        mut state: [PackedMontyField31AVX2<FP>; WIDTH],
+        mut state: [[__m256i; WIDTH]; 2],
         _final_external_constants: &[[MontyField31<FP>; WIDTH]],
         packed_final_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMontyField31AVX2<FP>; WIDTH] {
