@@ -380,14 +380,12 @@ where
         // Need to shift down and ensure the result is positive in {0..P}.
         output_even.iter_mut().for_each(|elem| {
             *elem = x86_64::_mm256_srli_epi64::<32>(*elem);
-            let elem_plus_p = x86_64::_mm256_add_epi32(*elem, FP::PACKED_P_U64);
-            *elem = x86_64::_mm256_min_epu32(*elem, elem_plus_p);
+            *elem = x86_64::_mm256_add_epi32(*elem, FP::PACKED_P_U64);
         });
 
         output_odd.iter_mut().for_each(|elem| {
             *elem = x86_64::_mm256_srli_epi64::<32>(*elem);
-            let elem_plus_p = x86_64::_mm256_add_epi32(*elem, FP::PACKED_P_U64);
-            *elem = x86_64::_mm256_min_epu32(*elem, elem_plus_p);
+            *elem = x86_64::_mm256_add_epi32(*elem, FP::PACKED_P_U64);
         });
 
         // Now elements of output are <= P (Might be enough to do 2P here.)
