@@ -13,7 +13,9 @@ const WIDTH: usize = 8;
 
 pub trait MontyParametersAVX2 {
     const PACKED_P: __m256i;
+    const PACKED_P_U64: __m256i;
     const PACKED_MU: __m256i;
+    const PACKED_NEG_MU: __m256i;
 }
 
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
@@ -25,7 +27,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    pub(crate) fn to_vector(self) -> __m256i {
         unsafe {
             // Safety: `MontyField31<FP>` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[MontyField31<FP>; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -42,7 +44,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
@@ -166,11 +168,19 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 // [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
 //     2010, algorithm 2.7.
 
-// We provide 2 variants of Montgomery reduction depending on if the inputs are unsigned or signed.
-// The unsigned variant follows steps 1 and 2 in the above protocol to produce D in (-P, ..., P).
-// For the signed variant we assume -PB/2 < C < PB/2 and let Q := μ C mod B be the unique
+// We provide 3 variants of Montgomery reduction depending on if the inputs are unsigned or signed
+// and, for unsigned inputs, if we want a signed or unsigned output.
+
+// The unsigned -> signed variant follows steps 1 and 2 in the above protocol to produce D in (-P, ..., P).
+
+// For the signed -> signed variant we assume -PB/2 < C < PB/2 and let Q := μ C mod B be the unique
 // representative in [-B/2, ..., B/2 - 1]. The division in step 2 is clearly still exact and
 // |C - Q P| <= |C| + |Q||P| < PB so D still lies in (-P, ..., P).
+
+// Finally for unsigned -> unsigned, we assume that 0 < C < PB and pick μ so that μ = -P^-1 mod B
+// In the algorithm this means we redefine D to be (C + Q P) / B.
+// As Q P = - C mod B the division for D is still exact but now we have the bounds
+// 0 <= C + Q P <= 2PB and so after the shift 0 < D < 2P.
 
 /// Perform a Montgomery reduction on each 64 bit element.
 /// Input must lie in {0, ..., 2^32P}.
@@ -178,7 +188,7 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_MU);
         let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
@@ -192,11 +202,25 @@ fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epi32(input, MPAVX2::PACKED_MU);
         let q_P = x86_64::_mm256_mul_epi32(q, MPAVX2::PACKED_P);
         x86_64::_mm256_sub_epi32(input, q_P)
+    }
+}
+
+/// Perform a Montgomery reduction on each 64 bit element.
+/// Input must lie in {0, ..., 2^32P}.
+/// The output will lie in {0, ..., 2P} and be stored in the upper 32 bits.
+#[inline]
+#[must_use]
+#[allow(non_snake_case)]
+pub(crate) fn monty_red_unsigned_pos<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    unsafe {
+        let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_NEG_MU);
+        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
+        x86_64::_mm256_add_epi64(input, q_P)
     }
 }
 

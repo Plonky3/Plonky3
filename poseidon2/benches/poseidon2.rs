@@ -7,7 +7,7 @@ use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_goldilocks::{
     Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
 };
-// use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
+use p3_koala_bear::{KoalaBear, Poseidon2ExternalLayerKoalaBear, Poseidon2InternalLayerKoalaBear};
 use p3_mersenne_31::{
     Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
 };
@@ -23,8 +23,20 @@ fn bench_poseidon2(c: &mut Criterion) {
     // poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>(c);
     // poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, 7>(c);
 
-    // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>(c);
-    // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 3>(c);
+    poseidon2_p64::<
+        KoalaBear,
+        Poseidon2ExternalLayerKoalaBear<16>,
+        Poseidon2InternalLayerKoalaBear<16>,
+        16,
+        3,
+    >(c);
+    poseidon2_p64::<
+        KoalaBear,
+        Poseidon2ExternalLayerKoalaBear<24>,
+        Poseidon2InternalLayerKoalaBear<24>,
+        24,
+        3,
+    >(c);
 
     poseidon2_p64::<
         Mersenne31,

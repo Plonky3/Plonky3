@@ -68,17 +68,12 @@ where
         internal_layer: InternalPerm,
     ) -> Self {
         assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
-        let external_packed_constants: [Vec<_>; 2] =
-            external_constants.clone().map(|constant_list| {
-                constant_list
-                    .iter()
-                    .map(|constants| ExternalPerm::convert_from_field_array(constants))
-                    .collect()
-            });
-        let internal_packed_constants: Vec<_> = internal_constants
-            .iter()
-            .map(|val| InternalPerm::convert_from_field(val))
-            .collect();
+        let external_packed_constants = ExternalPerm::convert_from_field_array_list([
+            &external_constants[0],
+            &external_constants[1],
+        ]);
+
+        let internal_packed_constants = InternalPerm::convert_from_field_list(&internal_constants);
 
         Self {
             external_constants,
