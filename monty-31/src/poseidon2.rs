@@ -77,38 +77,6 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
 {
 }
 
-#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-pub trait ExternalLayerParameters: crate::ExternalLayerParametersNeon {}
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(all(feature = "nightly-features", target_feature = "avx512f"))
-))]
-pub trait ExternalLayerParameters<const D: u64>: crate::ExternalLayerParametersAVX2<D> {}
-#[cfg(all(
-    feature = "nightly-features",
-    target_arch = "x86_64",
-    target_feature = "avx512f"
-))]
-pub trait ExternalLayerParameters:
-    crate::ExternalLayerParametersAVX2 + crate::ExternalLayerParametersAVX512
-{
-}
-#[cfg(not(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
-    ),
-    all(
-        feature = "nightly-features",
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ),
-)))]
-pub trait ExternalLayerParameters {}
-
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerMonty31<ILP, const WIDTH: usize>
 where
@@ -158,13 +126,7 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Poseidon2ExternalLayerMonty31<ELP, const WIDTH: usize>
-where
-    ELP: Clone,
-{
-    _phantom: PhantomData<ELP>,
-}
-
+pub struct Poseidon2ExternalLayerMonty31<const WIDTH: usize> {}
 #[cfg(not(any(
     all(target_arch = "aarch64", target_feature = "neon"),
     all(
@@ -180,10 +142,9 @@ where
 )))]
 impl<const WIDTH: usize> NoPackedImplementation for Poseidon2ExternalLayerMonty31<WIDTH> {}
 
-impl<FP, ELP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon2ExternalLayerMonty31<ELP, WIDTH>
+impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
+    for Poseidon2ExternalLayerMonty31<WIDTH>
 where
-    ELP: Sync + Clone,
     FP: FieldParameters,
 {
     type InternalState = [MontyField31<FP>; WIDTH];
@@ -191,7 +152,7 @@ where
     fn permute_state_initial(
         &self,
         mut state: [MontyField31<FP>; WIDTH],
-        initial_external_constants: &[[<MontyField31<FP> as p3_field::AbstractField>::F; WIDTH]],
+        initial_external_constants: &[[MontyField31<FP>; WIDTH]],
         _initial_external_packed_constants: &[Self::ConstantsType],
     ) -> Self::InternalState {
         external_initial_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(

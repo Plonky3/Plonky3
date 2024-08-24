@@ -1,7 +1,8 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 
 use p3_monty_31::{
-    InternalLayerBaseParameters, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
+    InternalLayerBaseParameters, InternalLayerParameters, Poseidon2ExternalLayerMonty31,
+    Poseidon2InternalLayerMonty31,
 };
 
 use crate::KoalaBearParameters;
@@ -27,8 +28,7 @@ use crate::KoalaBearParameters;
 pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
     Poseidon2InternalLayerMonty31<KoalaBearInternalLayerParameters, WIDTH>;
 
-pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
-    Poseidon2ExternalLayerMonty31<KoalaBearExternalLayerParameters, WIDTH>;
+pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> = Poseidon2ExternalLayerMonty31<WIDTH>;
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
@@ -45,6 +45,9 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
     ];
 }
+
+impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {}
+impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {}
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearExternalLayerParameters;
