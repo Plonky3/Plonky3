@@ -1,7 +1,5 @@
 use core::borrow::{Borrow, BorrowMut};
-use core::mem::{size_of, transmute};
-
-use p3_util::indices_arr;
+use core::mem::size_of;
 
 /// Columns for Single-Row Poseidon2 STARK
 ///
@@ -72,7 +70,7 @@ pub const fn num_cols<
     )
 }
 
-pub(crate) const fn make_col_map<
+pub const fn make_col_map<
     const WIDTH: usize,
     const SBOX_DEGREE: usize,
     const SBOX_REGISTERS: usize,

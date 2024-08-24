@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{AbstractField, Field, PrimeField};
+use p3_field::{AbstractField, Field};
 use p3_matrix::Matrix;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -10,15 +10,9 @@ use rand::Rng;
 use crate::columns::{num_cols, Poseidon2Cols};
 use crate::{FullRound, PartialRound, SBox};
 
-/// Optimal Degree-Register Table
-///
-/// This table encodes the optimal number of S-BOX registers needed for the degree, where the
-/// degree is the index into this table. A zero is placed for entries that are ignored. This
-/// optimality value is asserted by the [`Self::eval`] method because it relies on using this
-/// exact number of registers.
-const OPTIMAL_REGISTER_COUNT: [usize; 12] = [0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 3];
-
 /// Assumes the field size is at least 16 bits.
+///
+/// ***WARNING***: this is a stub for now, not ready to use.
 #[derive(Debug)]
 pub struct Poseidon2Air<
     F: Field,
@@ -254,23 +248,23 @@ fn eval_sbox<AB, const DEGREE: usize, const REGISTERS: usize>(
 /// Loads `value` into the `i`-th S-BOX register.
 #[inline]
 fn load<AB, const SBOX_DEGREE: usize, const SBOX_REGISTERS: usize>(
-    sbox: &SBox<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
-    i: usize,
-    value: AB::Expr,
-    builder: &mut AB,
+    _sbox: &SBox<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
+    _i: usize,
+    _value: AB::Expr,
+    _builder: &mut AB,
 ) where
     AB: AirBuilder,
 {
-    builder.assert_eq(sbox.0[i].into(), value);
+    // builder.assert_eq(sbox.0[i].into(), value);
 }
 
 /// Loads the product over all `product` indices the into the `i`-th S-BOX register.
 #[inline]
 fn load_product<AB, const SBOX_DEGREE: usize, const SBOX_REGISTERS: usize>(
-    sbox: &SBox<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
-    i: usize,
-    product: &[usize],
-    builder: &mut AB,
+    _sbox: &SBox<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
+    _i: usize,
+    _product: &[usize],
+    _builder: &mut AB,
 ) where
     AB: AirBuilder,
 {
@@ -290,11 +284,11 @@ fn load_product<AB, const SBOX_DEGREE: usize, const SBOX_REGISTERS: usize>(
 /// `pow(x, DEGREE % 3)`.
 #[inline]
 fn load_last_product<AB, const SBOX_DEGREE: usize, const SBOX_REGISTERS: usize>(
-    sbox: &SBox<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
-    x: AB::Expr,
-    x2: AB::Expr,
-    x3: AB::Expr,
-    builder: &mut AB,
+    _sbox: &SBox<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
+    _x: AB::Expr,
+    _x2: AB::Expr,
+    _x3: AB::Expr,
+    _builder: &mut AB,
 ) where
     AB: AirBuilder,
 {

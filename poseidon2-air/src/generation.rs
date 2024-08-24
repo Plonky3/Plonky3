@@ -57,7 +57,7 @@ fn generate_trace_rows_for_perm<
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 >(
-    row: &mut Poseidon2Cols<
+    _row: &mut Poseidon2Cols<
         F,
         WIDTH,
         SBOX_DEGREE,
@@ -65,6 +65,7 @@ fn generate_trace_rows_for_perm<
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
     >,
-    input: [F; WIDTH],
+    _input: [F; WIDTH],
 ) {
+    // TODO
 }
