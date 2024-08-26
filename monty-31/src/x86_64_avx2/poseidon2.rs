@@ -18,6 +18,8 @@ use crate::{
 
 const ZEROS: __m256i = unsafe { transmute([0_i64; 4]) };
 
+#[inline(always)]
+#[must_use]
 fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m256i) -> __m256i {
     match D {
         3 => packed_exp_3::<PMP>(val),
@@ -27,6 +29,8 @@ fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m256i) -> __m256i 
     }
 }
 
+#[inline(always)]
+#[must_use]
 /// Compute val -> (val + rc)^D. Each entry of val should be represented by an
 /// element in [0, P]. Each entry of rc should be represented by an element
 /// in [-P, 0]. Each entry of the output will be represented by an element in [0, P].
@@ -47,6 +51,8 @@ fn add_rc_and_sbox_external<PMP: PackedMontyParameters, const D: u64>(
     }
 }
 
+#[inline(always)]
+#[must_use]
 /// A variant of x -> (x + rc)^D where the input still needs a monty reduction.
 /// Both x and rc must be positive with x + rc < 2^32P.
 fn add_rc_and_sbox_internal<PMP: PackedMontyParameters, const D: u64>(
@@ -74,6 +80,8 @@ fn add_rc_and_sbox_internal<PMP: PackedMontyParameters, const D: u64>(
     }
 }
 
+#[inline(always)]
+#[must_use]
 /// A variant of x -> (x + rc)^D where the input still needs a monty reduction.
 /// rc should be positive and x must be < 127P.
 fn add_rc_and_sbox_first_internal<
@@ -131,6 +139,7 @@ fn apply_packed_mat4(x: &mut [__m256i; 4]) {
     }
 }
 
+#[inline(always)]
 /// If inputs are <= L, outputs are <= 7 * (WIDTH/4 + 1)L.
 /// In particular for with 16/24 these are <= 28/35L respectively.
 fn apply_external_linear_layer<const WIDTH: usize>(state: &mut [__m256i; WIDTH]) {
@@ -178,6 +187,7 @@ pub trait InternalLayerParametersAVX2<const WIDTH: usize>: Clone + Sync {
     fn diagonal_mul_shifted_input(input: &mut [__m256i; WIDTH]);
 }
 
+#[inline(always)]
 /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0} and copy into a vector
 fn convert_to_vec_neg_form<MP: MontyParameters>(input: i32) -> __m256i {
     let input_sub_p = input - (MP::PRIME as i32);
