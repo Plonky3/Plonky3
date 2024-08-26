@@ -10,7 +10,7 @@ mod radix_2_bowers;
 mod radix_2_dit;
 mod radix_2_dit_parallel;
 mod traits;
-mod util;
+pub mod util; // FIXME: Are we sure this can be pub?
 
 pub use butterflies::*;
 pub use naive::*;

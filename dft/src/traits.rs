@@ -7,7 +7,7 @@ use p3_matrix::util::swap_rows;
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
-use crate::util::divide_by_height;
+use crate::util::{coset_shift_cols, divide_by_height};
 
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     // Effectively this is either RowMajorMatrix or BitReversedMatrixView<RowMajorMatrix>.
@@ -42,15 +42,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         //         = \sum_j (c_j s^j) (g^i)^j
         // which has the structure of an ordinary DFT, except each coefficient c_j is first replaced
         // by c_j s^j.
-        debug_span!("apply shift powers").in_scope(|| {
-            mat.rows_mut()
-                .zip(shift.powers())
-                .for_each(|(row, weight)| {
-                    row.iter_mut().for_each(|coeff| {
-                        *coeff *= weight;
-                    })
-                });
-        });
+        debug_span!("apply shift powers").in_scope(|| coset_shift_cols(&mut mat, shift));
         self.dft_batch(mat)
     }
 
@@ -86,15 +78,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// subgroup itself.
     fn coset_idft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         mat = self.idft_batch(mat);
-
-        mat.rows_mut()
-            .zip(shift.inverse().powers())
-            .for_each(|(row, weight)| {
-                row.iter_mut().for_each(|coeff| {
-                    *coeff *= weight;
-                })
-            });
-
+        coset_shift_cols(&mut mat, shift.inverse());
         mat
     }
 

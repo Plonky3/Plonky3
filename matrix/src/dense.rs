@@ -277,6 +277,31 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     }
 
     #[instrument(level = "debug", skip_all)]
+    pub fn bit_reversed_zero_pad_rows(self, added_bits: usize) -> RowMajorMatrix<T>
+    where
+        T: Copy + Default + Send + Sync,
+    {
+        if added_bits == 0 {
+            return self.to_row_major_matrix();
+        }
+
+        let new_width = self.width << added_bits;
+        let mut padded = RowMajorMatrix::default(new_width, self.height());
+        padded
+            .par_rows_mut()
+            .zip(self.par_row_slices())
+            .for_each(|(padded_row, row)| {
+                padded_row
+                    .chunks_exact_mut(1 << added_bits)
+                    .zip(row)
+                    .for_each(|(chunk, &r)| {
+                        chunk[0] = r;
+                    });
+            });
+        padded
+    }
+
+    #[instrument(level = "debug", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
         T: Copy + Default + Send + Sync,
