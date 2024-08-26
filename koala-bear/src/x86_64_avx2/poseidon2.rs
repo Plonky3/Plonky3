@@ -15,6 +15,7 @@ const PACKED_2P: __m256i = unsafe { transmute([0x7f0000010_u64; 4]) };
 // [32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 9]
 
 impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
+    #[inline(always)]
     fn diagonal_mul_shifted_input(state: &mut [__m256i; 16]) {
         unsafe {
             // State[0] lies in {-P, ... P}.
@@ -40,6 +41,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
         }
     }
 
+    #[inline(always)]
     fn diagonal_mul_standard_input(state: &mut [__m256i; 16]) {
         unsafe {
             // State[0] lies in {-P, ... P}.
@@ -65,6 +67,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
     }
 
     /// Reduce input elements from [0, 127P] to [0, 2P).
+    #[inline(always)]
     fn reduce(input: __m256i) -> __m256i {
         unsafe {
             // We approach this using Crandall reduction:
@@ -93,6 +96,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
 }
 
 impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
+    #[inline(always)]
     fn diagonal_mul_shifted_input(state: &mut [__m256i; 24]) {
         unsafe {
             // State[0] lies in {-P, ... P}.
@@ -126,19 +130,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
         }
     }
 
-    /// Reduce elements from [0, ..., 127P] to [0, ..., 2P].
-    fn reduce(input: __m256i) -> __m256i {
-        unsafe {
-            let top_7 = x86_64::_mm256_srli_epi64::<31>(input);
-            let top_7_x_2exp24 = x86_64::_mm256_slli_epi64::<24>(top_7);
-            const LOW_31: __m256i = unsafe { transmute([0x7fffffff_i64; 4]) };
-            let bottom_31 = x86_64::_mm256_and_si256(input, LOW_31);
-
-            let sub = x86_64::_mm256_sub_epi64(bottom_31, top_7);
-            x86_64::_mm256_add_epi64(sub, top_7_x_2exp24)
-        }
-    }
-
+    #[inline(always)]
     fn diagonal_mul_standard_input(state: &mut [__m256i; 24]) {
         unsafe {
             // State[0] lies in {-P, ... P}.
@@ -168,6 +160,20 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
             state[21] = x86_64::_mm256_slli_epi64::<20>(state[21]);
             state[22] = x86_64::_mm256_slli_epi64::<21>(state[22]);
             state[23] = x86_64::_mm256_slli_epi64::<23>(state[23]);
+        }
+    }
+
+    /// Reduce elements from [0, ..., 127P] to [0, ..., 2P].
+    #[inline(always)]
+    fn reduce(input: __m256i) -> __m256i {
+        unsafe {
+            let top_7 = x86_64::_mm256_srli_epi64::<31>(input);
+            let top_7_x_2exp24 = x86_64::_mm256_slli_epi64::<24>(top_7);
+            const LOW_31: __m256i = unsafe { transmute([0x7fffffff_i64; 4]) };
+            let bottom_31 = x86_64::_mm256_and_si256(input, LOW_31);
+
+            let sub = x86_64::_mm256_sub_epi64(bottom_31, top_7);
+            x86_64::_mm256_add_epi64(sub, top_7_x_2exp24)
         }
     }
 }

@@ -11,6 +11,7 @@ use crate::Poseidon2ExternalPackedConstants;
 /// [ 1 1 4 6 ].
 /// This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
 /// It is also the matrix used by the Horizon Labs implementation.
+#[inline(always)]
 fn apply_hl_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
@@ -58,12 +59,14 @@ where
 pub struct HLMDSMat4;
 
 impl<AF: AbstractField> Permutation<[AF; 4]> for HLMDSMat4 {
+    #[inline(always)]
     fn permute(&self, input: [AF; 4]) -> [AF; 4] {
         let mut output = input;
         self.permute_mut(&mut output);
         output
     }
 
+    #[inline(always)]
     fn permute_mut(&self, input: &mut [AF; 4]) {
         apply_hl_mat4(input)
     }
@@ -114,15 +117,8 @@ pub fn mds_light_permutation<
         4 | 8 | 12 | 16 | 20 | 24 => {
             // First, we apply M_4 to each consecutive four elements of the state.
             // In Appendix B's terminology, this replaces each x_i with x_i'.
-            for i in (0..WIDTH).step_by(4) {
-                let mut state_4 = [
-                    state[i].clone(),
-                    state[i + 1].clone(),
-                    state[i + 2].clone(),
-                    state[i + 3].clone(),
-                ];
-                mdsmat.permute_mut(&mut state_4);
-                state[i..i + 4].clone_from_slice(&state_4);
+            for chunk in state.chunks_exact_mut(4) {
+                mdsmat.permute_mut(chunk.try_into().unwrap());
             }
             // Now, we apply the outer circulant matrix (to compute the y_i values).
 
@@ -136,9 +132,10 @@ pub fn mds_light_permutation<
 
             // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
             // In other words, we can add a single copy of x_i' to the appropriate one of our precomputed sums
-            for i in 0..WIDTH {
-                state[i] += sums[i % 4].clone();
-            }
+            state
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, elem)| *elem += sums[i % 4].clone());
         }
 
         _ => {
