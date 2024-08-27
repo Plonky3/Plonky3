@@ -1,0 +1,22 @@
+[package]
+name = "p3-sha256"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Plonky3 hash trait implementations for the SHA2-256 hash function."
+
+[dependencies]
+p3-symmetric = { path = "../symmetric" }
+sha2 = { version = "0.10.8", default-features = false, features = ["compress"] }
+
+[features]
+default = []
+asm = [
+    "sha2/asm",
+] # Enable either x86 or aarch assembly implementation based on target.
+force-soft = [
+    "sha2/force-soft",
+] # Force software implementation (default if "asm" feature is not enabled).
+
+[dev-dependencies]
+hex-literal = "0.4.1"

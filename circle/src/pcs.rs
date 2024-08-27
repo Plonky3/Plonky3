@@ -15,7 +15,7 @@ use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
-use tracing::{info_span, instrument};
+use tracing::info_span;
 
 use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
@@ -131,7 +131,6 @@ where
         }
     }
 
-    #[instrument(skip_all)]
     fn open(
         &self,
         // For each round,
@@ -468,7 +467,7 @@ where
 #[cfg(test)]
 mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
-    use p3_commit::{ExtensionMmcs, Pcs};
+    use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::FieldMerkleTreeMmcs;

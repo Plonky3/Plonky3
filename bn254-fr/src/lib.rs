@@ -8,20 +8,15 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use ff::{Field as FFField, PrimeField as FFPrimeField, PrimeFieldBits};
+use ff::{Field as FFField, PrimeField as FFPrimeField};
+pub use halo2curves::bn256::Fr as FFBn254Fr;
+use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{AbstractField, Field, Packable, PrimeField};
+use p3_field::{AbstractField, Field, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::DiffusionMatrixBN254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize};
-
-#[derive(FFPrimeField)]
-#[PrimeFieldModulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
-#[PrimeFieldGenerator = "5"]
-#[PrimeFieldReprEndianness = "little"]
-pub struct FFBn254Fr([u64; 4]);
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
@@ -36,37 +31,27 @@ impl Bn254Fr {
 }
 
 impl Serialize for Bn254Fr {
+    /// Serializes to raw bytes, which are typically of the Montgomery representation of the field element.
+    // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L493
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let repr = self.value.to_repr();
-        let bytes = repr.as_ref();
-
-        let mut seq = serializer.serialize_seq(Some(bytes.len()))?;
-        for e in bytes {
-            seq.serialize_element(&e)?;
-        }
-        seq.end()
+        let bytes = self.value.to_raw_bytes();
+        serializer.serialize_bytes(&bytes)
     }
 }
 
 impl<'de> Deserialize<'de> for Bn254Fr {
+    /// Deserializes from raw bytes, which are typically of the Montgomery representation of the field element.
+    /// Performs a check that the deserialized field element corresponds to a value less than the field modulus, and
+    /// returns error otherwise.
+    // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
-        let mut res = <FFBn254Fr as FFPrimeField>::Repr::default();
+        let value = FFBn254Fr::from_raw_bytes(&bytes);
 
-        for (i, digit) in res.0.as_mut().iter_mut().enumerate() {
-            *digit = bytes[i];
-        }
-
-        let value = FFBn254Fr::from_repr(res);
-
-        if value.is_some().into() {
-            Ok(Self {
-                value: value.unwrap(),
-            })
-        } else {
-            Err(serde::de::Error::custom("Invalid field element"))
-        }
+        value
+            .map(Self::new)
+            .ok_or(serde::de::Error::custom("Invalid field element"))
     }
 }
 
@@ -118,7 +103,7 @@ impl AbstractField for Bn254Fr {
     }
 
     fn neg_one() -> Self {
-        Self::new(FFBn254Fr::ZERO - FFBn254Fr::ONE)
+        Self::new(-FFBn254Fr::ONE)
     }
 
     #[inline]
@@ -180,9 +165,12 @@ impl Field for Bn254Fr {
         }
     }
 
+    /// r = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
     fn order() -> BigUint {
-        let bytes = FFBn254Fr::char_le_bits();
-        BigUint::from_bytes_le(bytes.as_raw_slice())
+        BigUint::new(vec![
+            0xf0000001, 0x43e1f593, 0x79b97091, 0x2833e848, 0x8181585d, 0xb85045b6, 0xe131a029,
+            0x30644e72,
+        ])
     }
 
     fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
@@ -284,6 +272,18 @@ impl Distribution<Bn254Fr> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
         Bn254Fr::new(FFBn254Fr::random(rng))
+    }
+}
+
+impl TwoAdicField for Bn254Fr {
+    const TWO_ADICITY: usize = FFBn254Fr::S as usize;
+
+    fn two_adic_generator(bits: usize) -> Self {
+        let mut omega = FFBn254Fr::ROOT_OF_UNITY;
+        for _ in bits..Self::TWO_ADICITY {
+            omega = omega.square();
+        }
+        Self::new(omega)
     }
 }
 
