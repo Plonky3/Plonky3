@@ -31,7 +31,7 @@ where
 }
 
 #[instrument(level = "debug", skip_all)]
-fn bit_reversed_zero_pad_rows<T>(
+fn zero_pad_bit_reversed_rows<T>(
     output: &mut [T],
     input: &[T],
     nrows: usize,
@@ -346,8 +346,16 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // Allocate twice the space of the result, so we can do the final transpose
         // from the second half into the first half.
-        let mut scratch = debug_span!("allocate scratch space")
-            .in_scope(|| vec![MontyField31::zero(); 2 * output_size]);
+        //
+        // NB: The unsafe version below takes about 10μs, whereas doing
+        //   let mut scratch = vec![MontyField31::zero(); 2 * output_size]);
+        // takes about 320ms. Safety is expensive; don't pay for it if you
+        // don't need it.
+        let mut scratch =
+            debug_span!("allocate scratch space").in_scope(|| Vec::with_capacity(2 * output_size));
+        unsafe {
+            scratch.set_len(2 * output_size);
+        }
 
         // Split `scratch` into halves `output` and `padded`, each of length `output_size`.
         let (output, mut padded) = unsafe { split_at_mut_unchecked(&mut scratch, output_size) };
@@ -366,9 +374,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // as a row in `coeffs`.
 
         // Extend coeffs by a suitable number of zeros
-        // FIXME: do row-wise and incorporate bitrev; base on bit_reversed_zero_pad
-        // TODO: Shouldn't allocate&resize here, should allocate once at the start
-        bit_reversed_zero_pad_rows(padded, coeffs, mat.width(), mat.height(), added_bits);
+        zero_pad_bit_reversed_rows(padded, coeffs, mat.width(), mat.height(), added_bits);
 
         // TODO: coset_shift_rows will have poor memory coherence; could be
         // a good argument for integrating coset shift into twiddles?
