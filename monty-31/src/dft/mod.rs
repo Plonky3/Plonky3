@@ -1,23 +1,83 @@
 //! An implementation of the FFT for `MontyField31`
 extern crate alloc;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use p3_dft::util::{coset_shift_cols, coset_shift_rows};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{AbstractField, Field};
+use p3_field::{AbstractField, Field, PackedValue};
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::split_at_mut_unchecked;
+use p3_util::{reverse_slice_index_bits, split_at_mut_unchecked};
 use tracing::{debug_span, instrument};
 
 mod backward;
 mod forward;
 
 use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
+
+#[inline]
+fn scale<T>(vec: &mut [T], scale: T)
+where
+    T: Field,
+{
+    let (packed, sfx) = T::Packing::pack_slice_with_suffix_mut(vec);
+    let packed_scale: T::Packing = scale.into();
+    packed.iter_mut().for_each(|x| *x *= packed_scale);
+    sfx.iter_mut().for_each(|x| *x *= scale);
+}
+
+#[instrument(level = "debug", skip_all)]
+fn bit_reversed_zero_pad_rows<T>(
+    output: &mut [T],
+    input: &[T],
+    nrows: usize,
+    ncols: usize,
+    added_bits: usize,
+) where
+    T: Copy + Default + Send + Sync,
+{
+    if added_bits == 0 {
+        output.copy_from_slice(input);
+        return;
+    }
+
+    let new_ncols = ncols << added_bits;
+    assert_eq!(input.len(), nrows * ncols);
+    assert_eq!(output.len(), nrows * new_ncols);
+
+    output
+        .par_chunks_exact_mut(new_ncols)
+        .zip(input.par_chunks_exact(ncols))
+        .for_each(|(padded_row, row)| {
+            padded_row
+                .chunks_exact_mut(1 << added_bits)
+                .zip(row)
+                .for_each(|(chunk, &r)| {
+                    chunk[0] = r;
+                });
+        });
+}
+
+/// Multiply each element of column `j` of `mat` by `shift**j`.
+///
+/// TODO: This might be quite slow
+#[instrument(level = "debug", skip_all)]
+fn coset_shift_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F) {
+    // TODO: Work out how to avoid bit reversal of powers
+    // TODO: Don't need powers for elts of mat that are known to be zero
+    let mut powers = shift.powers().take(ncols).collect::<Vec<_>>();
+    reverse_slice_index_bits(&mut powers);
+
+    mat.par_chunks_exact_mut(ncols).for_each(|row| {
+        row.iter_mut().zip(&powers).for_each(|(coeff, &weight)| {
+            *coeff *= weight;
+        })
+    });
+}
 
 /// Radix-2 decimation-in-frequency FFT
 #[derive(Clone, Debug, Default)]
@@ -41,35 +101,35 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
 
     #[inline]
     fn decimation_in_freq_dft(
-        mat: &mut RowMajorMatrix<MontyField31<MP>>,
+        mat: &mut [MontyField31<MP>],
+        row_len: usize,
         twiddles: &Vec<Vec<MontyField31<MP>>>,
     ) {
-        let lg_fft_len = p3_util::log2_ceil_usize(mat.width());
-
+        let lg_fft_len = p3_util::log2_ceil_usize(row_len);
         let roots_idx = (twiddles.len() + 1) - lg_fft_len;
         let twiddles = &twiddles[roots_idx..];
 
-        mat.par_rows_mut()
+        mat.par_chunks_exact_mut(row_len)
             .for_each(|v| MontyField31::forward_fft(v, twiddles))
     }
 
     #[inline]
     fn decimation_in_time_dft(
-        mat: &mut RowMajorMatrix<MontyField31<MP>>,
+        mat: &mut [MontyField31<MP>],
+        row_len: usize,
         twiddles: &Vec<Vec<MontyField31<MP>>>,
     ) {
-        let lg_fft_len = p3_util::log2_ceil_usize(mat.width());
-
+        let lg_fft_len = p3_util::log2_ceil_usize(row_len);
         let roots_idx = (twiddles.len() + 1) - lg_fft_len;
         let twiddles = &twiddles[roots_idx..];
 
-        mat.par_rows_mut()
+        mat.par_chunks_exact_mut(row_len)
             .for_each(|v| MontyField31::backward_fft(v, twiddles))
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    #[instrument(skip_all, fields(nrows = %mat.len()/row_len, row_len, added_bits))]
     #[inline]
-    pub fn dft_batch_rows(&self, mat: &mut RowMajorMatrix<MontyField31<MP>>)
+    pub fn dft_batch_rows(&self, mat: &mut [MontyField31<MP>], row_len: usize)
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
@@ -80,8 +140,8 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         // unnecessary and somewhat expensive.
         debug_span!("maybe calculate twiddles").in_scope(|| {
             let curr_max_fft_len = 1 << self.twiddles.borrow().len();
-            if mat.width() > curr_max_fft_len {
-                let new_twiddles = MontyField31::roots_of_unity_table(mat.width());
+            if row_len > curr_max_fft_len {
+                let new_twiddles = MontyField31::roots_of_unity_table(row_len);
                 self.twiddles.replace(new_twiddles);
             }
         });
@@ -90,13 +150,13 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         // shouldn't be necessary, though it only costs ~20μs.
         let twiddles = debug_span!("clone twiddles").in_scope(|| self.twiddles.borrow().clone());
 
-        debug_span!("parallel dft", n_dfts = mat.height(), lengths = mat.width())
-            .in_scope(|| Self::decimation_in_time_dft(mat, &twiddles));
+        debug_span!("parallel dft") //, n_dfts = mat.height(), lengths = mat.width())
+            .in_scope(|| Self::decimation_in_time_dft(mat, row_len, &twiddles));
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    #[instrument(skip_all, fields(nrows = %mat.len()/row_len, row_len, added_bits))]
     #[inline]
-    pub fn idft_batch_rows(&self, mat: &mut RowMajorMatrix<MontyField31<MP>>)
+    pub fn idft_batch_rows(&self, mat: &mut [MontyField31<MP>], row_len: usize)
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
@@ -107,8 +167,8 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         // unnecessary and somewhat expensive.
         debug_span!("maybe calculate inv_twiddles").in_scope(|| {
             let curr_max_fft_len = 1 << self.inv_twiddles.borrow().len();
-            if mat.width() > curr_max_fft_len {
-                let new_twiddles = MontyField31::inv_roots_of_unity_table(mat.width());
+            if row_len > curr_max_fft_len {
+                let new_twiddles = MontyField31::inv_roots_of_unity_table(row_len);
                 self.inv_twiddles.replace(new_twiddles);
             }
         });
@@ -120,80 +180,91 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
 
         debug_span!(
             "parallel idft",
-            n_dfts = mat.height(),
-            lengths = mat.width()
+            //n_dfts = mat.height(),
+            //lengths = mat.width()
         )
-        .in_scope(|| Self::decimation_in_freq_dft(mat, &inv_twiddles));
+        .in_scope(|| Self::decimation_in_freq_dft(mat, row_len, &inv_twiddles));
 
-        let inv_len = MontyField31::from_canonical_usize(mat.width()).inverse();
+        let inv_len = MontyField31::from_canonical_usize(row_len).inverse();
         // TODO: mat.scale() is not parallelised...
-        mat.scale(inv_len);
+        // TODO: tidy up
+        scale(mat, inv_len);
     }
 
     pub fn idft_batch_cols_transposed_bitrevd(
         &self,
-        mat: &RowMajorMatrix<MontyField31<MP>>,
-        out: &mut RowMajorMatrix<MontyField31<MP>>,
+        mat: &[MontyField31<MP>],
+        ncols: usize,
+        out: &mut [MontyField31<MP>],
     ) where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
-        if mat.height() <= 1 {
-            out.values.copy_from_slice(&mat.values);
+        let nrows = mat.len() / ncols;
+        if nrows <= 1 {
+            out.copy_from_slice(mat);
             return;
         }
 
         // transpose input
-        debug_span!("pre-transpose", nrows = mat.height(), ncols = mat.width())
-            .in_scope(|| mat.transpose_into(out));
+        debug_span!("pre-transpose", nrows, ncols)
+            .in_scope(|| transpose::transpose(mat, out, ncols, nrows));
 
-        self.idft_batch_rows(out);
+        self.idft_batch_rows(out, nrows);
     }
 
     pub fn idft_batch_cols_bitrevd(
         &self,
-        mat: &mut RowMajorMatrix<MontyField31<MP>>,
-        out: &mut RowMajorMatrix<MontyField31<MP>>,
+        mat: &mut [MontyField31<MP>],
+        ncols: usize,
+        out: &mut [MontyField31<MP>],
     ) where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
-        self.idft_batch_cols_transposed_bitrevd(mat, out);
+        self.idft_batch_cols_transposed_bitrevd(mat, ncols, out);
+
+        let nrows = mat.len() / ncols;
 
         // transpose output
-        debug_span!("post-transpose", nrows = out.height(), ncols = out.width())
-            .in_scope(|| out.transpose_into(mat));
+        debug_span!("post-transpose", nrows, ncols)
+            .in_scope(|| transpose::transpose(out, mat, nrows, ncols));
     }
 
     pub fn dft_batch_cols_transposed_bitrevd(
         &self,
-        mat: &RowMajorMatrix<MontyField31<MP>>,
-        out: &mut RowMajorMatrix<MontyField31<MP>>,
+        mat: &[MontyField31<MP>],
+        ncols: usize,
+        out: &mut [MontyField31<MP>],
     ) where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
-        if mat.height() <= 1 {
-            out.values.copy_from_slice(&mat.values);
+        let nrows = mat.len() / ncols;
+        if nrows <= 1 {
+            out.copy_from_slice(mat);
             return;
         }
 
         // transpose input
-        debug_span!("pre-transpose", nrows = mat.height(), ncols = mat.width())
-            .in_scope(|| mat.transpose_into(out));
+        debug_span!("pre-transpose", nrows, ncols)
+            .in_scope(|| transpose::transpose(mat, out, ncols, nrows));
 
-        self.dft_batch_rows(out);
+        self.dft_batch_rows(out, nrows);
     }
 
     pub fn dft_batch_cols_bitrevd(
         &self,
-        mat: &mut RowMajorMatrix<MontyField31<MP>>,
-        out: &mut RowMajorMatrix<MontyField31<MP>>,
+        mat: &mut [MontyField31<MP>],
+        ncols: usize,
+        out: &mut [MontyField31<MP>],
     ) where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
-        self.dft_batch_cols_transposed_bitrevd(mat, out);
+        self.dft_batch_cols_transposed_bitrevd(mat, ncols, out);
+
+        let nrows = mat.len() / ncols;
 
         // transpose output
-        debug_span!("post-transpose", nrows = out.height(), ncols = out.width())
-            .in_scope(|| out.transpose_into(mat));
+        debug_span!("post-transpose", nrows, ncols)
+            .in_scope(|| transpose::transpose(out, mat, nrows, ncols));
     }
 }
 
@@ -231,7 +302,9 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let mut mat =
             debug_span!("initial bitrev").in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
 
-        debug_span!("dft batch").in_scope(|| self.dft_batch_cols_bitrevd(&mut mat, &mut scratch));
+        let ncols = mat.width();
+        debug_span!("dft batch")
+            .in_scope(|| self.dft_batch_cols_bitrevd(&mut mat.values, ncols, &mut scratch.values));
         mat
     }
 
@@ -246,7 +319,9 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let mut scratch = debug_span!("allocate scratch space")
             .in_scope(|| RowMajorMatrix::default(mat.height(), mat.width()));
 
-        debug_span!("idft batch").in_scope(|| self.idft_batch_cols_bitrevd(&mut mat, &mut scratch));
+        let ncols = mat.width();
+        debug_span!("idft batch")
+            .in_scope(|| self.idft_batch_cols_bitrevd(&mut mat.values, ncols, &mut scratch.values));
 
         // TODO: In principle bit reversal should only be necessary when
         // doing the transform inplace, though it might still be
@@ -266,44 +341,52 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .checked_shl(added_bits.try_into().unwrap())
             .unwrap();
 
-        let mut coeffs = debug_span!("allocate scratch space")
-            .in_scope(|| RowMajorMatrix::default(mat.height(), mat.width()));
+        let input_size = mat.height() * mat.width();
+        let output_size = result_height * mat.width();
+
+        // Allocate twice the space of the result, so we can do the final transpose
+        // from the second half into the first half.
+        let mut scratch = debug_span!("allocate scratch space")
+            .in_scope(|| vec![MontyField31::zero(); 2 * output_size]);
+
+        // Split `scratch` into halves `output` and `padded`, each of length `output_size`.
+        let (output, mut padded) = unsafe { split_at_mut_unchecked(&mut scratch, output_size) };
+
+        // `coeffs` will hold the result of the inverse FFT
+        let mut coeffs = &mut output[..input_size];
 
         // TODO: Ensure that we only calculate twiddle factors once;
         // at the moment we calculate a smaller table first then the
         // bigger table, but if we did the bigger table first we
         // wouldn't need to do the smaller table at all.
 
-        self.idft_batch_cols_transposed_bitrevd(&mat, &mut coeffs);
+        self.idft_batch_cols_transposed_bitrevd(&mat.values, mat.width(), &mut coeffs);
 
         // At this point the inverse FFT of each column of `mat` appears
         // as a row in `coeffs`.
 
         // Extend coeffs by a suitable number of zeros
         // FIXME: do row-wise and incorporate bitrev; base on bit_reversed_zero_pad
-        // TODO: Shouldn't resize here, should allocate once at the start
-        let mut padded = coeffs.bit_reversed_zero_pad_rows(added_bits);
+        // TODO: Shouldn't allocate&resize here, should allocate once at the start
+        bit_reversed_zero_pad_rows(padded, coeffs, mat.width(), mat.height(), added_bits);
 
         // TODO: coset_shift_rows will have poor memory coherence; could be
         // a good argument for integrating coset shift into twiddles?
         // TODO: Half of coeffs was just set to zero; make sure we're not
         // pointlessly multiplying zero values by shift powers
-        coset_shift_rows(&mut padded, shift);
+        coset_shift_rows(padded, result_height, shift);
 
-        self.dft_batch_rows(&mut padded);
-
-        // FIXME: Find a way to reuse the scratch space from above
-        let mut out = debug_span!("allocate output space")
-            .in_scope(|| RowMajorMatrix::default(mat.width(), result_height));
+        self.dft_batch_rows(&mut padded, result_height);
 
         // transpose output
-        debug_span!(
-            "post-transpose",
-            nrows = padded.height(),
-            ncols = padded.width()
-        )
-        .in_scope(|| padded.transpose_into(&mut out));
+        debug_span!("post-transpose", nrows = mat.width(), ncols = result_height)
+            .in_scope(|| transpose::transpose(padded, output, result_height, mat.width()));
 
-        out
+        // The first half of `scratch` corresponds to `output`.
+        // NB: truncating here probably leaves the second half of the vector (being the
+        // size of the output) still allocated as "capacity"; this will never be used
+        // which is somewhat wasteful.
+        scratch.truncate(output_size);
+        RowMajorMatrix::new(scratch, mat.width())
     }
 }
