@@ -205,7 +205,7 @@ pub trait Field:
 
         for i in 0..bits {
             if power.bit(i) {
-                result = result * base;
+                result *= base;
             }
             base = base * base;
         }
