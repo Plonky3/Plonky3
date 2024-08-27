@@ -1,7 +1,6 @@
 //! An implementation of the FFT for `MontyField31`
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
@@ -26,7 +25,7 @@ where
 {
     let (packed, sfx) = T::Packing::pack_slice_with_suffix_mut(vec);
     let packed_scale: T::Packing = scale.into();
-    packed.iter_mut().for_each(|x| *x *= packed_scale);
+    packed.par_iter_mut().for_each(|x| *x *= packed_scale);
     sfx.iter_mut().for_each(|x| *x *= scale);
 }
 
@@ -136,8 +135,6 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         // Compute twiddle factors, or take memoized ones if already available.
         // TODO: This recomputes the entire table from scratch if we
         // need it to be bigger, which is wasteful.
-        // TODO: This currently maintains both tables at the same length, but this is
-        // unnecessary and somewhat expensive.
         debug_span!("maybe calculate twiddles").in_scope(|| {
             let curr_max_fft_len = 1 << self.twiddles.borrow().len();
             if row_len > curr_max_fft_len {
@@ -154,21 +151,19 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
             .in_scope(|| Self::decimation_in_time_dft(mat, row_len, &twiddles));
     }
 
-    #[instrument(skip_all, fields(nrows = %mat.len()/row_len, row_len, added_bits))]
+    #[instrument(skip_all, fields(nrows = %mat.len()/ncols, ncols, added_bits))]
     #[inline]
-    pub fn idft_batch_rows(&self, mat: &mut [MontyField31<MP>], row_len: usize)
+    pub fn idft_batch_rows(&self, mat: &mut [MontyField31<MP>], ncols: usize)
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
         // Compute twiddle factors, or take memoized ones if already available.
         // TODO: This recomputes the entire table from scratch if we
         // need it to be bigger, which is wasteful.
-        // TODO: This currently maintains both tables at the same length, but this is
-        // unnecessary and somewhat expensive.
         debug_span!("maybe calculate inv_twiddles").in_scope(|| {
             let curr_max_fft_len = 1 << self.inv_twiddles.borrow().len();
-            if row_len > curr_max_fft_len {
-                let new_twiddles = MontyField31::inv_roots_of_unity_table(row_len);
+            if ncols > curr_max_fft_len {
+                let new_twiddles = MontyField31::inv_roots_of_unity_table(ncols);
                 self.inv_twiddles.replace(new_twiddles);
             }
         });
@@ -178,17 +173,12 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         let inv_twiddles =
             debug_span!("clone inv_twiddles").in_scope(|| self.inv_twiddles.borrow().clone());
 
-        debug_span!(
-            "parallel idft",
-            //n_dfts = mat.height(),
-            //lengths = mat.width()
-        )
-        .in_scope(|| Self::decimation_in_freq_dft(mat, row_len, &inv_twiddles));
+        debug_span!("parallel idft", n_dfts = mat.len() / ncols, fft_len = ncols)
+            .in_scope(|| Self::decimation_in_freq_dft(mat, ncols, &inv_twiddles));
 
-        let inv_len = MontyField31::from_canonical_usize(row_len).inverse();
+        let inv_len = MontyField31::from_canonical_usize(ncols).inverse();
         // TODO: mat.scale() is not parallelised...
-        // TODO: tidy up
-        scale(mat, inv_len);
+        debug_span!("scale").in_scope(|| scale(mat, inv_len));
     }
 
     pub fn idft_batch_cols_transposed_bitrevd(
