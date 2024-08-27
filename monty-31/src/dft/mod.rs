@@ -349,8 +349,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         //
         // NB: The unsafe version below takes about 10μs, whereas doing
         //   let mut scratch = vec![MontyField31::zero(); 2 * output_size]);
-        // takes about 320ms. Safety is expensive; don't pay for it if you
-        // don't need it.
+        // takes about 320ms. Safety is expensive.
         let mut scratch =
             debug_span!("allocate scratch space").in_scope(|| Vec::with_capacity(2 * output_size));
         unsafe {
@@ -368,20 +367,19 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // bigger table, but if we did the bigger table first we
         // wouldn't need to do the smaller table at all.
 
+        // Apply inverse DFT
         self.idft_batch_cols_transposed_bitrevd(&mat.values, mat.width(), &mut coeffs);
 
         // At this point the inverse FFT of each column of `mat` appears
         // as a row in `coeffs`.
 
+        // TODO: consider integrating coset shift into twiddles?
+        coset_shift_rows(coeffs, mat.height(), shift);
+
         // Extend coeffs by a suitable number of zeros
         zero_pad_bit_reversed_rows(padded, coeffs, mat.width(), mat.height(), added_bits);
 
-        // TODO: coset_shift_rows will have poor memory coherence; could be
-        // a good argument for integrating coset shift into twiddles?
-        // TODO: Half of coeffs was just set to zero; make sure we're not
-        // pointlessly multiplying zero values by shift powers
-        coset_shift_rows(padded, result_height, shift);
-
+        // Apply DFT
         self.dft_batch_rows(&mut padded, result_height);
 
         // transpose output
