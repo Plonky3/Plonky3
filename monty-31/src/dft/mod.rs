@@ -77,7 +77,7 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
     fn decimation_in_freq_dft(
         mat: &mut [MontyField31<MP>],
         ncols: usize,
-        twiddles: &Vec<Vec<MontyField31<MP>>>,
+        twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
             let lg_fft_len = p3_util::log2_ceil_usize(ncols);
@@ -93,7 +93,7 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
     fn decimation_in_time_dft(
         mat: &mut [MontyField31<MP>],
         ncols: usize,
-        twiddles: &Vec<Vec<MontyField31<MP>>>,
+        twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
             let lg_fft_len = p3_util::log2_ceil_usize(ncols);
@@ -253,10 +253,10 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         }
 
         // Split `scratch` into halves `output` and `padded`, each of length `output_size`.
-        let (output, mut padded) = unsafe { split_at_mut_unchecked(&mut scratch, output_size) };
+        let (output, padded) = unsafe { split_at_mut_unchecked(&mut scratch, output_size) };
 
         // `coeffs` will hold the result of the inverse FFT
-        let mut coeffs = &mut output[..input_size];
+        let coeffs = &mut output[..input_size];
 
         // TODO: Ensure that we only calculate twiddle factors once;
         // at the moment we calculate a smaller table first then the
@@ -264,13 +264,13 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // wouldn't need to do the smaller table at all.
 
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, &mut coeffs, ncols, nrows));
+            .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
 
         // Apply inverse DFT
         self.update_inv_twiddles(nrows);
         let inv_twiddles = self.inv_twiddles.borrow().clone();
         debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
-            .in_scope(|| Self::decimation_in_time_dft(&mut coeffs, nrows, &inv_twiddles));
+            .in_scope(|| Self::decimation_in_time_dft(coeffs, nrows, &inv_twiddles));
 
         // At this point the inverse FFT of each column of `mat` appears
         // as a row in `coeffs`.
@@ -287,7 +287,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         self.update_twiddles(result_nrows);
         let twiddles = self.twiddles.borrow().clone();
         debug_span!("dft batch", n_dfts = ncols, fft_len = nrows)
-            .in_scope(|| Self::decimation_in_freq_dft(&mut padded, result_nrows, &twiddles));
+            .in_scope(|| Self::decimation_in_freq_dft(padded, result_nrows, &twiddles));
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
