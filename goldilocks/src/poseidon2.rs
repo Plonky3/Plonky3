@@ -11,7 +11,8 @@ use alloc::vec::Vec;
 
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    matmul_internal, ExternalLayer, HLMDSMat4, InternalLayer, MDSMat4, Poseidon2,
+    matmul_internal, ExternalLayer, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
+    InternalLayerConstructor, MDSMat4, Poseidon2,
 };
 
 use crate::{to_goldilocks_array, Goldilocks};
@@ -97,12 +98,14 @@ pub struct Poseidon2InternalLayerGoldilocks {
     internal_constants: Vec<Goldilocks>,
 }
 
-impl InternalLayer<Goldilocks, 8, 7> for Poseidon2InternalLayerGoldilocks {
-    type InternalState = [Goldilocks; 8];
-
+impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocks {
     fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
         Self { internal_constants }
     }
+}
+
+impl InternalLayer<Goldilocks, 8, 7> for Poseidon2InternalLayerGoldilocks {
+    type InternalState = [Goldilocks; 8];
 
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Goldilocks, 8, 7>(
@@ -116,10 +119,6 @@ impl InternalLayer<Goldilocks, 8, 7> for Poseidon2InternalLayerGoldilocks {
 impl InternalLayer<Goldilocks, 12, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 12];
 
-    fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
-        Self { internal_constants }
-    }
-
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Goldilocks, 12, 7>(
             state,
@@ -132,10 +131,6 @@ impl InternalLayer<Goldilocks, 12, 7> for Poseidon2InternalLayerGoldilocks {
 impl InternalLayer<Goldilocks, 16, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 16];
 
-    fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
-        Self { internal_constants }
-    }
-
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Goldilocks, 16, 7>(
             state,
@@ -147,10 +142,6 @@ impl InternalLayer<Goldilocks, 16, 7> for Poseidon2InternalLayerGoldilocks {
 
 impl InternalLayer<Goldilocks, 20, 7> for Poseidon2InternalLayerGoldilocks {
     type InternalState = [Goldilocks; 20];
-
-    fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
-        Self { internal_constants }
-    }
 
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Goldilocks, 20, 7>(
@@ -167,11 +158,9 @@ pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
     final_external_constants: Vec<[Goldilocks; WIDTH]>,
 }
 
-impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocks<WIDTH>
 {
-    type InternalState = [Goldilocks; WIDTH];
-
     fn new_from_constants(external_constants: [Vec<[Goldilocks; WIDTH]>; 2]) -> Self {
         let [initial_external_constants, final_external_constants] = external_constants;
         Self {
@@ -179,6 +168,12 @@ impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
             final_external_constants,
         }
     }
+}
+
+impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
+    for Poseidon2ExternalLayerGoldilocks<WIDTH>
+{
+    type InternalState = [Goldilocks; WIDTH];
 
     fn permute_state_initial(&self, mut state: [Goldilocks; WIDTH]) -> [Goldilocks; WIDTH] {
         external_initial_permute_state::<_, _, WIDTH, 7>(
@@ -205,11 +200,9 @@ pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
     final_external_constants: Vec<[Goldilocks; WIDTH]>,
 }
 
-impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
 {
-    type InternalState = [Goldilocks; WIDTH];
-
     fn new_from_constants(external_constants: [Vec<[Goldilocks; WIDTH]>; 2]) -> Self {
         let [initial_external_constants, final_external_constants] = external_constants;
         Self {
@@ -217,6 +210,12 @@ impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
             final_external_constants,
         }
     }
+}
+
+impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, 7>
+    for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
+{
+    type InternalState = [Goldilocks; WIDTH];
 
     fn permute_state_initial(&self, mut state: [Goldilocks; WIDTH]) -> [Goldilocks; WIDTH] {
         external_initial_permute_state::<_, _, WIDTH, 7>(

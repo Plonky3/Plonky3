@@ -16,7 +16,7 @@ use core::marker::PhantomData;
 
 pub use diffusion::*;
 pub use matrix::*;
-use p3_field::{AbstractField, PrimeField, PrimeField64};
+use p3_field::{AbstractField, Field, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -100,7 +100,7 @@ where
 }
 
 impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[AF; WIDTH]>
-    for Poseidon2<AF, ExternalPerm, InternalPerm, WIDTH, D>
+    for Poseidon2<<AF::F as Field>::Packing, ExternalPerm, InternalPerm, WIDTH, D>
 where
     AF: AbstractField + Sync,
     AF::F: PrimeField,
@@ -121,7 +121,8 @@ where
 }
 
 impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    CryptographicPermutation<[AF; WIDTH]> for Poseidon2<AF, ExternalPerm, InternalPerm, WIDTH, D>
+    CryptographicPermutation<[AF; WIDTH]>
+    for Poseidon2<<AF::F as Field>::Packing, ExternalPerm, InternalPerm, WIDTH, D>
 where
     AF: AbstractField + Sync,
     AF::F: PrimeField,
