@@ -28,6 +28,7 @@
 //      assert ((const_mat + diag_mat)^i).characteristic_polynomial().is_irreducible()
 
 use alloc::vec::Vec;
+
 use p3_field::{AbstractField, Field};
 
 pub trait InternalLayerConstructor<AF>
