@@ -65,7 +65,7 @@ fn main() -> Result<(), impl Debug> {
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
 
-    type Dft = Radix2Dif<BabyBear>;
+    type Dft = Radix2Dif<Val>;
     let dft = Dft::new(trace.height());
 
     let fri_config = FriConfig {

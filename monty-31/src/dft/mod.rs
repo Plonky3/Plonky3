@@ -66,8 +66,6 @@ fn zero_pad_bit_reversed_rows<T>(
 /// TODO: This might be quite slow
 #[instrument(level = "debug", skip_all)]
 fn coset_shift_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F) {
-    // TODO: Work out how to avoid bit reversal of powers
-    // TODO: Don't need powers for elts of mat that are known to be zero
     let mut powers = shift.powers().take(ncols).collect::<Vec<_>>();
     reverse_slice_index_bits(&mut powers);
 

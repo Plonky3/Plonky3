@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use p3_baby_bear::BabyBear;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
-//use p3_dft::Radix2DitParallel;
+use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
@@ -54,10 +54,10 @@ fn main() -> Result<(), impl Debug> {
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
 
-    type Dft = Radix2Dif<BabyBear>;
+    type Dft = Radix2Dif<Val>;
     let dft = Dft::new(trace.height());
-    // type Dft = Radix2DitParallel;
-    // let dft = Dft::default();
+    //type Dft = Radix2DitParallel;
+    //let dft = Dft::default();
 
     let fri_config = FriConfig {
         log_blowup: 1,
