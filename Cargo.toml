@@ -12,6 +12,7 @@ members = [
     "field",
     "field-testing",
     "fri",
+    "fri-testing",
     "goldilocks",
     "interpolation",
     "koala-bear",

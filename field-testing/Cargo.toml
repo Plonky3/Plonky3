@@ -1,11 +1,12 @@
 [package]
 name = "p3-field-testing"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 field testing utilities."
 
 [dependencies]
-p3-field = { path = "../field" }
+p3-field = "0.2.0"
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 rand_chacha = "0.3.1"
 criterion = "0.5.1"
@@ -13,4 +14,4 @@ num-bigint = { version = "0.4.3", default-features = false }
 num-traits = "0.2.19"
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
+p3-baby-bear = "0.2.0"

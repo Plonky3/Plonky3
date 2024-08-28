@@ -1,23 +1,24 @@
 [package]
 name = "p3-mds"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Plonky3 MDS matrix logic."
 
 [dependencies]
-p3-dft = { path = "../dft" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
+p3-dft = "0.2.0"
+p3-field = "0.2.0"
+p3-matrix = "0.2.0"
+p3-symmetric = "0.2.0"
+p3-util = "0.2.0"
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 itertools = "0.12.0"
 
 [dev-dependencies]
 criterion = "0.5.1"
-p3-baby-bear = { path = "../baby-bear" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
+p3-baby-bear = "0.2.0"
+p3-goldilocks = "0.2.0"
+p3-mersenne-31 = "0.2.0"
 
 [[bench]]
 name = "mds"

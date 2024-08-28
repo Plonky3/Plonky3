@@ -1,12 +1,12 @@
 [package]
 name = "p3-sha256"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Plonky3 hash trait implementations for the SHA2-256 hash function."
+description = "SHA-256 hash wrapper adapted to Plonky3 APIs."
 
 [dependencies]
-p3-symmetric = { path = "../symmetric" }
+p3-symmetric = "0.2.0"
 sha2 = { version = "0.10.8", default-features = false, features = ["compress"] }
 
 [features]

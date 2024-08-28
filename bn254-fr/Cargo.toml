@@ -1,13 +1,14 @@
 [package]
 name = "p3-bn254-fr"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "BN-254 field wrapper adapted to Plonky3 APIs."
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-symmetric = { path = "../symmetric" }
+p3-field = "0.2.0"
+p3-poseidon2 = "0.2.0"
+p3-symmetric = "0.2.0"
 
 ff = { version = "0.13", features = ["derive", "derive_bits"] }
 num-bigint = { version = "0.4.3", default-features = false }
@@ -16,7 +17,7 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 halo2curves = { version = "0.7.0", features = ["bits", "derive_serde"] }
 
 [dev-dependencies]
-p3-field-testing = { path = "../field-testing" }
+p3-field-testing = "0.2.0"
 
 criterion = "0.5.1"
 num-traits = "0.2.16"
