@@ -41,8 +41,8 @@ impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
 where
     AF: AbstractField,
     AF::F: PrimeField,
-    ExternalPerm: ExternalLayer<AF, WIDTH, D>,
-    InternalPerm: InternalLayer<AF, WIDTH, D>,
+    ExternalPerm: ExternalLayerConstructor<AF, WIDTH>,
+    InternalPerm: InternalLayerConstructor<AF>,
 {
     /// Create a new Poseidon2 configuration.
     /// This internally converts the given constants to the relevant packed versions.
@@ -86,8 +86,8 @@ impl<AF, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
 where
     AF: AbstractField,
     AF::F: PrimeField64,
-    ExternalPerm: ExternalLayer<AF, WIDTH, D>,
-    InternalPerm: InternalLayer<AF, WIDTH, D>,
+    ExternalPerm: ExternalLayerConstructor<AF, WIDTH>,
+    InternalPerm: InternalLayerConstructor<AF>,
 {
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
     pub fn new_from_rng_128<R: Rng>(rng: &mut R) -> Self

@@ -1,7 +1,10 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 
-use p3_poseidon2::{mds_light_permutation, ExternalLayer, InternalLayer, MDSMat4};
+use p3_poseidon2::{
+    mds_light_permutation, ExternalLayer, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4,
+};
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
 
@@ -10,10 +13,26 @@ pub struct Poseidon2InternalLayerMersenne31AVX2 {
     packed_internal_constants: Vec<__m256i>,
 }
 
+impl InternalLayerConstructor<PackedMersenne31AVX2> for Poseidon2InternalLayerMersenne31AVX2 {
+    /// We save the round constants in the {-P, ..., 0} representation instead of the standard
+    /// {0, ..., P} one. This saves several instructions later.
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        Self::new_from_constants(internal_constants)
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Poseidon2ExternalLayerMersenne31AVX2<const WIDTH: usize> {
     packed_initial_external_constants: Vec<[__m256i; WIDTH]>,
     packed_final_external_constants: Vec<[__m256i; WIDTH]>,
+}
+
+impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX2, WIDTH>
+    for Poseidon2ExternalLayerMersenne31AVX2<WIDTH>
+{
+    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
+        Self::new_from_constants(external_constants)
+    }
 }
 
 /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0} and copy into a vector
@@ -243,12 +262,6 @@ fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
 impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersenne31AVX2 {
     type InternalState = [PackedMersenne31AVX2; 16];
 
-    /// We save the round constants in the {-P, ..., 0} representation instead of the standard
-    /// {0, ..., P} one. This saves several instructions later.
-    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
-        Self::new_from_constants(internal_constants)
-    }
-
     /// Compute the full Poseidon2 internal layer on a state of width 16.
     fn permute_state(&self, state: &mut Self::InternalState) {
         self.packed_internal_constants
@@ -268,12 +281,6 @@ fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
 
 impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersenne31AVX2 {
     type InternalState = [PackedMersenne31AVX2; 24];
-
-    /// We save the round constants in the {-P, ..., 0} representation instead of the standard
-    /// {0, ..., P} one. This saves several instructions later.
-    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
-        Self::new_from_constants(internal_constants)
-    }
 
     /// Compute the full Poseidon2 internal layer on a state of width 24.
     fn permute_state(&self, state: &mut Self::InternalState) {
@@ -303,10 +310,6 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31AVX2<WIDTH>
 {
     type InternalState = [PackedMersenne31AVX2; WIDTH];
-
-    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
-        Self::new_from_constants(external_constants)
-    }
 
     /// Compute the first half of the Poseidon2 external layers.
     fn permute_state_initial(

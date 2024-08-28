@@ -30,6 +30,15 @@
 use alloc::vec::Vec;
 use p3_field::{AbstractField, Field};
 
+pub trait InternalLayerConstructor<AF>
+where
+    AF: AbstractField,
+{
+    /// A constructor which internally will convert the supplied
+    /// constants into the appropriate form for the implementation.
+    fn new_from_constants(internal_constants: Vec<AF::F>) -> Self;
+}
+
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
 pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
     state: &mut [AF; WIDTH],
@@ -50,10 +59,6 @@ where
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
     /// This must be the same as the InternalState field used in the corresponding External Layer.
     type InternalState;
-
-    /// A constructor which internally will convert the supplied
-    /// constants into the appropriate form for the implementation.
-    fn new_from_constants(internal_constants: Vec<AF::F>) -> Self;
 
     /// Compute the internal part of the Poseidon2 permutation.
     /// Implementations will usually not use both constants fields.

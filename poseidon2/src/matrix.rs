@@ -146,6 +146,15 @@ pub fn mds_light_permutation<
     }
 }
 
+pub trait ExternalLayerConstructor<AF, const WIDTH: usize>
+where
+    AF: AbstractField,
+{
+    /// A constructor which internally will convert the supplied
+    /// constants into the appropriate form for the implementation.
+    fn new_from_constants(external_constants: [Vec<[AF::F; WIDTH]>; 2]) -> Self;
+}
+
 /// A trait containing all data needed to implement the external layers of Poseidon2.
 pub trait ExternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
 where
@@ -154,10 +163,6 @@ where
     /// The type used internally by the Poseidon2 implementation.
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
     type InternalState;
-
-    /// A constructor which internally will convert the supplied
-    /// constants into the appropriate form for the implementation.
-    fn new_from_constants(external_constants: [Vec<[AF::F; WIDTH]>; 2]) -> Self;
 
     // permute_state_initial, permute_state_final are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.

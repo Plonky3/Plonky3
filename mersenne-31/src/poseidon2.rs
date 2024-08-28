@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use p3_field::{Field, PrimeField32};
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer, MDSMat4, Poseidon2,
+    ExternalLayer, ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
+    Poseidon2,
 };
 
 use crate::{from_u62, to_mersenne31_array, Mersenne31};
@@ -78,6 +79,52 @@ pub struct Poseidon2InternalLayerMersenne31 {
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     initial_external_constants: Vec<[Mersenne31; WIDTH]>,
     final_external_constants: Vec<[Mersenne31; WIDTH]>,
+}
+
+pub(crate) trait Poseidon2InternalBaseLayer {
+    fn get_constants(&self) -> &[Mersenne31];
+}
+
+impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        Self { internal_constants }
+    }
+}
+
+impl Poseidon2InternalBaseLayer for Poseidon2InternalLayerMersenne31 {
+    fn get_constants(&self) -> &[Mersenne31] {
+        &self.internal_constants
+    }
+}
+
+pub(crate) trait Poseidon2ExternalBaseLayer<const WIDTH: usize> {
+    fn get_initial_constants(&self) -> &[[Mersenne31; WIDTH]];
+
+    fn get_final_constants(&self) -> &[[Mersenne31; WIDTH]];
+}
+
+impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
+    for Poseidon2ExternalLayerMersenne31<WIDTH>
+{
+    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
+        let [initial_external_constants, final_external_constants] = external_constants;
+        Self {
+            initial_external_constants,
+            final_external_constants,
+        }
+    }
+}
+
+impl<const WIDTH: usize> Poseidon2ExternalBaseLayer<WIDTH>
+    for Poseidon2ExternalLayerMersenne31<WIDTH>
+{
+    fn get_initial_constants(&self) -> &[[Mersenne31; WIDTH]] {
+        &self.initial_external_constants
+    }
+
+    fn get_final_constants(&self) -> &[[Mersenne31; WIDTH]] {
+        &self.final_external_constants
+    }
 }
 
 // See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
@@ -158,28 +205,20 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
     }
 }
 
-impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
+impl<Layer: Poseidon2InternalBaseLayer + Clone + Sync> InternalLayer<Mersenne31, 16, 5> for Layer {
     type InternalState = [Mersenne31; 16];
-
-    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
-        Self { internal_constants }
-    }
 
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Mersenne31, 16, 5>(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
-            &self.internal_constants,
+            Layer::get_constants(self),
         )
     }
 }
 
 impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [Mersenne31; 24];
-
-    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
-        Self { internal_constants }
-    }
 
     fn permute_state(&self, state: &mut Self::InternalState) {
         internal_permute_state::<Mersenne31, 24, 5>(
@@ -194,14 +233,6 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     type InternalState = [Mersenne31; WIDTH];
-
-    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
-        let [initial_external_constants, final_external_constants] = external_constants;
-        Self {
-            initial_external_constants,
-            final_external_constants,
-        }
-    }
 
     fn permute_state_initial(&self, mut state: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
