@@ -365,6 +365,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         coset_shift_rows(coeffs, mat.height(), shift);
 
         // Extend coeffs by a suitable number of zeros
+        padded.fill(MontyField31::zero());
         zero_pad_bit_reversed_rows(padded, coeffs, mat.width(), mat.height(), added_bits);
 
         // Apply DFT
