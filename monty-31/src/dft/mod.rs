@@ -99,34 +99,34 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
     #[inline]
     fn decimation_in_freq_dft(
         mat: &mut [MontyField31<MP>],
-        row_len: usize,
+        ncols: usize,
         twiddles: &Vec<Vec<MontyField31<MP>>>,
     ) {
-        let lg_fft_len = p3_util::log2_ceil_usize(row_len);
+        let lg_fft_len = p3_util::log2_ceil_usize(ncols);
         let roots_idx = (twiddles.len() + 1) - lg_fft_len;
         let twiddles = &twiddles[roots_idx..];
 
-        mat.par_chunks_exact_mut(row_len)
+        mat.par_chunks_exact_mut(ncols)
             .for_each(|v| MontyField31::forward_fft(v, twiddles))
     }
 
     #[inline]
     fn decimation_in_time_dft(
         mat: &mut [MontyField31<MP>],
-        row_len: usize,
+        ncols: usize,
         twiddles: &Vec<Vec<MontyField31<MP>>>,
     ) {
-        let lg_fft_len = p3_util::log2_ceil_usize(row_len);
+        let lg_fft_len = p3_util::log2_ceil_usize(ncols);
         let roots_idx = (twiddles.len() + 1) - lg_fft_len;
         let twiddles = &twiddles[roots_idx..];
 
-        mat.par_chunks_exact_mut(row_len)
+        mat.par_chunks_exact_mut(ncols)
             .for_each(|v| MontyField31::backward_fft(v, twiddles))
     }
 
-    #[instrument(skip_all, fields(nrows = %mat.len()/row_len, row_len, added_bits))]
+    #[instrument(skip_all, fields(nrows = %mat.len()/ncols, ncols, added_bits))]
     #[inline]
-    pub fn dft_batch_rows(&self, mat: &mut [MontyField31<MP>], row_len: usize)
+    pub fn dft_batch_rows(&self, mat: &mut [MontyField31<MP>], ncols: usize)
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
@@ -135,8 +135,8 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         // need it to be bigger, which is wasteful.
         debug_span!("maybe calculate twiddles").in_scope(|| {
             let curr_max_fft_len = 1 << self.twiddles.borrow().len();
-            if row_len > curr_max_fft_len {
-                let new_twiddles = MontyField31::roots_of_unity_table(row_len);
+            if ncols > curr_max_fft_len {
+                let new_twiddles = MontyField31::roots_of_unity_table(ncols);
                 self.twiddles.replace(new_twiddles);
             }
         });
@@ -146,7 +146,7 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         let twiddles = debug_span!("clone twiddles").in_scope(|| self.twiddles.borrow().clone());
 
         debug_span!("parallel dft") //, n_dfts = mat.height(), lengths = mat.width())
-            .in_scope(|| Self::decimation_in_time_dft(mat, row_len, &twiddles));
+            .in_scope(|| Self::decimation_in_freq_dft(mat, ncols, &twiddles));
     }
 
     #[instrument(skip_all, fields(nrows = %mat.len()/ncols, ncols, added_bits))]
