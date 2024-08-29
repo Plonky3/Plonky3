@@ -116,6 +116,7 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
         });
     }
 
+    /// Compute inverse twiddle factors, or take memoized ones if already available.
     fn update_inv_twiddles(&self, inv_fft_len: usize) {
         // TODO: This recomputes the entire table from scratch if we
         // need it to be bigger, which is wasteful.
@@ -129,20 +130,31 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
     }
 }
 
-/// DFT implementation that uses DIT for forward direction and DIF for backward.
-/// Hence a (coset) LDE
+/// DFT implementation that uses DIT for the inverse "backward"
+/// direction and DIF for the "forward" direction.
 ///
-///   - IDFT
-///   - zero extend
-///   - DFT
+/// The API mandates that the LDE is applied column-wise on the
+/// _row-major_ input. This is awkward for memory coherence, so the
+/// algorithm here transposes the input and operates on the rows in
+/// the typical way, then transposes back again for the output. Even
+/// for modestly large inputs, the cost of the two tranposes
+/// outweighed by the improved performance from operating row-wise.
+///
+/// The choice of DIT for inverse and DIF for "forward" transform mean
+/// that a (coset) LDE
+///
+/// - IDFT / zero extend / DFT
 ///
 /// expands to
 ///
-///   - invDFT DIF
-///     - result is bit-reversed
-///   - zero extend bitrevd result
-///   - DFT DIT
-///     - input is already bit-reversed
+///   - bit-reverse input
+///   - invDFT DIT
+///     - result is in "correct" order
+///   - zero extend result
+///   - DFT DIF on result
+///     - output is bit-reversed, as required for FRI.
+///
+/// Hence the only bit-reversal that needs to take place is on the input.
 ///
 impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<MontyField31<MP>>
     for Radix2Dif<MontyField31<MP>>
