@@ -177,12 +177,11 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
 #[inline]
 #[must_use]
-#[allow(non_snake_case)]
 fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_MU);
-        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
-        x86_64::_mm256_sub_epi32(input, q_P)
+        let q_p = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
+        x86_64::_mm256_sub_epi32(input, q_p)
     }
 }
 
