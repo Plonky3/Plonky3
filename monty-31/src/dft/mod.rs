@@ -254,27 +254,26 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let input_size = nrows * ncols;
         let output_size = result_nrows * ncols;
 
-        // TODO: Consider doing this in-place?
         // TODO: Use faster bit-reversal algo
         let mat = debug_span!("bit-reverse input trace")
             .in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
 
-        // Allocate twice the space of the result, so we can do the final transpose
-        // from the second half into the first half.
-        //
+        // Allocate space for the output and the intermediate state.
         // NB: The unsafe version below takes about 10μs, whereas doing
-        //   let mut scratch = vec![MontyField31::zero(); 2 * output_size]);
+        //   vec![MontyField31::zero(); output_size])
         // takes about 320ms. Safety is expensive.
-        let mut scratch =
-            debug_span!("allocate scratch space").in_scope(|| Vec::with_capacity(2 * output_size));
-        unsafe {
-            scratch.set_len(2 * output_size);
-        }
+        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| {
+            let mut output = Vec::with_capacity(output_size);
+            let mut padded = Vec::with_capacity(output_size);
+            unsafe {
+                output.set_len(output_size);
+                padded.set_len(output_size);
+            }
+            (output, padded)
+        });
 
-        // Split `scratch` into halves `output` and `padded`, each of length `output_size`.
-        let (output, padded) = unsafe { split_at_mut_unchecked(&mut scratch, output_size) };
-
-        // `coeffs` will hold the result of the inverse FFT
+        // `coeffs` will hold the result of the inverse FFT; use the
+        // output storage as scratch space.
         let coeffs = &mut output[..input_size];
 
         debug_span!("pre-transpose", nrows, ncols)
@@ -324,18 +323,13 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             fft_len = result_nrows >> added_bits
         )
         .in_scope(|| {
-            Self::decimation_in_freq_dft(padded, result_nrows >> added_bits, &twiddles[1..])
+            Self::decimation_in_freq_dft(&mut padded, result_nrows >> added_bits, &twiddles[1..])
         });
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
-            .in_scope(|| transpose::transpose(padded, output, result_nrows, ncols));
+            .in_scope(|| transpose::transpose(&padded, &mut output, result_nrows, ncols));
 
-        // The first half of `scratch` corresponds to `output`.
-        // NB: truncating here probably leaves the second half of the vector (being the
-        // size of the output) still allocated as "capacity"; this will never be used
-        // which is somewhat wasteful.
-        scratch.truncate(output_size);
-        RowMajorMatrix::new(scratch, ncols).bit_reverse_rows()
+        RowMajorMatrix::new(output, ncols).bit_reverse_rows()
     }
 }
