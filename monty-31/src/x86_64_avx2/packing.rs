@@ -204,8 +204,7 @@ fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// The output will lie in {-P, ..., P} and be stored in output[2i + 1].
 #[inline]
 #[must_use]
-#[allow(non_snake_case)]
-fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn monty_mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
         monty_red_unsigned::<MPAVX2>(prod)
@@ -218,8 +217,7 @@ fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// The output will lie in {-P, ..., P} stored in output[2i + 1].
 #[inline]
 #[must_use]
-#[allow(non_snake_case)]
-fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn monty_mul_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epi32(lhs, rhs);
         monty_red_signed::<MPAVX2>(prod)
@@ -264,8 +262,8 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
         let lhs_odd = movehdup_epi32(lhs);
         let rhs_odd = movehdup_epi32(rhs);
 
-        let d_evn = monty_d::<MPAVX2>(lhs_evn, rhs_evn);
-        let d_odd = monty_d::<MPAVX2>(lhs_odd, rhs_odd);
+        let d_evn = monty_mul::<MPAVX2>(lhs_evn, rhs_evn);
+        let d_odd = monty_mul::<MPAVX2>(lhs_odd, rhs_odd);
 
         let d_evn_hi = movehdup_epi32(d_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
@@ -297,7 +295,7 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 #[must_use]
 fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
-    monty_d_signed::<MPAVX2>(square, input)
+    monty_mul_signed::<MPAVX2>(square, input)
 }
 
 /// Take the fifth power of the MontyField31 field elements in the even index entries.
@@ -308,7 +306,7 @@ fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let quad = shifted_square::<MPAVX2>(square);
-    monty_d_signed::<MPAVX2>(quad, input)
+    monty_mul_signed::<MPAVX2>(quad, input)
 }
 
 /// Take the seventh power of the MontyField31 field elements in the even index entries.
@@ -318,11 +316,11 @@ fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 #[must_use]
 fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
-    let cube = monty_d_signed::<MPAVX2>(square, input);
+    let cube = monty_mul_signed::<MPAVX2>(square, input);
     let cube_shifted = movehdup_epi32(cube);
     let quad = shifted_square::<MPAVX2>(square);
 
-    monty_d_signed::<MPAVX2>(quad, cube_shifted)
+    monty_mul_signed::<MPAVX2>(quad, cube_shifted)
 }
 
 /// Apply func to the even and odd indices of the input vector.
@@ -530,9 +528,9 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     #[inline]
     fn cube(&self) -> Self {
         let val = self.to_vector();
-        let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
         unsafe {
             // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+            let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
             Self::from_vector(res)
         }
     }
@@ -548,18 +546,18 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
             4 => self.square().square(),
             5 => {
                 let val = self.to_vector();
-                let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
                 unsafe {
                     // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
                     Self::from_vector(res)
                 }
             }
             6 => self.square().cube(),
             7 => {
                 let val = self.to_vector();
-                let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
                 unsafe {
                     // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
                     Self::from_vector(res)
                 }
             }
