@@ -6,7 +6,6 @@ use p3_field::Field;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::ParallelIterator;
-use p3_util::reverse_slice_index_bits;
 use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.
@@ -52,21 +51,4 @@ pub fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
                 *coeff *= weight;
             })
         });
-}
-
-/// Multiply each element of column `j` of `mat` by `shift**j`.
-///
-/// TODO: This might be quite slow
-#[instrument(level = "debug", skip_all)]
-pub fn coset_shift_rows<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
-    // TODO: Work out how to avoid bit reversal of powers
-    // TODO: Don't need powers for elts of mat that are known to be zero
-    let mut powers = shift.powers().take(mat.width()).collect::<Vec<_>>();
-    reverse_slice_index_bits(&mut powers);
-
-    mat.par_rows_mut().for_each(|row| {
-        row.iter_mut().zip(&powers).for_each(|(coeff, &weight)| {
-            *coeff *= weight;
-        })
-    });
 }

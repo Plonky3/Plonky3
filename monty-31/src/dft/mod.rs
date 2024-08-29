@@ -41,8 +41,6 @@ where
 }
 
 /// Multiply each element of column `j` of `mat` by `shift**j`.
-///
-/// TODO: This might be quite slow
 #[instrument(level = "debug", skip_all)]
 fn coset_shift_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, scale: F) {
     let powers = shift.shifted_powers(scale).take(ncols).collect::<Vec<_>>();
