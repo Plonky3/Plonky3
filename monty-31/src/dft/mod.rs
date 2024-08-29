@@ -19,28 +19,6 @@ mod forward;
 
 use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
-#[instrument(level = "debug", skip_all)]
-fn zero_pad_rows<T>(output: &mut [T], input: &[T], nrows: usize, ncols: usize, added_bits: usize)
-where
-    T: Copy + Default + Send + Sync,
-{
-    if added_bits == 0 {
-        output.copy_from_slice(input);
-        return;
-    }
-
-    let new_ncols = ncols << added_bits;
-    assert_eq!(input.len(), nrows * ncols);
-    assert_eq!(output.len(), nrows * new_ncols);
-
-    output
-        .par_chunks_exact_mut(new_ncols)
-        .zip(input.par_chunks_exact(ncols))
-        .for_each(|(padded_row, row)| {
-            padded_row[..ncols].copy_from_slice(row);
-        });
-}
-
 /// Multiply each element of column `j` of `mat` by `shift**j`.
 #[instrument(level = "debug", skip_all)]
 fn coset_shift_and_scale_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, scale: F) {
@@ -295,6 +273,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let twiddles = self.twiddles.borrow().clone();
 
         // TODO: The following span assumes added_bits=1
+        // TODO: It's not clear from the timing that this is indeed
+        // faster than just calling the FFT directly.
         assert_eq!(added_bits, 1, "added_bits > 1 not yet implemented");
         debug_span!("dft batch first layer").in_scope(|| {
             let ncols = nrows;
