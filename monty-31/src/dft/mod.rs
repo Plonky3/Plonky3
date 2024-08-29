@@ -4,6 +4,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use itertools::Itertools;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, Field};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
@@ -42,7 +43,7 @@ where
 
 /// Multiply each element of column `j` of `mat` by `shift**j`.
 #[instrument(level = "debug", skip_all)]
-fn coset_shift_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, scale: F) {
+fn coset_shift_and_scale_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, scale: F) {
     let powers = shift.shifted_powers(scale).take(ncols).collect::<Vec<_>>();
     mat.par_chunks_exact_mut(ncols).for_each(|row| {
         row.iter_mut().zip(&powers).for_each(|(coeff, &weight)| {
@@ -51,6 +52,7 @@ fn coset_shift_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, scale: F) {
     });
 }
 
+/// FIXME: Fix name
 /// Radix-2 decimation-in-frequency FFT
 #[derive(Clone, Debug, Default)]
 pub struct Radix2Dif<F> {
@@ -239,8 +241,15 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     ) -> Self::Evaluations {
         let nrows = mat.height();
         let ncols = mat.width();
-
         let result_nrows = nrows << added_bits;
+
+        if nrows == 1 {
+            let dupd_rows = core::iter::repeat(mat.values)
+                .take(result_nrows)
+                .flatten()
+                .collect();
+            return RowMajorMatrix::new(dupd_rows, ncols).bit_reverse_rows();
+        }
 
         let input_size = nrows * ncols;
         let output_size = result_nrows * ncols;
@@ -268,11 +277,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // `coeffs` will hold the result of the inverse FFT
         let coeffs = &mut output[..input_size];
 
-        // TODO: Ensure that we only calculate twiddle factors once;
-        // at the moment we calculate a smaller table first then the
-        // bigger table, but if we did the bigger table first we
-        // wouldn't need to do the smaller table at all.
-
         debug_span!("pre-transpose", nrows, ncols)
             .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
 
@@ -287,17 +291,41 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // TODO: consider integrating coset shift into twiddles?
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
-        coset_shift_rows(coeffs, nrows, shift, inv_len);
+        coset_shift_and_scale_rows(coeffs, nrows, shift, inv_len);
 
-        // Extend coeffs by a suitable number of zeros
-        padded.fill(MontyField31::zero());
-        zero_pad_rows(padded, coeffs, ncols, nrows, added_bits);
-
-        // Apply DFT
         self.update_twiddles(result_nrows);
         let twiddles = self.twiddles.borrow().clone();
-        debug_span!("dft batch", n_dfts = ncols, fft_len = nrows)
-            .in_scope(|| Self::decimation_in_freq_dft(padded, result_nrows, &twiddles));
+
+        // TODO: The following span assumes added_bits=1
+        assert_eq!(added_bits, 1, "added_bits > 1 not yet implemented");
+        debug_span!("dft batch first layer").in_scope(|| {
+            let ncols = nrows;
+            let new_ncols = result_nrows;
+            padded
+                .par_chunks_exact_mut(new_ncols)
+                .zip_eq(coeffs.par_chunks_exact(ncols))
+                .for_each(|(padded_row, row)| {
+                    // TODO: We could avoid these copies by writing the output
+                    // of coset_shift() directly into padded; copying currently
+                    // takes ~10% of this scope so maybe not worth it.
+                    padded_row[..ncols].copy_from_slice(row);
+                    padded_row[ncols] = row[0]; // twiddle is 1
+                    padded_row[ncols + 1..]
+                        .iter_mut()
+                        .zip_eq(row[1..].iter().zip_eq(&twiddles[0]))
+                        .for_each(|(p, (&r, &w))| *p = r * w);
+                });
+        });
+
+        // Apply DFT
+        debug_span!(
+            "dft batch halves",
+            n_dfts = ncols << added_bits,
+            fft_len = result_nrows >> added_bits
+        )
+        .in_scope(|| {
+            Self::decimation_in_freq_dft(padded, result_nrows >> added_bits, &twiddles[1..])
+        });
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
