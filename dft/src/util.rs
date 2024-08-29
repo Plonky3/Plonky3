@@ -1,11 +1,9 @@
 use alloc::vec;
-use alloc::vec::Vec;
 use core::borrow::BorrowMut;
 
 use p3_field::Field;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_matrix::Matrix;
-use p3_maybe_rayon::prelude::ParallelIterator;
 use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.

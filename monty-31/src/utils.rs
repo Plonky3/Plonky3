@@ -54,3 +54,44 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     let corr = if over { MP::PRIME } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
 }
+
+/// Given x in `0..P << MONTY_BITS`, return x mod P in [0, 2p).
+/// TODO: Double-check the ranges above.
+#[inline(always)]
+#[must_use]
+pub(crate) fn partial_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
+    let q = MP::MONTY_MU.wrapping_mul(x as u32);
+    let h = ((q as u64 * MP::PRIME as u64) >> 32) as u32;
+    MP::PRIME - h + (x >> 32) as u32
+}
+
+/// Given x in [0, 2p), return the representative of x mod p in [0, p)
+#[inline(always)]
+#[must_use]
+pub(crate) fn reduce_2p<MP: MontyParameters>(x: u32) -> u32 {
+    debug_assert!(x < 2 * MP::PRIME);
+
+    if x < MP::PRIME {
+        x
+    } else {
+        x - MP::PRIME
+    }
+}
+
+/// Given x in [0, 4p), return the representative of x mod p in [0, p)
+#[inline(always)]
+#[must_use]
+pub(crate) fn reduce_4p<MP: MontyParameters>(mut x: u64) -> u32 {
+    debug_assert!(x < 4 * (MP::PRIME as u64));
+
+    if x > (MP::PRIME as u64) {
+        x -= MP::PRIME as u64;
+    }
+    if x > (MP::PRIME as u64) {
+        x -= MP::PRIME as u64;
+    }
+    if x > (MP::PRIME as u64) {
+        x -= MP::PRIME as u64;
+    }
+    x as u32
+}
