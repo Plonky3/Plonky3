@@ -329,7 +329,7 @@ fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// func should only depend in the 32 bit entries in the even indices.
 /// The output of func must lie in (-P, ..., P) and be stored in the odd indices.
 /// The even indices of the output of func will not be read.
-/// the input should should conform to the requirements of func
+/// The input should conform to the requirements of `func`.
 #[inline]
 #[must_use]
 fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
