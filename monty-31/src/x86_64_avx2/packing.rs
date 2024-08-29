@@ -332,23 +332,21 @@ fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// The input should conform to the requirements of `func`.
 #[inline]
 #[must_use]
-fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
+unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {
-    unsafe {
-        let input_evn = input;
-        let input_odd = movehdup_epi32(input);
+    let input_evn = input;
+    let input_odd = movehdup_epi32(input);
 
-        let d_evn = func(input_evn);
-        let d_odd = func(input_odd);
+    let d_evn = func(input_evn);
+    let d_odd = func(input_odd);
 
-        let d_evn_hi = movehdup_epi32(d_evn);
-        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
+    let d_evn_hi = movehdup_epi32(d_evn);
+    let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
 
-        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
-    }
+    let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
+    x86_64::_mm256_min_epu32(t, u)
 }
 
 /// Negate a vector of MontyField31 field elements in canonical form.
