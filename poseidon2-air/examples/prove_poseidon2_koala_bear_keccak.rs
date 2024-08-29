@@ -9,7 +9,7 @@ use p3_keccak::Keccak256Hash;
 use p3_koala_bear::KoalaBear;
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_monty_31::dft::Radix2Dif;
+use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -77,7 +77,7 @@ fn main() -> Result<(), impl Debug> {
 
     //type Dft = Radix2DitParallel;
     //let dft = Dft {};
-    type Dft = Radix2Dif<Val>;
+    type Dft = RecursiveDft<Val>;
     let dft = Dft::new(trace.height());
 
     let fri_config = FriConfig {

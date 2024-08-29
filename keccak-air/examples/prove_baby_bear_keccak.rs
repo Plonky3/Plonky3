@@ -10,7 +10,7 @@ use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_monty_31::dft::Radix2Dif;
+use p3_monty_31::dft::RecursiveDft;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
@@ -54,7 +54,7 @@ fn main() -> Result<(), impl Debug> {
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
 
-    type Dft = Radix2Dif<Val>;
+    type Dft = RecursiveDft<Val>;
     let dft = Dft::new(trace.height());
     //type Dft = Radix2DitParallel;
     //let dft = Dft::default();

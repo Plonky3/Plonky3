@@ -33,7 +33,7 @@ fn coset_shift_and_scale_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, s
 /// FIXME: Fix name
 /// Radix-2 decimation-in-frequency FFT
 #[derive(Clone, Debug, Default)]
-pub struct Radix2Dif<F> {
+pub struct RecursiveDft<F> {
     /// Memoized twiddle factors for each length log_n.
     ///
     /// TODO: The use of RefCell means this can't be shared across
@@ -43,7 +43,7 @@ pub struct Radix2Dif<F> {
     inv_twiddles: RefCell<Vec<Vec<F>>>,
 }
 
-impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
+impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     pub fn new(n: usize) -> Self {
         Self {
             twiddles: RefCell::new(MontyField31::roots_of_unity_table(n)),
@@ -137,7 +137,7 @@ impl<MP: FieldParameters + TwoAdicData> Radix2Dif<MontyField31<MP>> {
 /// Hence the only bit-reversal that needs to take place is on the input.
 ///
 impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<MontyField31<MP>>
-    for Radix2Dif<MontyField31<MP>>
+    for RecursiveDft<MontyField31<MP>>
 {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<MontyField31<MP>>>;
 

@@ -230,8 +230,8 @@ mod tests {
     test_field_dft!(bowers, crate::BabyBear, p3_dft::Radix2Bowers);
     test_field_dft!(parallel, crate::BabyBear, p3_dft::Radix2DitParallel);
     test_field_dft!(
-        radix2dif_recur,
+        recur_dft,
         crate::BabyBear,
-        p3_monty_31::dft::Radix2Dif<_>
+        p3_monty_31::dft::RecursiveDft<_>
     );
 }

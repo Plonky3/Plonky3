@@ -6,7 +6,7 @@ use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
-use p3_monty_31::dft::Radix2Dif;
+use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
@@ -21,7 +21,7 @@ fn bench_fft(c: &mut Criterion) {
     const BATCH_SIZE: usize = 256;
 
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    fft::<BabyBear, Radix2Dif<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -37,7 +37,7 @@ fn bench_fft(c: &mut Criterion) {
 
     ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
 
-    coset_lde::<BabyBear, Radix2Dif<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
