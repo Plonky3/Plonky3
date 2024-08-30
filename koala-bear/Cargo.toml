@@ -20,7 +20,6 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 [dev-dependencies]
 p3-dft = { path = "../dft" }
 p3-field-testing = { path = "../field-testing" }
-p3-matrix = { path = "../matrix" }
 ark-ff = { version = "^0.4.0", default-features = false }
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }

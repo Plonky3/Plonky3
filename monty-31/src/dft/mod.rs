@@ -130,7 +130,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 ///   - bit-reverse input
 ///   - invDFT DIT
 ///     - result is in "correct" order
-///   - zero extend result
+///   - coset shift and zero extend result
 ///   - DFT DIF on result
 ///     - output is bit-reversed, as required for FRI.
 ///
@@ -232,8 +232,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let output_size = result_nrows * ncols;
 
         // TODO: Use faster bit-reversal algo
-        let mat = debug_span!("bit-reverse input trace")
-            .in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
+        let mat = mat.bit_reverse_rows().to_row_major_matrix();
 
         // Allocate space for the output and the intermediate state.
         // NB: The unsafe version below takes about 10μs, whereas doing
@@ -256,7 +255,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         debug_span!("pre-transpose", nrows, ncols)
             .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
 
-        // Apply inverse DFT
+        // Apply inverse DFT; result is not yet normalised.
         self.update_inv_twiddles(nrows);
         let inv_twiddles = self.inv_twiddles.borrow().clone();
         debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
@@ -265,16 +264,19 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // At this point the inverse FFT of each column of `mat` appears
         // as a row in `coeffs`.
 
-        // TODO: consider integrating coset shift into twiddles?
+        // Normalise inverse DFT and coset shift in one go.
+        // TODO: consider integrating coset shift into twiddles; the current timing
+        // suggests this is not worth the effort.
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
         coset_shift_and_scale_rows(coeffs, nrows, shift, inv_len);
 
         self.update_twiddles(result_nrows);
         let twiddles = self.twiddles.borrow().clone();
 
-        // TODO: The following span assumes added_bits=1
-        // TODO: It's not clear from the timing that this is indeed
-        // faster than just calling the FFT directly.
+        // Apply first layer of DFT taking advantage of the fact that a
+        // significant fraction of the input (typically 1/2, when added_bits=1)
+        // is known to be zero.
+        // FIXME: The following span assumes added_bits=1
         assert_eq!(added_bits, 1, "added_bits > 1 not yet implemented");
         debug_span!("dft batch first layer").in_scope(|| {
             let ncols = nrows;

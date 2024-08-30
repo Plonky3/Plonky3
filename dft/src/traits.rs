@@ -5,7 +5,6 @@ use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::swap_rows;
 use p3_matrix::Matrix;
-use tracing::debug_span;
 
 use crate::util::{coset_shift_cols, divide_by_height};
 
@@ -42,7 +41,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         //         = \sum_j (c_j s^j) (g^i)^j
         // which has the structure of an ordinary DFT, except each coefficient c_j is first replaced
         // by c_j s^j.
-        debug_span!("apply shift powers").in_scope(|| coset_shift_cols(&mut mat, shift));
+        coset_shift_cols(&mut mat, shift);
         self.dft_batch(mat)
     }
 

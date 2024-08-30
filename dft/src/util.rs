@@ -41,7 +41,7 @@ pub fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: 
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.
-pub fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
+pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
     mat.rows_mut()
         .zip(shift.powers())
         .for_each(|(row, weight)| {

@@ -1,3 +1,9 @@
+//! Discrete Fourier Transform, in-place, decimation-in-time
+//!
+//! Straightforward recusive algorithm, "unrolled" up to size 256.
+//!
+//! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft
+
 extern crate alloc;
 use alloc::vec::Vec;
 

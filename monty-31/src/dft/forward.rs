@@ -1,3 +1,9 @@
+//! Discrete Fourier Transform, in-place, decimation-in-frequency
+//!
+//! Straightforward recusive algorithm, "unrolled" up to size 256.
+//!
+//! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft
+
 extern crate alloc;
 use alloc::vec::Vec;
 
@@ -11,12 +17,12 @@ use crate::{
 };
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
-    /// FIXME: Document the structure of the return value
+    /// Given a field element `gen` of order n where `n = 2^lg_n`,
+    /// return a vector of vectors `table` where table[i] is the
+    /// vector of twiddle factors for an fft of length n/2^i. The values
+    /// gen^0 = 1 are skipped, as are g_i^k for k >= i/2 as these are
+    /// just the negatives of the other roots (using g_i^{i/2} = -1).
     fn make_table(gen: Self, lg_n: usize) -> Vec<Vec<Self>> {
-        // TODO: Consider following Hexl and storing the roots in a single
-        // array in bit-reversed order, but with duplicates for certain roots
-        // to avoid computing permutations in the inner loop.
-
         let half_n = 1 << (lg_n - 1);
         // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
         let nth_roots: Vec<_> = gen.powers().take(half_n).skip(1).collect();
