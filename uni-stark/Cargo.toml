@@ -25,11 +25,8 @@ p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }
-p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 rand = "0.8.5"
-tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
-tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 postcard = { version = "1.0.0", default-features = false, features = ["alloc"] }
