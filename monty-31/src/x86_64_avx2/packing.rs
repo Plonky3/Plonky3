@@ -172,28 +172,37 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 // representative in [-B/2, ..., B/2 - 1]. The division in step 2 is clearly still exact and
 // |C - Q P| <= |C| + |Q||P| < PB so D still lies in (-P, ..., P).
 
-/// Perform a Montgomery reduction on each 64 bit element.
+/// Perform a partial Montgomery reduction on each 64 bit element.
 /// Input must lie in {0, ..., 2^32P}.
 /// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
 #[inline]
 #[must_use]
-fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+fn partial_monty_red_unsigned_to_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_MU);
         let q_p = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
+
+        // By construction, the bottom 32 bits of input and q_p are equal.
+        // Thus _mm256_sub_epi32 and _mm256_sub_epi64 should act identically.
+        // However for some reason, the compiler gets confused if we use _mm256_sub_epi64
+        // and outputs a load of nonsense, see: https://godbolt.org/z/3W8M7Tv84.
         x86_64::_mm256_sub_epi32(input, q_p)
     }
 }
 
-/// Perform a Montgomery reduction on each 64 bit element.
+/// Perform a partial Montgomery reduction on each 64 bit element.
 /// Input must lie in {-2^{31}P, ..., 2^31P}.
 /// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
 #[inline]
 #[must_use]
-fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+fn partial_monty_red_signed_to_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epi32(input, MPAVX2::PACKED_MU);
         let q_p = x86_64::_mm256_mul_epi32(q, MPAVX2::PACKED_P);
+
+        // Unlike the previous case the compiler output is essentially identical
+        // between _mm256_sub_epi32 and _mm256_sub_epi64. We use _mm256_sub_epi32
+        // again just for consistency.
         x86_64::_mm256_sub_epi32(input, q_p)
     }
 }
@@ -207,7 +216,7 @@ fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 fn monty_mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
-        monty_red_unsigned::<MPAVX2>(prod)
+        partial_monty_red_unsigned_to_signed::<MPAVX2>(prod)
     }
 }
 
@@ -220,7 +229,7 @@ fn monty_mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i
 fn monty_mul_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epi32(lhs, rhs);
-        monty_red_signed::<MPAVX2>(prod)
+        partial_monty_red_signed_to_signed::<MPAVX2>(prod)
     }
 }
 
@@ -283,7 +292,7 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
     unsafe {
         let square = x86_64::_mm256_mul_epi32(input, input);
-        let square_red = monty_red_unsigned::<MPAVX2>(square);
+        let square_red = partial_monty_red_unsigned_to_signed::<MPAVX2>(square);
         movehdup_epi32(square_red)
     }
 }
@@ -538,6 +547,9 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
             0 => Self::one(),
             1 => *self,
