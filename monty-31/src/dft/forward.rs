@@ -10,11 +10,11 @@ use alloc::vec::Vec;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_util::log2_strict_usize;
 
-use super::split_at_mut_unchecked;
 use crate::{
     monty_reduce, partial_monty_reduce, reduce_2p, reduce_4p, FieldParameters, MontyField31,
     MontyParameters, TwoAdicData,
 };
+use p3_util::split_at_mut_unchecked;
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Given a field element `gen` of order n where `n = 2^lg_n`,

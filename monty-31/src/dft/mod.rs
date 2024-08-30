@@ -11,7 +11,6 @@ use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::split_at_mut_unchecked;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -30,8 +29,8 @@ fn coset_shift_and_scale_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, s
     });
 }
 
-/// FIXME: Fix name
-/// Radix-2 decimation-in-frequency FFT
+/// Recursive DFT, decimation-in-frequency in the forward direction,
+/// decimation-in-time in the backward (inverse) direction.
 #[derive(Clone, Debug, Default)]
 pub struct RecursiveDft<F> {
     /// Memoized twiddle factors for each length log_n.

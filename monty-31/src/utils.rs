@@ -56,7 +56,6 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 }
 
 /// Given x in `0..P << MONTY_BITS`, return x mod P in [0, 2p).
-/// TODO: Double-check the ranges above.
 #[inline(always)]
 #[must_use]
 pub(crate) fn partial_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {

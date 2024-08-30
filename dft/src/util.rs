@@ -18,7 +18,8 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
 /// so in actuality we're interleaving zero rows.
 #[inline]
 pub fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: usize) {
-    // FIXME: This is copypasta from matrix/dense.rs; it is only used by Bowers.
+    // TODO: This is copypasta from matrix/dense.rs that should be
+    // refactored; it is only used by Radix2Bowers.
     if added_bits == 0 {
         return;
     }
