@@ -7,9 +7,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_koala_bear::KoalaBear;
-use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -75,10 +73,8 @@ fn main() -> Result<(), impl Debug> {
         PARTIAL_ROUNDS,
     >(inputs);
 
-    //type Dft = Radix2DitParallel;
-    //let dft = Dft {};
-    type Dft = RecursiveDft<Val>;
-    let dft = Dft::new(trace.height());
+    type Dft = Radix2DitParallel;
+    let dft = Dft {};
 
     let fri_config = FriConfig {
         log_blowup: 1,

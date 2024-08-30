@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use p3_baby_bear::BabyBear;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
-use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
@@ -56,8 +55,6 @@ fn main() -> Result<(), impl Debug> {
 
     type Dft = RecursiveDft<Val>;
     let dft = Dft::new(trace.height());
-    //type Dft = Radix2DitParallel;
-    //let dft = Dft::default();
 
     let fri_config = FriConfig {
         log_blowup: 1,
