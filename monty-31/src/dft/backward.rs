@@ -7,11 +7,12 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+use p3_util::split_at_mut_unchecked;
+
 use crate::{
     monty_reduce, partial_monty_reduce, reduce_2p, reduce_4p, MontyField31, MontyParameters,
     TwoAdicData,
 };
-use p3_util::split_at_mut_unchecked;
 
 impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]
