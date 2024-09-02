@@ -134,6 +134,7 @@ impl AbstractField for Goldilocks {
         Self::new(u64::from(n))
     }
 
+    #[inline(always)]
     fn from_canonical_u64(n: u64) -> Self {
         Self::new(n)
     }
@@ -265,6 +266,7 @@ impl TwoAdicField for Goldilocks {
 impl Add for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self {
         let (sum, over) = self.value.overflowing_add(rhs.value);
         let (mut sum, over) = sum.overflowing_add(u64::from(over) * Self::NEG_ORDER);
@@ -285,6 +287,7 @@ impl Add for Goldilocks {
 }
 
 impl AddAssign for Goldilocks {
+    #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
@@ -303,6 +306,7 @@ impl Sum for Goldilocks {
 impl Sub for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn sub(self, rhs: Self) -> Self {
         let (diff, under) = self.value.overflowing_sub(rhs.value);
         let (mut diff, under) = diff.overflowing_sub(u64::from(under) * Self::NEG_ORDER);
@@ -323,6 +327,7 @@ impl Sub for Goldilocks {
 }
 
 impl SubAssign for Goldilocks {
+    #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -331,6 +336,7 @@ impl SubAssign for Goldilocks {
 impl Neg for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         Self::new(Self::ORDER_U64 - self.as_canonical_u64())
     }
@@ -339,12 +345,14 @@ impl Neg for Goldilocks {
 impl Mul for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn mul(self, rhs: Self) -> Self {
-        reduce128(u128::from(self.value) * u128::from(rhs.value))
+        reduce128((self.value as u128) * (rhs.value as u128))
     }
 }
 
 impl MulAssign for Goldilocks {
+    #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }

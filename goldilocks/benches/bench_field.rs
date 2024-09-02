@@ -4,6 +4,7 @@ use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
+use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput};
 use p3_goldilocks::Goldilocks;
 
 type F = Goldilocks;
@@ -11,6 +12,8 @@ type F = Goldilocks;
 fn bench_field(c: &mut Criterion) {
     let name = "Goldilocks";
     const REPS: usize = 1000;
+    benchmark_mul_latency::<F, 100>(c, name);
+    benchmark_mul_throughput::<F, 25>(c, name);
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
     benchmark_iter_sum::<F, 8, REPS>(c, name);
