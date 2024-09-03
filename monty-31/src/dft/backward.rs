@@ -13,7 +13,6 @@ use crate::{partial_monty_reduce, MontyField31, MontyParameters, TwoAdicData};
 impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]
     fn backward_butterfly(x: Self, y: Self, w: Self) -> (Self, Self) {
-        // TODO: See if doing a partial_monty_reduce followed by reduce_3p's is faster
         let t = y * w;
         (x + t, x - t)
     }
