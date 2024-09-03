@@ -24,7 +24,6 @@ p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-merkle-tree = { path = "../merkle-tree" }
-p3-poseidon = { path = "../poseidon" }
 p3-symmetric = { path = "../symmetric" }
 
 hashbrown = "0.14.3"
