@@ -6,8 +6,8 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
-use itertools::izip;
 
+use itertools::izip;
 use p3_field::{AbstractField, Field, TwoAdicField};
 use p3_util::log2_strict_usize;
 
@@ -64,6 +64,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
+        // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
 
         let s = top[0] + tail[0];
