@@ -63,34 +63,3 @@ pub(crate) fn partial_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     let h = ((q as u64 * MP::PRIME as u64) >> 32) as u32;
     MP::PRIME - h + (x >> 32) as u32
 }
-
-/// Given x in [0, 2p), return the representative of x mod p in [0, p)
-#[inline(always)]
-#[must_use]
-pub(crate) fn reduce_2p<MP: MontyParameters>(x: u32) -> u32 {
-    debug_assert!(x < 2 * MP::PRIME);
-
-    if x < MP::PRIME {
-        x
-    } else {
-        x - MP::PRIME
-    }
-}
-
-/// Given x in [0, 4p), return the representative of x mod p in [0, p)
-#[inline(always)]
-#[must_use]
-pub(crate) fn reduce_4p<MP: MontyParameters>(mut x: u64) -> u32 {
-    debug_assert!(x < 4 * (MP::PRIME as u64));
-
-    if x > (MP::PRIME as u64) {
-        x -= MP::PRIME as u64;
-    }
-    if x > (MP::PRIME as u64) {
-        x -= MP::PRIME as u64;
-    }
-    if x > (MP::PRIME as u64) {
-        x -= MP::PRIME as u64;
-    }
-    x as u32
-}

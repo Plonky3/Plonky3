@@ -89,7 +89,7 @@ pub trait TwoAdicData: MontyParameters {
     /// Largest n such that 2^n divides p - 1.
     const TWO_ADICITY: usize;
 
-    /// ArrayLike should usually be [MontyField31; TWO_ADICITY + 1].
+    /// ArrayLike should usually be &'static [MontyField31].
     type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;
 
     /// A list of generators of 2-adic subgroups.
