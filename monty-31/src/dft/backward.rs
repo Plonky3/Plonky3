@@ -8,8 +8,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 use itertools::izip;
 
-use p3_util::split_at_mut_unchecked;
-
 use crate::{partial_monty_reduce, MontyField31, MontyParameters, TwoAdicData};
 
 impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
@@ -25,7 +23,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
-        let (top, tail) = unsafe { split_at_mut_unchecked(a, half_n) };
+        let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
 
         let s = top[0] + tail[0];
         let t = top[0] - tail[0];
@@ -74,7 +72,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(a.len(), 8);
 
         // Safe because a.len() == 8
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
         Self::backward_4(a0);
         Self::backward_4(a1);
 
@@ -86,7 +84,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(a.len(), 16);
 
         // Safe because a.len() == 16
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
         Self::backward_8(a0);
         Self::backward_8(a1);
 
@@ -98,7 +96,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(a.len(), 32);
 
         // Safe because a.len() == 32
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
         Self::backward_16(a0);
         Self::backward_16(a1);
 
@@ -110,7 +108,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(a.len(), 64);
 
         // Safe because a.len() == 64
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
         Self::backward_32(a0, &root_table[1..]);
         Self::backward_32(a1, &root_table[1..]);
 
@@ -122,7 +120,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(a.len(), 128);
 
         // Safe because a.len() == 128
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
         Self::backward_64(a0, &root_table[1..]);
         Self::backward_64(a1, &root_table[1..]);
 
@@ -134,7 +132,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(a.len(), 256);
 
         // Safe because a.len() == 256
-        let (a0, a1) = unsafe { split_at_mut_unchecked(a, a.len() / 2) };
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
         Self::backward_128(a0, &root_table[1..]);
         Self::backward_128(a1, &root_table[1..]);
 
@@ -162,7 +160,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
                 debug_assert!(n > 64);
 
                 // Safe because a.len() > 64
-                let (a0, a1) = unsafe { split_at_mut_unchecked(a, n / 2) };
+                let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
                 Self::backward_fft(a0, &root_table[1..]);
                 Self::backward_fft(a1, &root_table[1..]);
 

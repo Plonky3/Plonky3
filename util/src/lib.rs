@@ -170,36 +170,6 @@ pub fn pretty_name<T>() -> String {
     result
 }
 
-/// Copied from Rust nightly sources
-#[inline(always)]
-unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T] {
-    unsafe { &mut *core::ptr::slice_from_raw_parts_mut(data, len) }
-}
-
-/// Divides one mutable slice into two at an index, without doing bounds checking.
-///
-/// NB: Copied from Rust nightly sources
-///
-/// # Safety
-///
-/// Causes undefined behaviour if mid > v.len().
-#[inline(always)]
-pub unsafe fn split_at_mut_unchecked<T>(v: &mut [T], mid: usize) -> (&mut [T], &mut [T]) {
-    let len = v.len();
-    let ptr = v.as_mut_ptr();
-
-    // SAFETY: Caller has to check that `0 <= mid <= self.len()`.
-    //
-    // `[ptr; mid]` and `[mid; len]` are not overlapping, so returning
-    // a mutable reference is fine.
-    unsafe {
-        (
-            from_raw_parts_mut(ptr, mid),
-            from_raw_parts_mut(ptr.add(mid), len - mid),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
