@@ -1,10 +1,11 @@
 //! An implementation of the FFT for `MontyField31`
 extern crate alloc;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use itertools::Itertools;
+use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, Field};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
@@ -20,13 +21,22 @@ use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
 /// Multiply each element of column `j` of `mat` by `shift**j`.
 #[instrument(level = "debug", skip_all)]
-fn coset_shift_and_scale_rows<F: Field>(mat: &mut [F], ncols: usize, shift: F, scale: F) {
+fn coset_shift_and_scale_rows<F: Field>(
+    out: &mut [F],
+    out_ncols: usize,
+    mat: &[F],
+    ncols: usize,
+    shift: F,
+    scale: F,
+) {
     let powers = shift.shifted_powers(scale).take(ncols).collect::<Vec<_>>();
-    mat.par_chunks_exact_mut(ncols).for_each(|row| {
-        row.iter_mut().zip(&powers).for_each(|(coeff, &weight)| {
-            *coeff *= weight;
-        })
-    });
+    out.par_chunks_exact_mut(out_ncols)
+        .zip(mat.par_chunks_exact(ncols))
+        .for_each(|(out_row, in_row)| {
+            izip!(out_row.iter_mut(), in_row, &powers).for_each(|(out, &coeff, &weight)| {
+                *out = coeff * weight;
+            });
+        });
 }
 
 /// Recursive DFT, decimation-in-frequency in the forward direction,
@@ -234,16 +244,19 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let mat = mat.bit_reverse_rows().to_row_major_matrix();
 
         // Allocate space for the output and the intermediate state.
-        // NB: The unsafe version below takes about 10μs, whereas doing
+        // NB: The unsafe version below takes under 1ms, whereas doing
         //   vec![MontyField31::zero(); output_size])
         // takes about 320ms. Safety is expensive.
-        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| {
+        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| unsafe {
+            // Safety: This obtains uninitialised memory, but we're
+            // careful to ensure no part is accessed before it is
+            // written to.
             let mut output = Vec::with_capacity(output_size);
-            let mut padded = Vec::with_capacity(output_size);
-            unsafe {
-                output.set_len(output_size);
-                padded.set_len(output_size);
-            }
+            output.set_len(output_size);
+            // Safety: This is pretty dodgy, but works because
+            // MontyField31 is #[repr(transparent)]
+            let padded =
+                core::mem::transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
             (output, padded)
         });
 
@@ -264,47 +277,20 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // as a row in `coeffs`.
 
         // Normalise inverse DFT and coset shift in one go.
-        // TODO: consider integrating coset shift into twiddles; the current timing
+        // IDEA: consider integrating coset shift into twiddles; the current timing
         // suggests this is not worth the effort.
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
-        coset_shift_and_scale_rows(coeffs, nrows, shift, inv_len);
+        coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
+
+        // `padded` is implicitly zero padded since it was initialised
+        // to zeros when declared above.
 
         self.update_twiddles(result_nrows);
         let twiddles = self.twiddles.borrow().clone();
 
-        // Apply first layer of DFT taking advantage of the fact that a
-        // significant fraction of the input (typically 1/2, when added_bits=1)
-        // is known to be zero.
-        // FIXME: The following span assumes added_bits=1
-        assert_eq!(added_bits, 1, "added_bits > 1 not yet implemented");
-        debug_span!("dft batch first layer").in_scope(|| {
-            let ncols = nrows;
-            let new_ncols = result_nrows;
-            padded
-                .par_chunks_exact_mut(new_ncols)
-                .zip_eq(coeffs.par_chunks_exact(ncols))
-                .for_each(|(padded_row, row)| {
-                    // TODO: We could avoid these copies by writing the output
-                    // of coset_shift() directly into padded; copying currently
-                    // takes ~10% of this scope so maybe not worth it.
-                    padded_row[..ncols].copy_from_slice(row);
-                    padded_row[ncols] = row[0]; // twiddle is 1
-                    padded_row[ncols + 1..]
-                        .iter_mut()
-                        .zip_eq(row[1..].iter().zip_eq(&twiddles[0]))
-                        .for_each(|(p, (&r, &w))| *p = r * w);
-                });
-        });
-
         // Apply DFT
-        debug_span!(
-            "dft batch halves",
-            n_dfts = ncols << added_bits,
-            fft_len = result_nrows >> added_bits
-        )
-        .in_scope(|| {
-            Self::decimation_in_freq_dft(&mut padded, result_nrows >> added_bits, &twiddles[1..])
-        });
+        debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
+            .in_scope(|| Self::decimation_in_freq_dft(&mut padded, result_nrows, &twiddles));
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
