@@ -4,6 +4,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::mem::transmute;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
@@ -248,12 +249,9 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         //   vec![MontyField31::zero(); output_size])
         // takes 100s of ms. Safety is expensive.
         let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| unsafe {
-            // Safety: These are pretty dodgy, but works because
-            // MontyField31 is #[repr(transparent)]
-            let output =
-                core::mem::transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
-            let padded =
-                core::mem::transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
+            // Safety: These are pretty dodgy, but work because MontyField31 is #[repr(transparent)]
+            let output = transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
+            let padded = transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
             (output, padded)
         });
 
