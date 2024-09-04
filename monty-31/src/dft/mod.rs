@@ -244,17 +244,14 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let mat = mat.bit_reverse_rows().to_row_major_matrix();
 
         // Allocate space for the output and the intermediate state.
-        // NB: The unsafe version below takes under 1ms, whereas doing
+        // NB: The unsafe version below takes well under 1ms, whereas doing
         //   vec![MontyField31::zero(); output_size])
-        // takes about 320ms. Safety is expensive.
+        // takes 100s of ms. Safety is expensive.
         let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| unsafe {
-            // Safety: This obtains uninitialised memory, but we're
-            // careful to ensure no part is accessed before it is
-            // written to.
-            let mut output = Vec::with_capacity(output_size);
-            output.set_len(output_size);
-            // Safety: This is pretty dodgy, but works because
+            // Safety: These are pretty dodgy, but works because
             // MontyField31 is #[repr(transparent)]
+            let output =
+                core::mem::transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
             let padded =
                 core::mem::transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
             (output, padded)
