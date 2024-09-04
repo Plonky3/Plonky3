@@ -122,7 +122,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -210,20 +210,6 @@ pub(crate) fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> _
     }
 }
 
-/// Perform a Montgomery reduction on each 64 bit element.
-/// Input must lie in {0, ..., 2^32P}.
-/// The output will lie in {0, ..., 2P} and be stored in the upper 32 bits.
-#[inline]
-#[must_use]
-#[allow(non_snake_case)]
-pub(crate) fn monty_red_unsigned_pos<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
-    unsafe {
-        let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_NEG_MU);
-        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
-        x86_64::_mm256_add_epi64(input, q_P)
-    }
-}
-
 /// Multiply the MontyField31 field elements in the even index entries.
 /// lhs[2i], rhs[2i] must be unsigned 32-bit integers such that
 /// lhs[2i] * rhs[2i] lies in {0, ..., 2^32P}.
@@ -245,7 +231,7 @@ fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epi32(lhs, rhs);
         monty_red_signed::<MPAVX2>(prod)
@@ -306,7 +292,7 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) copied into both the even and odd indices.
 #[inline]
 #[must_use]
-fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     // Note that we do not need a restriction on the size of input[i]^2 as
     // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
     unsafe {
@@ -411,7 +397,7 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
