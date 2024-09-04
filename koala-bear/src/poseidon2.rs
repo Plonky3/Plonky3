@@ -1,8 +1,9 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+use p3_field::{AbstractField, Field};
 
 use p3_monty_31::{
-    InternalLayerBaseParameters, InternalLayerParameters, Poseidon2ExternalLayerMonty31,
-    Poseidon2InternalLayerMonty31,
+    construct_2_exp_neg_n, InternalLayerBaseParameters, InternalLayerParameters, MontyField31,
+    Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 
 use crate::KoalaBearParameters;
@@ -33,17 +34,90 @@ pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> = Poseidon2External
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
 
+// [-2, 1, 2, 1/2, -1/2, 3, -3, 4, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
+
 impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
-    type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+    type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
+
+    fn internal_diag_mul(
+        state: &mut [MontyField31<KoalaBearParameters>; 16],
+        sum: MontyField31<KoalaBearParameters>,
+    ) {
+        // We ignore state[0] as it has already been handled.
+        // [-2, 1, 2, 1/2, -1/2, 3, -3, 4, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
+        state[1] += sum;
+        state[2] = state[2].double() + sum;
+        state[3] = state[3].halve() + sum;
+        state[4] = sum + state[4].double() + state[4];
+        state[5] = sum + state[5].double().double();
+        state[6] = sum - state[6].halve();
+        state[7] = sum - (state[7].double() + state[7]);
+        state[8] = sum - state[8].double().double();
+        state[9] *= construct_2_exp_neg_n(8);
+        state[9] += sum;
+        state[10] *= construct_2_exp_neg_n(8);
+        state[10] = sum - state[10];
+        state[11] *= construct_2_exp_neg_n(3);
+        state[11] += sum;
+        state[12] *= construct_2_exp_neg_n(3);
+        state[12] = sum - state[12];
+        state[13] *= construct_2_exp_neg_n(4);
+        state[13] = sum - state[13];
+        state[14] *= construct_2_exp_neg_n(24);
+        state[14] += sum;
+        state[15] *= construct_2_exp_neg_n(24);
+        state[15] = sum - state[15];
+    }
 }
 
 impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
-    type ArrayLike = [u8; 23];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
-    ];
+    type ArrayLike = [MontyField31<KoalaBearParameters>; 23];
+
+    fn internal_diag_mul(
+        state: &mut [MontyField31<KoalaBearParameters>; 24],
+        sum: MontyField31<KoalaBearParameters>,
+    ) {
+        // We ignore state[0] as it has already been handled.
+        // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
+        state[1] += sum;
+        state[2] = state[2].double() + sum;
+        state[3] = state[3].halve() + sum;
+        state[4] = sum + state[4].double() + state[4];
+        state[5] = sum + state[5].double().double();
+        state[6] = sum - state[6].halve();
+        state[7] = sum - (state[7].double() + state[7]);
+        state[8] = sum - state[8].double().double();
+        state[9] *= construct_2_exp_neg_n(8);
+        state[9] += sum;
+        state[10] *= construct_2_exp_neg_n(8);
+        state[10] = sum - state[10];
+        state[11] *= construct_2_exp_neg_n(2);
+        state[11] += sum;
+        state[12] *= construct_2_exp_neg_n(3);
+        state[12] += sum;
+        state[13] *= construct_2_exp_neg_n(3);
+        state[13] = sum - state[13];
+        state[14] *= construct_2_exp_neg_n(4);
+        state[14] += sum;
+        state[15] *= construct_2_exp_neg_n(4);
+        state[15] = sum - state[15];
+        state[16] *= construct_2_exp_neg_n(5);
+        state[16] += sum;
+        state[17] *= construct_2_exp_neg_n(5);
+        state[17] = sum - state[17];
+        state[18] *= construct_2_exp_neg_n(6);
+        state[18] += sum;
+        state[19] *= construct_2_exp_neg_n(6);
+        state[19] = sum - state[19];
+        state[20] *= construct_2_exp_neg_n(7);
+        state[20] = sum - state[20];
+        state[21] *= construct_2_exp_neg_n(9);
+        state[21] = sum - state[21];
+        state[22] *= construct_2_exp_neg_n(24);
+        state[22] += sum;
+        state[23] *= construct_2_exp_neg_n(24);
+        state[23] = sum - state[23];
+    }
 }
 
 impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {}
@@ -70,8 +144,9 @@ mod tests {
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
 
     // Our Poseidon2 Implementation for KoalaBear
-    fn poseidon2_koalabear<const WIDTH: usize, const D: u64>(input: &mut [F; WIDTH])
-    where
+    fn poseidon2_koalabear<const WIDTH: usize, const WIDTH_MIN_1: usize, const D: u64>(
+        input: &mut [F; WIDTH],
+    ) where
         Poseidon2ExternalLayerKoalaBear<WIDTH>: ExternalLayer<KoalaBear, WIDTH, D>,
         Poseidon2InternalLayerKoalaBear<WIDTH>: InternalLayer<
             KoalaBear,
@@ -122,7 +197,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 3>(&mut input);
+        poseidon2_koalabear::<16, 15, 3>(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -148,7 +223,7 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 3>(&mut input);
+        poseidon2_koalabear::<24, 23, 3>(&mut input);
         assert_eq!(input, expected);
     }
 }

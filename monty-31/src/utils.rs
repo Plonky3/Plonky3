@@ -1,4 +1,4 @@
-use crate::{FieldParameters, MontyParameters};
+use crate::{FieldParameters, MontyField31, MontyParameters};
 
 /// Convert a u32 into MONTY form.
 /// There are no constraints on the input.
@@ -53,4 +53,8 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     let x_sub_u_hi = (x_sub_u >> MP::MONTY_BITS) as u32;
     let corr = if over { MP::PRIME } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
+}
+
+pub const fn construct_2_exp_neg_n<MP: MontyParameters>(exp: i8) -> MontyField31<MP> {
+    MontyField31::new_monty(((1_u64 << (32 - exp)) % (MP::PRIME as u64)) as u32)
 }

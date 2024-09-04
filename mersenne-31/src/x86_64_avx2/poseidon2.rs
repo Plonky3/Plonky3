@@ -124,7 +124,7 @@ fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> Pa
 #[inline(always)]
 fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
-    state[0] = -(state[0] + state[0]);
+
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
@@ -165,9 +165,7 @@ fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
     let sum1234567 = sum123 + sum4567;
     let sum_top_half = sum891011 + sum12131415;
 
-    let sum_all_but_0 = sum1234567 + sum_top_half;
-
-    sum_all_but_0 + state[0]
+    sum1234567 + sum_top_half
 }
 
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
@@ -177,7 +175,7 @@ fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
 #[inline(always)]
 fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
-    state[0] = -(state[0] + state[0]);
+
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
@@ -233,9 +231,7 @@ fn sum_24(state: &[PackedMersenne31AVX2; 24]) -> PackedMersenne31AVX2 {
     let sum_min_third = sum891011 + sum12131415;
     let sum_top_third = sum16171819 + sum20212223;
 
-    let sum_all_but_0 = sum1234567 + sum_min_third + sum_top_third;
-
-    sum_all_but_0 + state[0]
+    sum1234567 + sum_min_third + sum_top_third
 }
 
 /// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
@@ -261,9 +257,11 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum = sum_16(state);
+    let sum_non_0 = sum_16(state);
+    let sum = sum_non_0 + state[0];
+    state[0] = sum_non_0 - state[0];
     diagonal_mul_16(state);
-    state.iter_mut().for_each(|x| *x += sum);
+    state.iter_mut().skip(1).for_each(|x| *x += sum);
 }
 
 impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersenne31 {
@@ -281,9 +279,11 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum = sum_24(state);
+    let sum_non_0 = sum_24(state);
+    let sum = sum_non_0 + state[0];
+    state[0] = sum_non_0 - state[0];
     diagonal_mul_24(state);
-    state.iter_mut().for_each(|x| *x += sum);
+    state.iter_mut().skip(1).for_each(|x| *x += sum);
 }
 
 impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersenne31 {
