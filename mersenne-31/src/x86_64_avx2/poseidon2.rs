@@ -1,7 +1,7 @@
 use core::arch::x86_64::{self, __m256i};
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, InternalLayer, MDSMat4, Poseidon2ExternalPackedConstants,
-    Poseidon2InternalPackedConstants,
+    mds_light_permutation, sum_15, sum_23, ExternalLayer, InternalLayer, MDSMat4,
+    Poseidon2ExternalPackedConstants, Poseidon2InternalPackedConstants,
 };
 
 use crate::{
@@ -98,31 +98,6 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a faster method for 15.
 }
 
-/// The compiler doesn't realize that add is associative
-/// so we help it out and minimize the dependency chains by hand.
-/// Note that state[0] is involved in a large s-box immediately before this
-/// so we keep it separate for as long as possible.
-#[inline(always)]
-fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-    let sum1415 = state[14] + state[15];
-
-    let sum123 = state[1] + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum12131415 = sum1213 + sum1415;
-
-    let sum1234567 = sum123 + sum4567;
-    let sum_top_half = sum891011 + sum12131415;
-
-    sum1234567 + sum_top_half
-}
-
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
 /// In the Mersenne31, WIDTH = 24 case, the diagonal minus 1 is:
 /// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
@@ -157,38 +132,6 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[23] = mul_2exp_i::<22, 9>(state[23]);
 }
 
-/// The compiler doesn't realize that add is associative
-/// so we help it out and minimize the dependency chains by hand.
-/// Note that state[0] is involved in a large s-box immediately before this
-/// so we keep it separate for as long as possible.
-#[inline(always)]
-fn sum_24(state: &[PackedMersenne31AVX2; 24]) -> PackedMersenne31AVX2 {
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-    let sum1415 = state[14] + state[15];
-    let sum1617 = state[16] + state[17];
-    let sum1819 = state[18] + state[19];
-    let sum2021 = state[20] + state[21];
-    let sum2223 = state[22] + state[23];
-
-    let sum123 = state[1] + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum12131415 = sum1213 + sum1415;
-    let sum16171819 = sum1617 + sum1819;
-    let sum20212223 = sum2021 + sum2223;
-
-    let sum1234567 = sum123 + sum4567;
-    let sum_min_third = sum891011 + sum12131415;
-    let sum_top_third = sum16171819 + sum20212223;
-
-    sum1234567 + sum_min_third + sum_top_third
-}
-
 /// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
 /// x must be represented as a value in {0..P}.
 /// rc mut be represented as a value in {-P, ..., 0}.
@@ -212,7 +155,7 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum_non_0 = sum_16(state);
+    let sum_non_0 = sum_15(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
     diagonal_mul_16(state);
@@ -239,7 +182,7 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum_non_0 = sum_24(state);
+    let sum_non_0 = sum_23(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
     diagonal_mul_24(state);

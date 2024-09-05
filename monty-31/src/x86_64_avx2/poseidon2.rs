@@ -3,8 +3,8 @@ use core::{
     mem::transmute,
 };
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, InternalLayer, MDSMat4, Poseidon2ExternalPackedConstants,
-    Poseidon2InternalPackedConstants,
+    mds_light_permutation, sum_15, sum_23, ExternalLayer, InternalLayer, MDSMat4,
+    Poseidon2ExternalPackedConstants, Poseidon2InternalPackedConstants,
 };
 
 use alloc::vec::Vec;
@@ -88,65 +88,6 @@ fn add_rc_and_sbox_internal<PMP: PackedMontyParameters, const D: u64>(
 
         PackedMontyField31AVX2::<PMP>::from_vector(output)
     }
-}
-
-/// The compiler doesn't realize that add is associative
-/// so we help it out and minimize the dependency chains by hand.
-/// Note that state[0] is involved in a large s-box immediately before this
-/// so we keep it separate for as long as possible.
-#[must_use]
-#[inline(always)]
-fn sum_16<PMP: PackedMontyParameters>(
-    state: &[PackedMontyField31AVX2<PMP>; 15],
-) -> PackedMontyField31AVX2<PMP> {
-    let sum01 = state[0] + state[1];
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-
-    let sum0123 = sum01 + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum121314 = sum1213 + state[14];
-
-    let sum01234567 = sum0123 + sum4567;
-    let sum_top_half = sum891011 + sum121314;
-
-    sum01234567 + sum_top_half
-}
-
-#[must_use]
-#[inline(always)]
-fn sum_24<PMP: PackedMontyParameters>(
-    state: &[PackedMontyField31AVX2<PMP>; 23],
-) -> PackedMontyField31AVX2<PMP> {
-    let sum01 = state[0] + state[1];
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-    let sum1415 = state[14] + state[15];
-    let sum1617 = state[16] + state[17];
-    let sum1819 = state[18] + state[19];
-    let sum2021 = state[20] + state[21];
-
-    let sum0123 = sum01 + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum12131415 = sum1213 + sum1415;
-    let sum16171819 = sum1617 + sum1819;
-    let sum202122 = sum2021 + state[22];
-
-    let sum_bot_third = sum0123 + sum4567;
-    let sum_mid_third = sum891011 + sum12131415;
-    let sum_top_third = sum16171819 + sum202122;
-
-    sum_bot_third + sum_mid_third + sum_top_third
 }
 
 /// A trait containing the specific information needed to
@@ -251,11 +192,16 @@ where
         unsafe {
             packed_internal_constants.iter().for_each(|&rc| {
                 state.s0 = add_rc_and_sbox_internal::<FP, D>(state.s0, rc);
-                let sum_non_0 = sum_16(&transmute(state.s_hi));
+                let sum_non_0 = sum_15(
+                    &transmute::<[__m256i; 15], [PackedMontyField31AVX2<FP>; 15]>(state.s_hi),
+                );
                 ILP::diagonal_mul(&mut state.s_hi);
                 let sum = sum_non_0 + state.s0;
                 state.s0 = sum_non_0 - state.s0;
-                ILP::add_sum(&mut state.s_hi, transmute(sum));
+                ILP::add_sum(
+                    &mut state.s_hi,
+                    transmute::<PackedMontyField31AVX2<FP>, __m256i>(sum),
+                );
             })
         }
     }
@@ -284,11 +230,16 @@ where
         unsafe {
             packed_internal_constants.iter().for_each(|&rc| {
                 state.s0 = add_rc_and_sbox_internal::<FP, D>(state.s0, rc);
-                let sum_non_0 = sum_24(&transmute(state.s_hi));
+                let sum_non_0 = sum_23(
+                    &transmute::<[__m256i; 23], [PackedMontyField31AVX2<FP>; 23]>(state.s_hi),
+                );
                 ILP::diagonal_mul(&mut state.s_hi);
                 let sum = sum_non_0 + state.s0;
                 state.s0 = sum_non_0 - state.s0;
-                ILP::add_sum(&mut state.s_hi, transmute(sum));
+                ILP::add_sum(
+                    &mut state.s_hi,
+                    transmute::<PackedMontyField31AVX2<FP>, __m256i>(sum),
+                );
             })
         }
     }
