@@ -15,16 +15,91 @@ use crate::{
     Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 
-#[repr(C)]
+// In the internal layers, it is valuable to treat the first entry of the state differently as it is the only entry to which we apply s-box.
+// It seems to help the compiler if we introduce a different data structure for these layers.
+// Note that we use this structure instead of a tuple so we can force the memory layout to align for transmutes.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)] // This is needed to make `transmute`s safe.
 pub struct InternalLayer16<PMP: PackedMontyParameters> {
     s0: PackedMontyField31AVX2<PMP>,
     s_hi: [__m256i; 15],
 }
 
-#[repr(C)]
+impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
+    #[inline]
+    #[must_use]
+    /// Convert from InternalLayer16<PMP> to [PackedMontyField31AVX2<PMP>; 16]
+    ///
+    /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
+    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
+    unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 16] {
+        // Safety: It is up to the user to ensure that elements of `s_hi` represent valid
+        // `MontyField31<PMP>` values. We must only reason about memory representations.
+        // As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+
+        // `InternalLayer16` is is `repr(C)` so it's memory layout looks like:
+        // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
+        // Thus as `__m256i` can be can be transmuted to `PackedMontyField31AVX2<FP>`,
+        // `InternalLayer16` can be transmuted to `[PackedMontyField31AVX2<FP>; 16]`.
+        transmute(self)
+    }
+
+    #[inline]
+    #[must_use]
+    /// Convert from [PackedMontyField31AVX2<PMP>; 16] to InternalLayer16<PMP>
+    fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 16]) -> Self {
+        unsafe {
+            // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+
+            // `InternalLayer16` is is `repr(C)` so it's memory layout looks like:
+            // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
+            // Thus as `PackedMontyField31AVX2<FP>` can be can be transmuted to `__m256i`,
+            // `[PackedMontyField31AVX2<FP>; 16]` can be transmuted to `InternalLayer16`.
+            transmute(vector)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)] // This is needed to make `transmute`s safe.
 pub struct InternalLayer24<PMP: PackedMontyParameters> {
     s0: PackedMontyField31AVX2<PMP>,
     s_hi: [__m256i; 23],
+}
+
+impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
+    #[inline]
+    #[must_use]
+    /// Convert from InternalLayer24<PMP> to [PackedMontyField31AVX2<PMP>; 24]
+    ///
+    /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
+    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
+    unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 24] {
+        // Safety: It is up to the user to ensure that elements of `s_hi` represent valid
+        // `MontyField31<PMP>` values. We must only reason about memory representations.
+        // As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+
+        // `InternalLayer24` is is `repr(C)` so it's memory layout looks like:
+        // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
+        // Thus as `__m256i` can be can be transmuted to `PackedMontyField31AVX2<FP>`,
+        // `InternalLayer24` can be transmuted to `[PackedMontyField31AVX2<FP>; 24]`.
+        transmute(self)
+    }
+
+    #[inline]
+    #[must_use]
+    /// Convert from [PackedMontyField31AVX2<PMP>; 24] to InternalLayer24<PMP>
+    fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 24]) -> Self {
+        unsafe {
+            // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+
+            // `InternalLayer24` is is `repr(C)` so it's memory layout looks like:
+            // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
+            // Thus as `PackedMontyField31AVX2<FP>` can be can be transmuted to `__m256i`,
+            // `[PackedMontyField31AVX2<FP>; 24]` can be transmuted to `InternalLayer24`.
+            transmute(vector)
+        }
+    }
 }
 
 #[inline(always)]
@@ -283,18 +358,22 @@ where
 
         external_rounds::<FP, 16, D>(&mut state, packed_initial_external_constants);
 
-        unsafe { transmute(state) }
+        InternalLayer16::from_packed_field_array(state)
     }
 
     /// Compute the second half of the Poseidon2 external layers.
+    /// SAFETY: The caller must ensure that each element of `state` represents a valid `MontyField31<PMP>`.
+    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     fn permute_state_final(
         &self,
         state: Self::InternalState,
         _final_external_constants: &[[MontyField31<FP>; 16]],
         packed_final_external_constants: &[[__m256i; 16]],
     ) -> [PackedMontyField31AVX2<FP>; 16] {
-        // Need to do something slightly special for the first round.
-        let mut output_state = unsafe { transmute(state) };
+        // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
+        // Thus to_packed_field_array is safe to use.
+        let mut output_state = unsafe { state.to_packed_field_array() };
+
         external_rounds::<FP, 16, D>(&mut output_state, packed_final_external_constants);
         output_state
     }
@@ -318,18 +397,22 @@ where
 
         external_rounds::<FP, 24, D>(&mut state, packed_initial_external_constants);
 
-        unsafe { transmute(state) }
+        InternalLayer24::from_packed_field_array(state)
     }
 
     /// Compute the second half of the Poseidon2 external layers.
+    /// SAFETY: The caller must ensure that each element of `state` represents a valid `MontyField31<PMP>`.
+    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     fn permute_state_final(
         &self,
         state: Self::InternalState,
         _final_external_constants: &[[MontyField31<FP>; 24]],
         packed_final_external_constants: &[[__m256i; 24]],
     ) -> [PackedMontyField31AVX2<FP>; 24] {
-        // Need to do something slightly special for the first round.
-        let mut output_state = unsafe { transmute(state) };
+        // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
+        // Thus to_packed_field_array is safe to use.
+        let mut output_state = unsafe { state.to_packed_field_array() };
+
         external_rounds::<FP, 24, D>(&mut output_state, packed_final_external_constants);
         output_state
     }
