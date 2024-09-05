@@ -1,12 +1,48 @@
 //! The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 
 #![no_std]
+#![cfg_attr(
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+    feature(stdarch_x86_avx512)
+)]
 
 extern crate alloc;
-
 mod extension;
 mod mds;
 mod poseidon2;
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+mod x86_64_avx2;
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+pub use x86_64_avx2::*;
+
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+mod x86_64_avx512;
+
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub use x86_64_avx512::*;
+
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -162,7 +198,33 @@ impl AbstractField for Goldilocks {
 }
 
 impl Field for Goldilocks {
-    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
+    // TODO: Add cfg-guarded Packing for NEON
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ))]
+    type Packing = crate::PackedAvx2Goldilocks;
+
+    #[cfg(all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ))]
+    type Packing = crate::PackedAvx512Goldilocks;
+    #[cfg(not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(all(feature = "nightly-features", target_feature = "avx512f"))
+        ),
+        all(
+            feature = "nightly-features",
+            target_arch = "x86_64",
+            target_feature = "avx512f"
+        ),
+    )))]
     type Packing = Self;
 
     fn is_zero(&self) -> bool {

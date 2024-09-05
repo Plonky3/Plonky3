@@ -42,3 +42,4 @@ tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 # seem to work when using cargo with the -p or --package option.
 parallel = ["p3-maybe-rayon/parallel"]
 asm = ["p3-sha256/asm"]
+nightly-features = ["p3-goldilocks/nightly-features", "p3-monty-31/nightly-features", "p3-baby-bear/nightly-features", "p3-koala-bear/nightly-features", "p3-mersenne-31/nightly-features"]
