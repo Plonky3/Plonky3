@@ -1,3 +1,5 @@
+//! Vectorized AVX2 implementation of Poseidon2 for MontyField31
+
 use core::{
     arch::x86_64::{self, __m256i},
     mem::transmute,
@@ -165,14 +167,37 @@ fn add_rc_and_sbox_internal<PMP: PackedMontyParameters, const D: u64>(
     }
 }
 
+/// # Safety:
+///
+/// This function assumes its output is piped directly into add_sum.
 /// A trait containing the specific information needed to
 /// implement the Poseidon2 Permutation for Monty31 Fields.
 pub trait InternalLayerParametersAVX2<const WIDTH: usize>: Clone + Sync {
     type ArrayLike;
 
-    fn diagonal_mul(input: &mut Self::ArrayLike);
+    // diagonal_mul and add_sum morally should be one function but are split because diagonal_mul can happen simultaneously to
+    // the sbox being applied to the first element of the state which is advantageous as this s-box has very high latency.
+    // However these functions should only ever be used together and we only make safety guarantees about the output
+    // of the combined function add_sum(diagonal_mul(state), sum) which will output field elements in canonical form provided inputs are in canonical form.
 
-    fn add_sum(input: &mut Self::ArrayLike, sum: __m256i);
+    // Diagonal_mul will not output field elements in canonical form and indeed may even output incorrect values in places where
+    // it is efficient to pipe computation to add_sum. E.g. it might output 3*x instead of -3*x and then add_sum does sum - x.
+    // Similarly add_sum assumes its input has been piped directly from diagonal_mul so might assume that some inputs
+    // are the negative of the correct value or in some form other than canonical.
+
+    // For these reason we mark both functions as unsafe.
+
+    /// # Safety:
+    ///
+    /// This function assumes its output is piped directly into add_sum.
+    #[allow(clippy::missing_safety_doc)] // Clippy still complains without this for some reason.
+    unsafe fn diagonal_mul(input: &mut Self::ArrayLike);
+
+    /// # Safety:
+    ///
+    /// This function assumes its input is taken directly from diagonal_mul.
+    #[allow(clippy::missing_safety_doc)] // Clippy still complains without this for some reason.
+    unsafe fn add_sum(input: &mut Self::ArrayLike, sum: __m256i);
 }
 
 #[inline(always)]
