@@ -1,6 +1,6 @@
 //! Discrete Fourier Transform, in-place, decimation-in-time
 //!
-//! Straightforward recusive algorithm, "unrolled" up to size 256.
+//! Straightforward recursive algorithm, "unrolled" up to size 256.
 //!
 //! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
 
@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 
-use crate::{MontyField31, MontyParameters, TwoAdicData};
+use crate::{monty_reduce, MontyField31, MontyParameters, TwoAdicData};
 
 impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]
@@ -56,8 +56,11 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         let a1 = a[2];
         let a3 = a[3];
 
-        let t1 = a1 - a3;
-        let t3 = t1 * MP::INV_ROOTS_8.as_ref()[1];
+        // Expanding the calculation of t3 saves one instruction
+        let t1 = MP::PRIME + a1.value - a3.value;
+        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
+            t1 as u64 * MP::INV_ROOTS_8.as_ref()[1].value as u64,
+        ));
         let t5 = a1 + a3;
         let t4 = a0 + a2;
         let t2 = a0 - a2;

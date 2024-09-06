@@ -53,15 +53,15 @@ fn main() -> Result<(), impl Debug> {
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
 
-    type Dft = RecursiveDft<Val>;
-    let dft = Dft::new(trace.height());
-
     let fri_config = FriConfig {
         log_blowup: 1,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
+    type Dft = RecursiveDft<Val>;
+    let dft = Dft::new(trace.height() << fri_config.log_blowup);
+
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

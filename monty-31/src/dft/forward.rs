@@ -1,6 +1,6 @@
 //! Discrete Fourier Transform, in-place, decimation-in-frequency
 //!
-//! Straightforward recusive algorithm, "unrolled" up to size 256.
+//! Straightforward recursive algorithm, "unrolled" up to size 256.
 //!
 //! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
 
@@ -8,7 +8,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{AbstractField, TwoAdicField};
 use p3_util::log2_strict_usize;
 
 use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters, TwoAdicData};
@@ -19,7 +19,9 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// vector of twiddle factors for an fft of length n/2^i. The values
     /// gen^0 = 1 are skipped, as are g_i^k for k >= i/2 as these are
     /// just the negatives of the other roots (using g_i^{i/2} = -1).
-    fn make_table(gen: Self, lg_n: usize) -> Vec<Vec<Self>> {
+    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
+        let lg_n = log2_strict_usize(n);
+        let gen = Self::two_adic_generator(lg_n);
         let half_n = 1 << (lg_n - 1);
         // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
         let nth_roots: Vec<_> = gen.powers().take(half_n).skip(1).collect();
@@ -31,21 +33,9 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                     .skip((1 << i) - 1)
                     .step_by(1 << i)
                     .copied()
-                    .collect::<Vec<_>>()
+                    .collect()
             })
             .collect()
-    }
-
-    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
-        let lg_n = log2_strict_usize(n);
-        let gen = Self::two_adic_generator(lg_n);
-        Self::make_table(gen, lg_n)
-    }
-
-    pub fn inv_roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
-        let lg_n = log2_strict_usize(n);
-        let gen = Self::two_adic_generator(lg_n).inverse();
-        Self::make_table(gen, lg_n)
     }
 }
 
@@ -91,8 +81,11 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     fn forward_4(a: &mut [Self]) {
         assert_eq!(a.len(), 4);
 
-        let t1 = a[1] - a[3];
-        let t3 = t1 * MP::ROOTS_8.as_ref()[1];
+        // Expanding the calculation of t3 saves one instruction
+        let t1 = MP::PRIME + a[1].value - a[3].value;
+        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
+            t1 as u64 * MP::ROOTS_8.as_ref()[1].value as u64,
+        ));
         let t5 = a[1] + a[3];
         let t4 = a[0] + a[2];
         let t2 = a[0] - a[2];

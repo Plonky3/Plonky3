@@ -55,10 +55,12 @@ pub struct RecursiveDft<F> {
 
 impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     pub fn new(n: usize) -> Self {
-        Self {
-            twiddles: RefCell::new(MontyField31::roots_of_unity_table(n)),
-            inv_twiddles: RefCell::new(MontyField31::inv_roots_of_unity_table(n)),
-        }
+        let res = Self {
+            twiddles: RefCell::default(),
+            inv_twiddles: RefCell::default(),
+        };
+        res.update_twiddles(n);
+        res
     }
 
     #[inline]
@@ -94,29 +96,33 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     }
 
     /// Compute twiddle factors, or take memoized ones if already available.
+    #[instrument(skip_all)]
     fn update_twiddles(&self, fft_len: usize) {
         // TODO: This recomputes the entire table from scratch if we
         // need it to be bigger, which is wasteful.
-        debug_span!("maybe calculate twiddles").in_scope(|| {
-            let curr_max_fft_len = 1 << self.twiddles.borrow().len();
-            if fft_len > curr_max_fft_len {
-                let new_twiddles = MontyField31::roots_of_unity_table(fft_len);
-                self.twiddles.replace(new_twiddles);
-            }
-        });
-    }
 
-    /// Compute inverse twiddle factors, or take memoized ones if already available.
-    fn update_inv_twiddles(&self, inv_fft_len: usize) {
-        // TODO: This recomputes the entire table from scratch if we
-        // need it to be bigger, which is wasteful.
-        debug_span!("maybe calculate inv_twiddles").in_scope(|| {
-            let curr_max_fft_len = 1 << self.inv_twiddles.borrow().len();
-            if inv_fft_len > curr_max_fft_len {
-                let new_twiddles = MontyField31::inv_roots_of_unity_table(inv_fft_len);
-                self.inv_twiddles.replace(new_twiddles);
-            }
-        });
+        // As we don't save the twiddles for the final layer where
+        // the only twiddle is 1, roots_of_unity_table(fft_len)
+        // returns a vector of twiddles of length log_2(fft_len) - 1.
+        let curr_max_fft_len = 2 << self.twiddles.borrow().len();
+        if fft_len > curr_max_fft_len {
+            let new_twiddles = MontyField31::roots_of_unity_table(fft_len);
+            // We can obtain the inverse twiddles by reversing and
+            // negating the twiddles.
+            let new_inv_twiddles = new_twiddles
+                .iter()
+                .map(|ts| {
+                    ts.iter()
+                        .rev()
+                        // A twiddle t is never zero, so negation simplifies
+                        // to P - t.
+                        .map(|&t| MontyField31::new_monty(MP::PRIME - t.value))
+                        .collect()
+                })
+                .collect();
+            self.twiddles.replace(new_twiddles);
+            self.inv_twiddles.replace(new_inv_twiddles);
+        }
     }
 }
 
@@ -166,7 +172,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
         self.update_twiddles(nrows);
-        let twiddles = self.twiddles.borrow().clone();
+        let twiddles = self.twiddles.borrow();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -196,12 +202,11 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let mut scratch = debug_span!("allocate scratch space")
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
-        // TODO: Use faster bit-reversal algo
         let mut mat =
             debug_span!("initial bitrev").in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
 
-        self.update_inv_twiddles(nrows);
-        let inv_twiddles = self.inv_twiddles.borrow().clone();
+        self.update_twiddles(nrows);
+        let inv_twiddles = self.inv_twiddles.borrow();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -241,7 +246,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let input_size = nrows * ncols;
         let output_size = result_nrows * ncols;
 
-        // TODO: Use faster bit-reversal algo
         let mat = mat.bit_reverse_rows().to_row_major_matrix();
 
         // Allocate space for the output and the intermediate state.
@@ -263,8 +267,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
 
         // Apply inverse DFT; result is not yet normalised.
-        self.update_inv_twiddles(nrows);
-        let inv_twiddles = self.inv_twiddles.borrow().clone();
+        self.update_twiddles(result_nrows);
+        let inv_twiddles = self.inv_twiddles.borrow();
         debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_time_dft(coeffs, nrows, &inv_twiddles));
 
@@ -272,16 +276,13 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // as a row in `coeffs`.
 
         // Normalise inverse DFT and coset shift in one go.
-        // IDEA: consider integrating coset shift into twiddles; the current timing
-        // suggests this is not worth the effort.
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
         coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
 
-        self.update_twiddles(result_nrows);
-        let twiddles = self.twiddles.borrow().clone();
+        let twiddles = self.twiddles.borrow();
 
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
