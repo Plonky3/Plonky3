@@ -18,6 +18,8 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
 /// so in actuality we're interleaving zero rows.
 #[inline]
 pub fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: usize) {
+    // TODO: This is copypasta from matrix/dense.rs that should be
+    // refactored; it is only used by Radix2Bowers.
     if added_bits == 0 {
         return;
     }
@@ -37,4 +39,15 @@ pub fn bit_reversed_zero_pad<F: Field>(mat: &mut RowMajorMatrix<F>, added_bits: 
         values[(i << added_bits)..((i << added_bits) + w)].copy_from_slice(&mat.values[i..i + w]);
     }
     *mat = RowMajorMatrix::new(values, w);
+}
+
+/// Multiply each element of row `i` of `mat` by `shift**i`.
+pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
+    mat.rows_mut()
+        .zip(shift.powers())
+        .for_each(|(row, weight)| {
+            row.iter_mut().for_each(|coeff| {
+                *coeff *= weight;
+            })
+        });
 }

@@ -4,7 +4,9 @@
 
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec::Vec;
+use core::any::type_name;
 use core::hint::unreachable_unchecked;
 
 pub mod array_serialization;
@@ -156,6 +158,18 @@ pub fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
         })
         .collect()
 }
+
+/// Return a String containing the name of T but with all the crate
+/// and module prefixes removed.
+pub fn pretty_name<T>() -> String {
+    let name = type_name::<T>();
+    let mut result = String::new();
+    for qual in name.split_inclusive(&['<', '>', ',']) {
+        result.push_str(qual.split("::").last().unwrap());
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;

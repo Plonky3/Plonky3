@@ -53,9 +53,6 @@ fn main() -> Result<(), impl Debug> {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
-
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let air: Poseidon2Air<
@@ -75,6 +72,9 @@ fn main() -> Result<(), impl Debug> {
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
     >(inputs);
+
+    type Dft = Radix2DitParallel;
+    let dft = Dft {};
 
     let fri_config = FriConfig {
         log_blowup: 1,
