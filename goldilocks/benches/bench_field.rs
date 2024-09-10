@@ -1,4 +1,5 @@
 use std::any::type_name;
+
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use p3_field::{AbstractField, Field};
 use p3_field_testing::bench_func::{

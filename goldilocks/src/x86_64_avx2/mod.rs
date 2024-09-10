@@ -1,3 +1,3 @@
-mod packing;
 mod mds;
+mod packing;
 pub use packing::*;

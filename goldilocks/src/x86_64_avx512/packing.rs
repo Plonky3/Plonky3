@@ -4,12 +4,12 @@ use core::fmt::{Debug, Formatter};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
+use p3_field::{PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use p3_field::{PackedField, PackedValue};
 
-use crate::Goldilocks;
-use crate::{AbstractField, Field, PrimeField64};
+use crate::{AbstractField, Field, Goldilocks, PrimeField64};
 
 const WIDTH: usize = 8;
 /// AVX512 Goldilocks Field
@@ -245,15 +245,12 @@ unsafe impl PackedValue for PackedAvx512Goldilocks {
         &mut self.0[..]
     }
 
-
     /// Similar to `core:array::from_fn`.
     #[inline]
     fn from_fn<F: FnMut(usize) -> Goldilocks>(f: F) -> Self {
         let vals_arr: [_; WIDTH] = core::array::from_fn(f);
         Self(vals_arr)
     }
-
-
 }
 
 unsafe impl PackedField for PackedAvx512Goldilocks {
@@ -271,7 +268,6 @@ unsafe impl PackedField for PackedAvx512Goldilocks {
         };
         (Self::new(res0), Self::new(res1))
     }
-
 }
 
 impl Sub<Self> for PackedAvx512Goldilocks {
@@ -452,8 +448,9 @@ unsafe fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
 #[cfg(test)]
 mod tests {
     use p3_field::{AbstractField, PackedField, PackedValue};
-    use crate::{PackedAvx512Goldilocks, Goldilocks};
+
     use crate::x86_64_avx512::packing::WIDTH;
+    use crate::{Goldilocks, PackedAvx512Goldilocks};
 
     fn test_vals_a() -> [Goldilocks; WIDTH] {
         [
