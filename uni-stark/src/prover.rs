@@ -123,26 +123,28 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
-    let (opened_values, opening_proof) = pcs.open(
-        iter::empty()
-            .chain(
-                proving_key
-                    .map(|proving_key| {
-                        (&proving_key.preprocessed_data, vec![vec![zeta, zeta_next]])
-                    })
-                    .into_iter(),
-            )
-            .chain([
-                (&trace_data, vec![vec![zeta, zeta_next]]),
-                (
-                    &quotient_data,
-                    // open every chunk at zeta
-                    (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
-                ),
-            ])
-            .collect_vec(),
-        challenger,
-    );
+    let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
+        pcs.open(
+            iter::empty()
+                .chain(
+                    proving_key
+                        .map(|proving_key| {
+                            (&proving_key.preprocessed_data, vec![vec![zeta, zeta_next]])
+                        })
+                        .into_iter(),
+                )
+                .chain([
+                    (&trace_data, vec![vec![zeta, zeta_next]]),
+                    (
+                        &quotient_data,
+                        // open every chunk at zeta
+                        (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                    ),
+                ])
+                .collect_vec(),
+            challenger,
+        )
+    });
     let mut opened_values = opened_values.iter();
 
     // maybe get values for the preprocessed columns

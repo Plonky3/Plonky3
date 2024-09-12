@@ -1,24 +1,30 @@
 use std::fmt::Debug;
 
-use p3_baby_bear::BabyBear;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_keccak::Keccak256Hash;
+use p3_koala_bear::KoalaBear;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_sha256::Sha256;
+use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::random;
+use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-const NUM_HASHES: usize = 1_365;
+const WIDTH: usize = 16;
+const SBOX_DEGREE: usize = 3;
+const SBOX_REGISTERS: usize = 1;
+const HALF_FULL_ROUNDS: usize = 4;
+const PARTIAL_ROUNDS: usize = 20;
+
+const NUM_HASHES: usize = 1 << 16;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -30,13 +36,13 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
-    type Val = BabyBear;
+    type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type ByteHash = Sha256;
+    type ByteHash = Keccak256Hash;
     type FieldHash = SerializingHasher32<ByteHash>;
     let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(Sha256);
+    let field_hash = FieldHash::new(Keccak256Hash {});
 
     type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
@@ -47,13 +53,28 @@ fn main() -> Result<(), impl Debug> {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
-
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
+    let air: Poseidon2Air<
+        Val,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    > = Poseidon2Air::new_from_rng(&mut thread_rng());
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
+    let trace = generate_trace_rows::<
+        Val,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >(inputs);
+
+    type Dft = Radix2DitParallel;
+    let dft = Dft {};
 
     let fri_config = FriConfig {
         log_blowup: 1,
@@ -68,8 +89,8 @@ fn main() -> Result<(), impl Debug> {
     let config = MyConfig::new(pcs);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &air, &mut challenger, &proof, &vec![])
 }

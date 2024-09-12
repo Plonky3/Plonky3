@@ -1,5 +1,3 @@
-use std::any::type_name;
-
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
@@ -8,6 +6,8 @@ use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
+use p3_monty_31::dft::RecursiveDft;
+use p3_util::pretty_name;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
@@ -15,12 +15,13 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[14, 16, 18];
+    let log_sizes = &[14, 16, 18, 20, 22];
     let log_half_sizes = &[13, 15, 17];
 
-    const BATCH_SIZE: usize = 100;
+    const BATCH_SIZE: usize = 256;
 
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -34,11 +35,13 @@ fn bench_fft(c: &mut Criterion) {
     m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
 
-    ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c);
+    ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
 
-    coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c);
-    coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c);
-    coset_lde::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c);
+    coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
@@ -47,10 +50,10 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!(
-        "fft::<{}, {}, {}>",
-        type_name::<F>(),
-        type_name::<Dft>(),
+    let mut group = c.benchmark_group(format!(
+        "fft/{}/{}/ncols={}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
@@ -75,9 +78,9 @@ where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
     Standard: Distribution<Mersenne31>,
 {
-    let mut group = c.benchmark_group(&format!(
+    let mut group = c.benchmark_group(format!(
         "m31_fft::<{}, {}>",
-        type_name::<Dft>(),
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
@@ -96,22 +99,22 @@ where
     }
 }
 
-fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
+fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!(
-        "ifft::<{}, {}, {}>",
-        type_name::<F>(),
-        type_name::<Dft>(),
+    let mut group = c.benchmark_group(format!(
+        "ifft/{}/{}/ncols={}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [14, 16, 18] {
+    for n_log in log_sizes {
         let n = 1 << n_log;
 
         let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
@@ -125,22 +128,22 @@ where
     }
 }
 
-fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion)
+fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!(
-        "coset_lde::<{}, {}, {}>",
-        type_name::<F>(),
-        type_name::<Dft>(),
+    let mut group = c.benchmark_group(format!(
+        "coset_lde/{}/{}/ncols={}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
         BATCH_SIZE
     ));
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    for n_log in [14, 16, 18] {
+    for n_log in log_sizes {
         let n = 1 << n_log;
 
         let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);

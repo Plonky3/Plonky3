@@ -1,20 +1,33 @@
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
 use p3_matrix::dense::RowMajorMatrix;
+use rand::thread_rng;
 
 fn transpose_benchmark(c: &mut Criterion) {
     const SMALL_DIMS: [(usize, usize); 4] = [(4, 4), (8, 8), (10, 10), (12, 12)];
     const LARGE_DIMS: [(usize, usize); 4] = [(20, 8), (21, 8), (22, 8), (23, 8)];
 
     let inner = |g: &mut BenchmarkGroup<_>, dims: &[(usize, usize)]| {
+        let mut rng = thread_rng();
         for (lg_nrows, lg_ncols) in dims {
             let nrows = 1 << lg_nrows;
             let ncols = 1 << lg_ncols;
-            let matrix = RowMajorMatrix::new(vec![0u32; nrows * ncols], ncols);
+            let mut matrix1 = RowMajorMatrix::<u32>::rand(&mut rng, nrows, ncols);
+            let mut matrix2 = RowMajorMatrix::default(nrows, ncols);
+
             let name = format!("2^{lg_nrows} x 2^{lg_ncols}");
             g.throughput(Throughput::Bytes(
                 (nrows * ncols * core::mem::size_of::<u32>()) as u64,
             ));
-            g.bench_function(&name, |b| b.iter(|| matrix.transpose()));
+            g.bench_function(&name, |b| b.iter(|| matrix1.transpose_into(&mut matrix2)));
+
+            if nrows != ncols {
+                let matrix2 = RowMajorMatrix::rand(&mut rng, ncols, nrows);
+                let name = format!("2^{lg_ncols} x 2^{lg_nrows}");
+                g.throughput(Throughput::Bytes(
+                    (nrows * ncols * core::mem::size_of::<u32>()) as u64,
+                ));
+                g.bench_function(&name, |b| b.iter(|| matrix2.transpose_into(&mut matrix1)));
+            }
         }
     };
 

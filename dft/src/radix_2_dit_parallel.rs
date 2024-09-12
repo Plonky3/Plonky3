@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use itertools::izip;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -146,19 +147,22 @@ fn dit_layer<F: Field>(
     twiddles: &[F],
 ) {
     let layer_rev = log_h - 1 - layer;
+    let layer_pow = 1 << layer_rev;
 
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
+    let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for block_start in (0..submat.height()).step_by(block_size) {
-        for i in 0..half_block_size {
-            let hi = block_start + i;
-            let lo = hi + half_block_size;
-            let twiddle = twiddles[i << layer_rev];
+    for block in submat.values.chunks_mut(block_size * width) {
+        let (lows, highs) = block.split_at_mut(half_block_size * width);
 
-            let (hi_chunk, lo_chunk) = submat.row_pair_mut(hi, lo);
-            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
+        for (lo, hi, &twiddle) in izip!(
+            lows.chunks_mut(width),
+            highs.chunks_mut(width),
+            twiddles.iter().step_by(layer_pow)
+        ) {
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     }
 }
@@ -178,56 +182,12 @@ fn dit_layer_rev<F: Field>(
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for (block_i, block_start) in (0..submat.height()).step_by(block_size).enumerate() {
-        let twiddle = twiddles_rev[block_i];
-
-        let block = &mut submat.values[block_start * width..(block_start + block_size) * width];
+    for (block, &twiddle) in submat
+        .values
+        .chunks_mut(block_size * width)
+        .zip(twiddles_rev)
+    {
         let (lo, hi) = block.split_at_mut(half_block_size * width);
         DitButterfly(twiddle).apply_to_rows(lo, hi)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_baby_bear::BabyBear;
-    use p3_goldilocks::Goldilocks;
-
-    use crate::testing::*;
-    use crate::Radix2DitParallel;
-
-    #[test]
-    fn dft_matches_naive() {
-        test_dft_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn idft_matches_naive() {
-        test_idft_matches_naive::<Goldilocks, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn coset_idft_matches_naive() {
-        test_coset_idft_matches_naive::<BabyBear, Radix2DitParallel>();
-        test_coset_idft_matches_naive::<Goldilocks, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn lde_matches_naive() {
-        test_lde_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn dft_idft_consistency() {
-        test_dft_idft_consistency::<BabyBear, Radix2DitParallel>();
     }
 }

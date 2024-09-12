@@ -1,24 +1,25 @@
 use std::fmt::Debug;
 
-use p3_baby_bear::BabyBear;
-use p3_challenger::{HashChallenger, SerializingChallenger32};
+use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_sha256::Sha256;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::random;
+use rand::{random, thread_rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-const NUM_HASHES: usize = 1_365;
+const NUM_HASHES: usize = 1365;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -30,19 +31,30 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
-    type Val = BabyBear;
+    type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type ByteHash = Sha256;
-    type FieldHash = SerializingHasher32<ByteHash>;
-    let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(Sha256);
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixKoalaBear::default(),
+        &mut thread_rng(),
+    );
 
-    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
-    let compress = MyCompress::new(byte_hash);
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    let hash = MyHash::new(perm.clone());
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
-    let val_mmcs = ValMmcs::new(field_hash, compress);
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    let compress = MyCompress::new(perm.clone());
+
+    type ValMmcs = FieldMerkleTreeMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        8,
+    >;
+    let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -50,7 +62,7 @@ fn main() -> Result<(), impl Debug> {
     type Dft = Radix2DitParallel;
     let dft = Dft {};
 
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
@@ -67,9 +79,9 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let mut challenger = Challenger::new(perm.clone());
     let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let mut challenger = Challenger::new(perm);
     verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
 }

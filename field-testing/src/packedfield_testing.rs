@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, PackedField, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -208,6 +208,21 @@ where
         PF::two() * vec0,
         "Error when comparing x.double() to 2 * x."
     );
+    assert_eq!(
+        vec0.exp_const_u64::<3>(),
+        vec0 * vec0 * vec0,
+        "Error when comparing x.exp_const_u64::<3> to x*x*x."
+    );
+    assert_eq!(
+        vec0.exp_const_u64::<5>(),
+        vec0 * vec0 * vec0 * vec0 * vec0,
+        "Error when comparing x.exp_const_u64::<5> to x*x*x*x*x."
+    );
+    assert_eq!(
+        vec0.exp_const_u64::<7>(),
+        vec0 * vec0 * vec0 * vec0 * vec0 * vec0 * vec0,
+        "Error when comparing x.exp_const_u64::<7> to x*x*x*x*x*x*x."
+    );
 }
 
 pub fn test_distributivity<PF>()
@@ -290,6 +305,21 @@ where
     let vec_special_neg = -vec_special;
     let arr_special_neg = vec_special_neg.as_slice();
 
+    let vec_exp_3 = vec0.exp_const_u64::<3>();
+    let arr_exp_3 = vec_exp_3.as_slice();
+    let vec_special_exp_3 = vec_special.exp_const_u64::<3>();
+    let arr_special_exp_3 = vec_special_exp_3.as_slice();
+
+    let vec_exp_5 = vec0.exp_const_u64::<5>();
+    let arr_exp_5 = vec_exp_5.as_slice();
+    let vec_special_exp_5 = vec_special.exp_const_u64::<5>();
+    let arr_special_exp_5 = vec_special_exp_5.as_slice();
+
+    let vec_exp_7 = vec0.exp_const_u64::<7>();
+    let arr_exp_7 = vec_exp_7.as_slice();
+    let vec_special_exp_7 = vec_special.exp_const_u64::<7>();
+    let arr_special_exp_7 = vec_special_exp_7.as_slice();
+
     let special_vals = special_vals.as_slice();
     for i in 0..PF::WIDTH {
         assert_eq!(
@@ -353,6 +383,36 @@ where
         assert_eq!(arr_special_neg[i],
             -special_vals[i],
             "Error when testing consistency of neg for special values for packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_exp_3[i],
+            arr0[i].exp_const_u64::<3>(),
+            "Error when testing exp_const_u64::<3> consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_exp_3[i],
+            special_vals[i].exp_const_u64::<3>(),
+            "Error when testing consistency of exp_const_u64::<3> for special values for packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_exp_5[i],
+            arr0[i].exp_const_u64::<5>(),
+            "Error when testing exp_const_u64::<5> consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_exp_5[i],
+            special_vals[i].exp_const_u64::<5>(),
+            "Error when testing consistency of exp_const_u64::<5> for special values for packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_exp_7[i],
+            arr0[i].exp_const_u64::<7>(),
+            "Error when testing exp_const_u64::<7> consistency of packed and scalar at location {}.",
+            i
+        );
+        assert_eq!(arr_special_exp_7[i],
+            special_vals[i].exp_const_u64::<7>(),
+            "Error when testing consistency of exp_const_u64::<7> for special values for packed and scalar at location {}.",
             i
         );
     }
