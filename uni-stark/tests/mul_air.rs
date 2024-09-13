@@ -26,7 +26,7 @@ const TRACE_WIDTH: usize = REPETITIONS * 3;
 
 struct MulAir;
 
-impl<F> BaseAir<F> for MulAir {
+impl<F:Debug> BaseAir<F> for MulAir {
     fn width(&self) -> usize {
         TRACE_WIDTH
     }

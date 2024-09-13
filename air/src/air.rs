@@ -109,7 +109,7 @@ pub trait AirBuilder: Sized {
     }
 
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
-        self.assert_zero(x.into() - y.into());
+       self.assert_zero(x.into() - y.into());
     }
 
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
