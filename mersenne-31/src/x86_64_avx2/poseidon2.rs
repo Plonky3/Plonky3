@@ -1,13 +1,42 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
+
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, InternalLayer, MDSMat4, Poseidon2ExternalPackedConstants,
-    Poseidon2InternalPackedConstants,
+    mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
+    InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-use crate::{
-    exp5, Mersenne31, PackedMersenne31AVX2, Poseidon2ExternalLayerMersenne31,
-    Poseidon2InternalLayerMersenne31, P, P_AVX2,
-};
+use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
+
+#[derive(Debug, Clone, Default)]
+pub struct Poseidon2InternalLayerMersenne31 {
+    pub(crate) internal_constants: Vec<Mersenne31>,
+    packed_internal_constants: Vec<__m256i>,
+}
+
+impl InternalLayerConstructor<PackedMersenne31AVX2> for Poseidon2InternalLayerMersenne31 {
+    /// We save the round constants in the {-P, ..., 0} representation instead of the standard
+    /// {0, ..., P} one. This saves several instructions later.
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        Self::new_from_constants(internal_constants)
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
+    pub(crate) initial_external_constants: Vec<[Mersenne31; WIDTH]>,
+    packed_initial_external_constants: Vec<[__m256i; WIDTH]>,
+    pub(crate) final_external_constants: Vec<[Mersenne31; WIDTH]>,
+    packed_final_external_constants: Vec<[__m256i; WIDTH]>,
+}
+
+impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX2, WIDTH>
+    for Poseidon2ExternalLayerMersenne31<WIDTH>
+{
+    fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
+        Self::new_from_constants(external_constants)
+    }
+}
 
 /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0} and copy into a vector
 fn convert_to_vec_neg_form(input: i32) -> __m256i {
@@ -18,27 +47,43 @@ fn convert_to_vec_neg_form(input: i32) -> __m256i {
     }
 }
 
-/// We save the round constants in the {-P, ..., 0} representation instead of the standard
-/// {0, ..., P} one. This saves several instructions later.
-impl Poseidon2InternalPackedConstants<Mersenne31> for Poseidon2InternalLayerMersenne31 {
-    type ConstantsType = __m256i;
-
-    fn convert_from_field(internal_constant: &Mersenne31) -> Self::ConstantsType {
-        convert_to_vec_neg_form(internal_constant.value as i32)
+impl Poseidon2InternalLayerMersenne31 {
+    /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
+    /// the constants for each round. Internally, the constants are transformed into th
+    /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        let packed_internal_constants = internal_constants
+            .iter()
+            .map(|constant| convert_to_vec_neg_form(constant.value as i32))
+            .collect();
+        Self {
+            internal_constants,
+            packed_internal_constants,
+        }
     }
 }
 
-/// We save the round constants in the {-P, ..., 0} representation instead of the standard
-/// {0, ..., P} one. This saves several instructions later.
-impl<const WIDTH: usize> Poseidon2ExternalPackedConstants<Mersenne31, WIDTH>
-    for Poseidon2ExternalLayerMersenne31
-{
-    type ConstantsType = [__m256i; WIDTH];
-
-    /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0}.
-    fn convert_from_field_array(external_constants: &[Mersenne31; WIDTH]) -> [__m256i; WIDTH] {
-        external_constants
-            .map(|external_constant| convert_to_vec_neg_form(external_constant.value as i32))
+impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
+    /// vectors containing the constants for each round. Internally, the constants
+    ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
+    fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
+        let initial_external_constants = external_constants.get_initial_constants().clone();
+        let final_external_constants = external_constants.get_terminal_constants().clone();
+        let packed_initial_external_constants = initial_external_constants
+            .iter()
+            .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
+            .collect();
+        let packed_final_external_constants = final_external_constants
+            .iter()
+            .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
+            .collect();
+        Self {
+            initial_external_constants,
+            packed_initial_external_constants,
+            final_external_constants,
+            packed_final_external_constants,
+        }
     }
 }
 
@@ -225,13 +270,8 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
     type InternalState = [PackedMersenne31AVX2; 16];
 
     /// Compute the full Poseidon2 internal layer on a state of width 16.
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        _internal_constants: &[Mersenne31],
-        packed_internal_constants: &[__m256i],
-    ) {
-        packed_internal_constants
+    fn permute_state(&self, state: &mut Self::InternalState) {
+        self.packed_internal_constants
             .iter()
             .for_each(|&rc| internal_16(state, rc))
     }
@@ -250,13 +290,8 @@ impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersen
     type InternalState = [PackedMersenne31AVX2; 24];
 
     /// Compute the full Poseidon2 internal layer on a state of width 24.
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        _internal_constants: &[Mersenne31],
-        packed_internal_constants: &[__m256i],
-    ) {
-        packed_internal_constants
+    fn permute_state(&self, state: &mut Self::InternalState) {
+        self.packed_internal_constants
             .iter()
             .for_each(|&rc| internal_24(state, rc))
     }
@@ -279,7 +314,7 @@ fn external_rounds<const WIDTH: usize>(
 }
 
 impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
-    for Poseidon2ExternalLayerMersenne31
+    for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     type InternalState = [PackedMersenne31AVX2; WIDTH];
 
@@ -287,11 +322,9 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     fn permute_state_initial(
         &self,
         mut state: [PackedMersenne31AVX2; WIDTH],
-        _initial_external_constants: &[[Mersenne31; WIDTH]],
-        packed_initial_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMersenne31AVX2; WIDTH] {
         mds_light_permutation(&mut state, &MDSMat4);
-        external_rounds(&mut state, packed_initial_external_constants);
+        external_rounds(&mut state, &self.packed_initial_external_constants);
         state
     }
 
@@ -299,10 +332,8 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     fn permute_state_final(
         &self,
         mut state: [PackedMersenne31AVX2; WIDTH],
-        _final_external_constants: &[[Mersenne31; WIDTH]],
-        packed_final_external_constants: &[[__m256i; WIDTH]],
     ) -> [PackedMersenne31AVX2; WIDTH] {
-        external_rounds(&mut state, packed_final_external_constants);
+        external_rounds(&mut state, &self.packed_final_external_constants);
         state
     }
 }
@@ -310,18 +341,15 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
     use super::*;
+    use crate::Poseidon2Mersenne31;
 
     type F = Mersenne31;
-    const D: u64 = 5;
-    type Perm16 =
-        Poseidon2<F, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, 16, D>;
-    type Perm24 =
-        Poseidon2<F, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, 24, D>;
+    type Perm16 = Poseidon2Mersenne31<16>;
+    type Perm24 = Poseidon2Mersenne31<24>;
 
     /// Test that the output is the same as the scalar version on a random input of length 16.
     #[test]
@@ -329,11 +357,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalLayerMersenne31,
-            Poseidon2InternalLayerMersenne31,
-            &mut rng,
-        );
+        let poseidon2 = Perm16::new_from_rng_128(&mut rng);
 
         let input: [F; 16] = rng.gen();
 
@@ -354,11 +378,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalLayerMersenne31,
-            Poseidon2InternalLayerMersenne31,
-            &mut rng,
-        );
+        let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
         let input: [F; 24] = rng.gen();
 

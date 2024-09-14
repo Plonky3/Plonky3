@@ -27,9 +27,18 @@
 // for i in range(1, 2 * length + 1)
 //      assert ((const_mat + diag_mat)^i).characteristic_polynomial().is_irreducible()
 
+use alloc::vec::Vec;
+
 use p3_field::{AbstractField, Field};
 
-use crate::Poseidon2InternalPackedConstants;
+pub trait InternalLayerConstructor<AF>
+where
+    AF: AbstractField,
+{
+    /// A constructor which internally will convert the supplied
+    /// constants into the appropriate form for the implementation.
+    fn new_from_constants(internal_constants: Vec<AF::F>) -> Self;
+}
 
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
 pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
@@ -43,8 +52,7 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
     }
 }
 
-pub trait InternalLayer<AF, const WIDTH: usize, const D: u64>:
-    Poseidon2InternalPackedConstants<AF::F>
+pub trait InternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
 where
     AF: AbstractField,
 {
@@ -55,12 +63,7 @@ where
 
     /// Compute the internal part of the Poseidon2 permutation.
     /// Implementations will usually not use both constants fields.
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        internal_constants: &[AF::F],
-        internal_packed_constants: &[Self::ConstantsType],
-    );
+    fn permute_state(&self, state: &mut Self::InternalState);
 }
 
 /// A helper method which allows any field to easily implement Internal Layer.
