@@ -47,7 +47,7 @@ where
     /// Create a new Poseidon2 configuration.
     /// This internally converts the given constants to the relevant packed versions.
     pub fn new(
-        external_constants: [Vec<[AF::F; WIDTH]>; 2],
+        external_constants: ExternalLayerConstants<AF::F, WIDTH>,
         internal_constants: Vec<AF::F>,
     ) -> Self {
         assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
@@ -66,15 +66,7 @@ where
     where
         Standard: Distribution<AF::F> + Distribution<[AF::F; WIDTH]>,
     {
-        let half_f = rounds_f / 2;
-        assert_eq!(
-            2 * half_f,
-            rounds_f,
-            "The total number of external rounds should be even"
-        );
-        let init_external_constants = rng.sample_iter(Standard).take(half_f).collect();
-        let final_external_constants = rng.sample_iter(Standard).take(half_f).collect();
-        let external_constants = [init_external_constants, final_external_constants];
+        let external_constants = ExternalLayerConstants::new_from_rng(rounds_f, rng);
         let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect();
 
         Self::new(external_constants, internal_constants)

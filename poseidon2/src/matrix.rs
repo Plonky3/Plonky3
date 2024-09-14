@@ -3,6 +3,8 @@ use alloc::vec::Vec;
 use p3_field::AbstractField;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
+use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 /// Multiply a 4-element vector x by
 /// [ 5 7 1 3 ]
@@ -147,13 +149,64 @@ pub fn mds_light_permutation<
     }
 }
 
+/// A simple struct which holds the constants for the external layer.
+pub struct ExternalLayerConstants<T, const WIDTH: usize> {
+    // Note these are intentionally not pub. Once initialised, these constants should be immutable.
+    initial: Vec<[T; WIDTH]>,
+    terminal: Vec<[T; WIDTH]>,
+}
+
+impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
+    pub fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
+        assert_eq!(initial.len(), terminal.len(), "The number of initial and final external rounds should be equal.");
+        Self { initial, terminal }
+    }
+
+
+    pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
+    where
+        Standard: Distribution<[T; WIDTH]>,
+    {
+        let half_f = external_round_number / 2;
+        assert_eq!(
+            2 * half_f,
+            external_round_number,
+            "The total number of external rounds should be even"
+        );
+        let initial_constants = rng.sample_iter(Standard).take(half_f).collect();
+        let terminal_constants = rng.sample_iter(Standard).take(half_f).collect();
+
+        Self::new(initial_constants, terminal_constants)
+    }
+
+    pub fn new_from_saved_array<U, const N: usize>(
+        [initial, terminal]: [[[U; WIDTH]; N]; 2],
+        conversion_fn: fn([U; WIDTH]) -> [T; WIDTH],
+    ) -> Self
+    where
+        T: Clone,
+    {
+        let initial_consts = initial.map(conversion_fn).to_vec();
+        let terminal_consts = terminal.map(conversion_fn).to_vec();
+        Self::new(initial_consts, terminal_consts)
+    }
+
+    pub fn get_initial_constants(&self) -> &Vec<[T; WIDTH]> {
+        &self.initial
+    }
+
+    pub fn get_terminal_constants(&self) -> &Vec<[T; WIDTH]> {
+        &self.terminal
+    }
+}
+
 pub trait ExternalLayerConstructor<AF, const WIDTH: usize>
 where
     AF: AbstractField,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.
-    fn new_from_constants(external_constants: [Vec<[AF::F; WIDTH]>; 2]) -> Self;
+    fn new_from_constants(external_constants: ExternalLayerConstants<AF::F, WIDTH>) -> Self;
 }
 
 /// A trait containing all data needed to implement the external layers of Poseidon2.

@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, ExternalLayerConstructor, InternalLayer,
-    InternalLayerConstructor, MDSMat4,
+    mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
+    InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
@@ -33,7 +33,7 @@ pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
 impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX2, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
-    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
+    fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
         Self::new_from_constants(external_constants)
     }
 }
@@ -67,8 +67,9 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
     /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
-    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
-        let [initial_external_constants, final_external_constants] = external_constants;
+    fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
+        let initial_external_constants = external_constants.get_initial_constants().clone();
+        let final_external_constants = external_constants.get_terminal_constants().clone();
         let packed_initial_external_constants = initial_external_constants
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))

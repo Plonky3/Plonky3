@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_poseidon2::{ExternalLayerConstructor, InternalLayerConstructor};
+use p3_poseidon2::{ExternalLayerConstants, ExternalLayerConstructor, InternalLayerConstructor};
 
 use crate::Mersenne31;
 
@@ -24,8 +24,10 @@ impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
 impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
-    fn new_from_constants(external_constants: [Vec<[Mersenne31; WIDTH]>; 2]) -> Self {
-        let [initial_external_constants, final_external_constants] = external_constants;
+    fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
+        let initial_external_constants = external_constants.get_initial_constants().clone();
+        let final_external_constants = external_constants.get_terminal_constants().clone();
+
         Self {
             initial_external_constants,
             final_external_constants,

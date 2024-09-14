@@ -11,8 +11,8 @@ use alloc::vec::Vec;
 
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
-    matmul_internal, ExternalLayer, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
-    InternalLayerConstructor, MDSMat4, Poseidon2,
+    matmul_internal, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4,
+    InternalLayer, InternalLayerConstructor, MDSMat4, Poseidon2,
 };
 
 use crate::{to_goldilocks_array, Goldilocks};
@@ -161,8 +161,10 @@ pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
 impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocks<WIDTH>
 {
-    fn new_from_constants(external_constants: [Vec<[Goldilocks; WIDTH]>; 2]) -> Self {
-        let [initial_external_constants, final_external_constants] = external_constants;
+    fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
+        let initial_external_constants = external_constants.get_initial_constants().clone();
+        let final_external_constants = external_constants.get_terminal_constants().clone();
+
         Self {
             initial_external_constants,
             final_external_constants,
@@ -203,8 +205,10 @@ pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
 impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
 {
-    fn new_from_constants(external_constants: [Vec<[Goldilocks; WIDTH]>; 2]) -> Self {
-        let [initial_external_constants, final_external_constants] = external_constants;
+    fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
+        let initial_external_constants = external_constants.get_initial_constants().clone();
+        let final_external_constants = external_constants.get_terminal_constants().clone();
+
         Self {
             initial_external_constants,
             final_external_constants,
@@ -373,8 +377,10 @@ mod tests {
             WIDTH,
             D,
         > = Poseidon2::new(
-            HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS
-                .map(|consts| consts.map(to_goldilocks_array).to_vec()),
+            ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_saved_array(
+                HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS,
+                to_goldilocks_array,
+            ),
             to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
         );
 
