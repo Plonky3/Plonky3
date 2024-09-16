@@ -477,6 +477,7 @@ impl<F, const D: usize> DivAssign for BinomialExtensionField<F, D>
 where
     F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
     }
@@ -498,6 +499,7 @@ where
     AF: AbstractField,
     AF::F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn mul_assign(&mut self, rhs: AF) {
         *self = self.clone() * rhs;
     }

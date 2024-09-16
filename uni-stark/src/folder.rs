@@ -37,18 +37,22 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type Var = PackedVal<SC>;
     type M = RowMajorMatrix<PackedVal<SC>>;
 
+    #[inline]
     fn main(&self) -> Self::M {
         self.main.clone()
     }
 
+    #[inline]
     fn is_first_row(&self) -> Self::Expr {
         self.is_first_row
     }
 
+    #[inline]
     fn is_last_row(&self) -> Self::Expr {
         self.is_last_row
     }
 
+    #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         if size == 2 {
             self.is_transition
@@ -57,6 +61,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         }
     }
 
+    #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: PackedVal<SC> = x.into();
         self.accumulator *= PackedChallenge::<SC>::from_f(self.alpha);
@@ -67,6 +72,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 impl<'a, SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'a, SC> {
     type PublicVar = Self::F;
 
+    #[inline]
     fn public_values(&self) -> &[Self::F] {
         self.public_values
     }
