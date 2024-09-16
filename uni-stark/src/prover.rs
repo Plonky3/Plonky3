@@ -168,7 +168,7 @@ where
 
             let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {
-                main,
+                main: main.as_view(),
                 public_values,
                 is_first_row,
                 is_last_row,
