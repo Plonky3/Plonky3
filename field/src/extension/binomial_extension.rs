@@ -510,12 +510,14 @@ where
 {
     const D: usize = D;
 
+    #[inline]
     fn from_base(b: AF) -> Self {
         Self {
             value: field_to_array(b),
         }
     }
 
+    #[inline]
     fn from_base_slice(bs: &[AF]) -> Self {
         Self {
             value: bs.to_vec().try_into().expect("slice has wrong length"),
@@ -529,6 +531,7 @@ where
         }
     }
 
+    #[inline]
     fn as_base_slice(&self) -> &[AF] {
         &self.value
     }
@@ -553,6 +556,7 @@ impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
 {
     const TWO_ADICITY: usize = F::EXT_TWO_ADICITY;
 
+    #[inline]
     fn two_adic_generator(bits: usize) -> Self {
         Self {
             value: F::ext_two_adic_generator(bits),
