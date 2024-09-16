@@ -3,6 +3,7 @@ use core::borrow::Borrow;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
 use p3_matrix::MatrixRowSlices;
+use core::fmt::Debug;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
@@ -13,7 +14,7 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 /// Assumes the field size is at least 16 bits.
 pub struct KeccakAir {}
 
-impl<F> BaseAir<F> for KeccakAir {
+impl<F:Debug> BaseAir<F> for KeccakAir {
     fn width(&self) -> usize {
         NUM_KECCAK_COLS
     }

@@ -69,7 +69,7 @@ impl<T> Matrix<T> for PublicRow<T> {
     }
 }
 
-impl<T: Clone> MatrixRows<T> for PublicRow<T> {
+impl<T: Clone + core::fmt::Debug> MatrixRows<T> for PublicRow<T> {
     type Row<'a> = Cloned<slice::Iter<'a, T>> where T: 'a, Self: 'a;
 
     fn row(&self, _r: usize) -> Self::Row<'_> {
@@ -77,7 +77,7 @@ impl<T: Clone> MatrixRows<T> for PublicRow<T> {
     }
 }
 
-impl<T: Clone> MatrixRowSlices<T> for PublicRow<T> {
+impl<T: Clone + core::fmt::Debug> MatrixRowSlices<T> for PublicRow<T> {
     fn row_slice(&self, _r: usize) -> &[T] {
         self.0.iter().as_slice()
     }
