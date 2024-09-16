@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;

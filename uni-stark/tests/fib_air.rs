@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
