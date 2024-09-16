@@ -170,6 +170,48 @@ pub fn pretty_name<T>() -> String {
     result
 }
 
+/// A C-style buffered input reader, similar to
+/// `std::iter::Iterator::next_chunk()` from nightly.
+#[inline]
+pub fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(iter: &mut I) -> ([I::Item; BUFLEN], usize)
+where
+    I::Item: Copy + Default,
+{
+    // Read BUFLEN values from `iter` into `buf` at a time.
+    let mut buf = [I::Item::default(); BUFLEN];
+    let mut i = 0;
+
+    for c in iter {
+        // Copy the next Item into `buf`.
+        unsafe {
+            *buf.get_unchecked_mut(i) = c;
+            i = i.unchecked_add(1);
+        }
+        // If `buf` is full
+        if i == BUFLEN {
+            break;
+        }
+    }
+    (buf, i)
+}
+
+#[inline]
+pub fn apply_to_chunks<const BUFLEN: usize, I, H>(input: I, mut func: H)
+where
+    I: IntoIterator<Item = u8>,
+    H: FnMut(&[I::Item]),
+{
+    // Read BUFLEN values from `iter` into `buf` at a time.
+    let mut iter = input.into_iter();
+    loop {
+        let (buf, n) = iter_next_chunk::<BUFLEN, _>(&mut iter);
+        if n == 0 {
+            break;
+        }
+        func(unsafe { buf.get_unchecked(..n) });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;

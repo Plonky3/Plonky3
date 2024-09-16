@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-symmetric = { path = "../symmetric" }
+p3-util = { path = "../util" }
 blake3 = "1.5"
 
 [features]
