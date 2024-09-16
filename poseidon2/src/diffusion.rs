@@ -136,3 +136,59 @@ pub fn sum_23<AF: AbstractField + Copy>(state: &[AF]) -> AF {
 
     bot_sum + mid_sum + top_sum
 }
+
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+#[inline(always)]
+fn sum_7<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+    assert_eq!(state.len(), 7);
+
+    let s01 = state[0] + state[1];
+    let s23 = state[2] + state[3];
+    let s45 = state[4] + state[5];
+
+    let s0123 = s01 + s23;
+    let s456 = s45 + state[6];
+    s0123 + s456
+}
+
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+#[inline(always)]
+fn sum_8<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+    assert_eq!(state.len(), 8);
+
+    let s01 = state[0] + state[1];
+    let s23 = state[2] + state[3];
+    let s45 = state[4] + state[5];
+    let s67 = state[6] + state[7];
+
+    let s0123 = s01 + s23;
+    let s4567 = s45 + s67;
+    s0123 + s4567
+}
+
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+#[inline(always)]
+pub fn sum_15<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+    assert_eq!(state.len(), 15);
+
+    let bot_sum = sum_8(&state[..8]);
+    let top_sum = sum_7(&state[8..]);
+
+    bot_sum + top_sum
+}
+
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+#[inline(always)]
+pub fn sum_23<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+    assert_eq!(state.len(), 23);
+
+    let bot_sum = sum_8(&state[..8]);
+    let mid_sum = sum_8(&state[8..16]);
+    let top_sum = sum_7(&state[16..]);
+
+    bot_sum + mid_sum + top_sum
+}

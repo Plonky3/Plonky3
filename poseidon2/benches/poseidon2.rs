@@ -4,7 +4,19 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 // use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 // use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{AbstractField, Field};
+use p3_field::{AbstractField, PrimeField, PrimeField64};
+use p3_goldilocks::{
+    Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
+};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
+use p3_koala_bear::{KoalaBear, Poseidon2ExternalLayerKoalaBear, Poseidon2InternalLayerKoalaBear};
+use p3_mersenne_31::{
+    Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
+};
+use p3_poseidon2::{
+    ExternalLayer, InternalLayer, Poseidon2, Poseidon2ExternalPackedConstants,
+    Poseidon2InternalPackedConstants,
+};
 // use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::Permutation;

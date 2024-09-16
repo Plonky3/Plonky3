@@ -203,7 +203,11 @@ fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
     let sum_non_0 = sum_15(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
+    let sum_non_0 = sum_15(&state[1..]);
+    let sum = sum_non_0 + state[0];
+    state[0] = sum_non_0 - state[0];
     diagonal_mul_16(state);
+    state.iter_mut().skip(1).for_each(|x| *x += sum);
     state.iter_mut().skip(1).for_each(|x| *x += sum);
 }
 
@@ -225,7 +229,11 @@ fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
     let sum_non_0 = sum_23(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
+    let sum_non_0 = sum_23(&state[1..]);
+    let sum = sum_non_0 + state[0];
+    state[0] = sum_non_0 - state[0];
     diagonal_mul_24(state);
+    state.iter_mut().skip(1).for_each(|x| *x += sum);
     state.iter_mut().skip(1).for_each(|x| *x += sum);
 }
 
