@@ -1,16 +1,14 @@
 //! Vectorized AVX2 implementation of Poseidon2 for MontyField31
 
-use core::{
-    arch::x86_64::{self, __m256i},
-    marker::PhantomData,
-    mem::transmute,
-};
+use alloc::vec::Vec;
+use core::arch::x86_64::{self, __m256i};
+use core::marker::PhantomData;
+use core::mem::transmute;
+
 use p3_poseidon2::{
     mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
     ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
-
-use alloc::vec::Vec;
 
 use crate::{
     apply_func_to_even_odd, movehdup_epi32, packed_exp_3, packed_exp_5, packed_exp_7,

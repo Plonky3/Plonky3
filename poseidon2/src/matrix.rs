@@ -155,10 +155,13 @@ pub struct ExternalLayerConstants<T, const WIDTH: usize> {
 
 impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     pub fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
-        assert_eq!(initial.len(), terminal.len(), "The number of initial and final external rounds should be equal.");
+        assert_eq!(
+            initial.len(),
+            terminal.len(),
+            "The number of initial and final external rounds should be equal."
+        );
         Self { initial, terminal }
     }
-
 
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where

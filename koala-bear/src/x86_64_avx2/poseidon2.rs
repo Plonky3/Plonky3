@@ -1,7 +1,5 @@
-use core::{
-    arch::x86_64::{self, __m256i},
-    mem::transmute,
-};
+use core::arch::x86_64::{self, __m256i};
+use core::mem::transmute;
 
 use p3_monty_31::{add, sub, InternalLayerParametersAVX2, MontyParameters, MontyParametersAVX2};
 

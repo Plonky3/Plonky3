@@ -1,11 +1,9 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 use p3_field::{AbstractField, Field};
-
 use p3_monty_31::{
     construct_2_exp_neg_n, InternalLayerBaseParameters, InternalLayerParameters, MontyField31,
     Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
-
 use p3_poseidon2::Poseidon2;
 
 use crate::{BabyBear, BabyBearParameters};
@@ -144,7 +142,6 @@ mod tests {
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
-
     use crate::BabyBear;
 
     type F = BabyBear;

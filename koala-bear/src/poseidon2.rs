@@ -1,11 +1,9 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 use p3_field::{AbstractField, Field};
-
 use p3_monty_31::{
     construct_2_exp_neg_n, InternalLayerBaseParameters, InternalLayerParameters, MontyField31,
     Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
-
 use p3_poseidon2::Poseidon2;
 
 use crate::{KoalaBear, KoalaBearParameters};
@@ -146,7 +144,6 @@ mod tests {
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
-
     use crate::KoalaBear;
 
     type F = KoalaBear;
@@ -221,8 +218,7 @@ mod tests {
             383159477, 1853122842, 141680496, 292525701, 1259330520, 412236438, 2060624596,
             1222507449, 958106053, 1235449514, 956433966, 1740904776, 1248898185, 1255690239,
             678044138, 158528918, 59290002, 698848812, 1527585185, 801440866, 1870481147, 1837554,
-            176075260, 502918143
-            ,
+            176075260, 502918143,
         ]
         .map(F::from_canonical_u32);
 
