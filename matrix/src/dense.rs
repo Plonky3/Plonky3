@@ -229,8 +229,7 @@ impl<T: Clone + core::fmt::Debug> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
     }
 }
 
-#[derive(Copy, Clone)]
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct RowMajorMatrixView<'a, T> {
     pub values: &'a [T],
     pub width: usize,

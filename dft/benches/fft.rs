@@ -75,11 +75,7 @@ where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
     Standard: Distribution<Mersenne31>,
 {
-    let mut group = c.benchmark_group(format!(
-        "m31_fft::<{}, {}>",
-        type_name::<Dft>(),
-        BATCH_SIZE
-    ));
+    let mut group = c.benchmark_group(format!("m31_fft::<{}, {}>", type_name::<Dft>(), BATCH_SIZE));
     group.sample_size(10);
 
     let mut rng = thread_rng();

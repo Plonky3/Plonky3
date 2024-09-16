@@ -52,7 +52,8 @@ pub trait AirBuilder: Sized {
         + Sub<Self::Expr, Output = Self::Expr>
         + Mul<Self::F, Output = Self::Expr>
         + Mul<Self::Var, Output = Self::Expr>
-        + Mul<Self::Expr, Output = Self::Expr> + Debug;
+        + Mul<Self::Expr, Output = Self::Expr>
+        + Debug;
 
     type M: MatrixRowSlices<Self::Var>;
 
@@ -109,7 +110,7 @@ pub trait AirBuilder: Sized {
     }
 
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
-       self.assert_zero(x.into() - y.into());
+        self.assert_zero(x.into() - y.into());
     }
 
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
@@ -154,7 +155,10 @@ pub trait ExtensionBuilder: AirBuilder {
     }
 }
 
-pub trait PermutationAirBuilder: ExtensionBuilder where <Self as ExtensionBuilder>::VarEF: Debug {
+pub trait PermutationAirBuilder: ExtensionBuilder
+where
+    <Self as ExtensionBuilder>::VarEF: Debug,
+{
     type MP: MatrixRowSlices<Self::VarEF>;
 
     fn permutation(&self) -> Self::MP;

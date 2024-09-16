@@ -64,13 +64,17 @@ impl<T: core::fmt::Debug, Inner: MatrixRows<T>> MatrixRows<T> for BitReversedMat
     }
 }
 
-impl<T: core::fmt::Debug, Inner: MatrixRowSlices<T>> MatrixRowSlices<T> for BitReversedMatrixView<Inner> {
+impl<T: core::fmt::Debug, Inner: MatrixRowSlices<T>> MatrixRowSlices<T>
+    for BitReversedMatrixView<Inner>
+{
     fn row_slice(&self, r: usize) -> &[T] {
         self.inner.row_slice(reverse_bits_len(r, self.log_height))
     }
 }
 
-impl<T: core::fmt::Debug, Inner: MatrixRowSlicesMut<T>> MatrixRowSlicesMut<T> for BitReversedMatrixView<Inner> {
+impl<T: core::fmt::Debug, Inner: MatrixRowSlicesMut<T>> MatrixRowSlicesMut<T>
+    for BitReversedMatrixView<Inner>
+{
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         self.inner
             .row_slice_mut(reverse_bits_len(r, self.log_height))

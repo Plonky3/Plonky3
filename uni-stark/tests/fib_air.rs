@@ -21,7 +21,7 @@ use rand::thread_rng;
 
 pub struct FibonacciAir {}
 
-impl<F:Debug> BaseAir<F> for FibonacciAir {
+impl<F: Debug> BaseAir<F> for FibonacciAir {
     fn width(&self) -> usize {
         NUM_FIBONACCI_COLS
     }
