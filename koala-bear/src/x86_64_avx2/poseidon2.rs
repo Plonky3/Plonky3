@@ -38,7 +38,7 @@ fn halve(input: __m256i) -> __m256i {
 }
 
 /// Add two vectors of Monty31 field elements with lhs in canonical form and rhs in (-P, P).
-/// To reiterate, the two inputs are not symmatric, lhs must be positive. Return a value in canonical form.
+/// To reiterate, the two inputs are not symmetric, lhs must be positive. Return a value in canonical form.
 /// If the inputs do not conform to these restrictions, the result is undefined.
 #[inline(always)]
 fn signed_add(lhs: __m256i, rhs: __m256i) -> __m256i {
@@ -464,31 +464,15 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{
-        KoalaBear, PackedKoalaBearAVX2, Poseidon2ExternalLayerKoalaBear,
-        Poseidon2InternalLayerKoalaBear,
-    };
+    use crate::{KoalaBear, PackedKoalaBearAVX2, Poseidon2KoalaBear};
 
     type F = KoalaBear;
     const D: u64 = 3;
-    type Perm16 = Poseidon2<
-        F,
-        Poseidon2ExternalLayerKoalaBear<16>,
-        Poseidon2InternalLayerKoalaBear<16>,
-        16,
-        D,
-    >;
-    type Perm24 = Poseidon2<
-        F,
-        Poseidon2ExternalLayerKoalaBear<24>,
-        Poseidon2InternalLayerKoalaBear<24>,
-        24,
-        D,
-    >;
+    type Perm16 = Poseidon2KoalaBear<16, D>;
+    type Perm24 = Poseidon2KoalaBear<24, D>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
@@ -496,11 +480,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalLayerKoalaBear::default(),
-            Poseidon2InternalLayerKoalaBear::default(),
-            &mut rng,
-        );
+        let poseidon2 = Perm16::new_from_rng_128(&mut rng);
 
         let input: [F; 16] = rng.gen();
 
@@ -521,11 +501,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalLayerKoalaBear::default(),
-            Poseidon2InternalLayerKoalaBear::default(),
-            &mut rng,
-        );
+        let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
         let input: [F; 24] = rng.gen();
 

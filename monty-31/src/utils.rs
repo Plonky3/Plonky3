@@ -55,6 +55,9 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     x_sub_u_hi.wrapping_add(corr)
 }
 
+#[inline]
+#[must_use]
 pub const fn construct_2_exp_neg_n<MP: MontyParameters>(exp: i8) -> MontyField31<MP> {
-    MontyField31::new_monty(((1_u64 << (32 - exp)) % (MP::PRIME as u64)) as u32)
+    assert!(exp > 1);
+    MontyField31::new_monty(1_u32 << (32 - exp))
 }

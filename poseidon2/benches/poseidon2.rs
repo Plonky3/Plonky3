@@ -1,34 +1,27 @@
 use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-// use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 // use p3_bn254_fr::{Bn254Fr, DiffusionMatrixBN254};
 use p3_field::{AbstractField, Field};
-use p3_field::{AbstractField, PrimeField, PrimeField64};
-use p3_goldilocks::{
-    Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
-};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
-use p3_koala_bear::{KoalaBear, Poseidon2ExternalLayerKoalaBear, Poseidon2InternalLayerKoalaBear};
-use p3_mersenne_31::{
-    Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
-};
-use p3_poseidon2::{
-    ExternalLayer, InternalLayer, Poseidon2, Poseidon2ExternalPackedConstants,
-    Poseidon2InternalPackedConstants,
-};
-// use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
+use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::Permutation;
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
     let mut rng = thread_rng();
-    // poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>(c);
-    // poseidon2_p64::<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, 7>(c);
 
-    // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>(c);
-    // poseidon2_p64::<KoalaBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 3>(c);
+    let poseidon2_bb_16 = Poseidon2BabyBear::<16, 7>::new_from_rng_128(&mut rng);
+    poseidon2::<BabyBear, Poseidon2BabyBear<16, 7>, 16, 7>(c, poseidon2_bb_16);
+    let poseidon2_bb_24 = Poseidon2BabyBear::<24, 7>::new_from_rng_128(&mut rng);
+    poseidon2::<BabyBear, Poseidon2BabyBear<24, 7>, 24, 7>(c, poseidon2_bb_24);
+
+    let poseidon2_kb_16 = Poseidon2KoalaBear::<16, 3>::new_from_rng_128(&mut rng);
+    poseidon2::<KoalaBear, Poseidon2KoalaBear<16, 3>, 16, 3>(c, poseidon2_kb_16);
+    let poseidon2_kb_24 = Poseidon2KoalaBear::<24, 3>::new_from_rng_128(&mut rng);
+    poseidon2::<KoalaBear, Poseidon2KoalaBear<24, 3>, 24, 3>(c, poseidon2_kb_24);
 
     let poseidon2_m31_16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng);
     poseidon2::<Mersenne31, Poseidon2Mersenne31<16>, 16, 5>(c, poseidon2_m31_16);

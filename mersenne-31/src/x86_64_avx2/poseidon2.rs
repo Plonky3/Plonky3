@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
-    InternalLayer, InternalLayerConstructor, MDSMat4,
+    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
+    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
@@ -203,11 +203,7 @@ fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
     let sum_non_0 = sum_15(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
-    let sum_non_0 = sum_15(&state[1..]);
-    let sum = sum_non_0 + state[0];
-    state[0] = sum_non_0 - state[0];
     diagonal_mul_16(state);
-    state.iter_mut().skip(1).for_each(|x| *x += sum);
     state.iter_mut().skip(1).for_each(|x| *x += sum);
 }
 
@@ -229,11 +225,7 @@ fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
     let sum_non_0 = sum_23(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
-    let sum_non_0 = sum_23(&state[1..]);
-    let sum = sum_non_0 + state[0];
-    state[0] = sum_non_0 - state[0];
     diagonal_mul_24(state);
-    state.iter_mut().skip(1).for_each(|x| *x += sum);
     state.iter_mut().skip(1).for_each(|x| *x += sum);
 }
 

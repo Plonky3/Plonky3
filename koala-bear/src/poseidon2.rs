@@ -6,7 +6,9 @@ use p3_monty_31::{
     Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 
-use crate::KoalaBearParameters;
+use p3_poseidon2::Poseidon2;
+
+use crate::{KoalaBear, KoalaBearParameters};
 
 // See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 // Optimized Diffusion matrices for Koalabear16.
@@ -27,9 +29,18 @@ use crate::KoalaBearParameters;
 // Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
 
 pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
-    Poseidon2InternalLayerMonty31<KoalaBearInternalLayerParameters, WIDTH>;
+    Poseidon2InternalLayerMonty31<KoalaBearParameters, WIDTH, KoalaBearInternalLayerParameters>;
 
-pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> = Poseidon2ExternalLayerMonty31<WIDTH>;
+pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
+    Poseidon2ExternalLayerMonty31<KoalaBearParameters, WIDTH>;
+
+pub type Poseidon2KoalaBear<const WIDTH: usize, const D: u64> = Poseidon2<
+    <KoalaBear as Field>::Packing,
+    Poseidon2ExternalLayerKoalaBear<WIDTH>,
+    Poseidon2InternalLayerKoalaBear<WIDTH>,
+    WIDTH,
+    D,
+>;
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
@@ -147,6 +158,7 @@ mod tests {
     fn poseidon2_koalabear<const WIDTH: usize, const WIDTH_MIN_1: usize, const D: u64>(
         input: &mut [F; WIDTH],
     ) where
+        KoalaBearInternalLayerParameters: InternalLayerParameters<KoalaBearParameters, WIDTH>,
         Poseidon2ExternalLayerKoalaBear<WIDTH>: ExternalLayer<KoalaBear, WIDTH, D>,
         Poseidon2InternalLayerKoalaBear<WIDTH>: InternalLayer<
             KoalaBear,
@@ -162,17 +174,7 @@ mod tests {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<
-            F,
-            Poseidon2ExternalLayerKoalaBear<WIDTH>,
-            Poseidon2InternalLayerKoalaBear<WIDTH>,
-            WIDTH,
-            D,
-        > = Poseidon2::new_from_rng_128(
-            Poseidon2ExternalLayerKoalaBear::default(),
-            Poseidon2InternalLayerKoalaBear::default(),
-            &mut rng,
-        );
+        let poseidon2: Poseidon2KoalaBear<WIDTH, D> = Poseidon2::new_from_rng_128(&mut rng);
 
         poseidon2.permute_mut(input);
     }

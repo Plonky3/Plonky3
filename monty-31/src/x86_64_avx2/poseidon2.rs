@@ -2,11 +2,12 @@
 
 use core::{
     arch::x86_64::{self, __m256i},
+    marker::PhantomData,
     mem::transmute,
 };
 use p3_poseidon2::{
-    mds_light_permutation, sum_15, sum_23, ExternalLayer, InternalLayer, MDSMat4,
-    Poseidon2ExternalPackedConstants, Poseidon2InternalPackedConstants,
+    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
+    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
 use alloc::vec::Vec;
@@ -14,7 +15,6 @@ use alloc::vec::Vec;
 use crate::{
     apply_func_to_even_odd, movehdup_epi32, packed_exp_3, packed_exp_5, packed_exp_7,
     FieldParameters, MontyField31, MontyParameters, PackedMontyField31AVX2, PackedMontyParameters,
-    Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently as it is the only entry to which we apply s-box.
@@ -101,6 +101,98 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
             // `[PackedMontyField31AVX2<FP>; 24]` can be transmuted to `InternalLayer24`.
             transmute(vector)
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Poseidon2InternalLayerMonty31<
+    PMP: PackedMontyParameters,
+    const WIDTH: usize,
+    ILP: InternalLayerParametersAVX2<WIDTH>,
+> {
+    pub(crate) internal_constants: Vec<MontyField31<PMP>>,
+    packed_internal_constants: Vec<__m256i>,
+    _phantom: PhantomData<ILP>,
+}
+
+impl<PMP: PackedMontyParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<WIDTH>>
+    Poseidon2InternalLayerMonty31<PMP, WIDTH, ILP>
+{
+    /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
+    /// the constants for each round. Internally, the constants are transformed into th
+    /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
+    fn new_from_constants(internal_constants: Vec<MontyField31<PMP>>) -> Self {
+        let packed_internal_constants = internal_constants
+            .iter()
+            .map(|constant| convert_to_vec_neg_form::<PMP>(constant.value as i32))
+            .collect();
+        Self {
+            internal_constants,
+            packed_internal_constants,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<WIDTH>>
+    InternalLayerConstructor<PackedMontyField31AVX2<FP>>
+    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
+{
+    /// We save the round constants in the {-P, ..., 0} representation instead of the standard
+    /// {0, ..., P} one. This saves several instructions later.
+    fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
+        Self::new_from_constants(internal_constants)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH: usize> {
+    pub(crate) initial_external_constants: Vec<[MontyField31<PMP>; WIDTH]>,
+    packed_initial_external_constants: Vec<[__m256i; WIDTH]>,
+    pub(crate) final_external_constants: Vec<[MontyField31<PMP>; WIDTH]>,
+    packed_final_external_constants: Vec<[__m256i; WIDTH]>,
+}
+
+impl<PMP: PackedMontyParameters, const WIDTH: usize> Poseidon2ExternalLayerMonty31<PMP, WIDTH> {
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
+    /// vectors containing the constants for each round. Internally, the constants
+    ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
+    fn new_from_constants(
+        external_constants: ExternalLayerConstants<MontyField31<PMP>, WIDTH>,
+    ) -> Self {
+        let initial_external_constants = external_constants.get_initial_constants().clone();
+        let final_external_constants = external_constants.get_terminal_constants().clone();
+        let packed_initial_external_constants = initial_external_constants
+            .iter()
+            .map(|array| {
+                array.map(|constant| convert_to_vec_neg_form::<PMP>(constant.value as i32))
+            })
+            .collect();
+        let packed_final_external_constants = final_external_constants
+            .iter()
+            .map(|array| {
+                array.map(|constant| convert_to_vec_neg_form::<PMP>(constant.value as i32))
+            })
+            .collect();
+        Self {
+            initial_external_constants,
+            packed_initial_external_constants,
+            final_external_constants,
+            packed_final_external_constants,
+        }
+    }
+}
+
+impl<FP: FieldParameters, const WIDTH: usize>
+    ExternalLayerConstructor<PackedMontyField31AVX2<FP>, WIDTH>
+    for Poseidon2ExternalLayerMonty31<FP, WIDTH>
+{
+    /// We save the round constants in the {-P, ..., 0} representation instead of the standard
+    /// {0, ..., P} one. This saves several instructions later.
+    fn new_from_constants(
+        external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
+    ) -> Self {
+        Self::new_from_constants(external_constants)
     }
 }
 
@@ -210,70 +302,11 @@ fn convert_to_vec_neg_form<MP: MontyParameters>(input: i32) -> __m256i {
     }
 }
 
-/// We save the round constants in the {-P, ..., 0} representation instead of the standard
-/// {0, ..., P} one. This saves several instructions later.
-impl<P2P, MP, const WIDTH: usize> Poseidon2InternalPackedConstants<MontyField31<MP>>
-    for Poseidon2InternalLayerMonty31<P2P, WIDTH>
-where
-    P2P: Clone + Sync,
-    MP: MontyParameters,
-{
-    type ConstantsType = __m256i;
-
-    fn convert_from_field(internal_constant: &MontyField31<MP>) -> Self::ConstantsType {
-        let rc = (internal_constant.value as u64) << 32;
-        let rc_mod_p = rc % (MP::PRIME as u64);
-        unsafe { x86_64::_mm256_set1_epi64x(rc_mod_p as i64) }
-    }
-
-    fn convert_from_field_list(
-        internal_constants: &[MontyField31<MP>],
-    ) -> Vec<Self::ConstantsType> {
-        internal_constants
-            .iter()
-            .map(|constant| convert_to_vec_neg_form::<MP>(constant.value as i32))
-            .collect()
-    }
-}
-
-/// We save the round constants in the {-P, ..., 0} representation instead of the standard
-/// {0, ..., P} one. This saves several instructions later.
-impl<MP, const WIDTH: usize> Poseidon2ExternalPackedConstants<MontyField31<MP>, WIDTH>
-    for Poseidon2ExternalLayerMonty31<WIDTH>
-where
-    MP: MontyParameters,
-{
-    type ConstantsType = [__m256i; WIDTH];
-
-    /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0}.
-    fn convert_from_field_array(
-        external_constants: &[MontyField31<MP>; WIDTH],
-    ) -> [__m256i; WIDTH] {
-        external_constants
-            .map(|external_constant| convert_to_vec_neg_form::<MP>(external_constant.value as i32))
-    }
-
-    fn convert_from_field_array_list(
-        external_constants_list: [&[[MontyField31<MP>; WIDTH]]; 2],
-    ) -> [Vec<Self::ConstantsType>; 2] {
-        let constants_0 = external_constants_list[0]
-            .iter()
-            .map(Self::convert_from_field_array)
-            .collect();
-        let constants_1 = external_constants_list[1]
-            .iter()
-            .map(Self::convert_from_field_array)
-            .collect();
-
-        [constants_0, constants_1]
-    }
-}
-
 // First constant of internal round should be the standard thing.
 // remaining constants should be saved as R^2 rc instead of rc.
 // All should be positive.
 impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 16, D>
-    for Poseidon2InternalLayerMonty31<ILP, 16>
+    for Poseidon2InternalLayerMonty31<FP, 16, ILP>
 where
     FP: FieldParameters,
     ILP: InternalLayerParametersAVX2<16, ArrayLike = [__m256i; 15]>,
@@ -283,14 +316,9 @@ where
     /// Need to keep things positive as we don't have signed shifts in AVX2.
     /// Might be able to do things slightly cheaper in AVX512.
     /// Need initial round to be different too.
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        _internal_constants: &[<PackedMontyField31AVX2<FP> as p3_field::AbstractField>::F],
-        packed_internal_constants: &[Self::ConstantsType],
-    ) {
+    fn permute_state(&self, state: &mut Self::InternalState) {
         unsafe {
-            packed_internal_constants.iter().for_each(|&rc| {
+            self.packed_internal_constants.iter().for_each(|&rc| {
                 state.s0 = add_rc_and_sbox_internal::<FP, D>(state.s0, rc);
                 let sum_non_0 = sum_15(
                     &transmute::<[__m256i; 15], [PackedMontyField31AVX2<FP>; 15]>(state.s_hi),
@@ -311,7 +339,7 @@ where
 // remaining constants should be saved as R^2 rc instead of rc.
 // All should be positive.
 impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 24, D>
-    for Poseidon2InternalLayerMonty31<ILP, 24>
+    for Poseidon2InternalLayerMonty31<FP, 24, ILP>
 where
     FP: FieldParameters,
     ILP: InternalLayerParametersAVX2<24, ArrayLike = [__m256i; 23]>,
@@ -321,14 +349,9 @@ where
     /// Need to keep things positive as we don't have signed shifts in AVX2.
     /// Might be able to do things slightly cheaper in AVX512.
     /// Need initial round to be different too.
-    fn permute_state(
-        &self,
-        state: &mut Self::InternalState,
-        _internal_constants: &[<PackedMontyField31AVX2<FP> as p3_field::AbstractField>::F],
-        packed_internal_constants: &[Self::ConstantsType],
-    ) {
+    fn permute_state(&self, state: &mut Self::InternalState) {
         unsafe {
-            packed_internal_constants.iter().for_each(|&rc| {
+            self.packed_internal_constants.iter().for_each(|&rc| {
                 state.s0 = add_rc_and_sbox_internal::<FP, D>(state.s0, rc);
                 let sum_non_0 = sum_23(
                     &transmute::<[__m256i; 23], [PackedMontyField31AVX2<FP>; 23]>(state.s_hi),
@@ -366,7 +389,7 @@ fn external_rounds<FP, const WIDTH: usize, const D: u64>(
 }
 
 impl<FP, const D: u64> ExternalLayer<PackedMontyField31AVX2<FP>, 16, D>
-    for Poseidon2ExternalLayerMonty31<16>
+    for Poseidon2ExternalLayerMonty31<FP, 16>
 where
     FP: FieldParameters,
 {
@@ -376,12 +399,10 @@ where
     fn permute_state_initial(
         &self,
         mut state: [PackedMontyField31AVX2<FP>; 16],
-        _initial_external_constants: &[[MontyField31<FP>; 16]],
-        packed_initial_external_constants: &[[__m256i; 16]],
     ) -> Self::InternalState {
         mds_light_permutation(&mut state, &MDSMat4);
 
-        external_rounds::<FP, 16, D>(&mut state, packed_initial_external_constants);
+        external_rounds::<FP, 16, D>(&mut state, &self.packed_initial_external_constants);
 
         InternalLayer16::from_packed_field_array(state)
     }
@@ -389,23 +410,18 @@ where
     /// Compute the second half of the Poseidon2 external layers.
     /// SAFETY: The caller must ensure that each element of `state` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
-    fn permute_state_final(
-        &self,
-        state: Self::InternalState,
-        _final_external_constants: &[[MontyField31<FP>; 16]],
-        packed_final_external_constants: &[[__m256i; 16]],
-    ) -> [PackedMontyField31AVX2<FP>; 16] {
+    fn permute_state_final(&self, state: Self::InternalState) -> [PackedMontyField31AVX2<FP>; 16] {
         // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
         // Thus to_packed_field_array is safe to use.
         let mut output_state = unsafe { state.to_packed_field_array() };
 
-        external_rounds::<FP, 16, D>(&mut output_state, packed_final_external_constants);
+        external_rounds::<FP, 16, D>(&mut output_state, &self.packed_final_external_constants);
         output_state
     }
 }
 
 impl<FP, const D: u64> ExternalLayer<PackedMontyField31AVX2<FP>, 24, D>
-    for Poseidon2ExternalLayerMonty31<24>
+    for Poseidon2ExternalLayerMonty31<FP, 24>
 where
     FP: FieldParameters,
 {
@@ -415,12 +431,10 @@ where
     fn permute_state_initial(
         &self,
         mut state: [PackedMontyField31AVX2<FP>; 24],
-        _initial_external_constants: &[[MontyField31<FP>; 24]],
-        packed_initial_external_constants: &[[__m256i; 24]],
     ) -> Self::InternalState {
         mds_light_permutation(&mut state, &MDSMat4);
 
-        external_rounds::<FP, 24, D>(&mut state, packed_initial_external_constants);
+        external_rounds::<FP, 24, D>(&mut state, &self.packed_initial_external_constants);
 
         InternalLayer24::from_packed_field_array(state)
     }
@@ -428,17 +442,12 @@ where
     /// Compute the second half of the Poseidon2 external layers.
     /// SAFETY: The caller must ensure that each element of `state` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
-    fn permute_state_final(
-        &self,
-        state: Self::InternalState,
-        _final_external_constants: &[[MontyField31<FP>; 24]],
-        packed_final_external_constants: &[[__m256i; 24]],
-    ) -> [PackedMontyField31AVX2<FP>; 24] {
+    fn permute_state_final(&self, state: Self::InternalState) -> [PackedMontyField31AVX2<FP>; 24] {
         // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
         // Thus to_packed_field_array is safe to use.
         let mut output_state = unsafe { state.to_packed_field_array() };
 
-        external_rounds::<FP, 24, D>(&mut output_state, packed_final_external_constants);
+        external_rounds::<FP, 24, D>(&mut output_state, &self.packed_final_external_constants);
         output_state
     }
 }
