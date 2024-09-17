@@ -8,6 +8,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
+use core::mem::MaybeUninit;
+use core::slice;
 
 pub mod array_serialization;
 pub mod linear_map;
@@ -132,6 +134,8 @@ pub trait VecExt<T> {
     fn pushed_ref(&mut self, elem: T) -> &T;
     /// Push `elem` and return a mutable reference to it.
     fn pushed_mut(&mut self, elem: T) -> &mut T;
+
+    unsafe fn split_at_spare_ref_mut(&mut self) -> (&[T], &mut [MaybeUninit<T>]);
 }
 
 impl<T> VecExt<T> for alloc::vec::Vec<T> {
@@ -142,6 +146,15 @@ impl<T> VecExt<T> for alloc::vec::Vec<T> {
     fn pushed_mut(&mut self, elem: T) -> &mut T {
         self.push(elem);
         self.last_mut().unwrap()
+    }
+    unsafe fn split_at_spare_ref_mut(&mut self) -> (&[T], &mut [MaybeUninit<T>]) {
+        let ptr = self.as_mut_ptr();
+        let len = self.len();
+        let spare_len = self.capacity() - len;
+        (
+            slice::from_raw_parts(ptr, len),
+            slice::from_raw_parts_mut(ptr.add(len) as *mut MaybeUninit<T>, spare_len),
+        )
     }
 }
 

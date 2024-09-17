@@ -7,6 +7,7 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::ExtensionField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_maybe_rayon::{iter as par_iter, prelude::*};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -60,17 +61,40 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     pub(crate) fn gen(&self) -> Point<F> {
         Point::generator(self.log_n - 1)
     }
-    pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> {
+
+    pub(crate) fn par_coset0(&self) -> impl ParallelIterator<Item = Point<F>> + '_ {
         let g = self.gen();
-        iterate(self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
+        // g * 2^msb
+        let shifted_gs = iterate(g, |g| g.double())
+            .take(self.log_n - 1)
+            .collect_vec();
+        par_iter::split((self.shift, self.log_n - 1), move |(p, log_n)| {
+            if log_n == 0 {
+                ((p, 0), None)
+            } else {
+                ((p, log_n - 1), Some((p + shifted_gs[log_n - 1], log_n - 1)))
+            }
+        })
+        .flat_map_iter(move |(p, log_n)| iterate(p, move |&p| p + g).take(1 << log_n))
     }
-    fn coset1(&self) -> impl Iterator<Item = Point<F>> {
-        let g = self.gen();
-        iterate(g - self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
+
+    pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> + '_ {
+        self.par_coset0().collect::<Vec<_>>().into_iter()
     }
-    pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> {
-        self.coset0().interleave(self.coset1())
+
+    pub(crate) fn par_points(&self) -> impl ParallelIterator<Item = Point<F>> + '_ {
+        // let h = self.shift
+        //     coset0 is [ h,      h + g,   h + 2g, ...]
+        // and coset1 is [-h + g, -h + 2g, -h + 3g, ...]
+        // so we can get coset0 from coset1 by adding (g-2h).
+        let offset = self.gen() - self.shift * 2;
+        self.par_coset0().flat_map_iter(move |p| [p, p + offset])
     }
+
+    pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> + '_ {
+        self.par_points().collect::<Vec<_>>().into_iter()
+    }
+
     pub(crate) fn nth_point(&self, idx: usize) -> Point<F> {
         let (idx, lsb) = (idx >> 1, idx & 1);
         if lsb == 0 {
@@ -157,9 +181,9 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     #[instrument(skip_all, fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
         let sels = coset
-            .points()
+            .par_points()
             .map(|p| self.selectors_at_point(p.to_projective_line().unwrap()))
-            .collect_vec();
+            .collect::<Vec<_>>();
         LagrangeSelectors {
             is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
             is_last_row: sels.iter().map(|s| s.is_last_row).collect(),
@@ -327,6 +351,21 @@ mod tests {
             );
         }
     }
+
+    /*
+    fn do_test_par_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
+        let coset0 = d.coset0().collect_vec();
+        let p_coset0 = d.par_coset0().collect::<Vec<_>>();
+        assert_eq!(coset0, p_coset0);
+    }
+
+    #[test]
+    fn par_coset() {
+        type F = Mersenne31;
+        let d = CircleDomain::<F>::standard(8);
+        do_test_par_coset(d);
+    }
+    */
 
     #[test]
     fn selectors() {

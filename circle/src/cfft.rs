@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::{cmp, mem::MaybeUninit};
 
 use itertools::{iterate, izip, Itertools};
 use p3_commit::PolynomialSpace;
@@ -8,8 +9,8 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
+use p3_maybe_rayon::{par_izip, prelude::*};
+use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits, VecExt};
 use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
@@ -133,6 +134,14 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         let log_n = log2_strict_usize(coeffs.height());
         assert!(log_n <= domain.log_n);
 
+        let mut twiddles = debug_span!("twiddles").in_scope(|| {
+            compute_twiddles(domain)
+                .into_iter()
+                .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
+                .rev()
+                .peekable()
+        });
+
         if log_n < domain.log_n {
             // We could simply pad coeffs like this:
             // coeffs.pad_to_height(target_domain.size(), F::zero());
@@ -140,23 +149,51 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
             // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
             // both `x_1` and `x_2` are set to `x_1`).
             // So instead we directly repeat the coeffs and skip the initial layers.
-            debug_span!("extend coeffs").in_scope(|| {
-                coeffs.values.reserve(domain.size() * coeffs.width());
-                for _ in log_n..domain.log_n {
-                    coeffs.values.extend_from_within(..);
-                }
-            });
-        }
-        assert_eq!(coeffs.height(), 1 << domain.log_n);
 
-        let mut twiddles = debug_span!("twiddles").in_scope(|| {
-            compute_twiddles(domain)
-                .into_iter()
-                .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
-                .rev()
-                .skip(domain.log_n - log_n)
-                .peekable()
-        });
+            /*
+            1 2 3 4 0 0 0 0
+            |-----^ ^-----|
+
+            1 2 3 4 1 2 3 4
+            |-^ ^-| |-^ ^-|
+
+
+            */
+
+            let n_skipped_layers = domain.log_n - log_n;
+
+            let orig_len = coeffs.values.len();
+            let new_len = domain.size() * coeffs.width();
+
+            coeffs.values.reserve(new_len);
+
+            twiddles = twiddles.dropping(n_skipped_layers);
+
+            coeffs.values.resize(new_len, F::zero());
+
+            if let Some(ts) = twiddles.next() {
+                let blk_sz = coeffs.values.len() / ts.len();
+                let job_sz = cmp::max(1, blk_sz >> (1 + log2_ceil_usize(desired_num_jobs())));
+
+                let (src_blk, dst_blks) = coeffs.values.split_at_mut(blk_sz);
+                let (src_lo, src_hi) = src_blk.split_at_mut(blk_sz / 2);
+                for (&t, dst_blk) in izip!(&ts[1..], dst_blks.chunks_exact_mut(blk_sz)) {
+                    let (dst_lo, dst_hi) = dst_blk.split_at_mut(blk_sz / 2);
+                    par_izip!(
+                        src_lo.par_chunks(job_sz),
+                        src_hi.par_chunks(job_sz),
+                        dst_lo.par_chunks_mut(job_sz),
+                        dst_hi.par_chunks_mut(job_sz),
+                    )
+                    .for_each(|(src_lo, src_hi, dst_lo, dst_hi)| {
+                        t.apply_to_rows_from_src(src_lo, src_hi, dst_lo, dst_hi);
+                    });
+                }
+                par_izip!(src_lo.par_chunks_mut(job_sz), src_hi.par_chunks_mut(job_sz),)
+                    .for_each(|(lo, hi)| ts[0].apply_to_rows(lo, hi));
+            }
+        }
+        assert_eq!(coeffs.height(), domain.size());
 
         for ts in twiddles.peeking_take_while(|ts| ts.len() < desired_num_jobs()) {
             par_within_blk_layer(&mut coeffs.values, &ts);
@@ -197,9 +234,9 @@ fn serial_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
 #[instrument(level = "debug", skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
 fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
     let blk_sz = values.len() / twiddles.len();
+    let job_sz = cmp::max(1, blk_sz >> (1 + log2_ceil_usize(desired_num_jobs())));
     for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
         let (lo, hi) = blk.split_at_mut(blk_sz / 2);
-        let job_sz = core::cmp::max(1, lo.len() >> log2_ceil_usize(desired_num_jobs()));
         lo.par_chunks_mut(job_sz)
             .zip(hi.par_chunks_mut(job_sz))
             .for_each(|(lo_job, hi_job)| t.apply_to_rows(lo_job, hi_job));
@@ -319,12 +356,24 @@ mod tests {
             let coeffs = evals.interpolate();
             let lde_coeffs = lde.interpolate();
 
+            // let mut good = true;
             for r in 0..coeffs.height() {
                 assert_eq!(&*coeffs.row_slice(r), &*lde_coeffs.row_slice(r));
+                /*
+                if &*coeffs.row_slice(r) != &*lde_coeffs.row_slice(r) {
+                    good = false;
+                }
+                */
             }
             for r in coeffs.height()..lde_coeffs.height() {
                 assert!(lde_coeffs.row(r).all(|x| x.is_zero()));
+                /*
+                if !lde_coeffs.row(r).all(|x| x.is_zero()) {
+                    good = false;
+                }
+                */
             }
+            // dbg!(log_n, log_blowup, good);
         }
     }
 
