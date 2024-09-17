@@ -5,22 +5,23 @@ use p3_poseidon2::{
 };
 
 use crate::{
-    FieldParameters, MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
+    FieldParameters, MontyField31, MontyParameters, Poseidon2ExternalLayerMonty31,
+    Poseidon2InternalLayerMonty31,
 };
 
 /// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + Diag(vec).
 /// vec is assumed to be of the form [-2, ...] with all entries after the first being small powers of 2.
-pub trait InternalLayerBaseParameters<FP: FieldParameters, const WIDTH: usize>:
+pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     Clone + Sync
 {
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
-    type ArrayLike: AsRef<[MontyField31<FP>]> + Sized;
+    type ArrayLike: AsRef<[MontyField31<MP>]> + Sized;
 
-    fn internal_diag_mul(state: &mut [MontyField31<FP>; WIDTH], sum: MontyField31<FP>);
+    fn internal_diag_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
 
     /// Implements multiplication by the diffusion matrix 1 + Diag(vec) using a delayed reduction strategy.
-    fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
-        let part_sum: MontyField31<FP> = state.iter().skip(1).cloned().sum();
+    fn permute_state(state: &mut [MontyField31<MP>; WIDTH]) {
+        let part_sum: MontyField31<MP> = state.iter().skip(1).cloned().sum();
         let full_sum = part_sum + state[0];
         state[0] = part_sum - state[0];
         Self::internal_diag_mul(state, full_sum);
@@ -67,24 +68,6 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
 )))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     InternalLayerBaseParameters<FP, WIDTH>
-{
-}
-
-#[cfg(not(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
-    ),
-    all(
-        feature = "nightly-features",
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ),
-)))]
-impl<P2P> p3_poseidon2::NoPackedImplementation for Poseidon2InternalLayerMonty31<P2P> where
-    P2P: Clone + Sync
 {
 }
 
