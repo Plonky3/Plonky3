@@ -162,36 +162,49 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
 
             let n_skipped_layers = domain.log_n - log_n;
 
-            let orig_len = coeffs.values.len();
-            let new_len = domain.size() * coeffs.width();
-
-            coeffs.values.reserve(new_len);
+            let new_len = coeffs.values.len() << n_skipped_layers;
 
             twiddles = twiddles.dropping(n_skipped_layers);
 
-            coeffs.values.resize(new_len, F::zero());
+            let ts = twiddles.next().unwrap();
+            assert_eq!(ts.len(), 1 << n_skipped_layers);
+            coeffs
+                .values
+                .reserve(coeffs.values.len() << n_skipped_layers);
 
-            if let Some(ts) = twiddles.next() {
-                let blk_sz = coeffs.values.len() / ts.len();
-                let job_sz = cmp::max(1, blk_sz >> (1 + log2_ceil_usize(desired_num_jobs())));
+            // coeffs.values.resize(new_len, F::zero());
 
-                let (src_blk, dst_blks) = coeffs.values.split_at_mut(blk_sz);
-                let (src_lo, src_hi) = src_blk.split_at_mut(blk_sz / 2);
-                for (&t, dst_blk) in izip!(&ts[1..], dst_blks.chunks_exact_mut(blk_sz)) {
-                    let (dst_lo, dst_hi) = dst_blk.split_at_mut(blk_sz / 2);
-                    par_izip!(
-                        src_lo.par_chunks(job_sz),
-                        src_hi.par_chunks(job_sz),
-                        dst_lo.par_chunks_mut(job_sz),
-                        dst_hi.par_chunks_mut(job_sz),
-                    )
-                    .for_each(|(src_lo, src_hi, dst_lo, dst_hi)| {
-                        t.apply_to_rows_from_src(src_lo, src_hi, dst_lo, dst_hi);
-                    });
-                }
-                par_izip!(src_lo.par_chunks_mut(job_sz), src_hi.par_chunks_mut(job_sz),)
-                    .for_each(|(lo, hi)| ts[0].apply_to_rows(lo, hi));
+            // assert_eq!(ts.len())
+
+            // let blk_sz = coeffs.values.len() / ts.len();
+            let blk_sz = coeffs.values.len();
+            let job_sz = cmp::max(1, blk_sz >> (1 + log2_ceil_usize(desired_num_jobs())));
+
+            let (src_blk, dst_blks) = unsafe { coeffs.values.v_split_at_spare_mut() };
+            let (src_lo, src_hi) = src_blk.split_at_mut(blk_sz / 2);
+
+            // let (src_blk, dst_blks) = coeffs.values.split_at_mut(blk_sz);
+
+            // Initialize the new blocks
+            for (&t, dst_blk) in izip!(&ts[1..], dst_blks.chunks_exact_mut(blk_sz)) {
+                let (dst_lo, dst_hi) = dst_blk.split_at_mut(blk_sz / 2);
+                par_izip!(
+                    src_lo.par_chunks(job_sz),
+                    src_hi.par_chunks(job_sz),
+                    dst_lo.par_chunks_mut(job_sz),
+                    dst_hi.par_chunks_mut(job_sz),
+                )
+                .for_each(|(src_lo, src_hi, dst_lo, dst_hi)| {
+                    t.apply_to_uninit_rows_from_src(src_lo, src_hi, dst_lo, dst_hi);
+                });
             }
+            unsafe {
+                coeffs.values.set_len(new_len);
+            }
+
+            let (src_lo, src_hi) = coeffs.values[..blk_sz].split_at_mut(blk_sz / 2);
+            par_izip!(src_lo.par_chunks_mut(job_sz), src_hi.par_chunks_mut(job_sz))
+                .for_each(|(lo, hi)| ts[0].apply_to_rows(lo, hi));
         }
         assert_eq!(coeffs.height(), domain.size());
 

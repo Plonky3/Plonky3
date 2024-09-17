@@ -1,3 +1,4 @@
+use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::{mem, slice};
 
@@ -45,11 +46,6 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
-    fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
-        let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
-        (Self::pack_slice(packed), suffix)
-    }
-
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Value>());
         assert!(
@@ -63,9 +59,34 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    fn pack_uninit_slice_mut(buf: &mut [MaybeUninit<Self::Value>]) -> &mut [MaybeUninit<Self>] {
+        assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Value>());
+        assert!(
+            buf.len() % Self::WIDTH == 0,
+            "Slice length (got {}) must be a multiple of packed field width ({}).",
+            buf.len(),
+            Self::WIDTH
+        );
+        let buf_ptr = buf.as_mut_ptr().cast::<MaybeUninit<Self>>();
+        let n = buf.len() / Self::WIDTH;
+        unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
+    }
+
+    fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
+        let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
+        (Self::pack_slice(packed), suffix)
+    }
+
     fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
         let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice_mut(packed), suffix)
+    }
+
+    fn pack_uninit_slice_with_suffix_mut(
+        buf: &mut [MaybeUninit<Self::Value>],
+    ) -> (&mut [MaybeUninit<Self>], &mut [MaybeUninit<Self::Value>]) {
+        let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
+        (Self::pack_uninit_slice_mut(packed), suffix)
     }
 
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {

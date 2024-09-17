@@ -1,3 +1,5 @@
+use core::mem::MaybeUninit;
+
 use itertools::{izip, Itertools};
 use p3_field::{Field, PackedField, PackedValue};
 
@@ -58,6 +60,56 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
             izip!(src_suffix_1, dst_suffix_1, src_suffix_2, dst_suffix_2)
         {
             (*dst_x_1, *dst_x_2) = self.apply(*src_x_1, *src_x_2);
+        }
+    }
+
+    #[inline]
+    fn apply_to_uninit_rows_from_src(
+        &self,
+        src_row_1: &[F],
+        src_row_2: &[F],
+        dst_row_1: &mut [MaybeUninit<F>],
+        dst_row_2: &mut [MaybeUninit<F>],
+    ) {
+        let (src_shorts_1, src_suffix_1) = F::Packing::pack_slice_with_suffix(src_row_1);
+        let (dst_shorts_1, dst_suffix_1) = F::Packing::pack_uninit_slice_with_suffix_mut(dst_row_1);
+
+        let (src_shorts_2, src_suffix_2) = F::Packing::pack_slice_with_suffix(src_row_2);
+        let (dst_shorts_2, dst_suffix_2) = F::Packing::pack_uninit_slice_with_suffix_mut(dst_row_2);
+
+        // debug_assert?
+
+        assert!([
+            src_shorts_1.len(),
+            dst_shorts_1.len(),
+            src_shorts_2.len(),
+            dst_shorts_2.len()
+        ]
+        .into_iter()
+        .all_equal());
+
+        assert!([
+            src_suffix_1.len(),
+            dst_suffix_1.len(),
+            src_suffix_2.len(),
+            dst_suffix_2.len()
+        ]
+        .into_iter()
+        .all_equal());
+
+        for (src_x_1, dst_x_1, src_x_2, dst_x_2) in
+            izip!(src_shorts_1, dst_shorts_1, src_shorts_2, dst_shorts_2)
+        {
+            let (x_1, x_2) = self.apply(*src_x_1, *src_x_2);
+            dst_x_1.write(x_1);
+            dst_x_2.write(x_2);
+        }
+        for (src_x_1, dst_x_1, src_x_2, dst_x_2) in
+            izip!(src_suffix_1, dst_suffix_1, src_suffix_2, dst_suffix_2)
+        {
+            let (x_1, x_2) = self.apply(*src_x_1, *src_x_2);
+            dst_x_1.write(x_1);
+            dst_x_2.write(x_2);
         }
     }
 }
