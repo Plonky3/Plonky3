@@ -20,7 +20,7 @@ fn halve(input: __m256i) -> __m256i {
     // throughput: 1.33 cyc/vec
     // latency: 3 cyc
 
-    // Given an element val in [0, P), we want to compute val/2 mod P.
+    // Given an element val in [0, P), desired output is val/2 mod P.
     // If val is even: val/2 mod P = val/2 = val >> 1.
     // If val is odd: val/2 mod P = (val + P)/2 = (val >> 1) + (P + 1)/2
     unsafe {
@@ -39,7 +39,7 @@ fn halve(input: __m256i) -> __m256i {
 /// To reiterate, the two inputs are not symmetric, lhs must be positive. Return a value in canonical form.
 /// If the inputs do not conform to these restrictions, the result is undefined.
 #[inline(always)]
-fn signed_add(lhs: __m256i, rhs: __m256i) -> __m256i {
+unsafe fn signed_add(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsignd  pos_neg_P,  P, rhs
     //      vpaddd   sum,        lhs,   rhs
@@ -468,9 +468,8 @@ mod tests {
     use crate::{KoalaBear, PackedKoalaBearAVX2, Poseidon2KoalaBear};
 
     type F = KoalaBear;
-    const D: u64 = 3;
-    type Perm16 = Poseidon2KoalaBear<16, D>;
-    type Perm24 = Poseidon2KoalaBear<24, D>;
+    type Perm16 = Poseidon2KoalaBear<16>;
+    type Perm24 = Poseidon2KoalaBear<24>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]

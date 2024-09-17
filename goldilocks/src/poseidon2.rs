@@ -17,12 +17,18 @@ use p3_poseidon2::{
 
 use crate::{to_goldilocks_array, Goldilocks};
 
+// As p - 1 = 2^32 * 3 * 5 * 17 * ... the neither 3 or 5 satisfy gcd(p - 1, D) = 1.
+// Instead we use the next smallest available one, namely 7.
+const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
+
+/// Poseidon2Goldilocks contains the implementation of Poseidon2 for the Goldilocks field..
+/// It acts on arrays of the form [Goldilocks; WIDTH]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
     Poseidon2InternalLayerGoldilocks,
     WIDTH,
-    7,
+    GOLDILOCKS_S_BOX_DEGREE,
 >;
 
 pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array([

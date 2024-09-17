@@ -30,7 +30,7 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type F = BabyBear;
 
-    type Perm = Poseidon2BabyBear<16, 7>;
+    type Perm = Poseidon2BabyBear<16>;
     let perm = Perm::new_from_rng_128(&mut thread_rng());
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;

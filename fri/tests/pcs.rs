@@ -156,7 +156,7 @@ mod babybear_fri_pcs {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2BabyBear<16, 7>;
+    type Perm = Poseidon2BabyBear<16>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 

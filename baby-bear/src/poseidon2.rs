@@ -8,23 +8,18 @@ use p3_poseidon2::Poseidon2;
 
 use crate::{BabyBear, BabyBearParameters};
 
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimized Diffusion matrices for Babybear16.
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17]
-// Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
-//                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    15]
-//
-// Optimized Diffusion matrices for Babybear24.
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25]
-// Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 8388608]
-//                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    14,    15,    16,     17,     18,     19,      20,      21,      23]
-//
-// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
-// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
-// such that (1 + Diag(vec)) is the monty form of the matrix. This allows for delayed reduction tricks.
+// We want to find a "good" vector V such that 1 + Diag(V) is a diffusion matrix
+// and we can implement multiplication by elements of V efficiently in AVX2/AVX512/NEON.
+// Small values of V (e.g. 1, 2, 3, 4) and be implemented cheaply using addition and
+// for technical reasons, inverse powers of 2 also have efficient multiplication.
 
-// Long term, INTERNAL_DIAG_MONTY will be removed.
-// Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
+// Optimized Diagonal for BabyBear16:
+// [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/4, 1/8, -1/16, 1/2**27, -1/2**27]
+
+// Optimized Diagonal for BabyBear24:
+// [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**27, -1/2**27]
+
+// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 pub type Poseidon2InternalLayerBabyBear<const WIDTH: usize> =
     Poseidon2InternalLayerMonty31<BabyBearParameters, WIDTH, BabyBearInternalLayerParameters>;
@@ -32,12 +27,19 @@ pub type Poseidon2InternalLayerBabyBear<const WIDTH: usize> =
 pub type Poseidon2ExternalLayerBabyBear<const WIDTH: usize> =
     Poseidon2ExternalLayerMonty31<BabyBearParameters, WIDTH>;
 
-pub type Poseidon2BabyBear<const WIDTH: usize, const D: u64> = Poseidon2<
+// As p - 1 = 15 * 2^{27} the neither 3 or 5 satisfy gcd(p - 1, D) = 1.
+// Instead we use the next smallest available one, namely 7.
+const BABYBEAR_S_BOX_DEGREE: u64 = 7;
+
+/// Poseidon2BabyBear contains the implementations of Poseidon2
+/// specialised to run on the current architecture. It acts on
+/// arrays of the form [BabyBear::Packing; WIDTH]
+pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     <BabyBear as Field>::Packing,
     Poseidon2ExternalLayerBabyBear<WIDTH>,
     Poseidon2InternalLayerBabyBear<WIDTH>,
     WIDTH,
-    D,
+    BABYBEAR_S_BOX_DEGREE,
 >;
 
 #[derive(Debug, Clone, Default)]
@@ -51,6 +53,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         sum: MontyField31<BabyBearParameters>,
     ) {
         // We ignore state[0] as it has already been handled.
+        // The diagonal of the matrix is:
         // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/4, 1/8, -1/16, 1/2**27, -1/2**27]
         state[1] += sum;
         state[2] = state[2].double() + sum;
@@ -85,6 +88,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         sum: MontyField31<BabyBearParameters>,
     ) {
         // We ignore state[0] as it has already been handled.
+        // The diagonal of the matrix is:
         // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**27, -1/2**27]
         state[1] += sum;
         state[2] = state[2].double() + sum;
@@ -136,7 +140,6 @@ pub struct BabyBearExternalLayerParameters;
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{ExternalLayer, InternalLayer, Poseidon2};
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
@@ -148,31 +151,6 @@ mod tests {
 
     // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
-
-    // Our Poseidon2 Implementation for BabyBear
-    fn poseidon2_babybear<const WIDTH: usize, const WIDTH_MIN_1: usize, const D: u64>(
-        input: &mut [F; WIDTH],
-    ) where
-        BabyBearInternalLayerParameters: InternalLayerParameters<BabyBearParameters, WIDTH>,
-        Poseidon2ExternalLayerBabyBear<WIDTH>: ExternalLayer<BabyBear, WIDTH, D>,
-        Poseidon2InternalLayerBabyBear<WIDTH>: InternalLayer<
-            BabyBear,
-            WIDTH,
-            D,
-            InternalState = <Poseidon2ExternalLayerBabyBear<WIDTH> as ExternalLayer<
-                BabyBear,
-                WIDTH,
-                D,
-            >>::InternalState,
-        >,
-    {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2BabyBear<WIDTH, D> = Poseidon2::new_from_rng_128(&mut rng);
-
-        poseidon2.permute_mut(input);
-    }
 
     /// Test on a roughly random input.
     /// This random input is generated by the following sage code:
@@ -194,7 +172,10 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<16, 15, 7>(&mut input);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2BabyBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -220,7 +201,11 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<24, 23, 7>(&mut input);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2BabyBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
+
         assert_eq!(input, expected);
     }
 }

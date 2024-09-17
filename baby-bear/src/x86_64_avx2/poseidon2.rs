@@ -468,9 +468,8 @@ mod tests {
     use crate::{BabyBear, PackedBabyBearAVX2, Poseidon2BabyBear};
 
     type F = BabyBear;
-    const D: u64 = 7;
-    type Perm16 = Poseidon2BabyBear<16, D>;
-    type Perm24 = Poseidon2BabyBear<24, D>;
+    type Perm16 = Poseidon2BabyBear<16>;
+    type Perm24 = Poseidon2BabyBear<24>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]

@@ -13,8 +13,18 @@ use p3_poseidon2::{
 
 use crate::Bn254Fr;
 
-pub type Poseidon2Bn254<const WIDTH: usize> =
-    Poseidon2<Bn254Fr, Poseidon2ExternalLayerBn254<WIDTH>, Poseidon2InternalLayerBn254, WIDTH, 5>;
+// As p - 1 is divisible by 3 the smallest D which satisfies gcd(p - 1, D) = 1 is 5.
+const BN254_S_BOX_DEGREE: u64 = 5;
+
+/// Poseidon2Bn254 contains the implementation of Poseidon2 for the Bn254Fr field.
+/// It acts on arrays of the form [Bn254Fr; WIDTH].
+pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
+    Bn254Fr,
+    Poseidon2ExternalLayerBn254<WIDTH>,
+    Poseidon2InternalLayerBn254,
+    WIDTH,
+    BN254_S_BOX_DEGREE,
+>;
 
 #[inline]
 fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {

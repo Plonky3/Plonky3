@@ -8,23 +8,18 @@ use p3_poseidon2::Poseidon2;
 
 use crate::{KoalaBear, KoalaBearParameters};
 
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimized Diffusion matrices for Koalabear16.
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17]
-// Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
-//                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    15]
-//
-// Optimized Diffusion matrices for Koalabear24.
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25]
-// Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 8388608]
-//                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    14,    15,    16,     17,     18,     19,      20,      21,      23]
-//
-// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
-// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
-// such that (1 + Diag(vec)) is the monty form of the matrix. This allows for delayed reduction tricks.
+// We want to find a "good" vector V such that 1 + Diag(V) is a diffusion matrix
+// and we can implement multiplication by elements of V efficiently in AVX2/AVX512/NEON.
+// Small values of V (e.g. 1, 2, 3, 4) and be implemented cheaply using addition and
+// for technical reasons, inverse powers of 2 also have efficient multiplication.
 
-// Long term, INTERNAL_DIAG_MONTY will be removed.
-// Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
+// Optimized Diagonal for KoalaBear16:
+// [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
+
+// Optimized Diagonal for KoalaBear24:
+// [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
+
+// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
     Poseidon2InternalLayerMonty31<KoalaBearParameters, WIDTH, KoalaBearInternalLayerParameters>;
@@ -32,18 +27,23 @@ pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
 pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
     Poseidon2ExternalLayerMonty31<KoalaBearParameters, WIDTH>;
 
-pub type Poseidon2KoalaBear<const WIDTH: usize, const D: u64> = Poseidon2<
+// As p - 1 = 127 * 2^{24} we have a a lot of choice in degree D satisfying gcd(p - 1, D) = 1.
+// Experimentation suggests that the optimal choice is the smallest available one, namely 3.
+const KOALABEAR_S_BOX_DEGREE: u64 = 3;
+
+/// Poseidon2KoalaBear contains the implementations of Poseidon2
+/// specialised to run on the current architecture. It acts on
+/// arrays of the form [KoalaBear::Packing; WIDTH]
+pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     <KoalaBear as Field>::Packing,
     Poseidon2ExternalLayerKoalaBear<WIDTH>,
     Poseidon2InternalLayerKoalaBear<WIDTH>,
     WIDTH,
-    D,
+    KOALABEAR_S_BOX_DEGREE,
 >;
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
-
-// [-2, 1, 2, 1/2, -1/2, 3, -3, 4, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
 
 impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
@@ -53,6 +53,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         sum: MontyField31<KoalaBearParameters>,
     ) {
         // We ignore state[0] as it has already been handled.
+        // The diagonal of the matrix is:
         // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
         state[1] += sum;
         state[2] = state[2].double() + sum;
@@ -87,6 +88,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         sum: MontyField31<KoalaBearParameters>,
     ) {
         // We ignore state[0] as it has already been handled.
+        // The diagonal of the matrix is:
         // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
         state[1] += sum;
         state[2] = state[2].double() + sum;
@@ -138,7 +140,6 @@ pub struct KoalaBearExternalLayerParameters;
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{ExternalLayer, InternalLayer, Poseidon2};
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
@@ -150,31 +151,6 @@ mod tests {
 
     // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
-
-    // Our Poseidon2 Implementation for KoalaBear
-    fn poseidon2_koalabear<const WIDTH: usize, const WIDTH_MIN_1: usize, const D: u64>(
-        input: &mut [F; WIDTH],
-    ) where
-        KoalaBearInternalLayerParameters: InternalLayerParameters<KoalaBearParameters, WIDTH>,
-        Poseidon2ExternalLayerKoalaBear<WIDTH>: ExternalLayer<KoalaBear, WIDTH, D>,
-        Poseidon2InternalLayerKoalaBear<WIDTH>: InternalLayer<
-            KoalaBear,
-            WIDTH,
-            D,
-            InternalState = <Poseidon2ExternalLayerKoalaBear<WIDTH> as ExternalLayer<
-                KoalaBear,
-                WIDTH,
-                D,
-            >>::InternalState,
-        >,
-    {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2KoalaBear<WIDTH, D> = Poseidon2::new_from_rng_128(&mut rng);
-
-        poseidon2.permute_mut(input);
-    }
 
     /// Test on a roughly random input.
     /// This random input is generated by the following sage code:
@@ -196,7 +172,10 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 15, 3>(&mut input);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -222,7 +201,10 @@ mod tests {
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 23, 3>(&mut input);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
         assert_eq!(input, expected);
     }
 }

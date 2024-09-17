@@ -150,7 +150,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2BabyBear<16, 7>;
+    type Perm = Poseidon2BabyBear<16>;
     let perm = Perm::new_from_rng_128(&mut thread_rng());
 
     type Dft = Radix2DitParallel;
@@ -195,7 +195,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2BabyBear<16, 7>;
+    type Perm = Poseidon2BabyBear<16>;
     let perm = Perm::new_from_rng_128(&mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
