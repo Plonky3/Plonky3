@@ -402,7 +402,7 @@ pub trait TwoAdicField: Field {
     const TWO_ADICITY: usize;
 
     /// Returns a generator of the multiplicative group of order `2^bits`.
-    /// Assumes `bits < TWO_ADICITY`, otherwise the result is undefined.
+    /// Assumes `bits <= TWO_ADICITY`, otherwise the result is undefined.
     #[must_use]
     fn two_adic_generator(bits: usize) -> Self;
 }
