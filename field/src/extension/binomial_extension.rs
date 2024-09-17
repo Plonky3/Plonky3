@@ -441,9 +441,11 @@ where
                 res.value[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
                 res
             }
-            3 => Self {
-                value: cubic_mul(&a, &b, w).to_vec().try_into().unwrap(),
-            },
+            3 => {
+                let mut res = Self::default();
+                res.value.swap_with_slice(&mut cubic_mul(&a, &b, w));
+                res
+            }
             _ => {
                 let mut res = Self::default();
                 #[allow(clippy::needless_range_loop)]
