@@ -3,7 +3,7 @@ use core::slice;
 
 use p3_matrix::{Matrix, MatrixRowSlices, MatrixRows};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct TwoRowMatrixView<'a, T> {
     pub local: &'a [T],
     pub next: &'a [T],
@@ -25,7 +25,7 @@ impl<'a, T> Matrix<T> for TwoRowMatrixView<'a, T> {
     }
 }
 
-impl<T: Clone> MatrixRows<T> for TwoRowMatrixView<'_, T> {
+impl<T: Clone + core::fmt::Debug> MatrixRows<T> for TwoRowMatrixView<'_, T> {
     type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
@@ -38,7 +38,7 @@ impl<T: Clone> MatrixRows<T> for TwoRowMatrixView<'_, T> {
     }
 }
 
-impl<T: Clone> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
+impl<T: Clone + core::fmt::Debug> MatrixRowSlices<T> for TwoRowMatrixView<'_, T> {
     fn row_slice(&self, r: usize) -> &[T] {
         match r {
             0 => self.local,

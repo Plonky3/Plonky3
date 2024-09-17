@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
@@ -5,7 +6,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::MatrixRowSlices;
 
 /// An AIR (algebraic intermediate representation).
-pub trait BaseAir<F>: Sync {
+pub trait BaseAir<F: core::fmt::Debug>: Sync {
     /// The number of private columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
 
@@ -51,7 +52,8 @@ pub trait AirBuilder: Sized {
         + Sub<Self::Expr, Output = Self::Expr>
         + Mul<Self::F, Output = Self::Expr>
         + Mul<Self::Var, Output = Self::Expr>
-        + Mul<Self::Expr, Output = Self::Expr>;
+        + Mul<Self::Expr, Output = Self::Expr>
+        + Debug;
 
     type M: MatrixRowSlices<Self::Var>;
 
@@ -131,7 +133,7 @@ pub trait ExtensionBuilder: AirBuilder {
 
     type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
 
-    type VarEF: Into<Self::ExprEF> + Copy;
+    type VarEF: Into<Self::ExprEF> + Copy + Debug;
 
     fn assert_zero_ext<I>(&mut self, x: I)
     where
@@ -153,7 +155,10 @@ pub trait ExtensionBuilder: AirBuilder {
     }
 }
 
-pub trait PermutationAirBuilder: ExtensionBuilder {
+pub trait PermutationAirBuilder: ExtensionBuilder
+where
+    <Self as ExtensionBuilder>::VarEF: Debug,
+{
     type MP: MatrixRowSlices<Self::VarEF>;
 
     fn permutation(&self) -> Self::MP;
@@ -230,7 +235,7 @@ mod tests {
     #[allow(dead_code)]
     struct FibonacciAir;
 
-    impl<F> BaseAir<F> for FibonacciAir {
+    impl<F: core::fmt::Debug> BaseAir<F> for FibonacciAir {
         fn width(&self) -> usize {
             1
         }

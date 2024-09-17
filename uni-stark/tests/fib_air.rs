@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
@@ -20,7 +21,7 @@ use rand::thread_rng;
 
 pub struct FibonacciAir {}
 
-impl<F> BaseAir<F> for FibonacciAir {
+impl<F: Debug> BaseAir<F> for FibonacciAir {
     fn width(&self) -> usize {
         NUM_FIBONACCI_COLS
     }

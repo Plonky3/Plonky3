@@ -55,7 +55,7 @@ pub trait MatrixGet<T>: Matrix<T> {
 }
 
 /// A `Matrix` that supports randomly accessing particular rows.
-pub trait MatrixRows<T>: Matrix<T> {
+pub trait MatrixRows<T: core::fmt::Debug>: Matrix<T> {
     type Row<'a>: IntoIterator<Item = T>
     where
         Self: 'a;
@@ -98,16 +98,16 @@ pub trait MatrixRows<T>: Matrix<T> {
 }
 
 /// A `Matrix` which supports access its rows as slices.
-pub trait MatrixRowSlices<T>: MatrixRows<T> {
+pub trait MatrixRowSlices<T: core::fmt::Debug>: MatrixRows<T> + Debug {
     fn row_slice(&self, r: usize) -> &[T];
 }
 
 /// A `Matrix` which supports access its rows as mutable slices.
-pub trait MatrixRowSlicesMut<T>: MatrixRowSlices<T> {
+pub trait MatrixRowSlicesMut<T: core::fmt::Debug>: MatrixRowSlices<T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T];
 }
 
 /// A `TransposeMatrix` which supports transpose logic for matrices
-pub trait MatrixTranspose<T>: MatrixRows<T> {
+pub trait MatrixTranspose<T: core::fmt::Debug>: MatrixRows<T> {
     fn transpose(self) -> Self;
 }

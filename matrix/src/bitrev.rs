@@ -9,7 +9,7 @@ use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows};
 /// A matrix that is possibly bit-reversed, and can easily switch
 /// between orderings. Pretty much just either `RowMajorMatrix` or
 /// `BitReversedMatrixView<RowMajorMatrix>`.
-pub trait BitReversableMatrix<T>: MatrixRowSlicesMut<T> {
+pub trait BitReversableMatrix<T: core::fmt::Debug>: MatrixRowSlicesMut<T> {
     type BitRev: BitReversableMatrix<T>;
     fn bit_reverse_rows(self) -> Self::BitRev;
 }
@@ -46,7 +46,7 @@ impl<T, Inner: MatrixGet<T>> MatrixGet<T> for BitReversedMatrixView<Inner> {
     }
 }
 
-impl<T, Inner: MatrixRows<T>> MatrixRows<T> for BitReversedMatrixView<Inner> {
+impl<T: core::fmt::Debug, Inner: MatrixRows<T>> MatrixRows<T> for BitReversedMatrixView<Inner> {
     type Row<'a> = Inner::Row<'a> where Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
@@ -64,27 +64,31 @@ impl<T, Inner: MatrixRows<T>> MatrixRows<T> for BitReversedMatrixView<Inner> {
     }
 }
 
-impl<T, Inner: MatrixRowSlices<T>> MatrixRowSlices<T> for BitReversedMatrixView<Inner> {
+impl<T: core::fmt::Debug, Inner: MatrixRowSlices<T>> MatrixRowSlices<T>
+    for BitReversedMatrixView<Inner>
+{
     fn row_slice(&self, r: usize) -> &[T] {
         self.inner.row_slice(reverse_bits_len(r, self.log_height))
     }
 }
 
-impl<T, Inner: MatrixRowSlicesMut<T>> MatrixRowSlicesMut<T> for BitReversedMatrixView<Inner> {
+impl<T: core::fmt::Debug, Inner: MatrixRowSlicesMut<T>> MatrixRowSlicesMut<T>
+    for BitReversedMatrixView<Inner>
+{
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         self.inner
             .row_slice_mut(reverse_bits_len(r, self.log_height))
     }
 }
 
-impl<T: Clone> BitReversableMatrix<T> for BitReversedMatrixView<RowMajorMatrix<T>> {
+impl<T: Clone + Debug> BitReversableMatrix<T> for BitReversedMatrixView<RowMajorMatrix<T>> {
     type BitRev = RowMajorMatrix<T>;
     fn bit_reverse_rows(self) -> Self::BitRev {
         self.inner
     }
 }
 
-impl<T: Clone> BitReversableMatrix<T> for RowMajorMatrix<T> {
+impl<T: Clone + Debug> BitReversableMatrix<T> for RowMajorMatrix<T> {
     type BitRev = BitReversedMatrixView<RowMajorMatrix<T>>;
     fn bit_reverse_rows(self) -> Self::BitRev {
         BitReversedMatrixView::new(self)
