@@ -1,6 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::{cmp, mem::MaybeUninit};
+use core::cmp;
 
 use itertools::{iterate, izip, Itertools};
 use p3_commit::PolynomialSpace;
@@ -143,68 +143,24 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         });
 
         if log_n < domain.log_n {
-            // We could simply pad coeffs like this:
-            // coeffs.pad_to_height(target_domain.size(), F::zero());
-            // But the first `added_bits` layers will simply fill out the zeros
-            // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
-            // both `x_1` and `x_2` are set to `x_1`).
-            // So instead we directly repeat the coeffs and skip the initial layers.
-
             /*
-            1 2 3 4 0 0 0 0
-            |-----^ ^-----|
+            Naive method: pad coeffs with zeros, then proceed normally.
 
-            1 2 3 4 1 2 3 4
-            |-^ ^-| |-^ ^-|
+            But the first `added_bits` layers will simply fill out the zeros
+            with the lower order values.
+            (In `DitButterfly`, `x_2` is 0, so both `x_1` and `x_2` are set to `x_1`).
+            So, faster method: skip the first layers, and instead copy the first
+            block to the rest of the array.
 
+            Even faster method: skip the first layers, and instead of copying the first
+            block: perform the next layer, reading from the first block but writing to
+            the (uninitialized) later blocks. Then do the first block normally.
+            Then proceed with the rest of the layers.
 
             */
 
-            let n_skipped_layers = domain.log_n - log_n;
-
-            let new_len = coeffs.values.len() << n_skipped_layers;
-
-            twiddles = twiddles.dropping(n_skipped_layers);
-
-            let ts = twiddles.next().unwrap();
-            assert_eq!(ts.len(), 1 << n_skipped_layers);
-            coeffs
-                .values
-                .reserve(coeffs.values.len() << n_skipped_layers);
-
-            // coeffs.values.resize(new_len, F::zero());
-
-            // assert_eq!(ts.len())
-
-            // let blk_sz = coeffs.values.len() / ts.len();
-            let blk_sz = coeffs.values.len();
-            let job_sz = cmp::max(1, blk_sz >> (1 + log2_ceil_usize(desired_num_jobs())));
-
-            let (src_blk, dst_blks) = unsafe { coeffs.values.v_split_at_spare_mut() };
-            let (src_lo, src_hi) = src_blk.split_at_mut(blk_sz / 2);
-
-            // let (src_blk, dst_blks) = coeffs.values.split_at_mut(blk_sz);
-
-            // Initialize the new blocks
-            for (&t, dst_blk) in izip!(&ts[1..], dst_blks.chunks_exact_mut(blk_sz)) {
-                let (dst_lo, dst_hi) = dst_blk.split_at_mut(blk_sz / 2);
-                par_izip!(
-                    src_lo.par_chunks(job_sz),
-                    src_hi.par_chunks(job_sz),
-                    dst_lo.par_chunks_mut(job_sz),
-                    dst_hi.par_chunks_mut(job_sz),
-                )
-                .for_each(|(src_lo, src_hi, dst_lo, dst_hi)| {
-                    t.apply_to_uninit_rows_from_src(src_lo, src_hi, dst_lo, dst_hi);
-                });
-            }
-            unsafe {
-                coeffs.values.set_len(new_len);
-            }
-
-            let (src_lo, src_hi) = coeffs.values[..blk_sz].split_at_mut(blk_sz / 2);
-            par_izip!(src_lo.par_chunks_mut(job_sz), src_hi.par_chunks_mut(job_sz))
-                .for_each(|(lo, hi)| ts[0].apply_to_rows(lo, hi));
+            twiddles = twiddles.dropping(domain.log_n - log_n);
+            first_layer_after_skipping(&mut coeffs.values, &twiddles.next().unwrap());
         }
         assert_eq!(coeffs.height(), domain.size());
 
@@ -254,6 +210,42 @@ fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &
             .zip(hi.par_chunks_mut(job_sz))
             .for_each(|(lo_job, hi_job)| t.apply_to_rows(lo_job, hi_job));
     }
+}
+
+#[inline]
+#[instrument(level = "debug", skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
+fn first_layer_after_skipping<F: Field, B: Butterfly<F>>(values: &mut Vec<F>, twiddles: &[B]) {
+    let n_skipped_layers = log2_strict_usize(twiddles.len());
+    let new_len = values.len() << n_skipped_layers;
+    values.reserve(new_len);
+
+    let blk_sz = values.len();
+    let job_sz = cmp::max(1, blk_sz >> (1 + log2_ceil_usize(desired_num_jobs())));
+
+    let (src_blk, dst_blks) = unsafe { values.v_split_at_spare_mut() };
+    let (src_lo, src_hi) = src_blk.split_at_mut(blk_sz / 2);
+
+    // Initialize the new blocks, reading from the first block
+    for (&t, dst_blk) in izip!(&twiddles[1..], dst_blks.chunks_exact_mut(blk_sz)) {
+        let (dst_lo, dst_hi) = dst_blk.split_at_mut(blk_sz / 2);
+        par_izip!(
+            src_lo.par_chunks(job_sz),
+            src_hi.par_chunks(job_sz),
+            dst_lo.par_chunks_mut(job_sz),
+            dst_hi.par_chunks_mut(job_sz),
+        )
+        .for_each(|(src_lo, src_hi, dst_lo, dst_hi)| {
+            t.apply_to_uninit_rows_from_src(src_lo, src_hi, dst_lo, dst_hi);
+        });
+    }
+    unsafe {
+        values.set_len(new_len);
+    }
+
+    // Apply to first block normally
+    let (src_lo, src_hi) = values[..blk_sz].split_at_mut(blk_sz / 2);
+    par_izip!(src_lo.par_chunks_mut(job_sz), src_hi.par_chunks_mut(job_sz))
+        .for_each(|(lo, hi)| twiddles[0].apply_to_rows(lo, hi));
 }
 
 #[inline]
@@ -369,24 +361,12 @@ mod tests {
             let coeffs = evals.interpolate();
             let lde_coeffs = lde.interpolate();
 
-            // let mut good = true;
             for r in 0..coeffs.height() {
                 assert_eq!(&*coeffs.row_slice(r), &*lde_coeffs.row_slice(r));
-                /*
-                if &*coeffs.row_slice(r) != &*lde_coeffs.row_slice(r) {
-                    good = false;
-                }
-                */
             }
             for r in coeffs.height()..lde_coeffs.height() {
                 assert!(lde_coeffs.row(r).all(|x| x.is_zero()));
-                /*
-                if !lde_coeffs.row(r).all(|x| x.is_zero()) {
-                    good = false;
-                }
-                */
             }
-            // dbg!(log_n, log_blowup, good);
         }
     }
 

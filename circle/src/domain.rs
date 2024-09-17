@@ -68,6 +68,8 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         let shifted_gs = iterate(g, |g| g.double())
             .take(self.log_n - 1)
             .collect_vec();
+        // A pretty naive method of splitting on the MSB. Haven't benched, or looked
+        // into how much rayon likes this.
         par_iter::split((self.shift, self.log_n - 1), move |(p, log_n)| {
             if log_n == 0 {
                 ((p, 0), None)
@@ -351,21 +353,6 @@ mod tests {
             );
         }
     }
-
-    /*
-    fn do_test_par_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
-        let coset0 = d.coset0().collect_vec();
-        let p_coset0 = d.par_coset0().collect::<Vec<_>>();
-        assert_eq!(coset0, p_coset0);
-    }
-
-    #[test]
-    fn par_coset() {
-        type F = Mersenne31;
-        let d = CircleDomain::<F>::standard(8);
-        do_test_par_coset(d);
-    }
-    */
 
     #[test]
     fn selectors() {

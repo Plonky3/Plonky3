@@ -538,6 +538,8 @@ where
     /// Panics if D2 != D.
     #[inline]
     fn from_array_trust_me<const D2: usize>(mut arr: [AF; D2]) -> Self {
+        // One is tempted to do something unsafe here, but it seems like LLVM is
+        // fine getting rid of this.
         let mut me = Self::default();
         me.value.swap_with_slice(&mut arr);
         me
