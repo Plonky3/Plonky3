@@ -38,7 +38,7 @@ pub fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
 /// # Safety
 ///
 /// This function is not symmetric in the inputs. The caller must ensure that inputs
-/// conform to teh expected representation. Each element of lhs must lie in [0, P) and
+/// conform to the expected representation. Each element of lhs must lie in [0, P) and
 /// each element of rhs in (-P, P).
 #[inline(always)]
 pub unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(lhs: __m256i, rhs: __m256i) -> __m256i {
@@ -75,23 +75,26 @@ pub unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(lhs: __m256i, rhs: __m
     }
 }
 
-// The following functions implement x -> +/- 2^{-N} x and output a value in (-P, P).
-// The method works provided N < 15 and our prime is of the form P = r * 2^j + 1 with r < 2^15.
-// Additionally, when r = 2^i - 1, there is a related method for N = j which we implement below.
+// Write our prime P as r * 2^j + 1 for odd r.
+// The following functions implement x -> +/- 2^{-N} x for varying N and output a value in (-P, P).
+// There is one approach which works provided N < 15 and r < 2^15.
+// Similarly, there is another approach which works when N = j and when r = 2^i - 1.
 
-// We present the method for multiplication by -2^{-N} here.
-// The method for 2^{-N} is essentially identical, we simply return the negative.
+// Both approaches rely on the same basic observation about multiplication by +/- 2^{-N} which we present here.
+// We will focus on the -2^{-N} case but note that the case of 2^{-N} is essentially identical.
 // The strategy for these products is to observe that -2^{-N} = r2^{j - N} mod P.
 // Hence given a field element x write it as x = x_lo + 2^N x_hi where x_lo < 2^N.
 // Then -2^{-N} x = -x_hi + r2^{j - N} x_lo.
 // Clearly x_hi < P and, as x_lo < 2^N, r2^{j - N} x_lo < r2^j < P so
 // -P < r2^{j - N} x_lo - x_hi < P
 
-// When r < 2^16, N < 15, r2^{j - N} x_lo can be computed efficiently in AVX2 using _mm256_madd_epi16.
-// This avoids having to split the input in two and doing multiple multiplications. It also
-// lets us avoid needing any monty reductions.
+// It remains to understand how to efficiently compute r2^{j - N} x_lo. This splits into several cases:
+
+// When r < 2^16, N < 15, r2^{j - N} x_lo can be computed efficiently using _mm256_madd_epi16.
+// This avoids having to split the input in two and doing multiple multiplications and/or monty reductions.
+
 // There is a further improvment possible when if r < 2^7 and N = 8 using _mm256_maddubs_epi16.
-// This lets us avoid a mask and an and.
+// This lets us avoid a mask and an and so we implement a specialised version for this.
 
 // When n = j and r = 2^i - 1, rx_lo can also be computed efficiently using a shift and subtraction.
 
