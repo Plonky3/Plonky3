@@ -1,9 +1,13 @@
 [package]
 name = "p3-sha256"
-version = "0.3.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
 description = "Plonky3 hash trait implementations for the SHA2-256 hash function."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-symmetric = { path = "../symmetric" }

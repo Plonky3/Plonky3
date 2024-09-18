@@ -1,8 +1,12 @@
 [package]
 name = "p3-field"
-version = "0.3.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-util = { path = "../util" }
