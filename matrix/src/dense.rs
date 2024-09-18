@@ -6,6 +6,7 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
 
+use itertools::Itertools;
 use p3_field::{scale_slice_in_place, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};

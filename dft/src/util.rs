@@ -1,4 +1,3 @@
-use alloc::vec;
 use core::borrow::BorrowMut;
 
 use p3_field::Field;
