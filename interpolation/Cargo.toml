@@ -9,9 +9,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-util = { path = "../util" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-matrix = { path = "../matrix", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

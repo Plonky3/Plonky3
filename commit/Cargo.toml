@@ -12,17 +12,17 @@ categories.workspace = true
 test-utils = ["dep:p3-dft"]
 
 [dependencies]
-p3-challenger = { path = "../challenger" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-util = { path = "../util" }
+p3-challenger = { path = "../challenger", version = "0.3.0" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-matrix = { path = "../matrix", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 
 itertools = "0.13.0"
 serde = { version = "1.0", default-features = false }
 
 # for testing
-p3-dft = { path = "../dft", optional = true }
+p3-dft = { path = "../dft", version = "0.3.0", optional = true }
 
 [dev-dependencies]
-p3-dft = { path = "../dft" }
+p3-dft = { path = "../dft", version = "0.3.0" }
 rand = "0.8.5"
