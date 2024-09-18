@@ -8,7 +8,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 
 use crate::butterflies::{Butterfly, DifButterfly, DitButterfly, TwiddleFreeButterfly};
-use crate::util::{bit_reversed_zero_pad, divide_by_height};
+use crate::util::divide_by_height;
 use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
@@ -36,7 +36,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     fn lde_batch(&self, mut mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
         bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
         bowers_g(&mut mat.as_view_mut());
         mat
     }
@@ -65,7 +65,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
 
         bowers_g(&mut mat.as_view_mut());
 

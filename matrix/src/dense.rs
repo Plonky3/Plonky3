@@ -297,7 +297,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         );
         padded
             .par_row_chunks_exact_mut(1 << added_bits)
-            .zip(self.par_row_slices())
+            .zip_eq(self.par_row_slices())
             .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
 
         padded
