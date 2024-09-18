@@ -183,15 +183,16 @@ unsafe fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(
 where
     I::Item: Copy,
 {
-    // Read BUFLEN values from `iter` into `buf` at a time.
     let mut buf = unsafe {
         let t = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
         // We are forced to use `transmute_copy` here instead of
         // `transmute` because `BUFLEN` is a const generic parameter.
+        // The compiler *should* be smart enough not to emit a copy though.
         core::mem::transmute_copy::<_, [I::Item; BUFLEN]>(&t)
     };
     let mut i = 0;
 
+    // Read BUFLEN values from `iter` into `buf` at a time.
     for c in iter {
         // Copy the next Item into `buf`.
         unsafe {
@@ -216,7 +217,6 @@ where
     I: IntoIterator<Item = u8>,
     H: FnMut(&[I::Item]),
 {
-    // Read BUFLEN values from `iter` into `buf` at a time.
     let mut iter = input.into_iter();
     loop {
         let (buf, n) = unsafe { iter_next_chunk::<BUFLEN, _>(&mut iter) };
