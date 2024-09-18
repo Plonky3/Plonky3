@@ -10,7 +10,7 @@ categories.workspace = true
 
 [dependencies]
 p3-dft = { path="../dft" }
-p3-field = { path = "../field" }
+p3-field = { path = "../field", version = "0.3.0" }
 p3-matrix = { path="../matrix" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 rand_chacha = "0.3.1"
