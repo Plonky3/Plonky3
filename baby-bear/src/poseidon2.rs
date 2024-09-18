@@ -50,13 +50,14 @@ pub struct BabyBearInternalLayerParameters;
 impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {
     type ArrayLike = [MontyField31<BabyBearParameters>; 15];
 
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
+    /// We ignore state\[0\] as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<BabyBearParameters>; 16],
         sum: MontyField31<BabyBearParameters>,
     ) {
-        // This implements the matrix multiplication s -> (1 + Diag(V))s with
+        // The diagonal matrix is defined by the vector:
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/4, 1/8, -1/16, 1/2**27, -1/2**27]
-        // We ignore state[0] as it is handled separately.
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -85,13 +86,14 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
 impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {
     type ArrayLike = [MontyField31<BabyBearParameters>; 23];
 
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
+    /// We ignore state\[0\] as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<BabyBearParameters>; 24],
         sum: MontyField31<BabyBearParameters>,
     ) {
-        // This implements the matrix multiplication s -> (1 + Diag(V))s with
+        // The diagonal matrix is defined by the vector:
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**27, -1/2**27]
-        // We ignore state[0] as it is handled separately.
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;

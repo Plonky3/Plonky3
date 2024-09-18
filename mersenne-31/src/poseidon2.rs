@@ -101,11 +101,11 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
     }
 }
 
-impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
+impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [Mersenne31; 16];
 
     fn permute_state(&self, state: &mut Self::InternalState) {
-        internal_permute_state::<Mersenne31, 16, 5>(
+        internal_permute_state::<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE>(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
             &self.internal_constants,
@@ -113,11 +113,11 @@ impl InternalLayer<Mersenne31, 16, 5> for Poseidon2InternalLayerMersenne31 {
     }
 }
 
-impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
+impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
     type InternalState = [Mersenne31; 24];
 
     fn permute_state(&self, state: &mut Self::InternalState) {
-        internal_permute_state::<Mersenne31, 24, 5>(
+        internal_permute_state::<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE>(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
             &self.internal_constants,
@@ -125,13 +125,13 @@ impl InternalLayer<Mersenne31, 24, 5> for Poseidon2InternalLayerMersenne31 {
     }
 }
 
-impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5>
+impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGREE>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     type InternalState = [Mersenne31; WIDTH];
 
     fn permute_state_initial(&self, mut state: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
-        external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
+        external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
             &mut state,
             &self.initial_external_constants,
             &MDSMat4,
@@ -140,7 +140,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, 5>
     }
 
     fn permute_state_final(&self, mut state: Self::InternalState) -> [Mersenne31; WIDTH] {
-        external_final_permute_state::<Mersenne31, MDSMat4, WIDTH, 5>(
+        external_final_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
             &mut state,
             &self.final_external_constants,
             &MDSMat4,

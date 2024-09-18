@@ -13,7 +13,7 @@ use p3_poseidon2::{
 
 use crate::Bn254Fr;
 
-// As p - 1 is divisible by 3 the smallest D which satisfies gcd(p - 1, D) = 1 is 5.
+// The smallest D which satisfies gcd(p - 1, D) = 1.
 const BN254_S_BOX_DEGREE: u64 = 5;
 
 /// Poseidon2Bn254 contains the implementation of Poseidon2 for the Bn254Fr field.
@@ -43,11 +43,11 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
     }
 }
 
-impl InternalLayer<Bn254Fr, 3, 5> for Poseidon2InternalLayerBn254 {
+impl InternalLayer<Bn254Fr, 3, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     type InternalState = [Bn254Fr; 3];
 
     fn permute_state(&self, state: &mut Self::InternalState) {
-        internal_permute_state::<Bn254Fr, 3, 5>(
+        internal_permute_state::<Bn254Fr, 3, BN254_S_BOX_DEGREE>(
             state,
             |x| matmul_internal(x, *get_diffusion_matrix_3()),
             &self.internal_constants,
@@ -75,11 +75,13 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
     }
 }
 
-impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, 5> for Poseidon2ExternalLayerBn254<WIDTH> {
+impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
+    for Poseidon2ExternalLayerBn254<WIDTH>
+{
     type InternalState = [Bn254Fr; WIDTH];
 
     fn permute_state_initial(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
-        external_initial_permute_state::<_, _, WIDTH, 5>(
+        external_initial_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
             &mut state,
             &self.initial_external_constants,
             &HLMDSMat4,
@@ -88,7 +90,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, 5> for Poseidon2ExternalL
     }
 
     fn permute_state_final(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
-        external_final_permute_state::<_, _, WIDTH, 5>(
+        external_final_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
             &mut state,
             &self.final_external_constants,
             &HLMDSMat4,

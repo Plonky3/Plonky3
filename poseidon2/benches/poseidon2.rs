@@ -41,7 +41,7 @@ fn bench_poseidon2(c: &mut Criterion) {
 }
 
 // TODO: REMOVE BEFORE MERGING WITH MAIN.
-// CAN IMPORT THIS FROM UTILS ONCE WE UPDATE TO THE LATEST
+// CAN IMPORT THIS FROM UTILS ONCE WE UPDATE TO THE LATEST VERSION OF MAIN
 fn pretty_name<T>() -> String {
     let name = type_name::<T>();
     let mut result = String::new();

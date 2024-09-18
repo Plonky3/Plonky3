@@ -166,19 +166,11 @@ pub fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 // [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
 //     2010, algorithm 2.7.
 
-// We provide 3 variants of Montgomery reduction depending on if the inputs are unsigned or signed
-// and, for unsigned inputs, if we want a signed or unsigned output.
-
-// The unsigned -> signed variant follows steps 1 and 2 in the above protocol to produce D in (-P, ..., P).
-
-// For the signed -> signed variant we assume -PB/2 < C < PB/2 and let Q := μ C mod B be the unique
+// We provide 2 variants of Montgomery reduction depending on if the inputs are unsigned or signed.
+// The unsigned variant follows steps 1 and 2 in the above protocol to produce D in (-P, ..., P).
+// For the signed variant we assume -PB/2 < C < PB/2 and let Q := μ C mod B be the unique
 // representative in [-B/2, ..., B/2 - 1]. The division in step 2 is clearly still exact and
 // |C - Q P| <= |C| + |Q||P| < PB so D still lies in (-P, ..., P).
-
-// Finally for unsigned -> unsigned, we assume that 0 < C < PB and pick μ so that μ = -P^-1 mod B
-// In the algorithm this means we redefine D to be (C + Q P) / B.
-// As Q P = - C mod B the division for D is still exact but now we have the bounds
-// 0 <= C + Q P <= 2PB and so after the shift 0 < D < 2P.
 
 /// Perform a Montgomery reduction on each 64 bit element.
 /// Input must lie in {0, ..., 2^32P}.
@@ -186,7 +178,7 @@ pub fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-pub(crate) fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_MU);
         let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
@@ -200,7 +192,7 @@ pub(crate) fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) ->
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-pub(crate) fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     unsafe {
         let q = x86_64::_mm256_mul_epi32(input, MPAVX2::PACKED_MU);
         let q_P = x86_64::_mm256_mul_epi32(q, MPAVX2::PACKED_P);
@@ -229,7 +221,7 @@ fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
-pub(crate) fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epi32(lhs, rhs);
         monty_red_signed::<MPAVX2>(prod)
@@ -238,7 +230,7 @@ pub(crate) fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m
 
 #[inline]
 #[must_use]
-pub(crate) fn movehdup_epi32(x: __m256i) -> __m256i {
+fn movehdup_epi32(x: __m256i) -> __m256i {
     // This instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
     unsafe {
@@ -290,7 +282,7 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) copied into both the even and odd indices.
 #[inline]
 #[must_use]
-pub(crate) fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     // Note that we do not need a restriction on the size of input[i]^2 as
     // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
     unsafe {

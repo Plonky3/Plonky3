@@ -4,6 +4,8 @@ use p3_poseidon2::{ExternalLayerConstants, ExternalLayerConstructor, InternalLay
 
 use crate::Mersenne31;
 
+// These are just simple wrapper structs allowing us to implement Poseidon2 Internal/ExternalLayer on top of them.
+
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,

@@ -8,18 +8,20 @@ use p3_poseidon2::Poseidon2;
 
 use crate::{KoalaBear, KoalaBearParameters};
 
-// We want to find a "good" vector V such that 1 + Diag(V) is a diffusion matrix
-// and we can implement multiplication by elements of V efficiently in AVX2/AVX512/NEON.
-// Small values of V (e.g. 1, 2, 3, 4) and be implemented cheaply using addition and
-// for technical reasons, inverse powers of 2 also have efficient multiplication.
+/*
+    We want a "good" vector V such that 1 + Diag(V) is a diffusion matrix
+    and we can implement multiplication by elements of V efficiently in AVX2/AVX512/NEON.
+    This leads to using small values (e.g. 1, 2, 3, 4) which can be implemented cheaply using addition
+    and, for technical reasons, inverse powers of 2 which have have efficient multiplication.
 
-// Optimized Diagonal for KoalaBear16:
-// [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
+    Optimized Diagonal for KoalaBear16:
+    [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
 
-// Optimized Diagonal for KoalaBear24:
-// [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
+    Optimized Diagonal for KoalaBear24:
+    [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
 
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+    See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+*/
 
 pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
     Poseidon2InternalLayerMonty31<KoalaBearParameters, WIDTH, KoalaBearInternalLayerParameters>;
@@ -48,13 +50,14 @@ pub struct KoalaBearInternalLayerParameters;
 impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
 
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
+    /// We ignore state[0] as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<KoalaBearParameters>; 16],
         sum: MontyField31<KoalaBearParameters>,
     ) {
-        // We ignore state[0] as it has already been handled.
-        // The diagonal of the matrix is:
-        // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -83,13 +86,14 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
 impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 23];
 
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
+    /// We ignore state[0] as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<KoalaBearParameters>; 24],
         sum: MontyField31<KoalaBearParameters>,
     ) {
-        // We ignore state[0] as it has already been handled.
-        // The diagonal of the matrix is:
-        // [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -145,7 +149,6 @@ mod tests {
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
-    use crate::KoalaBear;
 
     type F = KoalaBear;
 
