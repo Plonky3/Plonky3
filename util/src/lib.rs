@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
+use core::mem::MaybeUninit;
 
 pub mod array_serialization;
 pub mod linear_map;
@@ -172,13 +173,23 @@ pub fn pretty_name<T>() -> String {
 
 /// A C-style buffered input reader, similar to
 /// `std::iter::Iterator::next_chunk()` from nightly.
+///
+/// Unsafe because the returned array may contain uninitialised
+/// elements.
 #[inline]
-pub fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(iter: &mut I) -> ([I::Item; BUFLEN], usize)
+unsafe fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(
+    iter: &mut I,
+) -> ([I::Item; BUFLEN], usize)
 where
-    I::Item: Copy + Default,
+    I::Item: Copy,
 {
     // Read BUFLEN values from `iter` into `buf` at a time.
-    let mut buf = [I::Item::default(); BUFLEN];
+    let mut buf = unsafe {
+        let t = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
+        // We are forced to use `transmute_copy` here instead of
+        // `transmute` because `BUFLEN` is a const generic parameter.
+        core::mem::transmute_copy::<_, [I::Item; BUFLEN]>(&t)
+    };
     let mut i = 0;
 
     for c in iter {
@@ -195,6 +206,10 @@ where
     (buf, i)
 }
 
+/// Repeatedly read `BUFLEN` elements from `input` into an array and
+/// pass the array to `func` as a slice. If less than `BUFLEN`
+/// elements are remaining, that smaller slice is passed to `func` (if
+/// it is non-empty) and the function returns.
 #[inline]
 pub fn apply_to_chunks<const BUFLEN: usize, I, H>(input: I, mut func: H)
 where
@@ -204,7 +219,7 @@ where
     // Read BUFLEN values from `iter` into `buf` at a time.
     let mut iter = input.into_iter();
     loop {
-        let (buf, n) = iter_next_chunk::<BUFLEN, _>(&mut iter);
+        let (buf, n) = unsafe { iter_next_chunk::<BUFLEN, _>(&mut iter) };
         if n == 0 {
             break;
         }
