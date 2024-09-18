@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-use itertools::izip;
-use p3_field::{Field, Powers, TwoAdicField};
+use itertools::{izip, Itertools};
+use p3_field::{scale_slice_in_place, Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -81,11 +81,12 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
             base: shift,
             current: h_inv,
         }
-        .take(h);
-        for (row, weight) in weights.enumerate() {
+        .take(h)
+        .collect_vec();
+        mat.par_rows_mut().enumerate().for_each(|(r, row)| {
             // reverse_bits because mat is encoded in bit-reversed order
-            mat.scale_row(reverse_bits(row, h), weight);
-        }
+            scale_slice_in_place(weights[reverse_bits(r, h)], row);
+        });
 
         mat = mat.bit_reversed_zero_pad(added_bits);
 

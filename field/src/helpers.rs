@@ -7,7 +7,7 @@ use core::ops::Mul;
 use num_bigint::BigUint;
 
 use crate::field::Field;
-use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField};
+use crate::{AbstractField, PackedValue, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -50,6 +50,13 @@ pub fn sum_vecs<F: Field, I: Iterator<Item = Vec<F>>>(iter: I) -> Vec<F> {
 
 pub fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
     vec.into_iter().map(|x| s * x).collect()
+}
+
+pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
+    let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
+    let packed_s: F::Packing = s.into();
+    packed.iter_mut().for_each(|x| *x *= packed_s);
+    sfx.iter_mut().for_each(|x| *x *= s);
 }
 
 /// `x += y * s`, where `s` is a scalar.
