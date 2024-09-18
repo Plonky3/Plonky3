@@ -23,11 +23,18 @@ pub mod prelude {
             self.fold(&identity, fold_op).reduce(&identity, reduce_op)
         }
     }
+
+    #[macro_export]
+    macro_rules! par_izip {
+        ( $first:expr $( , $rest:expr )+ $(,)* ) => {
+            ($first $( , $rest )+ ).into_par_iter()
+        };
+    }
 }
 
 #[cfg(feature = "parallel")]
 pub mod iter {
-    pub use rayon::iter::repeat;
+    pub use rayon::iter::{repeat, split};
 }
 
 #[cfg(not(feature = "parallel"))]
@@ -61,9 +68,23 @@ pub mod prelude {
             self.fold(identity(), fold_op)
         }
     }
+
+    #[macro_export]
+    macro_rules! par_izip {
+        ( $first:expr $( , $rest:expr )+ $(,)* ) => {
+            itertools::izip!($first $(, $rest)+ )
+        };
+    }
 }
 
 #[cfg(not(feature = "parallel"))]
 pub mod iter {
     pub use core::iter::repeat;
+
+    pub fn split<D, S>(data: D, _splitter: S) -> core::iter::Once<D>
+    where
+        S: Fn(D) -> (D, Option<D>),
+    {
+        core::iter::once(data)
+    }
 }

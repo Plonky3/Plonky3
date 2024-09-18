@@ -194,12 +194,7 @@ where
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
-            3 => Self {
-                value: cubic_square(&self.value, AF::F::w())
-                    .to_vec()
-                    .try_into()
-                    .unwrap(),
-            },
+            3 => Self::from_array_trust_me(cubic_square(&self.value, AF::F::w())),
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
         }
     }
@@ -412,9 +407,7 @@ where
                 res.value[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
                 res
             }
-            3 => Self {
-                value: cubic_mul(&a, &b, w).to_vec().try_into().unwrap(),
-            },
+            3 => Self::from_array_trust_me(cubic_mul(&a, &b, w)),
             _ => {
                 let mut res = Self::default();
                 #[allow(clippy::needless_range_loop)]
@@ -521,9 +514,7 @@ where
 
     #[inline]
     fn from_base_slice(bs: &[AF]) -> Self {
-        Self {
-            value: bs.to_vec().try_into().expect("slice has wrong length"),
-        }
+        Self::from_base_fn(|i| bs[i].clone())
     }
 
     #[inline]
@@ -536,6 +527,22 @@ where
     #[inline]
     fn as_base_slice(&self) -> &[AF] {
         &self.value
+    }
+}
+
+impl<AF, const D: usize> BinomialExtensionField<AF, D>
+where
+    AF: AbstractField,
+    AF::F: BinomiallyExtendable<D>,
+{
+    /// Panics if D2 != D.
+    #[inline]
+    fn from_array_trust_me<const D2: usize>(mut arr: [AF; D2]) -> Self {
+        // One is tempted to do something unsafe here, but it seems like LLVM is
+        // fine getting rid of this.
+        let mut me = Self::default();
+        me.value.swap_with_slice(&mut arr);
+        me
     }
 }
 
