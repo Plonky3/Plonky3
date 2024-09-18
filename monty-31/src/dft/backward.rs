@@ -8,12 +8,17 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
+use p3_field::{Field, PackedField, PackedValue};
 
-use crate::{monty_reduce, MontyField31, MontyParameters, TwoAdicData};
+use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
 
-impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
+impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]
-    fn backward_butterfly(x: Self, y: Self, w: Self) -> (Self, Self) {
+    fn backward_butterfly<PF: PackedField<Scalar = MontyField31<MP>>>(
+        x: PF,
+        y: PF,
+        w: PF,
+    ) -> (PF, PF) {
         let t = y * w;
         (x + t, x - t)
     }
@@ -31,7 +36,40 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         top[0] = s;
         tail[0] = t;
 
-        izip!(&mut top[1..], &mut tail[1..], roots).for_each(|(hi, lo, &root)| {
+        izip!(top[1..].iter_mut(), tail[1..].iter_mut(), roots).for_each(|(hi, lo, &root)| {
+            (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
+        });
+    }
+
+    #[inline]
+    fn packed_backward_pass(a: &mut [Self], roots: &[Self]) {
+        let half_n = a.len() / 2;
+        assert_eq!(roots.len(), half_n - 1);
+
+        // Safe because 0 <= half_n < a.len()
+        let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
+
+        let s = top[0] + tail[0];
+        let t = top[0] - tail[0];
+        top[0] = s;
+        tail[0] = t;
+
+        let (shorts_1, suffix_1) =
+            <Self as Field>::Packing::pack_slice_with_suffix_mut(&mut top[1..]);
+        let (shorts_2, suffix_2) =
+            <Self as Field>::Packing::pack_slice_with_suffix_mut(&mut tail[1..]);
+
+        let (shorts_roots, suffix_roots) = <Self as Field>::Packing::pack_slice_with_suffix(roots);
+        assert_eq!(shorts_1.len(), shorts_2.len());
+        assert_eq!(shorts_1.len(), shorts_roots.len());
+        assert_eq!(suffix_1.len(), suffix_2.len());
+        assert_eq!(suffix_1.len(), suffix_roots.len());
+
+        izip!(shorts_1, shorts_2, shorts_roots).for_each(|(hi, lo, &root)| {
+            (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
+        });
+
+        izip!(suffix_1, suffix_2, suffix_roots).for_each(|(hi, lo, &root)| {
             (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
         });
     }
@@ -92,7 +130,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_8(a0);
         Self::backward_8(a1);
 
-        Self::backward_pass(a, MP::INV_ROOTS_16.as_ref());
+        Self::packed_backward_pass(a, MP::INV_ROOTS_16.as_ref());
     }
 
     #[inline(always)]
@@ -104,7 +142,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_16(a0);
         Self::backward_16(a1);
 
-        Self::backward_pass(a, &root_table[0]);
+        Self::packed_backward_pass(a, &root_table[0]);
     }
 
     #[inline(always)]
@@ -116,7 +154,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_32(a0, &root_table[1..]);
         Self::backward_32(a1, &root_table[1..]);
 
-        Self::backward_pass(a, &root_table[0]);
+        Self::packed_backward_pass(a, &root_table[0]);
     }
 
     #[inline(always)]
@@ -128,7 +166,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_64(a0, &root_table[1..]);
         Self::backward_64(a1, &root_table[1..]);
 
-        Self::backward_pass(a, &root_table[0]);
+        Self::packed_backward_pass(a, &root_table[0]);
     }
 
     #[inline(always)]
@@ -140,7 +178,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_128(a0, &root_table[1..]);
         Self::backward_128(a1, &root_table[1..]);
 
-        Self::backward_pass(a, &root_table[0]);
+        Self::packed_backward_pass(a, &root_table[0]);
     }
 
     #[inline]
