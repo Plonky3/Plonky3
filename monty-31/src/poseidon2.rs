@@ -17,14 +17,14 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
     type ArrayLike: AsRef<[MontyField31<MP>]> + Sized;
 
-    fn internal_diag_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
+    fn internal_layer_mat_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
 
     /// Implements multiplication by the diffusion matrix 1 + Diag(vec) using a delayed reduction strategy.
     fn permute_state(state: &mut [MontyField31<MP>; WIDTH]) {
         let part_sum: MontyField31<MP> = state.iter().skip(1).cloned().sum();
         let full_sum = part_sum + state[0];
         state[0] = part_sum - state[0];
-        Self::internal_diag_mul(state, full_sum);
+        Self::internal_layer_mat_mul(state, full_sum);
     }
 }
 

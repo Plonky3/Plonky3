@@ -13,9 +13,7 @@ const WIDTH: usize = 8;
 
 pub trait MontyParametersAVX2 {
     const PACKED_P: __m256i;
-    const PACKED_P_U64: __m256i;
     const PACKED_MU: __m256i;
-    const PACKED_NEG_MU: __m256i;
 }
 
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
