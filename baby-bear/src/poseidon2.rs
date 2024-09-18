@@ -35,7 +35,7 @@ const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 
 /// Poseidon2BabyBear contains the implementations of Poseidon2
 /// specialised to run on the current architecture. It acts on
-/// arrays of the form [BabyBear::Packing; WIDTH]
+/// arrays of the form either [BabyBear::Packing; WIDTH] or [BabyBear; WIDTH].
 pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     <BabyBear as Field>::Packing,
     Poseidon2ExternalLayerBabyBear<WIDTH>,

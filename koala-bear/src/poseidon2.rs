@@ -35,7 +35,7 @@ const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 
 /// Poseidon2KoalaBear contains the implementations of Poseidon2
 /// specialised to run on the current architecture. It acts on
-/// arrays of the form [KoalaBear::Packing; WIDTH]
+/// arrays of the form either [KoalaBear::Packing; WIDTH] or [KoalaBear; WIDTH]
 pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     <KoalaBear as Field>::Packing,
     Poseidon2ExternalLayerKoalaBear<WIDTH>,

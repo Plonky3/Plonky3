@@ -29,7 +29,7 @@ pub struct InternalLayer16<PMP: PackedMontyParameters> {
 impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     #[inline]
     #[must_use]
-    /// Convert from InternalLayer16<PMP> to [PackedMontyField31AVX2<PMP>; 16]
+    /// Convert from InternalLayer16<PMP> to \[PackedMontyField31AVX2<PMP>; 16\]
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
@@ -47,7 +47,7 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
 
     #[inline]
     #[must_use]
-    /// Convert from [PackedMontyField31AVX2<PMP>; 16] to InternalLayer16<PMP>
+    /// Convert from \[PackedMontyField31AVX2<PMP>; 16\] to InternalLayer16<PMP>
     fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 16]) -> Self {
         unsafe {
             // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
@@ -71,7 +71,7 @@ pub struct InternalLayer24<PMP: PackedMontyParameters> {
 impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     #[inline]
     #[must_use]
-    /// Convert from InternalLayer24<PMP> to [PackedMontyField31AVX2<PMP>; 24]
+    /// Convert from InternalLayer24<PMP> to \[PackedMontyField31AVX2<PMP>; 24\]
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
@@ -89,7 +89,7 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
 
     #[inline]
     #[must_use]
-    /// Convert from [PackedMontyField31AVX2<PMP>; 24] to InternalLayer24<PMP>
+    /// Convert from \[PackedMontyField31AVX2<PMP>; 24\] to InternalLayer24<PMP>
     fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 24]) -> Self {
         unsafe {
             // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.

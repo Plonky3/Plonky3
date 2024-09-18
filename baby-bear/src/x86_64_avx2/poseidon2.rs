@@ -23,7 +23,7 @@ impl InternalLayerParametersAVX2<16> for BabyBearInternalLayerParameters {
     unsafe fn diagonal_mul(input: &mut [__m256i; 15]) {
         // As far as we know this is optimal in that it need the fewest instructions to perform all of these
         // multiplications. (Note that -1, 0 are not allowed on the diagonal for technical reasons).
-        // If there exist other number b for which x*b mod P can be computed quickly this diagonal can be updated.
+        // If there exist other numbers b for which x*b mod P can be computed quickly this diagonal can be updated.
 
         // The strategy is very simple. 2, 3, 4, -3, -4 are implemented using addition.
         //                              1/2, -1/2 using the custom half function.
@@ -32,7 +32,9 @@ impl InternalLayerParametersAVX2<16> for BabyBearInternalLayerParameters {
         // Note that for -3, -4, -1/2 we actually output 3x, 4x, x/2 and the negative is dealt with in add_sum by subtracting
         // this from the summation instead of adding it.
 
-        // x0 is handled seperately as we need to apply the s-box to it.
+        // Note that input only contains the last 15 elements of the state.
+        // The first element is handled seperately as we need to apply the s-box to it.
+
         // x1 is being multiplied by 1 so we can also ignore it.
 
         // x2 -> sum + 2*x2
@@ -107,7 +109,7 @@ impl InternalLayerParametersAVX2<24> for BabyBearInternalLayerParameters {
     type ArrayLike = [__m256i; 23];
 
     /// For the BabyBear field and width 16 we multiply by the diagonal matrix:
-    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**24, -1/2**24]
+    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**27, -1/2**27]
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no garuntees on the output except that, provided
     /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
@@ -124,7 +126,9 @@ impl InternalLayerParametersAVX2<24> for BabyBearInternalLayerParameters {
         // Note that for -3, -4, -1/2 we actually output 3x, 4x, x/2 and the negative is dealt with in add_sum by subtracting
         // this from the summation instead of adding it.
 
-        // x0 is handled seperately as we need to apply the s-box to it.
+        // Note that input only contains the last 23 elements of the state.
+        // The first element is handled seperately as we need to apply the s-box to it.
+
         // x1 is being multiplied by 1 so we can also ignore it.
 
         // x2 -> sum + 2*x2

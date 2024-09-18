@@ -14,7 +14,7 @@ const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 
 /// Poseidon2Mersenne31 contains the implementations of Poseidon2
 /// specialised to run on the current architecture. It acts on
-/// arrays of the form [Mersenne31::Packing; WIDTH]
+/// arrays of the form either [Mersenne31::Packing; WIDTH] or [Mersenne31; WIDTH]
 pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     <Mersenne31 as Field>::Packing,
     Poseidon2ExternalLayerMersenne31<WIDTH>,
