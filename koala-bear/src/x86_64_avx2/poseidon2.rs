@@ -1,77 +1,12 @@
 use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
-use p3_monty_31::{add, sub, InternalLayerParametersAVX2, MontyParameters, MontyParametersAVX2};
+use p3_monty_31::{add, halve_avx2, signed_add_avx2, sub, InternalLayerParametersAVX2};
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
 // https://godbolt.org/#z:OYLghAFBqd5QCxAYwPYBMCmBRdBLAF1QCcAaPECAMzwBtMA7AQwFtMQByAcQwCNVaBANQFMAZwJihVEkJaoGBAJ5DimdAFdkBPArEA6YmI6kZigMrIm9EAEYALKYUEAqmMwAFAB6cADCYArO1JaJgZQYg0JUgAHMMwAOVZ2bj4BYVEJKQBpVGsmACFMJmIhD1R3PHQFACYTd3ptXQZKRnQAYQENFhaAVhrSNoAZPAZE7t5MYhAAdliKwmbO2m6%2BgZiFnQURsYSJqdnSBswmhXMCEoJl1ZB%2Bo8xGrYZzy53xlknpuYlL657bgY/YgEN57D4HGYASiOqA0xGQKSimCEaDUIBAAFIZgUMb4AIJCQlCErIJAgLwADgAbAB9Kn2dFYgoNKikIQ0mksGq9Kl4LEAEVIuIJRLYLHRBGIYTELA0oiF%2BIFGIAzDjFfi0AwJGUAEoASQAstgQEINMqakIVfyhDVbMrfDNfPTlcqVWq8ZrtR48e1sth%2BTSPCaOVyeXhLcrrRotUwqMimSIpVrZaIIBjegUPPqjW6hBT0/zIZaZvy3cLhTENLxpAwhAhrAA3TAQUaVgjBznc3lFgC0Kuw7M7YeL7qJppjcZHwrHY89wgA8gljYPQ7yI1GJ/HsYnpSnm%2BmCrZc/neoXi6XVdOZ4S50IABJ4oYAMQ7q/DVvHYljW4KO%2BTcv3DMICzQ0BwxGpf1sIsAHobWPAsiyVS91RFa96GEegmAkGleEIdchEpWl6XRTlVxpMJ0BpMQ8C7FsGDbNlF2wSEy3xa9CXQkR8MIukGRAUiuyo4haDwGlMBiPBzUZZV2iPZVsDotsWOQ1CZ04lgmCUSYaXrWgqG46leJIlgyOo4AGDEiTzQgB9nzZTDsNwghlNHdieOI/iTMEph0Eo8TJJqCACDZDStMwHTrCoFi2KJJVFRLct8UrasqFrMyxkonz0AgWgEDEV8uzwNliDygqw17fsV0KqcYsJaMv0nJkrzQzBhA2MQaTGYAaRiAyiL4gSeSovBzMsgLgJ9P0Aw8Yq8pc5q1NaoQxG6PqjM8sisrG6zcrEWaxHm2rFuEFaWBpVFSg/dyBq8oaVt4bbAtOtl2s6zBupiQ7VLHa7jLIlhRkss0nu6NlTvOkhiGi1S4rxWGKyrGs5A0WgaRqMSvBiN7uopRS5TK7shD7eSquHJqjvq78au%2BolbyYmkABUAHVsASBmAE0aXMbAADVWYJ99I0/KmE0lXcALTDNbBqGZ4NPRCEpU9ihE4hBBetX6NsEsRhNE/ypMxGT83kvHnNYmmOKW2hUDWjzBtpDTfKrDr/NsKlTcYpdGZZtnOe5vmEi%2B5XOOtqiECoYQrsMu3btpMRaBEx7pNkql%2Bxy1Ag7c6ObtMqtHogNX7NQMOI%2Bhsd4YSlDkqR2VUa6tGMax%2BvcdbfHScJ4mBxDarydUynGuxBbZz0BcveZ1mOa53n%2Bfb9XhYH38xf/VMD2l2XVTzBDz3N4OlrV22c%2B13Wk8N9pjYU1uzaV9iQ5tqP%2Br%2BwTHc0XgXYkt2PaEenx99qeA8zlqGFi5iHDpHIWmt7ZUQTnrKyNRk5uzTtbABM4IGxyonnfWgVQ4gIjmyNWZdYqVzhkQ8sNRXQZlGCJMYEBrAAHdNIHQLMKVKyNUbo0wJjbGnUVTtFvAkE0AU2R8MDNmZcAU06XwFhVEm3cyaDwppuamyssLuGBGJAAjmASACQ2Q1HsETIQCQRGgWQcPLUo9sDewnn7ae/DZ74X7j%2BP8MoJarxlnLM8SF3RDyJOpLCABrAW%2BEl4uJXkBWwEZ2g8MMb2IQclfwnkLObHxlthD73vutSBOtE6YOTgkCR9E5SmN8UtBs1gaTWwPo/IaFFhq0UviFAJxTUkqzvuA7O1SHZbVdu7MpqNrae0sT/Se/tWbNJVlbYBoCqlazutAk%2BPCjEgRzCbJBO8s4P1mXHDBsCC5FVaSXM2R0K6lhQuBchBRKGjGbHQhhLFTzMNrLXLh7DOH1wYDwvhAjzRCJHoY4xRpvk1AKW2KRRNKqyLXL3McjilHsRUVMAgGitEQB0TafRPZ/nLOYus68dMx4%2BxGbYoJH5YWiyTKEwCh53Eb0SQrC83ijpjj8WIQJ9iPwhL3JLAoEAIk8OiYHAx8TN7y2SUykpaS56oNMsfXJp98km0vuMzifSKltI1h0rZ5EGCUWovUwpwU5BNNxcdVpMzIHPzGh/VVAyv4EusX/MZJrmWTMOeatB8ccmwLyQC7AiCM7OqJNK7WOzxrYNAXgvABDCQnMSniauLDnmvKbu9GkvRTZgs7uy%2BRqkk2Ny4S0U%2BypdFyQvga6G8MkqI0TSjBuHCU3dRmBm2e0iu5DihTmsceb60FuTgATjZLYXoIKinlhIVWlKTza312TVw92kiW3gpke298nbRTTtTbO95yc5hxPXmWpSY7TlwwnTXDd3Ut2pqbQuyFUal1trfHCwkzyZ35u3afBwg7fAjqOcQ49CNJ2sLrW8zd9hm23tbdm1ydVFHQvYreA0eJzDZBJULMl25OWuPCZE6JejYnCrpdvFSKSJmSvdTKr1AVk56J/cqyZ5HvI6rqTyT%2BiHkN0aAW6jJMdTLzLlTw/d6cOMHJiCsDq6T2mbMgd03Ztr8GBsJMGu6oadrF1E1EHS%2Bzw2lwWrGqu1ap1103W%2B0D4GV2QdvU%2B%2BeP4SMIaQyh9laHYMYYpVyg8vKcMyXRfhjx9KxUW1I3WKVmqsmyu9afGjiry0KcC5U7jh8alMb1SxhpQg2PZGE9psBGqpMer4%2BFgT/rMtqbE5phjNTfL5zk1GmLSntkPUwenQ5Rceqlfk8ckhJYODQloJwXoJgWgcFsCYVAnAeDoH4IIEQ4hJBCFyPkIoJQygVEwFUWoJh2wcH8JCaECBihYGmBAaEgSeT6EdBSPt5o9EzCpA4ZUtgQicHsCYcUthfC%2BFIIN/wpBRscHqCAD7m3tukDgLAJAaAWASXoGQCgEAIdQ4OMQWwFJ3umDoKIIwlBeB%2BBMLhZgxAlCcGG6QPHJQlDzl4AEE4m3icQ7YIoecDBaCE62yYLAvANDAHaNYWg%2BUhts8wBpcINhWekHwGoJoTY%2BffY4ScACROTCjFEL10XIleBSgJ50LAOPSCSjwOKfnpAmzEH4O4fkguwjACoaAVn0IqChGAGIHmeBMC0PnDERgCunAWCsDYT9ZhXDuG8DroID3QjhBAJEaIav8qQGhKgGITw%2Bc9nnETdoIgSjAFaj2ZAlYrRSkTyQUI/jkQ9nTwnggPZ6BNloFaZUI3jfECqOIeAEBmBsBAOoRYCgjfWA0CkGovhbTdehMcU4LQIBtD%2BC0B7wxrlgk%2BMEdq3eGDT6X5sZooJ9jTAe2Pp4LxgRr93w8anzQD8gnn9v4IQIrhdH%2BLvi4wIt/gh36P2E8J2BQUexwfrn2de/dUCiAIGQDiX0BR30F8CEAgFwEIFkHOSgg2xxx21IECWVApH0BqD0SpGVF6D7TIQuxmBu16G/2ez/1F1%2B3%2B0ByQJBxgEQBAFhAIAYlh3hzoCmCSA7w4Cj2ANAPAJl3wCICb3QGCAD0sGsE/0cADzcE8B8FF1D1IFoQLwVx6z6wG3/04HnDlDbCEFQH0i4JANsDAN8AgKgM6Eh1YMujIQQN1yQOOxAHsH0D7Xe1wPsGVHsDwNsBu2wJINUPIM4EoOsNt2UI4DqDIO%2BwoICO22hGN2ogUDsKAA%3D%3D
-
-/// Halve a vector of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline(always)]
-fn halve(input: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpand    least_bit, val, ONE
-    //      vpsrld   t, val, 1
-    //      vpsignd  maybe_half, HALF, least_bit
-    //      vpaddd   res, t, maybe_half
-    // throughput: 1.33 cyc/vec
-    // latency: 3 cyc
-
-    // Given an element val in [0, P), desired output is val/2 mod P.
-    // If val is even: val/2 mod P = val/2 = val >> 1.
-    // If val is odd: val/2 mod P = (val + P)/2 = (val >> 1) + (P + 1)/2
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        const ONE: __m256i = unsafe { transmute([1; 8]) };
-        const HALF: __m256i = unsafe { transmute([(KoalaBearParameters::PRIME + 1) / 2; 8]) };
-
-        let least_bit = x86_64::_mm256_and_si256(input, ONE); // Determine the parity of val.
-        let t = x86_64::_mm256_srli_epi32::<1>(input);
-        let maybe_half = x86_64::_mm256_sign_epi32(HALF, least_bit); // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
-        x86_64::_mm256_add_epi32(t, maybe_half)
-    }
-}
-
-/// Add two vectors of Monty31 field elements with lhs in canonical form and rhs in (-P, P).
-/// To reiterate, the two inputs are not symmetric, lhs must be positive. Return a value in canonical form.
-/// If the inputs do not conform to these restrictions, the result is undefined.
-#[inline(always)]
-unsafe fn signed_add(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpsignd  pos_neg_P,  P, rhs
-    //      vpaddd   sum,        lhs,   rhs
-    //      vpsubd   sum_corr,   sum,   pos_neg_P
-    //      vpminud  res,        sum,   sum_corr
-    // throughput: 1.33 cyc/vec
-    // latency: 3 cyc
-
-    // Let t = lhs + rhs mod 2^32, we want to return t mod P while correcting for any possible wraparound.
-    // We make use of the fact wrapping addition acts identically on signed and unsigned inputs.
-
-    // If rhs is positive, lhs + rhs < 2P < 2^32 and so we interpret t as a unsigned 32 bit integer.
-    //      In this case, t mod P = min_{u32}(t, t - P) where min_{u32} takes the min treating both inputs as unsigned 32 bit integers.
-    //      This works as if t >= P then t - P < t and if t < P then, due to wraparound, t - P outputs t - P + 2^32 > t.
-    // If rhs is negative, -2^31 < -P < lhs + rhs < P < 2^31 so we interpret t as a signed 32 bit integer.
-    //      In this case t mod P = min_{u32}(t, t + P)
-    //      This works as if t > 0 then t < t + P and if t < 0 then due to wraparound when we interpret t as an unsigned integer it becomes
-    //      2^32 + t > t + P.
-    // if rhs = 0 then we can just return t = lhs as it is already in the desired range.
-    unsafe {
-        // If rhs > 0 set the value to P, if rhs < 0 set it to -P and if rhs = 0 set it to 0.
-        let pos_neg_p = x86_64::_mm256_sign_epi32(KoalaBearParameters::PACKED_P, rhs);
-
-        // Compute t = lhs + rhs
-        let sum = x86_64::_mm256_add_epi32(lhs, rhs);
-
-        // sum_corr = (t - P) if rhs > 0, t + P if rhs < 0 and t if rhs = 0 as desired.
-        let sum_corr = x86_64::_mm256_sub_epi32(sum, pos_neg_p);
-
-        x86_64::_mm256_min_epu32(sum, sum_corr)
-    }
-}
 
 // The following functions all implement x -> +/- 2^{-n} x and output a value in (-P, P).
 // The methods work provided n < 15 and our prime is of the form P = r * 2^j + 1 with r < 2^15.
@@ -283,7 +218,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
         input[1] = add::<KoalaBearParameters>(input[1], input[1]);
 
         // x3 -> sum + x3/2
-        input[2] = halve(input[2]);
+        input[2] = halve_avx2::<KoalaBearParameters>(input[2]);
 
         // x4 -> sum + 3*x4
         let acc3 = add::<KoalaBearParameters>(input[3], input[3]);
@@ -294,7 +229,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
         input[4] = add::<KoalaBearParameters>(acc4, acc4);
 
         // x6 -> sum - x6/2
-        input[5] = halve(input[5]);
+        input[5] = halve_avx2::<KoalaBearParameters>(input[5]);
 
         // x7 -> sum - 3*x7
         let acc6 = add::<KoalaBearParameters>(input[6], input[6]);
@@ -341,7 +276,9 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
 
         // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
         // Note that signed add's parameters are not interchangable. The first parameter must be positive.
-        input[8..].iter_mut().for_each(|x| *x = signed_add(sum, *x));
+        input[8..]
+            .iter_mut()
+            .for_each(|x| *x = signed_add_avx2::<KoalaBearParameters>(sum, *x));
     }
 }
 
@@ -373,7 +310,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
         input[1] = add::<KoalaBearParameters>(input[1], input[1]);
 
         // x3 -> sum + x3/2
-        input[2] = halve(input[2]);
+        input[2] = halve_avx2::<KoalaBearParameters>(input[2]);
 
         // x4 -> sum + 3*x4
         let acc3 = add::<KoalaBearParameters>(input[3], input[3]);
@@ -384,7 +321,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
         input[4] = add::<KoalaBearParameters>(acc4, acc4);
 
         // x6 -> sum - x6/2
-        input[5] = halve(input[5]);
+        input[5] = halve_avx2::<KoalaBearParameters>(input[5]);
 
         // x7 -> sum - 3*x7
         let acc6 = add::<KoalaBearParameters>(input[6], input[6]);
@@ -455,7 +392,9 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
 
         // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
         // Note that signed add's parameters are not interchangable. The first parameter must be positive.
-        input[8..].iter_mut().for_each(|x| *x = signed_add(sum, *x));
+        input[8..]
+            .iter_mut()
+            .for_each(|x| *x = signed_add_avx2::<KoalaBearParameters>(sum, *x));
     }
 }
 
