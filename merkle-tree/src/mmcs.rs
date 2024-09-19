@@ -61,10 +61,10 @@ where
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
+    type ProverData<M> = FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>;
     type Commitment = Hash<P::Scalar, PW::Value, DIGEST_ELEMS>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
     type Error = FieldMerkleTreeError;
-    type ProverData<M> = FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>;
 
     fn commit<M: Matrix<P::Scalar>>(
         &self,

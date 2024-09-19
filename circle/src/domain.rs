@@ -135,6 +135,38 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         })
     }
 
+    /// Decompose a domain into disjoint twin-cosets.
+    fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
+        assert!(self.is_standard());
+        let log_chunks = log2_strict_usize(num_chunks);
+        self.points()
+            .take(num_chunks)
+            .map(|shift| CircleDomain {
+                log_n: self.log_n - log_chunks,
+                shift,
+            })
+            .collect()
+    }
+
+    fn split_evals(
+        &self,
+        num_chunks: usize,
+        evals: RowMajorMatrix<Self::Val>,
+    ) -> Vec<RowMajorMatrix<Self::Val>> {
+        let log_chunks = log2_strict_usize(num_chunks);
+        assert!(evals.height() >> (log_chunks + 1) >= 1);
+        let width = evals.width();
+        let mut values: Vec<Vec<Self::Val>> = vec![vec![]; num_chunks];
+        evals
+            .rows()
+            .enumerate()
+            .for_each(|(i, row)| values[forward_backward_index(i, num_chunks)].extend(row));
+        values
+            .into_iter()
+            .map(|v| RowMajorMatrix::new(v, width))
+            .collect()
+    }
+
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
         self.zeroifier(Point::from_projective_line(point))
     }
@@ -150,35 +182,6 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_transition: Ext::one() - self.s_p_normalized(-self.shift, point),
             inv_zeroifier: self.zeroifier(point).inverse(),
         }
-    }
-
-    // wow, really slow!
-    // todo: batch inverses
-    #[instrument(skip_all, fields(log_n = %coset.log_n))]
-    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
-        let sels = coset
-            .points()
-            .map(|p| self.selectors_at_point(p.to_projective_line().unwrap()))
-            .collect_vec();
-        LagrangeSelectors {
-            is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
-            is_last_row: sels.iter().map(|s| s.is_last_row).collect(),
-            is_transition: sels.iter().map(|s| s.is_transition).collect(),
-            inv_zeroifier: sels.iter().map(|s| s.inv_zeroifier).collect(),
-        }
-    }
-
-    /// Decompose a domain into disjoint twin-cosets.
-    fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
-        assert!(self.is_standard());
-        let log_chunks = log2_strict_usize(num_chunks);
-        self.points()
-            .take(num_chunks)
-            .map(|shift| CircleDomain {
-                log_n: self.log_n - log_chunks,
-                shift,
-            })
-            .collect()
     }
 
     /*
@@ -197,23 +200,20 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     chunks=2: 0 1 1 0 0 1 1 0 0 1 1 0 0 1 1 0
     chunks=4: 0 1 2 3 3 2 1 0 0 1 2 3 3 2 1 0
     */
-    fn split_evals(
-        &self,
-        num_chunks: usize,
-        evals: RowMajorMatrix<Self::Val>,
-    ) -> Vec<RowMajorMatrix<Self::Val>> {
-        let log_chunks = log2_strict_usize(num_chunks);
-        assert!(evals.height() >> (log_chunks + 1) >= 1);
-        let width = evals.width();
-        let mut values: Vec<Vec<Self::Val>> = vec![vec![]; num_chunks];
-        evals
-            .rows()
-            .enumerate()
-            .for_each(|(i, row)| values[forward_backward_index(i, num_chunks)].extend(row));
-        values
-            .into_iter()
-            .map(|v| RowMajorMatrix::new(v, width))
-            .collect()
+    // wow, really slow!
+    // todo: batch inverses
+    #[instrument(skip_all, fields(log_n = %coset.log_n))]
+    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
+        let sels = coset
+            .points()
+            .map(|p| self.selectors_at_point(p.to_projective_line().unwrap()))
+            .collect_vec();
+        LagrangeSelectors {
+            is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
+            is_last_row: sels.iter().map(|s| s.is_last_row).collect(),
+            is_transition: sels.iter().map(|s| s.is_transition).collect(),
+            inv_zeroifier: sels.iter().map(|s| s.inv_zeroifier).collect(),
+        }
     }
 }
 

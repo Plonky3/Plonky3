@@ -41,22 +41,31 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.index_map.height()
     }
 
+    fn get(&self, r: usize, c: usize) -> T {
+        self.inner.get(self.index_map.map_row_index(r), c)
+    }
+
     type Row<'a> = Inner::Row<'a>
     where
         Self: 'a;
+
+    // Override these methods so we use the potentially optimized inner methods instead of defaults.
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.inner.row(self.index_map.map_row_index(r))
     }
 
-    // Override these methods so we use the potentially optimized inner methods instead of defaults.
-
-    fn get(&self, r: usize, c: usize) -> T {
-        self.inner.get(self.index_map.map_row_index(r), c)
-    }
-
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.inner.row_slice(self.index_map.map_row_index(r))
+    }
+
+    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
+    where
+        Self: Sized,
+        T: Clone,
+    {
+        // Use Perm's optimized permutation routine, if it has one.
+        self.index_map.to_row_major_matrix(self.inner)
     }
 
     fn horizontally_packed_row<'a, P>(
@@ -84,14 +93,5 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     {
         self.inner
             .padded_horizontally_packed_row(self.index_map.map_row_index(r))
-    }
-
-    fn to_row_major_matrix(self) -> RowMajorMatrix<T>
-    where
-        Self: Sized,
-        T: Clone,
-    {
-        // Use Perm's optimized permutation routine, if it has one.
-        self.index_map.to_row_major_matrix(self.inner)
     }
 }
