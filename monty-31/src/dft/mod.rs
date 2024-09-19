@@ -8,7 +8,7 @@ use core::mem::transmute;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{AbstractField, Field};
+use p3_field::{AbstractField, Field, PackedField, PackedValue};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -22,10 +22,10 @@ use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
 /// Multiply each element of column `j` of `mat` by `shift**j`.
 #[instrument(level = "debug", skip_all)]
-fn coset_shift_and_scale_rows<F: Field>(
-    out: &mut [F],
+fn coset_shift_and_scale_rows<F: Field, PF: PackedField<Scalar = F>>(
+    out: &mut [PF],
     out_ncols: usize,
-    mat: &[F],
+    mat: &[PF],
     ncols: usize,
     shift: F,
     scale: F,
@@ -65,7 +65,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 
     #[inline]
     fn decimation_in_freq_dft(
-        mat: &mut [MontyField31<MP>],
+        mat: &mut [<MontyField31<MP> as Field>::Packing],
         ncols: usize,
         twiddles: &[Vec<MontyField31<MP>>],
     ) {
@@ -81,7 +81,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 
     #[inline]
     fn decimation_in_time_dft(
-        mat: &mut [MontyField31<MP>],
+        mat: &mut [<MontyField31<MP> as Field>::Packing],
         ncols: usize,
         twiddles: &[Vec<MontyField31<MP>>],
     ) {
@@ -164,6 +164,11 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     {
         let nrows = mat.height();
         let ncols = mat.width();
+        assert_eq!(ncols % <MontyField31<MP> as Field>::Packing::WIDTH, 0);
+        let ncols = mat.width() / <MontyField31<MP> as Field>::Packing::WIDTH;
+
+        let packedmat = <MontyField31<MP> as Field>::Packing::pack_slice_mut(&mut mat.values);
+
         if nrows <= 1 {
             return mat.bit_reverse_rows();
         }
@@ -176,14 +181,14 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows));
+            .in_scope(|| transpose::transpose(packedmat, &mut scratch.values, ncols, nrows));
 
         debug_span!("dft batch", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_freq_dft(&mut scratch.values, nrows, &twiddles));
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
-            .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
+            .in_scope(|| transpose::transpose(&scratch.values, packedmat, nrows, ncols));
 
         mat.bit_reverse_rows()
     }
@@ -199,6 +204,9 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             return mat;
         }
 
+        assert_eq!(ncols % <MontyField31<MP> as Field>::Packing::WIDTH, 0);
+        let ncols = mat.width() / <MontyField31<MP> as Field>::Packing::WIDTH;
+
         let mut scratch = debug_span!("allocate scratch space")
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
@@ -208,16 +216,18 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         self.update_twiddles(nrows);
         let inv_twiddles = self.inv_twiddles.borrow();
 
+        let packedmat = <MontyField31<MP> as Field>::Packing::pack_slice_mut(&mut mat.values);
+
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows));
+            .in_scope(|| transpose::transpose(packedmat, &mut scratch.values, ncols, nrows));
 
         debug_span!("idft", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_time_dft(&mut scratch.values, nrows, &inv_twiddles));
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
-            .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
+            .in_scope(|| transpose::transpose(&scratch.values, packedmat, nrows, ncols));
 
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
         debug_span!("scale").in_scope(|| mat.scale(inv_len));
@@ -243,10 +253,16 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             return RowMajorMatrix::new(dupd_rows, ncols).bit_reverse_rows();
         }
 
+        let pack_width = <MontyField31<MP> as Field>::Packing::WIDTH;
+        assert_eq!(ncols % pack_width, 0);
+
         let input_size = nrows * ncols;
         let output_size = result_nrows * ncols;
 
         let mat = mat.bit_reverse_rows().to_row_major_matrix();
+
+        let ncols_packed = ncols / pack_width;
+        let packedmat = <MontyField31<MP> as Field>::Packing::pack_slice(&mat.values);
 
         // Allocate space for the output and the intermediate state.
         // NB: The unsafe version below takes well under 1ms, whereas doing
@@ -255,16 +271,20 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| unsafe {
             // Safety: These are pretty dodgy, but work because MontyField31 is #[repr(transparent)]
             let output = transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
+            // #[allow(clippy::unsound_collection_transmute)]
             let padded = transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
             (output, padded)
         });
 
+        let packed_output = <MontyField31<MP> as Field>::Packing::pack_slice_mut(&mut output);
+        let packed_padded = <MontyField31<MP> as Field>::Packing::pack_slice_mut(&mut padded);
+
         // `coeffs` will hold the result of the inverse FFT; use the
         // output storage as scratch space.
-        let coeffs = &mut output[..input_size];
+        let coeffs = &mut packed_output[..input_size / pack_width];
 
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
+            .in_scope(|| transpose::transpose(packedmat, coeffs, ncols_packed, nrows));
 
         // Apply inverse DFT; result is not yet normalised.
         self.update_twiddles(result_nrows);
@@ -277,7 +297,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // Normalise inverse DFT and coset shift in one go.
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
-        coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
+        coset_shift_and_scale_rows(packed_padded, result_nrows, coeffs, nrows, shift, inv_len);
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
@@ -286,11 +306,12 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
-            .in_scope(|| Self::decimation_in_freq_dft(&mut padded, result_nrows, &twiddles));
+            .in_scope(|| Self::decimation_in_freq_dft(packed_padded, result_nrows, &twiddles));
 
         // transpose output
-        debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
-            .in_scope(|| transpose::transpose(&padded, &mut output, result_nrows, ncols));
+        debug_span!("post-transpose", nrows = ncols, ncols = result_nrows).in_scope(|| {
+            transpose::transpose(packed_padded, packed_output, result_nrows, ncols_packed)
+        });
 
         RowMajorMatrix::new(output, ncols).bit_reverse_rows()
     }

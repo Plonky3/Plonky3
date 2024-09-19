@@ -8,23 +8,23 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{Field, PackedField, PackedValue};
+use p3_field::PackedField;
 
-use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
+use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]
     fn backward_butterfly<PF: PackedField<Scalar = MontyField31<MP>>>(
         x: PF,
         y: PF,
-        w: PF,
+        w: Self,
     ) -> (PF, PF) {
-        let t = y * w;
+        let t = y * PF::from_f(w);
         (x + t, x - t)
     }
 
     #[inline]
-    fn backward_pass(a: &mut [Self], roots: &[Self]) {
+    fn backward_pass<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF], roots: &[Self]) {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
@@ -41,41 +41,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         });
     }
 
-    #[inline]
-    fn packed_backward_pass(a: &mut [Self], roots: &[Self]) {
-        let half_n = a.len() / 2;
-        assert_eq!(roots.len(), half_n - 1);
-
-        // Safe because 0 <= half_n < a.len()
-        let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
-
-        let s = top[0] + tail[0];
-        let t = top[0] - tail[0];
-        top[0] = s;
-        tail[0] = t;
-
-        let (shorts_1, suffix_1) =
-            <Self as Field>::Packing::pack_slice_with_suffix_mut(&mut top[1..]);
-        let (shorts_2, suffix_2) =
-            <Self as Field>::Packing::pack_slice_with_suffix_mut(&mut tail[1..]);
-
-        let (shorts_roots, suffix_roots) = <Self as Field>::Packing::pack_slice_with_suffix(roots);
-        assert_eq!(shorts_1.len(), shorts_2.len());
-        assert_eq!(shorts_1.len(), shorts_roots.len());
-        assert_eq!(suffix_1.len(), suffix_2.len());
-        assert_eq!(suffix_1.len(), suffix_roots.len());
-
-        izip!(shorts_1, shorts_2, shorts_roots).for_each(|(hi, lo, &root)| {
-            (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
-        });
-
-        izip!(suffix_1, suffix_2, suffix_roots).for_each(|(hi, lo, &root)| {
-            (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
-        });
-    }
-
     #[inline(always)]
-    fn backward_2(a: &mut [Self]) {
+    fn backward_2<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 2);
 
         let s = a[0] + a[1];
@@ -85,7 +52,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_4(a: &mut [Self]) {
+    fn backward_4<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
         // Read in bit-reversed order
@@ -95,10 +62,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let a3 = a[3];
 
         // Expanding the calculation of t3 saves one instruction
-        let t1 = MP::PRIME + a1.value - a3.value;
-        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
-            t1 as u64 * MP::INV_ROOTS_8.as_ref()[1].value as u64,
-        ));
+        let t1 = a1 - a3;
+        let t3 = t1 * PF::from_f(MP::INV_ROOTS_8.as_ref()[1]);
         let t5 = a1 + a3;
         let t4 = a0 + a2;
         let t2 = a0 - a2;
@@ -110,7 +75,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_8(a: &mut [Self]) {
+    fn backward_8<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 8);
 
         // Safe because a.len() == 8
@@ -122,7 +87,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_16(a: &mut [Self]) {
+    fn backward_16<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 16);
 
         // Safe because a.len() == 16
@@ -130,11 +95,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_8(a0);
         Self::backward_8(a1);
 
-        Self::packed_backward_pass(a, MP::INV_ROOTS_16.as_ref());
+        Self::backward_pass(a, MP::INV_ROOTS_16.as_ref());
     }
 
     #[inline(always)]
-    fn backward_32(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn backward_32<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 32);
 
         // Safe because a.len() == 32
@@ -142,11 +110,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_16(a0);
         Self::backward_16(a1);
 
-        Self::packed_backward_pass(a, &root_table[0]);
+        Self::backward_pass(a, &root_table[0]);
     }
 
     #[inline(always)]
-    fn backward_64(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn backward_64<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 64);
 
         // Safe because a.len() == 64
@@ -154,11 +125,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_32(a0, &root_table[1..]);
         Self::backward_32(a1, &root_table[1..]);
 
-        Self::packed_backward_pass(a, &root_table[0]);
+        Self::backward_pass(a, &root_table[0]);
     }
 
     #[inline(always)]
-    fn backward_128(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn backward_128<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 128);
 
         // Safe because a.len() == 128
@@ -166,11 +140,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_64(a0, &root_table[1..]);
         Self::backward_64(a1, &root_table[1..]);
 
-        Self::packed_backward_pass(a, &root_table[0]);
+        Self::backward_pass(a, &root_table[0]);
     }
 
     #[inline(always)]
-    fn backward_256(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn backward_256<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 256);
 
         // Safe because a.len() == 256
@@ -178,11 +155,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_128(a0, &root_table[1..]);
         Self::backward_128(a1, &root_table[1..]);
 
-        Self::packed_backward_pass(a, &root_table[0]);
+        Self::backward_pass(a, &root_table[0]);
     }
 
     #[inline]
-    pub fn backward_fft(a: &mut [Self], root_table: &[Vec<Self>]) {
+    pub fn backward_fft<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         let n = a.len();
         if n == 1 {
             return;

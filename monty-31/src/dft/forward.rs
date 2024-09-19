@@ -8,10 +8,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{AbstractField, Field, PackedField, PackedValue, TwoAdicField};
+use p3_field::{AbstractField, PackedField, TwoAdicField};
 use p3_util::log2_strict_usize;
 
-use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
+use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Given a field element `gen` of order n where `n = 2^lg_n`,
@@ -44,51 +44,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     fn forward_butterfly<PF: PackedField<Scalar = MontyField31<MP>>>(
         x: PF,
         y: PF,
-        w: PF,
+        w: Self,
     ) -> (PF, PF) {
         let t = x - y;
-        (x + y, t * w)
+        (x + y, t * PF::from_f(w))
     }
 
     #[inline]
-    fn packed_forward_pass(a: &mut [Self], roots: &[Self]) {
-        let half_n = a.len() / 2;
-        assert_eq!(roots.len(), half_n - 1);
-
-        // Safe because 0 <= half_n < a.len()
-        let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
-
-        let s = top[0] + tail[0];
-        let t = top[0] - tail[0];
-        top[0] = s;
-        tail[0] = t;
-
-        let (shorts_1, suffix_1) =
-            <Self as Field>::Packing::pack_slice_with_suffix_mut(&mut top[1..]);
-        let (shorts_2, suffix_2) =
-            <Self as Field>::Packing::pack_slice_with_suffix_mut(&mut tail[1..]);
-
-        let (shorts_roots, suffix_roots) = <Self as Field>::Packing::pack_slice_with_suffix(roots);
-        assert_eq!(shorts_1.len(), shorts_2.len());
-        assert_eq!(shorts_1.len(), shorts_roots.len());
-        assert_eq!(suffix_1.len(), suffix_2.len());
-        assert_eq!(suffix_1.len(), suffix_roots.len());
-
-        izip!(shorts_1, shorts_2, shorts_roots).for_each(|(hi, lo, &root)| {
-            (*hi, *lo) = Self::forward_butterfly(*hi, *lo, root);
-        });
-
-        izip!(suffix_1, suffix_2, suffix_roots).for_each(|(hi, lo, &root)| {
-            (*hi, *lo) = Self::forward_butterfly(*hi, *lo, root);
-        });
-
-        // izip!(&mut top[1..], &mut tail[1..], roots).for_each(|(hi, lo, &root)| {
-        //     (*hi, *lo) = Self::forward_butterfly(*hi, *lo, root);
-        // });
-    }
-
-    #[inline]
-    fn forward_pass(a: &mut [Self], roots: &[Self]) {
+    fn forward_pass<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF], roots: &[Self]) {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
@@ -106,7 +69,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_2(a: &mut [Self]) {
+    fn forward_2<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 2);
 
         let s = a[0] + a[1];
@@ -116,14 +79,12 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_4(a: &mut [Self]) {
+    fn forward_4<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
         // Expanding the calculation of t3 saves one instruction
-        let t1 = MP::PRIME + a[1].value - a[3].value;
-        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
-            t1 as u64 * MP::ROOTS_8.as_ref()[1].value as u64,
-        ));
+        let t1 = a[1] - a[3];
+        let t3 = t1 * PF::from_f(MP::ROOTS_8.as_ref()[1]);
         let t5 = a[1] + a[3];
         let t4 = a[0] + a[2];
         let t2 = a[0] - a[2];
@@ -136,7 +97,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_8(a: &mut [Self]) {
+    fn forward_8<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 8);
 
         Self::forward_pass(a, MP::ROOTS_8.as_ref());
@@ -148,10 +109,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_16(a: &mut [Self]) {
+    fn forward_16<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
         assert_eq!(a.len(), 16);
 
-        Self::packed_forward_pass(a, MP::ROOTS_16.as_ref());
+        Self::forward_pass(a, MP::ROOTS_16.as_ref());
 
         // Safe because a.len() == 16
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -160,10 +121,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_32(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_32<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 32);
 
-        Self::packed_forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, &root_table[0]);
 
         // Safe because a.len() == 32
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -172,10 +136,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_64(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_64<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 64);
 
-        Self::packed_forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, &root_table[0]);
 
         // Safe because a.len() == 64
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -184,10 +151,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_128(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_128<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 128);
 
-        Self::packed_forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, &root_table[0]);
 
         // Safe because a.len() == 128
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -196,10 +166,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_256(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_256<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         assert_eq!(a.len(), 256);
 
-        Self::packed_forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, &root_table[0]);
 
         // Safe because a.len() == 256
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -208,7 +181,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    pub fn forward_fft(a: &mut [Self], root_table: &[Vec<Self>]) {
+    pub fn forward_fft<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        root_table: &[Vec<Self>],
+    ) {
         let n = a.len();
         if n == 1 {
             return;
@@ -226,7 +202,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             2 => Self::forward_2(a),
             _ => {
                 debug_assert!(n > 64);
-                Self::packed_forward_pass(a, &root_table[0]);
+                Self::forward_pass(a, &root_table[0]);
 
                 // Safe because a.len() > 64
                 let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
