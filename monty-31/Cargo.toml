@@ -1,22 +1,26 @@
 [package]
 name = "p3-monty-31"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [features]
 nightly-features = []
 
 [dependencies]
 itertools = "0.13.0"
-p3-dft = { path = "../dft" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
+p3-dft = { path = "../dft", workspace.version = true }
+p3-field = { path = "../field", workspace.version = true }
+p3-matrix = { path = "../matrix", workspace.version = true }
 p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-mds = { path = "../mds" }
+p3-mds = { path = "../mds", workspace.version = true }
 p3-poseidon2 = { path = "../poseidon2" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
+p3-symmetric = { path = "../symmetric", workspace.version = true }
+p3-util = { path = "../util", workspace.version = true }
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
