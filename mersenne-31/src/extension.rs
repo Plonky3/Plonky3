@@ -44,6 +44,11 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
         Complex::new(Mersenne31::new(2), Mersenne31::one())
     }
 
+    // DTH_ROOT = W^((p^2 - 1)/2).
+    fn dth_root() -> Complex<Self> {
+        Complex::new_real(Mersenne31::new(2147483646))
+    }
+
     // Verifiable in Sage with
     // ```sage
     // K2.<j> = K.extension(f2)
@@ -53,11 +58,6 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // ```
     fn ext_generator() -> [Complex<Self>; 2] {
         [Complex::new_real(Mersenne31::new(6)), Complex::one()]
-    }
-
-    // DTH_ROOT = W^((p^2 - 1)/2).
-    fn dth_root() -> Complex<Self> {
-        Complex::new_real(Mersenne31::new(2147483646))
     }
 }
 

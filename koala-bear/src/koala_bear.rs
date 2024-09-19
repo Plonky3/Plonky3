@@ -27,6 +27,8 @@ impl PackedMontyParameters for KoalaBearParameters {}
 impl BarrettParameters for KoalaBearParameters {}
 
 impl FieldParameters for KoalaBearParameters {
+    const MONTY_GEN: KoalaBear = KoalaBear::new(3);
+
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
         match power {
             1420470955 => exp_1420470955(val), // used to compute x^{1/7}
@@ -59,8 +61,6 @@ impl FieldParameters for KoalaBearParameters {
 
         Some(p1111110111111111111111111111111)
     }
-
-    const MONTY_GEN: KoalaBear = KoalaBear::new(3);
 }
 
 impl TwoAdicData for KoalaBearParameters {

@@ -86,10 +86,6 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             shift: self.shift * Val::generator(),
         }
     }
-    fn zp_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
-        (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::one()
-    }
-
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         let log_chunks = log2_strict_usize(num_chunks);
         (0..num_chunks)
@@ -99,6 +95,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             })
             .collect()
     }
+
     fn split_evals(
         &self,
         num_chunks: usize,
@@ -113,6 +110,9 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                     .to_row_major_matrix()
             })
             .collect()
+    }
+    fn zp_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
+        (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::one()
     }
 
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
