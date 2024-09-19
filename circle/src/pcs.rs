@@ -9,7 +9,7 @@ use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
-use p3_fri::{FriConfig, FriProof};
+use p3_fri::FriConfig;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -21,7 +21,9 @@ use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
 use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
 use crate::point::Point;
-use crate::{cfft_permute_index, CfftPermutable, CircleEvaluations};
+use crate::prover::prove;
+use crate::verifier::verify;
+use crate::{cfft_permute_index, CfftPermutable, CircleEvaluations, CircleFriProof};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
@@ -39,8 +41,12 @@ pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
-pub struct InputProof<Val: Field, Challenge: Field, InputMmcs: Mmcs<Val>, FriMmcs: Mmcs<Challenge>>
-{
+pub struct CircleInputProof<
+    Val: Field,
+    Challenge: Field,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+> {
     input_openings: Vec<BatchOpening<Val, InputMmcs>>,
     first_layer_siblings: Vec<Challenge>,
     first_layer_proof: FriMmcs::Proof,
@@ -66,8 +72,12 @@ pub struct CirclePcsProof<
 > {
     first_layer_commitment: FriMmcs::Commitment,
     lambdas: Vec<Challenge>,
-    fri_proof:
-        FriProof<Challenge, FriMmcs, Witness, InputProof<Val, Challenge, InputMmcs, FriMmcs>>,
+    fri_proof: CircleFriProof<
+        Challenge,
+        FriMmcs,
+        Witness,
+        CircleInputProof<Val, Challenge, InputMmcs, FriMmcs>,
+    >,
 }
 
 impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -255,46 +265,43 @@ where
         let g: CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriGenericConfig(PhantomData);
 
-        let fri_proof =
-            p3_fri::prover::prove(&g, &self.fri_config, fri_input, challenger, |index| {
-                // CircleFriFolder asks for an extra query index bit, so we use that here to index
-                // the first layer fold.
+        let fri_proof = prove(&g, &self.fri_config, fri_input, challenger, |index| {
+            // CircleFriFolder asks for an extra query index bit, so we use that here to index
+            // the first layer fold.
 
-                // Open the input (big opening, lots of columns) at the full index...
-                let input_openings = rounds
-                    .iter()
-                    .map(|(data, _)| {
-                        let log_max_batch_height =
-                            log2_strict_usize(self.mmcs.get_max_height(data));
-                        let reduced_index = index >> (log_max_height - log_max_batch_height);
-                        let (opened_values, opening_proof) =
-                            self.mmcs.open_batch(reduced_index, data);
-                        BatchOpening {
-                            opened_values,
-                            opening_proof,
-                        }
-                    })
-                    .collect();
+            // Open the input (big opening, lots of columns) at the full index...
+            let input_openings = rounds
+                .iter()
+                .map(|(data, _)| {
+                    let log_max_batch_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                    let reduced_index = index >> (log_max_height - log_max_batch_height);
+                    let (opened_values, opening_proof) = self.mmcs.open_batch(reduced_index, data);
+                    BatchOpening {
+                        opened_values,
+                        opening_proof,
+                    }
+                })
+                .collect();
 
-                // We committed to first_layer in pairs, so open the reduced index and include the sibling
-                // as part of the input proof.
-                let (first_layer_values, first_layer_proof) = self
-                    .fri_config
-                    .mmcs
-                    .open_batch(index >> 1, &first_layer_data);
-                let first_layer_siblings = izip!(&first_layer_values, &log_heights)
-                    .map(|(v, log_height)| {
-                        let reduced_index = index >> (log_max_height - log_height);
-                        let sibling_index = (reduced_index & 1) ^ 1;
-                        v[sibling_index]
-                    })
-                    .collect();
-                InputProof {
-                    input_openings,
-                    first_layer_siblings,
-                    first_layer_proof,
-                }
-            });
+            // We committed to first_layer in pairs, so open the reduced index and include the sibling
+            // as part of the input proof.
+            let (first_layer_values, first_layer_proof) = self
+                .fri_config
+                .mmcs
+                .open_batch(index >> 1, &first_layer_data);
+            let first_layer_siblings = izip!(&first_layer_values, &log_heights)
+                .map(|(v, log_height)| {
+                    let reduced_index = index >> (log_max_height - log_height);
+                    let sibling_index = (reduced_index & 1) ^ 1;
+                    v[sibling_index]
+                })
+                .collect();
+            CircleInputProof {
+                input_openings,
+                first_layer_siblings,
+                first_layer_proof,
+            }
+        });
 
         (
             values,
@@ -339,7 +346,7 @@ where
         let g: CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriGenericConfig(PhantomData);
 
-        p3_fri::verifier::verify(
+        verify(
             &g,
             &self.fri_config,
             &proof.fri_proof,
@@ -348,7 +355,7 @@ where
                 // log_height -> (alpha_offset, ro)
                 let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
-                let InputProof {
+                let CircleInputProof {
                     input_openings,
                     first_layer_siblings,
                     first_layer_proof,

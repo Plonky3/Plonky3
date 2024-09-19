@@ -11,7 +11,7 @@ use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
-use crate::{InputError, InputProof};
+use crate::{CircleInputProof, InputError};
 
 pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
     pub(crate) PhantomData<(F, InputProof, InputError)>,
@@ -19,7 +19,7 @@ pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
 
 pub(crate) type CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> = CircleFriGenericConfig<
     Val,
-    InputProof<Val, Challenge, InputMmcs, FriMmcs>,
+    CircleInputProof<Val, Challenge, InputMmcs, FriMmcs>,
     InputError<<InputMmcs as Mmcs<Val>>::Error, <FriMmcs as Mmcs<Challenge>>::Error>,
 >;
 
