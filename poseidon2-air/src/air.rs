@@ -104,41 +104,63 @@ impl<
             PARTIAL_ROUNDS,
         > = (*local).borrow();
 
-        let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
+        eval(self, builder, local);
+    }
+}
 
-        // assert_eq!(
-        //     L::WIDTH,
-        //     WIDTH,
-        //     "The WIDTH for this STARK does not match the Linear Layer WIDTH."
-        // );
+pub(crate) fn eval<
+    AB: AirBuilder,
+    const WIDTH: usize,
+    const SBOX_DEGREE: usize,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>(
+    air: &Poseidon2Air<AB::F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    builder: &mut AB,
+    local: &Poseidon2Cols<
+        AB::Var,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >,
+) {
+    let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
 
-        // L::matmul_external(state);
-        for round in 0..HALF_FULL_ROUNDS {
-            eval_full_round(
-                &mut state,
-                &local.beginning_full_rounds[round],
-                &self.beginning_full_round_constants[round],
-                builder,
-            );
-        }
+    // assert_eq!(
+    //     L::WIDTH,
+    //     WIDTH,
+    //     "The WIDTH for this STARK does not match the Linear Layer WIDTH."
+    // );
 
-        for round in 0..PARTIAL_ROUNDS {
-            eval_partial_round(
-                &mut state,
-                &local.partial_rounds[round],
-                &self.partial_round_constants[round],
-                builder,
-            );
-        }
+    // L::matmul_external(state);
+    for round in 0..HALF_FULL_ROUNDS {
+        eval_full_round(
+            &mut state,
+            &local.beginning_full_rounds[round],
+            &air.beginning_full_round_constants[round],
+            builder,
+        );
+    }
 
-        for round in 0..HALF_FULL_ROUNDS {
-            eval_full_round(
-                &mut state,
-                &local.ending_full_rounds[round],
-                &self.ending_full_round_constants[round],
-                builder,
-            );
-        }
+    for round in 0..PARTIAL_ROUNDS {
+        eval_partial_round(
+            &mut state,
+            &local.partial_rounds[round],
+            &air.partial_round_constants[round],
+            builder,
+        );
+    }
+
+    for round in 0..HALF_FULL_ROUNDS {
+        eval_full_round(
+            &mut state,
+            &local.ending_full_rounds[round],
+            &air.ending_full_round_constants[round],
+            builder,
+        );
     }
 }
 
