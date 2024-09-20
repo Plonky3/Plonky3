@@ -19,7 +19,7 @@ use crate::{
 // as it is the only entry to which we apply s-box.
 // It seems to help the compiler if we introduce a different data structure for these layers.
 // Note that we use this structure instead of a tuple so we can force the memory layout to align for transmutes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[repr(C)] // This is needed to make `transmute`s safe.
 pub struct InternalLayer16<PMP: PackedMontyParameters> {
     s0: PackedMontyField31AVX2<PMP>,
@@ -61,7 +61,7 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[repr(C)] // This is needed to make `transmute`s safe.
 pub struct InternalLayer24<PMP: PackedMontyParameters> {
     s0: PackedMontyField31AVX2<PMP>,
@@ -104,7 +104,7 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
 }
 
 /// A struct containing the constants and methods needed to perform the internal layers of the Poseidon2 permutation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMonty31<
     PMP: PackedMontyParameters,
     const WIDTH: usize,
@@ -136,7 +136,7 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<W
 }
 
 /// A struct containing the constants and methods needed to perform the external layers of the Poseidon2 permutation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH: usize> {
     pub(crate) initial_external_constants: Vec<[MontyField31<PMP>; WIDTH]>,
     packed_initial_external_constants: Vec<[__m256i; WIDTH]>,

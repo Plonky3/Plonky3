@@ -8,7 +8,7 @@ use p3_poseidon2::{
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
     packed_internal_constants: Vec<__m256i>,
@@ -22,7 +22,7 @@ impl InternalLayerConstructor<PackedMersenne31AVX2> for Poseidon2InternalLayerMe
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) initial_external_constants: Vec<[Mersenne31; WIDTH]>,
     packed_initial_external_constants: Vec<[__m256i; WIDTH]>,

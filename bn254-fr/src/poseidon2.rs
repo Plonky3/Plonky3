@@ -55,23 +55,13 @@ impl InternalLayer<Bn254Fr, 3, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn2
     }
 }
 
-#[derive(Default, Clone)]
-pub struct Poseidon2ExternalLayerBn254<const WIDTH: usize> {
-    initial_external_constants: Vec<[Bn254Fr; WIDTH]>,
-    final_external_constants: Vec<[Bn254Fr; WIDTH]>,
-}
+pub type Poseidon2ExternalLayerBn254<const WIDTH: usize> = ExternalLayerConstants<Bn254Fr, WIDTH>;
 
 impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
     for Poseidon2ExternalLayerBn254<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Bn254Fr, WIDTH>) -> Self {
-        let initial_external_constants = external_constants.get_initial_constants().clone();
-        let final_external_constants = external_constants.get_terminal_constants().clone();
-
-        Self {
-            initial_external_constants,
-            final_external_constants,
-        }
+        external_constants
     }
 }
 
@@ -83,7 +73,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
     fn permute_state_initial(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
         external_initial_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
             &mut state,
-            &self.initial_external_constants,
+            self.get_initial_constants(),
             &HLMDSMat4,
         );
         state
@@ -92,7 +82,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
     fn permute_state_final(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
         external_final_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
             &mut state,
-            &self.final_external_constants,
+            self.get_terminal_constants(),
             &HLMDSMat4,
         );
         state

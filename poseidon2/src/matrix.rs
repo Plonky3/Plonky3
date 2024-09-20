@@ -147,6 +147,7 @@ pub fn mds_light_permutation<
 }
 
 /// A simple struct which holds the constants for the external layer.
+#[derive(Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
     // Note these are intentionally not pub. Once initialised, these constants should be immutable.
     initial: Vec<[T; WIDTH]>,

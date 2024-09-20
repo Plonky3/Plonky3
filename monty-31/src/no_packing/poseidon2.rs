@@ -1,11 +1,11 @@
+//! These are just simple wrapper structs allowing us to implement Poseidon2 Internal/ExternalLayer on top of them.
+
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_poseidon2::{ExternalLayerConstants, ExternalLayerConstructor, InternalLayerConstructor};
 
 use crate::{FieldParameters, InternalLayerBaseParameters, MontyField31, MontyParameters};
-
-// These are just simple wrapper structs allowing us to implement Poseidon2 Internal/ExternalLayer on top of them.
 
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerMonty31<

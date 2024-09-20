@@ -1,16 +1,17 @@
+//! This file contains simple wrapper structs on top of which we can implement Poseidon2 Internal/ExternalLayer.
+
 use alloc::vec::Vec;
 
 use p3_poseidon2::{ExternalLayerConstants, ExternalLayerConstructor, InternalLayerConstructor};
-//! This file contains simple wrapper structs on top of which we can implement Poseidon2 Internal/ExternalLayer.
 
 use crate::Mersenne31;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) initial_external_constants: Vec<[Mersenne31; WIDTH]>,
     pub(crate) final_external_constants: Vec<[Mersenne31; WIDTH]>,
