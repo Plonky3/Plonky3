@@ -17,25 +17,33 @@ use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
 // of pressure off Ports 0, 1.
 
 /// Multiply a vector of Monty31 field elements in canonical form by 2**{-8}.
-/// Output is returned as a vector of field elements in (-P, P).
-/// If the inputs are not in canonical form, the result is undefined.
+/// This is specialised to the KoalaBear prime which allows us to replace a
+/// shifts by a twiddle.
+/// # Safety
+///
+/// Input must be given in canonical form.
+/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-fn mul_2_exp_neg_8(input: __m256i) -> __m256i {
+unsafe fn mul_2_exp_neg_8(input: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsrld      hi, val, 8
-    //      vpmaddubsw  lo, val, bcast32(7fh)
+    //      vpmaddubsw  lo, val, [r; 8]
     //      vpslldq     lo, lo, 2
     //      vpsubd      t, hi, lo
     // throughput: 1.333
     // latency: 7
     unsafe {
-        const ONE_TWENTY_SEVEN: __m256i = unsafe { transmute([127; 8]) };
+        const ONE_TWENTY_SEVEN: __m256i = unsafe { transmute([127; 8]) }; // P = r*2^j + 1 = 127 * 2^24 + 1
         let hi = x86_64::_mm256_srli_epi32::<8>(input);
 
-        // This returns 127 the bottom 8 bits of input which is exactly 127*x_lo.
+        // Whilst it generically does something else, provided
+        // each entry of odd_factor is < 2^7, _mm256_maddubs_epi16
+        // performs an element wise multiplication of odd_factor with
+        // the bottom 8 bits of input interpreted as an unsigned integer
+        // Thus lo contains r*x_lo.
         let lo = x86_64::_mm256_maddubs_epi16(input, ONE_TWENTY_SEVEN);
 
-        // As the high bits 16 bits of each 32 bit word are all 0
+        // As the high 16 bits of each 32 bit word are all 0
         // we don't need to worry about shifting the high bits of one
         // word into the low bits of another. Thus we can use
         // _mm256_bslli_epi128 which can run on Port 5 as it is classed as
@@ -45,26 +53,34 @@ fn mul_2_exp_neg_8(input: __m256i) -> __m256i {
     }
 }
 
-/// Multiply a vector of Monty31 field elements in canonical form by -2**{-8}.
-/// Output is returned as a vector of field elements in (-P, P).
-/// If the inputs are not in canonical form, the result is undefined.
+/// Multiply a vector of Monty31 field elements in canonical form by 2**{-8}.
+/// This is specialised to the KoalaBear prime which allows us to replace a
+/// shifts by a twiddle.
+/// # Safety
+///
+/// Input must be given in canonical form.
+/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-fn mul_neg_2_exp_neg_8(input: __m256i) -> __m256i {
+unsafe fn mul_neg_2_exp_neg_8(input: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsrld      hi, val, 8
-    //      vpmaddubsw  lo, val, bcast32(7fh)
+    //      vpmaddubsw  lo, val, [r; 8]
     //      vpslldq     lo, lo, 2
     //      vpsubd      t, lo, hi
     // throughput: 1.333
     // latency: 7
     unsafe {
-        const ONE_TWENTY_SEVEN: __m256i = unsafe { transmute([127; 8]) };
+        const ONE_TWENTY_SEVEN: __m256i = unsafe { transmute([127; 8]) }; // P = r*2^j + 1 = 127 * 2^24 + 1
         let hi = x86_64::_mm256_srli_epi32::<8>(input);
 
-        // This returns 127 the bottom 8 bits of input which is exactly 127*x_lo.
+        // Whilst it generically does something else, provided
+        // each entry of odd_factor is < 2^7, _mm256_maddubs_epi16
+        // performs an element wise multiplication of odd_factor with
+        // the bottom 8 bits of input interpreted as an unsigned integer
+        // Thus lo contains r*x_lo.
         let lo = x86_64::_mm256_maddubs_epi16(input, ONE_TWENTY_SEVEN);
 
-        // As the high bits 16 bits of each 32 bit word are all 0
+        // As the high 16 bits of each 32 bit word are all 0
         // we don't need to worry about shifting the high bits of one
         // word into the low bits of another. Thus we can use
         // _mm256_bslli_epi128 which can run on Port 5 as it is classed as
