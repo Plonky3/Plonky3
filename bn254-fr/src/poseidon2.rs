@@ -26,9 +26,12 @@ pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
     BN254_S_BOX_DEGREE,
 >;
 
+// Currently we only support a single width for BN254.
+const BN254_WIDTH: usize = 3;
+
 #[inline]
-fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
-    static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; 3]> = OnceLock::new();
+fn get_diffusion_matrix_3() -> &'static [Bn254Fr; BN254_WIDTH] {
+    static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; BN254_WIDTH]> = OnceLock::new();
     MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::one(), Bn254Fr::one(), Bn254Fr::two()])
 }
 
@@ -43,11 +46,11 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
     }
 }
 
-impl InternalLayer<Bn254Fr, 3, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
-    type InternalState = [Bn254Fr; 3];
+impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
+    type InternalState = [Bn254Fr; BN254_WIDTH];
 
     fn permute_state(&self, state: &mut Self::InternalState) {
-        internal_permute_state::<Bn254Fr, 3, BN254_S_BOX_DEGREE>(
+        internal_permute_state::<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE>(
             state,
             |x| matmul_internal(x, *get_diffusion_matrix_3()),
             &self.internal_constants,
