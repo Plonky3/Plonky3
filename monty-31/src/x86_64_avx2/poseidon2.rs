@@ -120,7 +120,7 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<W
     for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
-    /// the constants for each round. Internally, the constants are transformed into th
+    /// the constants for each round. Internally, the constants are transformed into the
     /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
         let packed_internal_constants = internal_constants
