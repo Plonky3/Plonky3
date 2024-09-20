@@ -19,7 +19,6 @@ pub fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
         throughput: 1.33 cyc/vec
         latency: 3 cyc
 
-
         Given an element val in [0, P), we want to compute val/2 mod P.
         If val is even: val/2 mod P = val/2 = val >> 1.
         If val is odd: val/2 mod P = (val + P)/2 = (val >> 1) + (P + 1)/2
