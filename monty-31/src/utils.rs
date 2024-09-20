@@ -60,8 +60,10 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 /// the monty form of 2^{-n} is 2^{32 - n} < P for 2 < n < 33.
 #[inline]
 #[must_use]
-pub const fn construct_2_exp_neg_n<MP: MontyParameters>(exp: i8) -> MontyField31<MP> {
-    assert!(exp > 1);
-    assert!(exp < 33);
-    MontyField31::new_monty(1_u32 << (32 - exp))
+pub const fn mul_2_exp_neg_n<MP: MontyParameters, const N: i8>(
+    val: MontyField31<MP>,
+) -> MontyField31<MP> {
+    assert!(N < 33);
+    let value_mul_2_exp_neg_n = (val.value as u64) << (32 - N);
+    MontyField31::new_monty(monty_reduce::<MP>(value_mul_2_exp_neg_n))
 }
