@@ -50,8 +50,8 @@ pub struct KoalaBearInternalLayerParameters;
 impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
 
-    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
-    /// We ignore state[0] as it is handled separately.
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<KoalaBearParameters>; 16],
         sum: MontyField31<KoalaBearParameters>,
@@ -86,8 +86,8 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
 impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 23];
 
-    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
-    /// We ignore state[0] as it is handled separately.
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<KoalaBearParameters>; 24],
         sum: MontyField31<KoalaBearParameters>,

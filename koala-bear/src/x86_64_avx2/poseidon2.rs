@@ -96,7 +96,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
     /// For the KoalaBear field and width 16 we multiply by the diagonal matrix:
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/8, -1/8, -1/16, 1/2**24, -1/2**24].
     /// The inputs must be in canonical form, otherwise the result is undefined.
-    /// Even when the inputs are in canonical form, we make no garuntees on the output except that, provided
+    /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
     /// the output is piped directly into add_sum the vector will be modified such that x[i] = D[i]*x[i] + sum.
     #[inline(always)]
     unsafe fn diagonal_mul(input: &mut [__m256i; 15]) {
@@ -106,13 +106,13 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
 
         // The strategy is very simple. 2, 3, 4, -3, -4 are implemented using addition.
         //                              1/2, -1/2 using the custom half function.
-        //                              and the remainder utilising the custom functions for multiplication by 2^{-n}.
+        //                              and the remainder utilizing the custom functions for multiplication by 2^{-n}.
 
         // Note that for -3, -4, -1/2 we actually output 3x, 4x, x/2 and the negative is dealt with in add_sum by subtracting
         // this from the summation instead of adding it.
 
         // Note that input only contains the last 15 elements of the state.
-        // The first element is handled seperately as we need to apply the s-box to it.
+        // The first element is handled separately as we need to apply the s-box to it.
 
         // x1 is being multiplied by 1 so we can also ignore it.
 
@@ -177,7 +177,7 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
             .for_each(|x| *x = sub::<KoalaBearParameters>(sum, *x));
 
         // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangable. The first parameter must be positive.
+        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
         input[8..]
             .iter_mut()
             .for_each(|x| *x = signed_add_avx2::<KoalaBearParameters>(sum, *x));
@@ -190,7 +190,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
     /// For the KoalaBear field and width 16 we multiply by the diagonal matrix:
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), 1/(2**5), -1/(2**5), 1/(2**6), -1/(2**6), -1/(2**7), -1/(2**9), 1/2**24, -1/2**24]
     /// The inputs must be in canonical form, otherwise the result is undefined.
-    /// Even when the inputs are in canonical form, we make no garuntees on the output except that, provided
+    /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
     /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
     #[inline(always)]
     unsafe fn diagonal_mul(input: &mut [__m256i; 23]) {
@@ -200,13 +200,13 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
 
         // The strategy is very simple. 2, 3, 4, -3, -4 are implemented using addition.
         //                              1/2, -1/2 using the custom half function.
-        //                              and the remainder utilising the custom functions for multiplication by 2^{-n}.
+        //                              and the remainder utilizing the custom functions for multiplication by 2^{-n}.
 
         // Note that for -3, -4, -1/2 we actually output 3x, 4x, x/2 and the negative is dealt with in add_sum by subtracting
         // this from the summation instead of adding it.
 
         // Note that input only contains the last 23 elements of the state.
-        // The first element is handled seperately as we need to apply the s-box to it.
+        // The first element is handled separately as we need to apply the s-box to it.
 
         // x1 is being multiplied by 1 so we can also ignore it.
 
@@ -295,7 +295,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
             .for_each(|x| *x = sub::<KoalaBearParameters>(sum, *x));
 
         // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangable. The first parameter must be positive.
+        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
         input[8..]
             .iter_mut()
             .for_each(|x| *x = signed_add_avx2::<KoalaBearParameters>(sum, *x));

@@ -50,8 +50,8 @@ pub struct BabyBearInternalLayerParameters;
 impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {
     type ArrayLike = [MontyField31<BabyBearParameters>; 15];
 
-    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
-    /// We ignore state\[0\] as it is handled separately.
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<BabyBearParameters>; 16],
         sum: MontyField31<BabyBearParameters>,
@@ -86,8 +86,8 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
 impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {
     type ArrayLike = [MontyField31<BabyBearParameters>; 23];
 
-    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
-    /// We ignore state\[0\] as it is handled separately.
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(
         state: &mut [MontyField31<BabyBearParameters>; 24],
         sum: MontyField31<BabyBearParameters>,

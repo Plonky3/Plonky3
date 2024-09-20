@@ -17,8 +17,8 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     // Most of the time, ArrayLike will be [u8; WIDTH - 1].
     type ArrayLike: AsRef<[MontyField31<MP>]> + Sized;
 
-    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s
-    /// We ignore state\[0\] as it is handled separately.
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
 }
 
