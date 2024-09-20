@@ -1,4 +1,19 @@
-//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+/*!
+ * Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+ *
+ * For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
+ * vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
+ *
+ * This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
+ * and, inverse powers of 2 where it is possible to avoid monty reduction can be avoided.
+ * Additionally, for technical reasons, having the first entry be -2 is useful.
+ *
+ * Optimized Diagonal for BabyBear16:
+ * [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]
+ * Optimized Diagonal for BabyBear24:
+ * [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, -1/4, 1/8, -1/8, 1/16, -1/16, -1/32, -1/64, 1/2^7, -1/2^7, 1/2^9, 1/2^27, -1/2^27]
+ * See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+*/
 use p3_field::{AbstractField, Field};
 use p3_monty_31::{
     construct_2_exp_neg_n, InternalLayerBaseParameters, InternalLayerParameters, MontyField31,
@@ -7,21 +22,6 @@ use p3_monty_31::{
 use p3_poseidon2::Poseidon2;
 
 use crate::{BabyBear, BabyBearParameters};
-
-/*
-    We want a "good" vector V such that 1 + Diag(V) is a diffusion matrix
-    and we can implement multiplication by elements of V efficiently in AVX2/AVX512/NEON.
-    This leads to using small values (e.g. 1, 2, 3, 4) which can be implemented cheaply using addition
-    and, for technical reasons, inverse powers of 2 which have have efficient multiplication.
-
-    Optimized Diagonal for BabyBear16:
-    [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/4, 1/8, -1/16, 1/2**27, -1/2**27]
-
-    Optimized Diagonal for BabyBear24:
-    [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**27, -1/2**27]
-
-    See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-*/
 
 pub type Poseidon2InternalLayerBabyBear<const WIDTH: usize> =
     Poseidon2InternalLayerMonty31<BabyBearParameters, WIDTH, BabyBearInternalLayerParameters>;
@@ -59,7 +59,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         sum: MontyField31<BabyBearParameters>,
     ) {
         // The diagonal matrix is defined by the vector:
-        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/4, 1/8, -1/16, 1/2**27, -1/2**27]
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -95,7 +95,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         sum: MontyField31<BabyBearParameters>,
     ) {
         // The diagonal matrix is defined by the vector:
-        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/(2**8), -1/(2**8), 1/2**2, -1/2**2, 1/(2**3), -1/(2**3), 1/(2**4), -1/(2**4), -1/(2**5), -1/(2**6), 1/(2**7), -1/(2**7), 1/(2**9), 1/2**27, -1/2**27]
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, -1/4, 1/8, -1/8, 1/16, -1/16, -1/32, -1/64, 1/2^7, -1/2^7, 1/2^9, 1/2^27, -1/2^27]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;

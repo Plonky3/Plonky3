@@ -1,3 +1,19 @@
+/*!
+ * Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+ *
+ * For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
+ * vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
+ *
+ * This leads to using small values (e.g. 1, 2) where multiplication is implemented using addition
+ * and, powers of 2 where multiplication is implemented using shifts.
+ * Additionally, for technical reasons, having the first entry be -2 is useful.
+ *
+ * Optimized Diagonal for Mersenne31 width 16:
+ * [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
+ * Optimized Diagonal for Mersenne31 width 24:
+ * [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
+ * See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+*/
 use p3_field::{Field, PrimeField32};
 use p3_poseidon2::{
     external_final_permute_state, external_initial_permute_state, internal_permute_state,
@@ -25,17 +41,6 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     MERSENNE31_S_BOX_DEGREE,
 >;
 
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimised diffusion matrices for Mersenne31/16:
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17]
-// Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536]
-//                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
-//
-// Optimised diffusion matrices for Mersenne31/24:
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24]
-// Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304]
-//                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
-//
 // Long term, POSEIDON2_INTERNAL_MATRIX_DIAG_16, POSEIDON2_INTERNAL_MATRIX_DIAG_24 can be removed.
 // Currently they are needed for packed field implementations.
 // They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
