@@ -30,7 +30,8 @@ pub fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
 
         let least_bit = x86_64::_mm256_and_si256(input, ONE); // Determine the parity of val.
         let t = x86_64::_mm256_srli_epi32::<1>(input);
-        let maybe_half = x86_64::_mm256_sign_epi32(half, least_bit); // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
+        // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
+        let maybe_half = x86_64::_mm256_sign_epi32(half, least_bit);
         x86_64::_mm256_add_epi32(t, maybe_half)
     }
 }
