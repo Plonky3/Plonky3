@@ -55,15 +55,17 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     x_sub_u_hi.wrapping_add(corr)
 }
 
-/// Return a MontyField31 element in monty form for the value 2^{-n}.
-/// This makes use of the fact that as the monty constant is 2^32,
-/// the monty form of 2^{-n} is 2^{32 - n} < P for 2 < n < 33.
+/// Multiply the given MontyField31 element by 2^{-n}.
+/// This makes use of the fact that, as the monty constant is 2^32,
+/// the monty form of 2^{-n} is 2^{32 - n}. Monty reduction works
+/// provided the input is < 2^32P so this works for 0 <= n <= 32.
 #[inline]
 #[must_use]
-pub const fn mul_2_exp_neg_n<MP: MontyParameters, const N: i8>(
+pub const fn mul_2_exp_neg_n<MP: MontyParameters>(
     val: MontyField31<MP>,
+    n: u32,
 ) -> MontyField31<MP> {
-    assert!(N < 33);
-    let value_mul_2_exp_neg_n = (val.value as u64) << (32 - N);
+    assert!(n < 33);
+    let value_mul_2_exp_neg_n = (val.value as u64) << (32 - n);
     MontyField31::new_monty(monty_reduce::<MP>(value_mul_2_exp_neg_n))
 }
