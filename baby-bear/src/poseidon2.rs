@@ -29,8 +29,10 @@ pub type Poseidon2InternalLayerBabyBear<const WIDTH: usize> =
 pub type Poseidon2ExternalLayerBabyBear<const WIDTH: usize> =
     Poseidon2ExternalLayerMonty31<BabyBearParameters, WIDTH>;
 
-// As p - 1 = 15 * 2^{27} the neither 3 nor 5 satisfy gcd(p - 1, D) = 1.
-// Instead we use the next smallest available value, namely 7.
+/// Degree of the chosen permutation polynomial for BabyBear, used as the Poseidon2 S-Box.
+///
+/// As p - 1 = 15 * 2^{27} the neither 3 nor 5 satisfy gcd(p - 1, D) = 1.
+/// Instead we use the next smallest available value, namely 7.
 const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 
 /// Poseidon2BabyBear contains the implementations of Poseidon2

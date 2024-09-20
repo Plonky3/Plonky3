@@ -17,8 +17,9 @@ use p3_poseidon2::{
 
 use crate::{to_goldilocks_array, Goldilocks};
 
-// As p - 1 = 2^32 * 3 * 5 * 17 * ... the neither 3 or 5 satisfy gcd(p - 1, D) = 1.
-// Instead we use the next smallest available one, namely 7.
+/// Degree of the chosen permutation polynomial for Goldilocks, used as the Poseidon2 S-Box.
+///
+/// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
 const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
 
 /// Poseidon2Goldilocks contains the implementation of Poseidon2 for the Goldilocks field..

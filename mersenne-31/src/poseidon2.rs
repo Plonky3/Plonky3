@@ -9,7 +9,9 @@ use crate::{
     Poseidon2InternalLayerMersenne31,
 };
 
-// As p - 1 = 2×3^2×7×11×31×151×331 the obvious choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+/// Degree of the chosen permutation polynomial for Mersenne31, used as the Poseidon2 S-Box.
+///
+/// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 
 /// Poseidon2Mersenne31 contains the implementations of Poseidon2

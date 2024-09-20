@@ -13,7 +13,9 @@ use p3_poseidon2::{
 
 use crate::Bn254Fr;
 
-// The smallest D which satisfies gcd(p - 1, D) = 1.
+/// Degree of the chosen permutation polynomial for BN254, used as the Poseidon2 S-Box.
+///
+/// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 const BN254_S_BOX_DEGREE: u64 = 5;
 
 /// Poseidon2Bn254 contains the implementation of Poseidon2 for the Bn254Fr field.
@@ -26,7 +28,7 @@ pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
     BN254_S_BOX_DEGREE,
 >;
 
-// Currently we only support a single width for BN254.
+/// Currently we only support a single width for Poseidon2 BN254.
 const BN254_WIDTH: usize = 3;
 
 #[inline]
