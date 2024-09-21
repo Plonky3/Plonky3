@@ -40,7 +40,10 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         }
     }
 
-    type Row<'a> = EitherRow<First::Row<'a>, Second::Row<'a>> where Self: 'a;
+    type Row<'a>
+        = EitherRow<First::Row<'a>, Second::Row<'a>>
+    where
+        Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         if r < self.first.height() {

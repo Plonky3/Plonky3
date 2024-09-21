@@ -76,7 +76,10 @@ impl<T: Clone + Default + Send + Sync> Matrix<T> for CsrMatrix<T> {
             .unwrap_or_default()
     }
 
-    type Row<'a> = <Vec<T> as IntoIterator>::IntoIter where Self: 'a;
+    type Row<'a>
+        = <Vec<T> as IntoIterator>::IntoIter
+    where
+        Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         let mut row = vec![T::default(); self.width()];

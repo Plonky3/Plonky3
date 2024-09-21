@@ -45,7 +45,8 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.inner.get(self.index_map.map_row_index(r), c)
     }
 
-    type Row<'a> = Inner::Row<'a>
+    type Row<'a>
+        = Inner::Row<'a>
     where
         Self: 'a;
 

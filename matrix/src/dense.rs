@@ -318,7 +318,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
     }
-    type Row<'a> = iter::Cloned<slice::Iter<'a, T>> where Self: 'a;
+    type Row<'a>
+        = iter::Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a;
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.values.borrow()[r * self.width..(r + 1) * self.width]
             .iter()
