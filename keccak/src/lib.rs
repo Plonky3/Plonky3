@@ -1,6 +1,7 @@
 //! The Keccak-f permutation, and hash functions built from it.
 
 #![no_std]
+
 // #![cfg_attr(
 //     all(
 //         feature = "nightly-features",
@@ -9,10 +10,25 @@
 //     ),
 //     feature(stdarch_x86_avx512)
 // )]
-#![feature(stdarch_x86_avx512)]
+// #![feature(stdarch_x86_avx512)]
 
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
 use tiny_keccak::{keccakf, Hasher, Keccak};
+
+// #[cfg(all(feature = "nightly-features", target_arch = "x86_64", target_feature = "avx512f"))]
+// pub mod avx512;
+// #[cfg(all(feature = "nightly-features", target_arch = "x86_64", target_feature = "avx512f"))]
+// pub use avx512::*;
+
+// #[cfg(... TODO ...)]
+// pub mod avx2;
+// #[cfg(... TODO ...)]
+// pub use avx2::*;
+
+// #[cfg(... TODO ...)]
+// pub mod avx2split;
+// #[cfg(... TODO ...)]
+// pub use avx2split::*;
 
 #[cfg(all(
     target_arch = "aarch64",
@@ -20,12 +36,25 @@ use tiny_keccak::{keccakf, Hasher, Keccak};
     target_feature = "sha3"
 ))]
 pub mod neon;
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "sha3"
+))]
+pub use neon::*;
 
-// #[cfg(all(feature = "nightly-features", target_arch = "x86_64", target_feature = "avx512f"))]
-pub mod avx512;
-
-pub mod avx2;
-pub mod avx2split;
+#[cfg(not(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "sha3"
+)))]
+mod fallback;
+#[cfg(not(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "sha3"
+)))]
+pub use fallback::*;
 
 /// The Keccak-f permutation.
 #[derive(Copy, Clone, Debug)]

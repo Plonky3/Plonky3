@@ -5,22 +5,29 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+p3-field = { path = "../field" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
+itertools = "0.13.0"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [dev-dependencies]
+p3-mersenne-31 = { path = "../mersenne-31" }
 criterion = "0.5.1"
 
 [[bench]]
-name = "bench_avx512"
+name = "bench_keccak"
 harness = false
 
-[[bench]]
-name = "bench_avx2"
-harness = false
-
-[[bench]]
-name = "bench_avx2split"
-harness = false
+#[[bench]]
+#name = "bench_avx512"
+#harness = false
+#
+#[[bench]]
+#name = "bench_avx2"
+#harness = false
+#
+#[[bench]]
+#name = "bench_avx2split"
+#harness = false
 

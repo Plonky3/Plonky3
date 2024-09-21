@@ -6,6 +6,12 @@ use core::arch::x86_64::{
 };
 use core::mem::transmute;
 
+use p3_symmetric::{CryptographicPermutation, Permutation};
+
+use crate::KeccakF;
+
+pub const VECTOR_LEN: usize = 4;
+
 const RC: [__m256i; 24] = unsafe {
     transmute::<[[[u64; 2]; 2]; 24], _>([
         [[1, 0]; 2],
@@ -416,13 +422,21 @@ fn round(i: usize, state: State) -> State {
     }
 }
 
-pub fn keccak_perm(buf: &mut State) {
+fn keccak_perm(buf: &mut State) {
     let mut state = *buf;
     for i in 0..24 {
         state = round(i, state);
     }
     *buf = state;
 }
+
+impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
+    fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
+        keccak_perm(unsafe { transmute(state) });
+    }
+}
+
+impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {

@@ -499,7 +499,7 @@ mod tests {
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
 
-        type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
         let compress = MyCompress::new(byte_hash);
 
         type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;

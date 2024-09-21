@@ -77,6 +77,16 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
     }
 }
 
+impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u64, N>>
+    for SerializingChallenger32<F, Inner>
+{
+    fn observe(&mut self, values: Hash<F, u64, N>) {
+        for value in values {
+            self.inner.observe_slice(&value.to_le_bytes());
+        }
+    }
+}
+
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,

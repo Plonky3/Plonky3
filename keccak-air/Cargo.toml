@@ -37,8 +37,5 @@ tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
 tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 
 [features]
-# TODO: Consider removing, at least when this gets split off into another repository.
-# We should be able to enable p3-maybe-rayon/parallel directly; this just doesn't
-# seem to work when using cargo with the -p or --package option.
 parallel = ["p3-maybe-rayon/parallel"]
 asm = ["p3-sha256/asm"]

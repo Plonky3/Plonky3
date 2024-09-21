@@ -72,7 +72,7 @@ fn bench_bb_blake3(criterion: &mut Criterion) {
     type H = SerializingHasher32<Blake3>;
     let h = H::new(Blake3 {});
 
-    type C = CompressionFunctionFromHasher<u8, Blake3, 2, 32>;
+    type C = CompressionFunctionFromHasher<Blake3, 2, 32>;
     let b = Blake3 {};
     let c = C::new(b);
 
@@ -86,7 +86,7 @@ fn bench_bb_keccak(criterion: &mut Criterion) {
     let k = Keccak256Hash {};
     let h = H::new(k);
 
-    type C = CompressionFunctionFromHasher<u8, Keccak256Hash, 2, 32>;
+    type C = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
     let c = C::new(k);
 
     bench_merkle_tree::<F, u8, H, C, 32>(criterion, h, c);
