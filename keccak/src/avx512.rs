@@ -77,39 +77,139 @@ fn theta(state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
     unsafe {
         [
             [
-                _mm512_ternarylogic_epi64::<0b10010110>(state[0][0], theta_parities[0].0, theta_parities[0].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[0][1], theta_parities[1].0, theta_parities[1].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[0][2], theta_parities[2].0, theta_parities[2].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[0][3], theta_parities[3].0, theta_parities[3].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[0][4], theta_parities[4].0, theta_parities[4].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[0][0],
+                    theta_parities[0].0,
+                    theta_parities[0].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[0][1],
+                    theta_parities[1].0,
+                    theta_parities[1].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[0][2],
+                    theta_parities[2].0,
+                    theta_parities[2].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[0][3],
+                    theta_parities[3].0,
+                    theta_parities[3].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[0][4],
+                    theta_parities[4].0,
+                    theta_parities[4].1,
+                ),
             ],
             [
-                _mm512_ternarylogic_epi64::<0b10010110>(state[1][0], theta_parities[0].0, theta_parities[0].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[1][1], theta_parities[1].0, theta_parities[1].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[1][2], theta_parities[2].0, theta_parities[2].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[1][3], theta_parities[3].0, theta_parities[3].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[1][4], theta_parities[4].0, theta_parities[4].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[1][0],
+                    theta_parities[0].0,
+                    theta_parities[0].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[1][1],
+                    theta_parities[1].0,
+                    theta_parities[1].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[1][2],
+                    theta_parities[2].0,
+                    theta_parities[2].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[1][3],
+                    theta_parities[3].0,
+                    theta_parities[3].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[1][4],
+                    theta_parities[4].0,
+                    theta_parities[4].1,
+                ),
             ],
             [
-                _mm512_ternarylogic_epi64::<0b10010110>(state[2][0], theta_parities[0].0, theta_parities[0].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[2][1], theta_parities[1].0, theta_parities[1].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[2][2], theta_parities[2].0, theta_parities[2].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[2][3], theta_parities[3].0, theta_parities[3].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[2][4], theta_parities[4].0, theta_parities[4].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[2][0],
+                    theta_parities[0].0,
+                    theta_parities[0].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[2][1],
+                    theta_parities[1].0,
+                    theta_parities[1].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[2][2],
+                    theta_parities[2].0,
+                    theta_parities[2].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[2][3],
+                    theta_parities[3].0,
+                    theta_parities[3].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[2][4],
+                    theta_parities[4].0,
+                    theta_parities[4].1,
+                ),
             ],
             [
-                _mm512_ternarylogic_epi64::<0b10010110>(state[3][0], theta_parities[0].0, theta_parities[0].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[3][1], theta_parities[1].0, theta_parities[1].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[3][2], theta_parities[2].0, theta_parities[2].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[3][3], theta_parities[3].0, theta_parities[3].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[3][4], theta_parities[4].0, theta_parities[4].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[3][0],
+                    theta_parities[0].0,
+                    theta_parities[0].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[3][1],
+                    theta_parities[1].0,
+                    theta_parities[1].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[3][2],
+                    theta_parities[2].0,
+                    theta_parities[2].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[3][3],
+                    theta_parities[3].0,
+                    theta_parities[3].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[3][4],
+                    theta_parities[4].0,
+                    theta_parities[4].1,
+                ),
             ],
             [
-                _mm512_ternarylogic_epi64::<0b10010110>(state[4][0], theta_parities[0].0, theta_parities[0].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[4][1], theta_parities[1].0, theta_parities[1].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[4][2], theta_parities[2].0, theta_parities[2].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[4][3], theta_parities[3].0, theta_parities[3].1),
-                _mm512_ternarylogic_epi64::<0b10010110>(state[4][4], theta_parities[4].0, theta_parities[4].1),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[4][0],
+                    theta_parities[0].0,
+                    theta_parities[0].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[4][1],
+                    theta_parities[1].0,
+                    theta_parities[1].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[4][2],
+                    theta_parities[2].0,
+                    theta_parities[2].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[4][3],
+                    theta_parities[3].0,
+                    theta_parities[3].1,
+                ),
+                _mm512_ternarylogic_epi64::<0b10010110>(
+                    state[4][4],
+                    theta_parities[4].0,
+                    theta_parities[4].1,
+                ),
             ],
         ]
     }
@@ -257,6 +357,7 @@ mod tests {
     use core::mem::transmute_copy;
 
     use tiny_keccak::keccakf;
+
     use super::*;
 
     const STATES: [[u64; 25]; 8] = [

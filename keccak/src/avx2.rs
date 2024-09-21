@@ -1,34 +1,37 @@
 use core::arch::x86_64::{
-    __m256i, _mm256_xor_si256, _mm256_add_epi64, _mm256_srli_epi64, _mm256_or_si256, _mm256_shuffle_epi8, _mm256_andnot_si256, _mm256_slli_epi64,
+    __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_or_si256, _mm256_shuffle_epi8,
+    _mm256_slli_epi64, _mm256_srli_epi64, _mm256_xor_si256,
 };
 use core::mem::transmute;
 
-const RC: [__m256i; 24] = unsafe { transmute([
-    [1u64; 4],
-    [0x8082u64; 4],
-    [0x800000000000808au64; 4],
-    [0x8000000080008000u64; 4],
-    [0x808bu64; 4],
-    [0x80000001u64; 4],
-    [0x8000000080008081u64; 4],
-    [0x8000000000008009u64; 4],
-    [0x8au64; 4],
-    [0x88u64; 4],
-    [0x80008009u64; 4],
-    [0x8000000au64; 4],
-    [0x8000808bu64; 4],
-    [0x800000000000008bu64; 4],
-    [0x8000000000008089u64; 4],
-    [0x8000000000008003u64; 4],
-    [0x8000000000008002u64; 4],
-    [0x8000000000000080u64; 4],
-    [0x800au64; 4],
-    [0x800000008000000au64; 4],
-    [0x8000000080008081u64; 4],
-    [0x8000000000008080u64; 4],
-    [0x80000001u64; 4],
-    [0x8000000080008008u64; 4],
-]) };
+const RC: [__m256i; 24] = unsafe {
+    transmute([
+        [1u64; 4],
+        [0x8082u64; 4],
+        [0x800000000000808au64; 4],
+        [0x8000000080008000u64; 4],
+        [0x808bu64; 4],
+        [0x80000001u64; 4],
+        [0x8000000080008081u64; 4],
+        [0x8000000000008009u64; 4],
+        [0x8au64; 4],
+        [0x88u64; 4],
+        [0x80008009u64; 4],
+        [0x8000000au64; 4],
+        [0x8000808bu64; 4],
+        [0x800000000000008bu64; 4],
+        [0x8000000000008089u64; 4],
+        [0x8000000000008003u64; 4],
+        [0x8000000000008002u64; 4],
+        [0x8000000000000080u64; 4],
+        [0x800au64; 4],
+        [0x800000008000000au64; 4],
+        [0x8000000080008081u64; 4],
+        [0x8000000000008080u64; 4],
+        [0x80000001u64; 4],
+        [0x8000000080008008u64; 4],
+    ])
+};
 
 #[inline(always)]
 fn form_matrix(buf: [__m256i; 25]) -> [[__m256i; 5]; 5] {
@@ -49,32 +52,30 @@ fn rol_1(a: __m256i) -> __m256i {
     }
 }
 
-const ROL_8_CTRL: __m256i = unsafe { transmute::<[u8; 32], _>([
-    0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06,
-    0o17, 0o10, 0o11, 0o12, 0o13, 0o14, 0o15, 0o16,
-    0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06,
-    0o17, 0o10, 0o11, 0o12, 0o13, 0o14, 0o15, 0o16,
-]) };
+const ROL_8_CTRL: __m256i = unsafe {
+    transmute::<[u8; 32], _>([
+        0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o17, 0o10, 0o11, 0o12, 0o13, 0o14, 0o15,
+        0o16, 0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o17, 0o10, 0o11, 0o12, 0o13, 0o14,
+        0o15, 0o16,
+    ])
+};
 
 #[inline(always)]
 fn rol_8(a: __m256i) -> __m256i {
-    unsafe {
-        _mm256_shuffle_epi8(a, ROL_8_CTRL)
-    }
+    unsafe { _mm256_shuffle_epi8(a, ROL_8_CTRL) }
 }
 
-const ROL_56_CTRL: __m256i = unsafe { transmute::<[u8; 32], _>([
-    0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o07, 0o00,
-    0o11, 0o12, 0o13, 0o14, 0o15, 0o16, 0o17, 0o10,
-    0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o07, 0o00,
-    0o11, 0o12, 0o13, 0o14, 0o15, 0o16, 0o17, 0o10,
-]) };
+const ROL_56_CTRL: __m256i = unsafe {
+    transmute::<[u8; 32], _>([
+        0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o07, 0o00, 0o11, 0o12, 0o13, 0o14, 0o15, 0o16, 0o17,
+        0o10, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o07, 0o00, 0o11, 0o12, 0o13, 0o14, 0o15, 0o16,
+        0o17, 0o10,
+    ])
+};
 
 #[inline(always)]
 fn rol_56(a: __m256i) -> __m256i {
-    unsafe {
-        _mm256_shuffle_epi8(a, ROL_56_CTRL)
-    }
+    unsafe { _mm256_shuffle_epi8(a, ROL_56_CTRL) }
 }
 
 #[inline(always)]
@@ -305,9 +306,10 @@ pub fn keccak_perm(buf: &mut [__m256i; 25]) {
 #[cfg(test)]
 mod tests {
 
-    use core::arch::x86_64::{_mm256_setr_epi64x, _mm256_setzero_si256, _mm256_extract_epi64};
+    use core::arch::x86_64::{_mm256_extract_epi64, _mm256_setr_epi64x, _mm256_setzero_si256};
 
     use tiny_keccak::keccakf;
+
     use super::*;
 
     const STATES: [[u64; 25]; 4] = [

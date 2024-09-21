@@ -1,47 +1,48 @@
 use core::arch::x86_64::{
-    __m256i, _mm256_xor_si256, _mm256_add_epi64, _mm256_srli_epi64, _mm256_or_si256, _mm256_shuffle_epi8, _mm256_andnot_si256, _mm256_slli_epi64, _mm256_sllv_epi64, _mm256_srlv_epi64, _mm256_shuffle_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi64, _mm256_blend_epi32, _mm256_castpd_si256, _mm256_shuffle_pd, _mm256_castsi256_pd,
+    __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_blend_epi32, _mm256_castpd_si256,
+    _mm256_castsi256_pd, _mm256_or_si256, _mm256_shuffle_epi32, _mm256_shuffle_epi8,
+    _mm256_shuffle_pd, _mm256_slli_epi64, _mm256_sllv_epi64, _mm256_srli_epi64, _mm256_srlv_epi64,
+    _mm256_unpackhi_epi64, _mm256_unpacklo_epi64, _mm256_xor_si256,
 };
 use core::mem::transmute;
 
-const RC: [__m256i; 24] = unsafe { transmute::<[[[u64; 2]; 2]; 24], _>([
-    [[1, 0]; 2],
-    [[0x8082, 0]; 2],
-    [[0x800000000000808a, 0]; 2],
-    [[0x8000000080008000, 0]; 2],
-    [[0x808b, 0]; 2],
-    [[0x80000001, 0]; 2],
-    [[0x8000000080008081, 0]; 2],
-    [[0x8000000000008009, 0]; 2],
-    [[0x8a, 0]; 2],
-    [[0x88, 0]; 2],
-    [[0x80008009, 0]; 2],
-    [[0x8000000a, 0]; 2],
-    [[0x8000808b, 0]; 2],
-    [[0x800000000000008b, 0]; 2],
-    [[0x8000000000008089, 0]; 2],
-    [[0x8000000000008003, 0]; 2],
-    [[0x8000000000008002, 0]; 2],
-    [[0x8000000000000080, 0]; 2],
-    [[0x800a, 0]; 2],
-    [[0x800000008000000a, 0]; 2],
-    [[0x8000000080008081, 0]; 2],
-    [[0x8000000000008080, 0]; 2],
-    [[0x80000001, 0]; 2],
-    [[0x8000000080008008, 0]; 2],
-]) };
+const RC: [__m256i; 24] = unsafe {
+    transmute::<[[[u64; 2]; 2]; 24], _>([
+        [[1, 0]; 2],
+        [[0x8082, 0]; 2],
+        [[0x800000000000808a, 0]; 2],
+        [[0x8000000080008000, 0]; 2],
+        [[0x808b, 0]; 2],
+        [[0x80000001, 0]; 2],
+        [[0x8000000080008081, 0]; 2],
+        [[0x8000000000008009, 0]; 2],
+        [[0x8a, 0]; 2],
+        [[0x88, 0]; 2],
+        [[0x80008009, 0]; 2],
+        [[0x8000000a, 0]; 2],
+        [[0x8000808b, 0]; 2],
+        [[0x800000000000008b, 0]; 2],
+        [[0x8000000000008089, 0]; 2],
+        [[0x8000000000008003, 0]; 2],
+        [[0x8000000000008002, 0]; 2],
+        [[0x8000000000000080, 0]; 2],
+        [[0x800a, 0]; 2],
+        [[0x800000008000000a, 0]; 2],
+        [[0x8000000080008081, 0]; 2],
+        [[0x8000000000008080, 0]; 2],
+        [[0x80000001, 0]; 2],
+        [[0x8000000080008008, 0]; 2],
+    ])
+};
 
 #[inline(always)]
 fn xor(a: __m256i, b: __m256i) -> __m256i {
-    unsafe {
-        _mm256_xor_si256(a, b)
-    }
+    unsafe { _mm256_xor_si256(a, b) }
 }
 
 #[inline(always)]
 fn andn(a: __m256i, b: __m256i) -> __m256i {
-    unsafe {
-        _mm256_andnot_si256(a, b)
-    }
+    unsafe { _mm256_andnot_si256(a, b) }
 }
 
 #[inline(always)]
@@ -65,12 +66,14 @@ fn rol_2(a: __m256i) -> __m256i {
 #[inline(always)]
 fn rol_8_56(a: __m256i) -> __m256i {
     unsafe {
-        const CTRL: __m256i = unsafe { transmute::<[[u8; 16]; 2], _>([
-            [
-                0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06,
-                0o11, 0o12, 0o13, 0o14, 0o15, 0o16, 0o17, 0o10,
-            ]; 2
-        ]) };
+        const CTRL: __m256i = unsafe {
+            transmute::<[[u8; 16]; 2], _>(
+                [[
+                    0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o11, 0o12, 0o13, 0o14, 0o15,
+                    0o16, 0o17, 0o10,
+                ]; 2],
+            )
+        };
         _mm256_shuffle_epi8(a, CTRL)
     }
 }
@@ -87,120 +90,157 @@ fn rol_var(a: __m256i, shl_amt: __m256i, shr_amt: __m256i) -> __m256i {
 #[inline(always)]
 fn rol_0_20(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[0u64, 20u64]; 2]), transmute([[64u64, 44u64]; 2]))
+        rol_var(
+            a,
+            transmute([[0u64, 20u64]; 2]),
+            transmute([[64u64, 44u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_44_3(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[44u64, 3u64]; 2]), transmute([[20u64, 61u64]; 2]))
+        rol_var(
+            a,
+            transmute([[44u64, 3u64]; 2]),
+            transmute([[20u64, 61u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_43_45(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[43u64, 45u64]; 2]), transmute([[21u64, 19u64]; 2]))
+        rol_var(
+            a,
+            transmute([[43u64, 45u64]; 2]),
+            transmute([[21u64, 19u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_21_61(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[21u64, 61u64]; 2]), transmute([[43u64, 3u64]; 2]))
+        rol_var(
+            a,
+            transmute([[21u64, 61u64]; 2]),
+            transmute([[43u64, 3u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_14_28(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[14u64, 28u64]; 2]), transmute([[50u64, 36u64]; 2]))
+        rol_var(
+            a,
+            transmute([[14u64, 28u64]; 2]),
+            transmute([[50u64, 36u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_1_36(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[1u64, 36u64]; 2]), transmute([[63u64, 28u64]; 2]))
+        rol_var(
+            a,
+            transmute([[1u64, 36u64]; 2]),
+            transmute([[63u64, 28u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_6_10(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[6u64, 10u64]; 2]), transmute([[58u64, 54u64]; 2]))
+        rol_var(
+            a,
+            transmute([[6u64, 10u64]; 2]),
+            transmute([[58u64, 54u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_25_15(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[25u64, 15u64]; 2]), transmute([[39u64, 49u64]; 2]))
+        rol_var(
+            a,
+            transmute([[25u64, 15u64]; 2]),
+            transmute([[39u64, 49u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_18_27(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[18u64, 27u64]; 2]), transmute([[46u64, 37u64]; 2]))
+        rol_var(
+            a,
+            transmute([[18u64, 27u64]; 2]),
+            transmute([[46u64, 37u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_62_55(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[62u64, 55u64]; 2]), transmute([[2u64, 9u64]; 2]))
+        rol_var(
+            a,
+            transmute([[62u64, 55u64]; 2]),
+            transmute([[2u64, 9u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn rol_39_41(a: __m256i) -> __m256i {
     unsafe {
-        rol_var(a, transmute([[39u64, 41u64]; 2]), transmute([[25u64, 23u64]; 2]))
+        rol_var(
+            a,
+            transmute([[39u64, 41u64]; 2]),
+            transmute([[25u64, 23u64]; 2]),
+        )
     }
 }
 
 #[inline(always)]
 fn swap(a: __m256i) -> __m256i {
-    unsafe {
-        _mm256_shuffle_epi32::<0b01001110>(a)
-    }
+    unsafe { _mm256_shuffle_epi32::<0b01001110>(a) }
 }
 
 #[inline(always)]
 fn dup_hi(a: __m256i) -> __m256i {
-    unsafe {
-        _mm256_unpackhi_epi64(a, a)
-    }
+    unsafe { _mm256_unpackhi_epi64(a, a) }
 }
 
 #[inline(always)]
 fn get_lo_lo(a: __m256i, b: __m256i) -> __m256i {
-    unsafe {
-        _mm256_unpacklo_epi64(a, b)
-    }
+    unsafe { _mm256_unpacklo_epi64(a, b) }
 }
 
 #[inline(always)]
 fn get_lo_hi(a: __m256i, b: __m256i) -> __m256i {
-    unsafe {
-        _mm256_blend_epi32::<0b11001100>(a, b)
-    }
+    unsafe { _mm256_blend_epi32::<0b11001100>(a, b) }
 }
 
 #[inline(always)]
 fn get_hi_lo(a: __m256i, b: __m256i) -> __m256i {
     unsafe {
-        _mm256_castpd_si256(_mm256_shuffle_pd::<0b0101>(_mm256_castsi256_pd(a), _mm256_castsi256_pd(b)))
+        _mm256_castpd_si256(_mm256_shuffle_pd::<0b0101>(
+            _mm256_castsi256_pd(a),
+            _mm256_castsi256_pd(b),
+        ))
     }
 }
 
 #[inline(always)]
 fn get_hi_hi(a: __m256i, b: __m256i) -> __m256i {
-    unsafe {
-        _mm256_unpackhi_epi64(a, b)
-    }
+    unsafe { _mm256_unpackhi_epi64(a, b) }
 }
 
 const ZERO: __m256i = unsafe { transmute([0u64; 4]) };
@@ -239,7 +279,21 @@ impl State {
             let a4b4 = transmute([arrs[0][20], arrs[0][21], arrs[1][20], arrs[1][21]]);
             let c4d4 = transmute([arrs[0][22], arrs[0][23], arrs[1][22], arrs[1][23]]);
             let e4zz = transmute([arrs[0][24], 0u64, arrs[1][24], 0u64]);
-            State { a0b1, b0c1, c0d1, d0e1, e0a1, a2b3, b2c3, c2d3, d2e3, e2a3, a4b4, c4d4, e4zz }
+            State {
+                a0b1,
+                b0c1,
+                c0d1,
+                d0e1,
+                e0a1,
+                a2b3,
+                b2c3,
+                c2d3,
+                d2e3,
+                e2a3,
+                a4b4,
+                c4d4,
+                e4zz,
+            }
         }
     }
 
@@ -261,66 +315,14 @@ impl State {
 
         [
             [
-                a0b1[0],
-                b0c1[0],
-                c0d1[0],
-                d0e1[0],
-                e0a1[0],
-
-                e0a1[1],
-                a0b1[1],
-                b0c1[1],
-                c0d1[1],
-                d0e1[1],
-
-                a2b3[0],
-                b2c3[0],
-                c2d3[0],
-                d2e3[0],
-                e2a3[0],
-
-                e2a3[1],
-                a2b3[1],
-                b2c3[1],
-                c2d3[1],
-                d2e3[1],
-
-                a4b4[0],
-                a4b4[1],
-                c4d4[0],
-                c4d4[1],
-                e4zz[0],
+                a0b1[0], b0c1[0], c0d1[0], d0e1[0], e0a1[0], e0a1[1], a0b1[1], b0c1[1], c0d1[1],
+                d0e1[1], a2b3[0], b2c3[0], c2d3[0], d2e3[0], e2a3[0], e2a3[1], a2b3[1], b2c3[1],
+                c2d3[1], d2e3[1], a4b4[0], a4b4[1], c4d4[0], c4d4[1], e4zz[0],
             ],
             [
-                a0b1[2],
-                b0c1[2],
-                c0d1[2],
-                d0e1[2],
-                e0a1[2],
-
-                e0a1[3],
-                a0b1[3],
-                b0c1[3],
-                c0d1[3],
-                d0e1[3],
-
-                a2b3[2],
-                b2c3[2],
-                c2d3[2],
-                d2e3[2],
-                e2a3[2],
-
-                e2a3[3],
-                a2b3[3],
-                b2c3[3],
-                c2d3[3],
-                d2e3[3],
-
-                a4b4[2],
-                a4b4[3],
-                c4d4[2],
-                c4d4[3],
-                e4zz[2],
+                a0b1[2], b0c1[2], c0d1[2], d0e1[2], e0a1[2], e0a1[3], a0b1[3], b0c1[3], c0d1[3],
+                d0e1[3], a2b3[2], b2c3[2], c2d3[2], d2e3[2], e2a3[2], e2a3[3], a2b3[3], b2c3[3],
+                c2d3[3], d2e3[3], a4b4[2], a4b4[3], c4d4[2], c4d4[3], e4zz[2],
             ],
         ]
     }
@@ -422,10 +424,10 @@ pub fn keccak_perm(buf: &mut State) {
     *buf = state;
 }
 
-
 #[cfg(test)]
 mod tests {
     use tiny_keccak::keccakf;
+
     use super::*;
 
     const STATES: [[u64; 25]; 2] = [

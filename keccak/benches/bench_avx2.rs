@@ -1,4 +1,4 @@
-use core::arch::x86_64::{_mm256_setzero_si256, _mm256_setr_epi64x, _mm256_extract_epi64};
+use core::arch::x86_64::{_mm256_extract_epi64, _mm256_setr_epi64x, _mm256_setzero_si256};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use p3_keccak::avx2;
@@ -124,27 +124,27 @@ fn hash_tiny_keccak(states: &mut [[u64; 25]; 4]) {
 
 fn hash_avx2(states: &mut [[u64; 25]; 4]) {
     let mut packed_states = [unsafe { _mm256_setzero_si256() }; 25];
-        for i in 0..25 {
-            packed_states[i] = unsafe {
-                _mm256_setr_epi64x(
-                    states[0][i] as i64,
-                    states[1][i] as i64,
-                    states[2][i] as i64,
-                    states[3][i] as i64,
-                )
-            };
-        }
+    for i in 0..25 {
+        packed_states[i] = unsafe {
+            _mm256_setr_epi64x(
+                states[0][i] as i64,
+                states[1][i] as i64,
+                states[2][i] as i64,
+                states[3][i] as i64,
+            )
+        };
+    }
 
-        avx2::keccak_perm(&mut packed_states);
+    avx2::keccak_perm(&mut packed_states);
 
-        for i in 0..25 {
-            unsafe {
-                states[0][i] = _mm256_extract_epi64::<0>(packed_states[i]) as u64;
-                states[1][i] = _mm256_extract_epi64::<1>(packed_states[i]) as u64;
-                states[2][i] = _mm256_extract_epi64::<2>(packed_states[i]) as u64;
-                states[3][i] = _mm256_extract_epi64::<3>(packed_states[i]) as u64;
-            }
+    for i in 0..25 {
+        unsafe {
+            states[0][i] = _mm256_extract_epi64::<0>(packed_states[i]) as u64;
+            states[1][i] = _mm256_extract_epi64::<1>(packed_states[i]) as u64;
+            states[2][i] = _mm256_extract_epi64::<2>(packed_states[i]) as u64;
+            states[3][i] = _mm256_extract_epi64::<3>(packed_states[i]) as u64;
         }
+    }
 }
 fn bench_keccak_avx2(c: &mut Criterion) {
     c.bench_function("keccak_avx2_baseline", |b| {
