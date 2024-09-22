@@ -5,31 +5,31 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{PackedField, PackedValue};
+use p3_field::PackedValue;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-/// A binary Merkle tree for field data. It has leaves of type `F` and digests of type
+/// A binary Merkle tree for packed data. It has leaves of type `F` and digests of type
 /// `[W; DIGEST_ELEMS]`.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
-/// see `FieldMerkleTreeMmcs`.
+/// see `MerkleTreeMmcs`.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FieldMerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
+pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     pub(crate) leaves: Vec<M>,
-    // Enable serialization for this field whenever the underlying array type supports it (len 1-32).
+    // Enable serialization for this type whenever the underlying array type supports it (len 1-32).
     #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
-    // Enable deserialization for this field whenever the underlying array type supports it (len 1-32).
+    // Enable deserialization for this type whenever the underlying array type supports it (len 1-32).
     #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
     pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
     _phantom: PhantomData<F>,
 }
 
 impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
-    FieldMerkleTree<F, W, M, DIGEST_ELEMS>
+    MerkleTree<F, W, M, DIGEST_ELEMS>
 {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
@@ -37,7 +37,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
     where
-        P: PackedField<Scalar = F>,
+        P: PackedValue<Value = F>,
         PW: PackedValue<Value = W>,
         H: CryptographicHasher<F, [W; DIGEST_ELEMS]>,
         H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
@@ -117,12 +117,12 @@ fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     tallest_matrices: Vec<&M>,
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
 where
-    P: PackedField,
+    P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
     H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
-    M: Matrix<P::Scalar>,
+    M: Matrix<P::Value>,
 {
     let width = PW::WIDTH;
     let max_height = tallest_matrices[0].height();
@@ -166,15 +166,15 @@ fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     c: &C,
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
 where
+    P: PackedValue,
     PW: PackedValue,
-    P: PackedField,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
     H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
     C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
     C: Sync,
-    M: Matrix<P::Scalar>,
+    M: Matrix<P::Value>,
 {
     if matrices_to_inject.is_empty() {
         return compress::<PW, C, DIGEST_ELEMS>(prev_layer, c);
