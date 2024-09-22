@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::FriConfig;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_sha256::Sha256;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
@@ -42,7 +42,7 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
