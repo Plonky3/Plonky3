@@ -1,5 +1,6 @@
 use core::marker::PhantomData;
 
+use p3_field::AbstractField;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
@@ -62,6 +63,44 @@ where
 impl<FP, const WIDTH: usize, MP> DiffusionPermutation<MontyField31<FP>, WIDTH>
     for DiffusionMatrixMontyField31<MP>
 where
+    FP: FieldParameters,
+    MP: DiffusionMatrixParameters<FP, WIDTH>,
+{
+}
+
+/// Like `DiffusionMatrixMontyField31`, but generalized to any `AbstractField`, and less efficient
+/// for the concrete Monty fields.
+#[derive(Debug, Clone, Default)]
+pub struct GenericDiffusionMatrixMontyField31<FP, MP: Clone> {
+    _phantom_fp: PhantomData<FP>,
+    _phantom_mp: PhantomData<MP>,
+}
+
+impl<FP, MP: Clone> GenericDiffusionMatrixMontyField31<FP, MP> {
+    pub fn new() -> Self {
+        Self {
+            _phantom_fp: PhantomData,
+            _phantom_mp: PhantomData,
+        }
+    }
+}
+
+impl<AF, FP, const WIDTH: usize, MP> Permutation<[AF; WIDTH]>
+    for GenericDiffusionMatrixMontyField31<FP, MP>
+where
+    AF: AbstractField,
+    FP: FieldParameters,
+    MP: DiffusionMatrixParameters<FP, WIDTH>,
+{
+    fn permute_mut(&self, input: &mut [AF; WIDTH]) {
+        // TODO
+    }
+}
+
+impl<AF, FP, const WIDTH: usize, MP> DiffusionPermutation<AF, WIDTH>
+    for GenericDiffusionMatrixMontyField31<FP, MP>
+where
+    AF: AbstractField,
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
 {
