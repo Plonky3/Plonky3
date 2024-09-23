@@ -8,6 +8,8 @@ use p3_field::{ExtensionField, Field, PackedField};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
 
@@ -16,6 +18,7 @@ const TRANSPOSE_BLOCK_SIZE: usize = 64;
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct RowMajorMatrix<T: Debug> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,
