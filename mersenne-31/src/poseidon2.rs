@@ -1,19 +1,18 @@
-/*!
- * Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
- *
- * For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
- * vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
- *
- * This leads to using small values (e.g. 1, 2) where multiplication is implemented using addition
- * and, powers of 2 where multiplication is implemented using shifts.
- * Additionally, for technical reasons, having the first entry be -2 is useful.
- *
- * Optimized Diagonal for Mersenne31 width 16:
- * [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
- * Optimized Diagonal for Mersenne31 width 24:
- * [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
- * See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-*/
+//* Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//*
+//* For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
+//* vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
+//*
+//* This leads to using small values (e.g. 1, 2) where multiplication is implemented using addition
+//* and, powers of 2 where multiplication is implemented using shifts.
+//* Additionally, for technical reasons, having the first entry be -2 is useful.
+//*
+//* Optimized Diagonal for Mersenne31 width 16:
+//* [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
+//* Optimized Diagonal for Mersenne31 width 24:
+//* [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
+//* See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+
 use p3_field::{Field, PrimeField32};
 use p3_poseidon2::{
     external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
