@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use p3_field::AbstractField;
 use p3_poseidon2::{
-    external_final_permute_state, external_initial_permute_state, internal_permute_state,
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
     matmul_internal, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4,
     InternalLayer, InternalLayerConstructor, Poseidon2,
 };
@@ -84,8 +84,8 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
         state
     }
 
-    fn permute_state_final(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
-        external_final_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
+    fn permute_state_terminal(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
+        external_terminal_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
             &mut state,
             self.get_terminal_constants(),
             &HLMDSMat4,

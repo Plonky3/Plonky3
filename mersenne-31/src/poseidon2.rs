@@ -16,7 +16,7 @@
 */
 use p3_field::{Field, PrimeField32};
 use p3_poseidon2::{
-    external_final_permute_state, external_initial_permute_state, internal_permute_state,
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
     ExternalLayer, InternalLayer, MDSMat4, Poseidon2,
 };
 
@@ -146,10 +146,10 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
         state
     }
 
-    fn permute_state_final(&self, mut state: Self::InternalState) -> [Mersenne31; WIDTH] {
-        external_final_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
+    fn permute_state_terminal(&self, mut state: Self::InternalState) -> [Mersenne31; WIDTH] {
+        external_terminal_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
             &mut state,
-            &self.final_external_constants,
+            &self.terminal_external_constants,
             &MDSMat4,
         );
         state

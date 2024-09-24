@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use p3_poseidon2::{
-    external_final_permute_state, external_initial_permute_state, internal_permute_state,
+    external_terminal_permute_state, external_initial_permute_state, internal_permute_state,
     matmul_internal, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4,
     InternalLayer, InternalLayerConstructor, MDSMat4, Poseidon2,
 };
@@ -184,8 +184,8 @@ impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, GOLDILOCKS_S_BOX_DEGRE
         state
     }
 
-    fn permute_state_final(&self, mut state: [Goldilocks; WIDTH]) -> [Goldilocks; WIDTH] {
-        external_final_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
+    fn permute_state_terminal(&self, mut state: [Goldilocks; WIDTH]) -> [Goldilocks; WIDTH] {
+        external_terminal_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
             &mut state,
             self.get_terminal_constants(),
             &MDSMat4,
@@ -221,8 +221,8 @@ impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, GOLDILOCKS_S_BOX_DEGRE
         state
     }
 
-    fn permute_state_final(&self, mut state: Self::InternalState) -> [Goldilocks; WIDTH] {
-        external_final_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
+    fn permute_state_terminal(&self, mut state: Self::InternalState) -> [Goldilocks; WIDTH] {
+        external_terminal_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
             &mut state,
             self.external_constants.get_terminal_constants(),
             &HLMDSMat4,

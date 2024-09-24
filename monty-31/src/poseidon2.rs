@@ -1,6 +1,6 @@
 use p3_field::AbstractField;
 use p3_poseidon2::{
-    external_final_permute_state, external_initial_permute_state, ExternalLayer, InternalLayer,
+    external_initial_permute_state, external_terminal_permute_state, ExternalLayer, InternalLayer,
     MDSMat4,
 };
 
@@ -105,10 +105,10 @@ where
     }
 
     /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_final(&self, mut state: Self::InternalState) -> [MontyField31<FP>; WIDTH] {
-        external_final_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(
+    fn permute_state_terminal(&self, mut state: Self::InternalState) -> [MontyField31<FP>; WIDTH] {
+        external_terminal_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(
             &mut state,
-            &self.final_external_constants,
+            &self.terminal_external_constants,
             &MDSMat4,
         );
         state

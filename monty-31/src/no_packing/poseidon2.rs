@@ -20,7 +20,7 @@ pub struct Poseidon2InternalLayerMonty31<
 #[derive(Default, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize> {
     pub(crate) initial_external_constants: Vec<[MontyField31<MP>; WIDTH]>,
-    pub(crate) final_external_constants: Vec<[MontyField31<MP>; WIDTH]>,
+    pub(crate) terminal_external_constants: Vec<[MontyField31<MP>; WIDTH]>,
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<FP, WIDTH>>
@@ -41,11 +41,11 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
         let initial_external_constants = external_constants.get_initial_constants().clone();
-        let final_external_constants = external_constants.get_terminal_constants().clone();
+        let terminal_external_constants = external_constants.get_terminal_constants().clone();
 
         Self {
             initial_external_constants,
-            final_external_constants,
+            terminal_external_constants,
         }
     }
 }

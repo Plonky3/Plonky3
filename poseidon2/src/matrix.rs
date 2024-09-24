@@ -149,9 +149,9 @@ pub fn mds_light_permutation<
 /// A simple struct which holds the constants for the external layer.
 #[derive(Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
-    // Note these are intentionally not pub. Once initialised, these constants should be immutable.
+    // Once initialised, these constants should be immutable.
     initial: Vec<[T; WIDTH]>,
-    terminal: Vec<[T; WIDTH]>,
+    terminal: Vec<[T; WIDTH]>, // We use terminal instead of final as final is a reserved keyword.
 }
 
 impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
@@ -159,7 +159,7 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         assert_eq!(
             initial.len(),
             terminal.len(),
-            "The number of initial and final external rounds should be equal."
+            "The number of initial and terminal external rounds should be equal."
         );
         Self { initial, terminal }
     }
@@ -219,7 +219,7 @@ where
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
     type InternalState;
 
-    // permute_state_initial, permute_state_final are split as the Poseidon2 specifications are slightly different
+    // permute_state_initial, permute_state_terminal are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.
 
     /// Compute the initial external permutation.
@@ -228,27 +228,27 @@ where
     /// in appropriate form to feed into the Internal Layer.
     fn permute_state_initial(&self, state: [AF; WIDTH]) -> Self::InternalState;
 
-    /// Compute the final external permutation.
+    /// Compute the terminal external permutation.
     /// Implementations will usually not use both constants fields.
     /// Input state will be in appropriate form from Internal Layer.
     /// Output state will be [AF; WIDTH].
-    fn permute_state_final(&self, state: Self::InternalState) -> [AF; WIDTH];
+    fn permute_state_terminal(&self, state: Self::InternalState) -> [AF; WIDTH];
 }
 
-/// A helper method which allow any field to easily implement the final External Layer.
+/// A helper method which allow any field to easily implement the terminal External Layer.
 /// This should only be used in places where performance is not critical.
 #[inline]
-pub fn external_final_permute_state<
+pub fn external_terminal_permute_state<
     AF: AbstractField,
     MdsPerm4: MdsPermutation<AF, 4>,
     const WIDTH: usize,
     const D: u64,
 >(
     state: &mut [AF; WIDTH],
-    final_external_constants: &[[AF::F; WIDTH]],
+    terminal_external_constants: &[[AF::F; WIDTH]],
     mat4: &MdsPerm4,
 ) {
-    for elem in final_external_constants.iter() {
+    for elem in terminal_external_constants.iter() {
         state
             .iter_mut()
             .zip(elem.iter())
@@ -273,6 +273,10 @@ pub fn external_initial_permute_state<
 ) {
     mds_light_permutation(state, mat4);
     // After the initial mds_light_permutation, the remaining layers are identical
-    // to the final permutation simply with different constants.
-    external_final_permute_state::<AF, MdsPerm4, WIDTH, D>(state, initial_external_constants, mat4)
+    // to the terminal permutation simply with different constants.
+    external_terminal_permute_state::<AF, MdsPerm4, WIDTH, D>(
+        state,
+        initial_external_constants,
+        mat4,
+    )
 }
