@@ -24,6 +24,8 @@ impl PackedMontyParameters for BabyBearParameters {}
 impl BarrettParameters for BabyBearParameters {}
 
 impl FieldParameters for BabyBearParameters {
+    const MONTY_GEN: BabyBear = BabyBear::new(31);
+
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
         match power {
             1725656503 => exp_1725656503(val), // used to compute x^{1/7}
@@ -59,8 +61,6 @@ impl FieldParameters for BabyBearParameters {
 
         Some(p1110111111111111111111111111111)
     }
-
-    const MONTY_GEN: BabyBear = BabyBear::new(31);
 }
 
 impl TwoAdicData for BabyBearParameters {

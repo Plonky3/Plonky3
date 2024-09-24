@@ -2,10 +2,6 @@
 
 #![no_std]
 
-extern crate alloc;
-
-use alloc::vec::Vec;
-
 use p3_symmetric::CryptographicHasher;
 
 /// The blake3 hash function.
@@ -17,8 +13,12 @@ impl CryptographicHasher<u8, [u8; 32]> for Blake3 {
     where
         I: IntoIterator<Item = u8>,
     {
-        let input = input.into_iter().collect::<Vec<_>>();
-        self.hash_iter_slices([input.as_slice()])
+        const BUFLEN: usize = 512; // Tweakable parameter; determined by experiment
+        let mut hasher = blake3::Hasher::new();
+        p3_util::apply_to_chunks::<BUFLEN, _, _>(input, |buf| {
+            hasher.update(buf);
+        });
+        hasher.finalize().into()
     }
 
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]

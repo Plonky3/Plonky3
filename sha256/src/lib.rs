@@ -2,10 +2,6 @@
 
 #![no_std]
 
-extern crate alloc;
-
-use alloc::vec::Vec;
-
 use p3_symmetric::{CompressionFunction, CryptographicHasher, PseudoCompressionFunction};
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum::U64;
@@ -24,8 +20,10 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
     where
         I: IntoIterator<Item = u8>,
     {
-        let input = input.into_iter().collect::<Vec<_>>();
-        self.hash_iter_slices([input.as_slice()])
+        const BUFLEN: usize = 512; // Tweakable parameter; determined by experiment
+        let mut hasher = sha2::Sha256::new();
+        p3_util::apply_to_chunks::<BUFLEN, _, _>(input, |buf| hasher.update(buf));
+        hasher.finalize().into()
     }
 
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]

@@ -4,30 +4,31 @@ use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_commit::Mmcs;
-use p3_field::{PackedField, PackedValue};
+use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
-use crate::FieldMerkleTree;
-use crate::FieldMerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight};
+use crate::MerkleTree;
+use crate::MerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight};
 
-/// A vector commitment scheme backed by a `FieldMerkleTree`.
+/// A vector commitment scheme backed by a `MerkleTree`.
 ///
 /// Generics:
-/// - `P`: a leaf value TODO
+/// - `P`: a leaf value
+/// - `PW`: an element of a digest
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
 #[derive(Copy, Clone, Debug)]
-pub struct FieldMerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
+pub struct MerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
     hash: H,
     compress: C,
     _phantom: PhantomData<(P, PW)>,
 }
 
 #[derive(Debug)]
-pub enum FieldMerkleTreeError {
+pub enum MerkleTreeError {
     WrongBatchSize,
     WrongWidth,
     WrongHeight {
@@ -37,7 +38,7 @@ pub enum FieldMerkleTreeError {
     RootMismatch,
 }
 
-impl<P, PW, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
+impl<P, PW, H, C, const DIGEST_ELEMS: usize> MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
     pub const fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
@@ -47,12 +48,12 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> FieldMerkleTreeMmcs<P, PW, H, C, DI
     }
 }
 
-impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Scalar>
-    for FieldMerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
+impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Value>
+    for MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
 where
-    P: PackedField,
+    P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
     H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     H: Sync,
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
@@ -61,25 +62,25 @@ where
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
-    type Commitment = Hash<P::Scalar, PW::Value, DIGEST_ELEMS>;
+    type ProverData<M> = MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>;
+    type Commitment = Hash<P::Value, PW::Value, DIGEST_ELEMS>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
-    type Error = FieldMerkleTreeError;
-    type ProverData<M> = FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>;
+    type Error = MerkleTreeError;
 
-    fn commit<M: Matrix<P::Scalar>>(
+    fn commit<M: Matrix<P::Value>>(
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        let tree = FieldMerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
+        let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
     }
 
-    fn open_batch<M: Matrix<P::Scalar>>(
+    fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
-        prover_data: &FieldMerkleTree<P::Scalar, PW::Value, M, DIGEST_ELEMS>,
-    ) -> (Vec<Vec<P::Scalar>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
+        prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
+    ) -> (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
@@ -101,7 +102,7 @@ where
         (openings, proof)
     }
 
-    fn get_matrices<'a, M: Matrix<P::Scalar>>(
+    fn get_matrices<'a, M: Matrix<P::Value>>(
         &self,
         prover_data: &'a Self::ProverData<M>,
     ) -> Vec<&'a M> {
@@ -113,7 +114,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         mut index: usize,
-        opened_values: &[Vec<P::Scalar>],
+        opened_values: &[Vec<P::Value>],
         proof: &Self::Proof,
     ) -> Result<(), Self::Error> {
         // Check that the openings have the correct shape.
@@ -209,7 +210,7 @@ mod tests {
     };
     use rand::thread_rng;
 
-    use super::FieldMerkleTreeMmcs;
+    use super::MerkleTreeMmcs;
 
     type F = BabyBear;
 
@@ -217,7 +218,7 @@ mod tests {
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     type MyMmcs =
-        FieldMerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 8>;
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 8>;
 
     #[test]
     fn commit_single_1x8() {

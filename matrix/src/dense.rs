@@ -6,7 +6,6 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
 
-use itertools::Itertools;
 use p3_field::{scale_slice_in_place, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
@@ -298,7 +297,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         );
         padded
             .par_row_chunks_exact_mut(1 << added_bits)
-            .zip_eq(self.par_row_slices())
+            .zip(self.par_row_slices())
             .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
 
         padded
@@ -319,7 +318,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
     }
-    type Row<'a> = iter::Cloned<slice::Iter<'a, T>> where Self: 'a;
+    type Row<'a>
+        = iter::Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a;
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.values.borrow()[r * self.width..(r + 1) * self.width]
             .iter()

@@ -1,5 +1,5 @@
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
-use core::{mem, slice};
+use core::slice;
 
 use crate::field::Field;
 use crate::AbstractField;
@@ -33,7 +33,7 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
         // Sources vary, but this should be true on all platforms we care about.
         // This should be a const assert, but trait methods can't access `Self` in a const context,
         // even with inner struct instantiation. So we will trust LLVM to optimize this out.
-        assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Value>());
+        assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
             buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -51,7 +51,7 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
     }
 
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
-        assert!(mem::align_of::<Self>() <= mem::align_of::<Self::Value>());
+        assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
             buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -69,7 +69,7 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
     }
 
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
-        assert!(mem::align_of::<Self>() >= mem::align_of::<Self::Value>());
+        assert!(align_of::<Self>() >= align_of::<Self::Value>());
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();
         let n = buf.len() * Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }

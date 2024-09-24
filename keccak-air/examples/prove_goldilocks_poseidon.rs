@@ -8,7 +8,7 @@ use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon::Poseidon;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -43,13 +43,8 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = TruncatedPermutation<Perm, 2, 4, 8>;
     let compress = MyCompress::new(perm.clone());
 
-    type ValMmcs = FieldMerkleTreeMmcs<
-        <Val as Field>::Packing,
-        <Val as Field>::Packing,
-        MyHash,
-        MyCompress,
-        4,
-    >;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 4>;
     let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;

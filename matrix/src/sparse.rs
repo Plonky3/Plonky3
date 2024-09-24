@@ -68,8 +68,6 @@ impl<T: Clone + Default + Send + Sync> Matrix<T> for CsrMatrix<T> {
         self.row_indices.len() - 1
     }
 
-    type Row<'a> = <Vec<T> as IntoIterator>::IntoIter where Self: 'a;
-
     fn get(&self, r: usize, c: usize) -> T {
         self.sparse_row(r)
             .iter()
@@ -77,6 +75,11 @@ impl<T: Clone + Default + Send + Sync> Matrix<T> for CsrMatrix<T> {
             .map(|(_, val)| val.clone())
             .unwrap_or_default()
     }
+
+    type Row<'a>
+        = <Vec<T> as IntoIterator>::IntoIter
+    where
+        Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         let mut row = vec![T::default(); self.width()];

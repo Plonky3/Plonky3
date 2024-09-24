@@ -7,16 +7,22 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_koala_bear::KoalaBear;
-use p3_merkle_tree::FieldMerkleTreeMmcs;
-use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air};
+use p3_merkle_tree::MerkleTreeMmcs;
+use p3_poseidon2_air::{generate_vectorized_trace_rows, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 const WIDTH: usize = 16;
 const SBOX_DEGREE: usize = 3;
@@ -24,7 +30,9 @@ const SBOX_REGISTERS: usize = 1;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
-const NUM_HASHES: usize = 1 << 16;
+const NUM_ROWS: usize = 1 << 15;
+const VECTOR_LEN: usize = 8;
+const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -47,7 +55,7 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
@@ -55,22 +63,24 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let air: Poseidon2Air<
+    let air: VectorizedPoseidon2Air<
         Val,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
-    > = Poseidon2Air::new_from_rng(&mut thread_rng());
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<
+        VECTOR_LEN,
+    > = VectorizedPoseidon2Air::new_from_rng(&mut thread_rng());
+    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_vectorized_trace_rows::<
         Val,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
+        VECTOR_LEN,
     >(inputs);
 
     type Dft = Radix2DitParallel;

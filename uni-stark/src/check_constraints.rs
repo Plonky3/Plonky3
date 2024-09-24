@@ -59,6 +59,10 @@ where
     type Var = F;
     type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
 
+    fn main(&self) -> Self::M {
+        self.main
+    }
+
     fn is_first_row(&self) -> Self::Expr {
         self.is_first_row
     }
@@ -73,10 +77,6 @@ where
         } else {
             panic!("only supports a window size of 2")
         }
-    }
-
-    fn main(&self) -> Self::M {
-        self.main
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {

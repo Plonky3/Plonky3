@@ -5,6 +5,8 @@ use p3_field::{ExtensionField, Field};
 
 use crate::Matrix;
 
+/// Flattens a matrix of extension field elements to one of base field elements. The flattening is
+/// done horizontally, resulting in a wider matrix.
 #[derive(Debug)]
 pub struct FlatMatrixView<F, EF, Inner>(Inner, PhantomData<(F, EF)>);
 
@@ -31,7 +33,8 @@ where
         self.0.height()
     }
 
-    type Row<'a> = FlatIter<F, Inner::Row<'a>>
+    type Row<'a>
+        = FlatIter<F, Inner::Row<'a>>
     where
         Self: 'a;
 

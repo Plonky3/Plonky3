@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
+use core::mem::MaybeUninit;
 
 pub mod array_serialization;
 pub mod linear_map;
@@ -168,6 +169,62 @@ pub fn pretty_name<T>() -> String {
         result.push_str(qual.split("::").last().unwrap());
     }
     result
+}
+
+/// A C-style buffered input reader, similar to
+/// `std::iter::Iterator::next_chunk()` from nightly.
+///
+/// Unsafe because the returned array may contain uninitialised
+/// elements.
+#[inline]
+unsafe fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(
+    iter: &mut I,
+) -> ([I::Item; BUFLEN], usize)
+where
+    I::Item: Copy,
+{
+    let mut buf = unsafe {
+        let t = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
+        // We are forced to use `transmute_copy` here instead of
+        // `transmute` because `BUFLEN` is a const generic parameter.
+        // The compiler *should* be smart enough not to emit a copy though.
+        core::mem::transmute_copy::<_, [I::Item; BUFLEN]>(&t)
+    };
+    let mut i = 0;
+
+    // Read BUFLEN values from `iter` into `buf` at a time.
+    for c in iter {
+        // Copy the next Item into `buf`.
+        unsafe {
+            *buf.get_unchecked_mut(i) = c;
+            i = i.unchecked_add(1);
+        }
+        // If `buf` is full
+        if i == BUFLEN {
+            break;
+        }
+    }
+    (buf, i)
+}
+
+/// Repeatedly read `BUFLEN` elements from `input` into an array and
+/// pass the array to `func` as a slice. If less than `BUFLEN`
+/// elements are remaining, that smaller slice is passed to `func` (if
+/// it is non-empty) and the function returns.
+#[inline]
+pub fn apply_to_chunks<const BUFLEN: usize, I, H>(input: I, mut func: H)
+where
+    I: IntoIterator<Item = u8>,
+    H: FnMut(&[I::Item]),
+{
+    let mut iter = input.into_iter();
+    loop {
+        let (buf, n) = unsafe { iter_next_chunk::<BUFLEN, _>(&mut iter) };
+        if n == 0 {
+            break;
+        }
+        func(unsafe { buf.get_unchecked(..n) });
+    }
 }
 
 #[cfg(test)]
