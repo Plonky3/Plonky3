@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use p3_poseidon2::{
-    external_terminal_permute_state, external_initial_permute_state, internal_permute_state,
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
     matmul_internal, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4,
     InternalLayer, InternalLayerConstructor, MDSMat4, Poseidon2,
 };
