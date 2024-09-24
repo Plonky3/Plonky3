@@ -9,6 +9,7 @@ use tracing::instrument;
 
 use crate::columns::{num_cols, Poseidon2Cols};
 
+#[instrument(name = "generate vectorized Poseidon2 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
     const WIDTH: usize,
