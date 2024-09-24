@@ -124,7 +124,7 @@ fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> Pa
 #[inline(always)]
 fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
-
+    // state[0] -> -2*state[0] is handled by the calling code.
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
@@ -150,7 +150,7 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
 #[inline(always)]
 fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
-
+    // state[0] -> -2*state[0] is handled by the calling code.
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
