@@ -97,7 +97,7 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u8; 23] = [
 ];
 
 fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
-    let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
+    let part_sum: u64 = state[1..].iter().map(|x| x.value as u64).sum();
     let full_sum = part_sum + (state[0].value as u64);
     let s0 = part_sum + (-state[0]).value as u64;
     state[0] = from_u62(s0);

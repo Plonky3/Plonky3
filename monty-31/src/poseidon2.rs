@@ -79,7 +79,7 @@ where
         self.internal_constants.iter().for_each(|rc| {
             state[0] += *rc;
             state[0] = state[0].exp_const_u64::<D>();
-            let part_sum: MontyField31<FP> = state.iter().skip(1).cloned().sum();
+            let part_sum: MontyField31<FP> = state[1..].iter().cloned().sum();
             let full_sum = part_sum + state[0];
             state[0] = part_sum - state[0];
             P2P::internal_layer_mat_mul(state, full_sum);
