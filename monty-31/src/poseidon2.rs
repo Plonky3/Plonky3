@@ -27,9 +27,22 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
         state[0] = MontyField31::new_monty(monty_reduce::<FP>(s0));
 
         for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
-            let si =
-                full_sum + ((state[i + 1].value as u64) << Self::INTERNAL_DIAG_SHIFTS.as_ref()[i]);
+            let shift_i = Self::INTERNAL_DIAG_SHIFTS.as_ref()[i];
+            let si = full_sum + ((state[i + 1].value as u64) << shift_i);
             state[i + 1] = MontyField31::new_monty(monty_reduce::<FP>(si));
+        }
+    }
+
+    /// Like `permute_state`, but works with any `AbstractField`.
+    fn permute_state_generic<AF: AbstractField>(state: &mut [AF; WIDTH]) {
+        let part_sum: AF = state.iter().skip(1).cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+        state[0] = part_sum - state[0].clone();
+
+        for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
+            let shift_i = Self::INTERNAL_DIAG_SHIFTS.as_ref()[i];
+            state[i + 1] =
+                full_sum.clone() + state[i + 1].clone() * AF::two().exp_u64(shift_i as u64);
         }
     }
 }
@@ -93,7 +106,7 @@ where
     MP: DiffusionMatrixParameters<FP, WIDTH>,
 {
     fn permute_mut(&self, input: &mut [AF; WIDTH]) {
-        // TODO
+        MP::permute_state_generic(input)
     }
 }
 
