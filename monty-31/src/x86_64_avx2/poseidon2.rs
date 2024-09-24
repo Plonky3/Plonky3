@@ -76,9 +76,7 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 24] {
-        // Safety: It is up to the user to ensure that elements of `s_hi` represent valid
-        // `MontyField31<PMP>` values. We must only reason about memory representations.
-        // As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+        // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
 
         // `InternalLayer24` is `repr(C)` so its memory layout looks like:
         // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
