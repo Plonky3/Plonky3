@@ -2,13 +2,13 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
-    InternalLayer, InternalLayerConstructor, MDSMat4,
+    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
+    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
     packed_internal_constants: Vec<__m256i>,
@@ -22,12 +22,12 @@ impl InternalLayerConstructor<PackedMersenne31AVX2> for Poseidon2InternalLayerMe
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) initial_external_constants: Vec<[Mersenne31; WIDTH]>,
     packed_initial_external_constants: Vec<[__m256i; WIDTH]>,
-    pub(crate) final_external_constants: Vec<[Mersenne31; WIDTH]>,
-    packed_final_external_constants: Vec<[__m256i; WIDTH]>,
+    pub(crate) terminal_external_constants: Vec<[Mersenne31; WIDTH]>,
+    packed_terminal_external_constants: Vec<[__m256i; WIDTH]>,
 }
 
 impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX2, WIDTH>
@@ -69,20 +69,20 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
         let initial_external_constants = external_constants.get_initial_constants().clone();
-        let final_external_constants = external_constants.get_terminal_constants().clone();
+        let terminal_external_constants = external_constants.get_terminal_constants().clone();
         let packed_initial_external_constants = initial_external_constants
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
             .collect();
-        let packed_final_external_constants = final_external_constants
+        let packed_terminal_external_constants = terminal_external_constants
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
             .collect();
         Self {
             initial_external_constants,
             packed_initial_external_constants,
-            final_external_constants,
-            packed_final_external_constants,
+            terminal_external_constants,
+            packed_terminal_external_constants,
         }
     }
 }
@@ -124,7 +124,7 @@ fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> Pa
 #[inline(always)]
 fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
-    state[0] = -(state[0] + state[0]);
+    // state[0] -> -2*state[0] is handled by the calling code.
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
@@ -143,33 +143,6 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a faster method for 15.
 }
 
-/// The compiler doesn't realize that add is associative
-/// so we help it out and minimize the dependency chains by hand.
-/// Note that state[0] is involved in a large s-box immediately before this
-/// so we keep it separate for as long as possible.
-#[inline(always)]
-fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-    let sum1415 = state[14] + state[15];
-
-    let sum123 = state[1] + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum12131415 = sum1213 + sum1415;
-
-    let sum1234567 = sum123 + sum4567;
-    let sum_top_half = sum891011 + sum12131415;
-
-    let sum_all_but_0 = sum1234567 + sum_top_half;
-
-    sum_all_but_0 + state[0]
-}
-
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
 /// In the Mersenne31, WIDTH = 24 case, the diagonal minus 1 is:
 /// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
@@ -177,7 +150,7 @@ fn sum_16(state: &[PackedMersenne31AVX2; 16]) -> PackedMersenne31AVX2 {
 #[inline(always)]
 fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
-    state[0] = -(state[0] + state[0]);
+    // state[0] -> -2*state[0] is handled by the calling code.
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
     // For the remaining entires we use our fast shift code.
@@ -204,40 +177,6 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[23] = mul_2exp_i::<22, 9>(state[23]);
 }
 
-/// The compiler doesn't realize that add is associative
-/// so we help it out and minimize the dependency chains by hand.
-/// Note that state[0] is involved in a large s-box immediately before this
-/// so we keep it separate for as long as possible.
-#[inline(always)]
-fn sum_24(state: &[PackedMersenne31AVX2; 24]) -> PackedMersenne31AVX2 {
-    let sum23 = state[2] + state[3];
-    let sum45 = state[4] + state[5];
-    let sum67 = state[6] + state[7];
-    let sum89 = state[8] + state[9];
-    let sum1011 = state[10] + state[11];
-    let sum1213 = state[12] + state[13];
-    let sum1415 = state[14] + state[15];
-    let sum1617 = state[16] + state[17];
-    let sum1819 = state[18] + state[19];
-    let sum2021 = state[20] + state[21];
-    let sum2223 = state[22] + state[23];
-
-    let sum123 = state[1] + sum23;
-    let sum4567 = sum45 + sum67;
-    let sum891011 = sum89 + sum1011;
-    let sum12131415 = sum1213 + sum1415;
-    let sum16171819 = sum1617 + sum1819;
-    let sum20212223 = sum2021 + sum2223;
-
-    let sum1234567 = sum123 + sum4567;
-    let sum_min_third = sum891011 + sum12131415;
-    let sum_top_third = sum16171819 + sum20212223;
-
-    let sum_all_but_0 = sum1234567 + sum_min_third + sum_top_third;
-
-    sum_all_but_0 + state[0]
-}
-
 /// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
 /// x must be represented as a value in {0..P}.
 /// rc mut be represented as a value in {-P, ..., 0}.
@@ -261,9 +200,11 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum = sum_16(state);
+    let sum_non_0 = sum_15(&state[1..]);
+    let sum = sum_non_0 + state[0];
+    state[0] = sum_non_0 - state[0];
     diagonal_mul_16(state);
-    state.iter_mut().for_each(|x| *x += sum);
+    state[1..].iter_mut().for_each(|x| *x += sum);
 }
 
 impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersenne31 {
@@ -281,9 +222,11 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum = sum_24(state);
+    let sum_non_0 = sum_23(&state[1..]);
+    let sum = sum_non_0 + state[0];
+    state[0] = sum_non_0 - state[0];
     diagonal_mul_24(state);
-    state.iter_mut().for_each(|x| *x += sum);
+    state[1..].iter_mut().for_each(|x| *x += sum);
 }
 
 impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersenne31 {
@@ -329,11 +272,11 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     }
 
     /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_final(
+    fn permute_state_terminal(
         &self,
         mut state: [PackedMersenne31AVX2; WIDTH],
     ) -> [PackedMersenne31AVX2; WIDTH] {
-        external_rounds(&mut state, &self.packed_final_external_constants);
+        external_rounds(&mut state, &self.packed_terminal_external_constants);
         state
     }
 }

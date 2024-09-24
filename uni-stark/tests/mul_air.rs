@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::testing::TrivialPcs;
@@ -17,7 +17,6 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::FieldMerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
-use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
@@ -151,12 +150,8 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
-    let perm = Perm::new_from_rng_128(
-        Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear::default(),
-        &mut thread_rng(),
-    );
+    type Perm = Poseidon2BabyBear<16>;
+    let perm = Perm::new_from_rng_128(&mut thread_rng());
 
     type Dft = Radix2DitParallel;
     let dft = Dft {};
@@ -200,12 +195,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
-    let perm = Perm::new_from_rng_128(
-        Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear::default(),
-        &mut thread_rng(),
-    );
+    type Perm = Poseidon2BabyBear<16>;
+    let perm = Perm::new_from_rng_128(&mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());

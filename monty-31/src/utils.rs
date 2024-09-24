@@ -1,4 +1,4 @@
-use crate::{FieldParameters, MontyParameters};
+use crate::{FieldParameters, MontyField31, MontyParameters};
 
 /// Convert a u32 into MONTY form.
 /// There are no constraints on the input.
@@ -53,4 +53,19 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     let x_sub_u_hi = (x_sub_u >> MP::MONTY_BITS) as u32;
     let corr = if over { MP::PRIME } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
+}
+
+/// Multiply the given MontyField31 element by 2^{-n}.
+/// This makes use of the fact that, as the monty constant is 2^32,
+/// the monty form of 2^{-n} is 2^{32 - n}. Monty reduction works
+/// provided the input is < 2^32P so this works for 0 <= n <= 32.
+#[inline]
+#[must_use]
+pub const fn mul_2_exp_neg_n<MP: MontyParameters>(
+    val: MontyField31<MP>,
+    n: u32,
+) -> MontyField31<MP> {
+    assert!(n < 33);
+    let value_mul_2_exp_neg_n = (val.value as u64) << (32 - n);
+    MontyField31::new_monty(monty_reduce::<MP>(value_mul_2_exp_neg_n))
 }

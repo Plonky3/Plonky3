@@ -25,7 +25,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    pub(crate) fn to_vector(self) -> __m256i {
         unsafe {
             // Safety: `MontyField31<FP>` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[MontyField31<FP>; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -42,7 +42,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
@@ -120,7 +120,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -160,21 +160,71 @@ fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 // definition of Q and μ, we have Q P = μ C P = P^-1 C P = C (mod B). We also have
 // C - Q P = C (mod P), so thus D = C B^-1 (mod P).
 //
-// It remains to show that R is in the correct range. It suffices to show that -P <= D < P. We know
+// It remains to show that R is in the correct range. It suffices to show that -P < D < P. We know
 // that 0 <= C < P B and 0 <= Q P < P B. Then -P B < C - QP < P B and -P < D < P, as desired.
 //
 // [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
 //     2010, algorithm 2.7.
 
+// We provide 2 variants of Montgomery reduction depending on if the inputs are unsigned or signed.
+// The unsigned variant follows steps 1 and 2 in the above protocol to produce D in (-P, ..., P).
+// For the signed variant we assume -PB/2 < C < PB/2 and let Q := μ C mod B be the unique
+// representative in [-B/2, ..., B/2 - 1]. The division in step 2 is clearly still exact and
+// |C - Q P| <= |C| + |Q||P| < PB so D still lies in (-P, ..., P).
+
+/// Perform a Montgomery reduction on each 64 bit element.
+/// Input must lie in {0, ..., 2^32P}.
+/// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
+#[inline]
+#[must_use]
+#[allow(non_snake_case)]
+fn monty_red_unsigned<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    unsafe {
+        let q = x86_64::_mm256_mul_epu32(input, MPAVX2::PACKED_MU);
+        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
+        x86_64::_mm256_sub_epi32(input, q_P)
+    }
+}
+
+/// Perform a Montgomery reduction on each 64 bit element.
+/// Input must lie in {-2^{31}P, ..., 2^31P}.
+/// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
+#[inline]
+#[must_use]
+#[allow(non_snake_case)]
+fn monty_red_signed<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    unsafe {
+        let q = x86_64::_mm256_mul_epi32(input, MPAVX2::PACKED_MU);
+        let q_P = x86_64::_mm256_mul_epi32(q, MPAVX2::PACKED_P);
+        x86_64::_mm256_sub_epi32(input, q_P)
+    }
+}
+
+/// Multiply the MontyField31 field elements in the even index entries.
+/// lhs[2i], rhs[2i] must be unsigned 32-bit integers such that
+/// lhs[2i] * rhs[2i] lies in {0, ..., 2^32P}.
+/// The output will lie in {-P, ..., P} and be stored in output[2i + 1].
 #[inline]
 #[must_use]
 #[allow(non_snake_case)]
 fn monty_d<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     unsafe {
         let prod = x86_64::_mm256_mul_epu32(lhs, rhs);
-        let q = x86_64::_mm256_mul_epu32(prod, MPAVX2::PACKED_MU);
-        let q_P = x86_64::_mm256_mul_epu32(q, MPAVX2::PACKED_P);
-        x86_64::_mm256_sub_epi32(prod, q_P)
+        monty_red_unsigned::<MPAVX2>(prod)
+    }
+}
+
+/// Multiply the MontyField31 field elements in the even index entries.
+/// lhs[2i], rhs[2i] must be signed 32-bit integers such that
+/// lhs[2i] * rhs[2i] lies in {-2^31P, ..., 2^31P}.
+/// The output will lie in {-P, ..., P} stored in output[2i + 1].
+#[inline]
+#[must_use]
+#[allow(non_snake_case)]
+fn monty_d_signed<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+    unsafe {
+        let prod = x86_64::_mm256_mul_epi32(lhs, rhs);
+        monty_red_signed::<MPAVX2>(prod)
     }
 }
 
@@ -227,6 +277,83 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
+/// Square the MontyField31 field elements in the even index entries.
+/// Inputs must be signed 32-bit integers.
+/// Outputs will be a signed integer in (-P, ..., P) copied into both the even and odd indices.
+#[inline]
+#[must_use]
+fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    // Note that we do not need a restriction on the size of input[i]^2 as
+    // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
+    unsafe {
+        let square = x86_64::_mm256_mul_epi32(input, input);
+        let square_red = monty_red_unsigned::<MPAVX2>(square);
+        movehdup_epi32(square_red)
+    }
+}
+
+/// Cube the MontyField31 field elements in the even index entries.
+/// Inputs must be signed 32-bit integers in [-P, ..., P].
+/// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
+#[inline]
+#[must_use]
+pub(crate) fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    let square = shifted_square::<MPAVX2>(input);
+    monty_d_signed::<MPAVX2>(square, input)
+}
+
+/// Take the fifth power of the MontyField31 field elements in the even index entries.
+/// Inputs must be signed 32-bit integers in [-P, ..., P].
+/// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
+#[inline]
+#[must_use]
+pub(crate) fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    let square = shifted_square::<MPAVX2>(input);
+    let quad = shifted_square::<MPAVX2>(square);
+    monty_d_signed::<MPAVX2>(quad, input)
+}
+
+/// Take the seventh power of the MontyField31 field elements in the even index entries.
+/// Inputs must lie in [-P, ..., P].
+/// Outputs will also lie in (-P, ..., P) stored in the odd indices.
+#[inline]
+#[must_use]
+pub(crate) fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    let square = shifted_square::<MPAVX2>(input);
+    let cube = monty_d_signed::<MPAVX2>(square, input);
+    let cube_shifted = movehdup_epi32(cube);
+    let quad = shifted_square::<MPAVX2>(square);
+
+    monty_d_signed::<MPAVX2>(quad, cube_shifted)
+}
+
+/// Apply func to the even and odd indices of the input vector.
+/// func should only depend in the 32 bit entries in the even indices.
+/// The output of func must lie in (-P, ..., P) and be stored in the odd indices.
+/// The even indices of the output of func will not be read.
+/// the input should should conform to the requirements of func.
+/// This outputs elements in [0, ..., P)
+#[inline]
+#[must_use]
+pub(crate) fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
+    input: __m256i,
+    func: fn(__m256i) -> __m256i,
+) -> __m256i {
+    unsafe {
+        let input_evn = input;
+        let input_odd = movehdup_epi32(input);
+
+        let d_evn = func(input_evn);
+        let d_odd = func(input_odd);
+
+        let d_evn_hi = movehdup_epi32(d_evn);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
+
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
+        x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
 /// Negate a vector of MontyField31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
@@ -260,7 +387,7 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
@@ -403,6 +530,46 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     #[inline]
     fn generator() -> Self {
         MontyField31::generator().into()
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        let val = self.to_vector();
+        let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
+        unsafe {
+            // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::one(),
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => {
+                let val = self.to_vector();
+                let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    Self::from_vector(res)
+                }
+            }
+            6 => self.square().cube(),
+            7 => {
+                let val = self.to_vector();
+                let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    Self::from_vector(res)
+                }
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 }
 

@@ -13,6 +13,7 @@ use rand::Rng;
 /// [ 1 1 4 6 ].
 /// This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
 /// It is also the matrix used by the Horizon Labs implementation.
+#[inline(always)]
 fn apply_hl_mat4<AF>(x: &mut [AF; 4])
 where
     AF: AbstractField,
@@ -60,12 +61,14 @@ where
 pub struct HLMDSMat4;
 
 impl<AF: AbstractField> Permutation<[AF; 4]> for HLMDSMat4 {
+    #[inline(always)]
     fn permute(&self, input: [AF; 4]) -> [AF; 4] {
         let mut output = input;
         self.permute_mut(&mut output);
         output
     }
 
+    #[inline(always)]
     fn permute_mut(&self, input: &mut [AF; 4]) {
         apply_hl_mat4(input)
     }
@@ -116,15 +119,8 @@ pub fn mds_light_permutation<
         4 | 8 | 12 | 16 | 20 | 24 => {
             // First, we apply M_4 to each consecutive four elements of the state.
             // In Appendix B's terminology, this replaces each x_i with x_i'.
-            for i in (0..WIDTH).step_by(4) {
-                let mut state_4 = [
-                    state[i].clone(),
-                    state[i + 1].clone(),
-                    state[i + 2].clone(),
-                    state[i + 3].clone(),
-                ];
-                mdsmat.permute_mut(&mut state_4);
-                state[i..i + 4].clone_from_slice(&state_4);
+            for chunk in state.chunks_exact_mut(4) {
+                mdsmat.permute_mut(chunk.try_into().unwrap());
             }
             // Now, we apply the outer circulant matrix (to compute the y_i values).
 
@@ -138,9 +134,10 @@ pub fn mds_light_permutation<
 
             // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
             // In other words, we can add a single copy of x_i' to the appropriate one of our precomputed sums
-            for i in 0..WIDTH {
-                state[i] += sums[i % 4].clone();
-            }
+            state
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, elem)| *elem += sums[i % 4].clone());
         }
 
         _ => {
@@ -150,18 +147,22 @@ pub fn mds_light_permutation<
 }
 
 /// A simple struct which holds the constants for the external layer.
+#[derive(Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
-    // Note these are intentionally not pub. Once initialised, these constants should be immutable.
+    // Once initialised, these constants should be immutable.
     initial: Vec<[T; WIDTH]>,
-    terminal: Vec<[T; WIDTH]>,
+    terminal: Vec<[T; WIDTH]>, // We use terminal instead of final as final is a reserved keyword.
 }
 
 impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     pub fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
-        assert_eq!(initial.len(), terminal.len(), "The number of initial and final external rounds should be equal.");
+        assert_eq!(
+            initial.len(),
+            terminal.len(),
+            "The number of initial and terminal external rounds should be equal."
+        );
         Self { initial, terminal }
     }
-
 
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where
@@ -218,7 +219,7 @@ where
     /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
     type InternalState;
 
-    // permute_state_initial, permute_state_final are split as the Poseidon2 specifications are slightly different
+    // permute_state_initial, permute_state_terminal are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.
 
     /// Compute the initial external permutation.
@@ -227,27 +228,27 @@ where
     /// in appropriate form to feed into the Internal Layer.
     fn permute_state_initial(&self, state: [AF; WIDTH]) -> Self::InternalState;
 
-    /// Compute the final external permutation.
+    /// Compute the terminal external permutation.
     /// Implementations will usually not use both constants fields.
     /// Input state will be in appropriate form from Internal Layer.
     /// Output state will be [AF; WIDTH].
-    fn permute_state_final(&self, state: Self::InternalState) -> [AF; WIDTH];
+    fn permute_state_terminal(&self, state: Self::InternalState) -> [AF; WIDTH];
 }
 
-/// A helper method which allow any field to easily implement the final External Layer.
+/// A helper method which allow any field to easily implement the terminal External Layer.
 /// This should only be used in places where performance is not critical.
 #[inline]
-pub fn external_final_permute_state<
+pub fn external_terminal_permute_state<
     AF: AbstractField,
     MdsPerm4: MdsPermutation<AF, 4>,
     const WIDTH: usize,
     const D: u64,
 >(
     state: &mut [AF; WIDTH],
-    final_external_constants: &[[AF::F; WIDTH]],
+    terminal_external_constants: &[[AF::F; WIDTH]],
     mat4: &MdsPerm4,
 ) {
-    for elem in final_external_constants.iter() {
+    for elem in terminal_external_constants.iter() {
         state
             .iter_mut()
             .zip(elem.iter())
@@ -272,6 +273,10 @@ pub fn external_initial_permute_state<
 ) {
     mds_light_permutation(state, mat4);
     // After the initial mds_light_permutation, the remaining layers are identical
-    // to the final permutation simply with different constants.
-    external_final_permute_state::<AF, MdsPerm4, WIDTH, D>(state, initial_external_constants, mat4)
+    // to the terminal permutation simply with different constants.
+    external_terminal_permute_state::<AF, MdsPerm4, WIDTH, D>(
+        state,
+        initial_external_constants,
+        mat4,
+    )
 }

@@ -104,7 +104,7 @@ where
 
         self.internal_layer.permute_state(&mut internal_state);
 
-        self.external_layer.permute_state_final(internal_state)
+        self.external_layer.permute_state_terminal(internal_state)
     }
 
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
