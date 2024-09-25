@@ -8,6 +8,8 @@ use p3_field::{ExtensionField, Field, PackedField};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 use crate::{Matrix, MatrixGet, MatrixRowSlices, MatrixRowSlicesMut, MatrixRows, MatrixTranspose};
 
@@ -16,6 +18,7 @@ const TRANSPOSE_BLOCK_SIZE: usize = 64;
 
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct RowMajorMatrix<T: Debug> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,
@@ -201,7 +204,10 @@ impl<T: Clone + core::fmt::Debug> MatrixGet<T> for RowMajorMatrix<T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrix<T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where T: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.row_slice(r).iter().cloned()
@@ -284,7 +290,11 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrixView<'_, T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixView<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a,
+        T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.row_slice(r).iter().cloned()
@@ -420,7 +430,11 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrixViewMut<'_, T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a,
+        T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.row_slice(r).iter().cloned()

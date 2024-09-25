@@ -47,7 +47,10 @@ impl<T, Inner: MatrixGet<T>> MatrixGet<T> for BitReversedMatrixView<Inner> {
 }
 
 impl<T: core::fmt::Debug, Inner: MatrixRows<T>> MatrixRows<T> for BitReversedMatrixView<Inner> {
-    type Row<'a> = Inner::Row<'a> where Self: 'a;
+    type Row<'a>
+        = Inner::Row<'a>
+    where
+        Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.inner.row(reverse_bits_len(r, self.log_height))

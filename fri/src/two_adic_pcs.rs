@@ -140,7 +140,10 @@ where
     <C::FriMmcs as Mmcs<C::Challenge>>::ProverData: Send + Sync,
     <C::InputMmcs as Mmcs<C::Val>>::ProverData: Send + Sync + Sized,
 {
-    type Lde<'a> = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>> where Self: 'a;
+    type Lde<'a>
+        = BitReversedMatrixView<<C::InputMmcs as Mmcs<C::Val>>::Mat<'a>>
+    where
+        Self: 'a;
 
     fn coset_shift(&self) -> C::Val {
         C::Val::generator()

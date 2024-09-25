@@ -7,6 +7,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::dense::RowMajorMatrix;
 use crate::strided::VerticallyStridedMatrixView;
 
@@ -31,7 +34,8 @@ pub trait Matrix<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,

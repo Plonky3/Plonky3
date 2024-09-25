@@ -70,7 +70,11 @@ impl<T> Matrix<T> for PublicRow<T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for PublicRow<T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where T: 'a, Self: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        T: 'a,
+        Self: 'a;
 
     fn row(&self, _r: usize) -> Self::Row<'_> {
         self.0.iter().cloned()

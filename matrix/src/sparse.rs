@@ -4,10 +4,14 @@ use core::ops::Range;
 
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 use crate::Matrix;
 
 /// A sparse matrix stored in the compressed sparse row format.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 pub struct CsrMatrix<T> {
     width: usize,
 

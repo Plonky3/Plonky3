@@ -36,7 +36,10 @@ where
     Second: MatrixRows<T>,
     T: core::fmt::Debug,
 {
-    type Row<'a> = EitherIterable<First::Row<'a>, Second::Row<'a>> where Self: 'a;
+    type Row<'a>
+        = EitherIterable<First::Row<'a>, Second::Row<'a>>
+    where
+        Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         if r < self.first.height() {
