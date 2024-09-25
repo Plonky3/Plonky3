@@ -32,7 +32,10 @@ where
     type Commitment = InnerMmcs::Commitment;
     type Proof = InnerMmcs::Proof;
     type Error = InnerMmcs::Error;
-    type Mat<'a> = ExtensionMatrix<F, EF, InnerMmcs::Mat<'a>> where Self: 'a;
+    type Mat<'a>
+        = ExtensionMatrix<F, EF, InnerMmcs::Mat<'a>>
+    where
+        Self: 'a;
 
     fn open_batch(
         &self,
@@ -131,7 +134,10 @@ where
     EF: ExtensionField<F>,
     InnerMat: MatrixRows<F>,
 {
-    type Row<'a> = ExtensionRow<F, EF, <<InnerMat as MatrixRows<F>>::Row<'a> as IntoIterator>::IntoIter> where Self: 'a;
+    type Row<'a>
+        = ExtensionRow<F, EF, <<InnerMat as MatrixRows<F>>::Row<'a> as IntoIterator>::IntoIter>
+    where
+        Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         ExtensionRow {

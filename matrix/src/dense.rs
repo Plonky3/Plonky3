@@ -204,7 +204,10 @@ impl<T: Clone + core::fmt::Debug> MatrixGet<T> for RowMajorMatrix<T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrix<T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where T: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.row_slice(r).iter().cloned()
@@ -287,7 +290,11 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrixView<'_, T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixView<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a,
+        T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.row_slice(r).iter().cloned()
@@ -423,7 +430,11 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrixViewMut<'_, T> {
 }
 
 impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
-    type Row<'a> = Cloned<slice::Iter<'a, T>> where Self: 'a, T: 'a;
+    type Row<'a>
+        = Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a,
+        T: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.row_slice(r).iter().cloned()

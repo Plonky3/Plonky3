@@ -52,7 +52,11 @@ where
     type Commitment = [P::Scalar; DIGEST_ELEMS];
     type Proof = Vec<[P::Scalar; DIGEST_ELEMS]>;
     type Error = ();
-    type Mat<'a> = RowMajorMatrixView<'a, P::Scalar> where H: 'a, C: 'a;
+    type Mat<'a>
+        = RowMajorMatrixView<'a, P::Scalar>
+    where
+        H: 'a,
+        C: 'a;
 
     fn open_batch(
         &self,
