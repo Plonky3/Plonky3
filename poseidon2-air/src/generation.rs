@@ -188,6 +188,7 @@ fn generate_trace_rows_for_perm<
     }
 }
 
+#[inline]
 fn generate_full_round<
     F: PrimeField,
     MdsLight: MdsLightPermutation<F, WIDTH>,
@@ -210,6 +211,7 @@ fn generate_full_round<
     full_round.post = *state;
 }
 
+#[inline]
 fn generate_partial_round<
     F: PrimeField,
     Diffusion: DiffusionPermutation<F, WIDTH>,
@@ -228,6 +230,7 @@ fn generate_partial_round<
     internal_linear_layer.permute_mut(state);
 }
 
+#[inline]
 fn generate_sbox<F: PrimeField, const DEGREE: usize, const REGISTERS: usize>(
     sbox: &mut SBox<F, DEGREE, REGISTERS>,
     x: &mut F,
