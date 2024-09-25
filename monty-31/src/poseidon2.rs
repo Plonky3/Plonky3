@@ -44,9 +44,8 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
         let full_sum = part_sum.clone() + state[0].clone();
         state[0] = part_sum - state[0].clone();
 
-        for i in 1..Self::INTERNAL_DIAG_MONTY.len() {
-            let const_i = Self::INTERNAL_DIAG_MONTY[i];
-            state[i] = full_sum.clone() + state[i].clone() * const_i;
+        for (state_i, const_i) in state.iter_mut().zip(Self::INTERNAL_DIAG_MONTY).skip(1) {
+            *state_i = full_sum.clone() + state_i.clone() * const_i;
         }
     }
 }
