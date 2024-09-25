@@ -3,10 +3,10 @@ use core::borrow::{Borrow, BorrowMut};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::Field;
 use p3_matrix::Matrix;
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
+use p3_poseidon2::{DiffusionPermutation, MdsLightPermutation};
 
 use crate::air::eval;
+use crate::constants::RoundConstants;
 use crate::{Poseidon2Air, Poseidon2Cols};
 
 /// A "vectorized" version of Poseidon2Cols, for computing multiple Poseidon2 permutations per row.
@@ -130,6 +130,8 @@ impl<
 /// A "vectorized" version of Poseidon2Air, for computing multiple Poseidon2 permutations per row.
 pub struct VectorizedPoseidon2Air<
     F: Field,
+    MdsLight,
+    Diffusion,
     const WIDTH: usize,
     const SBOX_DEGREE: usize,
     const SBOX_REGISTERS: usize,
@@ -137,11 +139,22 @@ pub struct VectorizedPoseidon2Air<
     const PARTIAL_ROUNDS: usize,
     const VECTOR_LEN: usize,
 > {
-    air: Poseidon2Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    air: Poseidon2Air<
+        F,
+        MdsLight,
+        Diffusion,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >,
 }
 
 impl<
         F: Field,
+        MdsLight,
+        Diffusion,
         const WIDTH: usize,
         const SBOX_DEGREE: usize,
         const SBOX_REGISTERS: usize,
@@ -151,6 +164,8 @@ impl<
     >
     VectorizedPoseidon2Air<
         F,
+        MdsLight,
+        Diffusion,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -159,18 +174,21 @@ impl<
         VECTOR_LEN,
     >
 {
-    pub fn new_from_rng<R: Rng>(rng: &mut R) -> Self
-    where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
-    {
+    pub fn new(
+        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+        external_linear_layer: MdsLight,
+        internal_linear_layer: Diffusion,
+    ) -> Self {
         Self {
-            air: Poseidon2Air::new_from_rng(rng),
+            air: Poseidon2Air::new(constants, external_linear_layer, internal_linear_layer),
         }
     }
 }
 
 impl<
         F: Field,
+        MdsLight: Sync,
+        Diffusion: Sync,
         const WIDTH: usize,
         const SBOX_DEGREE: usize,
         const SBOX_REGISTERS: usize,
@@ -180,6 +198,8 @@ impl<
     > BaseAir<F>
     for VectorizedPoseidon2Air<
         F,
+        MdsLight,
+        Diffusion,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -195,6 +215,8 @@ impl<
 
 impl<
         AB: AirBuilder,
+        MdsLight: MdsLightPermutation<AB::Expr, WIDTH>,
+        Diffusion: DiffusionPermutation<AB::Expr, WIDTH>,
         const WIDTH: usize,
         const SBOX_DEGREE: usize,
         const SBOX_REGISTERS: usize,
@@ -204,6 +226,8 @@ impl<
     > Air<AB>
     for VectorizedPoseidon2Air<
         AB::F,
+        MdsLight,
+        Diffusion,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,

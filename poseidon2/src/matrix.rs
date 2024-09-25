@@ -149,17 +149,14 @@ pub struct Poseidon2ExternalMatrixGeneral;
 impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixGeneral
 where
     AF: AbstractField,
-    AF::F: PrimeField,
 {
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
         mds_light_permutation::<AF, MDSMat4, WIDTH>(state, MDSMat4)
     }
 }
 
-impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixGeneral
-where
-    AF: AbstractField,
-    AF::F: PrimeField,
+impl<AF, const WIDTH: usize> MdsLightPermutation<AF, WIDTH> for Poseidon2ExternalMatrixGeneral where
+    AF: AbstractField
 {
 }
 

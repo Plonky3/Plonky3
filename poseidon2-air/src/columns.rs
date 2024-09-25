@@ -1,13 +1,13 @@
 use core::borrow::{Borrow, BorrowMut};
 use core::mem::size_of;
 
-/// Columns for Single-Row Poseidon2 STARK
+/// Columns for a Poseidon2 AIR which computes one permutation per row.
 ///
 /// The columns of the STARK are divided into the three different round sections of the Poseidon2
 /// Permutation: beginning full rounds, partial rounds, and ending full rounds. For the full
 /// rounds we store an [`SBox`] columnset for each state variable, and for the partial rounds we
 /// store only for the first state variable. Because the matrix multiplications are linear
-/// functions, we need only keep auxiliary columns for the S-BOX computations.
+/// functions, we need only keep auxiliary columns for the S-box computations.
 #[repr(C)]
 pub struct Poseidon2Cols<
     T,
@@ -31,14 +31,16 @@ pub struct Poseidon2Cols<
     pub ending_full_rounds: [FullRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; HALF_FULL_ROUNDS],
 }
 
-/// Full Round Columns
+/// Full round columns.
 #[repr(C)]
 pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: usize, const SBOX_REGISTERS: usize> {
-    /// S-BOX Columns
+    /// Possible intermediate results within each S-box.
     pub sbox: [SBox<T, SBOX_DEGREE, SBOX_REGISTERS>; WIDTH],
+    /// The post-state, i.e. the entire layer after this full round.
+    pub post: [T; WIDTH],
 }
 
-/// Partial Round Columns
+/// Partial round columns.
 #[repr(C)]
 pub struct PartialRound<
     T,
@@ -46,16 +48,18 @@ pub struct PartialRound<
     const SBOX_DEGREE: usize,
     const SBOX_REGISTERS: usize,
 > {
-    /// S-BOX Columns
+    /// Possible intermediate results within the S-box.
     pub sbox: SBox<T, SBOX_DEGREE, SBOX_REGISTERS>,
+    /// The output of the S-box.
+    pub post_sbox: T,
 }
 
-/// S-BOX Columns
+/// Possible intermediate results within an S-box.
 ///
-/// Use this column-set for an S-BOX that can be computed in `REGISTERS`-many columns. The S-BOX is
-/// checked to ensure that `REGISTERS` is the optimal number of registers for the given `DEGREE`
-/// for the degrees given in the Poseidon2 paper: `3`, `5`, `7`, and `11`. See [`Self::eval`] for
-/// more information.
+/// Use this column-set for an S-box that can be computed with `REGISTERS`-many intermediate results
+/// (not counting the final output). The S-box is checked to ensure that `REGISTERS` is the optimal
+/// number of registers for the given `DEGREE` for the degrees given in the Poseidon2 paper:
+/// `3`, `5`, `7`, and `11`. See `eval_sbox` for more information.
 #[repr(C)]
 pub struct SBox<T, const DEGREE: usize, const REGISTERS: usize>(pub [T; REGISTERS]);
 
