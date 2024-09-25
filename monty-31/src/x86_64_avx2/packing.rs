@@ -302,7 +302,7 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     monty_mul_signed::<MPAVX2>(square, input)
 }
@@ -312,7 +312,7 @@ fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let quad = shifted_square::<MPAVX2>(square);
     monty_mul_signed::<MPAVX2>(quad, input)
@@ -323,7 +323,7 @@ fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will also lie in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let cube = monty_mul_signed::<MPAVX2>(square, input);
     let cube_shifted = movehdup_epi32(cube);
@@ -339,7 +339,7 @@ fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// The input should conform to the requirements of `func`.
 #[inline]
 #[must_use]
-unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
+pub(crate) unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {

@@ -8,7 +8,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::FriConfig;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};

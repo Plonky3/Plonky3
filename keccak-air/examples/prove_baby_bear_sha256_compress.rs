@@ -1,4 +1,4 @@
-// use std::fmt::Debug;
+use std::fmt::Debug;
 
 use p3_baby_bear::BabyBear;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
@@ -18,60 +18,58 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-// const NUM_HASHES: usize = 1_365;
+const NUM_HASHES: usize = 1_365;
 
-// fn main() -> Result<(), impl Debug> {
-//     let env_filter = EnvFilter::builder()
-//         .with_default_directive(LevelFilter::INFO.into())
-//         .from_env_lossy();
+fn main() -> Result<(), impl Debug> {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
 
-//     Registry::default()
-//         .with(env_filter)
-//         .with(ForestLayer::default())
-//         .init();
+    Registry::default()
+        .with(env_filter)
+        .with(ForestLayer::default())
+        .init();
 
-//     type Val = BabyBear;
-//     type Challenge = BinomialExtensionField<Val, 4>;
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
 
-//     type ByteHash = Sha256;
-//     type FieldHash = SerializingHasher32<ByteHash>;
-//     let byte_hash = ByteHash {};
-//     let field_hash = FieldHash::new(byte_hash);
+    type ByteHash = Sha256;
+    type FieldHash = SerializingHasher32<ByteHash>;
+    let byte_hash = ByteHash {};
+    let field_hash = FieldHash::new(byte_hash);
 
-//     type MyCompress = Sha256Compress;
-//     let compress = MyCompress {};
+    type MyCompress = Sha256Compress;
+    let compress = MyCompress {};
 
     type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
-//     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-//     let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
 
-//     type Dft = Radix2DitParallel;
-//     let dft = Dft {};
+    type Dft = Radix2DitParallel;
+    let dft = Dft {};
 
-//     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-//     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-//     let trace = generate_trace_rows::<Val>(inputs);
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_trace_rows::<Val>(inputs);
 
-//     let fri_config = FriConfig {
-//         log_blowup: 1,
-//         num_queries: 100,
-//         proof_of_work_bits: 16,
-//         mmcs: challenge_mmcs,
-//     };
-//     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-//     let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        num_queries: 100,
+        proof_of_work_bits: 16,
+        mmcs: challenge_mmcs,
+    };
+    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
-//     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-//     let config = MyConfig::new(pcs);
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs);
 
-//     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-//     let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
-//     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-//     verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
-// }
-
-fn main() {}
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+}
