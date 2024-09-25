@@ -179,3 +179,34 @@ where
 pub fn current_num_threads() -> usize {
     1
 }
+
+pub struct ThreadPool;
+
+impl ThreadPool {
+    pub fn install<OP, R>(&self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        op()
+    }
+}
+
+pub struct ThreadPoolBuilder;
+
+impl ThreadPoolBuilder {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn num_threads(self, _num_threads: usize) -> Self {
+        self
+    }
+
+    pub fn build(self) -> Result<ThreadPool, ThreadPoolBuildError> {
+        Ok(ThreadPool)
+    }
+}
+
+#[derive(Debug)]
+pub struct ThreadPoolBuildError;

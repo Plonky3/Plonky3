@@ -1,7 +1,7 @@
 #[cfg(feature = "parallel")]
 pub mod prelude {
     pub use rayon::prelude::*;
-    pub use rayon::{current_num_threads, join};
+    pub use rayon::{current_num_threads, join, ThreadPoolBuilder};
 
     pub trait SharedExt: ParallelIterator {
         fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, reduce_op: R) -> Acc

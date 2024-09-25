@@ -11,9 +11,14 @@ use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
+use tracing::{debug_span, instrument};
 
 use crate::Matrix;
+
+/// The number of threads to use for highly memory-intensive operations (when parallelism is on).
+/// On most systems, 2-3 threads are enough to saturate memory bandwidth, so larger thread pools
+/// don't help and can sometimes hurt.
+const THREADS_FOR_MEMORY: usize = 3;
 
 /// A dense matrix stored in row-major form.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,14 +296,27 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         // whose rows are zero except for rows whose low `added_bits` bits are zero.
 
         let w = self.width;
-        let mut padded = RowMajorMatrix::new(
-            vec![T::default(); self.values.borrow().len() << added_bits],
-            w,
-        );
-        padded
-            .par_row_chunks_exact_mut(1 << added_bits)
-            .zip(self.par_row_slices())
-            .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
+        let m = self.values.borrow().len() << added_bits;
+        let v = debug_span!("allocate buffer").in_scope(|| unsafe { uninitialized_vec(m) });
+        let mut padded = RowMajorMatrix::new(v, w);
+
+        debug_span!("fill buffer").in_scope(|| {
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(THREADS_FOR_MEMORY)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                padded
+                    .par_row_chunks_exact_mut(1 << added_bits)
+                    .zip(self.par_row_slices())
+                    .for_each(|(mut ch, r)| {
+                        ch.row_mut(0).copy_from_slice(r);
+                        for r in 1..1 << added_bits {
+                            ch.row_mut(r).fill(T::default());
+                        }
+                    })
+            });
+        });
 
         padded
     }
@@ -421,6 +439,12 @@ impl<'a, T: Clone + Default + Send + Sync> DenseMatrix<T, &'a [T]> {
     pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Borrowed(self.values), self.width)
     }
+}
+
+unsafe fn uninitialized_vec<T>(n: usize) -> Vec<T> {
+    let mut vec = Vec::with_capacity(n);
+    vec.set_len(n);
+    vec
 }
 
 #[cfg(test)]
