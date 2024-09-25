@@ -13,7 +13,7 @@ pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 /// - `WIDTH` is assumed to be a power of 2.
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
-pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
+pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     type Value: Packable;
 
     const WIDTH: usize;
@@ -76,6 +76,34 @@ pub unsafe trait PackedValue: 'static + Copy + From<Self::Value> + Send + Sync {
     }
 }
 
+unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
+    type Value = T;
+    const WIDTH: usize = WIDTH;
+
+    fn from_slice(slice: &[Self::Value]) -> &Self {
+        slice.try_into().unwrap()
+    }
+
+    fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        slice.try_into().unwrap()
+    }
+
+    fn from_fn<F>(f: F) -> Self
+    where
+        F: FnMut(usize) -> Self::Value,
+    {
+        core::array::from_fn(f)
+    }
+
+    fn as_slice(&self) -> &[Self::Value] {
+        self
+    }
+
+    fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+        self
+    }
+}
+
 /// # Safety
 /// - See `PackedValue` above.
 pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
@@ -91,8 +119,6 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     + Div<Self::Scalar, Output = Self>
 {
     type Scalar: Field + Add<Self, Output = Self> + Mul<Self, Output = Self> + Sub<Self, Output = Self>;
-
-
 
     /// Take interpret two vectors as chunks of `block_len` elements. Unpack and interleave those
     /// chunks. This is best seen with an example. If we have:

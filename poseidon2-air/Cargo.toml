@@ -11,7 +11,6 @@ p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-util = { path = "../util" }
-#rand = { version = "0.8.5", features = ["min_const_gen"] }
 rand = "0.8.5"
 tracing = "0.1.37"
 
@@ -35,7 +34,4 @@ tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
 tikv-jemallocator = "0.6"
 
 [features]
-# TODO: Consider removing, at least when this gets split off into another repository.
-# We should be able to enable p3-maybe-rayon/parallel directly; this just doesn't
-# seem to work when using cargo with the -p or --package option.
-#parallel = ["p3-maybe-rayon/parallel"]
+parallel = ["p3-maybe-rayon/parallel"]

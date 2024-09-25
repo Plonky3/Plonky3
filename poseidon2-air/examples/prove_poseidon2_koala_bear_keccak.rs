@@ -2,16 +2,15 @@ use std::fmt::Debug;
 
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
-use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_keccak::Keccak256Hash;
+use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_koala_bear::{KoalaBear, KoalaBearDiffusionMatrixParameters, KoalaBearParameters};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::GenericDiffusionMatrixMontyField31;
 use p3_poseidon2::Poseidon2ExternalMatrixGeneral;
 use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
 #[cfg(not(target_env = "msvc"))]
@@ -33,8 +32,13 @@ const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
 const NUM_ROWS: usize = 1 << 15;
-const VECTOR_LEN: usize = 8;
+const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
+
+#[cfg(feature = "parallel")]
+type Dft = p3_dft::Radix2DitParallel;
+#[cfg(not(feature = "parallel"))]
+type Dft = p3_dft::Radix2Bowers;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -50,14 +54,24 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher32<ByteHash>;
     let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(Keccak256Hash {});
 
-    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
-    let compress = MyCompress::new(byte_hash);
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    let u64_hash = U64Hash::new(KeccakF {});
 
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type FieldHash = SerializingHasher32To64<U64Hash>;
+    let field_hash = FieldHash::new(u64_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    let compress = MyCompress::new(u64_hash);
+
+    type ValMmcs = MerkleTreeMmcs<
+        [Val; p3_keccak::VECTOR_LEN],
+        [u64; p3_keccak::VECTOR_LEN],
+        FieldHash,
+        MyCompress,
+        4,
+    >;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
@@ -103,7 +117,6 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
 
-    type Dft = Radix2DitParallel;
     let dft = Dft {};
 
     let fri_config = FriConfig {

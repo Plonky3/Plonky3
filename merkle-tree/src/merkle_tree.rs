@@ -112,6 +112,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     }
 }
 
+#[instrument(name = "first digest layer", level = "debug", skip_all)]
 fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
     tallest_matrices: Vec<&M>,
