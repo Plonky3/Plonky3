@@ -20,6 +20,7 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
     const INTERNAL_DIAG_MONTY: [MontyField31<FP>; WIDTH];
 
     /// Implements multiplication by the diffusion matrix 1 + Diag(vec) using a delayed reduction strategy.
+    #[inline]
     fn permute_state(state: &mut [MontyField31<FP>; WIDTH]) {
         let part_sum: u64 = state.iter().skip(1).map(|x| x.value as u64).sum();
         let full_sum = part_sum + (state[0].value as u64);
@@ -34,6 +35,7 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
     }
 
     /// Like `permute_state`, but works with any `AbstractField`.
+    #[inline]
     fn permute_state_generic<AF: AbstractField>(state: &mut [AF; WIDTH]) {
         let part_sum: AF = state.iter().skip(1).cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
@@ -42,7 +44,7 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
         for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
             let shift_i = Self::INTERNAL_DIAG_SHIFTS.as_ref()[i];
             state[i + 1] =
-                full_sum.clone() + state[i + 1].clone() * AF::two().exp_u64(shift_i as u64);
+                full_sum.clone() + state[i + 1].clone() * AF::from_canonical_u32(1u32 << shift_i);
         }
     }
 }
