@@ -1,4 +1,5 @@
 use core::marker::PhantomData;
+use core::ops::Mul;
 
 use p3_field::AbstractField;
 use p3_poseidon2::DiffusionPermutation;
@@ -36,15 +37,16 @@ pub trait DiffusionMatrixParameters<FP: FieldParameters, const WIDTH: usize>: Cl
 
     /// Like `permute_state`, but works with any `AbstractField`.
     #[inline]
-    fn permute_state_generic<AF: AbstractField>(state: &mut [AF; WIDTH]) {
+    fn permute_state_generic<AF: AbstractField + Mul<MontyField31<FP>, Output = AF>>(
+        state: &mut [AF; WIDTH],
+    ) {
         let part_sum: AF = state.iter().skip(1).cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
         state[0] = part_sum - state[0].clone();
 
-        for i in 0..Self::INTERNAL_DIAG_SHIFTS.as_ref().len() {
-            let shift_i = Self::INTERNAL_DIAG_SHIFTS.as_ref()[i];
-            state[i + 1] =
-                full_sum.clone() + state[i + 1].clone() * AF::from_canonical_u32(1u32 << shift_i);
+        for i in 1..Self::INTERNAL_DIAG_MONTY.len() {
+            let const_i = Self::INTERNAL_DIAG_MONTY[i];
+            state[i] = full_sum.clone() + state[i].clone() * const_i;
         }
     }
 }
@@ -103,7 +105,7 @@ impl<FP, MP: Clone> GenericDiffusionMatrixMontyField31<FP, MP> {
 impl<AF, FP, const WIDTH: usize, MP> Permutation<[AF; WIDTH]>
     for GenericDiffusionMatrixMontyField31<FP, MP>
 where
-    AF: AbstractField,
+    AF: AbstractField + Mul<MontyField31<FP>, Output = AF>,
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
 {
@@ -115,7 +117,7 @@ where
 impl<AF, FP, const WIDTH: usize, MP> DiffusionPermutation<AF, WIDTH>
     for GenericDiffusionMatrixMontyField31<FP, MP>
 where
-    AF: AbstractField,
+    AF: AbstractField + Mul<MontyField31<FP>, Output = AF>,
     FP: FieldParameters,
     MP: DiffusionMatrixParameters<FP, WIDTH>,
 {
