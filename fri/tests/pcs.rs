@@ -7,7 +7,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::distributions::{Distribution, Standard};
 use rand::{Rng, SeedableRng};
@@ -160,13 +160,8 @@ mod babybear_fri_pcs {
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 
-    type ValMmcs = FieldMerkleTreeMmcs<
-        <Val as Field>::Packing,
-        <Val as Field>::Packing,
-        MyHash,
-        MyCompress,
-        8,
-    >;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 
     type Dft = Radix2DitParallel;
@@ -219,7 +214,7 @@ mod m31_fri_pcs {
 
     type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
 
-    type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 

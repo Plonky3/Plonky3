@@ -11,7 +11,7 @@ use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
-use crate::{InputError, InputProof};
+use crate::{CircleInputProof, InputError};
 
 pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
     pub(crate) PhantomData<(F, InputProof, InputError)>,
@@ -19,7 +19,7 @@ pub(crate) struct CircleFriGenericConfig<F, InputProof, InputError>(
 
 pub(crate) type CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> = CircleFriGenericConfig<
     Val,
-    InputProof<Val, Challenge, InputMmcs, FriMmcs>,
+    CircleInputProof<Val, Challenge, InputMmcs, FriMmcs>,
     InputError<<InputMmcs as Mmcs<Val>>::Error, <FriMmcs as Mmcs<Challenge>>::Error>,
 >;
 
@@ -33,10 +33,6 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         1
     }
 
-    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
-        fold_x(beta, m)
-    }
-
     fn fold_row(
         &self,
         index: usize,
@@ -45,6 +41,10 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         evals: impl Iterator<Item = EF>,
     ) -> EF {
         fold_x_row(index, log_folded_height, beta, evals)
+    }
+
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
+        fold_x(beta, m)
     }
 }
 

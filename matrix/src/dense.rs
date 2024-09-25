@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
 
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{scale_slice_in_place, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -155,10 +155,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Field,
         S: BorrowMut<[T]>,
     {
-        let (packed, sfx) = self.horizontally_packed_row_mut::<T::Packing>(r);
-        let packed_scale: T::Packing = scale.into();
-        packed.iter_mut().for_each(|x| *x *= packed_scale);
-        sfx.iter_mut().for_each(|x| *x *= scale);
+        scale_slice_in_place(scale, self.row_mut(r));
     }
 
     pub fn scale(&mut self, scale: T)
@@ -166,10 +163,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Field,
         S: BorrowMut<[T]>,
     {
-        let (packed, sfx) = T::Packing::pack_slice_with_suffix_mut(self.values.borrow_mut());
-        let packed_scale: T::Packing = scale.into();
-        packed.iter_mut().for_each(|x| *x *= packed_scale);
-        sfx.iter_mut().for_each(|x| *x *= scale);
+        scale_slice_in_place(scale, self.values.borrow_mut());
     }
 
     pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
@@ -276,6 +270,8 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         )
     }
 
+    /// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,
+    /// so in actuality we're interleaving zero rows.
     #[instrument(level = "debug", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
@@ -322,7 +318,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
     }
-    type Row<'a> = iter::Cloned<slice::Iter<'a, T>> where Self: 'a;
+    type Row<'a>
+        = iter::Cloned<slice::Iter<'a, T>>
+    where
+        Self: 'a;
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.values.borrow()[r * self.width..(r + 1) * self.width]
             .iter()

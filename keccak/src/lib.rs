@@ -2,10 +2,6 @@
 
 #![no_std]
 
-extern crate alloc;
-
-use alloc::vec::Vec;
-
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
 use tiny_keccak::{keccakf, Hasher, Keccak};
 
@@ -52,8 +48,13 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
     where
         I: IntoIterator<Item = u8>,
     {
-        let input = input.into_iter().collect::<Vec<_>>();
-        self.hash_iter_slices([input.as_slice()])
+        const BUFLEN: usize = 512; // Tweakable parameter; determined by experiment
+        let mut hasher = Keccak::v256();
+        p3_util::apply_to_chunks::<BUFLEN, _, _>(input, |buf| hasher.update(buf));
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        output
     }
 
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]

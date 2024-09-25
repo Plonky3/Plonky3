@@ -92,12 +92,30 @@ pub trait TwoAdicData: MontyParameters {
     /// The odd constant r such that p = r * 2^n + 1
     const ODD_FACTOR: u32 = (Self::PRIME >> Self::TWO_ADICITY);
 
-    /// ArrayLike should usually be [MontyField31; TWO_ADICITY + 1].
+    /// ArrayLike should usually be `&'static [MontyField31]`.
     type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;
 
     /// A list of generators of 2-adic subgroups.
     /// The i'th element must be a 2^i root of unity and the i'th element squared must be the i-1'th element.
     const TWO_ADIC_GENERATORS: Self::ArrayLike;
+
+    /// Precomputation of the first 3 8th-roots of unity.
+    ///
+    /// Must agree with the 8th-root in TWO_ADIC_GENERATORS, i.e.
+    /// ROOTS_8[0] == TWO_ADIC_GENERATORS[3]
+    const ROOTS_8: Self::ArrayLike;
+
+    /// Precomputation of the inverses of ROOTS_8.
+    const INV_ROOTS_8: Self::ArrayLike;
+
+    /// Precomputation of the first 7 16th-roots of unity.
+    ///
+    /// Must agree with the 16th-root in TWO_ADIC_GENERATORS, i.e.
+    /// ROOTS_16[0] == TWO_ADIC_GENERATORS[4]
+    const ROOTS_16: Self::ArrayLike;
+
+    /// Precomputation of the inverses of ROOTS_16.
+    const INV_ROOTS_16: Self::ArrayLike;
 }
 
 /// TODO: This should be deleted long term once we have improved our API for defining extension fields.

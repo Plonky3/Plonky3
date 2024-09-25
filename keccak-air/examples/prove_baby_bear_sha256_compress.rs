@@ -1,22 +1,22 @@
 // use std::fmt::Debug;
 
-// use p3_baby_bear::BabyBear;
-// use p3_challenger::{HashChallenger, SerializingChallenger32};
-// use p3_commit::ExtensionMmcs;
-// use p3_dft::Radix2DitParallel;
-// use p3_field::extension::BinomialExtensionField;
-// use p3_fri::{FriConfig, TwoAdicFriPcs};
-// use p3_keccak_air::{generate_trace_rows, KeccakAir};
-// use p3_merkle_tree::FieldMerkleTreeMmcs;
-// use p3_sha256::{Sha256, Sha256Compress};
-// use p3_symmetric::SerializingHasher32;
-// use p3_uni_stark::{prove, verify, StarkConfig};
-// use rand::random;
-// use tracing_forest::util::LevelFilter;
-// use tracing_forest::ForestLayer;
-// use tracing_subscriber::layer::SubscriberExt;
-// use tracing_subscriber::util::SubscriberInitExt;
-// use tracing_subscriber::{EnvFilter, Registry};
+use p3_baby_bear::BabyBear;
+use p3_challenger::{HashChallenger, SerializingChallenger32};
+use p3_commit::ExtensionMmcs;
+use p3_dft::Radix2DitParallel;
+use p3_field::extension::BinomialExtensionField;
+use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_merkle_tree::MerkleTreeMmcs;
+use p3_sha256::{Sha256, Sha256Compress};
+use p3_symmetric::SerializingHasher32;
+use p3_uni_stark::{prove, verify, StarkConfig};
+use rand::random;
+use tracing_forest::util::LevelFilter;
+use tracing_forest::ForestLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 // const NUM_HASHES: usize = 1_365;
 
@@ -41,8 +41,8 @@
 //     type MyCompress = Sha256Compress;
 //     let compress = MyCompress {};
 
-//     type ValMmcs = FieldMerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
-//     let val_mmcs = ValMmcs::new(field_hash, compress);
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    let val_mmcs = ValMmcs::new(field_hash, compress);
 
 //     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 //     let challenge_mmcs = ChallengeMmcs::new(val_mmcs);

@@ -8,7 +8,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
 
 use crate::butterflies::{Butterfly, DifButterfly, DitButterfly, TwiddleFreeButterfly};
-use crate::util::{bit_reversed_zero_pad, divide_by_height};
+use crate::util::divide_by_height;
 use crate::TwoAdicSubgroupDft;
 
 /// The Bowers G FFT algorithm.
@@ -36,7 +36,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     fn lde_batch(&self, mut mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
         bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
         bowers_g(&mut mat.as_view_mut());
         mat
     }
@@ -65,7 +65,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        bit_reversed_zero_pad(&mut mat, added_bits);
+        mat = mat.bit_reversed_zero_pad(added_bits);
 
         bowers_g(&mut mat.as_view_mut());
 
@@ -125,49 +125,4 @@ fn butterfly_layer<F: Field, B: Butterfly<F>>(
                     }
                 });
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_baby_bear::BabyBear;
-    use p3_goldilocks::Goldilocks;
-
-    use crate::radix_2_bowers::Radix2Bowers;
-    use crate::testing::*;
-
-    #[test]
-    fn dft_matches_naive() {
-        test_dft_matches_naive::<BabyBear, Radix2Bowers>();
-    }
-
-    #[test]
-    fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<BabyBear, Radix2Bowers>();
-    }
-
-    #[test]
-    fn idft_matches_naive() {
-        test_idft_matches_naive::<Goldilocks, Radix2Bowers>();
-    }
-
-    #[test]
-    fn coset_idft_matches_naive() {
-        test_coset_idft_matches_naive::<BabyBear, Radix2Bowers>();
-        test_coset_idft_matches_naive::<Goldilocks, Radix2Bowers>();
-    }
-
-    #[test]
-    fn lde_matches_naive() {
-        test_lde_matches_naive::<BabyBear, Radix2Bowers>();
-    }
-
-    #[test]
-    fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<BabyBear, Radix2Bowers>();
-    }
-
-    #[test]
-    fn dft_idft_consistency() {
-        test_dft_idft_consistency::<BabyBear, Radix2Bowers>();
-    }
 }

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-use itertools::izip;
-use p3_field::{Field, Powers, TwoAdicField};
+use itertools::{izip, Itertools};
+use p3_field::{scale_slice_in_place, Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -81,11 +81,12 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2DitParallel {
             base: shift,
             current: h_inv,
         }
-        .take(h);
-        for (row, weight) in weights.enumerate() {
+        .take(h)
+        .collect_vec();
+        mat.par_rows_mut().enumerate().for_each(|(r, row)| {
             // reverse_bits because mat is encoded in bit-reversed order
-            mat.scale_row(reverse_bits(row, h), weight);
-        }
+            scale_slice_in_place(weights[reverse_bits(r, h)], row);
+        });
 
         mat = mat.bit_reversed_zero_pad(added_bits);
 
@@ -189,50 +190,5 @@ fn dit_layer_rev<F: Field>(
     {
         let (lo, hi) = block.split_at_mut(half_block_size * width);
         DitButterfly(twiddle).apply_to_rows(lo, hi)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_baby_bear::BabyBear;
-    use p3_goldilocks::Goldilocks;
-
-    use crate::testing::*;
-    use crate::Radix2DitParallel;
-
-    #[test]
-    fn dft_matches_naive() {
-        test_dft_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn coset_dft_matches_naive() {
-        test_coset_dft_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn idft_matches_naive() {
-        test_idft_matches_naive::<Goldilocks, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn coset_idft_matches_naive() {
-        test_coset_idft_matches_naive::<BabyBear, Radix2DitParallel>();
-        test_coset_idft_matches_naive::<Goldilocks, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn lde_matches_naive() {
-        test_lde_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn coset_lde_matches_naive() {
-        test_coset_lde_matches_naive::<BabyBear, Radix2DitParallel>();
-    }
-
-    #[test]
-    fn dft_idft_consistency() {
-        test_dft_idft_consistency::<BabyBear, Radix2DitParallel>();
     }
 }

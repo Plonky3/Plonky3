@@ -1,23 +1,23 @@
 // use std::fmt::Debug;
 
-// use p3_challenger::DuplexChallenger;
-// use p3_commit::ExtensionMmcs;
-// use p3_dft::Radix2DitParallel;
-// use p3_field::extension::BinomialExtensionField;
-// use p3_field::Field;
-// use p3_fri::{FriConfig, TwoAdicFriPcs};
-// use p3_keccak_air::{generate_trace_rows, KeccakAir};
-// use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
-// use p3_merkle_tree::FieldMerkleTreeMmcs;
-// use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
-// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-// use p3_uni_stark::{prove, verify, StarkConfig};
-// use rand::{random, thread_rng};
-// use tracing_forest::util::LevelFilter;
-// use tracing_forest::ForestLayer;
-// use tracing_subscriber::layer::SubscriberExt;
-// use tracing_subscriber::util::SubscriberInitExt;
-// use tracing_subscriber::{EnvFilter, Registry};
+use p3_challenger::DuplexChallenger;
+use p3_commit::ExtensionMmcs;
+use p3_dft::Radix2DitParallel;
+use p3_field::extension::BinomialExtensionField;
+use p3_field::Field;
+use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
+use p3_merkle_tree::MerkleTreeMmcs;
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_uni_stark::{prove, verify, StarkConfig};
+use rand::{random, thread_rng};
+use tracing_forest::util::LevelFilter;
+use tracing_forest::ForestLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 // const NUM_HASHES: usize = 1365;
 
@@ -47,14 +47,9 @@
 //     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 //     let compress = MyCompress::new(perm.clone());
 
-//     type ValMmcs = FieldMerkleTreeMmcs<
-//         <Val as Field>::Packing,
-//         <Val as Field>::Packing,
-//         MyHash,
-//         MyCompress,
-//         8,
-//     >;
-//     let val_mmcs = ValMmcs::new(hash, compress);
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+    let val_mmcs = ValMmcs::new(hash, compress);
 
 //     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 //     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());

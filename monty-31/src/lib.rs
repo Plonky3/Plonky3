@@ -11,12 +11,12 @@
 extern crate alloc;
 
 mod data_traits;
+pub mod dft;
 mod extension;
 mod mds;
 mod monty_31;
 mod poseidon2;
 mod utils;
-
 pub use data_traits::*;
 pub use mds::*;
 pub use monty_31::*;

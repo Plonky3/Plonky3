@@ -9,7 +9,7 @@ use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
-use p3_merkle_tree::FieldMerkleTreeMmcs;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_rescue::{BasicSboxLayer, Rescue};
 use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
@@ -117,7 +117,7 @@ where
     let mut group = criterion.benchmark_group(name);
     group.sample_size(10);
 
-    let mmcs = FieldMerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
+    let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
     group.bench_with_input(params, &leaves, |b, input| {
         b.iter(|| mmcs.commit(input.clone()))
     });

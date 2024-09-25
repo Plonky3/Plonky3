@@ -12,8 +12,12 @@ mod folding;
 mod ordering;
 mod pcs;
 mod point;
+mod proof;
+mod prover;
+mod verifier;
 
 pub use cfft::*;
 pub use domain::*;
 pub use ordering::*;
 pub use pcs::*;
+pub use proof::*;

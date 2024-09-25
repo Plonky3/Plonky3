@@ -24,6 +24,8 @@ impl PackedMontyParameters for BabyBearParameters {}
 impl BarrettParameters for BabyBearParameters {}
 
 impl FieldParameters for BabyBearParameters {
+    const MONTY_GEN: BabyBear = BabyBear::new(31);
+
     fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
         match power {
             1725656503 => exp_1725656503(val), // used to compute x^{1/7}
@@ -59,20 +61,28 @@ impl FieldParameters for BabyBearParameters {
 
         Some(p1110111111111111111111111111111)
     }
-
-    const MONTY_GEN: BabyBear = BabyBear::new(31);
 }
 
 impl TwoAdicData for BabyBearParameters {
     const TWO_ADICITY: usize = 27;
 
-    type ArrayLike = [BabyBear; Self::TWO_ADICITY + 1];
+    type ArrayLike = &'static [BabyBear];
 
-    const TWO_ADIC_GENERATORS: Self::ArrayLike = BabyBear::new_array([
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = &BabyBear::new_array([
         0x1, 0x78000000, 0x67055c21, 0x5ee99486, 0xbb4c4e4, 0x2d4cc4da, 0x669d6090, 0x17b56c64,
         0x67456167, 0x688442f9, 0x145e952d, 0x4fe61226, 0x4c734715, 0x11c33e2a, 0x62c3d2b1,
         0x77cad399, 0x54c131f4, 0x4cabd6a6, 0x5cf5713f, 0x3e9430e8, 0xba067a3, 0x18adc27d,
         0x21fd55bc, 0x4b859b3d, 0x3bd57996, 0x4483d85a, 0x3a26eef8, 0x1a427a41,
+    ]);
+
+    const ROOTS_8: Self::ArrayLike = &BabyBear::new_array([0x5ee99486, 0x67055c21, 0xc9ea3ba]);
+    const INV_ROOTS_8: Self::ArrayLike = &BabyBear::new_array([0x6b615c47, 0x10faa3e0, 0x19166b7b]);
+
+    const ROOTS_16: Self::ArrayLike = &BabyBear::new_array([
+        0xbb4c4e4, 0x5ee99486, 0x4b49e08, 0x67055c21, 0x5376917a, 0xc9ea3ba, 0x563112a7,
+    ]);
+    const INV_ROOTS_16: Self::ArrayLike = &BabyBear::new_array([
+        0x21ceed5a, 0x6b615c47, 0x24896e87, 0x10faa3e0, 0x734b61f9, 0x19166b7b, 0x6c4b3b1d,
     ]);
 }
 
@@ -102,7 +112,7 @@ mod tests {
     use core::array;
 
     use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
-    use p3_field_testing::{test_field, test_two_adic_field};
+    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
 
     use super::*;
 
@@ -215,4 +225,13 @@ mod tests {
 
     test_field!(crate::BabyBear);
     test_two_adic_field!(crate::BabyBear);
+
+    test_field_dft!(radix2dit, crate::BabyBear, p3_dft::Radix2Dit<_>);
+    test_field_dft!(bowers, crate::BabyBear, p3_dft::Radix2Bowers);
+    test_field_dft!(parallel, crate::BabyBear, p3_dft::Radix2DitParallel);
+    test_field_dft!(
+        recur_dft,
+        crate::BabyBear,
+        p3_monty_31::dft::RecursiveDft<_>
+    );
 }
