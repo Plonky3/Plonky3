@@ -203,14 +203,14 @@ impl Field for Goldilocks {
         target_feature = "avx2",
         not(all(feature = "nightly-features", target_feature = "avx512f"))
     ))]
-    type Packing = crate::PackedAvx2Goldilocks;
+    type Packing = crate::PackedGoldilocksAVX2;
 
     #[cfg(all(
         feature = "nightly-features",
         target_arch = "x86_64",
         target_feature = "avx512f"
     ))]
-    type Packing = crate::PackedAvx512Goldilocks;
+    type Packing = crate::PackedGoldilocksAVX512;
     #[cfg(not(any(
         all(
             target_arch = "x86_64",
@@ -407,7 +407,7 @@ impl Mul for Goldilocks {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        reduce128((self.value as u128) * (rhs.value as u128))
+        reduce128(u128::from(self.value) * u128::from(rhs.value))
     }
 }
 

@@ -14,16 +14,16 @@ use crate::{AbstractField, Field, Goldilocks, PrimeField64};
 const WIDTH: usize = 8;
 /// AVX512 Goldilocks Field
 ///
-/// Ideally `PackedAvx512Goldilocks` would wrap `__m512i`. Unfortunately, `__m512i` has an alignment
+/// Ideally `PackedGoldilocksAVX512` would wrap `__m512i`. Unfortunately, `__m512i` has an alignment
 /// of 64B, which would preclude us from casting `[Goldilocks; 8]` (alignment 8B) to
-/// `PackedAvx512Goldilocks`. We need to ensure that `PackedAvx512Goldilocks` has the same alignment as
+/// `PackedGoldilocksAVX512`. We need to ensure that `PackedGoldilocksAVX512` has the same alignment as
 /// `Goldilocks`. Thus we wrap `[Goldilocks; 8]` and use the `new` and `get` methods to
 /// convert to and from `__m512i`.
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-pub struct PackedAvx512Goldilocks(pub [Goldilocks; WIDTH]);
+pub struct PackedGoldilocksAVX512(pub [Goldilocks; WIDTH]);
 
-impl PackedAvx512Goldilocks {
+impl PackedGoldilocksAVX512 {
     #[inline]
     fn new(x: __m512i) -> Self {
         unsafe { transmute(x) }
@@ -34,55 +34,55 @@ impl PackedAvx512Goldilocks {
     }
 }
 
-impl Add<Self> for PackedAvx512Goldilocks {
+impl Add<Self> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         Self::new(unsafe { add(self.get(), rhs.get()) })
     }
 }
-impl Add<Goldilocks> for PackedAvx512Goldilocks {
+impl Add<Goldilocks> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Goldilocks) -> Self {
         self + Self::from(rhs)
     }
 }
-impl Add<PackedAvx512Goldilocks> for Goldilocks {
-    type Output = PackedAvx512Goldilocks;
+impl Add<PackedGoldilocksAVX512> for Goldilocks {
+    type Output = PackedGoldilocksAVX512;
     #[inline]
     fn add(self, rhs: Self::Output) -> Self::Output {
         Self::Output::from(self) + rhs
     }
 }
-impl AddAssign<Self> for PackedAvx512Goldilocks {
+impl AddAssign<Self> for PackedGoldilocksAVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
-impl AddAssign<Goldilocks> for PackedAvx512Goldilocks {
+impl AddAssign<Goldilocks> for PackedGoldilocksAVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: Goldilocks) {
         *self = *self + rhs;
     }
 }
 
-impl Debug for PackedAvx512Goldilocks {
+impl Debug for PackedGoldilocksAVX512 {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "({:?})", self.get())
     }
 }
 
-impl Default for PackedAvx512Goldilocks {
+impl Default for PackedGoldilocksAVX512 {
     #[inline]
     fn default() -> Self {
         Self::zero()
     }
 }
 
-impl Div<Goldilocks> for PackedAvx512Goldilocks {
+impl Div<Goldilocks> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
@@ -90,7 +90,7 @@ impl Div<Goldilocks> for PackedAvx512Goldilocks {
         self * rhs.inverse()
     }
 }
-impl DivAssign<Goldilocks> for PackedAvx512Goldilocks {
+impl DivAssign<Goldilocks> for PackedGoldilocksAVX512 {
     #[allow(clippy::suspicious_op_assign_impl)]
     #[inline]
     fn div_assign(&mut self, rhs: Goldilocks) {
@@ -98,47 +98,47 @@ impl DivAssign<Goldilocks> for PackedAvx512Goldilocks {
     }
 }
 
-impl From<Goldilocks> for PackedAvx512Goldilocks {
+impl From<Goldilocks> for PackedGoldilocksAVX512 {
     fn from(x: Goldilocks) -> Self {
         Self([x; WIDTH])
     }
 }
 
-impl Mul<Self> for PackedAvx512Goldilocks {
+impl Mul<Self> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         Self::new(unsafe { mul(self.get(), rhs.get()) })
     }
 }
-impl Mul<Goldilocks> for PackedAvx512Goldilocks {
+impl Mul<Goldilocks> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Goldilocks) -> Self {
         self * Self::from(rhs)
     }
 }
-impl Mul<PackedAvx512Goldilocks> for Goldilocks {
-    type Output = PackedAvx512Goldilocks;
+impl Mul<PackedGoldilocksAVX512> for Goldilocks {
+    type Output = PackedGoldilocksAVX512;
     #[inline]
-    fn mul(self, rhs: PackedAvx512Goldilocks) -> Self::Output {
+    fn mul(self, rhs: PackedGoldilocksAVX512) -> Self::Output {
         Self::Output::from(self) * rhs
     }
 }
-impl MulAssign<Self> for PackedAvx512Goldilocks {
+impl MulAssign<Self> for PackedGoldilocksAVX512 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
-impl MulAssign<Goldilocks> for PackedAvx512Goldilocks {
+impl MulAssign<Goldilocks> for PackedGoldilocksAVX512 {
     #[inline]
     fn mul_assign(&mut self, rhs: Goldilocks) {
         *self = *self * rhs;
     }
 }
 
-impl Neg for PackedAvx512Goldilocks {
+impl Neg for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
@@ -146,14 +146,14 @@ impl Neg for PackedAvx512Goldilocks {
     }
 }
 
-impl Product for PackedAvx512Goldilocks {
+impl Product for PackedGoldilocksAVX512 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::one())
     }
 }
 
-impl AbstractField for PackedAvx512Goldilocks {
+impl AbstractField for PackedGoldilocksAVX512 {
     type F = Goldilocks;
 
     #[inline]
@@ -219,9 +219,14 @@ impl AbstractField for PackedAvx512Goldilocks {
     fn generator() -> Self {
         Goldilocks::generator().into()
     }
+
+    #[inline]
+    fn square(&self) -> Self {
+        Self::new(unsafe { square(self.get()) })
+    }
 }
 
-unsafe impl PackedValue for PackedAvx512Goldilocks {
+unsafe impl PackedValue for PackedGoldilocksAVX512 {
     type Value = Goldilocks;
 
     const WIDTH: usize = WIDTH;
@@ -253,7 +258,7 @@ unsafe impl PackedValue for PackedAvx512Goldilocks {
     }
 }
 
-unsafe impl PackedField for PackedAvx512Goldilocks {
+unsafe impl PackedField for PackedGoldilocksAVX512 {
     type Scalar = Goldilocks;
 
     #[inline]
@@ -270,51 +275,51 @@ unsafe impl PackedField for PackedAvx512Goldilocks {
     }
 }
 
-impl Sub<Self> for PackedAvx512Goldilocks {
+impl Sub<Self> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         Self::new(unsafe { sub(self.get(), rhs.get()) })
     }
 }
-impl Sub<Goldilocks> for PackedAvx512Goldilocks {
+impl Sub<Goldilocks> for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Goldilocks) -> Self {
         self - Self::from(rhs)
     }
 }
-impl Sub<PackedAvx512Goldilocks> for Goldilocks {
-    type Output = PackedAvx512Goldilocks;
+impl Sub<PackedGoldilocksAVX512> for Goldilocks {
+    type Output = PackedGoldilocksAVX512;
     #[inline]
-    fn sub(self, rhs: PackedAvx512Goldilocks) -> Self::Output {
+    fn sub(self, rhs: PackedGoldilocksAVX512) -> Self::Output {
         Self::Output::from(self) - rhs
     }
 }
-impl SubAssign<Self> for PackedAvx512Goldilocks {
+impl SubAssign<Self> for PackedGoldilocksAVX512 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
-impl SubAssign<Goldilocks> for PackedAvx512Goldilocks {
+impl SubAssign<Goldilocks> for PackedGoldilocksAVX512 {
     #[inline]
     fn sub_assign(&mut self, rhs: Goldilocks) {
         *self = *self - rhs;
     }
 }
 
-impl Sum for PackedAvx512Goldilocks {
+impl Sum for PackedGoldilocksAVX512 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
     }
 }
 
-impl Distribution<PackedAvx512Goldilocks> for Standard {
+impl Distribution<PackedGoldilocksAVX512> for Standard {
     #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedAvx512Goldilocks {
-        PackedAvx512Goldilocks(rng.gen())
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
+        PackedGoldilocksAVX512(rng.gen())
     }
 }
 
@@ -400,6 +405,30 @@ unsafe fn mul64_64(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
 }
 
 #[inline]
+unsafe fn square64(x: __m512i) -> (__m512i, __m512i) {
+    // Get high 32 bits of x. See comment in mul64_64_s.
+    let x_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(x)));
+
+    // All pairwise multiplications.
+    let mul_ll = _mm512_mul_epu32(x, x);
+    let mul_lh = _mm512_mul_epu32(x, x_hi);
+    let mul_hh = _mm512_mul_epu32(x_hi, x_hi);
+
+    // Bignum addition, but mul_lh is shifted by 33 bits (not 32).
+    let mul_ll_hi = _mm512_srli_epi64::<33>(mul_ll);
+    let t0 = _mm512_add_epi64(mul_lh, mul_ll_hi);
+    let t0_hi = _mm512_srli_epi64::<31>(t0);
+    let res_hi = _mm512_add_epi64(mul_hh, t0_hi);
+
+    // Form low result by adding the mul_ll and the low 31 bits of mul_lh (shifted to the high
+    // position).
+    let mul_lh_lo = _mm512_slli_epi64::<33>(mul_lh);
+    let res_lo = _mm512_add_epi64(mul_ll, mul_lh_lo);
+
+    (res_hi, res_lo)
+}
+
+#[inline]
 unsafe fn reduce128(x: (__m512i, __m512i)) -> __m512i {
     let (hi0, lo0) = x;
     let hi_hi0 = _mm512_srli_epi64::<32>(hi0);
@@ -411,6 +440,11 @@ unsafe fn reduce128(x: (__m512i, __m512i)) -> __m512i {
 #[inline]
 unsafe fn mul(x: __m512i, y: __m512i) -> __m512i {
     reduce128(mul64_64(x, y))
+}
+
+#[inline]
+unsafe fn square(x: __m512i) -> __m512i {
+    reduce128(square64(x))
 }
 
 #[inline]
@@ -450,7 +484,7 @@ mod tests {
     use p3_field::{AbstractField, PackedField, PackedValue};
 
     use crate::x86_64_avx512::packing::WIDTH;
-    use crate::{Goldilocks, PackedAvx512Goldilocks};
+    use crate::{Goldilocks, PackedGoldilocksAVX512};
 
     fn test_vals_a() -> [Goldilocks; WIDTH] {
         [
@@ -482,8 +516,8 @@ mod tests {
         let a_arr = test_vals_a();
         let b_arr = test_vals_b();
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&a_arr);
-        let packed_b = *PackedAvx512Goldilocks::from_slice(&b_arr);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
+        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
         let packed_res = packed_a + packed_b;
         let arr_res = packed_res.as_slice();
 
@@ -498,8 +532,8 @@ mod tests {
         let a_arr = test_vals_a();
         let b_arr = test_vals_b();
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&a_arr);
-        let packed_b = *PackedAvx512Goldilocks::from_slice(&b_arr);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
+        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
         let packed_res = packed_a * packed_b;
         let arr_res = packed_res.as_slice();
 
@@ -513,7 +547,7 @@ mod tests {
     fn test_square() {
         let a_arr = test_vals_a();
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&a_arr);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
         let packed_res = packed_a.square();
         let arr_res = packed_res.as_slice();
 
@@ -527,7 +561,7 @@ mod tests {
     fn test_neg() {
         let a_arr = test_vals_a();
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&a_arr);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
         let packed_res = -packed_a;
         let arr_res = packed_res.as_slice();
 
@@ -542,8 +576,8 @@ mod tests {
         let a_arr = test_vals_a();
         let b_arr = test_vals_b();
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&a_arr);
-        let packed_b = *PackedAvx512Goldilocks::from_slice(&b_arr);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
+        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
         let packed_res = packed_a - packed_b;
         let arr_res = packed_res.as_slice();
 
@@ -558,8 +592,8 @@ mod tests {
         let a_arr = test_vals_a();
         let b_arr = test_vals_b();
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&a_arr);
-        let packed_b = *PackedAvx512Goldilocks::from_slice(&b_arr);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
+        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
         {
             // Interleave, then deinterleave.
             let (x, y) = packed_a.interleave(packed_b, 1);
@@ -670,8 +704,8 @@ mod tests {
             Goldilocks::new(17),
         ];
 
-        let packed_a = *PackedAvx512Goldilocks::from_slice(&in_a);
-        let packed_b = *PackedAvx512Goldilocks::from_slice(&in_b);
+        let packed_a = *PackedGoldilocksAVX512::from_slice(&in_a);
+        let packed_b = *PackedGoldilocksAVX512::from_slice(&in_b);
         {
             let (x1, y1) = packed_a.interleave(packed_b, 1);
             assert_eq!(x1.as_slice(), int1_a);

@@ -2,7 +2,7 @@ use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::x86_64_avx512::packing::PackedAvx512Goldilocks;
+use crate::x86_64_avx512::packing::PackedGoldilocksAVX512;
 use crate::{
     MdsMatrixGoldilocks, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
     MATRIX_CIRC_MDS_24_GOLDILOCKS, MATRIX_CIRC_MDS_8_SML_ROW,
@@ -17,56 +17,56 @@ const fn convert_array<const N: usize>(arr: [i64; N]) -> [u64; N] {
     result
 }
 
-impl Permutation<[PackedAvx512Goldilocks; 8]> for MdsMatrixGoldilocks {
-    fn permute(&self, input: [PackedAvx512Goldilocks; 8]) -> [PackedAvx512Goldilocks; 8] {
+impl Permutation<[PackedGoldilocksAVX512; 8]> for MdsMatrixGoldilocks {
+    fn permute(&self, input: [PackedGoldilocksAVX512; 8]) -> [PackedGoldilocksAVX512; 8] {
         const MATRIX_CIRC_MDS_8_SML_ROW_U64: [u64; 8] = convert_array(MATRIX_CIRC_MDS_8_SML_ROW);
         apply_circulant(&MATRIX_CIRC_MDS_8_SML_ROW_U64, input)
     }
 
-    fn permute_mut(&self, input: &mut [PackedAvx512Goldilocks; 8]) {
+    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 8]) {
         *input = self.permute(*input);
     }
 }
 
-impl MdsPermutation<PackedAvx512Goldilocks, 8> for MdsMatrixGoldilocks {}
+impl MdsPermutation<PackedGoldilocksAVX512, 8> for MdsMatrixGoldilocks {}
 
-impl Permutation<[PackedAvx512Goldilocks; 12]> for MdsMatrixGoldilocks {
-    fn permute(&self, input: [PackedAvx512Goldilocks; 12]) -> [PackedAvx512Goldilocks; 12] {
+impl Permutation<[PackedGoldilocksAVX512; 12]> for MdsMatrixGoldilocks {
+    fn permute(&self, input: [PackedGoldilocksAVX512; 12]) -> [PackedGoldilocksAVX512; 12] {
         const MATRIX_CIRC_MDS_12_SML_ROW_U64: [u64; 12] = convert_array(MATRIX_CIRC_MDS_12_SML_ROW);
         apply_circulant(&MATRIX_CIRC_MDS_12_SML_ROW_U64, input)
     }
 
-    fn permute_mut(&self, input: &mut [PackedAvx512Goldilocks; 12]) {
+    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 12]) {
         *input = self.permute(*input);
     }
 }
 
-impl MdsPermutation<PackedAvx512Goldilocks, 12> for MdsMatrixGoldilocks {}
+impl MdsPermutation<PackedGoldilocksAVX512, 12> for MdsMatrixGoldilocks {}
 
-impl Permutation<[PackedAvx512Goldilocks; 16]> for MdsMatrixGoldilocks {
-    fn permute(&self, input: [PackedAvx512Goldilocks; 16]) -> [PackedAvx512Goldilocks; 16] {
+impl Permutation<[PackedGoldilocksAVX512; 16]> for MdsMatrixGoldilocks {
+    fn permute(&self, input: [PackedGoldilocksAVX512; 16]) -> [PackedGoldilocksAVX512; 16] {
         const MATRIX_CIRC_MDS_16_SML_ROW_U64: [u64; 16] = convert_array(MATRIX_CIRC_MDS_16_SML_ROW);
         apply_circulant(&MATRIX_CIRC_MDS_16_SML_ROW_U64, input)
     }
 
-    fn permute_mut(&self, input: &mut [PackedAvx512Goldilocks; 16]) {
+    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 16]) {
         *input = self.permute(*input);
     }
 }
 
-impl MdsPermutation<PackedAvx512Goldilocks, 16> for MdsMatrixGoldilocks {}
+impl MdsPermutation<PackedGoldilocksAVX512, 16> for MdsMatrixGoldilocks {}
 
-impl Permutation<[PackedAvx512Goldilocks; 24]> for MdsMatrixGoldilocks {
-    fn permute(&self, input: [PackedAvx512Goldilocks; 24]) -> [PackedAvx512Goldilocks; 24] {
+impl Permutation<[PackedGoldilocksAVX512; 24]> for MdsMatrixGoldilocks {
+    fn permute(&self, input: [PackedGoldilocksAVX512; 24]) -> [PackedGoldilocksAVX512; 24] {
         apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, input)
     }
 
-    fn permute_mut(&self, input: &mut [PackedAvx512Goldilocks; 24]) {
+    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 24]) {
         *input = self.permute(*input);
     }
 }
 
-impl MdsPermutation<PackedAvx512Goldilocks, 24> for MdsMatrixGoldilocks {}
+impl MdsPermutation<PackedGoldilocksAVX512, 24> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
@@ -75,7 +75,7 @@ mod tests {
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{Goldilocks, MdsMatrixGoldilocks, PackedAvx512Goldilocks};
+    use crate::{Goldilocks, MdsMatrixGoldilocks, PackedGoldilocksAVX512};
 
     #[test]
     fn test_avx512_poseidon_width_8() {
@@ -89,7 +89,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedAvx512Goldilocks::from_f);
+        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -108,7 +108,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedAvx512Goldilocks::from_f);
+        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -127,7 +127,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedAvx512Goldilocks::from_f);
+        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -146,7 +146,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedAvx512Goldilocks::from_f);
+        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);

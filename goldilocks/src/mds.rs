@@ -61,7 +61,7 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
 
 const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
-pub const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
+pub(crate) const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
 
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
@@ -80,7 +80,7 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
-pub const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+pub(crate) const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
 
 impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {
@@ -99,7 +99,7 @@ impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 12> for MdsMatrixGoldilocks {}
 
-pub const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
+pub(crate) const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
     [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
 impl Permutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
@@ -120,7 +120,7 @@ impl Permutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
 impl MdsPermutation<Goldilocks, 16> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
-pub const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
+pub(crate) const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
     0x5FFFFFFFA00AAAAB, 0x24021AB75BBFE656, 0x7BE9082D73B06DF5, 0x2282863E9C3A5A62,
     0xE0071C70DFFC71C8, 0x796CB65AB42A1A63, 0xDBBBBFFADFFDDDE3, 0x23B88EE217C5C9C2,
     0x20030C309FFB6DB7, 0x23C3C64763BE1E1D, 0x0F93B7C9CC51362E, 0xC697A1094BD0850A,
