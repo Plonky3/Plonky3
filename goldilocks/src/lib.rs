@@ -1,12 +1,40 @@
 //! The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 
 #![no_std]
+#![cfg_attr(
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+    feature(stdarch_x86_avx512)
+)]
 
 extern crate alloc;
-
 mod extension;
 mod mds;
 mod poseidon2;
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+mod x86_64_avx2;
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(all(feature = "nightly-features", target_feature = "avx512f"))
+))]
+pub use x86_64_avx2::*;
+
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+mod x86_64_avx512;
 
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
@@ -25,6 +53,12 @@ pub use poseidon2::*;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+#[cfg(all(
+    feature = "nightly-features",
+    target_arch = "x86_64",
+    target_feature = "avx512f"
+))]
+pub use x86_64_avx512::*;
 
 /// The Goldilocks prime
 const P: u64 = 0xFFFF_FFFF_0000_0001;
@@ -134,6 +168,7 @@ impl AbstractField for Goldilocks {
         Self::new(u64::from(n))
     }
 
+    #[inline(always)]
     fn from_canonical_u64(n: u64) -> Self {
         Self::new(n)
     }
@@ -161,7 +196,33 @@ impl AbstractField for Goldilocks {
 }
 
 impl Field for Goldilocks {
-    // TODO: Add cfg-guarded Packing for AVX2, NEON, etc.
+    // TODO: Add cfg-guarded Packing for NEON
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(all(feature = "nightly-features", target_feature = "avx512f"))
+    ))]
+    type Packing = crate::PackedGoldilocksAVX2;
+
+    #[cfg(all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ))]
+    type Packing = crate::PackedGoldilocksAVX512;
+    #[cfg(not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(all(feature = "nightly-features", target_feature = "avx512f"))
+        ),
+        all(
+            feature = "nightly-features",
+            target_arch = "x86_64",
+            target_feature = "avx512f"
+        ),
+    )))]
     type Packing = Self;
 
     fn is_zero(&self) -> bool {
@@ -265,6 +326,7 @@ impl TwoAdicField for Goldilocks {
 impl Add for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self {
         let (sum, over) = self.value.overflowing_add(rhs.value);
         let (mut sum, over) = sum.overflowing_add(u64::from(over) * Self::NEG_ORDER);
@@ -285,6 +347,7 @@ impl Add for Goldilocks {
 }
 
 impl AddAssign for Goldilocks {
+    #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
@@ -303,6 +366,7 @@ impl Sum for Goldilocks {
 impl Sub for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn sub(self, rhs: Self) -> Self {
         let (diff, under) = self.value.overflowing_sub(rhs.value);
         let (mut diff, under) = diff.overflowing_sub(u64::from(under) * Self::NEG_ORDER);
@@ -323,6 +387,7 @@ impl Sub for Goldilocks {
 }
 
 impl SubAssign for Goldilocks {
+    #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -331,6 +396,7 @@ impl SubAssign for Goldilocks {
 impl Neg for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         Self::new(Self::ORDER_U64 - self.as_canonical_u64())
     }
@@ -339,12 +405,14 @@ impl Neg for Goldilocks {
 impl Mul for Goldilocks {
     type Output = Self;
 
+    #[inline]
     fn mul(self, rhs: Self) -> Self {
         reduce128(u128::from(self.value) * u128::from(rhs.value))
     }
 }
 
 impl MulAssign for Goldilocks {
+    #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
