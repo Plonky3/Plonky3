@@ -1,4 +1,3 @@
-use alloc::fmt::Debug;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Cloned;
@@ -19,13 +18,13 @@ const TRANSPOSE_BLOCK_SIZE: usize = 64;
 /// A dense matrix stored in row-major form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub struct RowMajorMatrix<T: Debug> {
+pub struct RowMajorMatrix<T> {
     /// All values, stored in row-major order.
     pub values: Vec<T>,
     pub width: usize,
 }
 
-impl<T: Debug> RowMajorMatrix<T> {
+impl<T> RowMajorMatrix<T> {
     #[must_use]
     pub fn new(values: Vec<T>, width: usize) -> Self {
         debug_assert!(width == 0 || values.len() % width == 0);
@@ -102,7 +101,7 @@ impl<T: Debug> RowMajorMatrix<T> {
         }
     }
 
-    pub fn map<U: Debug, F: Fn(T) -> U>(&self, f: F) -> RowMajorMatrix<U>
+    pub fn map<U, F: Fn(T) -> U>(&self, f: F) -> RowMajorMatrix<U>
     where
         T: Clone,
     {
@@ -182,7 +181,7 @@ impl<T: Debug> RowMajorMatrix<T> {
     }
 }
 
-impl<T: core::fmt::Debug> Matrix<T> for RowMajorMatrix<T> {
+impl<T> Matrix<T> for RowMajorMatrix<T> {
     fn width(&self) -> usize {
         self.width
     }
@@ -196,14 +195,14 @@ impl<T: core::fmt::Debug> Matrix<T> for RowMajorMatrix<T> {
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixGet<T> for RowMajorMatrix<T> {
+impl<T: Clone> MatrixGet<T> for RowMajorMatrix<T> {
     #[inline]
     fn get(&self, r: usize, c: usize) -> T {
         self.values[r * self.width + c].clone()
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrix<T> {
+impl<T: Clone> MatrixRows<T> for RowMajorMatrix<T> {
     type Row<'a>
         = Cloned<slice::Iter<'a, T>>
     where
@@ -221,21 +220,21 @@ impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrix<T> {
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRowSlices<T> for RowMajorMatrix<T> {
+impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrix<T> {
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
+impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrix<T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct RowMajorMatrixView<'a, T> {
     pub values: &'a [T],
     pub width: usize,
@@ -289,7 +288,7 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrixView<'_, T> {
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixView<'_, T> {
+impl<T: Clone> MatrixRows<T> for RowMajorMatrixView<'_, T> {
     type Row<'a>
         = Cloned<slice::Iter<'a, T>>
     where
@@ -309,14 +308,13 @@ impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixView<'_, T> {
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
+impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixView<'_, T> {
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
-#[derive(Debug)]
 pub struct RowMajorMatrixViewMut<'a, T> {
     pub values: &'a mut [T],
     pub width: usize,
@@ -429,7 +427,7 @@ impl<T: Clone> MatrixGet<T> for RowMajorMatrixViewMut<'_, T> {
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
+impl<T: Clone> MatrixRows<T> for RowMajorMatrixViewMut<'_, T> {
     type Row<'a>
         = Cloned<slice::Iter<'a, T>>
     where
@@ -449,14 +447,14 @@ impl<T: Clone + core::fmt::Debug> MatrixRows<T> for RowMajorMatrixViewMut<'_, T>
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
+impl<T: Clone> MatrixRowSlices<T> for RowMajorMatrixViewMut<'_, T> {
     fn row_slice(&self, r: usize) -> &[T] {
         debug_assert!(r < self.height());
         &self.values[r * self.width..(r + 1) * self.width]
     }
 }
 
-impl<T: Clone + core::fmt::Debug> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
+impl<T: Clone> MatrixRowSlicesMut<T> for RowMajorMatrixViewMut<'_, T> {
     fn row_slice_mut(&mut self, r: usize) -> &mut [T] {
         debug_assert!(r < self.height());
         &mut self.values[r * self.width..(r + 1) * self.width]
@@ -465,7 +463,7 @@ impl<T: Clone + core::fmt::Debug> MatrixRowSlicesMut<T> for RowMajorMatrixViewMu
 
 impl<T> MatrixTranspose<T> for RowMajorMatrix<T>
 where
-    T: Clone + Default + Send + Sync + Debug,
+    T: Clone + Default + Send + Sync,
 {
     fn transpose(self) -> Self {
         let block_size = TRANSPOSE_BLOCK_SIZE;

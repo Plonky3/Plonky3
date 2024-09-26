@@ -19,7 +19,7 @@ use serde::Serialize;
 /// The `DirectMmcs` sub-trait represents an MMS which can be directly constructed from a set of
 /// matrices. Other MMCSs may be virtual combinations of child MMCSs, or may be constructed in a
 /// streaming manner.
-pub trait Mmcs<T: core::fmt::Debug>: Clone {
+pub trait Mmcs<T>: Clone {
     type ProverData;
     type Commitment: Clone + Serialize + DeserializeOwned;
     type Proof: Serialize + DeserializeOwned;
@@ -72,7 +72,7 @@ pub trait Mmcs<T: core::fmt::Debug>: Clone {
 }
 
 /// An MMCS over explicit inputs which are supplied upfront.
-pub trait DirectMmcs<T: core::fmt::Debug>: Mmcs<T> {
+pub trait DirectMmcs<T>: Mmcs<T> {
     fn commit(&self, inputs: Vec<RowMajorMatrix<T>>) -> (Self::Commitment, Self::ProverData);
 
     fn commit_matrix(&self, input: RowMajorMatrix<T>) -> (Self::Commitment, Self::ProverData) {

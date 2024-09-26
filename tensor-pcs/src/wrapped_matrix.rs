@@ -38,7 +38,6 @@ where
 impl<T, M> MatrixRows<T> for WrappedMatrix<T, M>
 where
     M: MatrixRows<T>,
-    T: core::fmt::Debug,
 {
     type Row<'a>
         = WrappedMatrixRow<'a, T, M>
@@ -58,7 +57,7 @@ where
 
 pub struct WrappedMatrixRow<'a, T, M>
 where
-    T: 'a + core::fmt::Debug,
+    T: 'a,
     M: MatrixRows<T>,
 {
     wrapped_matrix: &'a WrappedMatrix<T, M>,
@@ -69,7 +68,7 @@ where
 
 impl<'a, T, M> Iterator for WrappedMatrixRow<'a, T, M>
 where
-    T: 'a + core::fmt::Debug,
+    T: 'a,
     M: MatrixRows<T>,
 {
     type Item = T;

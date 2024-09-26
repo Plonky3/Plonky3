@@ -34,7 +34,6 @@ impl<T, First, Second> MatrixRows<T> for VerticalPair<T, First, Second>
 where
     First: MatrixRows<T>,
     Second: MatrixRows<T>,
-    T: core::fmt::Debug,
 {
     type Row<'a>
         = EitherIterable<First::Row<'a>, Second::Row<'a>>

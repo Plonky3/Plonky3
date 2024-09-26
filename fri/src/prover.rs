@@ -134,7 +134,7 @@ where
     }
 }
 
-struct CommitPhaseResult<F: std::fmt::Debug, M: Mmcs<F>> {
+struct CommitPhaseResult<F, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData>,
     final_poly: F,
