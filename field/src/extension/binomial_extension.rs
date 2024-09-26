@@ -117,63 +117,77 @@ where
 {
     type F = BinomialExtensionField<AF::F, D>;
 
+    #[inline]
     fn zero() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::zero()),
         }
     }
+
+    #[inline]
     fn one() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::one()),
         }
     }
+
+    #[inline]
     fn two() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::two()),
         }
     }
+
+    #[inline]
     fn neg_one() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::neg_one()),
         }
     }
 
+    #[inline]
     fn from_f(f: Self::F) -> Self {
         Self {
             value: f.value.map(AF::from_f),
         }
     }
 
+    #[inline]
     fn from_bool(b: bool) -> Self {
         AF::from_bool(b).into()
     }
 
+    #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         AF::from_canonical_u8(n).into()
     }
 
+    #[inline]
     fn from_canonical_u16(n: u16) -> Self {
         AF::from_canonical_u16(n).into()
     }
 
+    #[inline]
     fn from_canonical_u32(n: u32) -> Self {
         AF::from_canonical_u32(n).into()
     }
 
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
     fn from_canonical_u64(n: u64) -> Self {
         AF::from_canonical_u64(n).into()
     }
 
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
     fn from_canonical_usize(n: usize) -> Self {
         AF::from_canonical_usize(n).into()
     }
 
+    #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
         AF::from_wrapped_u32(n).into()
     }
 
+    #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         AF::from_wrapped_u64(n).into()
     }
@@ -309,6 +323,7 @@ where
     AF: AbstractField,
     AF::F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = self.clone() + rhs;
     }
@@ -319,6 +334,7 @@ where
     AF: AbstractField,
     AF::F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn add_assign(&mut self, rhs: AF) {
         *self = self.clone() + rhs;
     }
@@ -468,6 +484,7 @@ where
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         self * rhs.inverse()
     }
