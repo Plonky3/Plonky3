@@ -13,12 +13,6 @@ use core::mem::MaybeUninit;
 pub mod array_serialization;
 pub mod linear_map;
 
-/// Computes `ceil(a / b)`. Assumes `a + b` does not overflow.
-#[must_use]
-pub const fn ceil_div_usize(a: usize, b: usize) -> usize {
-    (a + b - 1) / b
-}
-
 /// Computes `ceil(log_2(n))`.
 #[must_use]
 pub const fn log2_ceil_usize(n: usize) -> usize {
