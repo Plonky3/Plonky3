@@ -275,7 +275,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     #[instrument(level = "debug", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
-        T: Copy + Default + Send + Sync,
+        T: Field,
     {
         if added_bits == 0 {
             return self.to_row_major_matrix();
@@ -291,10 +291,8 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         // whose rows are zero except for rows whose low `added_bits` bits are zero.
 
         let w = self.width;
-        let mut padded = RowMajorMatrix::new(
-            vec![T::default(); self.values.borrow().len() << added_bits],
-            w,
-        );
+        let mut padded =
+            RowMajorMatrix::new(T::zero_vec(self.values.borrow().len() << added_bits), w);
         padded
             .par_row_chunks_exact_mut(1 << added_bits)
             .zip(self.par_row_slices())

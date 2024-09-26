@@ -58,7 +58,7 @@ impl MulAir {
         Standard: Distribution<F>,
     {
         let mut rng = thread_rng();
-        let mut trace_values = vec![F::default(); rows * TRACE_WIDTH];
+        let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
 
