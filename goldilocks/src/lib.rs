@@ -65,6 +65,7 @@ const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
+#[repr(transparent)] // Packed field implementations rely on this!
 pub struct Goldilocks {
     /// Not necessarily canonical.
     value: u64,
