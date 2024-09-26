@@ -42,8 +42,6 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
     // modification if it is changed. I tried to make it more generic, but Rust's const
     // generics are not yet good enough.
 
-    // Handle special cases. Paradoxically, below is repetitive but concise.
-    // The branches should be very predictable.
     let n = x.len();
     assert_eq!(result.len(), n);
     if n < WIDTH {
@@ -104,11 +102,24 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
     }
 }
 
+/// A simple single-threaded implementation of Montgomery's trick, suitable for small n.
 fn batch_multiplicative_inverse_small<F: Field>(x: &[F], result: &mut [F]) {
-    // Currently we don't care much about speed on small inputs, so just do it naively.
-    x.par_iter()
-        .zip(result.par_iter_mut())
-        .for_each(|(&xi, ri)| {
-            *ri = xi.inverse();
-        });
+    let n = x.len();
+    assert_eq!(result.len(), n);
+    if n == 0 {
+        return;
+    }
+
+    result[0] = F::one();
+    for i in 1..n {
+        result[i] = result[i - 1] * x[i - 1];
+    }
+
+    let product = result[n - 1] * x[n - 1];
+    let mut inv = product.inverse();
+
+    for i in (0..n).rev() {
+        result[i] *= inv;
+        inv *= x[i];
+    }
 }
