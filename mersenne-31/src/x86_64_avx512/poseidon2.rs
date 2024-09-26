@@ -42,13 +42,13 @@ impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX512, WIDTH>
 fn convert_to_vec_neg_form(input: i32) -> __m512i {
     let input_sub_p = input - (P as i32);
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX512-F intrinsics are available.
         x86_64::_mm512_set1_epi32(input_sub_p)
     }
 }
 
 impl Poseidon2InternalLayerMersenne31 {
-    /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
+    /// Construct an instance of Poseidon2InternalLayerMersenne31 from a vector containing
     /// the constants for each round. Internally, the constants are transformed into th
     /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
@@ -64,7 +64,7 @@ impl Poseidon2InternalLayerMersenne31 {
 }
 
 impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from a array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
@@ -95,7 +95,7 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 fn mul_2exp_i<const I: u32, const I_PRIME: u32>(val: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
     assert_eq!(I + I_PRIME, 31);
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX512-F intrinsics are available.
         let input = val.to_vector();
 
         // In M31, multiplication by 2^n corresponds to a cyclic rotation which
@@ -125,7 +125,9 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(val: PackedMersenne31AVX512) -> 
 fn diagonal_mul_16(state: &mut [PackedMersenne31AVX512; 16]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
     // state[0] -> -2*state[0] is handled by the calling code.
-    state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
+
+    // We could use mul_2exp_i here as it is also 3 instructions but add should have better throughput as its instructions work on more ports.
+    state[2] = state[2] + state[2]; 
 
     // For the remaining entires we use our fast shift code.
     state[3] = mul_2exp_i::<2, 29>(state[3]);
@@ -151,7 +153,9 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX512; 16]) {
 fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
     // state[0] -> -2*state[0] is handled by the calling code.
-    state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
+
+    // We could use mul_2exp_i here as it is also 3 instructions but add should have better throughput as its instructions work on more ports.
+    state[2] = state[2] + state[2];
 
     // For the remaining entires we use our fast shift code.
     state[3] = mul_2exp_i::<2, 29>(state[3]);
@@ -185,7 +189,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
 #[inline(always)]
 fn add_rc_and_sbox(input: PackedMersenne31AVX512, rc: __m512i) -> PackedMersenne31AVX512 {
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX512-F intrinsics are available.
         let input_vec = input.to_vector();
         let input_plus_rc = x86_64::_mm512_add_epi32(input_vec, rc);
 
@@ -296,7 +300,7 @@ mod tests {
 
     /// Test that the output is the same as the scalar version on a random input of length 16.
     #[test]
-    fn test_avx2_poseidon2_width_16() {
+    fn test_avx512_poseidon2_width_16() {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
@@ -307,17 +311,17 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedMersenne31AVX512::from_f);
-        poseidon2.permute_mut(&mut avx2_input);
+        let mut avx512_input = input.map(PackedMersenne31AVX512::from_f);
+        poseidon2.permute_mut(&mut avx512_input);
 
-        let avx2_output = avx2_input.map(|x| x.0[0]);
+        let avx512_output = avx512_input.map(|x| x.0[0]);
 
-        assert_eq!(avx2_output, expected);
+        assert_eq!(avx512_output, expected);
     }
 
     /// Test that the output is the same as the scalar version on a random input of length 24.
     #[test]
-    fn test_avx2_poseidon2_width_24() {
+    fn test_avx512_poseidon2_width_24() {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
@@ -328,11 +332,11 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedMersenne31AVX512::from_f);
-        poseidon2.permute_mut(&mut avx2_input);
+        let mut avx512_input = input.map(PackedMersenne31AVX512::from_f);
+        poseidon2.permute_mut(&mut avx512_input);
 
-        let avx2_output = avx2_input.map(|x| x.0[0]);
+        let avx512_output = avx512_input.map(|x| x.0[0]);
 
-        assert_eq!(avx2_output, expected);
+        assert_eq!(avx512_output, expected);
     }
 }
