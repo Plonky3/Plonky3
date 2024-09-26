@@ -19,7 +19,7 @@ fn encode<F: Field, const ROW_WEIGHT: usize>(c: &mut Criterion)
 where
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(&format!("encode::<{}>", type_name::<F>()));
+    let mut group = c.benchmark_group(format!("encode::<{}>", type_name::<F>()));
     group.sample_size(10);
 
     let mut rng = thread_rng();
