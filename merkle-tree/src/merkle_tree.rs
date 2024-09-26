@@ -9,6 +9,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Matrix, MatrixRowSlices};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// A binary Merkle tree for field data. It has leaves of type `F` and digests of type
@@ -16,6 +18,9 @@ use tracing::instrument;
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `FieldMerkleTreeMmcs`.
+#[derive(Clone, Debug, Deserialize, Eq, Serialize, PartialEq)]
+#[serde(bound(serialize = "[F; DIGEST_ELEMS]: Serialize"))]
+#[serde(bound(deserialize = "[F; DIGEST_ELEMS]: DeserializeOwned"))]
 pub struct FieldMerkleTree<F: Field, const DIGEST_ELEMS: usize> {
     pub(crate) leaves: Vec<RowMajorMatrix<F>>,
     pub(crate) digest_layers: Vec<Vec<[F; DIGEST_ELEMS]>>,
