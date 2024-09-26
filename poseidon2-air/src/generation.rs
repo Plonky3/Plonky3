@@ -5,7 +5,6 @@ use p3_field::PrimeField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_poseidon2::{DiffusionPermutation, MdsLightPermutation};
-use p3_util::ceil_div_usize;
 use tracing::instrument;
 
 use crate::columns::{num_cols, Poseidon2Cols};
@@ -34,7 +33,7 @@ pub fn generate_vectorized_trace_rows<
         "Callers expected to pad inputs to VECTOR_LEN times a power of two"
     );
 
-    let nrows = ceil_div_usize(n, VECTOR_LEN);
+    let nrows = n.div_ceil(VECTOR_LEN);
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
         * VECTOR_LEN;
     let mut trace = RowMajorMatrix::new(vec![F::zero(); nrows * ncols], ncols);

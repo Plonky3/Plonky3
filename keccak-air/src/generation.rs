@@ -5,7 +5,6 @@ use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::iter::repeat;
 use p3_maybe_rayon::prelude::*;
-use p3_util::ceil_div_usize;
 use tracing::instrument;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
@@ -24,7 +23,7 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
-    let num_padding_inputs = ceil_div_usize(num_rows, NUM_ROUNDS) - inputs.len();
+    let num_padding_inputs = num_rows.div_ceil(NUM_ROUNDS) - inputs.len();
     let padded_inputs = inputs
         .into_par_iter()
         .chain(repeat([0; 25]).take(num_padding_inputs));

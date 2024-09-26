@@ -7,7 +7,6 @@ use num_integer::binomial;
 use p3_field::{AbstractField, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use p3_util::ceil_div_usize;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -73,7 +72,7 @@ where
         F: PrimeField64,
     {
         let num_constants = 2 * WIDTH * num_rounds;
-        let bytes_per_constant = ceil_div_usize(F::bits(), 8) + 1;
+        let bytes_per_constant = F::bits().div_ceil(8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
