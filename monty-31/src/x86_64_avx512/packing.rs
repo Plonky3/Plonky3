@@ -28,7 +28,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m512i {
+    pub(crate) fn to_vector(self) -> __m512i {
         unsafe {
             // Safety: `MontyField31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[MontyField31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -45,7 +45,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `MontyField31`. In particular, each element of vector must be in `0..=P`.
-    unsafe fn from_vector(vector: __m512i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m512i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `MontyField31` values. We must only reason about memory representations. `__m512i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can

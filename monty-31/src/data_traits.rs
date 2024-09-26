@@ -40,7 +40,7 @@ pub trait PackedMontyParameters: crate::MontyParametersAVX2 + MontyParameters {}
 ))]
 /// PackedMontyParameters contains constants needed for MONTY operations for packings of Monty31 fields.
 pub trait PackedMontyParameters:
-    crate::MontyParametersAVX2 + crate::MontyParametersAVX512 + MontyParameters
+    crate::MontyParametersAVX512 + MontyParameters
 {
 }
 #[cfg(not(any(

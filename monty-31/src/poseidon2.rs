@@ -43,7 +43,6 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
 ))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     InternalLayerBaseParameters<FP, WIDTH>
-    + crate::InternalLayerParametersAVX2<WIDTH>
     + crate::InternalLayerParametersAVX512<WIDTH>
 {
 }
