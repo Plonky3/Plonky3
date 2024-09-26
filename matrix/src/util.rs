@@ -4,7 +4,7 @@ use p3_util::{log2_strict_usize, reverse_bits_len};
 use crate::dense::RowMajorMatrix;
 use crate::Matrix;
 
-pub fn reverse_matrix_index_bits<F: core::fmt::Debug>(mat: &mut RowMajorMatrix<F>) {
+pub fn reverse_matrix_index_bits<F>(mat: &mut RowMajorMatrix<F>) {
     let w = mat.width();
     let h = mat.height();
     let log_h = log2_strict_usize(h);
@@ -20,7 +20,7 @@ pub fn reverse_matrix_index_bits<F: core::fmt::Debug>(mat: &mut RowMajorMatrix<F
 }
 
 /// Assumes `i < j`.
-pub fn swap_rows<F: core::fmt::Debug>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
+pub fn swap_rows<F>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
     let w = mat.width();
     let (upper, lower) = mat.values.split_at_mut(j * w);
     let row_i = &mut upper[i * w..(i + 1) * w];

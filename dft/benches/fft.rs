@@ -47,7 +47,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(format!(
+    let mut group = c.benchmark_group(&format!(
         "fft::<{}, {}, {}>",
         type_name::<F>(),
         type_name::<Dft>(),
@@ -75,7 +75,11 @@ where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
     Standard: Distribution<Mersenne31>,
 {
-    let mut group = c.benchmark_group(format!("m31_fft::<{}, {}>", type_name::<Dft>(), BATCH_SIZE));
+    let mut group = c.benchmark_group(&format!(
+        "m31_fft::<{}, {}>",
+        type_name::<Dft>(),
+        BATCH_SIZE
+    ));
     group.sample_size(10);
 
     let mut rng = thread_rng();
@@ -98,7 +102,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(format!(
+    let mut group = c.benchmark_group(&format!(
         "ifft::<{}, {}, {}>",
         type_name::<F>(),
         type_name::<Dft>(),
@@ -127,7 +131,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
     Standard: Distribution<F>,
 {
-    let mut group = c.benchmark_group(format!(
+    let mut group = c.benchmark_group(&format!(
         "coset_lde::<{}, {}, {}>",
         type_name::<F>(),
         type_name::<Dft>(),

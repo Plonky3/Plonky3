@@ -26,9 +26,7 @@ impl<T, Inner: MatrixGet<T>> MatrixGet<T> for VerticallyStridedMatrixView<Inner>
     }
 }
 
-impl<T: core::fmt::Debug, Inner: MatrixRows<T>> MatrixRows<T>
-    for VerticallyStridedMatrixView<Inner>
-{
+impl<T, Inner: MatrixRows<T>> MatrixRows<T> for VerticallyStridedMatrixView<Inner> {
     type Row<'a>
         = Inner::Row<'a>
     where
