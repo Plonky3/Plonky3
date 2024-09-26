@@ -8,6 +8,8 @@
     feature(stdarch_x86_avx512)
 )]
 
+extern crate alloc;
+
 mod data_traits;
 pub mod dft;
 mod extension;

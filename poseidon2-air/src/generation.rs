@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::PrimeField;
@@ -36,7 +35,7 @@ pub fn generate_vectorized_trace_rows<
     let nrows = n.div_ceil(VECTOR_LEN);
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
         * VECTOR_LEN;
-    let mut trace = RowMajorMatrix::new(vec![F::zero(); nrows * ncols], ncols);
+    let mut trace = RowMajorMatrix::new(F::zero_vec(nrows * ncols), ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
@@ -89,7 +88,7 @@ pub fn generate_trace_rows<
     );
 
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
-    let mut trace = RowMajorMatrix::new(vec![F::zero(); n * ncols], ncols);
+    let mut trace = RowMajorMatrix::new(F::zero_vec(n * ncols), ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<

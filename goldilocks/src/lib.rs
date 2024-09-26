@@ -11,6 +11,7 @@
 )]
 
 extern crate alloc;
+
 mod extension;
 mod mds;
 mod poseidon2;
@@ -21,6 +22,9 @@ mod poseidon2;
     not(all(feature = "nightly-features", target_feature = "avx512f"))
 ))]
 mod x86_64_avx2;
+
+use alloc::vec;
+use alloc::vec::Vec;
 
 #[cfg(all(
     target_arch = "x86_64",
@@ -39,6 +43,7 @@ mod x86_64_avx512;
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
+use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
@@ -291,6 +296,12 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: repr(transparent) ensures transmutation safety.
+        unsafe { transmute(vec![0u64; len]) }
     }
 }
 

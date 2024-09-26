@@ -1,5 +1,3 @@
-use alloc::vec;
-
 use p3_field::{add_scaled_slice_in_place, Field};
 use p3_maybe_rayon::prelude::*;
 
@@ -22,7 +20,7 @@ where
     let c_values = (0..a.height())
         .into_par_iter()
         .flat_map(|a_row_idx| {
-            let mut c_row = vec![F::zero(); c_width];
+            let mut c_row = F::zero_vec(c_width);
             for &(a_col_idx, a_val) in a.sparse_row(a_row_idx) {
                 add_scaled_slice_in_place(&mut c_row, b.row(a_col_idx), a_val);
             }
