@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_maybe_rayon::prelude::*;
@@ -22,7 +21,7 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     const CHUNK_SIZE: usize = 1024;
 
     let n = x.len();
-    let mut result = vec![F::zero(); n];
+    let mut result = F::zero_vec(n);
 
     x.par_chunks(CHUNK_SIZE)
         .zip(result.par_chunks_mut(CHUNK_SIZE))
