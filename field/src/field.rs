@@ -44,11 +44,38 @@ pub trait AbstractField:
     fn neg_one() -> Self;
 
     fn from_f(f: Self::F) -> Self;
+
+    /// Convert from a `bool`.
     fn from_bool(b: bool) -> Self;
+
+    /// Convert from a canonical `u8`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u8(n: u8) -> Self;
+
+    /// Convert from a canonical `u16`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u16(n: u16) -> Self;
+
+    /// Convert from a canonical `u32`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u32(n: u32) -> Self;
+
+    /// Convert from a canonical `u64`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u64(n: u64) -> Self;
+
+    /// Convert from a canonical `usize`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_usize(n: usize) -> Self;
 
     fn from_wrapped_u32(n: u32) -> Self;

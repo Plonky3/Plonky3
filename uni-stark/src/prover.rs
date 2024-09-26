@@ -173,7 +173,7 @@ where
                 is_first_row,
                 is_last_row,
                 is_transition,
-                alpha,
+                alpha_repeated: PackedChallenge::<SC>::from_f(alpha),
                 accumulator,
             };
             air.eval(&mut folder);
