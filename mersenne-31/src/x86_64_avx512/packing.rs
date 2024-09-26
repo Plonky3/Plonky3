@@ -284,9 +284,8 @@ fn partial_reduce_neg(x: __m512i) -> __m512i {
         // Get the top bits shifted down.
         let hi = x86_64::_mm512_srli_epi64::<31>(x);
 
-        const LOW31: __m512i = unsafe { transmute::<[u64; 8], _>([0x7fffffff; 8]) };
         // nand instead of and means this returns P - lo.
-        let neg_lo = x86_64::_mm512_andnot_si512(x, LOW31);
+        let neg_lo = x86_64::_mm512_maskz_andnot_epi32(EVENS, x, P_AVX512);
 
         // TODO: Check if we can use sub_epi64. Currently this breaks for large inputs.
         x86_64::_mm512_sub_epi32(hi, neg_lo)
@@ -473,6 +472,9 @@ impl AbstractField for PackedMersenne31AVX512 {
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
             0 => Self::one(),
             1 => *self,

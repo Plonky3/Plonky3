@@ -458,6 +458,9 @@ impl AbstractField for PackedMersenne31AVX2 {
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
             0 => Self::one(),
             1 => *self,
