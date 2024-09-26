@@ -17,6 +17,7 @@ p3-baby-bear = { path = "../baby-bear" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-bn254-fr = { path = "../bn254-fr" }
 p3-goldilocks = { path = "../goldilocks" }
+p3-util = { path = "../util" }
 criterion = "0.5.1"
 
 [[bench]]

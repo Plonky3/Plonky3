@@ -1,5 +1,3 @@
-use std::any::type_name;
-
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_bn254_fr::{Bn254Fr, Poseidon2Bn254};
@@ -8,6 +6,7 @@ use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::Permutation;
+use p3_util::pretty_name;
 use rand::thread_rng;
 
 fn bench_poseidon2(c: &mut Criterion) {
@@ -38,17 +37,6 @@ fn bench_poseidon2(c: &mut Criterion) {
     // We hard code the round numbers for Bn254Fr.
     let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 22, &mut rng);
     poseidon2::<Bn254Fr, Poseidon2Bn254<3>, 3>(c, poseidon2_bn254);
-}
-
-// TODO: REMOVE BEFORE MERGING WITH MAIN.
-// CAN IMPORT THIS FROM UTILS ONCE WE UPDATE TO THE LATEST VERSION OF MAIN
-fn pretty_name<T>() -> String {
-    let name = type_name::<T>();
-    let mut result = String::new();
-    for qual in name.split_inclusive(&['<', '>', ',']) {
-        result.push_str(qual.split("::").last().unwrap());
-    }
-    result
 }
 
 fn poseidon2<F, Perm, const WIDTH: usize>(c: &mut Criterion, poseidon2: Perm)
