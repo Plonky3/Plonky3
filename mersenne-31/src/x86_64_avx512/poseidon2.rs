@@ -92,7 +92,9 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 /// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
 /// If the inputs do not conform to this representations, the result is undefined.
 #[inline(always)]
-fn mul_2exp_i<const I: u32, const I_PRIME: u32>(val: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
+fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+    val: PackedMersenne31AVX512,
+) -> PackedMersenne31AVX512 {
     assert_eq!(I + I_PRIME, 31);
     unsafe {
         // Safety: If this code got compiled then AVX512-F intrinsics are available.
@@ -111,8 +113,9 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(val: PackedMersenne31AVX512) -> 
         // Clear the sign bit and combine the lo and high bits.
         // The simplest description of the operation we want is lo OR (hi_dirty AND P) which has bit pattern:
         // 111 => 1, 110 => 1, 101 => 1, 100 => 1, 011 => 1, 010 => 0, 001 => 0, 000 => 0
-        // Note that the input patters: 111, 110, 100 cannot occur so any constant of the form **1*1000 should work. 
-        let output = x86_64::_mm512_ternarylogic_epi32::<0b11111000>(lo_bits, hi_bits_dirty, P_AVX512);
+        // Note that the input patters: 111, 110, 100 cannot occur so any constant of the form **1*1000 should work.
+        let output =
+            x86_64::_mm512_ternarylogic_epi32::<0b11111000>(lo_bits, hi_bits_dirty, P_AVX512);
         PackedMersenne31AVX512::from_vector(output)
     }
 }
@@ -127,7 +130,7 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX512; 16]) {
     // state[0] -> -2*state[0] is handled by the calling code.
 
     // We could use mul_2exp_i here as it is also 3 instructions but add should have better throughput as its instructions work on more ports.
-    state[2] = state[2] + state[2]; 
+    state[2] = state[2] + state[2];
 
     // For the remaining entires we use our fast shift code.
     state[3] = mul_2exp_i::<2, 29>(state[3]);
