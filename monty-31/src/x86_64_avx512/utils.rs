@@ -9,7 +9,7 @@ use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 /// Halve a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline(always)]
-pub fn halve_avx2<MP: MontyParameters>(input: __m512i) -> __m512i {
+pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     /*
         We want this to compile to:
             vpand    least_bit, val, ONE
@@ -43,7 +43,7 @@ pub fn halve_avx2<MP: MontyParameters>(input: __m512i) -> __m512i {
 /// conform to the expected representation. Each element of lhs must lie in [0, P) and
 /// each element of rhs in (-P, P).
 #[inline(always)]
-pub unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(lhs: __m512i, rhs: __m512i) -> __m512i {
+pub unsafe fn signed_add_avx512<PMP: PackedMontyParameters>(lhs: __m512i, rhs: __m512i) -> __m512i {
     /*
         We want this to compile to:
             vpsignd  pos_neg_P,  P,     rhs
@@ -117,7 +117,7 @@ pub unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(lhs: __m512i, rhs: __m
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: u32, const N_PRIME: u32>(
+pub unsafe fn mul_2_exp_neg_n_avx512<TAD: TwoAdicData, const N: u32, const N_PRIME: u32>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -157,7 +157,7 @@ pub unsafe fn mul_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: u32, const N_PRIME
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: u32, const N_PRIME: u32>(
+pub unsafe fn mul_neg_2_exp_neg_n_avx512<TAD: TwoAdicData, const N: u32, const N_PRIME: u32>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -196,7 +196,7 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: u32, const N_P
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: u32>(
+pub unsafe fn mul_2_exp_neg_8_avx512<TAD: TwoAdicData, const N_PRIME: u32>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -233,7 +233,7 @@ pub unsafe fn mul_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: u32>(
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: u32>(
+pub unsafe fn mul_neg_2_exp_neg_8_avx512<TAD: TwoAdicData, const N_PRIME: u32>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -270,7 +270,7 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: u32>(
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_2_exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: u32, const N_PRIME: u32>(
+pub unsafe fn mul_2_exp_neg_two_adicity_avx512<TAD: TwoAdicData, const N: u32, const N_PRIME: u32>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -306,7 +306,7 @@ pub unsafe fn mul_2_exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: u32, con
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx2<
+pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
     TAD: TwoAdicData,
     const N: u32,
     const N_PRIME: u32,
