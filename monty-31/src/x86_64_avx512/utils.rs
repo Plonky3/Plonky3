@@ -70,14 +70,17 @@ pub unsafe fn signed_add_avx512<PMP: PackedMontyParameters>(lhs: __m512i, rhs: _
         if rhs = 0 then we can just return t = lhs as it is already in the desired range.
     */
     unsafe {
-        // If rhs > 0 set the value to P, if rhs < 0 set it to -P and if rhs = 0 set it to 0.
-        let pos_neg_p = x86_64::_mm512_sign_epi32(PMP::PACKED_P, rhs);
-
+        // Currently can't come up with anything better than just correcting rhs to lie in [0, P).
+        // This is rather annoying. I strongly suspect there should be a way to save an operation here.
+        // Unfortunately the natural extension of the AVX2 method doesn't work as _mm512_sign_epi32 doesn't exist.
+        let pos_rhs = x86_64::_mm512_add_epi32(PMP::PACKED_P, rhs);
+        let rhs_canonical = x86_64::_mm512_min_epu32(rhs, pos_rhs);
+        
         // Compute t = lhs + rhs
-        let sum = x86_64::_mm512_add_epi32(lhs, rhs);
+        let sum = x86_64::_mm512_add_epi32(lhs, rhs_canonical);
 
         // sum_corr = (t - P) if rhs > 0, t + P if rhs < 0 and t if rhs = 0 as desired.
-        let sum_corr = x86_64::_mm512_sub_epi32(sum, pos_neg_p);
+        let sum_corr = x86_64::_mm512_sub_epi32(sum, PMP::PACKED_P);
 
         x86_64::_mm512_min_epu32(sum, sum_corr)
     }
