@@ -81,10 +81,12 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     const WIDTH: usize = WIDTH;
 
     fn from_slice(slice: &[Self::Value]) -> &Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         slice.try_into().unwrap()
     }
 
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         slice.try_into().unwrap()
     }
 
@@ -118,7 +120,7 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {
-    type Scalar: Field + Add<Self, Output = Self> + Mul<Self, Output = Self> + Sub<Self, Output = Self>;
+    type Scalar: Field;
 
     /// Take interpret two vectors as chunks of `block_len` elements. Unpack and interleave those
     /// chunks. This is best seen with an example. If we have:

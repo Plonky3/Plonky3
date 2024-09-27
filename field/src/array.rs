@@ -1,11 +1,21 @@
 use core::array;
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::{AbstractField, Field};
+use crate::batch_inverse::batch_multiplicative_inverse_general;
+use crate::{AbstractField, Field, PackedValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)] // This needed to make `transmute`s safe.
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
+
+impl<F: Field, const N: usize> FieldArray<F, N> {
+    pub(crate) fn inverse(&self) -> Self {
+        let mut result = Self::default();
+        batch_multiplicative_inverse_general(&self.0, &mut result.0, |x| x.inverse());
+        result
+    }
+}
 
 impl<F: Field, const N: usize> Default for FieldArray<F, N> {
     fn default() -> Self {
@@ -80,6 +90,37 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
 
     fn generator() -> Self {
         [F::generator(); N].into()
+    }
+}
+
+unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
+    type Value = F;
+
+    const WIDTH: usize = N;
+
+    fn from_slice(slice: &[Self::Value]) -> &Self {
+        assert_eq!(slice.len(), Self::WIDTH);
+        unsafe { &*slice.as_ptr().cast() }
+    }
+
+    fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        assert_eq!(slice.len(), Self::WIDTH);
+        unsafe { &mut *slice.as_mut_ptr().cast() }
+    }
+
+    fn from_fn<Fn>(f: Fn) -> Self
+    where
+        Fn: FnMut(usize) -> Self::Value,
+    {
+        Self(array::from_fn(f))
+    }
+
+    fn as_slice(&self) -> &[Self::Value] {
+        &self.0
+    }
+
+    fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+        &mut self.0
     }
 }
 
@@ -185,6 +226,16 @@ impl<F: Field, const N: usize> MulAssign<F> for FieldArray<F, N> {
     #[inline]
     fn mul_assign(&mut self, rhs: F) {
         self.0.iter_mut().for_each(|x| *x *= rhs);
+    }
+}
+
+impl<F: Field, const N: usize> Div<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: F) -> Self::Output {
+        let rhs_inv = rhs.inverse();
+        self * rhs_inv
     }
 }
 
