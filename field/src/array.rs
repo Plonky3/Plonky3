@@ -232,6 +232,7 @@ impl<F: Field, const N: usize> MulAssign<F> for FieldArray<F, N> {
 impl<F: Field, const N: usize> Div<F> for FieldArray<F, N> {
     type Output = Self;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
     fn div(self, rhs: F) -> Self::Output {
         let rhs_inv = rhs.inverse();

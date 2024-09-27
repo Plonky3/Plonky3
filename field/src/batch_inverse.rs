@@ -49,9 +49,9 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
     }
 
     let x_packed = FieldArray::<F, 4>::pack_slice(x);
-    let mut result_packed = FieldArray::<F, 4>::pack_slice_mut(result);
+    let result_packed = FieldArray::<F, 4>::pack_slice_mut(result);
 
-    batch_multiplicative_inverse_general(x_packed, &mut result_packed, |x_packed| {
+    batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| {
         x_packed.inverse()
     });
 }
