@@ -51,9 +51,7 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
     let x_packed = FieldArray::<F, 4>::pack_slice(x);
     let result_packed = FieldArray::<F, 4>::pack_slice_mut(result);
 
-    batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| {
-        x_packed.inverse()
-    });
+    batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| x_packed.inverse());
 }
 
 /// A simple single-threaded implementation of Montgomery's trick. Since not all `AbstractField`s
