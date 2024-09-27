@@ -169,6 +169,54 @@ fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 // [1] Modern Computer Arithmetic, Richard Brent and Paul Zimmermann, Cambridge University Press,
 //     2010, algorithm 2.7.
 
+/// Perform a partial Montgomery reduction on each 64 bit element.
+/// Input must lie in {0, ..., 2^32P}.
+/// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
+#[inline]
+#[must_use]
+fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+    unsafe {
+        let q = x86_64::_mm512_mul_epu32(input, MPAVX512::PACKED_MU);
+        let q_p = x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P);
+
+        // By construction, the bottom 32 bits of input and q_p are equal.
+        // Thus _mm512_sub_epi32 and _mm512_sub_epi64 should act identically.
+        // However for some reason, the compiler gets confused if we use _mm512_sub_epi64
+        // it's not as bad as in the avx2 case but it's still slightly worse: https://godbolt.org/z/15Web5e64
+        x86_64::_mm512_sub_epi32(input, q_p)
+    }
+}
+
+/// Perform a partial Montgomery reduction on each 64 bit element.
+/// Input must lie in {-2^{31}P, ..., 2^31P}.
+/// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
+#[inline]
+#[must_use]
+fn partial_monty_red_signed_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+    unsafe {
+        let q = x86_64::_mm512_mul_epi32(input, MPAVX512::PACKED_MU);
+        let q_p = x86_64::_mm512_mul_epi32(q, MPAVX512::PACKED_P);
+
+        // Unlike the previous case the compiler output is essentially identical
+        // between _mm512_sub_epi32 and _mm512_sub_epi64. We use _mm512_sub_epi32
+        // again just for consistency.
+        x86_64::_mm512_sub_epi32(input, q_p)
+    }
+}
+
+/// Multiply the MontyField31 field elements in the even index entries.
+/// lhs[2i], rhs[2i] must be signed 32-bit integers such that
+/// lhs[2i] * rhs[2i] lies in {-2^31P, ..., 2^31P}.
+/// The output will lie in {-P, ..., P} stored in output[2i + 1].
+#[inline]
+#[must_use]
+fn monty_mul_signed<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+    unsafe {
+        let prod = x86_64::_mm512_mul_epi32(lhs, rhs);
+        partial_monty_red_signed_to_signed::<MPAVX512>(prod)
+    }
+}
+
 /// Viewing the input as a vector of 16 `u32`s, copy the odd elements into the even elements below
 /// them. In other words, for all `0 <= i < 8`, set the even elements according to
 /// `res[2 * i] := a[2 * i + 1]`, and the odd elements according to
@@ -266,6 +314,79 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         let t = x86_64::_mm512_sub_epi32(prod_hi, q_P_hi);
         x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKED_P)
     }
+}
+
+/// Square the MontyField31 field elements in the even index entries.
+/// Inputs must be signed 32-bit integers.
+/// Outputs will be a signed integer in (-P, ..., P) copied into both the even and odd indices.
+#[inline]
+#[must_use]
+fn shifted_square<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+    // Note that we do not need a restriction on the size of input[i]^2 as
+    // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
+    unsafe {
+        let square = x86_64::_mm512_mul_epi32(input, input);
+        let square_red = partial_monty_red_unsigned_to_signed::<MPAVX512>(square);
+        movehdup_epi32(square_red)
+    }
+}
+
+/// Cube the MontyField31 field elements in the even index entries.
+/// Inputs must be signed 32-bit integers in [-P, ..., P].
+/// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
+#[inline]
+#[must_use]
+pub(crate) fn packed_exp_3<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+    let square = shifted_square::<MPAVX512>(input);
+    monty_mul_signed::<MPAVX512>(square, input)
+}
+
+/// Take the fifth power of the MontyField31 field elements in the even index entries.
+/// Inputs must be signed 32-bit integers in [-P, ..., P].
+/// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
+#[inline]
+#[must_use]
+pub(crate) fn packed_exp_5<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+    let square = shifted_square::<MPAVX512>(input);
+    let quad = shifted_square::<MPAVX512>(square);
+    monty_mul_signed::<MPAVX512>(quad, input)
+}
+
+/// Take the seventh power of the MontyField31 field elements in the even index entries.
+/// Inputs must lie in [-P, ..., P].
+/// Outputs will also lie in (-P, ..., P) stored in the odd indices.
+#[inline]
+#[must_use]
+pub(crate) fn packed_exp_7<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+    let square = shifted_square::<MPAVX512>(input);
+    let cube = monty_mul_signed::<MPAVX512>(square, input);
+    let cube_shifted = movehdup_epi32(cube);
+    let quad = shifted_square::<MPAVX512>(square);
+
+    monty_mul_signed::<MPAVX512>(quad, cube_shifted)
+}
+
+/// Apply func to the even and odd indices of the input vector.
+/// func should only depend in the 32 bit entries in the even indices.
+/// The output of func must lie in (-P, ..., P) and be stored in the odd indices.
+/// The even indices of the output of func will not be read.
+/// The input should conform to the requirements of `func`.
+#[inline]
+#[must_use]
+pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
+    input: __m512i,
+    func: fn(__m512i) -> __m512i,
+) -> __m512i {
+    let input_evn = input;
+    let input_odd = movehdup_epi32(input);
+
+    let d_evn = func(input_evn);
+    let d_odd = func(input_odd);
+
+    let t = mask_movehdup_epi32(d_odd, EVENS, d_evn);
+
+    let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
+    x86_64::_mm512_min_epu32(t, u)
 }
 
 /// Negate a vector of Baby Bear field elements in canonical form.
