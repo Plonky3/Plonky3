@@ -193,8 +193,14 @@ where
 {
     fn sample(&mut self) -> EF {
         let modulus = F::ORDER_U64;
-        let log_size = log2_ceil_u64(F::ORDER_U64);
-        let pow_of_two_bound = (1 << log_size) - 1;
+        let log_size = log2_ceil_u64(F::ORDER_U64) as u32;
+        // In the edge case log_size=64, (1 << 64) - 1 would panic, so we use checked_shl to detect
+        // this case and have it return u64::MAX. unbounded_shl would also work but isn't stable.
+        let pow_of_two_bound = 1u64
+            .checked_shl(log_size)
+            .map(|pow2| pow2.wrapping_sub(1))
+            .unwrap_or(u64::MAX);
+
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
             let value = u64::from_le_bytes(inner.sample_array::<8>());
