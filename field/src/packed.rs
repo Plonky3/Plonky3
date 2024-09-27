@@ -10,7 +10,6 @@ use crate::AbstractField;
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
 /// # Safety
-/// - `WIDTH` is assumed to be a power of 2.
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
@@ -121,7 +120,11 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     + Div<Self::Scalar, Output = Self>
 {
     type Scalar: Field;
+}
 
+/// # Safety
+/// - `WIDTH` is assumed to be a power of 2.
+pub unsafe trait PackedFieldPow2: PackedField {
     /// Take interpret two vectors as chunks of `block_len` elements. Unpack and interleave those
     /// chunks. This is best seen with an example. If we have:
     /// ```text
@@ -190,7 +193,9 @@ unsafe impl<T: Packable> PackedValue for T {
 
 unsafe impl<F: Field> PackedField for F {
     type Scalar = Self;
+}
 
+unsafe impl<F: Field> PackedFieldPow2 for F {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         match block_len {
             1 => (*self, other),
