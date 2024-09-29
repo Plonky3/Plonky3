@@ -4,15 +4,15 @@
 
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use p3_field::{dot_product, AbstractExtensionField, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
+use tracing::instrument;
 
 use crate::dense::RowMajorMatrix;
 
@@ -176,19 +176,20 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Compute Mᵀv, aka premultiply this matrix by the given vector,
     /// aka scale each row by the corresponding entry in `v` and take the row-wise sum.
     /// `v` can be a vector of extension elements.
+    #[instrument(level = "debug", skip_all, fields(dims = %self.dimensions()))]
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>
     where
         T: Field,
         EF: ExtensionField<T>,
     {
         self.par_rows().zip(v).par_fold_reduce(
-            || vec![EF::zero(); self.width()],
+            || EF::zero_vec(self.width()),
             |mut acc, (row, &scale)| {
-                izip!(&mut acc, row).for_each(|(a, x)| *a += scale * x);
+                acc.iter_mut().zip(row).for_each(|(a, x)| *a += scale * x);
                 acc
             },
             |mut acc_l, acc_r| {
-                izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
+                acc_l.iter_mut().zip(acc_r).for_each(|(l, r)| *l += r);
                 acc_l
             },
         )
