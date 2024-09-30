@@ -39,7 +39,8 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> GrindingChallenger for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
