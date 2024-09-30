@@ -3,6 +3,7 @@
 use p3_field::PrimeField32;
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
+use serde::{Deserialize, Serialize};
 
 use crate::{monty_reduce, to_babybear_array, BabyBear};
 
@@ -78,7 +79,7 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_MONTY_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
 ];
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiffusionMatrixBabyBear;
 
 impl Permutation<[BabyBear; 16]> for DiffusionMatrixBabyBear {

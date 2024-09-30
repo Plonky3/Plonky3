@@ -20,11 +20,18 @@ use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 pub use round_numbers::poseidon2_round_numbers_128;
+use serde::{Deserialize, Serialize};
 
 const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
 /// The Poseidon2 permutation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "F: Serialize, [F; WIDTH]: Serialize, MdsLight: Serialize, Diffusion: Serialize"
+))]
+#[serde(bound(
+    deserialize = "F: Deserialize<'de>, [F; WIDTH]: Deserialize<'de>, MdsLight: Deserialize<'de>, Diffusion: Deserialize<'de>"
+))]
 pub struct Poseidon2<F, MdsLight, Diffusion, const WIDTH: usize, const D: u64> {
     /// The number of external rounds.
     rounds_f: usize,
