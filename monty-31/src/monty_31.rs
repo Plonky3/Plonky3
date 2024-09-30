@@ -34,6 +34,7 @@ pub struct MontyField31<MP: MontyParameters> {
 impl<MP: MontyParameters> MontyField31<MP> {
     // The standard way to crate a new element.
     // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
+    #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
             value: to_monty::<MP>(value),
@@ -44,6 +45,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
     // Create a new field element from something already in MONTY form.
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
     // likely doing something fishy.
+    #[inline(always)]
     pub(crate) const fn new_monty(value: u32) -> Self {
         Self {
             value,
@@ -52,7 +54,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
     }
 
     /// Produce a u32 in range [0, P) from a field element corresponding to the true value.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn to_u32(elem: &Self) -> u32 {
         from_monty::<MP>(elem.value)
     }
@@ -149,68 +151,75 @@ impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
+    #[inline(always)]
     fn zero() -> Self {
         FP::MONTY_ZERO
     }
+
+    #[inline(always)]
     fn one() -> Self {
         FP::MONTY_ONE
     }
+
+    #[inline(always)]
     fn two() -> Self {
         FP::MONTY_TWO
     }
+
+    #[inline(always)]
     fn neg_one() -> Self {
         FP::MONTY_NEG_ONE
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_f(f: Self::F) -> Self {
         f
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_bool(b: bool) -> Self {
         Self::from_canonical_u32(b as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u8(n: u8) -> Self {
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u16(n: u16) -> Self {
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u32(n: u32) -> Self {
         debug_assert!(n < FP::PRIME);
         Self::from_wrapped_u32(n)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u64(n: u64) -> Self {
         debug_assert!(n < FP::PRIME as u64);
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_usize(n: usize) -> Self {
         debug_assert!(n < FP::PRIME as usize);
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_wrapped_u32(n: u32) -> Self {
         Self::new(n)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_wrapped_u64(n: u64) -> Self {
         Self::new_monty(to_monty_64::<FP>(n))
     }
 
-    #[inline]
+    #[inline(always)]
     fn generator() -> Self {
         FP::MONTY_GEN
     }
