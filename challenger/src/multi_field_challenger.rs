@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use p3_field::{reduce_32, split_32, ExtensionField, Field, PrimeField, PrimeField32};
 use p3_symmetric::{CryptographicPermutation, Hash};
+use serde::{Deserialize, Serialize};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -13,7 +14,9 @@ use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 ///
 /// SAFETY: There are some bias complications with using this challenger. In particular,
 /// samples are actually random in [0, 2^64) and then reduced to be in F.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "[PF; WIDTH]: Serialize, P: Serialize"))]
+#[serde(bound(deserialize = "[PF; WIDTH]: Deserialize<'de>, P: Deserialize<'de>"))]
 pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize, const RATE: usize>
 where
     F: PrimeField32,

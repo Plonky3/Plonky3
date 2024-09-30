@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use serde::{Deserialize, Serialize};
 
 use p3_field::{ExtensionField, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
@@ -20,7 +21,9 @@ use crate::{
 /// **Sampling**:
 /// -  Samples a field element in a prime field of size `p` by sampling uniformly an element in the
 ///    range (0..1 << log_2(p)). This avoids modulo bias.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "Inner: Serialize"))]
+#[serde(bound(deserialize = "Inner: Deserialize<'de>"))]
 pub struct SerializingChallenger32<F, Inner> {
     inner: Inner,
     _marker: PhantomData<F>,
