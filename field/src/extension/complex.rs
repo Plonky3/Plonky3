@@ -15,14 +15,19 @@ pub trait ComplexExtendable: Field {
 }
 
 impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
+    #[inline(always)]
     fn w() -> Self {
         F::neg_one()
     }
+
+    #[inline(always)]
     fn dth_root() -> Self {
         // since `p = 3 (mod 4)`, `(p-1)/2` is always odd,
         // so `(-1)^((p-1)/2) = -1`
         F::neg_one()
     }
+
+    #[inline(always)]
     fn ext_generator() -> [Self; 2] {
         F::complex_generator().value
     }
@@ -30,32 +35,48 @@ impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
 
 /// Convenience methods for complex extensions
 impl<AF: AbstractField> Complex<AF> {
+    #[inline(always)]
     pub const fn new(real: AF, imag: AF) -> Self {
         Self {
             value: [real, imag],
         }
     }
+
+    #[inline(always)]
     pub fn new_real(real: AF) -> Self {
         Self::new(real, AF::zero())
     }
+
+    #[inline(always)]
     pub fn new_imag(imag: AF) -> Self {
         Self::new(AF::zero(), imag)
     }
+
+    #[inline(always)]
     pub fn real(&self) -> AF {
         self.value[0].clone()
     }
+
+    #[inline(always)]
     pub fn imag(&self) -> AF {
         self.value[1].clone()
     }
+
+    #[inline(always)]
     pub fn conjugate(&self) -> Self {
         Self::new(self.real(), self.imag().neg())
     }
+
+    #[inline]
     pub fn norm(&self) -> AF {
         self.real().square() + self.imag().square()
     }
+
+    #[inline(always)]
     pub fn to_array(&self) -> [AF; 2] {
         self.value.clone()
     }
+
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
     // but still on the circle.
     pub fn rotate<Ext: AbstractExtensionField<AF>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
@@ -69,7 +90,9 @@ impl<AF: AbstractField> Complex<AF> {
 /// The complex extension of this field has a binomial extension.
 pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
     fn w() -> Complex<Self>;
+
     fn dth_root() -> Complex<Self>;
+
     fn ext_generator() -> [Complex<Self>; D];
 }
 
@@ -77,12 +100,17 @@ impl<F, const D: usize> BinomiallyExtendable<D> for Complex<F>
 where
     F: HasComplexBinomialExtension<D>,
 {
+    #[inline(always)]
     fn w() -> Self {
         <F as HasComplexBinomialExtension<D>>::w()
     }
+
+    #[inline(always)]
     fn dth_root() -> Self {
         <F as HasComplexBinomialExtension<D>>::dth_root()
     }
+
+    #[inline(always)]
     fn ext_generator() -> [Self; D] {
         <F as HasComplexBinomialExtension<D>>::ext_generator()
     }
@@ -93,6 +121,7 @@ pub trait HasTwoAdicComplexBinomialExtension<const D: usize>:
     HasComplexBinomialExtension<D>
 {
     const COMPLEX_EXT_TWO_ADICITY: usize;
+
     fn complex_ext_two_adic_generator(bits: usize) -> [Complex<Self>; D];
 }
 
@@ -102,6 +131,7 @@ where
 {
     const EXT_TWO_ADICITY: usize = F::COMPLEX_EXT_TWO_ADICITY;
 
+    #[inline(always)]
     fn ext_two_adic_generator(bits: usize) -> [Self; D] {
         F::complex_ext_two_adic_generator(bits)
     }

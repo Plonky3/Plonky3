@@ -12,18 +12,23 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // R.<x> = F[]
     // assert (x^3 - 5).is_irreducible()
     // ```
+    #[inline(always)]
     fn w() -> Self {
         Self::new(5)
     }
+
     // ```sage
     // F(5)^((p-1)/3)
     // ```
+    #[inline(always)]
     fn dth_root() -> Self {
         Self::new(1513477735)
     }
+
     // ```sage
     // F.extension(x^3 - 5, 'u').multiplicative_generator()
     // ```
+    #[inline(always)]
     fn ext_generator() -> [Self; 3] {
         [Self::new(10), Self::new(1), Self::zero()]
     }
@@ -40,11 +45,13 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // f2 = y^2 - i - 2
     // assert f2.is_irreducible()
     // ```
+    #[inline(always)]
     fn w() -> Complex<Self> {
         Complex::new(Mersenne31::new(2), Mersenne31::one())
     }
 
     // DTH_ROOT = W^((p^2 - 1)/2).
+    #[inline(always)]
     fn dth_root() -> Complex<Self> {
         Complex::new_real(Mersenne31::new(2147483646))
     }
@@ -56,6 +63,7 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // for f in factor(p^4 - 1):
     //   assert g^((p^4-1) // f) != 1
     // ```
+    #[inline(always)]
     fn ext_generator() -> [Complex<Self>; 2] {
         [Complex::new_real(Mersenne31::new(6)), Complex::one()]
     }

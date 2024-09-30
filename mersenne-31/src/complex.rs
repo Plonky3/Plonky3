@@ -18,6 +18,7 @@ impl ComplexExtendable for Mersenne31 {
     // sage: F2.<u> = F.extension(x^2 + 1)
     // sage: F2.multiplicative_generator()
     // u + 12
+    #[inline(always)]
     fn complex_generator() -> Complex<Self> {
         Complex::new(Mersenne31::new(12), Mersenne31::one())
     }
