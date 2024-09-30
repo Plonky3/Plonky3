@@ -1,9 +1,8 @@
 use core::arch::x86_64::__m512i;
 
 use p3_monty_31::{
-    add, halve_avx512, mul_2_exp_neg_8_avx512, mul_2_exp_neg_n_avx512, mul_2_exp_neg_two_adicity_avx512,
-    mul_neg_2_exp_neg_8_avx512, mul_neg_2_exp_neg_n_avx512, mul_neg_2_exp_neg_two_adicity_avx512,
-    signed_add_avx512, sub, InternalLayerParametersAVX512,
+    add, halve_avx512,
+    mul_neg_2_exp_neg_8_avx512, mul_neg_2_exp_neg_n_avx512, mul_neg_2_exp_neg_two_adicity_avx512, sub, InternalLayerParametersAVX512,
 };
 
 use crate::{BabyBearInternalLayerParameters, BabyBearParameters};
@@ -63,22 +62,26 @@ impl InternalLayerParametersAVX512<16> for BabyBearInternalLayerParameters {
         input[7] = add::<BabyBearParameters>(acc7, acc7);
 
         // input[8] -> sum + input[8]/2**8
-        input[8] = mul_2_exp_neg_8_avx512::<BabyBearParameters, 19>(input[8]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[8] = mul_neg_2_exp_neg_8_avx512::<BabyBearParameters, 19>(input[8]);
 
         // input[9] -> sum - input[9]/2**8
         input[9] = mul_neg_2_exp_neg_8_avx512::<BabyBearParameters, 19>(input[9]);
 
         // input[10] -> sum + input[10]/2**2
-        input[10] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[10]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[10] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[10]);
 
         // input[11] -> sum + input[11]/2**3
-        input[11] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[11]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[11] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[11]);
 
         // input[12] -> sum - input[12]/2**4
         input[12] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 4, 23>(input[12]);
 
         // input[13] -> sum + input[13]/2**27
-        input[13] = mul_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[13]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[13] = mul_neg_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[13]);
 
         // input[14] -> sum - input[14]/2**27
         input[14] = mul_neg_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[14]);
@@ -97,11 +100,20 @@ impl InternalLayerParametersAVX512<16> for BabyBearInternalLayerParameters {
             .iter_mut()
             .for_each(|x| *x = sub::<BabyBearParameters>(sum, *x));
 
-        // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
-        input[8..]
-            .iter_mut()
-            .for_each(|x| *x = signed_add_avx512::<BabyBearParameters>(sum, *x));
+        // We similarly need to eitehr add or subtract sum depending on if diagonal mul returned the positive or negative.
+        // Note additionally that we are using sub/add for something not completely intended.
+        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P).
+        // Luckily for us however, the functions still work identically if we relax this assumption slightly.
+        // add is symmetric in inputs and will output the correct value in [0, P) provided only one input lies in
+        // [0, P] instead of [0, P).
+        // sub computes x - y and will output the correct value in [0, P) if x lies in [0, P) and y lies in [0, P].
+        input[8] = sub::<BabyBearParameters>(sum, input[8]);
+        input[9] = add::<BabyBearParameters>(sum, input[9]);
+        input[10] = sub::<BabyBearParameters>(sum, input[10]);
+        input[11] = add::<BabyBearParameters>(sum, input[11]);
+        input[12] = add::<BabyBearParameters>(sum, input[12]);
+        input[13] = sub::<BabyBearParameters>(sum, input[13]);
+        input[14] = add::<BabyBearParameters>(sum, input[14]);
     }
 }
 
@@ -157,25 +169,29 @@ impl InternalLayerParametersAVX512<24> for BabyBearInternalLayerParameters {
         input[7] = add::<BabyBearParameters>(acc7, acc7);
 
         // input[8] -> sum + input[8]/2**8
-        input[8] = mul_2_exp_neg_8_avx512::<BabyBearParameters, 19>(input[8]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[8] = mul_neg_2_exp_neg_8_avx512::<BabyBearParameters, 19>(input[8]);
 
         // input[9] -> sum - input[9]/2**8
         input[9] = mul_neg_2_exp_neg_8_avx512::<BabyBearParameters, 19>(input[9]);
 
         // input[10] -> sum + input[10]/2**2
-        input[10] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[10]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[10] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[10]);
 
         // input[11] -> sum - input[11]/2**2
         input[11] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[11]);
 
         // input[12] -> sum + input[12]/2**3
-        input[12] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[12]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[12] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[12]);
 
         // input[13] -> sum - input[13]/2**3
         input[13] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[13]);
 
         // input[14] -> sum + input[14]/2**4
-        input[14] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 4, 23>(input[14]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[14] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 4, 23>(input[14]);
 
         // input[15] -> sum - input[15]/2**4
         input[15] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 4, 23>(input[15]);
@@ -187,16 +203,19 @@ impl InternalLayerParametersAVX512<24> for BabyBearInternalLayerParameters {
         input[17] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 6, 21>(input[17]);
 
         // input[18] -> sum + input[18]/2**7
-        input[18] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 7, 20>(input[18]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[18] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 7, 20>(input[18]);
 
         // input[19] -> sum - input[19]/2**7
         input[19] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 7, 20>(input[19]);
 
         // input[20] -> sum + input[20]/2**9
-        input[20] = mul_2_exp_neg_n_avx512::<BabyBearParameters, 9, 18>(input[20]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[20] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 9, 18>(input[20]);
 
         // input[21] -> sum - input[21]/2**27
-        input[21] = mul_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[21]);
+        // This outputs the negative of what we want. This will be handled in add_sum.
+        input[21] = mul_neg_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[21]);
 
         // input[22] -> sum - input[22]/2**27
         input[22] = mul_neg_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[22]);
@@ -215,11 +234,28 @@ impl InternalLayerParametersAVX512<24> for BabyBearInternalLayerParameters {
             .iter_mut()
             .for_each(|x| *x = sub::<BabyBearParameters>(sum, *x));
 
-        // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
-        input[8..]
-            .iter_mut()
-            .for_each(|x| *x = signed_add_avx512::<BabyBearParameters>(sum, *x));
+        // We either add sum or subtract from sum depending on if diagonal mul returned the positive or negative.
+        // Note additionally that we are using sub/add for something not completely intended.
+        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P).
+        // Luckily for us however, the functions still work identically if we relax this assumption slightly.
+        // add is symmetric in inputs and will output the correct value in [0, P) provided only one input lies in
+        // [0, P] instead of [0, P).
+        // sub computes x - y and will output the correct value in [0, P) if x lies in [0, P) and y lies in [0, P].
+        input[8] = sub::<BabyBearParameters>(sum, input[8]);
+        input[9] = add::<BabyBearParameters>(sum, input[9]);
+        input[10] = sub::<BabyBearParameters>(sum, input[10]);
+        input[11] = sub::<BabyBearParameters>(sum, input[11]);
+        input[12] = add::<BabyBearParameters>(sum, input[12]);
+        input[13] = sub::<BabyBearParameters>(sum, input[13]);
+        input[14] = add::<BabyBearParameters>(sum, input[14]);
+        input[15] = sub::<BabyBearParameters>(sum, input[15]);
+        input[16] = add::<BabyBearParameters>(sum, input[16]);
+        input[17] = sub::<BabyBearParameters>(sum, input[17]);
+        input[18] = add::<BabyBearParameters>(sum, input[18]);
+        input[19] = add::<BabyBearParameters>(sum, input[19]);
+        input[20] = add::<BabyBearParameters>(sum, input[20]);
+        input[21] = sub::<BabyBearParameters>(sum, input[21]);
+        input[22] = add::<BabyBearParameters>(sum, input[22]);
     }
 }
 

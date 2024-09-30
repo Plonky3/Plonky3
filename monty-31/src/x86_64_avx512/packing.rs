@@ -1,4 +1,6 @@
 use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
+use core::arch::asm;
+use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -119,7 +121,33 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     }
 }
 
-/// Add two vectors of Baby Bear field elements in canonical form.
+/// No-op. Prevents the compiler from deducing the value of the vector.
+///
+/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
+/// and then read from the stack.
+#[inline]
+#[must_use]
+fn confuse_compiler(x: __m512i) -> __m512i {
+    let y;
+    unsafe {
+        asm!(
+            "/*{0}*/",
+            inlateout(zmm_reg) x => y,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
+        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
+        // what it does? The answer is that we still inhibit the transform we want to avoid, so
+        // apparently not. Idk, LLVM works in mysterious ways.
+        if transmute::<__m512i, [u32; 16]>(x) != transmute::<__m512i, [u32; 16]>(y) {
+            unreachable_unchecked();
+        }
+    }
+    y
+}
+
+/// Add two vectors of MontyField31 elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -138,11 +166,37 @@ pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
     //   If t is in 0, ..., P - 1, then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
     // Otherwise, t is in P, ..., 2 P - 2, u is in 0, ..., P - 2 (< P) and r = u. Hence, r is t if
     // t < P and t - P otherwise, as desired.
-
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_add_epi32(lhs, rhs);
         let u = x86_64::_mm512_sub_epi32(t, MPAVX512::PACKED_P);
+        x86_64::_mm512_min_epu32(t, u)
+    }
+}
+
+/// Subtract vectors of MontyField31 elements in canonical form.
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+    // We want this to compile to:
+    //      vpsubd   t, lhs, rhs
+    //      vpaddd   u, t, P
+    //      vpminud  res, t, u
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
+    // latency: 3 cyc
+
+    //   Let t := lhs - rhs. We want to return t mod P. Recall that lhs and rhs are in
+    // 0, ..., P - 1, so t is in (-2^31 <) -P + 1, ..., P - 1 (< 2^31). It suffices to return t if
+    // t >= 0 and t + P otherwise.
+    //   Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
+    //   If t is in 0, ..., P - 1, then u is in P, ..., 2 P - 1 and r = t.
+    // Otherwise, t is in -P + 1, ..., -1; u is in 1, ..., P - 1 (< P) and r = u. Hence, r is t if
+    // t < P and t - P otherwise, as desired.
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
+        let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
         x86_64::_mm512_min_epu32(t, u)
     }
 }
@@ -176,8 +230,8 @@ pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
 #[must_use]
 fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
     unsafe {
-        let q = x86_64::_mm512_mul_epu32(input, MPAVX512::PACKED_MU);
-        let q_p = x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P);
+        let q = confuse_compiler(x86_64::_mm512_mul_epu32(input, MPAVX512::PACKED_MU));
+        let q_p = confuse_compiler(x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P));
 
         // By construction, the bottom 32 bits of input and q_p are equal.
         // Thus _mm512_sub_epi32 and _mm512_sub_epi64 should act identically.
@@ -194,8 +248,8 @@ fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(input: 
 #[must_use]
 fn partial_monty_red_signed_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
     unsafe {
-        let q = x86_64::_mm512_mul_epi32(input, MPAVX512::PACKED_MU);
-        let q_p = x86_64::_mm512_mul_epi32(q, MPAVX512::PACKED_P);
+        let q = confuse_compiler(x86_64::_mm512_mul_epi32(input, MPAVX512::PACKED_MU));
+        let q_p = confuse_compiler(x86_64::_mm512_mul_epi32(q, MPAVX512::PACKED_P));
 
         // Unlike the previous case the compiler output is essentially identical
         // between _mm512_sub_epi32 and _mm512_sub_epi64. We use _mm512_sub_epi32
@@ -212,7 +266,7 @@ fn partial_monty_red_signed_to_signed<MPAVX512: MontyParametersAVX512>(input: __
 #[must_use]
 fn monty_mul_signed<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     unsafe {
-        let prod = x86_64::_mm512_mul_epi32(lhs, rhs);
+        let prod = confuse_compiler(x86_64::_mm512_mul_epi32(lhs, rhs));
         partial_monty_red_signed_to_signed::<MPAVX512>(prod)
     }
 }
@@ -248,7 +302,7 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     }
 }
 
-/// Multiply vectors of Baby Bear field elements in canonical form.
+/// Multiply vectors of MontyField31 elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -325,7 +379,7 @@ fn shifted_square<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
     // Note that we do not need a restriction on the size of input[i]^2 as
     // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
     unsafe {
-        let square = x86_64::_mm512_mul_epi32(input, input);
+        let square = confuse_compiler(x86_64::_mm512_mul_epi32(input, input));
         let square_red = partial_monty_red_unsigned_to_signed::<MPAVX512>(square);
         movehdup_epi32(square_red)
     }
@@ -389,7 +443,7 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     x86_64::_mm512_min_epu32(t, u)
 }
 
-/// Negate a vector of Baby Bear field elements in canonical form.
+/// Negate a vector of MontyField31 elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
@@ -409,33 +463,6 @@ fn neg<MPAVX512: MontyParametersAVX512>(val: __m512i) -> __m512i {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let nonzero = x86_64::_mm512_test_epi32_mask(val, val);
         x86_64::_mm512_maskz_sub_epi32(nonzero, MPAVX512::PACKED_P, val)
-    }
-}
-
-/// Subtract vectors of Baby Bear field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    //   Let t := lhs - rhs. We want to return t mod P. Recall that lhs and rhs are in
-    // 0, ..., P - 1, so t is in (-2^31 <) -P + 1, ..., P - 1 (< 2^31). It suffices to return t if
-    // t >= 0 and t + P otherwise.
-    //   Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
-    //   If t is in 0, ..., P - 1, then u is in P, ..., 2 P - 1 and r = t.
-    // Otherwise, t is in -P + 1, ..., -1; u is in 1, ..., P - 1 (< P) and r = u. Hence, r is t if
-    // t < P and t - P otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
-        x86_64::_mm512_min_epu32(t, u)
     }
 }
 

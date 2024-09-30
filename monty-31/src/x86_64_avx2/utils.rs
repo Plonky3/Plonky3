@@ -123,7 +123,7 @@ pub unsafe fn mul_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_PRIME
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpslld      val_hi,     val,        N
+            vpsrld      val_hi,     val,        N
             vpand       val_lo,     val,        2^{N} - 1
             vpmaddwd    lo_x_r,     val_lo,     [r; 8]
             vpslld      lo,         lo_x_r,     j - N
@@ -163,7 +163,7 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_P
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpslld      val_hi,     val,        N
+            vpsrld      val_hi,     val,        N
             vpand       val_lo,     val,        2^N - 1
             vpmaddwd    lo_x_r,     val_lo,     [r; 8]
             vpslld      lo,         lo_x_r,     j - N
@@ -276,7 +276,7 @@ pub unsafe fn mul_2_exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: i32, con
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpslld  val_hi, 	 	val,            N
+            vpsrld  val_hi, 	 	val,            N
             vpand   val_lo, 	 	val,     	    2^{N} - 1
             vpslrd  val_lo_hi,   	val_lo,         31 - N
             vpaddd  val_hi_plus_lo, val_lo,         val_hi
@@ -316,7 +316,7 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx2<
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpslld  val_hi, 	 	val,        N
+            vpsrld  val_hi, 	 	val,        N
             vpand   val_lo, 	 	val,        2^{N} - 1
             vpslrd  val_lo_hi,   	val_lo,     31 - N
             vpaddd  val_hi_plus_lo, val_lo,     val_hi

@@ -274,7 +274,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
         // input[20] -> sum - input[20]/2^9
         input[20] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 9, 15>(input[20]);
 
-        // input[21] -> sum - input[21]/2^24
+        // input[21] -> sum + input[21]/2^24
         input[21] = mul_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[21]);
 
         // input[22] -> sum - input[22]/2^24
