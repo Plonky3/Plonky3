@@ -210,12 +210,7 @@ where
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
-            3 => Self {
-                value: cubic_square(&self.value, AF::F::w())
-                    .to_vec()
-                    .try_into()
-                    .unwrap(),
-            },
+            3 => Self::from_base_iter(cubic_square(&self.value, AF::F::w()).into_iter()),
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
         }
     }
@@ -441,9 +436,7 @@ where
                 res.value[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
                 res
             }
-            3 => Self {
-                value: cubic_mul(&a, &b, w).to_vec().try_into().unwrap(),
-            },
+            3 => Self::from_base_iter(cubic_mul(&a, &b, w).into_iter()),
             _ => {
                 let mut res = Self::default();
                 #[allow(clippy::needless_range_loop)]
@@ -551,9 +544,7 @@ where
 
     #[inline]
     fn from_base_slice(bs: &[AF]) -> Self {
-        Self {
-            value: bs.to_vec().try_into().expect("slice has wrong length"),
-        }
+        Self::from_base_fn(|i| bs[i].clone())
     }
 
     #[inline]
@@ -561,6 +552,15 @@ where
         Self {
             value: array::from_fn(f),
         }
+    }
+
+    #[inline]
+    fn from_base_iter<I: Iterator<Item = AF>>(iter: I) -> Self {
+        let mut res = Self::default();
+        for (i, b) in iter.enumerate() {
+            res.value[i] = b;
+        }
+        res
     }
 
     #[inline]
