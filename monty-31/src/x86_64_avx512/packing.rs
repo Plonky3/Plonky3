@@ -148,7 +148,10 @@ fn confuse_compiler(x: __m512i) -> __m512i {
 }
 
 /// Add two vectors of MontyField31 elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// 
+/// We allow a slight loosening of the canonical form requirement. One of this inputs
+/// must be in canonical form [0, P) but the other is also allowed to equal P.
+/// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
 pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
@@ -159,13 +162,13 @@ pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
     // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
-    //   Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in
-    // 0, ..., P - 1, so t is in 0, ..., 2 P - 2 (< 2^32). It suffices to return t if t < P and
-    // t - P otherwise.
-    //   Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
-    //   If t is in 0, ..., P - 1, then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
-    // Otherwise, t is in P, ..., 2 P - 2, u is in 0, ..., P - 2 (< P) and r = u. Hence, r is t if
-    // t < P and t - P otherwise, as desired.
+    // Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in [0, P]
+    //   with at most one of them equal to P. Hence t is in [0, 2P - 1] and so it suffices
+    //   to return t if t < P and t - P otherwise.
+    // Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
+    // If t is in [0, P - 1], then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
+    // Otherwise, t is in [P, 2P - 1], and u is in [0, P - 1] (< P) and r = u. Hence, r is t if
+    //   t < P and t - P otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_add_epi32(lhs, rhs);
@@ -175,7 +178,10 @@ pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
 }
 
 /// Subtract vectors of MontyField31 elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// 
+/// We allow a slight loosening of the canonical form requirement. The
+/// rhs input is additionally allowed to be P.
+/// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
 pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
@@ -186,13 +192,13 @@ pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
     // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
-    //   Let t := lhs - rhs. We want to return t mod P. Recall that lhs and rhs are in
-    // 0, ..., P - 1, so t is in (-2^31 <) -P + 1, ..., P - 1 (< 2^31). It suffices to return t if
-    // t >= 0 and t + P otherwise.
-    //   Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
-    //   If t is in 0, ..., P - 1, then u is in P, ..., 2 P - 1 and r = t.
-    // Otherwise, t is in -P + 1, ..., -1; u is in 1, ..., P - 1 (< P) and r = u. Hence, r is t if
-    // t < P and t - P otherwise, as desired.
+    // Let t := lhs - rhs. We want to return t mod P. Recall that lhs is in [0, P - 1]
+    //   and rhs is in [0, P] so t is in (-2^31 <) -P, ..., P - 1 (< 2^31). It suffices to return t if
+    //   t >= 0 and t + P otherwise.
+    // Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
+    // If t is in [0, P - 1], then u is in P, ..., 2 P - 1 and r = t.
+    // Otherwise, t is in [-P, -1], u is in [0, P - 1] (< P) and r = u. Hence, r is t if
+    //   t < P and t - P otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_sub_epi32(lhs, rhs);

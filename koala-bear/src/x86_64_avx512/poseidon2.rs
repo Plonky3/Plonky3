@@ -1,57 +1,15 @@
-use core::arch::x86_64::{self, __m512i};
-use core::mem::transmute;
+use core::arch::x86_64::__m512i;
 
 use p3_monty_31::{
     add, halve_avx512,
-    mul_neg_2_exp_neg_n_avx512, mul_neg_2_exp_neg_two_adicity_avx512, sub,
-    InternalLayerParametersAVX512, MontyParametersAVX512
+    mul_neg_2_exp_neg_n_avx512, mul_neg_2_exp_neg_two_adicity_avx512, mul_neg_2_exp_neg_8_avx512, sub,
+    InternalLayerParametersAVX512
 };
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
 // https://godbolt.org/z/xK91MKsdd
-
-// We reimplement multiplication by +/- 2^{-8} here as there is an extra trick we can do specifically in the KoalaBear case.
-// This lets us replace a left shift by _mm512_bslli_epi128 which can be performed on Port 5. This takes a small amount
-// of pressure off Ports 0, 1.
-
-/// Multiply a vector of Monty31 field elements in canonical form by 2**{-8}.
-/// This is specialised to the KoalaBear prime which allows us to replace a
-/// shifts by a twiddle.
-/// # Safety
-///
-/// Input must be given in canonical form.
-/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
-#[inline(always)]
-unsafe fn mul_neg_2_exp_neg_8(input: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpsrld      hi, val, 8
-    //      vpmaddubsw  lo, val, [r; 8]
-    //      vpslldq     lo, lo, 2
-    //      vpsubd      t, lo, hi
-    // throughput: 1.333
-    // latency: 7
-    unsafe {
-        const ONE_TWENTY_SEVEN: __m512i = unsafe { transmute([127; 16]) }; // P = r*2^j + 1 = 127 * 2^24 + 1
-        let hi = x86_64::_mm512_srli_epi32::<8>(input);
-
-        let mask: __m512i = transmute([(1 << 8) - 1; 16]); // Compiler realises this is a constant.
-
-        // Whilst it generically does something else, provided
-        // each entry of odd_factor is < 2^7, _mm512_maddubs_epi16
-        // performs an element wise multiplication of odd_factor with
-        // the bottom 8 bits of input interpreted as an unsigned integer
-        // Thus lo contains r*x_lo.
-        let lo = x86_64::_mm512_maddubs_epi16(input, ONE_TWENTY_SEVEN);
-
-        // Determine the non 0 values of lo.
-        let non_0_mask = x86_64::_mm512_test_epi32_mask(input, mask);
-
-        let lo_shft = x86_64::_mm512_mask_slli_epi32::<16>(KoalaBearParameters::PACKED_P, non_0_mask, lo);
-        x86_64::_mm512_sub_epi32(lo_shft, hi)
-    }
-}
 
 impl InternalLayerParametersAVX512<16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m512i; 15];
@@ -106,10 +64,10 @@ impl InternalLayerParametersAVX512<16> for KoalaBearInternalLayerParameters {
 
         // input[8]-> sum + input[8]/2^8
         // This outputs the negative of what we want. This will be handled in add_sum.
-        input[8] = mul_neg_2_exp_neg_8(input[8]);
+        input[8] = mul_neg_2_exp_neg_8_avx512::<KoalaBearParameters, 16>(input[8]);
 
         // input[9] -> sum - input[9]/2^8
-        input[9] = mul_neg_2_exp_neg_8(input[9]);
+        input[9] = mul_neg_2_exp_neg_8_avx512::<KoalaBearParameters, 16>(input[9]);
 
         // input[10] -> sum + input[10]/2^3
         // This outputs the negative of what we want. This will be handled in add_sum.
@@ -143,12 +101,8 @@ impl InternalLayerParametersAVX512<16> for KoalaBearInternalLayerParameters {
             .for_each(|x| *x = sub::<KoalaBearParameters>(sum, *x));
 
         // We either add sum or subtract from sum depending on if diagonal mul returned the positive or negative.
-        // Note additionally that we are using sub/add for something not completely intended.
-        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P).
-        // Luckily for us however, the functions still work identically if we relax this assumption slightly.
-        // add is symmetric in inputs and will output the correct value in [0, P) provided only one input lies in
-        // [0, P] instead of [0, P).
-        // sub computes x - y and will output the correct value in [0, P) if x lies in [0, P) and y lies in [0, P].
+        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P) but we are doing it
+        // in a way allowed by the add and sum specifications.
         input[8] = sub::<KoalaBearParameters>(sum, input[8]);
         input[9] = add::<KoalaBearParameters>(sum, input[9]);
         input[10] = sub::<KoalaBearParameters>(sum, input[10]);
@@ -212,10 +166,10 @@ impl InternalLayerParametersAVX512<24> for KoalaBearInternalLayerParameters {
 
         // input[8] -> sum + input[8]/2^8
         // This outputs the negative of what we want. This will be handled in add_sum.
-        input[8] = mul_neg_2_exp_neg_8(input[8]);
+        input[8] = mul_neg_2_exp_neg_8_avx512::<KoalaBearParameters, 16>(input[8]);
 
         // input[9] -> sum - input[9]/2^8
-        input[9] = mul_neg_2_exp_neg_8(input[9]);
+        input[9] = mul_neg_2_exp_neg_8_avx512::<KoalaBearParameters, 16>(input[9]);
 
         // input[10] -> sum + input[10]/2^2
         // This outputs the negative of what we want. This will be handled in add_sum.
@@ -277,12 +231,8 @@ impl InternalLayerParametersAVX512<24> for KoalaBearInternalLayerParameters {
             .for_each(|x| *x = sub::<KoalaBearParameters>(sum, *x));
 
         // We either add sum or subtract from sum depending on if diagonal mul returned the positive or negative.
-        // Note additionally that we are using sub/add for something not completely intended.
-        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P).
-        // Luckily for us however, the functions still work identically if we relax this assumption slightly.
-        // add is symmetric in inputs and will output the correct value in [0, P) provided only one input lies in
-        // [0, P] instead of [0, P).
-        // sub computes x - y and will output the correct value in [0, P) if x lies in [0, P) and y lies in [0, P].
+        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P) but we are doing it
+        // in a way allowed by the add and sum specifications.
         input[8] = sub::<KoalaBearParameters>(sum, input[8]);
         input[9] = add::<KoalaBearParameters>(sum, input[9]);
         input[10] = sub::<KoalaBearParameters>(sum, input[10]);

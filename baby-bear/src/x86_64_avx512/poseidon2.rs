@@ -100,13 +100,9 @@ impl InternalLayerParametersAVX512<16> for BabyBearInternalLayerParameters {
             .iter_mut()
             .for_each(|x| *x = sub::<BabyBearParameters>(sum, *x));
 
-        // We similarly need to eitehr add or subtract sum depending on if diagonal mul returned the positive or negative.
-        // Note additionally that we are using sub/add for something not completely intended.
-        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P).
-        // Luckily for us however, the functions still work identically if we relax this assumption slightly.
-        // add is symmetric in inputs and will output the correct value in [0, P) provided only one input lies in
-        // [0, P] instead of [0, P).
-        // sub computes x - y and will output the correct value in [0, P) if x lies in [0, P) and y lies in [0, P].
+        // We either add sum or subtract from sum depending on if diagonal mul returned the positive or negative.
+        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P) but we are doing it
+        // in a way allowed by the add and sum specifications.
         input[8] = sub::<BabyBearParameters>(sum, input[8]);
         input[9] = add::<BabyBearParameters>(sum, input[9]);
         input[10] = sub::<BabyBearParameters>(sum, input[10]);
@@ -235,12 +231,8 @@ impl InternalLayerParametersAVX512<24> for BabyBearInternalLayerParameters {
             .for_each(|x| *x = sub::<BabyBearParameters>(sum, *x));
 
         // We either add sum or subtract from sum depending on if diagonal mul returned the positive or negative.
-        // Note additionally that we are using sub/add for something not completely intended.
-        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P).
-        // Luckily for us however, the functions still work identically if we relax this assumption slightly.
-        // add is symmetric in inputs and will output the correct value in [0, P) provided only one input lies in
-        // [0, P] instead of [0, P).
-        // sub computes x - y and will output the correct value in [0, P) if x lies in [0, P) and y lies in [0, P].
+        // We are breaking the canonical assumption as input lies in [0, P] and not [0, P) but we are doing it
+        // in a way allowed by the add and sum specifications.
         input[8] = sub::<BabyBearParameters>(sum, input[8]);
         input[9] = add::<BabyBearParameters>(sum, input[9]);
         input[10] = sub::<BabyBearParameters>(sum, input[10]);

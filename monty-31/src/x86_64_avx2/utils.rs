@@ -123,11 +123,11 @@ pub unsafe fn mul_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_PRIME
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld      val_hi,     val,        N
-            vpand       val_lo,     val,        2^{N} - 1
-            vpmaddwd    lo_x_r,     val_lo,     [r; 8]
-            vpslld      lo,         lo_x_r,     j - N
-            vpsubd      res,        val_hi,     lo
+            vpsrld      hi,       val,      N
+            vpand       lo,       val,      2^{N} - 1
+            vpmaddwd    lo_x_r,   lo,       [r; 8]
+            vpslld      lo_shft,  lo_x_r,   j - N
+            vpsubd      res,      hi,       lo_shft
         throughput: 1.67
         latency: 8
     */
@@ -163,11 +163,11 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_P
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld      val_hi,     val,        N
-            vpand       val_lo,     val,        2^N - 1
-            vpmaddwd    lo_x_r,     val_lo,     [r; 8]
-            vpslld      lo,         lo_x_r,     j - N
-            vpsubd      res,        lo,         val_hi
+            vpsrld      hi,       val,      N
+            vpand       lo,       val,      2^N - 1
+            vpmaddwd    lo_x_r,   lo,       [r; 8]
+            vpslld      lo_shft,  lo_x_r,   j - N
+            vpsubd      res,      lo_shft,  hi
         throughput: 1.67
         latency: 8
     */
@@ -178,13 +178,13 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_P
         let mask: __m256i = transmute([(1 << N) - 1; 8]); // Compiler realises this is a constant.
 
         let hi = x86_64::_mm256_srli_epi32::<N>(input);
-        let val_lo = x86_64::_mm256_and_si256(input, mask);
+        let lo = x86_64::_mm256_and_si256(input, mask);
 
         // Whilst it generically does something else, provided
-        // each entry of val_lo, odd_factor are < 2^15, _mm256_madd_epi16
+        // each entry of lo, odd_factor are < 2^15, _mm256_madd_epi16
         // performs an element wise multiplication.
-        // Thus lo_x_r contains r*x_lo.
-        let lo_x_r = x86_64::_mm256_madd_epi16(val_lo, odd_factor);
+        // Thus lo_x_r contains lo * r.
+        let lo_x_r = x86_64::_mm256_madd_epi16(lo, odd_factor);
         let lo_shft = x86_64::_mm256_slli_epi32::<N_PRIME>(lo_x_r);
         x86_64::_mm256_sub_epi32(lo_shft, hi)
     }
@@ -202,10 +202,10 @@ pub unsafe fn mul_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld      hi, val, 8
-            vpmaddubsw  lo, val, [r; 8]
-            vpslldq     lo, lo, j - 8
-            vpsubd      t, hi, lo
+            vpsrld      hi,      val,    8
+            vpmaddubsw  lo_x_r,  val,    [r; 8]
+            vpslldq     lo_shft, lo_x_r, j - 8
+            vpsubd      t,       hi,     lo_shft
         throughput: 1.33
         latency: 7
     */
@@ -213,14 +213,16 @@ pub unsafe fn mul_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
         assert_eq!(8 + N_PRIME, TAD::TWO_ADICITY as i32); // Compiler removes this provided it is satisfied.
 
         let odd_factor: __m256i = transmute([TAD::ODD_FACTOR; 8]); // This is [r; 8]. Compiler realises this is a constant.
+
+        // Get the hi 16 bits shifted down.
         let hi = x86_64::_mm256_srli_epi32::<8>(input);
 
         // Whilst it generically does something else, provided
         // each entry of odd_factor is < 2^7, _mm256_maddubs_epi16
         // performs an element wise multiplication of odd_factor with
         // the bottom 8 bits of input interpreted as an unsigned integer
-        // Thus lo contains r*x_lo.
-        let lo = x86_64::_mm256_maddubs_epi16(input, odd_factor);
+        // Thus lo_x_r contains lo * r.
+        let lo_x_r = x86_64::_mm256_maddubs_epi16(input, odd_factor);
 
         let lo_shft = x86_64::_mm256_slli_epi32::<N_PRIME>(lo);
         x86_64::_mm256_sub_epi32(hi, lo_shft)
@@ -239,10 +241,10 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld      hi, val, 8
-            vpmaddubsw  lo, val, [r; 8]
-            vpslldq     lo, lo, j - 8
-            vpsubd      t, lo, hi
+            vpsrld      hi,      val,     8
+            vpmaddubsw  lo_x_r,  val,     [r; 8]
+            vpslldq     lo_shft, lo_x_r,  j - 8
+            vpsubd      t,       lo_shft, hi
         throughput: 1.33
         latency: 7
     */
@@ -250,16 +252,18 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
         assert_eq!(8 + N_PRIME, TAD::TWO_ADICITY as i32); // Compiler removes this provided it is satisfied.
 
         let odd_factor: __m256i = transmute([TAD::ODD_FACTOR; 8]); // This is [r; 8]. Compiler realises this is a constant.
+
+        // Get the hi 16 bits shifted down.
         let hi = x86_64::_mm256_srli_epi32::<8>(input);
 
         // Whilst it generically does something else, provided
         // each entry of odd_factor is < 2^7, _mm256_maddubs_epi16
         // performs an element wise multiplication of odd_factor with
         // the bottom 8 bits of input interpreted as an unsigned integer
-        // Thus lo contains r*x_lo.
-        let lo = x86_64::_mm256_maddubs_epi16(input, odd_factor);
+        // Thus lo_x_r contains lo * r.
+        let lo_x_r = x86_64::_mm256_maddubs_epi16(input, odd_factor);
 
-        let lo_shft = x86_64::_mm256_slli_epi32::<N_PRIME>(lo);
+        let lo_shft = x86_64::_mm256_slli_epi32::<N_PRIME>(lo_x_r);
         x86_64::_mm256_sub_epi32(lo_shft, hi)
     }
 }
@@ -276,11 +280,11 @@ pub unsafe fn mul_2_exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: i32, con
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld  val_hi, 	 	val,            N
-            vpand   val_lo, 	 	val,     	    2^{N} - 1
-            vpslrd  val_lo_hi,   	val_lo,         31 - N
-            vpaddd  val_hi_plus_lo, val_lo,         val_hi
-            vpsubd  res 		 	val_hi_plus_lo, val_lo_hi,
+            vpsrld  hi, 	 	val,        N
+            vpand   lo, 	 	val,     	2^{N} - 1
+            vpslrd  lo_shft,   	lo,         31 - N
+            vpaddd  lo_plus_hi, lo,         hi
+            vpsubd  res 		lo_plus_hi, lo_shft,
         throughput: 1.67
         latency: 3
     */
@@ -316,11 +320,11 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx2<
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld  val_hi, 	 	val,        N
-            vpand   val_lo, 	 	val,        2^{N} - 1
-            vpslrd  val_lo_hi,   	val_lo,     31 - N
-            vpaddd  val_hi_plus_lo, val_lo,     val_hi
-            vpsubd  res 		 	val_lo_hi,  val_hi_plus_lo
+            vpsrld  hi, 	 	val,      N
+            vpand   lo, 	 	val,      2^{N} - 1
+            vpslrd  lo_shft,   	lo,       31 - N
+            vpaddd  lo_plus_hi, lo,       hi
+            vpsubd  res 		lo_shft,  lo_plus_hi
         throughput: 1.67
         latency: 3
     */

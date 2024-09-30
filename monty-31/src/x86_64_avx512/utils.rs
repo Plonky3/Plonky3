@@ -76,14 +76,15 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<TAD: TwoAdicData + PackedMontyParameter
 ) -> __m512i {
     /*
         We want this to compile to:
-            vpsrld      val_hi,     val,        N
-            vpandd      val_lo,     val,        2^N - 1
-            vptestmd    lo_MASK,    val,        2^N - 1
-            vpmaddwd    lo_x_r,     val_lo,     [r; 16]
-            vpslld      P,          lo_MASK,    lo_x_r,     j - N
-            vpsubd      res,        lo,         val_hi
-        throughput: 1.67
-        latency: 8
+            mov         lo_shft,            P           This can be a mov or a load. It will not affect throughput/latency.
+            vpsrld      hi,                 val,        N
+            vpandd      lo,                 val,        2^N - 1
+            vptestmd    lo_MASK,            val,        2^N - 1
+            vpmaddwd    lo_x_r,             lo,         [r; 16]
+            vpslld      lo_shft{lo_MASK},   lo_x_r,     j - N
+            vpsubd      res,                lo_shft,    hi
+        throughput: 3
+        latency: 9
     */
     unsafe {
         assert_eq!(N + N_PRIME, TAD::TWO_ADICITY as u32); // Compiler removes this provided it is satisfied.
@@ -92,7 +93,7 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<TAD: TwoAdicData + PackedMontyParameter
         let mask: __m512i = transmute([(1 << N) - 1; 16]); // Compiler realises this is a constant.
 
         let hi = x86_64::_mm512_srli_epi32::<N>(input);
-        let val_lo = x86_64::_mm512_and_si512(input, mask);
+        let lo = x86_64::_mm512_and_si512(input, mask);
 
         // Determine the non 0 values of lo.
         let lo_mask = x86_64::_mm512_test_epi32_mask(input, mask);
@@ -100,8 +101,8 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<TAD: TwoAdicData + PackedMontyParameter
         // Whilst it generically does something else, provided
         // each entry of val_lo, odd_factor are < 2^15, _mm512_madd_epi16
         // performs an element wise multiplication.
-        // Thus lo_x_r contains r*x_lo.
-        let lo_x_r = x86_64::_mm512_madd_epi16(val_lo, odd_factor);
+        // Thus lo_x_r contains lo * r.
+        let lo_x_r = x86_64::_mm512_madd_epi16(lo, odd_factor);
 
         // When lo = 0, lo_shft = P
         // When lo > 0, lo_shft = r2^{j - N} x_lo
@@ -124,11 +125,13 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx512<TAD: TwoAdicData + PackedMontyParameter
 ) -> __m512i {
     /*
         We want this to compile to:
-            vpsrld      hi, val, 8
-            vpmaddubsw  lo, val, [r; 16]
-            vpslldq     lo, lo, j - 8
-            vpsubd      t, lo, hi
-        throughput: 1.33
+            mov         lo_shft,            P           This can be a mov or a load. It will not affect throughput/latency.
+            vpsrld      hi,                 val,        8
+            vptestmd    lo_MASK,            val,        2^8 - 1
+            vpmaddubsw  lo_x_r,             val,        [r; 16]
+            vpslld      lo_shft{lo_MASK},   lo_x_r,     j - 8
+            vpsubd      res,                lo_shft,    hi
+        throughput: 3
         latency: 7
     */
     unsafe {
@@ -139,17 +142,21 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx512<TAD: TwoAdicData + PackedMontyParameter
         
         let mask: __m512i = transmute([(1 << 8) - 1; 16]); // Compiler realises this is a constant.
 
+        // Determine the non 0 values of lo.
+        let lo_mask = x86_64::_mm512_test_epi32_mask(input, mask);
+
         // Whilst it generically does something else, provided
         // each entry of odd_factor is < 2^7, _mm512_maddubs_epi16
         // performs an element wise multiplication of odd_factor with
         // the bottom 8 bits of input interpreted as an unsigned integer
-        // Thus lo contains r*x_lo.
+        // Thus lo_x_r contains lo * r.
         let lo_x_r = x86_64::_mm512_maddubs_epi16(input, odd_factor);
 
-        // Determine the non 0 values of lo.
-        let lo_mask = x86_64::_mm512_test_epi32_mask(input, mask);
-
+        // When lo = 0, lo_shft = P
+        // When lo > 0, lo_shft = r2^{j - N} x_lo
         let lo_shft = x86_64::_mm512_mask_slli_epi32::<N_PRIME>(TAD::PACKED_P, lo_mask, lo_x_r);
+
+        // As hi < r2^{j - N} < P, the output is always in [0, P]. It is equal to P only when input t = 0.
         x86_64::_mm512_sub_epi32(lo_shft, hi)
     }
 }
@@ -170,13 +177,15 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
 ) -> __m512i {
     /*
         We want this to compile to:
-            vpslld  val_hi, 	 	val,        N
-            vpand   val_lo, 	 	val,        2^{N} - 1
-            vpslrd  val_lo_hi,   	val_lo,     31 - N
-            vpaddd  val_hi_plus_lo, val_lo,     val_hi
-            vpsubd  res 		 	val_lo_hi,  val_hi_plus_lo
-        throughput: 1.67
-        latency: 3
+            mov         lo_shft,            P           This can be a mov or a load. It will not affect throughput/latency.
+            vpsrld      hi,                 val,        N
+            vpandd      lo,                 val,        2^N - 1
+            vptestmd    lo_MASK,            val,        2^N - 1
+            vpslld      lo_shft{lo_MASK},   lo,         31 - N
+            vpaddd      lo_plus_hi,         lo,         hi
+            vpsubd      res,                lo_shft,    lo_plus_hi
+        throughput: 3
+        latency: 5
     */
     unsafe {
         assert_eq!(N, (TAD::TWO_ADICITY as u32)); // Compiler removes this provided it is satisfied.
@@ -192,9 +201,14 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
         // Determine the non 0 values of lo.
         let lo_mask = x86_64::_mm512_test_epi32_mask(input, mask);
 
+        // When lo = 0, lo_shft = P
+        // When lo > 0, lo_shft = r x_lo
         let lo_shft = x86_64::_mm512_mask_slli_epi32::<N_PRIME>(TAD::PACKED_P, lo_mask, lo);
 
         let lo_plus_hi = x86_64::_mm512_add_epi32(lo, hi);
+
+        // When lo = 0, return P - hi
+        // When lo > 0 return r*lo - hi
         x86_64::_mm512_sub_epi32(lo_shft, lo_plus_hi)
     }
 }

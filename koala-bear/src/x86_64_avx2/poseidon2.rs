@@ -55,7 +55,7 @@ unsafe fn mul_2_exp_neg_8(input: __m256i) -> __m256i {
 
 /// Multiply a vector of Monty31 field elements in canonical form by 2**{-8}.
 /// This is specialised to the KoalaBear prime which allows us to replace a
-/// shifts by a twiddle.
+/// shift by a twiddle.
 /// # Safety
 ///
 /// Input must be given in canonical form.
