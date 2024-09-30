@@ -1,5 +1,5 @@
-use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
 use core::arch::asm;
+use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -148,7 +148,7 @@ fn confuse_compiler(x: __m512i) -> __m512i {
 }
 
 /// Add two vectors of MontyField31 elements in canonical form.
-/// 
+///
 /// We allow a slight loosening of the canonical form requirement. One of this inputs
 /// must be in canonical form [0, P) but the other is also allowed to equal P.
 /// If the inputs do not conform to this representation, the result is undefined.
@@ -178,7 +178,7 @@ pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
 }
 
 /// Subtract vectors of MontyField31 elements in canonical form.
-/// 
+///
 /// We allow a slight loosening of the canonical form requirement. The
 /// rhs input is additionally allowed to be P.
 /// If the inputs do not conform to this representation, the result is undefined.
@@ -234,7 +234,9 @@ pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
 /// The output will lie in {-P, ..., P} and be stored in the upper 32 bits.
 #[inline]
 #[must_use]
-fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
+fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(
+    input: __m512i,
+) -> __m512i {
     unsafe {
         let q = confuse_compiler(x86_64::_mm512_mul_epu32(input, MPAVX512::PACKED_MU));
         let q_p = confuse_compiler(x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P));

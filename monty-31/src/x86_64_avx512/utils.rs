@@ -46,8 +46,8 @@ pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     Then -2^{-N} x = -x_hi + r2^{j - N} x_lo.
 
     Observe that if x_lo > 0, then x_hi < r2^{j - N}x_lo < P and so r2^{j - N} x_lo - x_hi is canonical.
-    On the other hand, if x_lo = 0 then the canonical result should be P - x_hi if x_hi > 0 and 0 otherwise. 
-    
+    On the other hand, if x_lo = 0 then the canonical result should be P - x_hi if x_hi > 0 and 0 otherwise.
+
     Using intrinsics we can efficiently output r2^{j - N} x_lo - x_hi if x_lo > 0 and P - x_hi if x_lo = 0.
     Whilst this means the output will not be canonical and instead will lie in [0, P] this will be handled by
     a seperate function.
@@ -71,7 +71,11 @@ pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
 /// Input must be given in canonical form.
 /// Output may not be in canonical form but will lie in [0, P].
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_n_avx512<TAD: TwoAdicData + PackedMontyParameters, const N: u32, const N_PRIME: u32>(
+pub unsafe fn mul_neg_2_exp_neg_n_avx512<
+    TAD: TwoAdicData + PackedMontyParameters,
+    const N: u32,
+    const N_PRIME: u32,
+>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -120,7 +124,10 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<TAD: TwoAdicData + PackedMontyParameter
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_8_avx512<TAD: TwoAdicData + PackedMontyParameters, const N_PRIME: u32>(
+pub unsafe fn mul_neg_2_exp_neg_8_avx512<
+    TAD: TwoAdicData + PackedMontyParameters,
+    const N_PRIME: u32,
+>(
     input: __m512i,
 ) -> __m512i {
     /*
@@ -139,7 +146,7 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx512<TAD: TwoAdicData + PackedMontyParameter
 
         let odd_factor: __m512i = transmute([TAD::ODD_FACTOR; 16]); // This is [r; 16]. Compiler realises this is a constant.
         let hi = x86_64::_mm512_srli_epi32::<8>(input);
-        
+
         let mask: __m512i = transmute([(1 << 8) - 1; 16]); // Compiler realises this is a constant.
 
         // Determine the non 0 values of lo.

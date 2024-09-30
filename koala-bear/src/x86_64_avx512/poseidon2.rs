@@ -1,9 +1,8 @@
 use core::arch::x86_64::__m512i;
 
 use p3_monty_31::{
-    add, halve_avx512,
-    mul_neg_2_exp_neg_n_avx512, mul_neg_2_exp_neg_two_adicity_avx512, mul_neg_2_exp_neg_8_avx512, sub,
-    InternalLayerParametersAVX512
+    add, halve_avx512, mul_neg_2_exp_neg_8_avx512, mul_neg_2_exp_neg_n_avx512,
+    mul_neg_2_exp_neg_two_adicity_avx512, sub, InternalLayerParametersAVX512,
 };
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};

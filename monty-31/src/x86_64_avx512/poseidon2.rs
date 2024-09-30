@@ -274,9 +274,10 @@ where
             */
             self.packed_internal_constants.iter().for_each(|&rc| {
                 state.s0 = add_rc_and_sbox::<FP, D>(state.s0, rc); // s0 -> (s0 + rc)^D
-                let sum_non_0 = sum_15(
-                    &transmute::<[__m512i; 15], [PackedMontyField31AVX512<FP>; 15]>(state.s_hi),
-                ); // Get the sum of all elements other than s0.
+                let sum_non_0 = sum_15(&transmute::<
+                    [__m512i; 15],
+                    [PackedMontyField31AVX512<FP>; 15],
+                >(state.s_hi)); // Get the sum of all elements other than s0.
                 ILP::diagonal_mul(&mut state.s_hi); // si -> vi * si for all i > 0.
                 let sum = sum_non_0 + state.s0; // Get the full sum.
                 state.s0 = sum_non_0 - state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
@@ -319,9 +320,10 @@ where
 
             self.packed_internal_constants.iter().for_each(|&rc| {
                 state.s0 = add_rc_and_sbox::<FP, D>(state.s0, rc); // s0 -> (s0 + rc)^D
-                let sum_non_0 = sum_23(
-                    &transmute::<[__m512i; 23], [PackedMontyField31AVX512<FP>; 23]>(state.s_hi),
-                ); // Get the sum of all elements other than s0.
+                let sum_non_0 = sum_23(&transmute::<
+                    [__m512i; 23],
+                    [PackedMontyField31AVX512<FP>; 23],
+                >(state.s_hi)); // Get the sum of all elements other than s0.
                 ILP::diagonal_mul(&mut state.s_hi); // si -> vi * si for all i > 0.
                 let sum = sum_non_0 + state.s0; // Get the full sum.
                 state.s0 = sum_non_0 - state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
