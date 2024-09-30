@@ -1,9 +1,10 @@
 use alloc::format;
 use alloc::string::ToString;
-use core::array;
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, mem};
 
 use itertools::Itertools;
 use num_bigint::BigUint;
@@ -19,6 +20,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[repr(transparent)] // to make the zero_vec implementation safe
 pub struct BinomialExtensionField<AF, const D: usize> {
     #[serde(
         with = "p3_util::array_serialization",
@@ -120,7 +122,7 @@ where
     #[inline]
     fn zero() -> Self {
         Self {
-            value: field_to_array::<AF, D>(AF::zero()),
+            value: array::from_fn(|_| AF::zero()),
         }
     }
 
@@ -242,6 +244,17 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
     fn order() -> BigUint {
         F::order().pow(D as u32)
+    }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        let mut vec_f = F::zero_vec(len * D);
+        let ptr = vec_f.as_mut_ptr() as *mut Self;
+        let cap = vec_f.capacity() / D;
+        debug_assert_eq!(vec_f.len() / D, len);
+        mem::forget(vec_f);
+        // SAFETY: Self is a repr(transparent) wrapper around an array of F.
+        unsafe { Vec::from_raw_parts(ptr, len, cap) }
     }
 }
 
