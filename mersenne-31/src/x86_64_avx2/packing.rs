@@ -316,10 +316,12 @@ pub(crate) fn exp5(x: __m256i) -> __m256i {
         let evn_5 = x86_64::_mm256_mul_epi32(evn_4, input_evn);
         let odd_5 = x86_64::_mm256_mul_epi32(odd_4, input_odd);
 
+        // Marked dirty as the top bit needs to be cleared.
         let odd_5_lo_dirty = moveldup_epi32(odd_5);
         let odd_5_hi = x86_64::_mm256_add_epi64(odd_5, odd_5);
         let evn_5_hi = x86_64::_mm256_srli_epi64::<31>(evn_5);
 
+        // Marked dirty as the top bit needs to be cleared.
         let lo_dirty = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5, odd_5_lo_dirty);
         let hi = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5_hi, odd_5_hi);
         let lo = x86_64::_mm256_and_si256(lo_dirty, P_AVX2);
@@ -456,6 +458,9 @@ impl AbstractField for PackedMersenne31AVX2 {
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
             0 => Self::one(),
             1 => *self,

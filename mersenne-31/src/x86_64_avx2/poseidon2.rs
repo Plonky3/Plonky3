@@ -48,7 +48,7 @@ fn convert_to_vec_neg_form(input: i32) -> __m256i {
 }
 
 impl Poseidon2InternalLayerMersenne31 {
-    /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
+    /// Construct an instance of Poseidon2InternalLayerMersenne31 from a vector containing
     /// the constants for each round. Internally, the constants are transformed into th
     /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
@@ -64,7 +64,7 @@ impl Poseidon2InternalLayerMersenne31 {
 }
 
 impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from a array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
