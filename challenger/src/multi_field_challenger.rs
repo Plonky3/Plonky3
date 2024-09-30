@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use p3_field::{reduce_32, split_32, ExtensionField, Field, PrimeField, PrimeField32};
 use p3_symmetric::{CryptographicPermutation, Hash};
+use serde::{Deserialize, Serialize};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -13,8 +14,10 @@ use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 ///
 /// SAFETY: There are some bias complications with using this challenger. In particular,
 /// samples are actually random in [0, 2^64) and then reduced to be in F.
-#[derive(Clone, Debug)]
-pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize>
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "[PF ; WIDTH]: Serialize, P: Serialize"))]
+#[serde(bound(deserialize = "[PF ; WIDTH]: Deserialize<'de>, P: Deserialize<'de>"))]
+pub struct MultiField32Challenger<F, PF, P, const WIDTH: usize, const RATE: usize>
 where
     F: PrimeField32,
     PF: Field,
@@ -27,7 +30,7 @@ where
     num_f_elms: usize,
 }
 
-impl<F, PF, P, const WIDTH: usize> MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: Field,
@@ -48,14 +51,14 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn duplexing(&mut self) {
-        assert!(self.input_buffer.len() <= self.num_f_elms * WIDTH);
+        assert!(self.input_buffer.len() <= self.num_f_elms * RATE);
 
         for (i, f_chunk) in self.input_buffer.chunks(self.num_f_elms).enumerate() {
             self.sponge_state[i] = reduce_32(f_chunk);
@@ -75,7 +78,8 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> FieldChallenger<F> for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> FieldChallenger<F>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -83,7 +87,8 @@ where
 {
 }
 
-impl<F, PF, P, const WIDTH: usize> CanObserve<F> for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanObserve<F>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -95,14 +100,14 @@ where
 
         self.input_buffer.push(value);
 
-        if self.input_buffer.len() == self.num_f_elms * WIDTH {
+        if self.input_buffer.len() == self.num_f_elms * RATE {
             self.duplexing();
         }
     }
 }
 
-impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<[F; N]>
-    for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize> CanObserve<[F; N]>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -115,8 +120,8 @@ where
     }
 }
 
-impl<F, PF, const N: usize, P, const WIDTH: usize> CanObserve<Hash<F, PF, N>>
-    for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize> CanObserve<Hash<F, PF, N>>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -133,8 +138,8 @@ where
 }
 
 // for TrivialPcs
-impl<F, PF, P, const WIDTH: usize> CanObserve<Vec<Vec<F>>>
-    for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanObserve<Vec<Vec<F>>>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
@@ -149,7 +154,8 @@ where
     }
 }
 
-impl<F, EF, PF, P, const WIDTH: usize> CanSample<EF> for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, EF, PF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     EF: ExtensionField<F>,
@@ -171,7 +177,8 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize> CanSampleBits<usize> for MultiField32Challenger<F, PF, P, WIDTH>
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanSampleBits<usize>
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
