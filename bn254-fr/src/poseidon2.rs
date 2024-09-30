@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use p3_field::AbstractField;
 use p3_poseidon2::{matmul_internal, DiffusionPermutation};
 use p3_symmetric::Permutation;
+use serde::{Deserialize, Serialize};
 
 use crate::Bn254Fr;
 
@@ -16,7 +17,7 @@ fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
     MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::one(), Bn254Fr::one(), Bn254Fr::two()])
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiffusionMatrixBN254;
 
 impl<AF: AbstractField<F = Bn254Fr>> Permutation<[AF; 3]> for DiffusionMatrixBN254 {
