@@ -250,7 +250,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     fn zero_vec(len: usize) -> Vec<Self> {
         let mut vec_f = F::zero_vec(len * D);
         let ptr = vec_f.as_mut_ptr() as *mut Self;
-        let len = vec_f.len() / D;
         let cap = vec_f.capacity() / D;
         mem::forget(vec_f);
         // SAFETY: Self is a repr(transparent) wrapper around an array of F.
