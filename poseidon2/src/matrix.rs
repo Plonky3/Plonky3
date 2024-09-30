@@ -1,6 +1,7 @@
 use p3_field::{AbstractField, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
+use serde::{Deserialize, Serialize};
 
 extern crate alloc;
 
@@ -143,7 +144,7 @@ fn mds_light_permutation<AF: AbstractField, MdsPerm4: MdsPermutation<AF, 4>, con
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Poseidon2ExternalMatrixGeneral;
 
 impl<AF, const WIDTH: usize> Permutation<[AF; WIDTH]> for Poseidon2ExternalMatrixGeneral
