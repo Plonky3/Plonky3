@@ -340,6 +340,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// Similar to `core:array::from_fn`, with the same caveats as
     /// `from_base_slice`.
     fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
+    fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
 
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
@@ -423,6 +424,10 @@ impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     fn from_base_slice(bs: &[AF]) -> Self {
         assert_eq!(bs.len(), 1);
         bs[0].clone()
+    }
+
+    fn from_base_iter<I: Iterator<Item = AF>>(mut iter: I) -> Self {
+        iter.next().unwrap()
     }
 
     fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
