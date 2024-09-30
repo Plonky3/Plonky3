@@ -4,7 +4,7 @@ use core::mem::transmute;
 use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
-// https://godbolt.org/z/xK91MKsdd
+// https://godbolt.org/z/WW3GYjsTn
 
 /// Halve a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.

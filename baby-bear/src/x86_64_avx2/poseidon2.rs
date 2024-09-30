@@ -8,9 +8,6 @@ use p3_monty_31::{
 
 use crate::{BabyBearInternalLayerParameters, BabyBearParameters};
 
-// Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
-// https://godbolt.org/z/xK91MKsdd
-
 impl InternalLayerParametersAVX2<16> for BabyBearInternalLayerParameters {
     type ArrayLike = [__m256i; 15];
 

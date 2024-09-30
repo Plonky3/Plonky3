@@ -7,9 +7,6 @@ use p3_monty_31::{
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
 
-// Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
-// https://godbolt.org/z/xK91MKsdd
-
 impl InternalLayerParametersAVX512<16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m512i; 15];
 
