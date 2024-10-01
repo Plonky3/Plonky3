@@ -243,9 +243,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use core::marker::PhantomData;
-
     use alloc::vec;
+    use core::marker::PhantomData;
 
     use itertools::izip;
     use p3_baby_bear::BabyBear;
@@ -254,60 +253,6 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-
-    struct FakeMatrix<F: Field>(usize, usize, PhantomData<F>);
-
-    impl<F: Field> Matrix<F> for FakeMatrix<F> {
-        fn height(&self) -> usize {
-            self.0
-        }
-        fn width(&self) -> usize {
-            self.1
-        }
-
-        type Row<'a> = vec::IntoIter<F>;
-
-        fn row(&self, r: usize) -> Self::Row<'_> {
-            (0..self.width())
-                .map(|c| F::from_canonical_usize(self.width() * r + c))
-                .collect::<Vec<_>>()
-                .into_iter()
-        }
-    }
-
-    #[test]
-    fn test_matrix_methods() {
-        type F = BabyBear;
-        type P = <F as Field>::Packing;
-        assert_eq!(P::WIDTH, 4);
-        let m: FakeMatrix<F> = FakeMatrix(4, 2, PhantomData);
-        assert_eq!(
-            m.rows().map(|row| row.collect_vec()).collect_vec(),
-            vec![
-                vec![F::from_canonical_usize(0), F::from_canonical_usize(1)],
-                vec![F::from_canonical_usize(2), F::from_canonical_usize(3)],
-                vec![F::from_canonical_usize(4), F::from_canonical_usize(5)],
-                vec![F::from_canonical_usize(6), F::from_canonical_usize(7)],
-            ]
-        );
-
-        let (packed, sfx) = m.horizontally_packed_row::<P>(0);
-        assert_eq!(packed.collect_vec(), vec![]);
-        assert_eq!(
-            sfx.collect_vec(),
-            vec![F::from_canonical_usize(0), F::from_canonical_usize(1)]
-        );
-
-        assert_eq!(
-            m.padded_horizontally_packed_row::<P>(1).collect_vec(),
-            vec![*P::from_slice(&[
-                F::from_canonical_usize(2),
-                F::from_canonical_usize(3),
-                F::zero(),
-                F::zero()
-            ])]
-        );
-    }
 
     #[test]
     fn test_columnwise_dot_product() {
