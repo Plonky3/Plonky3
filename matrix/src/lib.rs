@@ -4,12 +4,15 @@
 
 extern crate alloc;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::Itertools;
-use p3_field::{dot_product, AbstractExtensionField, ExtensionField, Field, PackedValue};
+use itertools::{izip, Itertools};
+use p3_field::{
+    dot_product, AbstractExtensionField, AbstractField, ExtensionField, Field, PackedValue,
+};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
@@ -124,7 +127,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Clone + Default + 'a,
     {
         let mut row_iter = self.row(r);
-        let num_elems = self.width().next_multiple_of(P::WIDTH);
+        let num_elems = self.width().div_ceil(P::WIDTH);
         // array::from_fn currently always calls in order, but it's not clear whether that's guaranteed.
         (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
     }
@@ -174,7 +177,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Compute Mᵀv, aka premultiply this matrix by the given vector,
-    /// aka scale each row by the corresponding entry in `v` and take the row-wise sum.
+    /// aka scale each row by the corresponding entry in `v` and take the sum across rows.
     /// `v` can be a vector of extension elements.
     #[instrument(level = "debug", skip_all, fields(dims = %self.dimensions()))]
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>
@@ -182,17 +185,34 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        self.par_rows().zip(v).par_fold_reduce(
-            || EF::zero_vec(self.width()),
-            |mut acc, (row, &scale)| {
-                acc.iter_mut().zip(row).for_each(|(a, x)| *a += scale * x);
-                acc
-            },
-            |mut acc_l, acc_r| {
-                acc_l.iter_mut().zip(acc_r).for_each(|(l, r)| *l += r);
-                acc_l
-            },
-        )
+        let packed_width = self.width().div_ceil(T::Packing::WIDTH);
+
+        let packed_result = self
+            .par_padded_horizontally_packed_rows::<T::Packing>()
+            .zip(v)
+            .par_fold_reduce(
+                || vec![EF::ExtensionPacking::zero(); packed_width],
+                |mut acc, (row, &scale)| {
+                    let scale = EF::ExtensionPacking::from_base_fn(|i| {
+                        T::Packing::from(scale.as_base_slice()[i])
+                    });
+                    izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
+                    acc
+                },
+                |mut acc_l, acc_r| {
+                    izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
+                    acc_l
+                },
+            );
+
+        packed_result
+            .into_iter()
+            .flat_map(|p| {
+                (0..T::Packing::WIDTH)
+                    .map(move |i| EF::from_base_fn(|j| p.as_base_slice()[j].as_slice()[i]))
+            })
+            .take(self.width())
+            .collect()
     }
 
     /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
@@ -218,5 +238,36 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 });
                 sum_of_packed
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use itertools::izip;
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::AbstractField;
+    use rand::thread_rng;
+
+    use super::*;
+
+    #[test]
+    fn test_columnwise_dot_product() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
+
+        let mut expected = vec![EF::zero(); m.width()];
+        for (row, &scale) in izip!(m.rows(), &v) {
+            for (l, r) in izip!(&mut expected, row) {
+                *l += scale * r;
+            }
+        }
+
+        assert_eq!(m.columnwise_dot_product(&v), expected);
     }
 }

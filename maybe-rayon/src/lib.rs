@@ -13,6 +13,7 @@ pub mod prelude {
     }
 
     impl<I: ParallelIterator> SharedExt for I {
+        #[inline]
         fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, reduce_op: R) -> Acc
         where
             Acc: Send,
@@ -51,6 +52,7 @@ pub mod prelude {
     }
 
     impl<I: ParallelIterator> SharedExt for I {
+        #[inline]
         fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, _reduce_op: R) -> Acc
         where
             Acc: Send,

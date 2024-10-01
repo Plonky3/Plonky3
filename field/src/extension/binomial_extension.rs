@@ -319,10 +319,9 @@ where
     type Output = Self;
 
     #[inline]
-    fn add(self, rhs: AF) -> Self {
-        let mut res = self.value;
-        res[0] += rhs;
-        Self { value: res }
+    fn add(mut self, rhs: AF) -> Self {
+        self.value[0] += rhs;
+        self
     }
 }
 
@@ -333,7 +332,9 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        *self = self.clone() + rhs;
+        for i in 0..D {
+            self.value[i] += rhs.value[i].clone();
+        }
     }
 }
 
@@ -344,7 +345,7 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: AF) {
-        *self = self.clone() + rhs;
+        self.value[0] += rhs;
     }
 }
 
