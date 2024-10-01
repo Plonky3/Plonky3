@@ -319,9 +319,6 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
-
-    use core::arch::x86_64::{_mm256_extract_epi64, _mm256_setr_epi64x, _mm256_setzero_si256};
-
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -447,12 +444,10 @@ mod tests {
 
         let mut result = [[0; 25]; 4];
         for i in 0..25 {
-            unsafe {
-                result[0][i] = packed_result[i][0];
-                result[1][i] = packed_result[i][1];
-                result[2][i] = packed_result[i][2];
-                result[3][i] = packed_result[i][3];
-            }
+            result[0][i] = packed_result[i][0];
+            result[1][i] = packed_result[i][1];
+            result[2][i] = packed_result[i][2];
+            result[3][i] = packed_result[i][3];
         }
         result
     }
