@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
+use core::mem;
 use core::mem::MaybeUninit;
 
 pub mod array_serialization;
@@ -219,6 +220,29 @@ where
         }
         func(unsafe { buf.get_unchecked(..n) });
     }
+}
+
+/// Converts a vector of one type to one of another type. This is useful to convert between things
+/// like `Vec<u32>` and `Vec<[u32; 10]>`, for example. This is roughly like a transmutation, except
+/// that we also adjust the vector's length and capacity based on the sizes of the two types.
+///
+/// # Safety
+/// In addition to the usual safety considerations around transmutation, the caller must ensure that
+/// the two types have the same alignment, that one of their sizes is a multiple of the other.
+#[inline(always)]
+pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
+    let ptr = vec.as_mut_ptr() as *mut U;
+    let len_bytes = vec.len() * size_of::<T>();
+    let cap_bytes = vec.capacity() * size_of::<T>();
+
+    debug_assert_eq!(align_of::<T>(), align_of::<U>());
+    debug_assert_eq!(len_bytes % size_of::<U>(), 0);
+    debug_assert_eq!(cap_bytes % size_of::<U>(), 0);
+
+    let new_len = len_bytes / size_of::<U>();
+    let new_cap = cap_bytes / size_of::<U>();
+    mem::forget(vec);
+    Vec::from_raw_parts(ptr, new_len, new_cap)
 }
 
 #[cfg(test)]

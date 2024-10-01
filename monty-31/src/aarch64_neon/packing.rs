@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::arch::aarch64::{self, int32x4_t, uint32x4_t};
 use core::arch::asm;
 use core::hint::unreachable_unchecked;
@@ -6,6 +7,7 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -515,6 +517,12 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
             // Safety: `cube` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
     }
 }
 
