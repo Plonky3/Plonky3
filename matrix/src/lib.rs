@@ -243,12 +243,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
     use itertools::izip;
     use p3_baby_bear::BabyBear;
-    use p3_field::{extension::BinomialExtensionField, AbstractField};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::AbstractField;
     use rand::thread_rng;
+
+    use super::*;
 
     #[test]
     fn test_columnwise_dot_product() {
