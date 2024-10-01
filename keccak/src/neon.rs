@@ -1,5 +1,5 @@
 use core::arch::aarch64::{uint64x2_t, vbcaxq_u64, veor3q_u64, veorq_u64, vrax1q_u64, vxarq_u64};
-use core::mem::transmute;
+use core::mem::{transmute, transmute_copy};
 
 use p3_symmetric::{CryptographicPermutation, Permutation};
 

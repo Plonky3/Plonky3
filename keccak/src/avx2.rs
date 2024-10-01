@@ -2,7 +2,7 @@ use core::arch::x86_64::{
     __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_or_si256, _mm256_shuffle_epi8,
     _mm256_slli_epi64, _mm256_srli_epi64, _mm256_xor_si256,
 };
-use core::mem::transmute;
+use core::mem::{transmute, transmute_copy};
 
 use p3_symmetric::{CryptographicPermutation, Permutation};
 

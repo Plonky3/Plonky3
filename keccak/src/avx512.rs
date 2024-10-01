@@ -1,7 +1,7 @@
 use core::arch::x86_64::{
     __m512i, _mm512_rol_epi64, _mm512_set1_epi64, _mm512_ternarylogic_epi64, _mm512_xor_epi64,
 };
-use core::mem::transmute;
+use core::mem::{transmute, transmute_copy};
 
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
