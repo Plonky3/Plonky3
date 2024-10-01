@@ -597,14 +597,15 @@ mod tests {
         let mut packed_result = [[0; 8]; 25];
         for i in 0..25 {
             packed_result[i] = [
-                    STATES[0][i],
-                    STATES[1][i],
-                    STATES[2][i],
-                    STATES[3][i],
-                    STATES[4][i],
-                    STATES[5][i],
-                    STATES[6][i],
-                    STATES[7][i]];
+                STATES[0][i],
+                STATES[1][i],
+                STATES[2][i],
+                STATES[3][i],
+                STATES[4][i],
+                STATES[5][i],
+                STATES[6][i],
+                STATES[7][i],
+            ];
         }
 
         keccak_perm(&mut packed_result);
