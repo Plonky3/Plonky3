@@ -13,7 +13,7 @@ fn columnwise_dot_product(c: &mut Criterion) {
     let log_rows = 16;
 
     c.benchmark_group("babybear")
-        .sample_size(20)
+        .sample_size(10)
         .bench_function("columnwise_dot_product", |b| {
             b.iter_batched(
                 || {
