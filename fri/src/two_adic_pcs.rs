@@ -526,6 +526,8 @@ where
         &self,
         prover_data: &'a Self::ProverData,
     ) -> Vec<&'a RowMajorMatrix<<Self::Domain as PolynomialSpace>::Val>>;
+
+    fn log_blowup(&self) -> usize;
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> MatricesPcs<Challenge, Challenger>
@@ -547,6 +549,10 @@ where
         prover_data: &'a Self::ProverData,
     ) -> Vec<&'a RowMajorMatrix<<Self::Domain as PolynomialSpace>::Val>> {
         self.mmcs.get_matrices(prover_data)
+    }
+
+    fn log_blowup(&self) -> usize {
+        self.fri.log_blowup
     }
 }
 
