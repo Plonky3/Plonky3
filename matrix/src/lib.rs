@@ -244,6 +244,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
