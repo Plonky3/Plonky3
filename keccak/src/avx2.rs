@@ -302,7 +302,7 @@ fn round(i: usize, state: [__m256i; 25]) -> [__m256i; 25] {
 }
 
 fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
-    let mut state: [uint64x2_t; 25] = unsafe { transmute_copy(buf) };
+    let mut state: [__m256i; 25] = unsafe { transmute_copy(buf) };
     for i in 0..24 {
         state = round(i, state);
     }
