@@ -200,17 +200,17 @@ fn round(i: usize, state: [uint64x2_t; 25]) -> [uint64x2_t; 25] {
     flatten(state)
 }
 
-fn keccak_perm(buf: &mut [uint64x2_t; 25]) {
-    let mut state = *buf;
+fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
+    let mut state: [uint64x2_t; 25] = unsafe { transmute_copy(buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = state;
+    *buf = unsafe { transmute_copy(&state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
     fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
-        keccak_perm(unsafe { transmute(state) });
+        keccak_perm(state);
     }
 }
 
