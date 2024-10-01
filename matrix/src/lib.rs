@@ -185,31 +185,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        /*
-        let mut acc = EF::zero_vec(self.width());
-        for r in 0..self.height() {
-            for c in 0..self.width() {
-                acc[c] += v[r] * self.get(r, c);
-            }
-        }
-        acc
-        */
-
         let packed_width = self.width().next_multiple_of(T::Packing::WIDTH);
-
-        /*
-        let mut acc = vec![EF::ExtensionPacking::zero(); packed_width];
-        for (r, row) in self
-            .par_padded_horizontally_packed_rows::<T::Packing>()
-            .enumerate()
-        {
-            let scale =
-                EF::ExtensionPacking::from_base_fn(|i| T::Packing::from(v[r].as_base_slice()[i]));
-            for (c, val) in row.enumerate() {
-                acc[c] += scale * val;
-            }
-        }
-        */
 
         let packed_result = self
             .par_padded_horizontally_packed_rows::<T::Packing>()
@@ -237,44 +213,6 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             })
             .take(self.width())
             .collect()
-
-        /*
-        let packed = self.rows().zip(v).fold(
-            //vec![EF::ExtensionPacking::zero(); self.width()],
-            |mut acc, (row, &scale)| {
-                /*
-                for (l, r) in acc.iter_mut().zip(row) {
-                    *l += scale * r;
-                }
-                */
-                for (i, r) in row.enumerate() {
-                    acc[i] += scale * r;
-                }
-                acc
-            },
-        );
-        packed
-        */
-
-        // let w = self.width();
-
-        /*
-        self.par_rows().zip(v).par_fold_reduce(
-            || EF::zero_vec(self.width()),
-            |mut acc, (row, &scale)| {
-                for (l, r) in acc.iter_mut().zip_eq(row) {
-                    *l += scale * r;
-                }
-                acc
-            },
-            |mut acc_l, acc_r| {
-                for (l, r) in izip!(&mut acc_l, acc_r) {
-                    *l += r;
-                }
-                acc_l
-            },
-        )
-        */
     }
 
     /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
