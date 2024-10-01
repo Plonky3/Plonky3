@@ -4,12 +4,15 @@
 
 extern crate alloc;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
 use itertools::Itertools;
-use p3_field::{dot_product, AbstractExtensionField, ExtensionField, Field, PackedValue};
+use p3_field::{
+    dot_product, AbstractExtensionField, AbstractField, ExtensionField, Field, PackedValue,
+};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
@@ -174,7 +177,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Compute Mᵀv, aka premultiply this matrix by the given vector,
-    /// aka scale each row by the corresponding entry in `v` and take the row-wise sum.
+    /// aka scale each row by the corresponding entry in `v` and take the sum across rows.
     /// `v` can be a vector of extension elements.
     #[instrument(level = "debug", skip_all, fields(dims = %self.dimensions()))]
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>
@@ -182,17 +185,74 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        /*
+        let mut acc = EF::zero_vec(self.width());
+        for r in 0..self.height() {
+            for c in 0..self.width() {
+                acc[c] += v[r] * self.get(r, c);
+            }
+        }
+        acc
+        */
+
+        let packed_width = self.width().next_multiple_of(T::Packing::WIDTH);
+        let mut acc = vec![EF::ExtensionPacking::zero(); packed_width];
+        for (r, row) in self
+            .par_padded_horizontally_packed_rows::<T::Packing>()
+            .enumerate()
+        {
+            let scale =
+                EF::ExtensionPacking::from_base_fn(|i| T::Packing::from(v[r].as_base_slice()[i]));
+            for (c, val) in row.enumerate() {
+                acc[c] += scale * val;
+            }
+        }
+
+        acc.into_iter()
+            .flat_map(|p| {
+                (0..T::Packing::WIDTH)
+                    .map(move |i| EF::from_base_fn(|j| p.as_base_slice()[j].as_slice()[i]))
+            })
+            .take(self.width())
+            .collect()
+
+        /*
+        let packed = self.rows().zip(v).fold(
+            //vec![EF::ExtensionPacking::zero(); self.width()],
+            |mut acc, (row, &scale)| {
+                /*
+                for (l, r) in acc.iter_mut().zip(row) {
+                    *l += scale * r;
+                }
+                */
+                for (i, r) in row.enumerate() {
+                    acc[i] += scale * r;
+                }
+                acc
+            },
+        );
+        packed
+        */
+
+        // let w = self.width();
+
+        /*
         self.par_rows().zip(v).par_fold_reduce(
             || EF::zero_vec(self.width()),
             |mut acc, (row, &scale)| {
-                acc.iter_mut().zip(row).for_each(|(a, x)| *a += scale * x);
+                for (l, r) in acc.iter_mut().zip_eq(row) {
+                    *l += scale * r;
+                }
                 acc
             },
             |mut acc_l, acc_r| {
-                acc_l.iter_mut().zip(acc_r).for_each(|(l, r)| *l += r);
+                for (l, r) in izip!(&mut acc_l, acc_r) {
+                    *l += r;
+                }
                 acc_l
             },
         )
+        */
     }
 
     /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
@@ -218,5 +278,33 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 });
                 sum_of_packed
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use itertools::izip;
+    use p3_baby_bear::BabyBear;
+    use p3_field::{extension::BinomialExtensionField, AbstractField};
+    use rand::thread_rng;
+
+    #[test]
+    fn test_columnwise_dot_product() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
+
+        let mut expected = vec![EF::zero(); m.width()];
+        for (row, &scale) in izip!(m.rows(), &v) {
+            for (l, r) in izip!(&mut expected, row) {
+                *l += scale * r;
+            }
+        }
+
+        assert_eq!(m.columnwise_dot_product(&v), expected);
     }
 }

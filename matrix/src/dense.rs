@@ -303,9 +303,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
 }
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S> {
+    #[inline]
     fn width(&self) -> usize {
         self.width
     }
+
+    #[inline]
     fn height(&self) -> usize {
         if self.width == 0 {
             0
@@ -313,21 +316,29 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
             self.values.borrow().len() / self.width
         }
     }
+
+    #[inline]
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
     }
+
     type Row<'a>
         = iter::Cloned<slice::Iter<'a, T>>
     where
         Self: 'a;
+
+    #[inline]
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.values.borrow()[r * self.width..(r + 1) * self.width]
             .iter()
             .cloned()
     }
+
+    #[inline]
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         &self.values.borrow()[r * self.width..(r + 1) * self.width]
     }
+
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
@@ -336,6 +347,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
 
+    #[inline]
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
@@ -352,6 +364,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         (packed.iter().cloned(), sfx.iter().cloned())
     }
 
+    #[inline]
     fn padded_horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,

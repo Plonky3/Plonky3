@@ -333,7 +333,9 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        *self = self.clone() + rhs;
+        for (val, rhs_val) in self.value.iter_mut().zip(rhs.value) {
+            *val += rhs_val;
+        }
     }
 }
 
@@ -344,7 +346,7 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: AF) {
-        *self = self.clone() + rhs;
+        self.value[0] += rhs;
     }
 }
 
