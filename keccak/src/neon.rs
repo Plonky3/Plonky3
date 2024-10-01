@@ -283,10 +283,9 @@ mod tests {
     ];
 
     fn our_res() -> [[u64; 25]; 2] {
-        let mut packed_result = [unsafe { vdupq_n_u64(0) }; 25];
+        let mut packed_result = [[0; 2]; 25];
         for i in 0..25 {
-            packed_result[i] =
-                unsafe { vcombine_u64(vdup_n_u64(STATES[0][i]), vdup_n_u64(STATES[1][i])) };
+            packed_result[i] = [STATES[0][i], STATES[1][i]];
         }
 
         keccak_perm(&mut packed_result);
@@ -294,8 +293,8 @@ mod tests {
         let mut result = [[0; 25]; 2];
         for i in 0..25 {
             unsafe {
-                result[0][i] = vdupd_laneq_u64(packed_result[i], 0);
-                result[1][i] = vdupd_laneq_u64(packed_result[i], 1);
+                result[0][i] = packed_result[i][0];
+                result[1][i] = packed_result[i][1];
             }
         }
         result
