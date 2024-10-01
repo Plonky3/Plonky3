@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use p3_field::{
     dot_product, AbstractExtensionField, AbstractField, ExtensionField, Field, PackedValue,
 };
@@ -196,6 +196,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         */
 
         let packed_width = self.width().next_multiple_of(T::Packing::WIDTH);
+
+        /*
         let mut acc = vec![EF::ExtensionPacking::zero(); packed_width];
         for (r, row) in self
             .par_padded_horizontally_packed_rows::<T::Packing>()
@@ -207,8 +209,28 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 acc[c] += scale * val;
             }
         }
+        */
 
-        acc.into_iter()
+        let packed_result = self
+            .par_padded_horizontally_packed_rows::<T::Packing>()
+            .zip(v)
+            .par_fold_reduce(
+                || vec![EF::ExtensionPacking::zero(); packed_width],
+                |mut acc, (row, &scale)| {
+                    let scale = EF::ExtensionPacking::from_base_fn(|i| {
+                        T::Packing::from(scale.as_base_slice()[i])
+                    });
+                    izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
+                    acc
+                },
+                |mut acc_l, acc_r| {
+                    izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
+                    acc_l
+                },
+            );
+
+        packed_result
+            .into_iter()
             .flat_map(|p| {
                 (0..T::Packing::WIDTH)
                     .map(move |i| EF::from_base_fn(|j| p.as_base_slice()[j].as_slice()[i]))

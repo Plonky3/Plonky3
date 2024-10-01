@@ -18,7 +18,7 @@ fn columnwise_dot_product(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     (
-                        RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << log_rows, 1 << 10),
+                        RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << log_rows, 1 << 12),
                         RowMajorMatrix::<EF>::rand_nonzero(&mut rng, 1 << log_rows, 1).values,
                     )
                 },
