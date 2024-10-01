@@ -518,6 +518,38 @@ fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
         .collect()
 }
 
+pub trait MatricesPcs<Challenge, Challenger>: Pcs<Challenge, Challenger>
+where
+    Challenge: ExtensionField<<Self::Domain as PolynomialSpace>::Val>,
+{
+    fn get_matrices<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+    ) -> Vec<&'a RowMajorMatrix<<Self::Domain as PolynomialSpace>::Val>>;
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> MatricesPcs<Challenge, Challenger>
+    for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
+where
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenge: TwoAdicField + ExtensionField<Val>,
+    Challenger: CanObserve<FriMmcs::Commitment>
+        + CanSample<Challenge>
+        + GrindingChallenger<Witness = Val>
+        + FieldChallenger<Val>,
+    <InputMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>: Clone,
+{
+    fn get_matrices<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+    ) -> Vec<&'a RowMajorMatrix<<Self::Domain as PolynomialSpace>::Val>> {
+        self.mmcs.get_matrices(prover_data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
