@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{PackedField, PackedValue, PrimeField64};
+use p3_field::{PackedField, PackedFieldPow2, PackedValue, PrimeField64};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -261,7 +261,9 @@ unsafe impl PackedValue for PackedGoldilocksAVX2 {
 
 unsafe impl PackedField for PackedGoldilocksAVX2 {
     type Scalar = Goldilocks;
+}
 
+unsafe impl PackedFieldPow2 for PackedGoldilocksAVX2 {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.get(), other.get());
@@ -584,7 +586,7 @@ unsafe fn interleave2(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{AbstractField, PackedField, PackedValue};
+    use p3_field::{AbstractField, PackedFieldPow2, PackedValue};
 
     use crate::x86_64_avx2::packing::WIDTH;
     use crate::{Goldilocks, PackedGoldilocksAVX2};
