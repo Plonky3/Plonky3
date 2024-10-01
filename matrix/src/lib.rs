@@ -185,7 +185,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        let packed_width = self.width().next_multiple_of(T::Packing::WIDTH);
+        let packed_width = self.width().div_ceil(T::Packing::WIDTH);
 
         let packed_result = self
             .par_padded_horizontally_packed_rows::<T::Packing>()
