@@ -121,31 +121,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     }
 }
 
-/// No-op. Prevents the compiler from deducing the value of the vector.
-///
-/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
-/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
-/// and then read from the stack.
-#[inline]
-#[must_use]
-fn confuse_compiler(x: __m512i) -> __m512i {
-    let y;
-    unsafe {
-        asm!(
-            "/*{0}*/",
-            inlateout(zmm_reg) x => y,
-            options(nomem, nostack, preserves_flags, pure),
-        );
-        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
-        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
-        // what it does? The answer is that we still inhibit the transform we want to avoid, so
-        // apparently not. Idk, LLVM works in mysterious ways.
-        if transmute::<__m512i, [u32; 16]>(x) != transmute::<__m512i, [u32; 16]>(y) {
-            unreachable_unchecked();
-        }
-    }
-    y
-}
+// See https://godbolt.org/z/489aaPhz3 showing that this mostly compiles to what we want (Atleast on the AMD Zen 4 architecture).
 
 /// Add two vectors of MontyField31 elements in canonical form.
 ///
@@ -207,6 +183,32 @@ pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
     }
 }
 
+/// No-op. Prevents the compiler from deducing the value of the vector.
+///
+/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
+/// and then read from the stack.
+#[inline]
+#[must_use]
+fn confuse_compiler(x: __m512i) -> __m512i {
+    let y;
+    unsafe {
+        asm!(
+            "/*{0}*/",
+            inlateout(zmm_reg) x => y,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
+        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
+        // what it does? The answer is that we still inhibit the transform we want to avoid, so
+        // apparently not. Idk, LLVM works in mysterious ways.
+        if transmute::<__m512i, [u32; 16]>(x) != transmute::<__m512i, [u32; 16]>(y) {
+            unreachable_unchecked();
+        }
+    }
+    y
+}
+
 // MONTGOMERY MULTIPLICATION
 //   This implementation is based on [1] but with minor changes. The reduction is as follows:
 //
@@ -238,13 +240,13 @@ fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(
     input: __m512i,
 ) -> __m512i {
     unsafe {
+        // We throw a comfuse compiler here to prevent the compiler from
+        // using vpmullq instead of vpmuludq in the computations for q_p.
+        // vpmullq has both higher latency and higher throughput.
         let q = confuse_compiler(x86_64::_mm512_mul_epu32(input, MPAVX512::PACKED_MU));
-        let q_p = confuse_compiler(x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P));
+        let q_p = x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P);
 
-        // By construction, the bottom 32 bits of input and q_p are equal.
-        // Thus _mm512_sub_epi32 and _mm512_sub_epi64 should act identically.
-        // However for some reason, the compiler gets confused if we use _mm512_sub_epi64
-        // it's not as bad as in the avx2 case but it's still slightly worse: https://godbolt.org/z/15Web5e64
+        // This could equivalently be _mm512_sub_epi64
         x86_64::_mm512_sub_epi32(input, q_p)
     }
 }
@@ -256,26 +258,14 @@ fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(
 #[must_use]
 fn partial_monty_red_signed_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
     unsafe {
+        // We throw a comfuse compiler here to prevent the compiler from
+        // using vpmullq instead of vpmuludq in the computations for q_p.
+        // vpmullq has both higher latency and higher throughput.
         let q = confuse_compiler(x86_64::_mm512_mul_epi32(input, MPAVX512::PACKED_MU));
-        let q_p = confuse_compiler(x86_64::_mm512_mul_epi32(q, MPAVX512::PACKED_P));
+        let q_p = x86_64::_mm512_mul_epi32(q, MPAVX512::PACKED_P);
 
-        // Unlike the previous case the compiler output is essentially identical
-        // between _mm512_sub_epi32 and _mm512_sub_epi64. We use _mm512_sub_epi32
-        // again just for consistency.
+        // This could equivalently be _mm512_sub_epi64
         x86_64::_mm512_sub_epi32(input, q_p)
-    }
-}
-
-/// Multiply the MontyField31 field elements in the even index entries.
-/// lhs[2i], rhs[2i] must be signed 32-bit integers such that
-/// lhs[2i] * rhs[2i] lies in {-2^31P, ..., 2^31P}.
-/// The output will lie in {-P, ..., P} stored in output[2i + 1].
-#[inline]
-#[must_use]
-fn monty_mul_signed<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    unsafe {
-        let prod = confuse_compiler(x86_64::_mm512_mul_epi32(lhs, rhs));
-        partial_monty_red_signed_to_signed::<MPAVX512>(prod)
     }
 }
 
@@ -303,6 +293,12 @@ fn movehdup_epi32(a: __m512i) -> __m512i {
 fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     // The instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+
+    // Annoyingly, when inlined into the mul function, this seems to compile 
+    // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
+    // 
+    // Hopefully this should be only a negligible different to throughput and so we don't
+    // fix it right now. Maybe the compiler works it out when mul is inlined?
     unsafe {
         let src = x86_64::_mm512_castsi512_ps(src);
         let a = x86_64::_mm512_castsi512_ps(a);
@@ -314,7 +310,6 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-#[allow(non_snake_case)]
 fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vmovshdup  lhs_odd, lhs
@@ -324,11 +319,11 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     //      vpmuludq   q_evn, prod_evn, MU
     //      vpmuludq   q_odd, prod_hi, MU
     //      vmovshdup  prod_hi{EVENS}, prod_evn
-    //      vpmuludq   q_P_evn, q_evn, P
-    //      vpmuludq   q_P_hi, q_odd, P
-    //      vmovshdup  q_P_hi{EVENS}, q_P_evn
-    //      vpcmpltud  underflow, prod_hi, q_P_hi
-    //      vpsubd     res, prod_hi, q_P_hi
+    //      vpmuludq   q_p_evn, q_evn, P
+    //      vpmuludq   q_p_hi, q_odd, P
+    //      vmovshdup  q_p_hi{EVENS}, q_p_evn
+    //      vpcmpltud  underflow, prod_hi, q_p_hi
+    //      vpsubd     res, prod_hi, q_p_hi
     //      vpaddd     res{underflow}, res, P
     // throughput: 6.5 cyc/vec (2.46 els/cyc)
     // latency: 21 cyc
@@ -349,37 +344,46 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         let prod_evn = x86_64::_mm512_mul_epu32(lhs_evn, rhs_evn);
         let prod_odd = x86_64::_mm512_mul_epu32(lhs_odd, rhs_odd);
 
-        let q_evn = x86_64::_mm512_mul_epu32(prod_evn, MPAVX512::PACKED_MU);
-        let q_odd = x86_64::_mm512_mul_epu32(prod_odd, MPAVX512::PACKED_MU);
+        // We throw a comfuse compiler here to prevent the compiler from
+        // using vpmullq instead of vpmuludq in the computations for q_p.
+        // vpmullq has both higher latency and higher throughput.
+        let q_evn = confuse_compiler(x86_64::_mm512_mul_epu32(prod_evn, MPAVX512::PACKED_MU));
+        let q_odd = confuse_compiler(x86_64::_mm512_mul_epu32(prod_odd, MPAVX512::PACKED_MU));
 
         // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
         // latency.
+        // 
+        // Annoyingly, this (and the line for computing q_p_hi) seem to compile 
+        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
+        // 
+        // Hopefully this should be only a negligible different to throughput and so we don't
+        // fix it right now. Maybe the compiler works it out when mul is inlined?
         let prod_hi = mask_movehdup_epi32(prod_odd, EVENS, prod_evn);
 
         // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
         // low 32 bits anyway.
-        let q_P_evn = x86_64::_mm512_mul_epu32(q_evn, MPAVX512::PACKED_P);
-        let q_P_odd = x86_64::_mm512_mul_epu32(q_odd, MPAVX512::PACKED_P);
+        let q_p_evn = x86_64::_mm512_mul_epu32(q_evn, MPAVX512::PACKED_P);
+        let q_p_odd = x86_64::_mm512_mul_epu32(q_odd, MPAVX512::PACKED_P);
 
-        // We can ignore all the low halves of `q_P` as they cancel out. Get all the high halves as
+        // We can ignore all the low halves of `q_p` as they cancel out. Get all the high halves as
         // one vector.
-        let q_P_hi = mask_movehdup_epi32(q_P_odd, EVENS, q_P_evn);
+        let q_p_hi = mask_movehdup_epi32(q_p_odd, EVENS, q_p_evn);
 
-        // Subtraction `prod_hi - q_P_hi` modulo `P`.
+        // Subtraction `prod_hi - q_p_hi` modulo `P`.
         // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
         // is already under a lot of pressure performing multiplications. To relieve this pressure,
         // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
         // check runs on port 5, increasing our throughput, although it does cost us an additional
         // cycle of latency.
-        let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_P_hi);
-        let t = x86_64::_mm512_sub_epi32(prod_hi, q_P_hi);
+        let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_p_hi);
+        let t = x86_64::_mm512_sub_epi32(prod_hi, q_p_hi);
         x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKED_P)
     }
 }
 
-/// Square the MontyField31 field elements in the even index entries.
-/// Inputs must be signed 32-bit integers.
+/// Square the MontyField31 elements in the even index entries.
+/// Inputs must be signed 32-bit integers in [-P, ..., P].
 /// Outputs will be a signed integer in (-P, ..., P) copied into both the even and odd indices.
 #[inline]
 #[must_use]
@@ -387,52 +391,61 @@ fn shifted_square<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
     // Note that we do not need a restriction on the size of input[i]^2 as
     // 2^30 < P and |i32| <= 2^31 and so => input[i]^2 <= 2^62 < 2^32P.
     unsafe {
-        let square = confuse_compiler(x86_64::_mm512_mul_epi32(input, input));
+        let square = x86_64::_mm512_mul_epi32(input, input);
         let square_red = partial_monty_red_unsigned_to_signed::<MPAVX512>(square);
         movehdup_epi32(square_red)
     }
 }
 
-/// Cube the MontyField31 field elements in the even index entries.
+/// Cube the MontyField31 elements in the even index entries.
 /// Inputs must be signed 32-bit integers in [-P, ..., P].
-/// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
+/// Outputs will be signed integers in (-P^2, ..., P^2).
 #[inline]
 #[must_use]
 pub(crate) fn packed_exp_3<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
-    let square = shifted_square::<MPAVX512>(input);
-    monty_mul_signed::<MPAVX512>(square, input)
+    unsafe {
+        let square = shifted_square::<MPAVX512>(input);
+        x86_64::_mm512_mul_epi32(square, input)
+    }
 }
 
-/// Take the fifth power of the MontyField31 field elements in the even index entries.
+/// Take the fifth power of the MontyField31 elements in the even index entries.
 /// Inputs must be signed 32-bit integers in [-P, ..., P].
-/// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
+/// Outputs will be signed integers in (-P^2, ..., P^2).
 #[inline]
 #[must_use]
 pub(crate) fn packed_exp_5<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
-    let square = shifted_square::<MPAVX512>(input);
-    let quad = shifted_square::<MPAVX512>(square);
-    monty_mul_signed::<MPAVX512>(quad, input)
+    unsafe {
+        let square = shifted_square::<MPAVX512>(input);
+        let quad = shifted_square::<MPAVX512>(square);
+        x86_64::_mm512_mul_epi32(quad, input)
+    }
+    
 }
 
-/// Take the seventh power of the MontyField31 field elements in the even index entries.
+/// Take the seventh power of the MontyField31 elements in the even index entries.
 /// Inputs must lie in [-P, ..., P].
-/// Outputs will also lie in (-P, ..., P) stored in the odd indices.
+/// Outputs will be signed integers in (-P^2, ..., P^2).
 #[inline]
 #[must_use]
 pub(crate) fn packed_exp_7<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
-    let square = shifted_square::<MPAVX512>(input);
-    let cube = monty_mul_signed::<MPAVX512>(square, input);
-    let cube_shifted = movehdup_epi32(cube);
-    let quad = shifted_square::<MPAVX512>(square);
-
-    monty_mul_signed::<MPAVX512>(quad, cube_shifted)
+    unsafe {
+        let square = shifted_square::<MPAVX512>(input);
+        let cube_raw = x86_64::_mm512_mul_epi32(square, input);
+        let cube_red = partial_monty_red_signed_to_signed::<MPAVX512>(cube_raw);
+        let cube = movehdup_epi32(cube_red);
+        let quad = shifted_square::<MPAVX512>(square);
+        x86_64::_mm512_mul_epi32(quad, cube)
+    }
 }
 
 /// Apply func to the even and odd indices of the input vector.
+/// 
 /// func should only depend in the 32 bit entries in the even indices.
-/// The output of func must lie in (-P, ..., P) and be stored in the odd indices.
-/// The even indices of the output of func will not be read.
 /// The input should conform to the requirements of `func`.
+/// The output of func must lie in (-P^2, ..., P^2) after which
+/// apply_func_to_even_odd will reduce the outputs to lie in [0, P)
+/// and recombine the odd and even parts.
 #[inline]
 #[must_use]
 pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
@@ -442,13 +455,48 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     let input_evn = input;
     let input_odd = movehdup_epi32(input);
 
-    let d_evn = func(input_evn);
-    let d_odd = func(input_odd);
+    // Unlike the mul function, we need to recieve back values the reduced 
+    let output_even = func(input_evn);
+    let output_odd = func(input_odd);
 
-    let t = mask_movehdup_epi32(d_odd, EVENS, d_evn);
+    // We need to recombine these even and odd parts and, at the same time reduce back to 
+    // and output in [0, P).
 
-    let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
-    x86_64::_mm512_min_epu32(t, u)
+    // We throw a comfuse compiler here to prevent the compiler from
+    // using vpmullq instead of vpmuludq in the computations for q_p.
+    // vpmullq has both higher latency and higher throughput.
+    let q_evn = confuse_compiler(x86_64::_mm512_mul_epi32(output_even, MPAVX512::PACKED_MU));
+    let q_odd = confuse_compiler(x86_64::_mm512_mul_epi32(output_odd, MPAVX512::PACKED_MU));
+
+    // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+    // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
+    // latency.
+    //
+    // Annoyingly, this (and the line for computing q_p_hi) seem to compile 
+    // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
+    // 
+    // Hopefully this should be only a negligible different to throughput and so we don't
+    // fix it right now. Maybe the compiler works it out when mul is inlined?
+    let output_hi = mask_movehdup_epi32(output_odd, EVENS, output_even);
+
+    // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+    // low 32 bits anyway.
+    let q_p_evn = x86_64::_mm512_mul_epi32(q_evn, MPAVX512::PACKED_P);
+    let q_p_odd = x86_64::_mm512_mul_epi32(q_odd, MPAVX512::PACKED_P);
+
+    // We can ignore all the low halves of `q_p` as they cancel out. Get all the high halves as
+    // one vector.
+    let q_p_hi = mask_movehdup_epi32(q_p_odd, EVENS, q_p_evn);
+
+    // Subtraction `output_hi - q_p_hi` modulo `P`.
+    // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+    // is already under a lot of pressure performing multiplications. To relieve this pressure,
+    // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+    // check runs on port 5, increasing our throughput, although it does cost us an additional
+    // cycle of latency.
+    let underflow = x86_64::_mm512_cmplt_epi32_mask(output_hi, q_p_hi);
+    let t = x86_64::_mm512_sub_epi32(output_hi, q_p_hi);
+    x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKED_P)
 }
 
 /// Negate a vector of MontyField31 elements in canonical form.
@@ -594,6 +642,49 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
     #[inline]
     fn generator() -> Self {
         MontyField31::generator().into()
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        let val = self.to_vector();
+        unsafe {
+            // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+            let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
+            Self::from_vector(res)
+        }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::one(),
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
+                    Self::from_vector(res)
+                }
+            }
+            6 => self.square().cube(),
+            7 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
+                    Self::from_vector(res)
+                }
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 }
 

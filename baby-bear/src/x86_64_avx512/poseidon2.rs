@@ -103,7 +103,7 @@ impl InternalLayerParametersAVX512<16> for BabyBearInternalLayerParameters {
         input[8] = sub::<BabyBearParameters>(sum, input[8]);
         input[9] = add::<BabyBearParameters>(sum, input[9]);
         input[10] = sub::<BabyBearParameters>(sum, input[10]);
-        input[11] = add::<BabyBearParameters>(sum, input[11]);
+        input[11] = sub::<BabyBearParameters>(sum, input[11]);
         input[12] = add::<BabyBearParameters>(sum, input[12]);
         input[13] = sub::<BabyBearParameters>(sum, input[13]);
         input[14] = add::<BabyBearParameters>(sum, input[14]);
@@ -206,7 +206,7 @@ impl InternalLayerParametersAVX512<24> for BabyBearInternalLayerParameters {
         // This outputs the negative of what we want. This will be handled in add_sum.
         input[20] = mul_neg_2_exp_neg_n_avx512::<BabyBearParameters, 9, 18>(input[20]);
 
-        // input[21] -> sum - input[21]/2**27
+        // input[21] -> sum + input[21]/2**27
         // This outputs the negative of what we want. This will be handled in add_sum.
         input[21] = mul_neg_2_exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[21]);
 
@@ -233,16 +233,16 @@ impl InternalLayerParametersAVX512<24> for BabyBearInternalLayerParameters {
         input[8] = sub::<BabyBearParameters>(sum, input[8]);
         input[9] = add::<BabyBearParameters>(sum, input[9]);
         input[10] = sub::<BabyBearParameters>(sum, input[10]);
-        input[11] = sub::<BabyBearParameters>(sum, input[11]);
-        input[12] = add::<BabyBearParameters>(sum, input[12]);
-        input[13] = sub::<BabyBearParameters>(sum, input[13]);
-        input[14] = add::<BabyBearParameters>(sum, input[14]);
-        input[15] = sub::<BabyBearParameters>(sum, input[15]);
+        input[11] = add::<BabyBearParameters>(sum, input[11]);
+        input[12] = sub::<BabyBearParameters>(sum, input[12]);
+        input[13] = add::<BabyBearParameters>(sum, input[13]);
+        input[14] = sub::<BabyBearParameters>(sum, input[14]);
+        input[15] = add::<BabyBearParameters>(sum, input[15]);
         input[16] = add::<BabyBearParameters>(sum, input[16]);
-        input[17] = sub::<BabyBearParameters>(sum, input[17]);
-        input[18] = add::<BabyBearParameters>(sum, input[18]);
+        input[17] = add::<BabyBearParameters>(sum, input[17]);
+        input[18] = sub::<BabyBearParameters>(sum, input[18]);
         input[19] = add::<BabyBearParameters>(sum, input[19]);
-        input[20] = add::<BabyBearParameters>(sum, input[20]);
+        input[20] = sub::<BabyBearParameters>(sum, input[20]);
         input[21] = sub::<BabyBearParameters>(sum, input[21]);
         input[22] = add::<BabyBearParameters>(sum, input[22]);
     }
