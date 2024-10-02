@@ -69,11 +69,10 @@ impl<F: Field> Point<F> {
         self.x
     }
 
-    /// Compute a product of successive v_n's.
+    /// Compute a product of successive `v_n`'s.
     /// 
-    /// Explicitely this computes (1..log_n).map(|i| self.v_n(i)).product()
-    /// but uses far fewer self.x.square().double() - F::one() steps
-    /// compared to the naive implementation. 
+    /// More explicitely this computes `(1..log_n).map(|i| self.v_n(i)).product()`
+    /// but uses far fewer `self.x.square().double() - F::one()` steps compared to the naive implementation. 
     pub fn v_n_prod(mut self, log_n: usize) -> F {
         let mut output = self.x;
         for _ in 0..(log_n - 2) {
@@ -113,6 +112,8 @@ impl<F: Field> Point<F> {
     }
 }
 
+/// Compute (ṽ_P(x,y) * s_p)^{-1} for each element if the list.
+/// This takes advantage of batched inversion.
 pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(points: &[Point<F>], at: Point<EF>, log_n: usize) -> Vec<EF> {
     let (numer, denom): (Vec<_>, Vec<_>) = points.iter().map(|&pt| {
         let diff = at - pt;

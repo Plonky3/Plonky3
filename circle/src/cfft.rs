@@ -99,12 +99,10 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         CircleEvaluations::<F>::evaluate(target_domain, self.interpolate())
     }
 
-    #[instrument(name = "evaluate_at_point", skip_all)]
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         // Compute z_H
         let lagrange_num = self.domain.zeroifier(point);
 
-        // Map: (x, y) -> (x + 1)/(y * p.s_p_at_p(log_n))
         let lagrange_den = compute_lagrange_den_batched(&cfft_permute_slice(&self.domain.points().collect_vec()), point, self.domain.log_n);
 
         self.values
