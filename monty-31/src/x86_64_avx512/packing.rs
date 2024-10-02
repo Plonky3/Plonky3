@@ -240,9 +240,9 @@ fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(
     input: __m512i,
 ) -> __m512i {
     unsafe {
-        // We throw a comfuse compiler here to prevent the compiler from
+        // We throw a confuse compiler here to prevent the compiler from
         // using vpmullq instead of vpmuludq in the computations for q_p.
-        // vpmullq has both higher latency and higher throughput.
+        // vpmullq has both higher latency and lower throughput.
         let q = confuse_compiler(x86_64::_mm512_mul_epu32(input, MPAVX512::PACKED_MU));
         let q_p = x86_64::_mm512_mul_epu32(q, MPAVX512::PACKED_P);
 
@@ -258,9 +258,9 @@ fn partial_monty_red_unsigned_to_signed<MPAVX512: MontyParametersAVX512>(
 #[must_use]
 fn partial_monty_red_signed_to_signed<MPAVX512: MontyParametersAVX512>(input: __m512i) -> __m512i {
     unsafe {
-        // We throw a comfuse compiler here to prevent the compiler from
+        // We throw a confuse compiler here to prevent the compiler from
         // using vpmullq instead of vpmuludq in the computations for q_p.
-        // vpmullq has both higher latency and higher throughput.
+        // vpmullq has both higher latency and lower throughput.
         let q = confuse_compiler(x86_64::_mm512_mul_epi32(input, MPAVX512::PACKED_MU));
         let q_p = x86_64::_mm512_mul_epi32(q, MPAVX512::PACKED_P);
 
@@ -297,7 +297,7 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     // Annoyingly, when inlined into the mul function, this seems to compile 
     // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
     // 
-    // Hopefully this should be only a negligible different to throughput and so we don't
+    // Hopefully this should be only a negligible difference to throughput and so we don't
     // fix it right now. Maybe the compiler works it out when mul is inlined?
     unsafe {
         let src = x86_64::_mm512_castsi512_ps(src);
@@ -344,9 +344,9 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         let prod_evn = x86_64::_mm512_mul_epu32(lhs_evn, rhs_evn);
         let prod_odd = x86_64::_mm512_mul_epu32(lhs_odd, rhs_odd);
 
-        // We throw a comfuse compiler here to prevent the compiler from
+        // We throw a confuse compiler here to prevent the compiler from
         // using vpmullq instead of vpmuludq in the computations for q_p.
-        // vpmullq has both higher latency and higher throughput.
+        // vpmullq has both higher latency and lower throughput.
         let q_evn = confuse_compiler(x86_64::_mm512_mul_epu32(prod_evn, MPAVX512::PACKED_MU));
         let q_odd = confuse_compiler(x86_64::_mm512_mul_epu32(prod_odd, MPAVX512::PACKED_MU));
 
@@ -357,7 +357,7 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // Annoyingly, this (and the line for computing q_p_hi) seem to compile 
         // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
         // 
-        // Hopefully this should be only a negligible different to throughput and so we don't
+        // Hopefully this should be only a negligible difference to throughput and so we don't
         // fix it right now. Maybe the compiler works it out when mul is inlined?
         let prod_hi = mask_movehdup_epi32(prod_odd, EVENS, prod_evn);
 
@@ -462,9 +462,9 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     // We need to recombine these even and odd parts and, at the same time reduce back to 
     // and output in [0, P).
 
-    // We throw a comfuse compiler here to prevent the compiler from
+    // We throw a confuse compiler here to prevent the compiler from
     // using vpmullq instead of vpmuludq in the computations for q_p.
-    // vpmullq has both higher latency and higher throughput.
+    // vpmullq has both higher latency and lower throughput.
     let q_evn = confuse_compiler(x86_64::_mm512_mul_epi32(output_even, MPAVX512::PACKED_MU));
     let q_odd = confuse_compiler(x86_64::_mm512_mul_epi32(output_odd, MPAVX512::PACKED_MU));
 
@@ -475,8 +475,8 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     // Annoyingly, this (and the line for computing q_p_hi) seem to compile 
     // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
     // 
-    // Hopefully this should be only a negligible different to throughput and so we don't
-    // fix it right now. Maybe the compiler works it out when mul is inlined?
+    // Hopefully this should be only a negligible difference to throughput and so we don't
+    // fix it right now. Maybe the compiler works it out when apply_func_to_even_odd is inlined?
     let output_hi = mask_movehdup_epi32(output_odd, EVENS, output_even);
 
     // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the

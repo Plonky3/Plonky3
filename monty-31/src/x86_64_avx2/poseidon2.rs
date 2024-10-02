@@ -136,9 +136,8 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<W
 /// A struct containing the constants and methods needed to perform the external layers of the Poseidon2 permutation.
 #[derive(Debug, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH: usize> {
-    pub(crate) initial_external_constants: Vec<[MontyField31<PMP>; WIDTH]>,
+    pub(crate) external_constants: ExternalLayerConstants<MontyField31<PMP>, WIDTH>,
     packed_initial_external_constants: Vec<[__m256i; WIDTH]>,
-    pub(crate) terminal_external_constants: Vec<[MontyField31<PMP>; WIDTH]>,
     packed_terminal_external_constants: Vec<[__m256i; WIDTH]>,
 }
 
@@ -152,20 +151,17 @@ impl<FP: FieldParameters, const WIDTH: usize>
     fn new_from_constants(
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
-        let initial_external_constants = external_constants.get_initial_constants().clone();
-        let terminal_external_constants = external_constants.get_terminal_constants().clone();
-        let packed_initial_external_constants = initial_external_constants
+        let packed_initial_external_constants = external_constants.get_initial_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form::<FP>(constant.value as i32)))
             .collect();
-        let packed_terminal_external_constants = terminal_external_constants
+        let packed_terminal_external_constants = external_constants.get_terminal_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form::<FP>(constant.value as i32)))
             .collect();
         Self {
-            initial_external_constants,
+            external_constants,
             packed_initial_external_constants,
-            terminal_external_constants,
             packed_terminal_external_constants,
         }
     }
@@ -385,15 +381,15 @@ where
     }
 
     /// Compute the second half of the Poseidon2 external layers.
-    /// SAFETY: The caller must ensure that each element of `state` represents a valid `MontyField31<PMP>`.
-    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     fn permute_state_terminal(
         &self,
         state: Self::InternalState,
     ) -> [PackedMontyField31AVX2<FP>; 16] {
-        // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
-        // Thus to_packed_field_array is safe to use.
-        let mut output_state = unsafe { state.to_packed_field_array() };
+        let mut output_state = unsafe { 
+            // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
+            // Thus to_packed_field_array is safe to use.
+            state.to_packed_field_array() 
+        };
 
         external_rounds::<FP, 16, D>(&mut output_state, &self.packed_terminal_external_constants);
         output_state
@@ -420,15 +416,15 @@ where
     }
 
     /// Compute the second half of the Poseidon2 external layers.
-    /// SAFETY: The caller must ensure that each element of `state` represents a valid `MontyField31<PMP>`.
-    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     fn permute_state_terminal(
         &self,
         state: Self::InternalState,
     ) -> [PackedMontyField31AVX2<FP>; 24] {
-        // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
-        // Thus to_packed_field_array is safe to use.
-        let mut output_state = unsafe { state.to_packed_field_array() };
+        let mut output_state = unsafe { 
+            // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
+            // Thus to_packed_field_array is safe to use.
+            state.to_packed_field_array() 
+        };
 
         external_rounds::<FP, 24, D>(&mut output_state, &self.packed_terminal_external_constants);
         output_state
