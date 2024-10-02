@@ -589,6 +589,7 @@ mod tests {
         ],
     ];
 
+    #[allow(clippy::needless_range_loop)]
     fn our_res() -> [[u64; 25]; 8] {
         let mut packed_result = [[0; 8]; 25];
         for i in 0..25 {
