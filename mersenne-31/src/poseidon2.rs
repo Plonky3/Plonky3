@@ -139,7 +139,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
     fn permute_state_initial(&self, mut state: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
             &mut state,
-            &self.initial_external_constants,
+            self.external_constants.get_initial_constants(),
             &MDSMat4,
         );
         state
@@ -148,7 +148,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
     fn permute_state_terminal(&self, mut state: Self::InternalState) -> [Mersenne31; WIDTH] {
         external_terminal_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
             &mut state,
-            &self.terminal_external_constants,
+            self.external_constants.get_terminal_constants(),
             &MDSMat4,
         );
         state

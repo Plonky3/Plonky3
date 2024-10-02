@@ -13,8 +13,7 @@ pub struct Poseidon2InternalLayerMersenne31 {
 
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
-    pub(crate) initial_external_constants: Vec<[Mersenne31; WIDTH]>,
-    pub(crate) terminal_external_constants: Vec<[Mersenne31; WIDTH]>,
+    pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
 }
 
 impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
@@ -27,12 +26,8 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
-        let initial_external_constants = external_constants.get_initial_constants().clone();
-        let terminal_external_constants = external_constants.get_terminal_constants().clone();
-
         Self {
-            initial_external_constants,
-            terminal_external_constants,
+            external_constants
         }
     }
 }

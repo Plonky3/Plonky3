@@ -24,9 +24,8 @@ impl InternalLayerConstructor<PackedMersenne31AVX512> for Poseidon2InternalLayer
 
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
-    pub(crate) initial_external_constants: Vec<[Mersenne31; WIDTH]>,
+    pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
     packed_initial_external_constants: Vec<[__m512i; WIDTH]>,
-    pub(crate) terminal_external_constants: Vec<[Mersenne31; WIDTH]>,
     packed_terminal_external_constants: Vec<[__m512i; WIDTH]>,
 }
 
@@ -68,20 +67,17 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
-        let initial_external_constants = external_constants.get_initial_constants().clone();
-        let terminal_external_constants = external_constants.get_terminal_constants().clone();
-        let packed_initial_external_constants = initial_external_constants
+        let packed_initial_external_constants = external_constants.get_initial_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
             .collect();
-        let packed_terminal_external_constants = terminal_external_constants
+        let packed_terminal_external_constants = external_constants.get_terminal_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
             .collect();
         Self {
-            initial_external_constants,
+            external_constants,
             packed_initial_external_constants,
-            terminal_external_constants,
             packed_terminal_external_constants,
         }
     }
