@@ -1,7 +1,8 @@
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
+use alloc::vec::Vec;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
+use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -63,15 +64,29 @@ impl<F: Field> Point<F> {
     /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)
     pub fn v_n(mut self, log_n: usize) -> F {
         for _ in 0..(log_n - 1) {
-            self.x = self.x.square().double() - F::one();
+            self.x = self.x.square().double() - F::one(); // TODO: replace this by a custom field impl.
         }
         self.x
+    }
+
+    /// Compute a product of successive v_n's.
+    /// 
+    /// Explicitely this computes (1..log_n).map(|i| self.v_n(i)).product()
+    /// but uses far fewer self.x.square().double() - F::one() steps
+    /// compared to the naive implementation. 
+    pub fn v_n_prod(mut self, log_n: usize) -> F {
+        let mut output = self.x;
+        for _ in 0..(log_n - 2) {
+            self.x = self.x.square().double() - F::one();  // TODO: replace this by a custom field impl.
+            output *= self.x;
+        }
+        output
     }
 
     /// Evaluate the formal derivative of `v_n` at `self`
     /// Circle STARKs, Section 5.1, Remark 15 (page 21 of the first revision PDF)
     pub fn v_n_prime(self, log_n: usize) -> F {
-        F::two().exp_u64((2 * (log_n - 1)) as u64) * (1..log_n).map(|i| self.v_n(i)).product()
+        F::one().mul_2exp_u64((2 * (log_n - 1)) as u64) * self.v_n_prod(log_n)
     }
 
     /// Evaluate the selector function which is zero at `self` and nonzero elsewhere, at `at`.
@@ -96,6 +111,19 @@ impl<F: Field> Point<F> {
         let diff = -at + self;
         (EF::one() - diff.x, -diff.y)
     }
+}
+
+pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(points: &[Point<F>], at: Point<EF>, log_n: usize) -> Vec<EF> {
+    let (numer, denom): (Vec<_>, Vec<_>) = points.iter().map(|&pt| {
+        let diff = at - pt;
+        let numer = diff.x + F::one();
+        let denom = diff.y * pt.s_p_at_p(log_n);
+        (numer, denom)
+    }).unzip();
+
+    let inv_d = batch_multiplicative_inverse(&denom);
+
+    numer.iter().zip(inv_d.iter()).map(|(&num, &inv_d)| num * inv_d).collect()
 }
 
 impl<F: ComplexExtendable> Point<F> {
