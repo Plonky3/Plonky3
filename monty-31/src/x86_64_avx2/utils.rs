@@ -224,7 +224,7 @@ pub unsafe fn mul_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
         // Thus lo_x_r contains lo * r.
         let lo_x_r = x86_64::_mm256_maddubs_epi16(input, odd_factor);
 
-        let lo_shft = x86_64::_mm256_slli_epi32::<N_PRIME>(lo);
+        let lo_shft = x86_64::_mm256_slli_epi32::<N_PRIME>(lo_x_r);
         x86_64::_mm256_sub_epi32(hi, lo_shft)
     }
 }
