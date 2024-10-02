@@ -55,7 +55,7 @@ unsafe fn mul_2_exp_neg_8(input: __m256i) -> __m256i {
 
 /// Multiply a vector of Monty31 field elements in canonical form by 2**{-8}.
 /// This is specialised to the KoalaBear prime which allows us to replace a
-/// shifts by a twiddle.
+/// shift by a twiddle.
 /// # Safety
 ///
 /// Input must be given in canonical form.
@@ -274,7 +274,7 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
         // input[20] -> sum - input[20]/2^9
         input[20] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 9, 15>(input[20]);
 
-        // input[21] -> sum - input[21]/2^24
+        // input[21] -> sum + input[21]/2^24
         input[21] = mul_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[21]);
 
         // input[22] -> sum - input[22]/2^24
