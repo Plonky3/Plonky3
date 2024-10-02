@@ -349,11 +349,11 @@ fn round(i: usize, state: [__m512i; 25]) -> [__m512i; 25] {
 }
 
 fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
-    let mut state: [__m512i; 25] = unsafe { transmute_copy(buf) };
+    let mut state: [__m512i; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute_copy(&state) };
+    *buf = unsafe { transmute(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {

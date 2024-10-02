@@ -1,5 +1,5 @@
 use core::arch::aarch64::{uint64x2_t, vbcaxq_u64, veor3q_u64, veorq_u64, vrax1q_u64, vxarq_u64};
-use core::mem::{transmute, transmute_copy};
+use core::mem::transmute;
 
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
@@ -201,11 +201,11 @@ fn round(i: usize, state: [uint64x2_t; 25]) -> [uint64x2_t; 25] {
 }
 
 fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
-    let mut state: [uint64x2_t; 25] = unsafe { transmute_copy(buf) };
+    let mut state: [uint64x2_t; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute_copy(&state) };
+    *buf = unsafe { transmute(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
@@ -218,9 +218,6 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
-
-    use core::arch::aarch64::{vcombine_u64, vdup_n_u64, vdupd_laneq_u64, vdupq_n_u64};
-
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -292,10 +289,8 @@ mod tests {
 
         let mut result = [[0; 25]; 2];
         for i in 0..25 {
-            unsafe {
-                result[0][i] = packed_result[i][0];
-                result[1][i] = packed_result[i][1];
-            }
+            result[0][i] = packed_result[i][0];
+            result[1][i] = packed_result[i][1];
         }
         result
     }

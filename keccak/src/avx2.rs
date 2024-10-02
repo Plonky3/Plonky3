@@ -2,7 +2,7 @@ use core::arch::x86_64::{
     __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_or_si256, _mm256_shuffle_epi8,
     _mm256_slli_epi64, _mm256_srli_epi64, _mm256_xor_si256,
 };
-use core::mem::{transmute, transmute_copy};
+use core::mem::transmute;
 
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
@@ -302,11 +302,11 @@ fn round(i: usize, state: [__m256i; 25]) -> [__m256i; 25] {
 }
 
 fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
-    let mut state: [__m256i; 25] = unsafe { transmute_copy(buf) };
+    let mut state: [__m256i; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute_copy(&state) };
+    *buf = unsafe { transmute(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
