@@ -26,8 +26,6 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
-        Self {
-            external_constants
-        }
+        Self { external_constants }
     }
 }

@@ -39,8 +39,6 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
     fn new_from_constants(
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
-        Self {
-            external_constants
-        }
+        Self { external_constants }
     }
 }

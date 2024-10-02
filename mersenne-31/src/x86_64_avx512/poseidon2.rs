@@ -67,11 +67,13 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
-        let packed_initial_external_constants = external_constants.get_initial_constants()
+        let packed_initial_external_constants = external_constants
+            .get_initial_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
             .collect();
-        let packed_terminal_external_constants = external_constants.get_terminal_constants()
+        let packed_terminal_external_constants = external_constants
+            .get_terminal_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form(constant.value as i32)))
             .collect();

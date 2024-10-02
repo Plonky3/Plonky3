@@ -294,9 +294,9 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     // The instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
 
-    // Annoyingly, when inlined into the mul function, this seems to compile 
+    // Annoyingly, when inlined into the mul function, this seems to compile
     // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
-    // 
+    //
     // Hopefully this should be only a negligible difference to throughput and so we don't
     // fix it right now. Maybe the compiler works it out when mul is inlined?
     unsafe {
@@ -353,10 +353,10 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
         // latency.
-        // 
-        // Annoyingly, this (and the line for computing q_p_hi) seem to compile 
+        //
+        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
         // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
-        // 
+        //
         // Hopefully this should be only a negligible difference to throughput and so we don't
         // fix it right now. Maybe the compiler works it out when mul is inlined?
         let prod_hi = mask_movehdup_epi32(prod_odd, EVENS, prod_evn);
@@ -420,7 +420,6 @@ pub(crate) fn packed_exp_5<MPAVX512: MontyParametersAVX512>(input: __m512i) -> _
         let quad = shifted_square::<MPAVX512>(square);
         x86_64::_mm512_mul_epi32(quad, input)
     }
-    
 }
 
 /// Take the seventh power of the MontyField31 elements in the even index entries.
@@ -440,7 +439,7 @@ pub(crate) fn packed_exp_7<MPAVX512: MontyParametersAVX512>(input: __m512i) -> _
 }
 
 /// Apply func to the even and odd indices of the input vector.
-/// 
+///
 /// func should only depend in the 32 bit entries in the even indices.
 /// The input should conform to the requirements of `func`.
 /// The output of func must lie in (-P^2, ..., P^2) after which
@@ -455,11 +454,11 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     let input_evn = input;
     let input_odd = movehdup_epi32(input);
 
-    // Unlike the mul function, we need to recieve back values the reduced 
+    // Unlike the mul function, we need to recieve back values the reduced
     let output_even = func(input_evn);
     let output_odd = func(input_odd);
 
-    // We need to recombine these even and odd parts and, at the same time reduce back to 
+    // We need to recombine these even and odd parts and, at the same time reduce back to
     // and output in [0, P).
 
     // We throw a confuse compiler here to prevent the compiler from
@@ -472,9 +471,9 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
     // latency.
     //
-    // Annoyingly, this (and the line for computing q_p_hi) seem to compile 
+    // Annoyingly, this (and the line for computing q_p_hi) seem to compile
     // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
-    // 
+    //
     // Hopefully this should be only a negligible difference to throughput and so we don't
     // fix it right now. Maybe the compiler works it out when apply_func_to_even_odd is inlined?
     let output_hi = mask_movehdup_epi32(output_odd, EVENS, output_even);

@@ -151,11 +151,13 @@ impl<FP: FieldParameters, const WIDTH: usize>
     fn new_from_constants(
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
-        let packed_initial_external_constants = external_constants.get_initial_constants()
+        let packed_initial_external_constants = external_constants
+            .get_initial_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form::<FP>(constant.value as i32)))
             .collect();
-        let packed_terminal_external_constants = external_constants.get_terminal_constants()
+        let packed_terminal_external_constants = external_constants
+            .get_terminal_constants()
             .iter()
             .map(|array| array.map(|constant| convert_to_vec_neg_form::<FP>(constant.value as i32)))
             .collect();
@@ -385,10 +387,10 @@ where
         &self,
         state: Self::InternalState,
     ) -> [PackedMontyField31AVX2<FP>; 16] {
-        let mut output_state = unsafe { 
+        let mut output_state = unsafe {
             // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
             // Thus to_packed_field_array is safe to use.
-            state.to_packed_field_array() 
+            state.to_packed_field_array()
         };
 
         external_rounds::<FP, 16, D>(&mut output_state, &self.packed_terminal_external_constants);
@@ -420,10 +422,10 @@ where
         &self,
         state: Self::InternalState,
     ) -> [PackedMontyField31AVX2<FP>; 24] {
-        let mut output_state = unsafe { 
+        let mut output_state = unsafe {
             // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
             // Thus to_packed_field_array is safe to use.
-            state.to_packed_field_array() 
+            state.to_packed_field_array()
         };
 
         external_rounds::<FP, 24, D>(&mut output_state, &self.packed_terminal_external_constants);
