@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;

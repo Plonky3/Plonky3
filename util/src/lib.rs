@@ -235,9 +235,9 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
     let len_bytes = vec.len() * size_of::<T>();
     let cap_bytes = vec.capacity() * size_of::<T>();
 
-    debug_assert_eq!(align_of::<T>(), align_of::<U>());
-    debug_assert_eq!(len_bytes % size_of::<U>(), 0);
-    debug_assert_eq!(cap_bytes % size_of::<U>(), 0);
+    assert_eq!(align_of::<T>(), align_of::<U>());
+    assert_eq!(len_bytes % size_of::<U>(), 0);
+    assert_eq!(cap_bytes % size_of::<U>(), 0);
 
     let new_len = len_bytes / size_of::<U>();
     let new_cap = cap_bytes / size_of::<U>();
