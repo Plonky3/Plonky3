@@ -162,7 +162,10 @@ impl<F: Field> AddAssign for Point<F> {
 impl<F: Field, EF: ExtensionField<F>> Sub<Point<F>> for Point<EF> {
     type Output = Self;
     fn sub(self, rhs: Point<F>) -> Self::Output {
-        self + (-rhs)
+        Self::new(
+            self.x * rhs.x + self.y * rhs.y,
+            self.y * rhs.x - self.x * rhs.y,
+        )
     }
 }
 
