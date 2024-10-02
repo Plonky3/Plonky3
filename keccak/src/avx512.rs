@@ -366,10 +366,6 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
-
-    use core::arch::x86_64::{_mm512_setr_epi64, _mm512_setzero_si512};
-    use core::mem::transmute_copy;
-
     use tiny_keccak::keccakf;
 
     use super::*;
