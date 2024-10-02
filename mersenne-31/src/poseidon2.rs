@@ -115,8 +115,7 @@ impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
 #[derive(Debug, Clone, Default)]
 pub struct GenericDiffusionMatrixMersenne31 {}
 
-impl<AF> Permutation<[AF; 16]>
-    for GenericDiffusionMatrixMersenne31
+impl<AF> Permutation<[AF; 16]> for GenericDiffusionMatrixMersenne31
 where
     AF: AbstractField + Mul<Mersenne31, Output = AF>,
 {
@@ -125,21 +124,22 @@ where
         let full_sum = part_sum.clone() + state[0].clone();
         state[0] = part_sum - state[0].clone();
 
-        for (state_i, const_i) in state.iter_mut().zip(POSEIDON2_INTERNAL_MATRIX_DIAG_16).skip(1) {
+        for (state_i, const_i) in state
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_16)
+            .skip(1)
+        {
             *state_i = full_sum.clone() + state_i.clone() * const_i;
         }
     }
 }
 
-impl<AF> DiffusionPermutation<AF, 16>
-    for GenericDiffusionMatrixMersenne31
-where
-    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+impl<AF> DiffusionPermutation<AF, 16> for GenericDiffusionMatrixMersenne31 where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>
 {
 }
 
-impl<AF> Permutation<[AF; 24]>
-    for GenericDiffusionMatrixMersenne31
+impl<AF> Permutation<[AF; 24]> for GenericDiffusionMatrixMersenne31
 where
     AF: AbstractField + Mul<Mersenne31, Output = AF>,
 {
@@ -148,16 +148,18 @@ where
         let full_sum = part_sum.clone() + state[0].clone();
         state[0] = part_sum - state[0].clone();
 
-        for (state_i, const_i) in state.iter_mut().zip(POSEIDON2_INTERNAL_MATRIX_DIAG_24).skip(1) {
+        for (state_i, const_i) in state
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_24)
+            .skip(1)
+        {
             *state_i = full_sum.clone() + state_i.clone() * const_i;
         }
     }
 }
 
-impl<AF> DiffusionPermutation<AF, 24>
-    for GenericDiffusionMatrixMersenne31
-where
-    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+impl<AF> DiffusionPermutation<AF, 24> for GenericDiffusionMatrixMersenne31 where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>
 {
 }
 
