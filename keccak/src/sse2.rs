@@ -1,6 +1,6 @@
 use core::arch::x86_64::{
-    __m128i, _mm_add_epi64, _mm_andnot_si128, _mm_or_si128, _mm_shuffle_epi8, _mm_slli_epi64,
-    _mm_srli_epi64, _mm_xor_si128,
+    __m128i, _mm_add_epi64, _mm_andnot_si128, _mm_or_si128, _mm_slli_epi64, _mm_srli_epi64,
+    _mm_xor_si128,
 };
 use core::mem::transmute;
 
@@ -61,6 +61,7 @@ fn rol_1(a: __m128i) -> __m128i {
 #[cfg(target_feature = "ssse3")]
 #[inline(always)]
 fn rol_8(a: __m128i) -> __m128i {
+    use core::arch::x86_64::_mm_shuffle_epi8;
     const ROL_8_CTRL: __m128i = unsafe {
         transmute::<[u8; 16], _>([
             0o07, 0o00, 0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o17, 0o10, 0o11, 0o12, 0o13, 0o14,
@@ -79,6 +80,7 @@ fn rol_8(a: __m128i) -> __m128i {
 #[cfg(target_feature = "ssse3")]
 #[inline(always)]
 fn rol_56(a: __m128i) -> __m128i {
+    use core::arch::x86_64::_mm_shuffle_epi8;
     const ROL_56_CTRL: __m128i = unsafe {
         transmute::<[u8; 16], _>([
             0o01, 0o02, 0o03, 0o04, 0o05, 0o06, 0o07, 0o00, 0o11, 0o12, 0o13, 0o14, 0o15, 0o16,
