@@ -202,6 +202,8 @@ where
     (buf, i)
 }
 
+/// Split an interator into small arrays and apply `func` to each.
+///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
 /// pass the array to `func` as a slice. If less than `BUFLEN`
 /// elements are remaining, that smaller slice is passed to `func` (if
@@ -222,9 +224,11 @@ where
     }
 }
 
-/// Converts a vector of one type to one of another type. This is useful to convert between things
-/// like `Vec<u32>` and `Vec<[u32; 10]>`, for example. This is roughly like a transmutation, except
-/// that we also adjust the vector's length and capacity based on the sizes of the two types.
+/// Converts a vector of one type to one of another type.
+///
+/// This is useful to convert between things like `Vec<u32>` and `Vec<[u32; 10]>`, for example.
+/// This is roughly like a transmutation, except that we also adjust the vector's length
+/// and capacity based on the sizes of the two types.
 ///
 /// # Safety
 /// In addition to the usual safety considerations around transmutation, the caller must ensure that

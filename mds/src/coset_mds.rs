@@ -7,6 +7,8 @@ use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;
 
+/// A Reed-Solomon based MDS permutation.
+///
 /// An MDS permutation which works by interpreting the input as evaluations of a polynomial over a
 /// power-of-two subgroup, and computing evaluations over a coset of that subgroup. This can be
 /// viewed as returning the parity elements of a systematic Reed-Solomon code. Since Reed-Solomon
