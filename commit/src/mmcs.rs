@@ -7,8 +7,9 @@ use p3_matrix::{Dimensions, Matrix};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme; it
-/// supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
+/// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme.
+/// 
+/// It supports committing to matrices and then opening rows. It is also batch-oriented; one can commit
 /// to a batch of matrices at once even if their widths and heights differ.
 ///
 /// When a particular row index is opened, it is interpreted directly as a row index for matrices

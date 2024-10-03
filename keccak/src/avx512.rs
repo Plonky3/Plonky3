@@ -353,7 +353,7 @@ fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute(state) };
+    *buf = unsafe { transmute::<[__m512i; 25], [[u64; VECTOR_LEN]; 25]>(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
@@ -591,8 +591,8 @@ mod tests {
 
     fn our_res() -> [[u64; 25]; 8] {
         let mut packed_result = [[0; 8]; 25];
-        for i in 0..25 {
-            packed_result[i] = [
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            *packed_res = [
                 STATES[0][i],
                 STATES[1][i],
                 STATES[2][i],
@@ -607,15 +607,15 @@ mod tests {
         keccak_perm(&mut packed_result);
 
         let mut result = [[0; 25]; 8];
-        for i in 0..25 {
-            result[0][i] = packed_result[i][0];
-            result[1][i] = packed_result[i][1];
-            result[2][i] = packed_result[i][2];
-            result[3][i] = packed_result[i][3];
-            result[4][i] = packed_result[i][4];
-            result[5][i] = packed_result[i][5];
-            result[6][i] = packed_result[i][6];
-            result[7][i] = packed_result[i][7];
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            result[0][i] = packed_res[0];
+            result[1][i] = packed_res[1];
+            result[2][i] = packed_res[2];
+            result[3][i] = packed_res[3];
+            result[4][i] = packed_res[4];
+            result[5][i] = packed_res[5];
+            result[6][i] = packed_res[6];
+            result[7][i] = packed_res[7];
         }
         result
     }
