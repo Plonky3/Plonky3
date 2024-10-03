@@ -1,6 +1,6 @@
+use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
-use alloc::vec::Vec;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
 
@@ -70,13 +70,13 @@ impl<F: Field> Point<F> {
     }
 
     /// Compute a product of successive `v_n`'s.
-    /// 
+    ///
     /// More explicitely this computes `(1..log_n).map(|i| self.v_n(i)).product()`
-    /// but uses far fewer `self.x.square().double() - F::one()` steps compared to the naive implementation. 
+    /// but uses far fewer `self.x.square().double() - F::one()` steps compared to the naive implementation.
     pub fn v_n_prod(mut self, log_n: usize) -> F {
         let mut output = self.x;
         for _ in 0..(log_n - 2) {
-            self.x = self.x.square().double() - F::one();  // TODO: replace this by a custom field impl.
+            self.x = self.x.square().double() - F::one(); // TODO: replace this by a custom field impl.
             output *= self.x;
         }
         output
@@ -93,7 +93,7 @@ impl<F: Field> Point<F> {
     /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P=self, used for normalization.
     /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
     pub fn s_p_at_p(self, log_n: usize) -> F {
-        - self.v_n_prod(log_n).mul_2exp_u64((2 * log_n - 1) as u64) * self.y
+        -self.v_n_prod(log_n).mul_2exp_u64((2 * log_n - 1) as u64) * self.y
     }
 
     /// Evaluate the alternate single-point vanishing function v_p(x), used for DEEP quotient.
@@ -108,20 +108,30 @@ impl<F: Field> Point<F> {
 
 /// Compute (ṽ_P(x,y) * s_p)^{-1} for each element if the list.
 /// This takes advantage of batched inversion.
-pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(points: &[Point<F>], at: Point<EF>, log_n: usize) -> Vec<EF> {
-    
+pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
+    points: &[Point<F>],
+    at: Point<EF>,
+    log_n: usize,
+) -> Vec<EF> {
     // This following line costs about 2% of the runtime. Would be nice to find further speedups.
     // Maybe modify to use packed fields here?
-    let (numer, denom): (Vec<_>, Vec<_>) = points.iter().map(|&pt| {
-        let diff = at - pt;
-        let numer = diff.x + F::one();
-        let denom = diff.y * pt.s_p_at_p(log_n);
-        (numer, denom)
-    }).unzip(); 
+    let (numer, denom): (Vec<_>, Vec<_>) = points
+        .iter()
+        .map(|&pt| {
+            let diff = at - pt;
+            let numer = diff.x + F::one();
+            let denom = diff.y * pt.s_p_at_p(log_n);
+            (numer, denom)
+        })
+        .unzip();
 
     let inv_d = batch_multiplicative_inverse(&denom);
 
-    numer.iter().zip(inv_d.iter()).map(|(&num, &inv_d)| num * inv_d).collect()
+    numer
+        .iter()
+        .zip(inv_d.iter())
+        .map(|(&num, &inv_d)| num * inv_d)
+        .collect()
 }
 
 impl<F: ComplexExtendable> Point<F> {

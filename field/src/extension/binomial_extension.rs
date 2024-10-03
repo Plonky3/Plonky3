@@ -437,7 +437,8 @@ where
                 res.value[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
             }
             3 => cubic_mul(&a, &b, &mut res.value, w_af),
-            _ => {
+            _ =>
+            {
                 #[allow(clippy::needless_range_loop)]
                 for i in 0..D {
                     for j in 0..D {
@@ -625,7 +626,12 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-fn cubic_mul<AF: AbstractField, const D: usize>(a: &[AF; D], b: &[AF; D], res: &mut [AF; D], w: AF) {
+fn cubic_mul<AF: AbstractField, const D: usize>(
+    a: &[AF; D],
+    b: &[AF; D],
+    res: &mut [AF; D],
+    w: AF,
+) {
     assert_eq!(D, 3);
 
     let a0_b0 = a[0].clone() * b[0].clone();
