@@ -6,6 +6,7 @@ use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
+use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
 use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
@@ -20,6 +21,7 @@ fn bench_lde(c: &mut Criterion) {
     lde_twoadic::<BabyBear, Radix2Dit<_>, _>(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2DitParallel, _>(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2Bowers, _>(&mut g, log_n, log_w);
+    lde_twoadic::<BabyBear, RecursiveDft<_>, _>(&mut g, log_n, log_w);
 }
 
 fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usize) {

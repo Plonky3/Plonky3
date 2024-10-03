@@ -11,9 +11,9 @@ use itertools::izip;
 use p3_field::{AbstractField, PackedField, TwoAdicField};
 use p3_util::log2_strict_usize;
 
-use crate::{FieldParameters, MontyField31, TwoAdicData};
+use crate::Mersenne31;
 
-impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+impl Mersenne31 {
     /// Given a field element `gen` of order n where `n = 2^lg_n`,
     /// return a vector of vectors `table` where table[i] is the
     /// vector of twiddle factors for an fft of length n/2^i. The values
@@ -39,9 +39,9 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 }
 
-impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+impl Mersenne31 {
     #[inline(always)]
-    fn forward_butterfly<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn forward_butterfly<PF: PackedField<Scalar = Mersenne31>>(
         x: PF,
         y: PF,
         w: Self,
@@ -51,7 +51,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    fn forward_pass<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF], roots: &[Self]) {
+    fn forward_pass<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF], roots: &[Self]) {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
@@ -69,7 +69,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_2<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn forward_2<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 2);
 
         let s = a[0] + a[1];
@@ -79,12 +79,12 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_4<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn forward_4<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
         // Expanding the calculation of t3 saves one instruction
         let t1 = a[1] - a[3];
-        let t3 = t1 * PF::from_f(MP::ROOTS_8.as_ref()[1]);
+        let t3 = t1; // TODO: Determine the small twiddles
         let t5 = a[1] + a[3];
         let t4 = a[0] + a[2];
         let t2 = a[0] - a[2];
@@ -97,10 +97,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_8<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn forward_8<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 8);
 
-        Self::forward_pass(a, MP::ROOTS_8.as_ref());
+        Self::forward_pass(a, todo!());
 
         // Safe because a.len() == 8
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -109,10 +109,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_16<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn forward_16<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 16);
 
-        Self::forward_pass(a, MP::ROOTS_16.as_ref());
+        Self::forward_pass(a, todo!());
 
         // Safe because a.len() == 16
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -121,7 +121,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_32<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn forward_32<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -136,7 +136,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_64<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn forward_64<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -151,7 +151,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_128<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn forward_128<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -166,7 +166,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_256<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn forward_256<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -181,7 +181,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    pub fn forward_fft<PF: PackedField<Scalar = MontyField31<MP>>>(
+    pub fn forward_fft<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {

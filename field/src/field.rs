@@ -89,6 +89,13 @@ pub trait AbstractField:
         self.clone() + self.clone()
     }
 
+    /// self * 2^exp
+    #[must_use]
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        self.clone() * Self::two().exp_u64(exp)
+    }
+
     #[must_use]
     fn square(&self) -> Self {
         self.clone() * self.clone()
@@ -209,13 +216,6 @@ pub trait Field:
 
     fn is_one(&self) -> bool {
         *self == Self::one()
-    }
-
-    /// self * 2^exp
-    #[must_use]
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::two().exp_u64(exp)
     }
 
     /// self / 2^exp

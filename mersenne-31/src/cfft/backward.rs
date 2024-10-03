@@ -10,11 +10,13 @@ use alloc::vec::Vec;
 use itertools::izip;
 use p3_field::PackedField;
 
-use crate::{FieldParameters, MontyField31, TwoAdicData};
+use crate::{to_mersenne31_array, Mersenne31};
 
-impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+const TWIDDLES_4: [Mersenne31; 2] = to_mersenne31_array([590768354, 1168891274]);
+
+impl Mersenne31 {
     #[inline(always)]
-    fn backward_butterfly<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn backward_butterfly<PF: PackedField<Scalar = Mersenne31>>(
         x: PF,
         y: PF,
         w: Self,
@@ -24,35 +26,30 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    fn backward_pass<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF], roots: &[Self]) {
+    fn backward_pass<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF], roots: &[Self]) {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
         // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
 
-        let s = top[0] + tail[0];
-        let t = top[0] - tail[0];
-        top[0] = s;
-        tail[0] = t;
-
-        izip!(top[1..].iter_mut(), tail[1..].iter_mut(), roots).for_each(|(hi, lo, &root)| {
+        izip!(top.iter_mut(), tail.iter_mut(), roots).for_each(|(hi, lo, &root)| {
             (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
         });
     }
 
     #[inline(always)]
-    fn backward_2<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn backward_2<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 2);
 
         let s = a[0] + a[1];
-        let t = a[0] - a[1];
+        let t = a[0] - a[1].mul_2exp_u64(15); // The smalleest t
         a[0] = s;
         a[1] = t;
     }
 
     #[inline(always)]
-    fn backward_4<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn backward_4<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
         // Read in bit-reversed order
@@ -63,7 +60,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         // Expanding the calculation of t3 saves one instruction
         let t1 = a1 - a3;
-        let t3 = t1 * PF::from_f(MP::INV_ROOTS_8.as_ref()[1]);
+        let t3 = t1; // TODO: Determine the small twiddles
         let t5 = a1 + a3;
         let t4 = a0 + a2;
         let t2 = a0 - a2;
@@ -75,7 +72,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_8<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn backward_8<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 8);
 
         // Safe because a.len() == 8
@@ -83,11 +80,11 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_4(a0);
         Self::backward_4(a1);
 
-        Self::backward_pass(a, MP::INV_ROOTS_8.as_ref());
+        Self::backward_pass(a, todo!());
     }
 
     #[inline(always)]
-    fn backward_16<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF]) {
+    fn backward_16<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 16);
 
         // Safe because a.len() == 16
@@ -95,11 +92,11 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_8(a0);
         Self::backward_8(a1);
 
-        Self::backward_pass(a, MP::INV_ROOTS_16.as_ref());
+        Self::backward_pass(a, todo!());
     }
 
     #[inline(always)]
-    fn backward_32<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn backward_32<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -114,7 +111,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_64<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn backward_64<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -129,7 +126,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_128<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn backward_128<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -144,7 +141,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_256<PF: PackedField<Scalar = MontyField31<MP>>>(
+    fn backward_256<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
@@ -159,7 +156,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    pub fn backward_fft<PF: PackedField<Scalar = MontyField31<MP>>>(
+    pub fn backward_fft<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
         root_table: &[Vec<Self>],
     ) {
