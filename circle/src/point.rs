@@ -82,12 +82,6 @@ impl<F: Field> Point<F> {
         output
     }
 
-    /// Evaluate the formal derivative of `v_n` at `self`
-    /// Circle STARKs, Section 5.1, Remark 15 (page 21 of the first revision PDF)
-    pub fn v_n_prime(self, log_n: usize) -> F {
-        F::one().mul_2exp_u64((2 * (log_n - 1)) as u64) * self.v_n_prod(log_n)
-    }
-
     /// Evaluate the selector function which is zero at `self` and nonzero elsewhere, at `at`.
     /// Called v_0 . T_p⁻¹ or ṽ_p(x,y) in the paper, used for constraint selectors.
     /// Panics if p = -self, the pole.
@@ -99,7 +93,7 @@ impl<F: Field> Point<F> {
     /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P=self, used for normalization.
     /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
     pub fn s_p_at_p(self, log_n: usize) -> F {
-        -F::two() * self.v_n_prime(log_n) * self.y
+        - self.v_n_prod(log_n).mul_2exp_u64((2 * log_n - 1) as u64) * self.y
     }
 
     /// Evaluate the alternate single-point vanishing function v_p(x), used for DEEP quotient.
@@ -115,12 +109,15 @@ impl<F: Field> Point<F> {
 /// Compute (ṽ_P(x,y) * s_p)^{-1} for each element if the list.
 /// This takes advantage of batched inversion.
 pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(points: &[Point<F>], at: Point<EF>, log_n: usize) -> Vec<EF> {
+    
+    // This following line costs about 2% of the runtime. Would be nice to find further speedups.
+    // Maybe modify to use packed fields here?
     let (numer, denom): (Vec<_>, Vec<_>) = points.iter().map(|&pt| {
         let diff = at - pt;
         let numer = diff.x + F::one();
         let denom = diff.y * pt.s_p_at_p(log_n);
         (numer, denom)
-    }).unzip();
+    }).unzip(); 
 
     let inv_d = batch_multiplicative_inverse(&denom);
 
@@ -202,5 +199,10 @@ mod tests {
         assert_eq!(one + one + one, one * 3);
         assert_eq!(one * 7, -one);
         assert_eq!(one * 8, Pt::zero());
+
+        let gen = Pt::generator(10);
+        let log_n = 10;
+        let vn_prod_gen = (1..log_n).map(|i| gen.v_n(i)).product();
+        assert_eq!(gen.v_n_prod(log_n), vn_prod_gen);
     }
 }
