@@ -1,4 +1,6 @@
-use p3_field::PrimeField32;
+use core::ops::Mul;
+
+use p3_field::{AbstractField, PrimeField32};
 use p3_poseidon2::DiffusionPermutation;
 use p3_symmetric::Permutation;
 
@@ -107,6 +109,59 @@ impl Permutation<[Mersenne31; 24]> for DiffusionMatrixMersenne31 {
 }
 
 impl DiffusionPermutation<Mersenne31, 24> for DiffusionMatrixMersenne31 {}
+
+/// Like `DiffusionMatrixMontyField31`, but generalized to any `AbstractField`, and less efficient
+/// for the concrete Monty fields.
+#[derive(Debug, Clone, Default)]
+pub struct GenericDiffusionMatrixMersenne31 {}
+
+impl<AF> Permutation<[AF; 16]> for GenericDiffusionMatrixMersenne31
+where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+{
+    fn permute_mut(&self, state: &mut [AF; 16]) {
+        let part_sum: AF = state.iter().skip(1).cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+        state[0] = part_sum - state[0].clone();
+
+        for (state_i, const_i) in state
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_16)
+            .skip(1)
+        {
+            *state_i = full_sum.clone() + state_i.clone() * const_i;
+        }
+    }
+}
+
+impl<AF> DiffusionPermutation<AF, 16> for GenericDiffusionMatrixMersenne31 where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>
+{
+}
+
+impl<AF> Permutation<[AF; 24]> for GenericDiffusionMatrixMersenne31
+where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+{
+    fn permute_mut(&self, state: &mut [AF; 24]) {
+        let part_sum: AF = state.iter().skip(1).cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+        state[0] = part_sum - state[0].clone();
+
+        for (state_i, const_i) in state
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_24)
+            .skip(1)
+        {
+            *state_i = full_sum.clone() + state_i.clone() * const_i;
+        }
+    }
+}
+
+impl<AF> DiffusionPermutation<AF, 24> for GenericDiffusionMatrixMersenne31 where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>
+{
+}
 
 #[cfg(test)]
 mod tests {
