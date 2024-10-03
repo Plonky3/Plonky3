@@ -50,8 +50,8 @@ fn main() -> Result<(), impl Debug> {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
 

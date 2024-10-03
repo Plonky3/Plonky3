@@ -1,6 +1,6 @@
 //! Utilities for testing field implementations.
 
-#![no_std]
+// #![no_std]
 
 extern crate alloc;
 
