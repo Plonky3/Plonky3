@@ -223,6 +223,12 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     fn generator() -> Self {
         FP::MONTY_GEN
     }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: repr(transparent) ensures transmutation safety.
+        unsafe { transmute(vec![0u32; len]) }
+    }
 }
 
 impl<FP: FieldParameters> Field for MontyField31<FP> {
@@ -279,12 +285,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[inline]
     fn order() -> BigUint {
         FP::PRIME.into()
-    }
-
-    #[inline]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u32; len]) }
     }
 }
 

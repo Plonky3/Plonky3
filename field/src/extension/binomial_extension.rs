@@ -1,13 +1,14 @@
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::{array, mem};
 
 use itertools::Itertools;
 use num_bigint::BigUint;
+use p3_util::convert_vec;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
@@ -218,6 +219,12 @@ where
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
         }
     }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(AF::zero_vec(len * D)) }
+    }
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
@@ -243,17 +250,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
     fn order() -> BigUint {
         F::order().pow(D as u32)
-    }
-
-    #[inline]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        let mut vec_f = F::zero_vec(len * D);
-        let ptr = vec_f.as_mut_ptr() as *mut Self;
-        let cap = vec_f.capacity() / D;
-        debug_assert_eq!(vec_f.len() / D, len);
-        mem::forget(vec_f);
-        // SAFETY: Self is a repr(transparent) wrapper around an array of F.
-        unsafe { Vec::from_raw_parts(ptr, len, cap) }
     }
 }
 

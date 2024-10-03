@@ -17,7 +17,6 @@ use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::thread_rng;
 
 /// For testing the public values feature
-
 pub struct FibonacciAir {}
 
 impl<F> BaseAir<F> for FibonacciAir {
