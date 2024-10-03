@@ -57,8 +57,8 @@ pub fn apply_circulant<AF: AbstractField, const N: usize>(
 }
 
 /// Given the first row of a circulant matrix, return the first column.
-/// 
-/// For example if, `v = [0, 1, 2, 3, 4, 5]` then `output = [0, 5, 4, 3, 2, 1]`, 
+///
+/// For example if, `v = [0, 1, 2, 3, 4, 5]` then `output = [0, 5, 4, 3, 2, 1]`,
 /// i.e. the first element is the same and the other elements are reversed.
 ///
 /// This is useful to prepare a circulant matrix for input to an FFT
@@ -84,7 +84,7 @@ pub const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; 
 
 /// Use the convolution theorem to calculate the product of the given
 /// circulant matrix and the given vector.
-/// 
+///
 /// The circulant matrix must be specified by its first *column*, not its first row. If you have
 /// the row as an array, you can obtain the column with `first_row_to_first_col()`.
 #[inline]
