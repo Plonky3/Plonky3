@@ -28,6 +28,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn as_slice(&self) -> &[Self::Value];
     fn as_slice_mut(&mut self) -> &mut [Self::Value];
 
+    #[inline]
     fn pack_slice(buf: &[Self::Value]) -> &[Self] {
         // Sources vary, but this should be true on all platforms we care about.
         // This should be a const assert, but trait methods can't access `Self` in a const context,
@@ -44,11 +45,13 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
+    #[inline]
     fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
         let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice(packed), suffix)
     }
 
+    #[inline]
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
@@ -62,11 +65,13 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    #[inline]
     fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
         let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice_mut(packed), suffix)
     }
 
+    #[inline]
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
         assert!(align_of::<Self>() >= align_of::<Self::Value>());
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();

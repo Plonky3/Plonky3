@@ -31,6 +31,9 @@ pub mod iter {
     pub use rayon::iter::repeat;
 }
 
+#[cfg(feature = "parallel")]
+pub use rayon::{ThreadBuilder, ThreadPoolBuilder};
+
 #[cfg(not(feature = "parallel"))]
 mod serial;
 

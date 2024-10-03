@@ -8,6 +8,7 @@ use core::{iter, slice};
 
 use p3_field::{scale_slice_in_place, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
+use p3_maybe_rayon::ThreadPoolBuilder;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -272,7 +273,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
 
     /// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,
     /// so in actuality we're interleaving zero rows.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "info", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
         T: Field,
@@ -293,10 +294,16 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         let w = self.width;
         let mut padded =
             RowMajorMatrix::new(T::zero_vec(self.values.borrow().len() << added_bits), w);
-        padded
-            .par_row_chunks_exact_mut(1 << added_bits)
-            .zip(self.par_row_slices())
-            .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
+        ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| {
+                padded
+                    .par_row_chunks_exact_mut(1 << added_bits)
+                    .zip(self.par_row_slices())
+                    .for_each(|(mut ch, r)| ch.row_mut(0).copy_from_slice(r));
+            });
 
         padded
     }

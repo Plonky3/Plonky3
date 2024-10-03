@@ -5,7 +5,7 @@ use tracing::instrument;
 use crate::dense::RowMajorMatrix;
 use crate::Matrix;
 
-#[instrument(level = "debug", skip_all)]
+#[instrument(level = "info", skip_all)]
 pub fn reverse_matrix_index_bits<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>) {
     let w = mat.width();
     let h = mat.height();
