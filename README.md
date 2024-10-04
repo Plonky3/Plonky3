@@ -64,12 +64,12 @@ Many variations are possible, with different fields, hashes and so forth, but he
 Prove 2^19 Poseidon2 permutations of width 16, using the `KoalaBear` field and Keccak in the Merkle tree:
 Poseidon2
 ```
-cargo run --example prove_poseidon2_koala_bear_keccak --release --features parallel
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_poseidon2_koala_bear_keccak --release --features parallel
 ```
 
 Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the Merkle tree.
 ```
-RUST_LOG=info cargo run --example prove_baby_bear_keccak --release --features parallel
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_baby_bear_keccak --release --features parallel
 ```
 
 ## CPU features
