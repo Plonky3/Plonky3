@@ -101,7 +101,6 @@ where
     let dft = Dft::default();
     let mut rng = thread_rng();
     for log_h in 0..5 {
-        dbg!(log_h);
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
         let shift = F::generator();
