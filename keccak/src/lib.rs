@@ -39,6 +39,11 @@ pub mod avx2;
 ))]
 pub use avx2::*;
 
+#[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+pub mod sse2;
+#[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+pub use sse2::*;
+
 #[cfg(all(
     target_arch = "aarch64",
     target_feature = "neon",
@@ -58,7 +63,7 @@ pub use neon::*;
         target_feature = "neon",
         target_feature = "sha3",
     ),
-    all(target_arch = "x86_64", target_feature = "avx2",),
+    target_arch = "x86_64",
 )))]
 mod fallback;
 #[cfg(not(any(
@@ -67,7 +72,7 @@ mod fallback;
         target_feature = "neon",
         target_feature = "sha3",
     ),
-    all(target_arch = "x86_64", target_feature = "avx2",),
+    target_arch = "x86_64",
 )))]
 pub use fallback::*;
 

@@ -205,7 +205,7 @@ fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute(state) };
+    *buf = unsafe { transmute::<[uint64x2_t; 25], [[u64; VECTOR_LEN]; 25]>(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
@@ -279,6 +279,7 @@ mod tests {
         ],
     ];
 
+    #[allow(clippy::needless_range_loop)]
     fn our_res() -> [[u64; 25]; 2] {
         let mut packed_result = [[0; 2]; 25];
         for i in 0..25 {
