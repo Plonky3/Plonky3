@@ -113,7 +113,8 @@ pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
     at: Point<EF>,
     log_n: usize,
 ) -> Vec<EF> {
-    // This following line costs about 2% of the runtime. Would be nice to find further speedups.
+    // This following line costs about 2% of the runtime for example prove_poseidon2_m31_keccak.
+    // Would be nice to find further speedups.
     // Maybe modify to use packed fields here?
     let (numer, denom): (Vec<_>, Vec<_>) = points
         .iter()

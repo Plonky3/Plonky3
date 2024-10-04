@@ -103,10 +103,14 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         // Compute z_H
         let lagrange_num = self.domain.zeroifier(point);
 
+        // Permute the domiain to get it into the right format.
         let permuted_points = cfft_permute_slice(&self.domain.points().collect_vec());
 
+        // Compute the lagrange denominators. This is batched as it lets us make use of batched_multiplicative_inverse.
         let lagrange_den = compute_lagrange_den_batched(&permuted_points, point, self.domain.log_n);
 
+        // The columnwise_dot_product here consumes about 5% of the runtime for example prove_poseidon2_m31_keccak.
+        // Definately something worth optimising further.
         self.values
             .columnwise_dot_product(&lagrange_den)
             .into_iter()
