@@ -72,6 +72,8 @@ Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the M
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_baby_bear_keccak --release --features parallel
 ```
 
+Adding `lto = "fat"` in the top-level Cargo.toml may give some additional speedup, at the cost of longer compilation times.
+
 ## CPU features
 
 Plonky3 contains optimizations that rely on newer CPU instructions that are not available in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
