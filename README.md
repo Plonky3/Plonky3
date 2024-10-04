@@ -57,7 +57,7 @@ Hashes
 - [x] Monolith
 
 
-## Benchmark
+## Benchmarks
 
 Many variations are possible, with different fields, hashes and so forth, but here are a couple examples of Plonky3 benchmarks.
 
