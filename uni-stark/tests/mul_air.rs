@@ -158,12 +158,12 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
         &mut thread_rng(),
     );
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    type Pcs = TrivialPcs<Val, Radix2DitParallel>;
+    type Pcs = TrivialPcs<Val, Radix2DitParallel<Val>>;
     let pcs = TrivialPcs {
         dft,
         log_n,
@@ -220,8 +220,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 

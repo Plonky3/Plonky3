@@ -36,7 +36,7 @@ const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 #[cfg(feature = "parallel")]
-type Dft = p3_dft::Radix2DitParallel;
+type Dft = p3_dft::Radix2DitParallel<KoalaBear>;
 #[cfg(not(feature = "parallel"))]
 type Dft = p3_dft::Radix2Bowers;
 
@@ -117,7 +117,7 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
 
-    let dft = Dft {};
+    let dft = Dft::default();
 
     let fri_config = FriConfig {
         log_blowup: 1,

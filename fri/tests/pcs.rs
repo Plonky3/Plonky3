@@ -165,7 +165,7 @@ mod babybear_fri_pcs {
         MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 
-    type Dft = Radix2DitParallel;
+    type Dft = Radix2DitParallel<Val>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
@@ -188,7 +188,7 @@ mod babybear_fri_pcs {
             mmcs: challenge_mmcs,
         };
 
-        let pcs = MyPcs::new(Dft {}, val_mmcs, fri_config);
+        let pcs = MyPcs::new(Dft::default(), val_mmcs, fri_config);
         (pcs, Challenger::new(perm.clone()))
     }
 
