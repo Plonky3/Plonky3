@@ -31,7 +31,7 @@ const SBOX_REGISTERS: usize = 1;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
-const NUM_ROWS: usize = 1 << 15;
+const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
