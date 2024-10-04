@@ -4,7 +4,6 @@
 
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
@@ -191,7 +190,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .par_padded_horizontally_packed_rows::<T::Packing>()
             .zip(v)
             .par_fold_reduce(
-                || vec![EF::ExtensionPacking::zero(); packed_width],
+                || EF::ExtensionPacking::zero_vec(packed_width),
                 |mut acc, (row, &scale)| {
                     let scale = EF::ExtensionPacking::from_base_fn(|i| {
                         T::Packing::from(scale.as_base_slice()[i])

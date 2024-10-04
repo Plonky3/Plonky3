@@ -199,6 +199,12 @@ impl AbstractField for Goldilocks {
     fn generator() -> Self {
         Self::new(7)
     }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: repr(transparent) ensures transmutation safety.
+        unsafe { transmute(vec![0u64; len]) }
+    }
 }
 
 impl Field for Goldilocks {
@@ -296,12 +302,6 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
-    }
-
-    #[inline]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u64; len]) }
     }
 }
 

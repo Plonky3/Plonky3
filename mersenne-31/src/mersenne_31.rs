@@ -181,6 +181,12 @@ impl AbstractField for Mersenne31 {
         let rotated = left | right;
         Self::new(rotated)
     }
+    
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: repr(transparent) ensures transmutation safety.
+        unsafe { transmute(vec![0u32; len]) }
+    }
 }
 
 impl Field for Mersenne31 {
@@ -266,12 +272,6 @@ impl Field for Mersenne31 {
     #[inline]
     fn order() -> BigUint {
         P.into()
-    }
-
-    #[inline]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u32; len]) }
     }
 }
 

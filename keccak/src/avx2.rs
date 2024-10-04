@@ -301,17 +301,17 @@ fn round(i: usize, state: [__m256i; 25]) -> [__m256i; 25] {
     flatten(state)
 }
 
-fn keccak_perm(buf: &mut [__m256i; 25]) {
-    let mut state = *buf;
+fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
+    let mut state: [__m256i; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = state;
+    *buf = unsafe { transmute::<[__m256i; 25], [[u64; VECTOR_LEN]; 25]>(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
     fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
-        keccak_perm(unsafe { transmute(state) });
+        keccak_perm(state);
     }
 }
 
@@ -319,9 +319,6 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
-
-    use core::arch::x86_64::{_mm256_extract_epi64, _mm256_setr_epi64x, _mm256_setzero_si256};
-
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -438,28 +435,19 @@ mod tests {
     ];
 
     fn our_res() -> [[u64; 25]; 4] {
-        let mut packed_result = [unsafe { _mm256_setzero_si256() }; 25];
-        for i in 0..25 {
-            packed_result[i] = unsafe {
-                _mm256_setr_epi64x(
-                    STATES[0][i] as i64,
-                    STATES[1][i] as i64,
-                    STATES[2][i] as i64,
-                    STATES[3][i] as i64,
-                )
-            };
+        let mut packed_result = [[0; 4]; 25];
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            *packed_res = [STATES[0][i], STATES[1][i], STATES[2][i], STATES[3][i]];
         }
 
         keccak_perm(&mut packed_result);
 
         let mut result = [[0; 25]; 4];
-        for i in 0..25 {
-            unsafe {
-                result[0][i] = _mm256_extract_epi64::<0>(packed_result[i]) as u64;
-                result[1][i] = _mm256_extract_epi64::<1>(packed_result[i]) as u64;
-                result[2][i] = _mm256_extract_epi64::<2>(packed_result[i]) as u64;
-                result[3][i] = _mm256_extract_epi64::<3>(packed_result[i]) as u64;
-            }
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            result[0][i] = packed_res[0];
+            result[1][i] = packed_res[1];
+            result[2][i] = packed_res[2];
+            result[3][i] = packed_res[3];
         }
         result
     }

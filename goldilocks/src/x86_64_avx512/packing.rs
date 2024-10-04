@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::*;
 use core::fmt;
 use core::fmt::{Debug, Formatter};
@@ -6,6 +7,7 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{PackedField, PackedFieldPow2, PackedValue};
+use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -223,6 +225,12 @@ impl AbstractField for PackedGoldilocksAVX512 {
     #[inline]
     fn square(&self) -> Self {
         Self::new(unsafe { square(self.get()) })
+    }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
     }
 }
 
