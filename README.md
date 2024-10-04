@@ -59,7 +59,15 @@ Hashes
 
 ## Benchmark
 
-We sometimes use a Keccak AIR to compare Plonky3's performance to other libraries like Plonky2. Several variations are possible here, with different fields and so forth, but here is one example:
+Many variations are possible, with different fields, hashes and so forth, but here are a couple examples of Plonky3 benchmarks.
+
+Prove 2^19 Poseidon2 permutations of width 16, using the `KoalaBear` field and Keccak in the Merkle tree:
+Poseidon2
+```
+RUSTFLAGS=-Ctarget-cpu=native RUST_LOG=debug cargo run --example prove_poseidon2_koala_bear_keccak --profile profiling --features parallel
+```
+
+Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the Merkle tree.
 ```
 RUST_LOG=info cargo run --example prove_baby_bear_keccak --release --features parallel
 ```
