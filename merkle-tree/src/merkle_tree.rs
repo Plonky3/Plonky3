@@ -80,7 +80,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             if prev_layer.len() == 1 {
                 break;
             }
-            let next_layer_len = prev_layer.len() / 2;
+            let next_layer_len = prev_layer.len().next_power_of_two() / 2;
 
             // The matrices that get injected at this layer.
             let matrices_to_inject = leaves_largest_first
@@ -127,7 +127,7 @@ where
 {
     let width = PW::WIDTH;
     let max_height = tallest_matrices[0].height();
-    let max_height_padded = max_height.next_power_of_two();
+    let max_height_padded = max_height + max_height % 2;
 
     let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut digests = vec![default_digest; max_height_padded];
@@ -183,7 +183,7 @@ where
 
     let width = PW::WIDTH;
     let next_len = matrices_to_inject[0].height();
-    let next_len_padded = prev_layer.len() / 2;
+    let next_len_padded = prev_layer.len() / 2 + prev_layer.len() % 2;
 
     let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
@@ -211,7 +211,7 @@ where
     // for the last bit.
     for i in (next_len / width * width)..next_len {
         let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
+        let right = *prev_layer.get(2 * i + 1).unwrap_or(&default_digest);
         let digest = c.compress([left, right]);
         let rows_digest = h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row(i)));
         next_digests[i] = c.compress([digest, rows_digest]);
@@ -221,7 +221,7 @@ where
     // process above except with default_digest in place of an input digest.
     for i in next_len..next_len_padded {
         let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
+        let right = *prev_layer.get(2 * i + 1).unwrap_or(&default_digest);
         let digest = c.compress([left, right]);
         next_digests[i] = c.compress([digest, default_digest]);
     }
@@ -240,9 +240,8 @@ where
     C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
     C: Sync,
 {
-    debug_assert!(prev_layer.len().is_power_of_two());
     let width = P::WIDTH;
-    let next_len = prev_layer.len() / 2;
+    let next_len = prev_layer.len() / 2 + prev_layer.len() % 2;
 
     let default_digest: [P::Value; DIGEST_ELEMS] = [P::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len];
@@ -253,7 +252,7 @@ where
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
             let left = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
-            let right = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
+            let right = array::from_fn(|j| P::from_fn(|k| prev_layer.get(2 * (first_row + k) + 1).unwrap_or(&default_digest)[j]));
             let packed_digest = c.compress([left, right]);
             for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
                 *dst = src;
@@ -264,9 +263,8 @@ where
     // for the last bit.
     for i in (next_len / width * width)..next_len {
         let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
-        let digest = c.compress([left, right]);
-        next_digests[i] = digest;
+        let right = *prev_layer.get(2 * i + 1).unwrap_or(&default_digest);
+        next_digests[i] = c.compress([left, right]);
     }
 
     // Everything has been initialized so we can safely cast.
