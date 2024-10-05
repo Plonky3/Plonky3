@@ -496,10 +496,18 @@ mod tests {
             width: 8,
         });
 
+        // 7 tiny mat with 1 row, 8 columns
+        let tiny_mats = (0..7).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8));
+        let tiny_mat_dims = (0..7).map(|_| Dimensions {
+            height: 1,
+            width: 8,
+        });
+
         let (commit, prover_data) = mmcs.commit(
             large_mats
                 .chain(medium_mats)
                 .chain(small_mats)
+                .chain(tiny_mats)
                 .collect_vec(),
         );
 
@@ -510,6 +518,7 @@ mod tests {
             &large_mat_dims
                 .chain(medium_mat_dims)
                 .chain(small_mat_dims)
+                .chain(tiny_mat_dims)
                 .collect_vec(),
             6,
             &opened_values,
