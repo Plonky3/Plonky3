@@ -80,6 +80,7 @@ impl Mersenne31 {
     fn forward_2<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 2);
 
+        let t = a[1].mul_2exp_u64(15);
         let s = a[0] + a[1];
         let t = a[0] - a[1];
         a[0] = s;
@@ -90,18 +91,12 @@ impl Mersenne31 {
     fn forward_4<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
-        // Expanding the calculation of t3 saves one instruction
-        let t1 = a[1] - a[3];
-        let t3 = t1; // TODO: Determine the small twiddles
-        let t5 = a[1] + a[3];
-        let t4 = a[0] + a[2];
-        let t2 = a[0] - a[2];
+        Self::forward_pass(a, &TWIDDLES_4);
 
-        // Return in bit-reversed order
-        a[0] = t4 + t5;
-        a[1] = t4 - t5;
-        a[2] = t2 + t3;
-        a[3] = t2 - t3;
+        // Safe because a.len() == 8
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
+        Self::forward_2(a0);
+        Self::forward_2(a1);
     }
 
     #[inline(always)]
