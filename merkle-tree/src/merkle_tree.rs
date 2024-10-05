@@ -211,7 +211,7 @@ where
     // for the last bit.
     for i in (next_len / width * width)..next_len {
         let left = prev_layer[2 * i];
-        let right = *prev_layer.get(2 * i + 1).unwrap_or(&default_digest);
+        let right = prev_layer[2 * i + 1];
         let digest = c.compress([left, right]);
         let rows_digest = h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row(i)));
         next_digests[i] = c.compress([digest, rows_digest]);
@@ -221,7 +221,7 @@ where
     // process above except with default_digest in place of an input digest.
     for i in next_len..next_len_padded {
         let left = prev_layer[2 * i];
-        let right = *prev_layer.get(2 * i + 1).unwrap_or(&default_digest);
+        let right = prev_layer[2 * i + 1];
         let digest = c.compress([left, right]);
         next_digests[i] = c.compress([digest, default_digest]);
     }
