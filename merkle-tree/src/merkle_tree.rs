@@ -80,7 +80,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             if prev_layer.len() == 1 {
                 break;
             }
-            let next_layer_len = prev_layer.len().next_power_of_two() / 2;
+            let next_layer_len = (prev_layer.len() / 2).next_power_of_two();
 
             // The matrices that get injected at this layer.
             let matrices_to_inject = leaves_largest_first
