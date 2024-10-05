@@ -258,6 +258,24 @@ mod tests {
     }
 
     #[test]
+    fn commit_single_8x1() {
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear::default(),
+            &mut thread_rng(),
+        );
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+
+        let mat = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8);
+        let (commit, _) = mmcs.commit(vec![mat.clone()]);
+
+        let expected_result = hash.hash_iter(mat.clone().vertically_packed_row(0));
+        assert_eq!(commit, expected_result);
+    }
+
+    #[test]
     fn commit_single_2x2() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,

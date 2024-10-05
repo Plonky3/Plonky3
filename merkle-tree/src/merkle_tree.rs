@@ -127,7 +127,12 @@ where
 {
     let width = PW::WIDTH;
     let max_height = tallest_matrices[0].height();
-    let max_height_padded = max_height + max_height % 2;
+    // we always want to return an even number of digests, except when it's the root.
+    let max_height_padded = if max_height == 1 {
+        1
+    } else {
+        max_height + max_height % 2
+    };
 
     let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut digests = vec![default_digest; max_height_padded];
@@ -183,11 +188,15 @@ where
 
     let width = PW::WIDTH;
     let next_len = matrices_to_inject[0].height();
-    let next_len_padded = prev_layer.len() / 2 + prev_layer.len() % 2;
+    // We always want to return an even number of digests, except when it's the root.
+    let next_len_padded = if prev_layer.len() == 2 {
+        1
+    } else {
+        (prev_layer.len() / 2 + 1) & !1
+    };
 
     let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
-
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
@@ -219,7 +228,8 @@ where
 
     // At this point, we've exceeded the height of the matrices to inject, so we continue the
     // process above except with default_digest in place of an input digest.
-    for i in next_len..next_len_padded {
+    // We only need go as far as half the length of the previous layer.
+    for i in next_len..(prev_layer.len() / 2) {
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let digest = c.compress([left, right]);
@@ -241,10 +251,16 @@ where
     C: Sync,
 {
     let width = P::WIDTH;
-    let next_len = prev_layer.len() / 2 + prev_layer.len() % 2;
+    // Always return an even number of digests, except when it's the root.
+    let next_len_padded = if prev_layer.len() == 2 {
+        1
+    } else {
+        (prev_layer.len() / 2 + 1) & !1
+    };
+    let next_len = prev_layer.len() / 2;
 
     let default_digest: [P::Value; DIGEST_ELEMS] = [P::Value::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len];
+    let mut next_digests = vec![default_digest; next_len_padded];
 
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
@@ -252,7 +268,7 @@ where
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
             let left = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
-            let right = array::from_fn(|j| P::from_fn(|k| prev_layer.get(2 * (first_row + k) + 1).unwrap_or(&default_digest)[j]));
+            let right = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
             let packed_digest = c.compress([left, right]);
             for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
                 *dst = src;
@@ -263,7 +279,7 @@ where
     // for the last bit.
     for i in (next_len / width * width)..next_len {
         let left = prev_layer[2 * i];
-        let right = *prev_layer.get(2 * i + 1).unwrap_or(&default_digest);
+        let right = prev_layer[2 * i + 1];
         next_digests[i] = c.compress([left, right]);
     }
 
