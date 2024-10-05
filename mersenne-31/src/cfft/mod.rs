@@ -307,3 +307,33 @@ impl RecursiveCfft<Mersenne31>
         RowMajorMatrix::new(output, ncols).bit_reverse_rows()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_field::AbstractField;
+
+    use crate::cfft::{backward, forward};
+
+    use crate::Mersenne31;
+
+    type F = Mersenne31;
+
+    #[test]
+    fn check_twiddles() {
+        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_32.iter().zip(forward::TWIDDLES_32) {
+            assert_eq!(F::one(), twiddle * twiddle_inv);
+        }
+
+        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_16.iter().zip(forward::TWIDDLES_16) {
+            assert_eq!(F::one(), twiddle * twiddle_inv);
+        }
+
+        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_8.iter().zip(forward::TWIDDLES_8) {
+            assert_eq!(F::one(), twiddle * twiddle_inv);
+        }
+
+        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_4.iter().zip(forward::TWIDDLES_4) {
+            assert_eq!(F::one(), twiddle * twiddle_inv);
+        }
+    }
+}

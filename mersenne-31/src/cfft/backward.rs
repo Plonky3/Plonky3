@@ -12,7 +12,11 @@ use p3_field::PackedField;
 
 use crate::{to_mersenne31_array, Mersenne31};
 
-const TWIDDLES_4: [Mersenne31; 2] = to_mersenne31_array([590768354, 1168891274]);
+// the twiddle for the inner most layer is 2^16 (65536)
+pub(crate) const INV_TWIDDLES_4: [Mersenne31; 2] = to_mersenne31_array([991237807, 1371835609]);
+pub(crate) const INV_TWIDDLES_8: [Mersenne31; 4] = to_mersenne31_array([1160411471, 490549293, 204982243, 628957573]);
+pub(crate) const INV_TWIDDLES_16: [Mersenne31; 8] = to_mersenne31_array([1899133673, 685780700, 761629115, 1798231519, 421110815, 1859156789, 655012266, 969924856]);
+pub(crate) const INV_TWIDDLES_32: [Mersenne31; 16] = to_mersenne31_array([959596234, 721860568, 218253990, 1955048591, 1046725194, 1036402186, 1268642696, 559888787, 1381082522, 2138687850, 448375059, 559361447, 1356867335, 1767118503, 1051468699, 2029303208]);
 
 impl Mersenne31 {
     #[inline(always)]
@@ -21,8 +25,8 @@ impl Mersenne31 {
         y: PF,
         w: Self,
     ) -> (PF, PF) {
-        let t = y * PF::from_f(w);
-        (x + t, x - t)
+        let t = (x - y) * PF::from_f(w); // Should use a custom field function for this.
+        (x + y, t)
     }
 
     #[inline]
@@ -43,32 +47,22 @@ impl Mersenne31 {
         assert_eq!(a.len(), 2);
 
         let s = a[0] + a[1];
-        let t = a[0] - a[1].mul_2exp_u64(15); // The smalleest t
+        let t = a[0] - a[1];
         a[0] = s;
-        a[1] = t;
+        a[1] = t.mul_2exp_u64(16); // The twiddle for the inner most layer is 2^16.
     }
 
     #[inline(always)]
     fn backward_4<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
-        // Read in bit-reversed order
-        let a0 = a[0];
-        let a2 = a[1];
-        let a1 = a[2];
-        let a3 = a[3];
+        Self::backward_pass(a, &INV_TWIDDLES_4);
 
-        // Expanding the calculation of t3 saves one instruction
-        let t1 = a1 - a3;
-        let t3 = t1; // TODO: Determine the small twiddles
-        let t5 = a1 + a3;
-        let t4 = a0 + a2;
-        let t2 = a0 - a2;
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
+        Self::backward_2(a0);
+        Self::backward_2(a1);
 
-        a[0] = t4 + t5;
-        a[1] = t2 + t3;
-        a[2] = t4 - t5;
-        a[3] = t2 - t3;
+        
     }
 
     #[inline(always)]
@@ -80,7 +74,7 @@ impl Mersenne31 {
         Self::backward_4(a0);
         Self::backward_4(a1);
 
-        Self::backward_pass(a, todo!());
+        Self::backward_pass(a, &INV_TWIDDLES_8);
     }
 
     #[inline(always)]
@@ -92,13 +86,12 @@ impl Mersenne31 {
         Self::backward_8(a0);
         Self::backward_8(a1);
 
-        Self::backward_pass(a, todo!());
+        Self::backward_pass(a, &INV_TWIDDLES_16);
     }
 
     #[inline(always)]
     fn backward_32<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
-        root_table: &[Vec<Self>],
     ) {
         assert_eq!(a.len(), 32);
 
@@ -107,7 +100,7 @@ impl Mersenne31 {
         Self::backward_16(a0);
         Self::backward_16(a1);
 
-        Self::backward_pass(a, &root_table[0]);
+        Self::backward_pass(a, &INV_TWIDDLES_32);
     }
 
     #[inline(always)]
@@ -119,8 +112,8 @@ impl Mersenne31 {
 
         // Safe because a.len() == 64
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
-        Self::backward_32(a0, &root_table[1..]);
-        Self::backward_32(a1, &root_table[1..]);
+        Self::backward_32(a0);
+        Self::backward_32(a1);
 
         Self::backward_pass(a, &root_table[0]);
     }
@@ -158,19 +151,19 @@ impl Mersenne31 {
     #[inline]
     pub fn backward_fft<PF: PackedField<Scalar = Mersenne31>>(
         a: &mut [PF],
-        root_table: &[Vec<Self>],
+        twiddle_table: &[Vec<Self>],
     ) {
         let n = a.len();
         if n == 1 {
             return;
         }
 
-        assert_eq!(n, 1 << (root_table.len() + 1));
+        assert_eq!(n, 1 << (twiddle_table.len() + 1));
         match n {
-            256 => Self::backward_256(a, root_table),
-            128 => Self::backward_128(a, root_table),
-            64 => Self::backward_64(a, root_table),
-            32 => Self::backward_32(a, root_table),
+            256 => Self::backward_256(a, twiddle_table),
+            128 => Self::backward_128(a, twiddle_table),
+            64 => Self::backward_64(a, twiddle_table),
+            32 => Self::backward_32(a),
             16 => Self::backward_16(a),
             8 => Self::backward_8(a),
             4 => Self::backward_4(a),
@@ -180,10 +173,10 @@ impl Mersenne31 {
 
                 // Safe because a.len() > 64
                 let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
-                Self::backward_fft(a0, &root_table[1..]);
-                Self::backward_fft(a1, &root_table[1..]);
+                Self::backward_fft(a0, &twiddle_table[1..]);
+                Self::backward_fft(a1, &twiddle_table[1..]);
 
-                Self::backward_pass(a, &root_table[0]);
+                Self::backward_pass(a, &twiddle_table[0]);
             }
         }
     }
