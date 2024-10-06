@@ -351,17 +351,41 @@ mod tests {
         //   0 1
         //   2 1
         //   2 2
+        //   2 1
+        //   2 2
         // ]
         let mat_1 = RowMajorMatrix::new(
-            vec![F::zero(), F::one(), F::two(), F::one(), F::two(), F::two()],
+            vec![
+                F::zero(),
+                F::one(),
+                F::two(),
+                F::one(),
+                F::two(),
+                F::two(),
+                F::two(),
+                F::one(),
+                F::two(),
+                F::two(),
+            ],
             2,
         );
         // mat_2 = [
         //   1 2 1
         //   0 2 2
+        //   1 2 1
         // ]
         let mat_2 = RowMajorMatrix::new(
-            vec![F::one(), F::two(), F::one(), F::zero(), F::two(), F::two()],
+            vec![
+                F::one(),
+                F::two(),
+                F::one(),
+                F::zero(),
+                F::two(),
+                F::two(),
+                F::one(),
+                F::two(),
+                F::one(),
+            ],
             3,
         );
 
@@ -371,22 +395,38 @@ mod tests {
             hash.hash_slice(&[F::zero(), F::one()]),
             hash.hash_slice(&[F::two(), F::one()]),
             hash.hash_slice(&[F::two(), F::two()]),
+            hash.hash_slice(&[F::two(), F::one()]),
+            hash.hash_slice(&[F::two(), F::two()]),
         ];
         let mat_2_leaf_hashes = [
             hash.hash_slice(&[F::one(), F::two(), F::one()]),
             hash.hash_slice(&[F::zero(), F::two(), F::two()]),
+            hash.hash_slice(&[F::one(), F::two(), F::one()]),
         ];
 
         let expected_result = compress.compress([
             compress.compress([
-                compress.compress([mat_1_leaf_hashes[0], mat_1_leaf_hashes[1]]),
-                mat_2_leaf_hashes[0],
+                compress.compress([
+                    compress.compress([mat_1_leaf_hashes[0], mat_1_leaf_hashes[1]]),
+                    mat_2_leaf_hashes[0],
+                ]),
+                compress.compress([
+                    compress.compress([mat_1_leaf_hashes[2], mat_1_leaf_hashes[3]]),
+                    mat_2_leaf_hashes[1],
+                ]),
             ]),
             compress.compress([
-                compress.compress([mat_1_leaf_hashes[2], default_digest]),
-                mat_2_leaf_hashes[1],
+                compress.compress([
+                    compress.compress([mat_1_leaf_hashes[4], default_digest]),
+                    mat_2_leaf_hashes[2],
+                ]),
+                compress.compress([
+                    compress.compress([default_digest, default_digest]),
+                    default_digest,
+                ]),
             ]),
         ]);
+
         assert_eq!(commit, expected_result);
 
         let (opened_values, _proof) = mmcs.open_batch(2, &prover_data);
