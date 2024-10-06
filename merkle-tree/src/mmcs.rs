@@ -420,10 +420,7 @@ mod tests {
                     compress.compress([mat_1_leaf_hashes[4], default_digest]),
                     mat_2_leaf_hashes[2],
                 ]),
-                compress.compress([
-                    compress.compress([default_digest, default_digest]),
-                    default_digest,
-                ]),
+                default_digest,
             ]),
         ]);
 
