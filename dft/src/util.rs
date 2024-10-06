@@ -3,6 +3,7 @@ use core::borrow::BorrowMut;
 use p3_field::Field;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_matrix::Matrix;
+use p3_util::reverse_bits;
 use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.
@@ -22,4 +23,18 @@ pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) 
                 *coeff *= weight;
             })
         });
+}
+
+/// Multiply each element of row `i` of `mat` by `shift**i`.
+#[instrument(skip_all, fields(dims = %mat.dimensions()))]
+pub(crate) fn coset_shift_cols_bitrev<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
+    let mut shift_powers = shift.powers();
+    let h = mat.height();
+    for r in 0..h {
+        let weight = shift_powers.next().unwrap();
+        let r_bitrev = reverse_bits(r, h);
+        mat.row_mut(r_bitrev)
+            .iter_mut()
+            .for_each(|coeff| *coeff *= weight);
+    }
 }

@@ -5,6 +5,7 @@ use core::iter::Sum;
 use core::ops::Mul;
 
 use num_bigint::BigUint;
+use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
 use crate::{AbstractField, PackedValue, PrimeField, PrimeField32, TwoAdicField};
@@ -55,7 +56,7 @@ pub fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
 pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
     let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let packed_s: F::Packing = s.into();
-    packed.iter_mut().for_each(|x| *x *= packed_s);
+    packed.par_iter_mut().for_each(|x| *x *= packed_s);
     sfx.iter_mut().for_each(|x| *x *= s);
 }
 

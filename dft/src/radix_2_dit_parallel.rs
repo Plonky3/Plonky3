@@ -2,18 +2,20 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use itertools::{izip, Itertools};
-use p3_field::{scale_slice_in_place, Field, Powers, TwoAdicField};
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
-use p3_matrix::util::reverse_matrix_index_bits;
-use p3_matrix::Matrix;
-use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+use itertools::izip;
 use tracing::instrument;
 
+use p3_field::{Field, Powers, TwoAdicField};
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::interleaved::VerticallyInterleaved;
+use p3_matrix::Matrix;
+use p3_matrix::util::reverse_matrix_index_bits;
+use p3_maybe_rayon::prelude::*;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+
+use crate::{divide_by_height, TwoAdicSubgroupDft};
 use crate::butterflies::{Butterfly, DitButterfly};
-use crate::TwoAdicSubgroupDft;
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -27,11 +29,11 @@ pub struct Radix2DitParallel<F> {
     /// Twiddles based on roots of unity, used in the forward DFT.
     twiddles: RefCell<BTreeMap<usize, VectorPair<F>>>,
 
+    /// A map from (log_h, shift) to (forward DFT) twiddles with that coset shift baked in.
+    coset_twiddles: RefCell<BTreeMap<(usize, F), Vec<Vec<F>>>>,
+
     /// Twiddles based on inverse roots of unity, used in the inverse DFT.
     inverse_twiddles: RefCell<BTreeMap<usize, VectorPair<F>>>,
-
-    /// A map from (log_h, shift) to the weights used in the middle of the coset LDE.
-    coset_lde_weights: RefCell<BTreeMap<(usize, F), Vec<F>>>,
 }
 
 /// A pair of vectors, one with twiddle factors in their natural order, the other bit-reversed.
@@ -55,6 +57,29 @@ fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
 }
 
 #[instrument(level = "debug", skip_all)]
+fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<Vec<F>> {
+    let mid = log_h / 2;
+    let h = 1 << log_h;
+    let root = F::two_adic_generator(log_h);
+
+    (0..log_h)
+        .map(|layer| {
+            let shift_power = shift.exp_power_of_2(layer);
+            let powers = Powers {
+                base: root.exp_power_of_2(layer),
+                current: shift_power,
+            };
+            let mut twiddles: Vec<_> = powers.take(h >> (layer + 1)).collect();
+            let layer_rev = log_h - 1 - layer;
+            if layer_rev >= mid {
+                reverse_slice_index_bits(&mut twiddles);
+            }
+            twiddles
+        })
+        .collect()
+}
+
+#[instrument(level = "debug", skip_all)]
 fn compute_inverse_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
     let half_h = (1 << log_h) >> 1;
     let root_inv = F::two_adic_generator(log_h).inverse();
@@ -70,23 +95,8 @@ fn compute_inverse_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F
     }
 }
 
-/// weights used in the middle of the coset LDE.
-#[instrument(level = "debug", skip_all)]
-fn compute_coset_lde_weighs<F: TwoAdicField>(log_h: usize, shift: F) -> Vec<F> {
-    let h = 1 << log_h;
-    let h_inv = F::from_canonical_usize(h).inverse();
-    let mut weights = Powers {
-        base: shift,
-        current: h_inv,
-    }
-    .take(h)
-    .collect_vec();
-    reverse_slice_index_bits(&mut weights);
-    weights
-}
-
 impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
-    type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
+    type Evaluations = VerticallyInterleaved<BitReversedMatrixView<RowMajorMatrix<F>>>;
 
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> Self::Evaluations {
         let h = mat.height();
@@ -108,7 +118,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         reverse_matrix_index_bits(&mut mat);
         par_dit_layer_rev(&mut mat, mid, &twiddles.bit_reversed_twiddles);
 
-        mat.bit_reverse_rows()
+        VerticallyInterleaved::single(mat.bit_reverse_rows())
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
@@ -136,37 +146,56 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         par_dit_layer_rev(&mut mat, mid, &twiddles.bit_reversed_twiddles);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
 
-        // Rescale coefficients in two ways:
-        // - divide by height (since we're doing an inverse DFT)
-        // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
-        let mut weights_ref_mut = self.coset_lde_weights.borrow_mut();
-        let weights = weights_ref_mut
-            .entry((log_h, shift))
-            .or_insert_with(|| compute_coset_lde_weighs(log_h, shift));
+        divide_by_height(&mut mat);
 
-        mat.par_rows_mut().enumerate().for_each(|(r, row)| {
-            scale_slice_in_place(weights[r], row);
-        });
+        let g_big = F::two_adic_generator(log_h + added_bits);
 
-        mat = mat.bit_reversed_zero_pad(added_bits);
+        let mut coset_ldes = Vec::with_capacity(1 << added_bits);
+        for coset_idx in 0..1 << added_bits {
+            let mut mat = mat.clone();
+            let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
+            let mut twiddles_ref_mut = self.coset_twiddles.borrow_mut();
+            let twiddles = twiddles_ref_mut
+                .entry((log_h, total_shift))
+                .or_insert_with(|| compute_coset_twiddles(log_h, total_shift));
 
-        let h = mat.height();
-        let log_h = log2_strict_usize(h);
-        let mid = log_h / 2;
+            // The first half looks like a normal DIT.
+            // par_dit_layer(&mut mat, mid, &old_twiddles.twiddles);
+            mat.par_row_chunks_exact_mut(1 << mid)
+                .for_each(|mut submat| {
+                    for layer in 0..mid {
+                        let layer_rev = log_h - 1 - layer;
+                        dit_layer(
+                            &mut submat,
+                            layer,
+                            twiddles[layer_rev].iter().copied(),
+                        );
+                    }
+                });
 
-        let mut twiddles_ref_mut = self.twiddles.borrow_mut();
-        let twiddles = twiddles_ref_mut
-            .entry(log_h)
-            .or_insert_with(|| compute_twiddles(log_h));
+            // For the second half, we flip the DIT, working in bit-reversed order.
+            reverse_matrix_index_bits(&mut mat);
 
-        // The first half looks like a normal DIT.
-        par_dit_layer(&mut mat, mid, &twiddles.twiddles);
+            // par_dit_layer_rev(&mut mat, mid, &old_twiddles.bit_reversed_twiddles);
+            mat.par_row_chunks_exact_mut(1 << (log_h - mid))
+                .enumerate()
+                .for_each(|(thread, mut submat)| {
+                    for layer in mid..log_h {
+                        let layer_rev = log_h - 1 - layer;
+                        let first_block = thread << (layer - mid);
+                        dit_layer_rev(
+                            &mut submat,
+                            log_h,
+                            layer,
+                            twiddles[layer_rev][first_block..].iter().copied(),
+                        );
+                    }
+                });
 
-        // For the second half, we flip the DIT, working in bit-reversed order.
-        reverse_matrix_index_bits(&mut mat);
-        par_dit_layer_rev(&mut mat, mid, &twiddles.bit_reversed_twiddles);
+            coset_ldes.push(mat.bit_reverse_rows());
+        }
 
-        mat.bit_reverse_rows()
+        VerticallyInterleaved::new(coset_ldes)
     }
 }
 
@@ -179,7 +208,13 @@ fn par_dit_layer<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[
     mat.par_row_chunks_exact_mut(1 << mid)
         .for_each(|mut submat| {
             for layer in 0..mid {
-                dit_layer(&mut submat, log_h, layer, twiddles);
+                let layer_rev = log_h - 1 - layer;
+                let layer_pow = 1 << layer_rev;
+                dit_layer(
+                    &mut submat,
+                    layer,
+                    twiddles.iter().copied().step_by(layer_pow),
+                );
             }
         });
 }
@@ -195,7 +230,12 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
         .for_each(|(thread, mut submat)| {
             for layer in mid..log_h {
                 let first_block = thread << (layer - mid);
-                dit_layer_rev(&mut submat, log_h, layer, &twiddles_rev[first_block..]);
+                dit_layer_rev(
+                    &mut submat,
+                    log_h,
+                    layer,
+                    twiddles_rev[first_block..].iter().copied(),
+                );
             }
         });
 }
@@ -203,13 +243,9 @@ fn par_dit_layer_rev<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles
 /// One layer of a DIT butterfly network.
 fn dit_layer<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
-    log_h: usize,
     layer: usize,
-    twiddles: &[F],
+    twiddles: impl Iterator<Item = F> + Clone,
 ) {
-    let layer_rev = log_h - 1 - layer;
-    let layer_pow = 1 << layer_rev;
-
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
     let width = submat.width();
@@ -218,10 +254,10 @@ fn dit_layer<F: Field>(
     for block in submat.values.chunks_mut(block_size * width) {
         let (lows, highs) = block.split_at_mut(half_block_size * width);
 
-        for (lo, hi, &twiddle) in izip!(
+        for (lo, hi, twiddle) in izip!(
             lows.chunks_mut(width),
             highs.chunks_mut(width),
-            twiddles.iter().step_by(layer_pow)
+            twiddles.clone()
         ) {
             DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
@@ -234,7 +270,7 @@ fn dit_layer_rev<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
-    twiddles_rev: &[F],
+    twiddles_rev: impl Iterator<Item = F>,
 ) {
     let layer_rev = log_h - 1 - layer;
 
@@ -243,7 +279,7 @@ fn dit_layer_rev<F: Field>(
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for (block, &twiddle) in submat
+    for (block, twiddle) in submat
         .values
         .chunks_mut(block_size * width)
         .zip(twiddles_rev)

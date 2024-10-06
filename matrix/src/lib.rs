@@ -21,14 +21,16 @@ use crate::dense::RowMajorMatrix;
 pub mod bitrev;
 pub mod dense;
 pub mod extension;
+pub mod interleaved;
 pub mod mul;
+pub mod repeated;
 pub mod row_index_mapped;
 pub mod sparse;
 pub mod stack;
 pub mod strided;
 pub mod util;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,

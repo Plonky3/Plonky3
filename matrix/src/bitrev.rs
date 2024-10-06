@@ -53,10 +53,10 @@ impl RowIndexMap for BitReversalPerm {
 
 pub type BitReversedMatrixView<Inner> = RowIndexMappedView<BitReversalPerm, Inner>;
 
-impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T>
-    for BitReversedMatrixView<DenseMatrix<T, S>>
+impl<T: Clone + Send + Sync, Inner: BitReversableMatrix<T>> BitReversableMatrix<T>
+    for BitReversedMatrixView<Inner>
 {
-    type BitRev = DenseMatrix<T, S>;
+    type BitRev = Inner;
     fn bit_reverse_rows(self) -> Self::BitRev {
         self.inner
     }

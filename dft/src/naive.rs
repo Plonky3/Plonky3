@@ -12,6 +12,7 @@ pub struct NaiveDft;
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
     type Evaluations = RowMajorMatrix<F>;
+
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         let w = mat.width();
         let h = mat.height();

@@ -30,7 +30,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let mut twiddles_ref_mut = self.twiddles.borrow_mut();
         let twiddles = twiddles_ref_mut.entry(log_h).or_insert_with(|| {
             let root = F::two_adic_generator(log_h);
-            root.powers().take(1 << log_h).collect()
+            root.powers().take((1 << log_h) >> 1).collect()
         });
 
         // DIT butterfly

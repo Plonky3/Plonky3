@@ -12,6 +12,7 @@ pub fn reverse_matrix_index_bits<F: Clone + Send + Sync>(mat: &mut RowMajorMatri
     let log_h = log2_strict_usize(h);
     let values = mat.values.as_mut_ptr() as usize;
 
+    // TODO: Use smaller thread pool.
     (0..h).into_par_iter().for_each(|i| {
         let values = values as *mut F;
         let j = reverse_bits_len(i, log_h);

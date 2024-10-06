@@ -85,16 +85,19 @@ pub trait AbstractField:
     fn generator() -> Self;
 
     #[must_use]
+    #[inline]
     fn double(&self) -> Self {
         self.clone() + self.clone()
     }
 
     #[must_use]
+    #[inline]
     fn square(&self) -> Self {
         self.clone() * self.clone()
     }
 
     #[must_use]
+    #[inline]
     fn cube(&self) -> Self {
         self.square() * self.clone()
     }
@@ -133,6 +136,7 @@ pub trait AbstractField:
     }
 
     #[must_use]
+    #[inline]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
         let mut res = self.clone();
         for _ in 0..power_log {
@@ -142,10 +146,12 @@ pub trait AbstractField:
     }
 
     #[must_use]
+    #[inline]
     fn powers(&self) -> Powers<Self> {
         self.shifted_powers(Self::one())
     }
 
+    #[inline]
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
             base: self.clone(),
@@ -153,10 +159,12 @@ pub trait AbstractField:
         }
     }
 
+    #[inline]
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
         self.shifted_powers_packed(Self::one())
     }
 
+    #[inline]
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
         &self,
         start: Self,
