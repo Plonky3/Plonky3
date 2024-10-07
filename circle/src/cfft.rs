@@ -103,7 +103,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         // Compute z_H
         let lagrange_num = self.domain.zeroifier(point);
 
-        // Permute the domiain to get it into the right format.
+        // Permute the domain to get it into the right format.
         let permuted_points = cfft_permute_slice(&self.domain.points().collect_vec());
 
         // Compute the lagrange denominators. This is batched as it lets us make use of batched_multiplicative_inverse.
