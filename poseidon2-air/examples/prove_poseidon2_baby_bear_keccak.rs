@@ -36,7 +36,7 @@ const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 #[cfg(feature = "parallel")]
-type Dft = p3_dft::Radix2DitParallel;
+type Dft = p3_dft::Radix2DitParallel<BabyBear>;
 #[cfg(not(feature = "parallel"))]
 type Dft = p3_dft::Radix2Bowers;
 
