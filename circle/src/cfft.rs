@@ -13,7 +13,7 @@ use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
-use crate::point::Point;
+use crate::point::{compute_lagrange_den_batched, Point};
 use crate::{cfft_permute_index, cfft_permute_slice, CfftPermutable, CfftView};
 
 #[derive(Clone)]
@@ -100,13 +100,19 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     }
 
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
+        // Compute z_H
         let lagrange_num = self.domain.zeroifier(point);
-        let lagrange_den = cfft_permute_slice(&self.domain.points().collect_vec())
-            .into_iter()
-            .map(|p| p.v_tilde_p(point) * p.s_p_at_p(self.domain.log_n))
-            .collect_vec();
+
+        // Permute the domain to get it into the right format.
+        let permuted_points = cfft_permute_slice(&self.domain.points().collect_vec());
+
+        // Compute the lagrange denominators. This is batched as it lets us make use of batched_multiplicative_inverse.
+        let lagrange_den = compute_lagrange_den_batched(&permuted_points, point, self.domain.log_n);
+
+        // The columnwise_dot_product here consumes about 5% of the runtime for example prove_poseidon2_m31_keccak.
+        // Definately something worth optimising further.
         self.values
-            .columnwise_dot_product(&batch_multiplicative_inverse(&lagrange_den))
+            .columnwise_dot_product(&lagrange_den)
             .into_iter()
             .map(|x| x * lagrange_num)
             .collect_vec()

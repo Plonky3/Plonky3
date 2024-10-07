@@ -211,7 +211,11 @@ where
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
-            3 => Self::from_base_iter(cubic_square(&self.value, AF::F::w()).into_iter()),
+            3 => {
+                let mut res = Self::default();
+                cubic_square(&self.value, &mut res.value, AF::F::w());
+                res
+            }
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
         }
     }
@@ -423,19 +427,18 @@ where
     fn mul(self, rhs: Self) -> Self {
         let a = self.value;
         let b = rhs.value;
+        let mut res = Self::default();
         let w = AF::F::w();
         let w_af = AF::from_f(w);
 
         match D {
             2 => {
-                let mut res = Self::default();
                 res.value[0] = a[0].clone() * b[0].clone() + a[1].clone() * w_af * b[1].clone();
                 res.value[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
-                res
             }
-            3 => Self::from_base_iter(cubic_mul(&a, &b, w).into_iter()),
-            _ => {
-                let mut res = Self::default();
+            3 => cubic_mul(&a, &b, &mut res.value, w_af),
+            _ =>
+            {
                 #[allow(clippy::needless_range_loop)]
                 for i in 0..D {
                     for j in 0..D {
@@ -446,9 +449,9 @@ where
                         }
                     }
                 }
-                res
             }
         }
+        res
     }
 }
 
@@ -623,33 +626,38 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-fn cubic_mul<AF: AbstractField>(a: &[AF], b: &[AF], w: AF::F) -> [AF; 3] {
+fn cubic_mul<AF: AbstractField, const D: usize>(
+    a: &[AF; D],
+    b: &[AF; D],
+    res: &mut [AF; D],
+    w: AF,
+) {
+    assert_eq!(D, 3);
+
     let a0_b0 = a[0].clone() * b[0].clone();
     let a1_b1 = a[1].clone() * b[1].clone();
     let a2_b2 = a[2].clone() * b[2].clone();
 
-    let c0 = a0_b0.clone()
+    res[0] = a0_b0.clone()
         + ((a[1].clone() + a[2].clone()) * (b[1].clone() + b[2].clone())
             - a1_b1.clone()
             - a2_b2.clone())
-            * AF::from_f(w);
-    let c1 = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
+            * w.clone();
+    res[1] = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
         - a0_b0.clone()
         - a1_b1.clone()
-        + a2_b2.clone() * AF::from_f(w);
-    let c2 = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
-
-    [c0, c1, c2]
+        + a2_b2.clone() * w;
+    res[2] = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
 }
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_square<AF: AbstractField>(a: &[AF], w: AF::F) -> [AF; 3] {
+fn cubic_square<AF: AbstractField, const D: usize>(a: &[AF; D], res: &mut [AF; D], w: AF::F) {
+    assert_eq!(D, 3);
+
     let w_a2 = a[2].clone() * AF::from_f(w);
 
-    let c0 = a[0].square() + (a[1].clone() * w_a2.clone()).double();
-    let c1 = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
-    let c2 = a[1].square() + (a[0].clone() * a[2].clone()).double();
-
-    [c0, c1, c2]
+    res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
+    res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
+    res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
 }
