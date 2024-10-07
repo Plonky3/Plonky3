@@ -11,6 +11,8 @@ pub mod extension;
 mod field;
 mod helpers;
 mod packed;
+mod cipolla_sqrt;
+
 
 pub use array::*;
 pub use batch_inverse::*;
