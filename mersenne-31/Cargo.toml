@@ -26,6 +26,7 @@ transpose = "0.2.3"
 [dev-dependencies]
 criterion = "0.5"
 p3-field-testing = { path = "../field-testing" }
+p3-circle = { path = "../circle" }
 rand_chacha = "0.3.1"
 rand_xoshiro = "0.6.0"
 

@@ -12,9 +12,9 @@
 
 extern crate alloc;
 
+pub mod cfft;
 mod complex;
 mod dft;
-pub mod cfft;
 mod extension;
 mod mds;
 mod mersenne_31;

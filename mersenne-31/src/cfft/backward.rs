@@ -34,7 +34,7 @@ impl Mersenne31 {
     #[inline]
     fn backward_pass<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF], roots: &[Self]) {
         let half_n = a.len() / 2;
-        assert_eq!(roots.len(), half_n - 1);
+        assert_eq!(roots.len(), half_n);
 
         // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
@@ -147,7 +147,7 @@ impl Mersenne31 {
             return;
         }
 
-        assert_eq!(n, 1 << (twiddle_table.len() + 1));
+        assert_eq!(n, 1 << (twiddle_table.len()));
         match n {
             256 => Self::backward_256(a, twiddle_table),
             128 => Self::backward_128(a, twiddle_table),

@@ -10,7 +10,6 @@ use alloc::vec::Vec;
 
 use itertools::{iterate, izip, Itertools};
 use p3_field::{extension::ComplexExtendable, AbstractField, PackedField};
-use p3_util::log2_strict_usize;
 
 use crate::{to_mersenne31_array, Mersenne31};
 
@@ -29,14 +28,13 @@ pub(crate) const TWIDDLES_32: [Mersenne31; 16] = to_mersenne31_array([
 impl Mersenne31 {
     /// NAME: TODO
     /// COMMENTS: TODO
-    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Mersenne31>> {
-        let log_n = log2_strict_usize(n);
+    pub fn roots_of_unity_table(log_n: usize) -> Vec<Vec<Mersenne31>> {
         assert!(log_n > 6);
         let g = Mersenne31::circle_two_adic_generator(log_n);
         let shft = Mersenne31::circle_two_adic_generator(log_n + 1);
 
         let init_coset = iterate(shft, move |&p| p * g).take(1 << (log_n - 1));
-        let (x_vals, y_vals): (Vec<_>, Vec<_>) = init_coset.map(|x| (x.imag(), x.real())).unzip();
+        let (x_vals, y_vals): (Vec<_>, Vec<_>) = init_coset.map(|x| (x.real(), x.imag())).unzip();
         let mut twiddles = vec![y_vals];
         twiddles.push(x_vals.into_iter().step_by(2).collect_vec());
 
@@ -64,7 +62,7 @@ impl Mersenne31 {
     #[inline]
     fn forward_pass<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF], roots: &[Self]) {
         let half_n = a.len() / 2;
-        assert_eq!(roots.len(), half_n - 1);
+        assert_eq!(roots.len(), half_n);
 
         // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
@@ -179,7 +177,7 @@ impl Mersenne31 {
             return;
         }
 
-        assert_eq!(n, 1 << (twiddle_table.len() + 1));
+        assert_eq!(n, 1 << twiddle_table.len());
         match n {
             256 => Self::forward_256(a, twiddle_table),
             128 => Self::forward_128(a, twiddle_table),
