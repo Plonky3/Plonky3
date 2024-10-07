@@ -26,7 +26,7 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 
-hashbrown = "0.14.3"
+hashbrown = "0.15.0"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 criterion = "0.5.1"
