@@ -117,7 +117,7 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
 
-    let dft = Dft {};
+    let dft = Dft::default();
 
     let fri_config = FriConfig {
         log_blowup: 1,
