@@ -158,6 +158,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         scale_slice_in_place(scale, self.row_mut(r));
     }
 
+    #[inline]
     pub fn scale(&mut self, scale: T)
     where
         T: Field,

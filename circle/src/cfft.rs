@@ -64,21 +64,23 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let par_twiddles = twiddles
             .peeking_take_while(|ts| ts.len() >= desired_num_jobs())
             .collect_vec();
-        if let Some(min_blks) = par_twiddles.last().map(|ts| ts.len()) {
-            let max_blk_sz = values.height() / min_blks;
-            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
-                values
-                    .par_row_chunks_exact_mut(max_blk_sz)
-                    .enumerate()
-                    .for_each(|(chunk_i, submat)| {
-                        for ts in &par_twiddles {
-                            let twiddle_chunk_sz = ts.len() / min_blks;
-                            let twiddle_chunk = &ts
-                                [(twiddle_chunk_sz * chunk_i)..(twiddle_chunk_sz * (chunk_i + 1))];
-                            serial_layer(submat.values, twiddle_chunk);
-                        }
-                    });
-            });
+        if let Some(min_blocks) = par_twiddles.last().map(|ts| ts.len()) {
+            let max_block_size = values.height() / min_blocks;
+            debug_span!("par_layers", log_min_blocks = log2_strict_usize(min_blocks)).in_scope(
+                || {
+                    values
+                        .par_row_chunks_exact_mut(max_block_size)
+                        .enumerate()
+                        .for_each(|(chunk_i, submat)| {
+                            for ts in &par_twiddles {
+                                let twiddle_chunk_sz = ts.len() / min_blocks;
+                                let twiddle_chunk = &ts[(twiddle_chunk_sz * chunk_i)
+                                    ..(twiddle_chunk_sz * (chunk_i + 1))];
+                                serial_layer(submat.values, twiddle_chunk);
+                            }
+                        });
+                },
+            );
         }
 
         for ts in twiddles {
@@ -186,9 +188,9 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
 
 #[inline]
 fn serial_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
-    let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (lo, hi) = blk.split_at_mut(blk_sz / 2);
+    let block_size = values.len() / twiddles.len();
+    for (&t, block) in izip!(twiddles, values.chunks_exact_mut(block_size)) {
+        let (lo, hi) = block.split_at_mut(block_size / 2);
         t.apply_to_rows(lo, hi);
     }
 }
@@ -196,12 +198,12 @@ fn serial_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
 #[inline]
 #[instrument(level = "debug", skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
 fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
-    let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (lo, hi) = blk.split_at_mut(blk_sz / 2);
-        let job_sz = core::cmp::max(1, lo.len() >> log2_ceil_usize(desired_num_jobs()));
-        lo.par_chunks_mut(job_sz)
-            .zip(hi.par_chunks_mut(job_sz))
+    let block_size = values.len() / twiddles.len();
+    for (&t, block) in izip!(twiddles, values.chunks_exact_mut(block_size)) {
+        let (lo, hi) = block.split_at_mut(block_size / 2);
+        let job_size = core::cmp::max(1, lo.len() >> log2_ceil_usize(desired_num_jobs()));
+        lo.par_chunks_mut(job_size)
+            .zip(hi.par_chunks_mut(job_size))
             .for_each(|(lo_job, hi_job)| t.apply_to_rows(lo_job, hi_job));
     }
 }

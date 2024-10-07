@@ -132,7 +132,7 @@ impl RecursiveCfft<Mersenne31> {
 /// _row-major_ input. This is awkward for memory coherence, so the
 /// algorithm here transposes the input and operates on the rows in
 /// the typical way, then transposes back again for the output. Even
-/// for modestly large inputs, the cost of the two tranposes
+/// for modestly large inputs, the cost of the two transposes
 /// outweighed by the improved performance from operating row-wise.
 ///
 /// The choice of DIT for inverse and DIF for "forward" transform mean
@@ -151,10 +151,12 @@ impl RecursiveCfft<Mersenne31> {
 ///
 /// Hence the only bit-reversal that needs to take place is on the input.
 ///
-impl RecursiveCfft<Mersenne31>
-{
+impl RecursiveCfft<Mersenne31> {
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn dft_batch(&self, mut mat: RowMajorMatrix<Mersenne31>) -> BitReversedMatrixView<RowMajorMatrix<Mersenne31>> {
+    fn dft_batch(
+        &self,
+        mut mat: RowMajorMatrix<Mersenne31>,
+    ) -> BitReversedMatrixView<RowMajorMatrix<Mersenne31>> {
         let nrows = mat.height();
         let ncols = mat.width();
         assert_eq!(ncols % <Mersenne31 as Field>::Packing::WIDTH, 0);
@@ -187,8 +189,7 @@ impl RecursiveCfft<Mersenne31>
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn idft_batch(&self, mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31>
-    {
+    fn idft_batch(&self, mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
         let nrows = mat.height();
         let ncols = mat.width();
         if nrows <= 1 {
