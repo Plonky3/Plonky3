@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 
 use itertools::{iterate, izip, Itertools};
 use p3_field::{extension::ComplexExtendable, AbstractField, PackedField};
+use p3_util::log2_strict_usize;
 
 use crate::{to_mersenne31_array, Mersenne31};
 
@@ -28,7 +29,8 @@ pub(crate) const TWIDDLES_32: [Mersenne31; 16] = to_mersenne31_array([
 impl Mersenne31 {
     /// NAME: TODO
     /// COMMENTS: TODO
-    pub fn roots_of_unity_table(log_n: usize) -> Vec<Vec<Mersenne31>> {
+    pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Mersenne31>> {
+        let log_n = log2_strict_usize(n);
         assert!(log_n > 6);
         let g = Mersenne31::circle_two_adic_generator(log_n);
         let shft = Mersenne31::circle_two_adic_generator(log_n + 1);

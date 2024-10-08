@@ -145,7 +145,7 @@ impl RecursiveCfftMersenne31 {
 ///
 impl RecursiveCfftMersenne31 {
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn dft_batch(&self, mut mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
+    pub fn dft_batch(&self, mut mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
         let nrows = mat.height();
         let ncols = mat.width();
         assert_eq!(ncols % <Mersenne31 as Field>::Packing::WIDTH, 0);
@@ -174,7 +174,7 @@ impl RecursiveCfftMersenne31 {
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn idft_batch(&self, mut mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
+    pub fn idft_batch(&self, mut mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
         let nrows = mat.height();
         let ncols = mat.width();
         if nrows <= 1 {
@@ -209,7 +209,7 @@ impl RecursiveCfftMersenne31 {
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn coset_lde_batch(
+    pub fn coset_lde_batch(
         &self,
         mat: RowMajorMatrix<Mersenne31>,
         added_bits: usize,
@@ -257,6 +257,11 @@ impl RecursiveCfftMersenne31 {
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
+        packed_padded
+            .iter_mut()
+            .step_by(2)
+            .zip(coeffs)
+            .for_each(|(padded, coeff)| *padded = *coeff);
 
         let twiddles = self.twiddles.borrow();
 
@@ -310,13 +315,13 @@ mod tests {
 
     #[test]
     fn test_cfft() {
-        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 8);
-        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(8), m);
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 7, 1 << 7);
+        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(7), m);
         let copy = rotated.clone().to_cfft_order().to_row_major_matrix();
 
-        let cfft = RecursiveCfftMersenne31::new(10);
+        let cfft = RecursiveCfftMersenne31::new(1 << 7);
 
-        let output_circle = rotated.extrapolate(CircleDomain::standard(8 + 1));
+        let output_circle = rotated.extrapolate(CircleDomain::standard(7 + 1));
         let output_cfft = cfft.coset_lde_batch(copy, 1);
 
         assert_eq!(
