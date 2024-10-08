@@ -50,7 +50,7 @@ fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usiz
 fn recursive_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usize) {
     type F = Mersenne31;
     let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
-    let cfft = RecursiveCfftMersenne31::new(1 << log_n);
+    let cfft = RecursiveCfftMersenne31::new(1 << (log_n + 1));
     g.bench_with_input(
         BenchmarkId::new("RecursiveCfft<M31>", format!("log_n={log_n},log_w={log_w}")),
         &m,
@@ -59,7 +59,7 @@ fn recursive_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w
                 || m.clone(),
                 |m| {
                     let evals =
-                        CircleEvaluations::from_natural_order(CircleDomain::standard(log_n), m)
+                        CircleEvaluations::from_cfft_order(CircleDomain::standard(log_n), m)
                             .to_cfft_order()
                             .to_row_major_matrix();
                     cfft.coset_lde_batch(evals, 1)

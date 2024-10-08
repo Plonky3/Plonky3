@@ -48,49 +48,65 @@ pub struct RecursiveCfftMersenne31 {
     /// TODO: The use of RefCell means this can't be shared across
     /// threads; consider using RwLock or finding a better design
     /// instead.
-    twiddles: RefCell<Vec<Vec<Mersenne31>>>,
-    inv_twiddles: RefCell<Vec<Vec<Mersenne31>>>,
+    y_twiddles: RefCell<Vec<Vec<Mersenne31>>>,
+    y_inv_twiddles: RefCell<Vec<Vec<Mersenne31>>>,
+    x_twiddles: RefCell<Vec<Vec<Mersenne31>>>,
+    x_inv_twiddles: RefCell<Vec<Vec<Mersenne31>>>,
 }
 
 impl RecursiveCfftMersenne31 {
     pub fn new(n: usize) -> Self {
         let res = Self {
-            twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
+            y_twiddles: RefCell::default(),
+            y_inv_twiddles: RefCell::default(),
+            x_twiddles: RefCell::default(),
+            x_inv_twiddles: RefCell::default(),
         };
         res.update_twiddles(n);
         res
     }
 
     #[inline]
-    fn decimation_in_freq_dft(
-        mat: &mut [<Mersenne31 as Field>::Packing],
-        ncols: usize,
-        twiddles: &[Vec<Mersenne31>],
-    ) {
+    fn decimation_in_freq_dft(&self, mat: &mut [<Mersenne31 as Field>::Packing], ncols: usize) {
         if ncols > 1 {
             let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = twiddles.len() - lg_fft_len;
+            let twiddles = self.x_inv_twiddles.borrow();
+            let roots_idx = twiddles.len() + 1 - lg_fft_len;
             let twiddles = &twiddles[roots_idx..];
+            let y_inv_twiddle = &self.y_inv_twiddles.borrow()[roots_idx];
 
-            mat.par_chunks_exact_mut(ncols)
-                .for_each(|v| Mersenne31::backward_fft(v, twiddles))
+            mat.par_chunks_exact_mut(ncols).for_each(|v| {
+                Mersenne31::backward_pass(v, y_inv_twiddle);
+
+                let n = v.len();
+                assert!(n > 1);
+
+                let (v0, v1) = unsafe { v.split_at_mut_unchecked(n / 2) };
+                Mersenne31::backward_fft(v0, twiddles);
+                Mersenne31::backward_fft(v1, twiddles);
+            })
         }
     }
 
     #[inline]
-    fn decimation_in_time_dft(
-        mat: &mut [<Mersenne31 as Field>::Packing],
-        ncols: usize,
-        twiddles: &[Vec<Mersenne31>],
-    ) {
+    fn decimation_in_time_dft(&self, mat: &mut [<Mersenne31 as Field>::Packing], ncols: usize) {
         if ncols > 1 {
             let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = twiddles.len() - lg_fft_len;
+            let twiddles = self.x_twiddles.borrow();
+            let roots_idx = twiddles.len() + 1 - lg_fft_len;
             let twiddles = &twiddles[roots_idx..];
+            let y_twiddle = &self.y_twiddles.borrow()[roots_idx];
 
-            mat.par_chunks_exact_mut(ncols)
-                .for_each(|v| Mersenne31::forward_fft(v, twiddles))
+            mat.par_chunks_exact_mut(ncols).for_each(|v| {
+                let n = v.len();
+                assert!(n > 1);
+
+                let (v0, v1) = unsafe { v.split_at_mut_unchecked(n / 2) };
+                Mersenne31::forward_fft(v0, twiddles);
+                Mersenne31::forward_fft(v1, twiddles);
+
+                Mersenne31::forward_pass(v, y_twiddle);
+            })
         }
     }
 
@@ -106,18 +122,27 @@ impl RecursiveCfftMersenne31 {
         // the only twiddle is 1, roots_of_unity_table(fft_len)
         // returns a vector of twiddles of length log_2(fft_len) - 1.
 
-        // let curr_max_fft_len = 1 << self.twiddles.borrow().len();
-        // if fft_len > curr_max_fft_len {
-        let log_n = log2_strict_usize(fft_len);
-        let new_twiddles = compute_twiddles_no_bit_rev(CircleDomain::standard(log_n));
-        // We can obtain the inverse twiddles by inverting the twiddles.
-        let new_inv_twiddles = new_twiddles
-            .iter()
-            .map(|ts| batch_multiplicative_inverse(ts))
-            .collect();
-        self.twiddles.replace(new_twiddles);
-        self.inv_twiddles.replace(new_inv_twiddles);
-        // }
+        let curr_max_fft_len = 1 << (1 + self.x_twiddles.borrow().len());
+        if fft_len > curr_max_fft_len {
+            let log_n = log2_strict_usize(fft_len);
+            let (new_x_twiddles, new_y_twiddles): (Vec<_>, Vec<_>) =
+                compute_twiddles_no_bit_rev(CircleDomain::standard(log_n));
+            // We can obtain the inverse twiddles by inverting the twiddles.
+            let new_x_inv_twiddles = new_x_twiddles
+                .iter()
+                .map(|ts| batch_multiplicative_inverse(ts))
+                .collect();
+
+            let new_y_inv_twiddles = new_y_twiddles
+                .iter()
+                .map(|ts| batch_multiplicative_inverse(ts))
+                .collect();
+
+            self.x_twiddles.replace(new_x_twiddles);
+            self.x_inv_twiddles.replace(new_x_inv_twiddles);
+            self.y_twiddles.replace(new_y_twiddles);
+            self.y_inv_twiddles.replace(new_y_inv_twiddles);
+        }
     }
 }
 
@@ -163,14 +188,13 @@ impl RecursiveCfftMersenne31 {
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
         self.update_twiddles(nrows);
-        let inv_twiddles = self.inv_twiddles.borrow();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
             .in_scope(|| transpose::transpose(packedmat, &mut scratch.values, ncols, nrows));
 
         debug_span!("dft batch", n_dfts = ncols, fft_len = nrows)
-            .in_scope(|| Self::decimation_in_freq_dft(&mut scratch.values, nrows, &inv_twiddles));
+            .in_scope(|| Self::decimation_in_freq_dft(self, &mut scratch.values, nrows));
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
@@ -201,6 +225,8 @@ impl RecursiveCfftMersenne31 {
 
         let mut mat = mat.bit_reverse_rows().to_row_major_matrix();
 
+        self.update_twiddles(result_nrows);
+
         divide_by_height(&mut mat);
 
         let packedmat = <Mersenne31 as Field>::Packing::pack_slice(&mat.values);
@@ -228,12 +254,8 @@ impl RecursiveCfftMersenne31 {
 
         // Apply inverse DFT; result is not yet normalised.
 
-        self.update_twiddles(nrows);
-        {
-            let inv_twiddles = self.inv_twiddles.borrow();
-            debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
-                .in_scope(|| Self::decimation_in_freq_dft(coeffs, nrows, &inv_twiddles));
-        }
+        debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
+            .in_scope(|| Self::decimation_in_freq_dft(self, coeffs, nrows));
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
@@ -243,12 +265,9 @@ impl RecursiveCfftMersenne31 {
             .zip(coeffs)
             .for_each(|(val, coeff)| *val = *coeff);
 
-        self.update_twiddles(result_nrows);
-        let twiddles = self.twiddles.borrow();
-
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
-            .in_scope(|| Self::decimation_in_time_dft(packed_padded, result_nrows, &twiddles));
+            .in_scope(|| Self::decimation_in_time_dft(self, packed_padded, result_nrows));
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows).in_scope(|| {
@@ -302,7 +321,7 @@ mod tests {
         let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(8), m);
         let copy = rotated.clone().to_cfft_order().to_row_major_matrix();
 
-        let cfft = RecursiveCfftMersenne31::new(1 << 8);
+        let cfft = RecursiveCfftMersenne31::new(1 << 3);
 
         let output_circle = rotated.interpolate();
         let output_cfft = cfft.dft_batch(copy);
