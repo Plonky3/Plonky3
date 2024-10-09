@@ -6,6 +6,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_koala_bear::{KoalaBear, KoalaBearDiffusionMatrixParameters, KoalaBearParameters};
+use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::GenericDiffusionMatrixMontyField31;
 use p3_poseidon2::Poseidon2ExternalMatrixGeneral;
@@ -31,14 +32,14 @@ const SBOX_REGISTERS: usize = 0;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
-const NUM_ROWS: usize = 1 << 15;
+const NUM_ROWS: usize = 1 << 18;
 const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
-#[cfg(feature = "parallel")]
-type Dft = p3_dft::Radix2DitParallel;
-#[cfg(not(feature = "parallel"))]
-type Dft = p3_dft::Radix2Bowers;
+// #[cfg(feature = "parallel")]
+// type Dft = p3_dft::Radix2DitParallel;
+// #[cfg(not(feature = "parallel"))]
+type Dft = p3_monty_31::dft::RecursiveDft<KoalaBear>;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -117,14 +118,13 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
 
-    let dft = Dft {};
-
     let fri_config = FriConfig {
         log_blowup: 1,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
+    let dft = Dft::new(trace.height() << fri_config.log_blowup);
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

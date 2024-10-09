@@ -9,9 +9,10 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 
-use crate::{monty_reduce, MontyField31, MontyParameters, TwoAdicData};
+use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
+use p3_field::{Field, PackedValue};
 
-impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
+impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]
     fn backward_butterfly(x: Self, y: Self, w: Self) -> (Self, Self) {
         let t = y * w;
@@ -21,19 +22,30 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline]
     fn backward_pass(a: &mut [Self], roots: &[Self]) {
         let half_n = a.len() / 2;
-        assert_eq!(roots.len(), half_n - 1);
+        assert_eq!(roots.len(), half_n);
 
         // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
 
-        let s = top[0] + tail[0];
-        let t = top[0] - tail[0];
-        top[0] = s;
-        tail[0] = t;
+        if half_n >= <Self as Field>::Packing::WIDTH {
+            let top_packed = <Self as Field>::Packing::pack_slice_mut(top);
+            let tail_packed = <Self as Field>::Packing::pack_slice_mut(tail);
+            let roots_packed = <Self as Field>::Packing::pack_slice(roots);
+            izip!(top_packed, tail_packed, roots_packed).for_each(|(x, y, &root)| {
+                let t = *y * root;
+                *y = *x - t;
+                *x += t;
+            });
+        } else {
+            let s = top[0] + tail[0];
+            let t = top[0] - tail[0];
+            top[0] = s;
+            tail[0] = t;
 
-        izip!(&mut top[1..], &mut tail[1..], roots).for_each(|(hi, lo, &root)| {
-            (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
-        });
+            izip!(&mut top[1..], &mut tail[1..], &roots[1..]).for_each(|(x, y, &root)| {
+                (*x, *y) = Self::backward_butterfly(*x, *y, root);
+            });
+        }
     }
 
     #[inline(always)]
@@ -59,7 +71,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         // Expanding the calculation of t3 saves one instruction
         let t1 = MP::PRIME + a1.value - a3.value;
         let t3 = MontyField31::new_monty(monty_reduce::<MP>(
-            t1 as u64 * MP::INV_ROOTS_8.as_ref()[1].value as u64,
+            t1 as u64 * MP::INV_ROOTS_8.as_ref()[2].value as u64,
         ));
         let t5 = a1 + a3;
         let t4 = a0 + a2;

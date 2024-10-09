@@ -5,41 +5,68 @@
 //! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
 
 extern crate alloc;
+//use core::arch::x86_64::__m512;
+//use core::mem::transmute;
+
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{AbstractField, TwoAdicField};
+use p3_field::{AbstractField, Field, PackedValue, TwoAdicField};
 use p3_util::log2_strict_usize;
 
-use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters, TwoAdicData};
+use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Given a field element `gen` of order n where `n = 2^lg_n`,
     /// return a vector of vectors `table` where table[i] is the
-    /// vector of twiddle factors for an fft of length n/2^i. The values
-    /// gen^0 = 1 are skipped, as are g_i^k for k >= i/2 as these are
-    /// just the negatives of the other roots (using g_i^{i/2} = -1).
+    /// vector of twiddle factors for an fft of length n/2^i. The
+    /// values g_i^k for k >= i/2 are skipped as these are just the
+    /// negatives of the other roots (using g_i^{i/2} = -1).  The
+    /// value gen^0 = 1 is included to aid consistency between the
+    /// packed and non-packed variants.
     pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
         let lg_n = log2_strict_usize(n);
         let gen = Self::two_adic_generator(lg_n);
         let half_n = 1 << (lg_n - 1);
-        // nth_roots = [g, g^2, g^3, ..., g^{n/2 - 1}]
-        let nth_roots: Vec<_> = gen.powers().take(half_n).skip(1).collect();
+        // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
+        let nth_roots: Vec<_> = gen.powers().take(half_n).collect();
 
         (0..(lg_n - 1))
-            .map(|i| {
-                nth_roots
-                    .iter()
-                    .skip((1 << i) - 1)
-                    .step_by(1 << i)
-                    .copied()
-                    .collect()
-            })
+            .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
             .collect()
     }
 }
 
-impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
+impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+    /// Breadth-first DIF FFT for small vectors
+    #[inline]
+    fn forward_small(a: &mut [Self], root_table: &[Vec<Self>]) {
+        let lg_n = log2_strict_usize(a.len());
+
+        for j in (0..lg_n).rev() {
+            let s = lg_n - j - 1;
+            let l = 1 << j;
+
+            // TODO: specialise betterer
+            let blah = [Self::one(); 1];
+            let roots = if j != 0 { &root_table[s] } else { &blah[..] };
+            assert_eq!(roots.len(), l);
+
+            for i in 0..(1 << s) {
+                let offset = i << (j + 1);
+
+                for k in 0..l {
+                    let x = a[offset + k];
+                    let y = a[offset + k + l];
+                    let t = MP::PRIME + x.value - y.value;
+                    a[offset + k] = x + y;
+                    a[offset + k + l] =
+                        Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+                }
+            }
+        }
+    }
+
     #[inline(always)]
     fn forward_butterfly(x: Self, y: Self, w: Self) -> (Self, Self) {
         let t = MP::PRIME + x.value - y.value;
@@ -52,19 +79,30 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline]
     fn forward_pass(a: &mut [Self], roots: &[Self]) {
         let half_n = a.len() / 2;
-        assert_eq!(roots.len(), half_n - 1);
+        assert_eq!(roots.len(), half_n);
 
         // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
 
-        let s = top[0] + tail[0];
-        let t = top[0] - tail[0];
-        top[0] = s;
-        tail[0] = t;
+        if half_n >= <Self as Field>::Packing::WIDTH {
+            let top_packed = <Self as Field>::Packing::pack_slice_mut(top);
+            let tail_packed = <Self as Field>::Packing::pack_slice_mut(tail);
+            let roots_packed = <Self as Field>::Packing::pack_slice(roots);
+            izip!(top_packed, tail_packed, roots_packed).for_each(|(x, y, &root)| {
+                let t = (*x - *y) * root;
+                *x += *y;
+                *y = t;
+            });
+        } else {
+            let s = top[0] + tail[0];
+            let t = top[0] - tail[0];
+            top[0] = s;
+            tail[0] = t;
 
-        izip!(&mut top[1..], &mut tail[1..], roots).for_each(|(hi, lo, &root)| {
-            (*hi, *lo) = Self::forward_butterfly(*hi, *lo, root);
-        });
+            izip!(&mut top[1..], &mut tail[1..], &roots[1..]).for_each(|(x, y, &root)| {
+                (*x, *y) = Self::forward_butterfly(*x, *y, root);
+            });
+        }
     }
 
     #[inline(always)]
@@ -84,7 +122,7 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
         // Expanding the calculation of t3 saves one instruction
         let t1 = MP::PRIME + a[1].value - a[3].value;
         let t3 = MontyField31::new_monty(monty_reduce::<MP>(
-            t1 as u64 * MP::ROOTS_8.as_ref()[1].value as u64,
+            t1 as u64 * MP::ROOTS_8.as_ref()[2].value as u64,
         ));
         let t5 = a[1] + a[3];
         let t4 = a[0] + a[2];
@@ -173,6 +211,11 @@ impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     pub fn forward_fft(a: &mut [Self], root_table: &[Vec<Self>]) {
         let n = a.len();
         if n == 1 {
+            return;
+        }
+
+        if n > 2 {
+            Self::forward_small(a, root_table);
             return;
         }
 

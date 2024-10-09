@@ -99,7 +99,7 @@ pub trait TwoAdicData: MontyParameters {
     /// Precomputation of the first 3 8th-roots of unity.
     ///
     /// Must agree with the 8th-root in TWO_ADIC_GENERATORS, i.e.
-    /// ROOTS_8[0] == TWO_ADIC_GENERATORS[3]
+    /// ROOTS_8[1] == TWO_ADIC_GENERATORS[4]
     const ROOTS_8: Self::ArrayLike;
 
     /// Precomputation of the inverses of ROOTS_8.
@@ -108,7 +108,7 @@ pub trait TwoAdicData: MontyParameters {
     /// Precomputation of the first 7 16th-roots of unity.
     ///
     /// Must agree with the 16th-root in TWO_ADIC_GENERATORS, i.e.
-    /// ROOTS_16[0] == TWO_ADIC_GENERATORS[4]
+    /// ROOTS_16[1] == TWO_ADIC_GENERATORS[5]
     const ROOTS_16: Self::ArrayLike;
 
     /// Precomputation of the inverses of ROOTS_16.
