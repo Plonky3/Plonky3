@@ -174,7 +174,10 @@ impl RecursiveCfftMersenne31 {
 ///
 impl RecursiveCfftMersenne31 {
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    pub fn dft_batch(&self, mat: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
+    pub fn to_coefficients_dft_batch(
+        &self,
+        mat: RowMajorMatrix<Mersenne31>,
+    ) -> RowMajorMatrix<Mersenne31> {
         let nrows = mat.height();
         let ncols = mat.width();
         assert_eq!(ncols % <Mersenne31 as Field>::Packing::WIDTH, 0);
@@ -259,11 +262,16 @@ impl RecursiveCfftMersenne31 {
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
-        packed_padded
-            .iter_mut()
-            .step_by(2)
-            .zip(coeffs)
-            .for_each(|(val, coeff)| *val = *coeff);
+
+        // This is reasonably slow.
+        // Replacing it with copy_from_slice gives a 14% speed up. (Though of course that's not valid.)
+        debug_span!("Widen Data", n_dfts = ncols, fft_len = nrows).in_scope(|| {
+            packed_padded
+                .iter_mut()
+                .step_by(2)
+                .zip(coeffs)
+                .for_each(|(val, coeff)| *val = *coeff)
+        });
 
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
@@ -324,7 +332,7 @@ mod tests {
         let cfft = RecursiveCfftMersenne31::new(1 << 3);
 
         let output_circle = rotated.interpolate();
-        let output_cfft = cfft.dft_batch(copy);
+        let output_cfft = cfft.to_coefficients_dft_batch(copy);
 
         assert_eq!(output_circle.values, output_cfft.values)
     }

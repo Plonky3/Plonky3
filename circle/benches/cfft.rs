@@ -14,8 +14,8 @@ use rand::distributions::{Distribution, Standard};
 use rand::thread_rng;
 
 fn bench_lde(c: &mut Criterion) {
-    let log_n = 18;
-    let log_w = 8;
+    let log_n = 16;
+    let log_w = 11;
 
     let mut g = c.benchmark_group("lde");
     g.sample_size(10);
@@ -57,13 +57,7 @@ fn recursive_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w
         |b, m| {
             b.iter_batched(
                 || m.clone(),
-                |m| {
-                    let evals =
-                        CircleEvaluations::from_cfft_order(CircleDomain::standard(log_n), m)
-                            .to_cfft_order()
-                            .to_row_major_matrix();
-                    cfft.coset_lde_batch(evals, 1)
-                },
+                |m| cfft.coset_lde_batch(m, 1),
                 criterion::BatchSize::LargeInput,
             )
         },
