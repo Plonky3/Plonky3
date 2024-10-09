@@ -20,6 +20,7 @@ fn bench_lde(c: &mut Criterion) {
     g.sample_size(10);
     lde_cfft(&mut g, log_n, log_w);
     recursive_cfft(&mut g, log_n, log_w);
+    recursive_cfft_2(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2Dit<_>, _>(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2DitParallel, _>(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2Bowers, _>(&mut g, log_n, log_w);
@@ -57,6 +58,26 @@ fn recursive_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w
             b.iter_batched(
                 || m.clone(),
                 |m| cfft.coset_lde_batch(m, 1),
+                criterion::BatchSize::LargeInput,
+            )
+        },
+    );
+}
+
+fn recursive_cfft_2<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usize) {
+    type F = Mersenne31;
+    let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
+    let cfft = RecursiveCfftMersenne31::new(1 << (log_n + 1));
+    g.bench_with_input(
+        BenchmarkId::new(
+            "RecursiveCfft2<M31>",
+            format!("log_n={log_n},log_w={log_w}"),
+        ),
+        &m,
+        |b, m| {
+            b.iter_batched(
+                || m.clone(),
+                |m| cfft.coset_lde_batch_trial_2(m),
                 criterion::BatchSize::LargeInput,
             )
         },

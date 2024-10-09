@@ -61,11 +61,20 @@ impl Mersenne31 {
     fn backward_4<PF: PackedField<Scalar = Mersenne31>>(a: &mut [PF]) {
         assert_eq!(a.len(), 4);
 
-        Self::backward_pass(a, &INV_TWIDDLES_4);
+        let a0 = a[0];
+        let a1 = a[1];
+        let a2 = a[2];
+        let a3 = a[3];
 
-        let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
-        Self::backward_2(a0);
-        Self::backward_2(a1);
+        let a0_pos_02 = a0 + a2;
+        let a2_neg_02 = (a0 - a2) * INV_TWIDDLES_4[0];
+        let a1_pos_13 = a1 + a3;
+        let a3_neg_13 = (a1 - a3) * INV_TWIDDLES_4[1];
+
+        a[0] = a0_pos_02 + a1_pos_13;
+        a[1] = (a0_pos_02 - a1_pos_13).mul_2exp_u64(16);
+        a[2] = a2_neg_02 + a3_neg_13;
+        a[3] = (a2_neg_02 - a3_neg_13).mul_2exp_u64(16);
     }
 
     #[inline(always)]

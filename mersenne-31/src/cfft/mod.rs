@@ -16,6 +16,7 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 mod backward;
+mod extrapolate;
 mod forward;
 
 use crate::Mersenne31;
@@ -109,6 +110,43 @@ impl RecursiveCfftMersenne31 {
                 Mersenne31::forward_pass(v, y_twiddle);
             })
         }
+    }
+
+    #[inline]
+    fn coset_extrapolation_dft(
+        &self,
+        input_mat: &mut [<Mersenne31 as Field>::Packing],
+        output_mat: &mut [<Mersenne31 as Field>::Packing],
+        ncols: usize,
+    ) {
+        assert_eq!(2 * input_mat.len(), output_mat.len());
+
+        let lg_fft_len = p3_util::log2_ceil_usize(ncols);
+        let twiddles = self.x_twiddles.borrow();
+        let inv_twiddles = self.x_inv_twiddles.borrow();
+        let roots_idx = inv_twiddles.len() + 1 - lg_fft_len;
+
+        let twiddles = &twiddles[(roots_idx - 1)..];
+        let inv_twiddles = &inv_twiddles[roots_idx..];
+
+        let y_twiddle = &self.y_twiddles.borrow()[roots_idx - 1];
+        let y_inv_twiddle = &self.y_inv_twiddles.borrow()[roots_idx];
+
+        input_mat
+            .par_chunks_exact_mut(ncols)
+            .zip(output_mat.par_chunks_exact_mut(2 * ncols))
+            .for_each(|(vec_input, vec_output)| {
+                Mersenne31::backward_pass(vec_input, y_inv_twiddle);
+
+                let (input0, input1) =
+                    unsafe { vec_input.split_at_mut_unchecked(vec_input.len() / 2) };
+                let (output0, output1) =
+                    unsafe { vec_output.split_at_mut_unchecked(vec_output.len() / 2) };
+                Mersenne31::extrapolate_fft(input0, output0, twiddles, inv_twiddles);
+                Mersenne31::extrapolate_fft(input1, output1, twiddles, inv_twiddles);
+
+                Mersenne31::forward_pass(vec_output, y_twiddle);
+            })
     }
 
     /// Compute twiddle factors, or take memoized ones if already available.
@@ -287,6 +325,67 @@ impl RecursiveCfftMersenne31 {
             .bit_reverse_rows()
             .to_row_major_matrix()
     }
+
+    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    pub fn coset_lde_batch_trial_2(
+        &self,
+        mat: RowMajorMatrix<Mersenne31>,
+    ) -> RowMajorMatrix<Mersenne31> {
+        let nrows = mat.height();
+        let ncols = mat.width();
+        let result_nrows = nrows << 1;
+
+        let pack_width = <Mersenne31 as Field>::Packing::WIDTH;
+        assert_eq!(ncols % pack_width, 0);
+
+        let input_size = nrows * ncols;
+        let output_size = result_nrows * ncols;
+
+        let ncols_packed = ncols / pack_width;
+
+        let mut mat = mat.bit_reverse_rows().to_row_major_matrix();
+
+        self.update_twiddles(result_nrows);
+
+        divide_by_height(&mut mat);
+
+        let packedmat = <Mersenne31 as Field>::Packing::pack_slice(&mat.values);
+
+        // Allocate space for the output and the intermediate state.
+        // NB: The unsafe version below takes well under 1ms, whereas doing
+        //   vec![Mersenne31::zero(); output_size])
+        // takes 100s of ms. Safety is expensive.
+        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| {
+            // Safety: These are pretty dodgy, but work because Mersenne31 is #[repr(transparent)]
+            let output = Mersenne31::zero_vec(output_size);
+            let padded = Mersenne31::zero_vec(output_size);
+            (output, padded)
+        });
+
+        let packed_output = <Mersenne31 as Field>::Packing::pack_slice_mut(&mut output);
+        let packed_padded = <Mersenne31 as Field>::Packing::pack_slice_mut(&mut padded);
+
+        // `coeffs` will hold the result of the inverse FFT; use the
+        // output storage as scratch space.
+        let coeffs = &mut packed_output[..input_size / pack_width];
+
+        debug_span!("pre-transpose", nrows, ncols)
+            .in_scope(|| transpose::transpose(packedmat, coeffs, ncols_packed, nrows));
+
+        // Apply inverse DFT; result is not yet normalised.
+
+        debug_span!("extrapolate", n_dfts = ncols, fft_len = nrows)
+            .in_scope(|| Self::coset_extrapolation_dft(self, coeffs, packed_padded, nrows));
+
+        // transpose output
+        debug_span!("post-transpose", nrows = ncols, ncols = result_nrows).in_scope(|| {
+            transpose::transpose(packed_padded, packed_output, result_nrows, ncols_packed)
+        });
+
+        RowMajorMatrix::new(output, ncols)
+            .bit_reverse_rows()
+            .to_row_major_matrix()
+    }
 }
 
 #[cfg(test)]
@@ -297,7 +396,7 @@ mod tests {
     use p3_matrix::Matrix;
     use rand::thread_rng;
 
-    use super::RecursiveCfftMersenne31;
+    use super::{extrapolate, RecursiveCfftMersenne31};
     use crate::cfft::{backward, forward};
     use crate::Mersenne31;
 
@@ -305,27 +404,34 @@ mod tests {
 
     #[test]
     fn check_twiddles() {
-        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_32.iter().zip(forward::_TWIDDLES_32) {
+        for (&twiddle_inv, twiddle) in backward::INV_TWIDDLES_32.iter().zip(forward::TWIDDLES_32) {
             assert_eq!(F::one(), twiddle * twiddle_inv);
         }
 
-        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_16.iter().zip(forward::_TWIDDLES_16) {
+        for (&twiddle_inv, twiddle) in backward::INV_TWIDDLES_16.iter().zip(forward::TWIDDLES_16) {
             assert_eq!(F::one(), twiddle * twiddle_inv);
         }
 
-        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_8.iter().zip(forward::_TWIDDLES_8) {
+        for (&twiddle_inv, twiddle) in backward::INV_TWIDDLES_8.iter().zip(forward::TWIDDLES_8) {
             assert_eq!(F::one(), twiddle * twiddle_inv);
         }
 
-        for (&twiddle, twiddle_inv) in backward::INV_TWIDDLES_4.iter().zip(forward::_TWIDDLES_4) {
+        for (&twiddle_inv, twiddle) in backward::INV_TWIDDLES_4.iter().zip(forward::TWIDDLES_4) {
             assert_eq!(F::one(), twiddle * twiddle_inv);
+        }
+
+        for (&ext_twiddle, twiddle) in extrapolate::EXTRAPOLATE_TWIDDLES_4
+            .iter()
+            .zip(forward::TWIDDLES_4)
+        {
+            assert_eq!(ext_twiddle, twiddle.mul_2exp_u64(16));
         }
     }
 
     #[test]
     fn test_to_coeffs() {
-        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 6);
-        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(8), m);
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 10, 1 << 6);
+        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(10), m);
         let copy = rotated.clone().to_cfft_order().to_row_major_matrix();
 
         let cfft = RecursiveCfftMersenne31::new(1 << 3);
@@ -338,14 +444,31 @@ mod tests {
 
     #[test]
     fn test_cfft() {
-        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 6);
-        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(8), m);
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 10, 1 << 6);
+        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(10), m);
         let copy = rotated.clone().to_cfft_order().to_row_major_matrix();
 
         let cfft = RecursiveCfftMersenne31::new(2);
 
-        let output_circle = rotated.extrapolate(CircleDomain::standard(8 + 1));
+        let output_circle = rotated.extrapolate(CircleDomain::standard(10 + 1));
         let output_cfft = cfft.coset_lde_batch(copy, 1);
+
+        assert_eq!(
+            output_circle.to_cfft_order().to_row_major_matrix().values,
+            output_cfft.values
+        )
+    }
+
+    #[test]
+    fn test_new_cfft() {
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 10, 1 << 6);
+        let rotated = CircleEvaluations::from_natural_order(CircleDomain::standard(10), m);
+        let copy = rotated.clone().to_cfft_order().to_row_major_matrix();
+
+        let cfft = RecursiveCfftMersenne31::new(2);
+
+        let output_circle = rotated.extrapolate(CircleDomain::standard(10 + 1));
+        let output_cfft = cfft.coset_lde_batch_trial_2(copy);
 
         assert_eq!(
             output_circle.to_cfft_order().to_row_major_matrix().values,
