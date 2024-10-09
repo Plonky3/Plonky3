@@ -5,7 +5,6 @@ use p3_circle::{CircleDomain, CircleEvaluations};
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_mersenne_31::cfft::RecursiveCfftMersenne31;
 use p3_mersenne_31::Mersenne31;
 use p3_monty_31::dft::RecursiveDft;

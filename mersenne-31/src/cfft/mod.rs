@@ -3,15 +3,16 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use p3_dft::divide_by_height;
-use p3_util::log2_strict_usize;
 
 use itertools::izip;
 use p3_circle::{compute_twiddles_no_bit_rev, CircleDomain};
+use p3_dft::divide_by_height;
 use p3_field::{batch_multiplicative_inverse, AbstractField, Field, PackedField, PackedValue};
+use p3_matrix::bitrev::BitReversableMatrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_matrix::{bitrev::BitReversableMatrix, dense::RowMajorMatrix};
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -296,11 +297,9 @@ mod tests {
     use p3_matrix::Matrix;
     use rand::thread_rng;
 
-    use crate::cfft::{backward, forward};
-
-    use crate::Mersenne31;
-
     use super::RecursiveCfftMersenne31;
+    use crate::cfft::{backward, forward};
+    use crate::Mersenne31;
 
     type F = Mersenne31;
 

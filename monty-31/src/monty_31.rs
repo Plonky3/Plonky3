@@ -230,7 +230,7 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
         let value = (product % (FP::PRIME as u64)) as u32;
         Self::new_monty(value)
     }
-    
+
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
