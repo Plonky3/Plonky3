@@ -95,4 +95,9 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.inner
             .padded_horizontally_packed_row(self.index_map.map_row_index(r))
     }
+
+    type BitRev = Inner;
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        self.inner
+    }
 }

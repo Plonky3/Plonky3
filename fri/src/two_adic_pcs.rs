@@ -13,7 +13,7 @@ use p3_field::{
     Field, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
+use p3_matrix::bitrev::BitReversalPerm;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -142,7 +142,7 @@ where
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
+    type ProverData = InputMmcs::ProverData<<Dft::Evaluations as Matrix<Val>>::BitRev>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
@@ -167,11 +167,21 @@ where
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
                     .bit_reverse_rows()
-                    .to_row_major_matrix()
+                // .to_row_major_matrix()
             })
             .collect();
 
         self.mmcs.commit(ldes)
+    }
+
+    fn get_evaluations<'a>(&self, prover_data: &'a Self::ProverData, idx: usize) -> Option<(Self::Domain, &'a impl Matrix<Val>)> {
+        // TODO: This assumes the domain passed to `commit` had no shift.
+        let mat = self.mmcs.get_matrices(prover_data)[idx];
+        let domain = TwoAdicMultiplicativeCoset {
+            log_n: log2_strict_usize(mat.height()),
+            shift: Val::generator(),
+        };
+        Some((domain, mat))
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -184,7 +194,9 @@ where
         assert_eq!(domain.shift, Val::generator());
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
-        lde.split_rows(domain.size()).0.bit_reverse_rows()
+        RowMajorMatrix::new_row(todo!())
+        // lde.truncate_rows_power_of_two(log2_strict_usize(domain.size()))
+        //     .bit_reverse_rows()
     }
 
     fn open(
@@ -244,11 +256,7 @@ where
             .iter()
             .map(|(data, points)| {
                 (
-                    self.mmcs
-                        .get_matrices(data)
-                        .into_iter()
-                        .map(|m| m.as_view())
-                        .collect_vec(),
+                    self.mmcs.get_matrices(data).into_iter().collect_vec(),
                     points,
                 )
             })
@@ -286,9 +294,11 @@ where
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
                     let ys = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
-                            let (low_coset, _) =
-                                mat.split_rows(mat.height() >> self.fri.log_blowup);
-                            interpolate_coset(
+                            let log_h = log2_strict_usize(mat.height());
+                            let low_coset = mat; // TODO
+                            // let low_coset =
+                            //     mat.truncate_rows_power_of_two(log_h + self.fri.log_blowup);
+                            interpolate_coset::<_, _, <Dft::Evaluations as Matrix<_>>::BitRev>(
                                 &BitReversalPerm::new_view(low_coset),
                                 Val::generator(),
                                 point,
@@ -439,7 +449,7 @@ where
 
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
-    mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
+    mats_and_points: &[(Vec<&M>, &Vec<Vec<EF>>)],
     coset_shift: F,
 ) -> LinearMap<EF, Vec<EF>> {
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();

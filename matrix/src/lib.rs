@@ -90,6 +90,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         self.row(self.height() - 1)
     }
 
+    // #[deprecated]
+    // fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
+    // where
+    //     T: Clone,
+    //     Self: Sized,
+    // {
+    //     RowMajorMatrix::new_row(unimplemented!())
+    // }
+
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
@@ -100,6 +109,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             self.width(),
         )
     }
+
+    type BitRev: Matrix<T>;
+    fn bit_reverse_rows(self) -> Self::BitRev;
 
     fn horizontally_packed_row<'a, P>(
         &'a self,

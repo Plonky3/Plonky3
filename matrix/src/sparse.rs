@@ -88,4 +88,10 @@ impl<T: Clone + Default + Send + Sync> Matrix<T> for CsrMatrix<T> {
         }
         row.into_iter()
     }
+
+    type BitRev = Self;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        unimplemented!("Not supported for now...")
+    }
 }

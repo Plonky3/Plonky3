@@ -4,7 +4,6 @@ use core::ops::Deref;
 
 use p3_util::reverse_slice_index_bits;
 
-use crate::bitrev::BitReversableMatrix;
 use crate::interleaved::VerticallyInterleaved;
 use crate::{Dimensions, Matrix};
 
@@ -90,17 +89,13 @@ impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyRepeated<
         let r = r % self.inner_height;
         self.inner[mat_idx].row_slice(r)
     }
-}
 
-impl<T: Clone + Send + Sync, Inner: BitReversableMatrix<T>> BitReversableMatrix<T>
-    for VerticallyRepeated<Inner>
-{
     type BitRev = VerticallyInterleaved<Inner::BitRev>;
     fn bit_reverse_rows(self) -> Self::BitRev {
         let mut mats: Vec<Inner::BitRev> = self
             .inner
             .into_iter()
-            .map(BitReversableMatrix::bit_reverse_rows)
+            .map(Matrix::bit_reverse_rows)
             .collect();
         reverse_slice_index_bits(&mut mats);
         VerticallyInterleaved::new(mats)
@@ -112,7 +107,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use crate::dense::DenseMatrix;
-    use crate::repeated::{BitReversableMatrix, VerticallyRepeated};
+    use crate::repeated::VerticallyRepeated;
     use crate::util::reverse_matrix_index_bits;
     use crate::Matrix;
 

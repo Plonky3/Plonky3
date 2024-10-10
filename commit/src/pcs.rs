@@ -41,6 +41,13 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    fn get_evaluations<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+    ) -> Option<(Self::Domain, &'a impl Matrix<Val<Self::Domain>>)>;
+
+    #[deprecated]
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,

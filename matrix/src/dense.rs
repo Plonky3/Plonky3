@@ -13,6 +13,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
+use crate::bitrev::{BitReversalPerm, BitReversedMatrixView};
 use crate::Matrix;
 
 /// A dense matrix stored in row-major form.
@@ -112,6 +113,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     pub fn row_slices(&self) -> impl Iterator<Item = &[T]> {
         self.values.borrow().chunks_exact(self.width)
     }
+
+    // fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
+    // where
+    //     T: Clone,
+    //     Self: Sized,
+    // {
+    //     self.split_rows(1 << log_rows).0
+    // }
 
     pub fn par_row_slices(&self) -> impl IndexedParallelIterator<Item = &[T]>
     where
@@ -345,6 +354,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         T: Clone,
     {
         RowMajorMatrix::new(self.values.to_vec(), self.width)
+    }
+
+    type BitRev = BitReversedMatrixView<DenseMatrix<T, S>>;
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        BitReversalPerm::new_view(self)
     }
 
     #[inline]

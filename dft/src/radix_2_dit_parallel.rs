@@ -3,19 +3,18 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use itertools::izip;
-use tracing::instrument;
-
 use p3_field::{Field, Powers, TwoAdicField};
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
+use p3_matrix::bitrev::BitReversedMatrixView;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::interleaved::VerticallyInterleaved;
-use p3_matrix::Matrix;
 use p3_matrix::util::reverse_matrix_index_bits;
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+use tracing::instrument;
 
-use crate::{divide_by_height, TwoAdicSubgroupDft};
 use crate::butterflies::{Butterfly, DitButterfly};
+use crate::{divide_by_height, TwoAdicSubgroupDft};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -165,11 +164,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
                 .for_each(|mut submat| {
                     for layer in 0..mid {
                         let layer_rev = log_h - 1 - layer;
-                        dit_layer(
-                            &mut submat,
-                            layer,
-                            twiddles[layer_rev].iter().copied(),
-                        );
+                        dit_layer(&mut submat, layer, twiddles[layer_rev].iter().copied());
                     }
                 });
 

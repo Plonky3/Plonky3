@@ -60,6 +60,12 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
             EitherRow::Right(self.second.row_slice(r - self.first.height()))
         }
     }
+
+    type BitRev = Self;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        unimplemented!("Not supported for now...")
+    }
 }
 
 /// We use this to wrap both the row iterator and the row slice.

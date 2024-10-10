@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use p3_challenger::CanSample;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,14 @@ where
             coeffs.clone().into_iter().map(|m| m.values).collect(),
             coeffs,
         )
+    }
+
+    fn get_evaluations<'a>(
+        &self,
+        _prover_data: &'a Self::ProverData,
+        _idx: usize,
+    ) -> Option<(Self::Domain, &'a DenseMatrix<Val>)> {
+        None
     }
 
     fn get_evaluations_on_domain<'a>(

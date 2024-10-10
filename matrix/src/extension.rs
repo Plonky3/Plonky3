@@ -45,6 +45,12 @@ where
             _phantom: PhantomData,
         }
     }
+
+    type BitRev = FlatMatrixView<F, EF, Inner::BitRev>;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        FlatMatrixView::new(self.0.bit_reverse_rows())
+    }
 }
 
 pub struct FlatIter<F, I: Iterator> {

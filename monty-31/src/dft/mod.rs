@@ -7,7 +7,7 @@ use core::cell::RefCell;
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{AbstractField, Field};
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
+use p3_matrix::bitrev::BitReversedMatrixView;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
