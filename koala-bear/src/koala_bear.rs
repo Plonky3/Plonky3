@@ -214,4 +214,10 @@ mod tests {
         crate::KoalaBear,
         p3_monty_31::dft::RecursiveDft<_>
     );
+
+    test_field_dft!(
+        recur_dft2,
+        crate::KoalaBear,
+        p3_monty_31::dft::RecursiveDft2<_>
+    );
 }

@@ -51,7 +51,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    fn forward_pass<PF: PackedField<Scalar = MontyField31<MP>>>(a: &mut [PF], roots: &[Self]) {
+    pub(crate) fn forward_pass<PF: PackedField<Scalar = MontyField31<MP>>>(
+        a: &mut [PF],
+        roots: &[Self],
+    ) {
         let half_n = a.len() / 2;
         assert_eq!(roots.len(), half_n - 1);
 
