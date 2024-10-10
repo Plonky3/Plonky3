@@ -254,6 +254,24 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 }
 
+impl<T: Send + Sync, M: Matrix<T>> Matrix<T> for &M {
+    fn width(&self) -> usize {
+        (*self).width()
+    }
+
+    fn height(&self) -> usize {
+        (*self).height()
+    }
+
+    type Row<'a> = M::Row<'a>
+    where
+        Self: 'a;
+
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        (*self).row(r)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
