@@ -10,6 +10,8 @@ use core::any::type_name;
 use core::hint::unreachable_unchecked;
 use core::mem;
 use core::mem::MaybeUninit;
+use core::mem::size_of;
+use core::mem::align_of;
 
 pub mod array_serialization;
 pub mod linear_map;
