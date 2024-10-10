@@ -4,7 +4,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 use p3_circle::{compute_twiddles_no_bit_rev, CircleDomain};
 use p3_dft::divide_by_height;
 use p3_field::{batch_multiplicative_inverse, AbstractField, Field, PackedField, PackedValue};
@@ -130,13 +130,19 @@ impl RecursiveCfftMersenne31 {
         let inv_twiddles = &inv_twiddles[roots_idx..];
 
         let y_twiddle = &self.y_twiddles.borrow()[roots_idx - 1];
-        let y_inv_twiddle = &self.y_inv_twiddles.borrow()[roots_idx];
+
+        let inv_height = Mersenne31::from_canonical_usize(ncols).inverse();
+        let scaled_y_inv_twiddle = self.y_inv_twiddles.borrow()[roots_idx]
+            .iter()
+            .map(|&x| x * inv_height)
+            .collect_vec();
 
         input_mat
             .par_chunks_exact_mut(ncols)
             .zip(output_mat.par_chunks_exact_mut(2 * ncols))
             .for_each(|(vec_input, vec_output)| {
-                Mersenne31::backward_pass(vec_input, y_inv_twiddle);
+                Mersenne31::normalized_backward_pass(vec_input, &scaled_y_inv_twiddle, inv_height);
+                // Mersenne31::backward_pass(vec_input, &scaled_y_inv_twiddle);
 
                 let (input0, input1) =
                     unsafe { vec_input.split_at_mut_unchecked(vec_input.len() / 2) };
@@ -343,11 +349,9 @@ impl RecursiveCfftMersenne31 {
 
         let ncols_packed = ncols / pack_width;
 
-        let mut mat = mat.bit_reverse_rows().to_row_major_matrix();
+        let mat = mat.bit_reverse_rows().to_row_major_matrix();
 
         self.update_twiddles(result_nrows);
-
-        divide_by_height(&mut mat);
 
         let packedmat = <Mersenne31 as Field>::Packing::pack_slice(&mat.values);
 
@@ -383,8 +387,8 @@ impl RecursiveCfftMersenne31 {
         });
 
         RowMajorMatrix::new(output, ncols)
-            .bit_reverse_rows()
-            .to_row_major_matrix()
+        // .bit_reverse_rows()
+        // .to_row_major_matrix()
     }
 }
 

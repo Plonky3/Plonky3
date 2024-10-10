@@ -42,8 +42,27 @@ impl Mersenne31 {
         // Safe because 0 <= half_n < a.len()
         let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
 
-        izip!(top.iter_mut(), tail.iter_mut(), roots).for_each(|(hi, lo, &root)| {
+        izip!(top, tail, roots).for_each(|(hi, lo, &root)| {
             (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
+        });
+    }
+
+    pub(crate) fn normalized_backward_pass<PF: PackedField<Scalar = Mersenne31>>(
+        a: &mut [PF],
+        scaled_roots: &[Self],
+        inv_height: Self,
+    ) {
+        let half_n = a.len() / 2;
+        assert_eq!(scaled_roots.len(), half_n);
+
+        // Safe because 0 <= half_n < a.len()
+        let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
+
+        izip!(top, tail, scaled_roots).for_each(|(hi, lo, &root)| {
+            (*hi, *lo) = Self::backward_butterfly(*hi, *lo, root);
+            *hi *= inv_height;
+            // We can potentially absorb basically all of these mul's into twiddles.
+            // Seems to have an insignificant effect on timing. E.g. realm of 1% and it would make the code more complicated.
         });
     }
 
