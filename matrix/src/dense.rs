@@ -114,14 +114,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow().chunks_exact(self.width)
     }
 
-    // fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
-    // where
-    //     T: Clone,
-    //     Self: Sized,
-    // {
-    //     self.split_rows(1 << log_rows).0
-    // }
-
     pub fn par_row_slices(&self) -> impl IndexedParallelIterator<Item = &[T]>
     where
         T: Sync,
@@ -346,6 +338,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     #[inline]
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         &self.values.borrow()[r * self.width..(r + 1) * self.width]
+    }
+
+    fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
+    where
+        T: Clone,
+        Self: Sized,
+    {
+        self.split_rows(1 << log_rows).0
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>

@@ -158,10 +158,13 @@ where
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
 
-    (0..quotient_size)
-        .into_par_iter()
-        .step_by(PackedVal::<SC>::WIDTH)
-        .flat_map_iter(|i_start| {
+    let mut windows =
+        trace_on_quotient_domain.par_vertically_packed_pairs_wrapping::<PackedVal<SC>>(next_step);
+
+    windows
+        // .enumerate()
+        .flat_map_iter(|(i_start, [lhs, rhs])| {
+            let i_start = i_start * PackedVal::<SC>::WIDTH;
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -169,13 +172,7 @@ where
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
-            let main = RowMajorMatrix::new(
-                iter::empty()
-                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start))
-                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start + next_step))
-                    .collect_vec(),
-                width,
-            );
+            let main = RowMajorMatrix::new(lhs.chain(rhs).collect_vec(), width);
 
             let accumulator = PackedChallenge::<SC>::zero();
             let mut folder = ProverConstraintFolder {

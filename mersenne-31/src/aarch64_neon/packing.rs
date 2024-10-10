@@ -527,7 +527,7 @@ unsafe impl PackedValue for PackedMersenne31Neon {
 
     const WIDTH: usize = WIDTH;
 
-    #[inline]
+    #[inline(always)]
     fn from_slice(slice: &[Mersenne31]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
@@ -537,7 +537,7 @@ unsafe impl PackedValue for PackedMersenne31Neon {
             &*slice.as_ptr().cast()
         }
     }
-    #[inline]
+    #[inline(always)]
     fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe {
@@ -549,17 +549,17 @@ unsafe impl PackedValue for PackedMersenne31Neon {
     }
 
     /// Similar to `core:array::from_fn`.
-    #[inline]
+    #[inline(always)]
     fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
         let vals_arr: [_; WIDTH] = core::array::from_fn(f);
         Self(vals_arr)
     }
 
-    #[inline]
+    #[inline(always)]
     fn as_slice(&self) -> &[Mersenne31] {
         &self.0[..]
     }
-    #[inline]
+    #[inline(always)]
     fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
         &mut self.0[..]
     }

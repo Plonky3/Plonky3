@@ -98,16 +98,19 @@ unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
 
     const WIDTH: usize = N;
 
+    #[inline(always)]
     fn from_slice(slice: &[Self::Value]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe { &*slice.as_ptr().cast() }
     }
 
+    #[inline(always)]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
         unsafe { &mut *slice.as_mut_ptr().cast() }
     }
 
+    #[inline(always)]
     fn from_fn<Fn>(f: Fn) -> Self
     where
         Fn: FnMut(usize) -> Self::Value,
@@ -115,10 +118,12 @@ unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
         Self(array::from_fn(f))
     }
 
+    #[inline(always)]
     fn as_slice(&self) -> &[Self::Value] {
         &self.0
     }
 
+    #[inline(always)]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         &mut self.0
     }

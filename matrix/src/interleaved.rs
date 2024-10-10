@@ -2,10 +2,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
 
-use p3_util::reverse_slice_index_bits;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
-use crate::{Dimensions, Matrix};
 use crate::repeated::VerticallyRepeated;
+use crate::{Dimensions, Matrix};
 
 /// A sequence of matrices, each of the same dimensions, stacked together vertically.
 #[derive(Clone)]
@@ -90,19 +90,19 @@ impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyInterleav
         self.inner[mat_idx].row_slice(r)
     }
 
-    // #[inline]
-    // fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
-    // where
-    //     T: Clone,
-    // {
-    //     let log_rows_per_mat = log_rows - log2_strict_usize(self.inner.len());
-    //     let inner = self
-    //         .inner
-    //         .iter()
-    //         .map(|mat| mat.truncate_rows_power_of_two(log_rows_per_mat))
-    //         .collect();
-    //     VerticallyInterleaved::new(inner)
-    // }
+    #[inline]
+    fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
+    where
+        T: Clone,
+    {
+        let log_rows_per_mat = log_rows - log2_strict_usize(self.inner.len());
+        let inner = self
+            .inner
+            .iter()
+            .map(|mat| mat.truncate_rows_power_of_two(log_rows_per_mat))
+            .collect();
+        VerticallyInterleaved::new(inner)
+    }
 
     type BitRev = VerticallyRepeated<Inner::BitRev>;
     fn bit_reverse_rows(self) -> Self::BitRev {
@@ -121,10 +121,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use super::*;
     use crate::dense::DenseMatrix;
     use crate::Matrix;
-
-    use super::*;
 
     #[test]
     fn to_row_major_matrix() {

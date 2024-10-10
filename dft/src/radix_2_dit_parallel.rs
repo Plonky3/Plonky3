@@ -11,7 +11,7 @@ use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::butterflies::{Butterfly, DitButterfly};
 use crate::{divide_by_height, TwoAdicSubgroupDft};
@@ -148,50 +148,68 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         divide_by_height(&mut mat);
 
         let g_big = F::two_adic_generator(log_h + added_bits);
-
         let mut coset_ldes = Vec::with_capacity(1 << added_bits);
-        for coset_idx in 0..1 << added_bits {
-            let mut mat = mat.clone();
+        for coset_idx in 1..(1 << added_bits) {
+            // TODO: Do the first layer out-of-place, into a MaybeUninit buffer, instead of cloning?
+            let mut mat = info_span!("clone").in_scope(|| mat.clone());
             let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
-            let mut twiddles_ref_mut = self.coset_twiddles.borrow_mut();
-            let twiddles = twiddles_ref_mut
-                .entry((log_h, total_shift))
-                .or_insert_with(|| compute_coset_twiddles(log_h, total_shift));
-
-            // The first half looks like a normal DIT.
-            // par_dit_layer(&mut mat, mid, &old_twiddles.twiddles);
-            mat.par_row_chunks_exact_mut(1 << mid)
-                .for_each(|mut submat| {
-                    for layer in 0..mid {
-                        let layer_rev = log_h - 1 - layer;
-                        dit_layer(&mut submat, layer, twiddles[layer_rev].iter().copied());
-                    }
-                });
-
-            // For the second half, we flip the DIT, working in bit-reversed order.
-            reverse_matrix_index_bits(&mut mat);
-
-            // par_dit_layer_rev(&mut mat, mid, &old_twiddles.bit_reversed_twiddles);
-            mat.par_row_chunks_exact_mut(1 << (log_h - mid))
-                .enumerate()
-                .for_each(|(thread, mut submat)| {
-                    for layer in mid..log_h {
-                        let layer_rev = log_h - 1 - layer;
-                        let first_block = thread << (layer - mid);
-                        dit_layer_rev(
-                            &mut submat,
-                            log_h,
-                            layer,
-                            twiddles[layer_rev][first_block..].iter().copied(),
-                        );
-                    }
-                });
-
+            coset_dft(self, &mut mat, total_shift);
             coset_ldes.push(mat.bit_reverse_rows());
         }
 
+        // Now run a forward DFT on the very first coset, this time in-place.
+        coset_dft(self, &mut mat, shift);
+        coset_ldes.insert(0, mat.bit_reverse_rows());
+
         VerticallyInterleaved::new(coset_ldes)
     }
+}
+
+fn coset_dft<F: TwoAdicField + Ord>(
+    dft: &Radix2DitParallel<F>,
+    mat: &mut RowMajorMatrix<F>,
+    shift: F,
+) {
+    let log_h = log2_strict_usize(mat.height());
+    let mid = log_h / 2;
+
+    let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
+    let twiddles = twiddles_ref_mut
+        .entry((log_h, shift))
+        .or_insert_with(|| compute_coset_twiddles(log_h, shift));
+
+    // The first half looks like a normal DIT.
+    // par_dit_layer(&mut mat, mid, &old_twiddles.twiddles);
+    info_span!("modified par_dit_layer").in_scope(|| {
+        mat.par_row_chunks_exact_mut(1 << mid)
+            .for_each(|mut submat| {
+                for layer in 0..mid {
+                    let layer_rev = log_h - 1 - layer;
+                    dit_layer(&mut submat, layer, twiddles[layer_rev].iter().copied());
+                }
+            });
+    });
+
+    // For the second half, we flip the DIT, working in bit-reversed order.
+    reverse_matrix_index_bits(mat);
+
+    // par_dit_layer_rev(&mut mat, mid, &old_twiddles.bit_reversed_twiddles);
+    info_span!("modified par_dit_layer_rev").in_scope(|| {
+        mat.par_row_chunks_exact_mut(1 << (log_h - mid))
+            .enumerate()
+            .for_each(|(thread, mut submat)| {
+                for layer in mid..log_h {
+                    let layer_rev = log_h - 1 - layer;
+                    let first_block = thread << (layer - mid);
+                    dit_layer_rev(
+                        &mut submat,
+                        log_h,
+                        layer,
+                        twiddles[layer_rev][first_block..].iter().copied(),
+                    );
+                }
+            });
+    });
 }
 
 /// This can be used as the first half of a parallelized butterfly network.

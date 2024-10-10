@@ -16,6 +16,7 @@ use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
 
+use crate::bitrev::{BitReversalPerm, BitReversedMatrixView};
 use crate::dense::RowMajorMatrix;
 
 pub mod bitrev;
@@ -52,6 +53,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     fn width(&self) -> usize;
     fn height(&self) -> usize;
 
+    #[inline(always)]
     fn dimensions(&self) -> Dimensions {
         Dimensions {
             width: self.width(),
@@ -59,6 +61,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         }
     }
 
+    #[inline(always)]
     fn get(&self, r: usize, c: usize) -> T {
         self.row(r).nth(c).unwrap()
     }
@@ -69,35 +72,41 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
     fn row(&self, r: usize) -> Self::Row<'_>;
 
+    #[inline]
     fn rows(&self) -> impl Iterator<Item = Self::Row<'_>> {
         (0..self.height()).map(move |r| self.row(r))
     }
 
+    #[inline]
     fn par_rows(&self) -> impl IndexedParallelIterator<Item = Self::Row<'_>> {
         (0..self.height()).into_par_iter().map(move |r| self.row(r))
     }
 
     // Opaque return type implicitly captures &'_ self
+    #[inline(always)]
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.row(r).collect_vec()
     }
 
+    #[inline(always)]
     fn first_row(&self) -> Self::Row<'_> {
         self.row(0)
     }
 
+    #[inline(always)]
     fn last_row(&self) -> Self::Row<'_> {
         self.row(self.height() - 1)
     }
 
-    // #[deprecated]
-    // fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
-    // where
-    //     T: Clone,
-    //     Self: Sized,
-    // {
-    //     RowMajorMatrix::new_row(unimplemented!())
-    // }
+    #[deprecated]
+    fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
+    where
+        T: Clone,
+        Self: Sized,
+    {
+        // panic!("{:?}", type_name::<Self>());
+        RowMajorMatrix::new_row(unimplemented!())
+    }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
@@ -125,8 +134,19 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Clone + 'a,
     {
         let num_packed = self.width() / P::WIDTH;
-        let packed = (0..num_packed).map(move |c| P::from_fn(|i| self.get(r, P::WIDTH * c + i)));
-        let sfx = (num_packed * P::WIDTH..self.width()).map(move |c| self.get(r, c));
+        let packed = (0..num_packed).map(
+            #[inline(always)]
+            move |c| {
+                P::from_fn(
+                    #[inline(always)]
+                    |i| self.get(r, P::WIDTH * c + i),
+                )
+            },
+        );
+        let sfx = (num_packed * P::WIDTH..self.width()).map(
+            #[inline(always)]
+            move |c| self.get(r, c),
+        );
         (packed, sfx)
     }
 
@@ -142,7 +162,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         let mut row_iter = self.row(r);
         let num_elems = self.width().div_ceil(P::WIDTH);
         // array::from_fn currently always calls in order, but it's not clear whether that's guaranteed.
-        (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
+        (0..num_elems).map(
+            #[inline(always)]
+            move |_| {
+                P::from_fn(
+                    #[inline(always)]
+                    |_| row_iter.next().unwrap_or_default(),
+                )
+            },
+        )
     }
 
     fn par_horizontally_packed_rows<'a, P>(
@@ -157,9 +185,10 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
-        (0..self.height())
-            .into_par_iter()
-            .map(|r| self.horizontally_packed_row(r))
+        (0..self.height()).into_par_iter().map(
+            #[inline(always)]
+            |r| self.horizontally_packed_row(r),
+        )
     }
 
     fn par_padded_horizontally_packed_rows<'a, P>(
@@ -169,17 +198,92 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
-        (0..self.height())
-            .into_par_iter()
-            .map(|r| self.padded_horizontally_packed_row(r))
+        (0..self.height()).into_par_iter().map(
+            #[inline(always)]
+            |r| self.padded_horizontally_packed_row(r),
+        )
     }
 
-    /// Wraps at the end.
-    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    /// Undefined behavior if `r + P::WIDTH > self.height()`.
+    #[inline(always)]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P> + Send
     where
         P: PackedValue<Value = T>,
     {
-        (0..self.width()).map(move |c| P::from_fn(|i| self.get((r + i) % self.height(), c)))
+        (0..self.width()).map(
+            #[inline(always)]
+            move |c| {
+                P::from_fn(
+                    #[inline(always)]
+                    |i| self.get(r + i, c),
+                )
+            },
+        )
+    }
+
+    /// Wraps at the end.
+    #[inline(always)]
+    fn vertically_packed_row_wrapping<P>(&self, r: usize) -> impl Iterator<Item = P> + Send
+    where
+        P: PackedValue<Value = T>,
+    {
+        (0..self.width()).map(
+            #[inline(always)]
+            move |c| {
+                P::from_fn(
+                    #[inline(always)]
+                    |i| self.get((r + i) % self.height(), c),
+                )
+            },
+        )
+    }
+
+    // /// Stops when there isn't a complete set of `P::WIDTH` rows left.
+    // fn par_vertically_packed_rows<P>(
+    //     &self,
+    // ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = P>>
+    // where
+    //     P: PackedValue<Value = T>,
+    // {
+    //     (0..self.height()).step_by(P::WIDTH).into_par_iter().map(
+    //         #[inline(always)]
+    //         move |r| self.vertically_packed_row(r),
+    //     )
+    // }
+
+    // /// Wraps at the end.
+    // fn par_vertically_packed_rows_wrapping<P>(
+    //     &self,
+    // ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = P>>
+    // where
+    //     P: PackedValue<Value = T>,
+    // {
+    //     (0..self.height()).step_by(P::WIDTH).into_par_iter().map(
+    //         #[inline(always)]
+    //         move |r| self.vertically_packed_row_wrapping(r),
+    //     )
+    // }
+
+    fn par_vertically_packed_pairs_wrapping<P>(
+        &self,
+        distance: usize,
+    ) -> impl ParallelIterator<Item = (usize, [impl Iterator<Item = P>; 2])>
+    where
+        P: PackedValue<Value = T>,
+    {
+        let range = (0..self.height()).into_par_iter();
+        let shifted_range = (distance..self.height() + distance).into_par_iter();
+        let lhs_indices = range.step_by(P::WIDTH);
+        let rhs_indices = shifted_range.step_by(P::WIDTH);
+        let both_indices = lhs_indices.zip(rhs_indices);
+        both_indices.map(
+            #[inline(always)]
+            move |(lhs_start, rhs_start)| {
+                let lhs = self.vertically_packed_row_wrapping(lhs_start);
+                let rhs = self.vertically_packed_row_wrapping(rhs_start);
+                [lhs, rhs]
+            },
+        ).enumerate()
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
@@ -254,7 +358,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 }
 
-impl<T: Send + Sync, M: Matrix<T>> Matrix<T> for &M {
+impl<T: Clone + Send + Sync, M: Matrix<T>> Matrix<T> for &M {
     fn width(&self) -> usize {
         (*self).width()
     }
@@ -263,12 +367,19 @@ impl<T: Send + Sync, M: Matrix<T>> Matrix<T> for &M {
         (*self).height()
     }
 
-    type Row<'a> = M::Row<'a>
+    type Row<'a>
+        = M::Row<'a>
     where
         Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
         (*self).row(r)
+    }
+
+    type BitRev = BitReversedMatrixView<Self>;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        BitReversalPerm::new_view(self)
     }
 }
 

@@ -13,7 +13,6 @@ use p3_field::{
     Field, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::BitReversalPerm;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -174,15 +173,15 @@ where
         self.mmcs.commit(ldes)
     }
 
-    fn get_evaluations<'a>(&self, prover_data: &'a Self::ProverData, idx: usize) -> Option<(Self::Domain, &'a impl Matrix<Val>)> {
-        // TODO: This assumes the domain passed to `commit` had no shift.
-        let mat = self.mmcs.get_matrices(prover_data)[idx];
-        let domain = TwoAdicMultiplicativeCoset {
-            log_n: log2_strict_usize(mat.height()),
-            shift: Val::generator(),
-        };
-        Some((domain, mat))
-    }
+    // fn get_evaluations<'a>(&self, prover_data: &'a Self::ProverData, idx: usize) -> Option<(Self::Domain, &'a impl Matrix<Val>)> {
+    //     // TODO: This assumes the domain passed to `commit` had no shift.
+    //     let mat = self.mmcs.get_matrices(prover_data)[idx];
+    //     let domain = TwoAdicMultiplicativeCoset {
+    //         log_n: log2_strict_usize(mat.height()),
+    //         shift: Val::generator(),
+    //     };
+    //     Some((domain, mat))
+    // }
 
     fn get_evaluations_on_domain<'a>(
         &self,
@@ -194,9 +193,11 @@ where
         assert_eq!(domain.shift, Val::generator());
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
-        RowMajorMatrix::new_row(todo!())
-        // lde.truncate_rows_power_of_two(log2_strict_usize(domain.size()))
-        //     .bit_reverse_rows()
+        // lde.split_rows(domain.size()).0.bit_reverse_rows()
+        // RowMajorMatrix::new_row(todo!())
+        lde.truncate_rows_power_of_two(log2_strict_usize(domain.size()))
+            .bit_reverse_rows()
+        // lde.bit_reverse_rows() // TODO
     }
 
     fn open(
@@ -296,13 +297,9 @@ where
                         .in_scope(|| {
                             let log_h = log2_strict_usize(mat.height());
                             let low_coset = mat; // TODO
-                            // let low_coset =
-                            //     mat.truncate_rows_power_of_two(log_h + self.fri.log_blowup);
-                            interpolate_coset::<_, _, <Dft::Evaluations as Matrix<_>>::BitRev>(
-                                &BitReversalPerm::new_view(low_coset),
-                                Val::generator(),
-                                point,
-                            )
+                                                 // let low_coset =
+                                                 //     mat.truncate_rows_power_of_two(log_h + self.fri.log_blowup);
+                            interpolate_coset(low_coset.bit_reverse_rows(), Val::generator(), point)
                         });
 
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);

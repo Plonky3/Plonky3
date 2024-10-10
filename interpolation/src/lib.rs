@@ -30,7 +30,7 @@ where
 /// subgroup, evaluate the polynomials at `point`.
 ///
 /// This assumes the point is not in the coset, otherwise the behavior is undefined.
-pub fn interpolate_coset<F, EF, Mat>(coset_evals: &Mat, shift: F, point: EF) -> Vec<EF>
+pub fn interpolate_coset<F, EF, Mat>(coset_evals: Mat, shift: F, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,

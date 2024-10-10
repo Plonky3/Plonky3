@@ -89,13 +89,13 @@ where
         )
     }
 
-    fn get_evaluations<'a>(
-        &self,
-        _prover_data: &'a Self::ProverData,
-        _idx: usize,
-    ) -> Option<(Self::Domain, &'a DenseMatrix<Val>)> {
-        None
-    }
+    // fn get_evaluations<'a>(
+    //     &self,
+    //     _prover_data: &'a Self::ProverData,
+    //     _idx: usize,
+    // ) -> Option<(Self::Domain, &'a DenseMatrix<Val>)> {
+    //     None
+    // }
 
     fn get_evaluations_on_domain<'a>(
         &self,

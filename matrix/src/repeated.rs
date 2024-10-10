@@ -2,7 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
 
-use p3_util::reverse_slice_index_bits;
+use p3_field::PackedValue;
+use p3_maybe_rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::interleaved::VerticallyInterleaved;
 use crate::{Dimensions, Matrix};
@@ -12,7 +14,8 @@ use crate::{Dimensions, Matrix};
 pub struct VerticallyRepeated<Inner> {
     inner: Vec<Inner>,
     width: usize,
-    inner_height: usize,
+    log_num_mats: usize,
+    log_inner_height: usize,
     outer_height: usize,
 }
 
@@ -31,12 +34,14 @@ impl<Inner> VerticallyRepeated<Inner> {
             );
         }
         let width = inner_dims.width;
-        let inner_height = inner_dims.height;
-        let outer_height = inner.len() * inner_height;
+        let log_num_mats = log2_strict_usize(inner.len());
+        let log_inner_height = log2_strict_usize(inner_dims.height);
+        let outer_height = inner.len() << log_inner_height;
         Self {
             inner,
             width,
-            inner_height,
+            log_num_mats,
+            log_inner_height,
             outer_height,
         }
     }
@@ -51,14 +56,17 @@ impl<Inner> VerticallyRepeated<Inner> {
 }
 
 impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyRepeated<Inner> {
+    #[inline(always)]
     fn width(&self) -> usize {
         self.width
     }
 
+    #[inline(always)]
     fn height(&self) -> usize {
         self.outer_height
     }
 
+    #[inline(always)]
     fn dimensions(&self) -> Dimensions {
         Dimensions {
             width: self.width,
@@ -66,9 +74,11 @@ impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyRepeated<
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn get(&self, r: usize, c: usize) -> T {
-        self.row_slice(r).deref()[c].clone()
+        let mat_idx = r >> self.log_inner_height;
+        let r = r % (1 << self.log_inner_height);
+        self.inner[mat_idx].get(r, c)
     }
 
     type Row<'a>
@@ -76,18 +86,35 @@ impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyRepeated<
     where
         Self: 'a;
 
-    #[inline]
+    #[inline(always)]
     fn row(&self, r: usize) -> Self::Row<'_> {
-        let mat_idx = r / self.inner_height;
-        let r = r % self.inner_height;
+        let mat_idx = r >> self.log_inner_height;
+        let r = r % (1 << self.log_inner_height);
         self.inner[mat_idx].row(r)
     }
 
-    #[inline]
+    #[inline(always)]
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        let mat_idx = r / self.inner_height;
-        let r = r % self.inner_height;
+        let mat_idx = r >> self.log_inner_height;
+        let r = r % (1 << self.log_inner_height);
         self.inner[mat_idx].row_slice(r)
+    }
+
+    fn truncate_rows_power_of_two(&self, log_rows: usize) -> impl Matrix<T>
+    where
+        T: Clone,
+        Self: Sized,
+    {
+        let inner: Vec<_> = if log_rows >= self.log_inner_height {
+            self.inner[..1 << (log_rows - self.log_inner_height)]
+                .iter()
+                // This shouldn't actually truncate, we just need the same type in the two branches.
+                .map(|mat| mat.truncate_rows_power_of_two(self.log_inner_height))
+                .collect()
+        } else {
+            vec![self.inner[0].truncate_rows_power_of_two(log_rows)]
+        };
+        VerticallyRepeated::new(inner)
     }
 
     type BitRev = VerticallyInterleaved<Inner::BitRev>;
@@ -99,6 +126,16 @@ impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyRepeated<
             .collect();
         reverse_slice_index_bits(&mut mats);
         VerticallyInterleaved::new(mats)
+    }
+
+    fn par_vertically_packed_pairs_wrapping<P>(
+        &self,
+        distance: usize,
+    ) -> impl ParallelIterator<Item = (usize, [impl Iterator<Item = P>; 2])>
+    where
+        P: PackedValue<Value = T>,
+    {
+        self.inner.par_iter().flat_map(move |mat| mat.par_vertically_packed_pairs_wrapping(distance))
     }
 }
 
