@@ -142,6 +142,10 @@ impl RecursiveCfftMersenne31 {
             .zip(output_mat.par_chunks_exact_mut(2 * ncols))
             .for_each(|(vec_input, vec_output)| {
                 Mersenne31::normalized_backward_pass(vec_input, &scaled_y_inv_twiddle, inv_height);
+
+                // Leaving this line here for timing test purposes.
+                // It gives the wrong result but shows how long rescaling by inv_height takes.
+                // Seems to be 0.5 ~ 1%.
                 // Mersenne31::backward_pass(vec_input, &scaled_y_inv_twiddle);
 
                 let (input0, input1) =
@@ -349,7 +353,7 @@ impl RecursiveCfftMersenne31 {
 
         let ncols_packed = ncols / pack_width;
 
-        let mat = mat.bit_reverse_rows().to_row_major_matrix();
+        let mat = mat.bit_reverse_rows().to_row_major_matrix(); // This is about 5% of the runtime.
 
         self.update_twiddles(result_nrows);
 
@@ -374,19 +378,20 @@ impl RecursiveCfftMersenne31 {
         let coeffs = &mut packed_output[..input_size / pack_width];
 
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(packedmat, coeffs, ncols_packed, nrows));
+            .in_scope(|| transpose::transpose(packedmat, coeffs, ncols_packed, nrows)); // This is about 35% of the runtime.
 
         // Apply inverse DFT; result is not yet normalised.
 
         debug_span!("extrapolate", n_dfts = ncols, fft_len = nrows)
-            .in_scope(|| Self::coset_extrapolation_dft(self, coeffs, packed_padded, nrows));
+            .in_scope(|| Self::coset_extrapolation_dft(self, coeffs, packed_padded, nrows)); // This is about 15% of the runtime.
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows).in_scope(|| {
             transpose::transpose(packed_padded, packed_output, result_nrows, ncols_packed)
-        });
+        }); // This is about 35% of the runtime.
 
-        RowMajorMatrix::new(output, ncols)
+        // This is about 5% of the runtime.
+        RowMajorMatrix::new(padded, ncols)
             .bit_reverse_rows()
             .to_row_major_matrix()
     }
