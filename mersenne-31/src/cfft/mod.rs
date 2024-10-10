@@ -378,20 +378,20 @@ impl RecursiveCfftMersenne31 {
         let coeffs = &mut packed_output[..input_size / pack_width];
 
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(packedmat, coeffs, ncols_packed, nrows)); // This is about 35% of the runtime.
+            .in_scope(|| transpose::transpose(packedmat, coeffs, ncols_packed, nrows)); // This is about 15% of the runtime.
 
         // Apply inverse DFT; result is not yet normalised.
 
         debug_span!("extrapolate", n_dfts = ncols, fft_len = nrows)
-            .in_scope(|| Self::coset_extrapolation_dft(self, coeffs, packed_padded, nrows)); // This is about 15% of the runtime.
+            .in_scope(|| Self::coset_extrapolation_dft(self, coeffs, packed_padded, nrows)); // This is about 30-35% of the runtime.
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows).in_scope(|| {
             transpose::transpose(packed_padded, packed_output, result_nrows, ncols_packed)
-        }); // This is about 35% of the runtime.
+        }); // This is about 35-40% of the runtime.
 
-        // This is about 5% of the runtime.
-        RowMajorMatrix::new(padded, ncols)
+        // // This is about 5% of the runtime.
+        RowMajorMatrix::new(output, ncols)
             .bit_reverse_rows()
             .to_row_major_matrix()
     }
