@@ -387,8 +387,8 @@ impl RecursiveCfftMersenne31 {
         });
 
         RowMajorMatrix::new(output, ncols)
-        // .bit_reverse_rows()
-        // .to_row_major_matrix()
+            .bit_reverse_rows()
+            .to_row_major_matrix()
     }
 }
 
