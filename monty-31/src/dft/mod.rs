@@ -135,7 +135,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 /// _row-major_ input. This is awkward for memory coherence, so the
 /// algorithm here transposes the input and operates on the rows in
 /// the typical way, then transposes back again for the output. Even
-/// for modestly large inputs, the cost of the two tranposes
+/// for modestly large inputs, the cost of the two transposes
 /// outweighed by the improved performance from operating row-wise.
 ///
 /// The choice of DIT for inverse and DIF for "forward" transform mean
@@ -387,9 +387,10 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft2<MontyField31<MP>> {
             let inv_twiddles = self.inv_twiddles.borrow();
 
             let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = (twiddles.len() + 1) - lg_fft_len;
-            let twiddles = &twiddles[roots_idx..];
-            let inv_twiddles = &inv_twiddles[(roots_idx - 1)..];
+            let roots_idx = (inv_twiddles.len() + 1) - lg_fft_len;
+
+            let inv_twiddles = &inv_twiddles[roots_idx..];
+            let twiddles = &twiddles[(roots_idx - 1)..];
 
             let inv_len = MontyField31::from_canonical_usize(ncols).inverse();
             let mut shifts = shift
@@ -508,7 +509,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
             .in_scope(|| transpose::transpose(&scratch.values, packedmat, nrows, ncols));
 
-        mat
+        mat.bit_reverse_rows().to_row_major_matrix()
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
@@ -549,7 +550,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
         debug_span!("scale").in_scope(|| mat.scale(inv_len));
-        mat.bit_reverse_rows().to_row_major_matrix()
+        mat
     }
 
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]

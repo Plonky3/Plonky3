@@ -26,7 +26,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         let s_shift = s * shifts[0];
         let t_shift = t * shifts[1];
-        let t_shift_adjust = t_shift * MP::INV_ROOTS_8.as_ref()[1];
+        let t_shift_adjust = t_shift * MP::ROOTS_8.as_ref()[1];
 
         output[0] = s_shift + t_shift;
         output[1] = s_shift + t_shift_adjust;
@@ -43,17 +43,33 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(input.len(), 4);
         assert_eq!(output.len(), 8);
 
-        Self::forward_pass(input, &MP::ROOTS_8.as_ref()[1..2]);
+        let a0 = input[0] + input[2];
+        let a1 = input[1] + input[3];
+        let a2 = input[0] - input[2];
+        let a3 = (input[1] - input[3]) * MP::INV_ROOTS_8.as_ref()[1];
 
-        // Safe because input.len() == 4
-        let (input0, input1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
-        // Safe because input.len() == 8
-        let (output0, output1) = unsafe { output.split_at_mut_unchecked(output.len() / 2) };
-        let (shifts0, shifts1) = unsafe { shifts.split_at_unchecked(shifts.len() / 2) };
-        Self::extrapolate_2_to_4(input0, output0, shifts0);
-        Self::extrapolate_2_to_4(input1, output1, shifts1);
+        let a00 = a0 + a1;
+        let a01 = a0 - a1;
+        let a10 = a2 + a3;
+        let a11 = a2 - a3;
 
-        Self::backward_pass(output, MP::INV_ROOTS_8.as_ref());
+        let a00_shift = a00 * shifts[0];
+        let a01_shift = a01 * shifts[1];
+        let a01_shift_adjusted = a01_shift * MP::ROOTS_8.as_ref()[1];
+        let a10_shift = a10 * shifts[2];
+        let a11_shift = a11 * shifts[3];
+        let a11_shift_adjusted = a11_shift * MP::ROOTS_8.as_ref()[1];
+
+        output[0] = a00_shift + a01_shift;
+        output[1] = a00_shift + a01_shift_adjusted;
+        output[2] = a00_shift - a01_shift;
+        output[3] = a00_shift - a01_shift_adjusted;
+        output[4] = a10_shift + a11_shift;
+        output[5] = a10_shift + a11_shift_adjusted;
+        output[6] = a10_shift - a11_shift;
+        output[7] = a10_shift - a11_shift_adjusted;
+
+        Self::backward_pass(output, MP::ROOTS_8.as_ref());
     }
 
     #[inline(always)]
@@ -65,7 +81,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(input.len(), 8);
         assert_eq!(output.len(), 16);
 
-        Self::forward_pass(input, MP::ROOTS_8.as_ref());
+        Self::forward_pass(input, MP::INV_ROOTS_8.as_ref());
 
         // Safe because input.len() == 8
         let (input0, input1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
@@ -75,7 +91,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::extrapolate_4_to_8(input0, output0, shifts0);
         Self::extrapolate_4_to_8(input1, output1, shifts1);
 
-        Self::backward_pass(output, MP::INV_ROOTS_16.as_ref());
+        Self::backward_pass(output, MP::ROOTS_16.as_ref());
     }
 
     #[inline(always)]
@@ -89,7 +105,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(input.len(), 16);
         assert_eq!(output.len(), 32);
 
-        Self::forward_pass(input, &twiddle_table[0]);
+        Self::forward_pass(input, &inv_twiddle_table[0]);
 
         // Safe because input.len() == 16
         let (input0, input1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
@@ -99,7 +115,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::extrapolate_8_to_16(input0, output0, shifts0);
         Self::extrapolate_8_to_16(input1, output1, shifts1);
 
-        Self::backward_pass(output, &inv_twiddle_table[0]);
+        Self::backward_pass(output, &twiddle_table[0]);
     }
 
     #[inline(always)]
@@ -113,7 +129,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(input.len(), 32);
         assert_eq!(output.len(), 64);
 
-        Self::forward_pass(input, &twiddle_table[0]);
+        Self::forward_pass(input, &inv_twiddle_table[0]);
 
         // Safe because input.len() == 32
         let (input0, input1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
@@ -135,7 +151,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             shifts1,
         );
 
-        Self::backward_pass(output, &inv_twiddle_table[0]);
+        Self::backward_pass(output, &twiddle_table[0]);
     }
 
     #[inline(always)]
@@ -171,7 +187,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             shifts1,
         );
 
-        Self::backward_pass(output, &inv_twiddle_table[0]);
+        Self::backward_pass(output, &twiddle_table[0]);
     }
 
     #[inline(always)]
@@ -208,7 +224,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             shifts1,
         );
 
-        Self::backward_pass(output, &inv_twiddle_table[0]);
+        Self::backward_pass(output, &twiddle_table[0]);
     }
 
     #[inline(always)]
@@ -222,7 +238,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert_eq!(input.len(), 256);
         assert_eq!(output.len(), 512);
 
-        Self::forward_pass(input, &twiddle_table[0]);
+        Self::forward_pass(input, &inv_twiddle_table[0]);
 
         // Safe because input.len() == 256
         let (input0, input1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
@@ -244,7 +260,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             shifts1,
         );
 
-        Self::backward_pass(output, &inv_twiddle_table[0]);
+        Self::backward_pass(output, &twiddle_table[0]);
     }
 
     #[inline]
@@ -260,8 +276,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             return;
         }
 
-        assert_eq!(n, 1 << (inv_twiddle_table.len()));
-        assert_eq!(output.len(), 1 << (twiddle_table.len()));
+        assert_eq!(n, 1 << (inv_twiddle_table.len() + 1));
+        assert_eq!(output.len(), 1 << (twiddle_table.len() + 1));
         match n {
             256 => Self::extrapolate_256_to_512(
                 input,
@@ -292,7 +308,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             _ => {
                 debug_assert!(n > 64);
 
-                Self::forward_pass(input, &twiddle_table[0]);
+                Self::forward_pass(input, &inv_twiddle_table[0]);
 
                 // Safe because a.len() > 64
                 let (input0, input1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
@@ -313,7 +329,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                     shifts1,
                 );
 
-                Self::backward_pass(output, &inv_twiddle_table[0]);
+                Self::backward_pass(output, &twiddle_table[0]);
             }
         }
     }
