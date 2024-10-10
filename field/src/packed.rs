@@ -1,6 +1,6 @@
+use core::mem::align_of;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
-use core::mem::align_of;
 
 use crate::field::Field;
 use crate::AbstractField;
