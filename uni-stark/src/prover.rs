@@ -12,7 +12,7 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
-
+use p3_matrix::row_index_mapped::RowIndexMap;
 use crate::{
     get_symbolic_constraints, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof,
     ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val,
@@ -69,6 +69,8 @@ where
         trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
 
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
+    let (evals_domain, trace_on_quotient_domain, index_map) = pcs.get_evaluations(&trace_data, 0).expect("TODO");
+    assert_eq!(evals_domain, quotient_domain);
 
     let quotient_values = quotient_values(
         air,
@@ -131,6 +133,7 @@ fn quotient_values<SC, A, Mat>(
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: Mat,
+    index_map: impl RowIndexMap,
     alpha: SC::Challenge,
     constraint_count: usize,
 ) -> Vec<SC::Challenge>
@@ -158,6 +161,7 @@ where
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
 
+    // TODO: use index_map
     let mut windows =
         trace_on_quotient_domain.par_vertically_packed_pairs_wrapping::<PackedVal<SC>>(next_step);
 

@@ -286,6 +286,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         ).enumerate()
     }
 
+    // fn eval_windows<P>(&self, distance: usize) -> Vec<P>
+
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
     where
         Self: Sized,

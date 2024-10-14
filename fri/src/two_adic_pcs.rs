@@ -20,7 +20,8 @@ use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
-
+use p3_matrix::bitrev::BitReversalPerm;
+use p3_matrix::row_index_mapped::{IdentityIndexMap, RowIndexMap};
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriGenericConfig, FriProof};
 
@@ -173,15 +174,17 @@ where
         self.mmcs.commit(ldes)
     }
 
-    // fn get_evaluations<'a>(&self, prover_data: &'a Self::ProverData, idx: usize) -> Option<(Self::Domain, &'a impl Matrix<Val>)> {
-    //     // TODO: This assumes the domain passed to `commit` had no shift.
-    //     let mat = self.mmcs.get_matrices(prover_data)[idx];
-    //     let domain = TwoAdicMultiplicativeCoset {
-    //         log_n: log2_strict_usize(mat.height()),
-    //         shift: Val::generator(),
-    //     };
-    //     Some((domain, mat))
-    // }
+    fn get_evaluations<'a>(&self, prover_data: &'a Self::ProverData, idx: usize) -> Option<(Self::Domain, &'a impl Matrix<Val>, impl RowIndexMap)> {
+        // TODO: This assumes the domain passed to `commit` had no shift.
+        let mat = self.mmcs.get_matrices(prover_data)[idx];
+        let height = mat.height();
+        let log_height = log2_strict_usize(height);
+        let domain = TwoAdicMultiplicativeCoset {
+            log_n: log2_strict_usize(mat.height()),
+            shift: Val::generator(),
+        };
+        Some((domain, mat, BitReversalPerm { log_height }))
+    }
 
     fn get_evaluations_on_domain<'a>(
         &self,

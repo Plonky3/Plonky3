@@ -25,6 +25,20 @@ pub trait RowIndexMap: Send + Sync {
     }
 }
 
+pub struct IdentityIndexMap {
+    pub height: usize,
+}
+
+impl RowIndexMap for IdentityIndexMap {
+    fn height(&self) -> usize {
+        self.height
+    }
+
+    fn map_row_index(&self, r: usize) -> usize {
+        r
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct RowIndexMappedView<IndexMap, Inner> {
     pub index_map: IndexMap,
@@ -38,7 +52,8 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.inner.width()
     }
     fn height(&self) -> usize {
-        self.index_map.height()
+        self.inner.height()
+        // self.index_map.height()
     }
 
     fn get(&self, r: usize, c: usize) -> T {

@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
-
+use p3_maybe_rayon::prelude::{ ParallelIterator};
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::repeated::VerticallyRepeated;
@@ -114,6 +114,17 @@ impl<T: Clone + Send + Sync, Inner: Matrix<T>> Matrix<T> for VerticallyInterleav
         reverse_slice_index_bits(&mut mats);
         VerticallyRepeated::new(mats)
     }
+
+    // fn par_vertically_packed_pairs_wrapping<P>(
+    //     &self,
+    //     distance: usize,
+    // ) -> impl ParallelIterator<Item = (usize, [impl Iterator<Item = P>; 2])>
+    // where
+    //     P: PackedValue<Value = T>,
+    // {
+    //     (0..self.inner_height).into_par_iter().flat_map_iter(|r| )
+    //     self.inner.par_iter().flat_map(move |mat| mat.par_vertically_packed_pairs_wrapping(distance))
+    // }
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-
+use p3_matrix::row_index_mapped::RowIndexMap;
 use crate::PolynomialSpace;
 
 pub type Val<D> = <D as PolynomialSpace>::Val;
@@ -41,11 +41,11 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
-    // fn get_evaluations<'a>(
-    //     &self,
-    //     prover_data: &'a Self::ProverData,
-    //     idx: usize,
-    // ) -> Option<(Self::Domain, &'a impl Matrix<Val<Self::Domain>>)>;
+    fn get_evaluations<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+    ) -> Option<(Self::Domain, &'a impl Matrix<Val<Self::Domain>>, impl RowIndexMap)>;
 
     #[deprecated]
     fn get_evaluations_on_domain<'a>(

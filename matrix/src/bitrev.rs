@@ -7,7 +7,7 @@ use crate::Matrix;
 
 #[derive(Debug)]
 pub struct BitReversalPerm {
-    log_height: usize,
+    pub log_height: usize,
 }
 
 impl BitReversalPerm {

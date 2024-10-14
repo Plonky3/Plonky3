@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-
+use core::fmt::Debug;
 use itertools::Itertools;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
@@ -17,7 +17,7 @@ pub struct LagrangeSelectors<T> {
     pub inv_zeroifier: T,
 }
 
-pub trait PolynomialSpace: Copy {
+pub trait PolynomialSpace: Copy + Eq + Debug {
     type Val: Field;
 
     fn size(&self) -> usize;
@@ -54,7 +54,7 @@ pub trait PolynomialSpace: Copy {
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
     pub log_n: usize,
     pub shift: Val,
