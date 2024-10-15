@@ -140,7 +140,7 @@ where
             let packed_digest: [PW; DIGEST_ELEMS] = h.hash_iter(
                 tallest_matrices
                     .iter()
-                    .flat_map(|m| m.one_vertically_packed_row(first_row)),
+                    .flat_map(|m| m.vertically_packed_row(first_row)),
             );
             for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
                 *dst = src;
@@ -199,7 +199,7 @@ where
             let tallest_digest = h.hash_iter(
                 matrices_to_inject
                     .iter()
-                    .flat_map(|m| m.one_vertically_packed_row(first_row)),
+                    .flat_map(|m| m.vertically_packed_row(first_row)),
             );
             packed_digest = c.compress([packed_digest, tallest_digest]);
             for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {

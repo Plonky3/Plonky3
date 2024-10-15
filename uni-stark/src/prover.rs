@@ -169,7 +169,7 @@ where
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
             let main = RowMajorMatrix::new(
-                trace_on_quotient_domain.two_vertically_packed_rows(i_start, next_step),
+                trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
                 width,
             );
 
