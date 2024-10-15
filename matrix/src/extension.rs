@@ -1,6 +1,8 @@
 use core::iter;
 use core::marker::PhantomData;
+use core::ops::Deref;
 
+use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field};
 
 use crate::Matrix;
@@ -44,6 +46,17 @@ where
             idx: 0,
             _phantom: PhantomData,
         }
+    }
+
+    fn row_slice(&self, r: usize) -> impl Deref<Target = [F]> {
+        let ef_row: Vec<F> = self
+            .0
+            .row_slice(r)
+            .iter()
+            .flat_map(|val| val.as_base_slice())
+            .copied()
+            .collect();
+        ef_row
     }
 }
 
