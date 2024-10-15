@@ -162,10 +162,10 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
     /// Pack together a collection of adjacent rows from the matrix.
     ///
-    /// Returns a vector whose i'th element is packing of the i'th element of the
+    /// Returns an iterator whose i'th element is packing of the i'th element of the
     /// rows r through r + P::WIDTH - 1. If we exceed the height of the matrix,
     /// wrap around and include initial rows.
-    fn vertically_packed_row<P>(&self, r: usize) -> Vec<P>
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
         T: Copy,
         P: PackedValue<Value = T>,
@@ -173,9 +173,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         let rows = (0..(P::WIDTH))
             .map(|c| self.row_slice((r + c) % self.height()))
             .collect_vec();
-        (0..self.width())
-            .map(|c| P::from_fn(|i| rows[i][c]))
-            .collect_vec()
+        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
     }
 
     /// Pack together a collection of rows and "next" rows from the matrix.
