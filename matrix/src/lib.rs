@@ -185,12 +185,13 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// height of the matrix, wrap around and include initial rows.
     ///
     /// We assume P::WIDTH > step which lets us batch together getting the relevant matrix rows.
+    /// If a larger step size is needed, we should instead run vertically_packed_row twice.
     fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
     where
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        debug_assert!(P::WIDTH > step);
+        debug_assert!((P::WIDTH == 1) || (P::WIDTH >= step));
         let rows = (0..(P::WIDTH + step))
             .map(|c| self.row_slice((r + c) % self.height()))
             .collect_vec();
