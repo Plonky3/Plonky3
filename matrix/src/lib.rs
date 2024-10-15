@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
+use core::iter;
 use core::ops::Deref;
 
 use itertools::{izip, Itertools};
@@ -166,6 +167,21 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         P: PackedValue<Value = T>,
     {
         (0..self.width()).map(move |c| P::from_fn(|i| self.get((r + i) % self.height(), c)))
+    }
+
+    /// Wraps at the end.
+    fn two_vertically_packed_rows<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let rows = (0..(P::WIDTH + step))
+            .map(move |c| self.row((r + c) % self.height()).collect_vec())
+            .collect_vec();
+        iter::empty()
+            .chain((0..self.width()).map(|c| P::from_fn(|i| rows[i][c])))
+            .chain((0..self.width()).map(|c| P::from_fn(|i| rows[i + step][c])))
+            .collect_vec()
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
