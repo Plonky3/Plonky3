@@ -170,13 +170,27 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Wraps at the end.
+    fn one_vertically_packed_row<P>(&self, r: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let rows = (0..(P::WIDTH))
+            .map(move |c| self.row_slice((r + c) % self.height()))
+            .collect_vec();
+        iter::empty()
+            .chain((0..self.width()).map(|c| P::from_fn(|i| rows[i][c])))
+            .collect_vec()
+    }
+
+    /// Wraps at the end.
     fn two_vertically_packed_rows<P>(&self, r: usize, step: usize) -> Vec<P>
     where
         T: Copy,
         P: PackedValue<Value = T>,
     {
         let rows = (0..(P::WIDTH + step))
-            .map(move |c| self.row((r + c) % self.height()).collect_vec())
+            .map(move |c| self.row_slice((r + c) % self.height()))
             .collect_vec();
         iter::empty()
             .chain((0..self.width()).map(|c| P::from_fn(|i| rows[i][c])))
