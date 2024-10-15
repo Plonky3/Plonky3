@@ -191,6 +191,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
+        // We include the P::WIDTH == 1 option so we can pass tests.
+        // This should always be run with vectorization in practice.
         debug_assert!((P::WIDTH == 1) || (P::WIDTH >= step));
         let rows = (0..(P::WIDTH + step))
             .map(|c| self.row_slice((r + c) % self.height()))
