@@ -1,8 +1,8 @@
+use alloc::vec::Vec;
 use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field};
 
 use crate::Matrix;
