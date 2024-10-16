@@ -1,3 +1,4 @@
+use core::marker::PhantomData;
 use p3_field::PackedValue;
 use p3_symmetric::CryptographicHasher;
 use p3_symmetric::PseudoCompressionFunction;
@@ -51,29 +52,44 @@ pub trait HybridPseudoCompressionFunction<T, const N: usize>: Clone {
 // Hybrid hasher/compressor with two functions, the first of which is chosen
 // only at the lowest level and the second of which is chosen elsewhere
 #[derive(Clone)]
-pub struct SimpleHybridHasher<H1, H2>
-where
-    H1: Clone,
-    H2: Clone,
+pub struct SimpleHybridHasher<
+    H1,
+    H2,
+    F,
+    W1,
+    W2,
+    const DIGEST_ELEMS_1: usize,
+    const DIGEST_ELEMS_2: usize,
+> where
+    F: Clone,
+    H1: CryptographicHasher<F, [W1; DIGEST_ELEMS_1]> + Clone,
+    H2: CryptographicHasher<F, [W2; DIGEST_ELEMS_2]> + Clone,
 {
     h1: H1,
     h2: H2,
+    _marker: PhantomData<(F, W1, W2)>,
 }
 
-impl<H1, H2> SimpleHybridHasher<H1, H2>
+impl<H1, H2, F, W1, W2, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize>
+    SimpleHybridHasher<H1, H2, F, W1, W2, DIGEST_ELEMS_1, DIGEST_ELEMS_2>
 where
-    H1: Clone,
-    H2: Clone,
+    F: Clone,
+    H1: CryptographicHasher<F, [W1; DIGEST_ELEMS_1]> + Clone,
+    H2: CryptographicHasher<F, [W2; DIGEST_ELEMS_2]> + Clone,
 {
-    pub fn new<F, W, P, PW, const DIGEST_ELEMS: usize>(h1: H1, h2: H2) -> Self
+    pub fn new<P, PW>(h1: H1, h2: H2) -> Self
     where
         F: Clone,
         P: PackedValue<Value = F>,
-        PW: PackedValue<Value = W>,
-        H1: CryptographicHasher<F, [W; DIGEST_ELEMS]> + CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-        H2: CryptographicHasher<F, [W; DIGEST_ELEMS]> + CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
+        PW: PackedValue<Value = W1>,
+        H1: CryptographicHasher<F, [W1; DIGEST_ELEMS_1]>, // + CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
+        H2: CryptographicHasher<F, [W2; DIGEST_ELEMS_2]>, //+ CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
     {
-        Self { h1, h2 }
+        Self {
+            h1,
+            h2,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -104,21 +120,27 @@ where
     }
 }
 
-impl<Item, Out, H1, H2> HybridCryptographicHasher<Item, Out> for SimpleHybridHasher<H1, H2>
+impl<F, W1, W2, H1, H2, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize>
+    HybridCryptographicHasher<F, [W1; DIGEST_ELEMS_1]>
+    for SimpleHybridHasher<H1, H2, F, W1, W2, DIGEST_ELEMS_1, DIGEST_ELEMS_2>
 where
-    Item: Clone,
-    H1: CryptographicHasher<Item, Out>,
-    H2: CryptographicHasher<Item, Out>,
+    F: Clone,
+    H1: CryptographicHasher<F, [W1; DIGEST_ELEMS_1]>,
+    H2: CryptographicHasher<F, [W2; DIGEST_ELEMS_2]>,
+    W1: Clone,
+    W2: Clone,
+    [W1; DIGEST_ELEMS_1]: PackedValue<Value = W2>,
 {
-    fn hash_iter<I>(&self, input: I, sizes: &[usize], current_size: usize) -> Out
+    fn hash_iter<I>(&self, input: I, sizes: &[usize], current_size: usize) -> [W1; DIGEST_ELEMS_1]
     where
-        I: IntoIterator<Item = Item>,
+        I: IntoIterator<Item = F>,
     {
         // TODO
         if sizes.len() == 1 {
             self.h1.hash_iter(input)
         } else {
-            self.h2.hash_iter(input)
+            // TODO fix
+            <[W1; DIGEST_ELEMS_1] as PackedValue>::from_slice(&self.h2.hash_iter(input)).clone()
         }
     }
 }

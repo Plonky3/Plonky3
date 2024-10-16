@@ -24,11 +24,8 @@ fn main() {
     let h_blake3 = HBlake3::new(Blake3 {});
 
     let h_hybrid = SimpleHybridHasher::new::<
-        BabyBear,
-        BabyBear,
         <BabyBear as Field>::Packing,
         <BabyBear as Field>::Packing,
-        8,
     >(h_poseidon, h_blake3);
 
     // bench_merkle_tree::<<F as Field>::Packing, <F as Field>::Packing, H, C, 8>(criterion, h, c);
