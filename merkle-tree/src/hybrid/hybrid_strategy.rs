@@ -94,29 +94,38 @@ where
 }
 
 #[derive(Clone)]
-pub struct SimpleHybridCompressor<C1, C2>
-where
+pub struct SimpleHybridCompressor<
+    C1,
+    C2,
+    W1,
+    W2,
+    const DIGEST_ELEMS_1: usize,
+    const DIGEST_ELEMS_2: usize,
+> where
     C1: Clone,
     C2: Clone,
+    C1: PseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2> + Clone,
+    C2: PseudoCompressionFunction<[W2; DIGEST_ELEMS_2], 2> + Clone,
 {
     c1: C1,
     c2: C2,
+    _marker: PhantomData<(W1, W2)>,
 }
 
-impl<C1, C2> SimpleHybridCompressor<C1, C2>
+impl<C1, C2, W1, W2, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize>
+    SimpleHybridCompressor<C1, C2, W1, W2, DIGEST_ELEMS_1, DIGEST_ELEMS_2>
 where
     C1: Clone,
     C2: Clone,
+    C1: PseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2> + Clone,
+    C2: PseudoCompressionFunction<[W2; DIGEST_ELEMS_2], 2> + Clone,
 {
-    pub fn new<W, P, PW, const DIGEST_ELEMS: usize>(c1: C1, c2: C2) -> Self
-    where
-        PW: PackedValue<Value = W>,
-        C1: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>
-            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-        C2: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>
-            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    {
-        Self { c1, c2 }
+    pub fn new(c1: C1, c2: C2) -> Self {
+        Self {
+            c1,
+            c2,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -145,18 +154,33 @@ where
     }
 }
 
-impl<T, const N: usize, C1, C2> HybridPseudoCompressionFunction<T, N>
-    for SimpleHybridCompressor<C1, C2>
+impl<C1, C2, W1, W2, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize>
+    HybridPseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2>
+    for SimpleHybridCompressor<C1, C2, W1, W2, DIGEST_ELEMS_1, DIGEST_ELEMS_2>
 where
-    C1: PseudoCompressionFunction<T, N>,
-    C2: PseudoCompressionFunction<T, N>,
+    C1: PseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2> + Clone,
+    C2: PseudoCompressionFunction<[W2; DIGEST_ELEMS_2], 2> + Clone,
+    W1: Clone,
+    W2: Clone,
+    [W1; DIGEST_ELEMS_1]: PackedValue<Value = W2>,
+    [W2; DIGEST_ELEMS_2]: PackedValue<Value = W1>,
 {
-    fn compress(&self, input: [T; N], sizes: &[usize], current_size: usize) -> T {
+    fn compress(
+        &self,
+        input: [[W1; DIGEST_ELEMS_1]; 2],
+        sizes: &[usize],
+        current_size: usize,
+    ) -> [W1; DIGEST_ELEMS_1] {
         // TODO
         if sizes.len() == 1 {
             self.c1.compress(input)
         } else {
-            self.c2.compress(input)
+            let input_w2 = [
+                <[W2; DIGEST_ELEMS_2] as PackedValue>::from_slice(&input[0]).clone(),
+                <[W2; DIGEST_ELEMS_2] as PackedValue>::from_slice(&input[1]).clone(),
+            ];
+
+            <[W1; DIGEST_ELEMS_1] as PackedValue>::from_slice(&self.c2.compress(input_w2)).clone()
         }
     }
 }
