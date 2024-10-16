@@ -160,12 +160,52 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .map(|r| self.padded_horizontally_packed_row(r))
     }
 
-    /// Wraps at the end.
+    /// Pack together a collection of adjacent rows from the matrix.
+    ///
+    /// Returns an iterator whose i'th element is packing of the i'th element of the
+    /// rows r through r + P::WIDTH - 1. If we exceed the height of the matrix,
+    /// wrap around and include initial rows.
+    #[inline]
     fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
+        T: Copy,
         P: PackedValue<Value = T>,
     {
-        (0..self.width()).map(move |c| P::from_fn(|i| self.get((r + i) % self.height(), c)))
+        let rows = (0..(P::WIDTH))
+            .map(|c| self.row_slice((r + c) % self.height()))
+            .collect_vec();
+        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
+    }
+
+    /// Pack together a collection of rows and "next" rows from the matrix.
+    ///
+    /// Returns a vector corresponding to 2 packed rows. The i'th element of the first
+    /// row contains the packing of the i'th element of the rows r through r + P::WIDTH - 1.
+    /// The i'th element of the second row contains the packing of the i'th element of the
+    /// rows r + step through r + step + P::WIDTH - 1. If at some point we exceed the
+    /// height of the matrix, wrap around and include initial rows.
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
+        // tests seem to indicate that combining them in the same function is slightly faster.
+        // It's probably allowing the compiler to make some optimizations on the fly.
+
+        let rows = (0..P::WIDTH)
+            .map(|c| self.row_slice((r + c) % self.height()))
+            .collect_vec();
+
+        let next_rows = (0..P::WIDTH)
+            .map(|c| self.row_slice((r + c + step) % self.height()))
+            .collect_vec();
+
+        (0..self.width())
+            .map(|c| P::from_fn(|i| rows[i][c]))
+            .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+            .collect_vec()
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>

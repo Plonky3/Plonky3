@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{izip, Itertools};
 use p3_air::Air;
@@ -170,10 +169,7 @@ where
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
             let main = RowMajorMatrix::new(
-                iter::empty()
-                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start))
-                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start + next_step))
-                    .collect_vec(),
+                trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
                 width,
             );
 
