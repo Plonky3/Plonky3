@@ -37,7 +37,7 @@ fn main() -> Result<(), impl Debug> {
     type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>;
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixGoldilocks::default(),
+        DiffusionMatrixGoldilocks,
         &mut thread_rng(),
     );
 
