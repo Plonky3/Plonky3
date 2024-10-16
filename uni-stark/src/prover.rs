@@ -169,8 +169,6 @@ where
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
             let main = RowMajorMatrix::new(
-                // vertically_packed_row_pair should only be used if next_step = 1, 2, 4.
-                // Potentially want to add an if branch here or something similar.
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
                 width,
             );
