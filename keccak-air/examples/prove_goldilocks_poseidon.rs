@@ -6,10 +6,10 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
+use p3_goldilocks::{DiffusionMatrixGoldilocks, Goldilocks};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon::Poseidon;
+use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
@@ -34,8 +34,12 @@ fn main() -> Result<(), impl Debug> {
     type Val = Goldilocks;
     type Challenge = BinomialExtensionField<Val, 2>;
 
-    type Perm = Poseidon<Val, MdsMatrixGoldilocks, 8, 7>;
-    let perm = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut thread_rng());
+    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixGoldilocks, 8, 7>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixGoldilocks::default(),
+        &mut thread_rng(),
+    );
 
     type MyHash = PaddingFreeSponge<Perm, 8, 4, 4>;
     let hash = MyHash::new(perm.clone());
