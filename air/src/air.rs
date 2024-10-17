@@ -14,6 +14,13 @@ pub trait BaseAir<F>: Sync {
     }
 }
 
+///  An AIR with 0 or more public values.
+pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
+    fn num_public_values(&self) -> usize {
+        0
+    }
+}
+
 /// An AIR that works with a particular `AirBuilder`.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     fn eval(&self, builder: &mut AB);
