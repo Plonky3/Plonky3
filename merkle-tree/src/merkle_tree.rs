@@ -80,7 +80,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             if prev_layer.len() == 1 {
                 break;
             }
-            let next_layer_len = prev_layer.len() / 2;
+            let next_layer_len = (prev_layer.len() / 2).next_power_of_two();
 
             // The matrices that get injected at this layer.
             let matrices_to_inject = leaves_largest_first
@@ -127,7 +127,12 @@ where
 {
     let width = PW::WIDTH;
     let max_height = tallest_matrices[0].height();
-    let max_height_padded = max_height.next_power_of_two();
+    // we always want to return an even number of digests, except when it's the root.
+    let max_height_padded = if max_height == 1 {
+        1
+    } else {
+        max_height + max_height % 2
+    };
 
     let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut digests = vec![default_digest; max_height_padded];
@@ -183,11 +188,15 @@ where
 
     let width = PW::WIDTH;
     let next_len = matrices_to_inject[0].height();
-    let next_len_padded = prev_layer.len() / 2;
+    // We always want to return an even number of digests, except when it's the root.
+    let next_len_padded = if prev_layer.len() == 2 {
+        1
+    } else {
+        (prev_layer.len() / 2 + 1) & !1
+    };
 
     let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
-
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
@@ -219,7 +228,8 @@ where
 
     // At this point, we've exceeded the height of the matrices to inject, so we continue the
     // process above except with default_digest in place of an input digest.
-    for i in next_len..next_len_padded {
+    // We only need go as far as half the length of the previous layer.
+    for i in next_len..(prev_layer.len() / 2) {
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let digest = c.compress([left, right]);
@@ -240,12 +250,17 @@ where
     C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
     C: Sync,
 {
-    debug_assert!(prev_layer.len().is_power_of_two());
     let width = P::WIDTH;
+    // Always return an even number of digests, except when it's the root.
+    let next_len_padded = if prev_layer.len() == 2 {
+        1
+    } else {
+        (prev_layer.len() / 2 + 1) & !1
+    };
     let next_len = prev_layer.len() / 2;
 
     let default_digest: [P::Value; DIGEST_ELEMS] = [P::Value::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len];
+    let mut next_digests = vec![default_digest; next_len_padded];
 
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
@@ -265,8 +280,7 @@ where
     for i in (next_len / width * width)..next_len {
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
-        let digest = c.compress([left, right]);
-        next_digests[i] = digest;
+        next_digests[i] = c.compress([left, right]);
     }
 
     // Everything has been initialized so we can safely cast.
