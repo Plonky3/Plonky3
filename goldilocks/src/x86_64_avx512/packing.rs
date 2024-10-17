@@ -6,12 +6,12 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue, PrimeField64};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{AbstractField, Field, Goldilocks, PrimeField64};
+use crate::Goldilocks;
 
 const WIDTH: usize = 8;
 /// AVX512 Goldilocks Field
@@ -21,7 +21,7 @@ const WIDTH: usize = 8;
 /// `PackedGoldilocksAVX512`. We need to ensure that `PackedGoldilocksAVX512` has the same alignment as
 /// `Goldilocks`. Thus we wrap `[Goldilocks; 8]` and use the `new` and `get` methods to
 /// convert to and from `__m512i`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct PackedGoldilocksAVX512(pub [Goldilocks; WIDTH]);
 
@@ -491,250 +491,25 @@ unsafe fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{AbstractField, PackedFieldPow2, PackedValue};
+    use p3_field_testing::test_packed_field;
 
-    use crate::x86_64_avx512::packing::WIDTH;
-    use crate::{Goldilocks, PackedGoldilocksAVX512};
+    use super::{Goldilocks, WIDTH};
+    use crate::to_goldilocks_array;
 
-    fn test_vals_a() -> [Goldilocks; WIDTH] {
-        [
-            Goldilocks::new(14479013849828404771),
-            Goldilocks::new(9087029921428221768),
-            Goldilocks::new(2441288194761790662),
-            Goldilocks::new(5646033492608483824),
-            Goldilocks::new(2779181197214900072),
-            Goldilocks::new(2989742820063487116),
-            Goldilocks::new(727880025589250743),
-            Goldilocks::new(3803926346107752679),
-        ]
-    }
-    fn test_vals_b() -> [Goldilocks; WIDTH] {
-        [
-            Goldilocks::new(17891926589593242302),
-            Goldilocks::new(11009798273260028228),
-            Goldilocks::new(2028722748960791447),
-            Goldilocks::new(7929433601095175579),
-            Goldilocks::new(6632528436085461172),
-            Goldilocks::new(2145438710786785567),
-            Goldilocks::new(11821483668392863016),
-            Goldilocks::new(15638272883309521929),
-        ]
-    }
+    const SPECIAL_VALS: [Goldilocks; WIDTH] = to_goldilocks_array([
+        0xFFFF_FFFF_0000_0001,
+        0xFFFF_FFFF_0000_0000,
+        0xFFFF_FFFE_FFFF_FFFF,
+        0xFFFF_FFFF_FFFF_FFFF,
+        0x0000_0000_0000_0000,
+        0x0000_0000_0000_0001,
+        0x0000_0000_0000_0002,
+        0x0FFF_FFFF_F000_0000,
+    ]);
 
-    #[test]
-    fn test_add() {
-        let a_arr = test_vals_a();
-        let b_arr = test_vals_b();
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
-        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
-        let packed_res = packed_a + packed_b;
-        let arr_res = packed_res.as_slice();
-
-        let expected = a_arr.iter().zip(b_arr).map(|(&a, b)| a + b);
-        for (exp, &res) in expected.zip(arr_res) {
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_mul() {
-        let a_arr = test_vals_a();
-        let b_arr = test_vals_b();
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
-        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
-        let packed_res = packed_a * packed_b;
-        let arr_res = packed_res.as_slice();
-
-        let expected = a_arr.iter().zip(b_arr).map(|(&a, b)| a * b);
-        for (exp, &res) in expected.zip(arr_res) {
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_square() {
-        let a_arr = test_vals_a();
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
-        let packed_res = packed_a.square();
-        let arr_res = packed_res.as_slice();
-
-        let expected = a_arr.iter().map(|&a| a.square());
-        for (exp, &res) in expected.zip(arr_res) {
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_neg() {
-        let a_arr = test_vals_a();
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
-        let packed_res = -packed_a;
-        let arr_res = packed_res.as_slice();
-
-        let expected = a_arr.iter().map(|&a| -a);
-        for (exp, &res) in expected.zip(arr_res) {
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_sub() {
-        let a_arr = test_vals_a();
-        let b_arr = test_vals_b();
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
-        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
-        let packed_res = packed_a - packed_b;
-        let arr_res = packed_res.as_slice();
-
-        let expected = a_arr.iter().zip(b_arr).map(|(&a, b)| a - b);
-        for (exp, &res) in expected.zip(arr_res) {
-            assert_eq!(res, exp);
-        }
-    }
-
-    #[test]
-    fn test_interleave_is_involution() {
-        let a_arr = test_vals_a();
-        let b_arr = test_vals_b();
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&a_arr);
-        let packed_b = *PackedGoldilocksAVX512::from_slice(&b_arr);
-        {
-            // Interleave, then deinterleave.
-            let (x, y) = packed_a.interleave(packed_b, 1);
-            let (res_a, res_b) = x.interleave(y, 1);
-            assert_eq!(res_a.as_slice(), a_arr);
-            assert_eq!(res_b.as_slice(), b_arr);
-        }
-        {
-            let (x, y) = packed_a.interleave(packed_b, 2);
-            let (res_a, res_b) = x.interleave(y, 2);
-            assert_eq!(res_a.as_slice(), a_arr);
-            assert_eq!(res_b.as_slice(), b_arr);
-        }
-        {
-            let (x, y) = packed_a.interleave(packed_b, 4);
-            let (res_a, res_b) = x.interleave(y, 4);
-            assert_eq!(res_a.as_slice(), a_arr);
-            assert_eq!(res_b.as_slice(), b_arr);
-        }
-        {
-            let (x, y) = packed_a.interleave(packed_b, 8);
-            let (res_a, res_b) = x.interleave(y, 8);
-            assert_eq!(res_a.as_slice(), a_arr);
-            assert_eq!(res_b.as_slice(), b_arr);
-        }
-    }
-
-    #[test]
-    fn test_interleave() {
-        let in_a: [Goldilocks; WIDTH] = [
-            Goldilocks::new(0),
-            Goldilocks::new(1),
-            Goldilocks::new(2),
-            Goldilocks::new(3),
-            Goldilocks::new(4),
-            Goldilocks::new(5),
-            Goldilocks::new(6),
-            Goldilocks::new(7),
-        ];
-        let in_b: [Goldilocks; WIDTH] = [
-            Goldilocks::new(10),
-            Goldilocks::new(11),
-            Goldilocks::new(12),
-            Goldilocks::new(13),
-            Goldilocks::new(14),
-            Goldilocks::new(15),
-            Goldilocks::new(16),
-            Goldilocks::new(17),
-        ];
-        let int1_a: [Goldilocks; WIDTH] = [
-            Goldilocks::new(0),
-            Goldilocks::new(10),
-            Goldilocks::new(2),
-            Goldilocks::new(12),
-            Goldilocks::new(4),
-            Goldilocks::new(14),
-            Goldilocks::new(6),
-            Goldilocks::new(16),
-        ];
-        let int1_b: [Goldilocks; WIDTH] = [
-            Goldilocks::new(1),
-            Goldilocks::new(11),
-            Goldilocks::new(3),
-            Goldilocks::new(13),
-            Goldilocks::new(5),
-            Goldilocks::new(15),
-            Goldilocks::new(7),
-            Goldilocks::new(17),
-        ];
-        let int2_a: [Goldilocks; WIDTH] = [
-            Goldilocks::new(0),
-            Goldilocks::new(1),
-            Goldilocks::new(10),
-            Goldilocks::new(11),
-            Goldilocks::new(4),
-            Goldilocks::new(5),
-            Goldilocks::new(14),
-            Goldilocks::new(15),
-        ];
-        let int2_b: [Goldilocks; WIDTH] = [
-            Goldilocks::new(2),
-            Goldilocks::new(3),
-            Goldilocks::new(12),
-            Goldilocks::new(13),
-            Goldilocks::new(6),
-            Goldilocks::new(7),
-            Goldilocks::new(16),
-            Goldilocks::new(17),
-        ];
-        let int4_a: [Goldilocks; WIDTH] = [
-            Goldilocks::new(0),
-            Goldilocks::new(1),
-            Goldilocks::new(2),
-            Goldilocks::new(3),
-            Goldilocks::new(10),
-            Goldilocks::new(11),
-            Goldilocks::new(12),
-            Goldilocks::new(13),
-        ];
-        let int4_b: [Goldilocks; WIDTH] = [
-            Goldilocks::new(4),
-            Goldilocks::new(5),
-            Goldilocks::new(6),
-            Goldilocks::new(7),
-            Goldilocks::new(14),
-            Goldilocks::new(15),
-            Goldilocks::new(16),
-            Goldilocks::new(17),
-        ];
-
-        let packed_a = *PackedGoldilocksAVX512::from_slice(&in_a);
-        let packed_b = *PackedGoldilocksAVX512::from_slice(&in_b);
-        {
-            let (x1, y1) = packed_a.interleave(packed_b, 1);
-            assert_eq!(x1.as_slice(), int1_a);
-            assert_eq!(y1.as_slice(), int1_b);
-        }
-        {
-            let (x2, y2) = packed_a.interleave(packed_b, 2);
-            assert_eq!(x2.as_slice(), int2_a);
-            assert_eq!(y2.as_slice(), int2_b);
-        }
-        {
-            let (x4, y4) = packed_a.interleave(packed_b, 4);
-            assert_eq!(x4.as_slice(), int4_a);
-            assert_eq!(y4.as_slice(), int4_b);
-        }
-        {
-            let (x8, y8) = packed_a.interleave(packed_b, 8);
-            assert_eq!(x8.as_slice(), in_a);
-            assert_eq!(y8.as_slice(), in_b);
-        }
-    }
+    test_packed_field!(
+        crate::PackedGoldilocksAVX512,
+        crate::PackedGoldilocksAVX512::zero(),
+        crate::PackedGoldilocksAVX512(super::SPECIAL_VALS)
+    );
 }
