@@ -35,7 +35,13 @@ pub fn generate_vectorized_trace_rows<
     let nrows = n.div_ceil(VECTOR_LEN);
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
         * VECTOR_LEN;
-    let mut trace = RowMajorMatrix::new(F::zero_vec(nrows * ncols), ncols);
+    let mut vec = Vec::with_capacity(nrows * ncols * 2);
+    unsafe {
+        vec.set_len(nrows * ncols); // TODO unsafe
+    }
+    // vec.resize(nrows * ncols, F::zero());
+    // let vec = F::zero_vec(nrows * ncols);
+    let mut trace = RowMajorMatrix::new(vec, ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
@@ -88,7 +94,13 @@ pub fn generate_trace_rows<
     );
 
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
-    let mut trace = RowMajorMatrix::new(F::zero_vec(n * ncols), ncols);
+    let mut vec = Vec::with_capacity(n * ncols * 2);
+    unsafe {
+        vec.set_len(n * ncols); // TODO unsafe
+    }
+    // vec.resize(n * ncols, F::zero());
+    // let vec = F::zero_vec(n * ncols);
+    let mut trace = RowMajorMatrix::new(vec, ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
