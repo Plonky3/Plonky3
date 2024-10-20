@@ -1,8 +1,10 @@
 use alloc::collections::BTreeMap;
+use alloc::slice;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::mem::{transmute, MaybeUninit};
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -28,6 +30,7 @@ pub struct Radix2DitParallel<F> {
     twiddles: RefCell<BTreeMap<usize, VectorPair<F>>>,
 
     /// A map from `(log_h, shift)` to forward DFT twiddles with that coset shift baked in.
+    #[allow(clippy::type_complexity)]
     coset_twiddles: RefCell<BTreeMap<(usize, F), Vec<Vec<F>>>>,
 
     /// Twiddles based on inverse roots of unity, used in the inverse DFT.
@@ -147,39 +150,65 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
         divide_by_height(&mut mat);
 
-        // mat.values.resize(w * (h << added_bits), F::zero());
-        let target_capacity = w * (h << added_bits);
-        let to_reserve = target_capacity.saturating_sub(mat.values.capacity());
-        debug_span!("reserve_exact").in_scope(|| mat.values.reserve_exact(to_reserve));
-        unsafe {
-            mat.values.set_len(w * (h << added_bits));
-        }
+        let lde_elems = w * (h << added_bits);
+        let elems_to_add = lde_elems - w * h;
+        debug_span!("reserve_exact").in_scope(|| mat.values.reserve_exact(elems_to_add));
 
         let g_big = F::two_adic_generator(log_h + added_bits);
 
-        // mat.values.spare_capacity_mut();
-
-        let mut coset_mats: Vec<RowMajorMatrixViewMut<F>> = mat.row_chunks_exact_mut(h).collect();
-        let mut first_coset_mat = coset_mats.remove(0);
+        let mat_ptr = mat.values.as_mut_ptr();
+        let rest_ptr = unsafe { (mat_ptr as *mut MaybeUninit<F>).add(w * h) };
+        let first_slice: &mut [F] = unsafe { slice::from_raw_parts_mut(mat_ptr, w * h) };
+        let rest_slice: &mut [MaybeUninit<F>] =
+            unsafe { slice::from_raw_parts_mut(rest_ptr, lde_elems - w * h) };
+        assert!(mat.values.spare_capacity_mut().len() >= rest_slice.len());
+        let mut first_coset_mat = RowMajorMatrixViewMut::new(first_slice, w);
+        let mut rest_cosets_mat = rest_slice
+            .chunks_exact_mut(w * h)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, w))
+            .collect_vec();
 
         for coset_idx in 1..(1 << added_bits) {
             let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
             let coset_idx = reverse_bits_len(coset_idx, added_bits);
-            let dest = &mut coset_mats[coset_idx - 1]; // - 1 because we removed the first matrix.
-            dest.copy_from(&first_coset_mat); // todo
+            let dest = &mut rest_cosets_mat[coset_idx - 1]; // - 1 because we removed the first matrix.
+
+            // // TODO: naive
+            // for r in 0..h {
+            //     for c in 0..w {
+            //         dest.values[r * w + c].write(first_coset_mat.values[r * w + c]);
+            //     }
+            // }
+            let first_coset_mat_maybe = unsafe {
+                transmute::<&RowMajorMatrixViewMut<F>, &RowMajorMatrixViewMut<MaybeUninit<F>>>(
+                    &first_coset_mat,
+                )
+            };
+            // TODO: Could skip it and have coset_dft read initial input from a separate buffer.
+            dest.copy_from(first_coset_mat_maybe);
+            let dest = unsafe {
+                transmute::<&mut RowMajorMatrixViewMut<MaybeUninit<F>>, &mut RowMajorMatrixViewMut<F>>(
+                    dest,
+                )
+            };
+
             coset_dft(self, dest, total_shift);
         }
 
         // Now run a forward DFT on the very first coset, this time in-place.
         coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
 
+        unsafe {
+            assert!(mat.values.capacity() >= lde_elems);
+            mat.values.set_len(lde_elems);
+        }
         BitReversalPerm::new_view(mat)
     }
 }
 
 fn coset_dft<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    mut mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
     shift: F,
 ) {
     let log_h = log2_strict_usize(mat.height());
@@ -203,7 +232,7 @@ fn coset_dft<F: TwoAdicField + Ord>(
     });
 
     // For the second half, we flip the DIT, working in bit-reversed order.
-    reverse_matrix_index_bits(&mut mat);
+    reverse_matrix_index_bits(mat);
 
     // par_dit_layer_rev(&mut mat, mid, &old_twiddles.bit_reversed_twiddles);
     info_span!("modified par_dit_layer_rev").in_scope(|| {
