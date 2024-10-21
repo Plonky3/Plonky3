@@ -3,15 +3,17 @@ use core::marker::PhantomData;
 use itertools::{izip, Itertools};
 use p3_commit::PolynomialSpace;
 use p3_dft::{divide_by_height, Butterfly, DifButterfly, DitButterfly};
-use p3_field::{batch_multiplicative_inverse, extension::ComplexExtendable, Field};
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_field::extension::ComplexExtendable;
+use p3_field::{batch_multiplicative_inverse, Field};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{debug_span, instrument};
 
-use crate::{cfft::compute_twiddles, CircleDomain};
-
 use super::{CfftAlgorithm, CircleEvaluations};
+use crate::cfft::compute_twiddles;
+use crate::CircleDomain;
 
 #[derive(Default)]
 pub struct ParChunkedCfft<F>(PhantomData<F>);

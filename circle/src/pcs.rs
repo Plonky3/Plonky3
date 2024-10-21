@@ -489,9 +489,8 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
-    use crate::ParChunkedCfft;
-
     use super::*;
+    use crate::ParChunkedCfft;
 
     #[test]
     fn circle_pcs() {

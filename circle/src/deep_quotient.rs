@@ -129,9 +129,8 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
 
-    use crate::{CfftAlgorithm, ParChunkedCfft};
-
     use super::*;
+    use crate::{CfftAlgorithm, ParChunkedCfft};
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
