@@ -129,6 +129,8 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
 
+    use crate::{par_chunked::ParChunkedCfft, CfftAlgorithm};
+
     use super::*;
 
     type F = Mersenne31;
@@ -162,13 +164,12 @@ mod tests {
     fn reduce_evaluations_low_degree() {
         let log_n = 5;
         let log_blowup = 1;
+        let cfft = ParChunkedCfft::default();
         let evals = CircleEvaluations::from_cfft_order(
             CircleDomain::standard(log_n),
             RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << 3),
         );
-        let lde = evals
-            .clone()
-            .extrapolate(CircleDomain::standard(log_n + log_blowup));
+        let lde = cfft.extrapolate(CircleDomain::standard(log_n + log_blowup), evals.clone());
         assert!(lde.dim() <= (1 << log_n));
 
         let alpha: EF = random();
@@ -193,6 +194,8 @@ mod tests {
 
     #[test]
     fn reduce_multiple_evaluations() {
+        let cfft = ParChunkedCfft::default();
+
         let domain = CircleDomain::standard(5);
         let lde_domain = CircleDomain::standard(8);
 
@@ -208,7 +211,7 @@ mod tests {
                 RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
             );
             let ps_at_zeta = evals.evaluate_at_point(zeta);
-            let lde = evals.extrapolate(lde_domain);
+            let lde = cfft.extrapolate(lde_domain, evals);
             assert!(lde.dim() <= (1 << domain.log_n) + 1);
             let mat_ros = lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
             for (ro, mat_ro) in izip!(&mut ros, mat_ros) {
@@ -227,20 +230,23 @@ mod tests {
     #[test]
     fn test_extract_lambda() {
         let log_n = 5;
+        let cfft = ParChunkedCfft::default();
         for log_blowup in [1, 2, 3] {
             let mut coeffs = RowMajorMatrix::<F>::rand(&mut thread_rng(), (1 << log_n) + 1, 1);
             coeffs.pad_to_height(1 << (log_n + log_blowup), F::zero());
 
             let domain = CircleDomain::standard(log_n + log_blowup);
-            let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone()).values;
+            let mut lde = cfft.evaluate(domain, coeffs.clone()).values;
 
             let lambda = extract_lambda(&mut lde.values, log_blowup);
             assert_eq!(lambda, coeffs.get(1 << log_n, 0));
 
-            let coeffs2 =
-                CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde.values))
-                    .interpolate()
-                    .values;
+            let coeffs2 = cfft
+                .interpolate(CircleEvaluations::from_cfft_order(
+                    domain,
+                    RowMajorMatrix::new_col(lde.values),
+                ))
+                .values;
             assert_eq!(&coeffs2[..(1 << log_n)], &coeffs.values[..(1 << log_n)]);
             assert_eq!(lambda, coeffs.values[1 << log_n]);
             assert_eq!(coeffs2[1 << log_n], F::zero());

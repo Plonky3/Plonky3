@@ -23,10 +23,11 @@ use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig
 use crate::point::Point;
 use crate::prover::prove;
 use crate::verifier::verify;
-use crate::{cfft_permute_index, CfftPermutable, CircleEvaluations, CircleFriProof};
+use crate::{cfft_permute_index, CfftAlgorithm, CfftPermutable, CircleEvaluations, CircleFriProof};
 
 #[derive(Debug)]
-pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
+pub struct CirclePcs<Val: Field, Cfft, InputMmcs, FriMmcs> {
+    pub cfft: Cfft,
     pub mmcs: InputMmcs,
     pub fri_config: FriConfig<FriMmcs>,
     pub _phantom: PhantomData<Val>,
@@ -80,10 +81,11 @@ pub struct CirclePcsProof<
     >,
 }
 
-impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
-    for CirclePcs<Val, InputMmcs, FriMmcs>
+impl<Val, Cfft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
+    for CirclePcs<Val, Cfft, InputMmcs, FriMmcs>
 where
     Val: ComplexExtendable,
+    Cfft: CfftAlgorithm<Val>,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
@@ -111,10 +113,11 @@ where
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );
-                CircleEvaluations::from_natural_order(domain, evals)
-                    .extrapolate(CircleDomain::standard(
-                        domain.log_n + self.fri_config.log_blowup,
-                    ))
+                self.cfft
+                    .extrapolate(
+                        CircleDomain::standard(domain.log_n + self.fri_config.log_blowup),
+                        CircleEvaluations::from_natural_order(domain, evals),
+                    )
                     .to_cfft_order()
             })
             .collect_vec();
@@ -133,8 +136,11 @@ where
         if domain == committed_domain {
             mat.as_cow().cfft_perm_rows()
         } else {
-            CircleEvaluations::from_cfft_order(committed_domain, mat)
-                .extrapolate(domain)
+            self.cfft
+                .extrapolate(
+                    domain,
+                    CircleEvaluations::from_cfft_order(committed_domain, mat),
+                )
                 .to_cfft_order()
                 .as_cow()
                 .cfft_perm_rows()
@@ -483,6 +489,8 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
+    use crate::par_chunked::ParChunkedCfft;
+
     use super::*;
 
     #[test]
@@ -517,8 +525,11 @@ mod tests {
             mmcs: challenge_mmcs,
         };
 
-        type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+        let cfft = ParChunkedCfft::<Val>::default();
+
+        type Pcs = CirclePcs<Val, ParChunkedCfft<Val>, ValMmcs, ChallengeMmcs>;
         let pcs = Pcs {
+            cfft,
             mmcs: val_mmcs,
             fri_config,
             _phantom: PhantomData,

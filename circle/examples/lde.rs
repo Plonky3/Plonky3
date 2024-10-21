@@ -2,7 +2,8 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use p3_baby_bear::BabyBear;
-use p3_circle::{CircleDomain, CircleEvaluations};
+use p3_circle::par_chunked::ParChunkedCfft;
+use p3_circle::{CfftAlgorithm, CircleDomain, CircleEvaluations};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;
@@ -17,8 +18,12 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 type F = Mersenne31;
 
-fn go<M: Matrix<F>>(evals: CircleEvaluations<F, M>, log_n: usize) -> CircleEvaluations<F> {
-    evals.extrapolate(CircleDomain::standard(log_n))
+fn go<Cfft: CfftAlgorithm<F>, M: Matrix<F>>(
+    cfft: &Cfft,
+    evals: CircleEvaluations<F, M>,
+    log_n: usize,
+) -> CircleEvaluations<F> {
+    cfft.extrapolate(CircleDomain::standard(log_n), evals)
 }
 
 fn main() {
@@ -31,13 +36,15 @@ fn main() {
     let log_w = args.next().map(|s| s.parse().unwrap()).unwrap_or(8);
     println!("log_n={log_n}, log_w={log_w}");
 
+    let cfft = ParChunkedCfft::default();
+
     let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
     let evals = CircleEvaluations::from_natural_order(CircleDomain::standard(log_n), m);
 
     println!("warming up for 1s...");
     let t0 = Instant::now();
     while Instant::now().duration_since(t0) < Duration::from_secs(1) {
-        black_box(go(black_box(evals.clone()), log_n + 1));
+        black_box(go(&cfft, black_box(evals.clone()), log_n + 1));
     }
 
     Registry::default()
@@ -45,7 +52,7 @@ fn main() {
         .with(ForestLayer::default())
         .init();
 
-    black_box(go(black_box(evals), log_n + 1));
+    black_box(go(&cfft, black_box(evals), log_n + 1));
 
     let m = RowMajorMatrix::<BabyBear>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
     black_box(Radix2DitParallel::default().coset_lde_batch(black_box(m), 1, BabyBear::generator()));

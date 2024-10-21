@@ -238,7 +238,7 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-    use crate::CircleEvaluations;
+    use crate::{par_chunked::ParChunkedCfft, CfftAlgorithm, CircleEvaluations};
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
         let pts = d.points().collect_vec();
@@ -333,6 +333,7 @@ mod tests {
         type F = Mersenne31;
         let log_n = 8;
         let n = 1 << log_n;
+        let cfft = ParChunkedCfft::default();
 
         let d = CircleDomain::<F>::standard(log_n);
         let coset = d.create_disjoint_domain(n);
@@ -354,10 +355,10 @@ mod tests {
                 coset,
                 RowMajorMatrix::new_col(evals.to_vec()),
             );
-            let coeffs = evals.interpolate().to_row_major_matrix();
+            let coeffs = cfft.interpolate(evals).to_row_major_matrix();
             let (lo, hi) = coeffs.split_rows(n);
             assert_eq!(hi.values, vec![F::zero(); n]);
-            CircleEvaluations::evaluate(d, lo.to_row_major_matrix())
+            cfft.evaluate(d, lo.to_row_major_matrix())
                 .to_natural_order()
                 .to_row_major_matrix()
                 .values
@@ -379,13 +380,13 @@ mod tests {
         assert_eq!(is_transition[n - 1], F::zero());
 
         // Zeroifier coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
-        let z_coeffs = CircleEvaluations::from_natural_order(
-            coset,
-            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_zeroifier)),
-        )
-        .interpolate()
-        .to_row_major_matrix()
-        .values;
+        let z_coeffs = cfft
+            .interpolate(CircleEvaluations::from_natural_order(
+                coset,
+                RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_zeroifier)),
+            ))
+            .to_row_major_matrix()
+            .values;
         assert_eq!(
             z_coeffs,
             iter::empty()

@@ -136,7 +136,7 @@ mod tests {
     use rand::{random, thread_rng};
 
     use super::*;
-    use crate::CircleEvaluations;
+    use crate::{par_chunked::ParChunkedCfft, CfftAlgorithm, CircleEvaluations};
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
@@ -170,13 +170,16 @@ mod tests {
             .dim()
         };
 
+        let cfft = ParChunkedCfft::default();
+
         for (log_n, log_blowup) in iproduct!(3..6, 1..4) {
-            let mut values = CircleEvaluations::evaluate(
-                CircleDomain::standard(log_n + log_blowup),
-                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1),
-            )
-            .to_cfft_order()
-            .values;
+            let mut values = cfft
+                .evaluate(
+                    CircleDomain::standard(log_n + log_blowup),
+                    RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1),
+                )
+                .to_cfft_order()
+                .values;
 
             values = fold_y(random(), RowMajorMatrix::new(values, 2));
             assert_eq!(vec_dim(&values), values.len() >> log_blowup);

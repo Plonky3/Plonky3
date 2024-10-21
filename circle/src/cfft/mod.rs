@@ -1,24 +1,44 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{iterate, izip, Itertools};
-use p3_commit::PolynomialSpace;
-use p3_dft::{divide_by_height, Butterfly, DifButterfly, DitButterfly};
+use itertools::{iterate, Itertools};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
-use tracing::{debug_span, instrument};
+use p3_util::reverse_slice_index_bits;
+use tracing::instrument;
 
 use crate::domain::CircleDomain;
 use crate::point::{compute_lagrange_den_batched, Point};
 use crate::{cfft_permute_index, cfft_permute_slice, CfftPermutable, CfftView};
 
+pub mod par_chunked;
+
+pub trait CfftAlgorithm<F: ComplexExtendable> {
+    fn interpolate<M: Matrix<F>>(&self, evals: CircleEvaluations<F, M>) -> RowMajorMatrix<F>;
+
+    fn evaluate(&self, domain: CircleDomain<F>, coeffs: RowMajorMatrix<F>) -> CircleEvaluations<F>;
+
+    #[instrument(skip_all, fields(
+        dims = %evals.values.dimensions(),
+        target = target_domain.log_n,
+    ))]
+    fn extrapolate<M: Matrix<F>>(
+        &self,
+        target_domain: CircleDomain<F>,
+        evals: CircleEvaluations<F, M>,
+    ) -> CircleEvaluations<F> {
+        assert!(target_domain.log_n >= evals.domain.log_n);
+        self.evaluate(target_domain, self.interpolate(evals))
+    }
+}
+
 #[derive(Clone)]
 pub struct CircleEvaluations<F, M = RowMajorMatrix<F>> {
     pub(crate) domain: CircleDomain<F>,
+    // Stored in "cfft order."
     pub(crate) values: M,
 }
 
@@ -42,63 +62,6 @@ impl<F: Copy + Send + Sync, M: Matrix<F>> CircleEvaluations<F, M> {
 }
 
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
-    pub fn interpolate(self) -> RowMajorMatrix<F> {
-        let CircleEvaluations { domain, values } = self;
-        let mut values = debug_span!("to_rmm").in_scope(|| values.to_row_major_matrix());
-
-        let mut twiddles = debug_span!("twiddles").in_scope(|| {
-            compute_twiddles(domain)
-                .into_iter()
-                .map(|ts| {
-                    batch_multiplicative_inverse(&ts)
-                        .into_iter()
-                        .map(|t| DifButterfly(t))
-                        .collect_vec()
-                })
-                .peekable()
-        });
-
-        assert_eq!(twiddles.len(), domain.log_n);
-
-        let par_twiddles = twiddles
-            .peeking_take_while(|ts| ts.len() >= desired_num_jobs())
-            .collect_vec();
-        if let Some(min_blks) = par_twiddles.last().map(|ts| ts.len()) {
-            let max_blk_sz = values.height() / min_blks;
-            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
-                values
-                    .par_row_chunks_exact_mut(max_blk_sz)
-                    .enumerate()
-                    .for_each(|(chunk_i, submat)| {
-                        for ts in &par_twiddles {
-                            let twiddle_chunk_sz = ts.len() / min_blks;
-                            let twiddle_chunk = &ts
-                                [(twiddle_chunk_sz * chunk_i)..(twiddle_chunk_sz * (chunk_i + 1))];
-                            serial_layer(submat.values, twiddle_chunk);
-                        }
-                    });
-            });
-        }
-
-        for ts in twiddles {
-            par_within_blk_layer(&mut values.values, &ts);
-        }
-
-        // TODO: omit this?
-        divide_by_height(&mut values);
-        values
-    }
-
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
-    pub fn extrapolate(
-        self,
-        target_domain: CircleDomain<F>,
-    ) -> CircleEvaluations<F, RowMajorMatrix<F>> {
-        assert!(target_domain.log_n >= self.domain.log_n);
-        CircleEvaluations::<F>::evaluate(target_domain, self.interpolate())
-    }
-
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         // Compute z_H
         let lagrange_num = self.domain.zeroifier(point);
@@ -123,7 +86,8 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     where
         M: Clone,
     {
-        let coeffs = self.clone().interpolate();
+        use par_chunked::ParChunkedCfft;
+        let coeffs = ParChunkedCfft::default().interpolate(self.clone());
         for (i, mut row) in coeffs.rows().enumerate() {
             if row.all(|x| x.is_zero()) {
                 return i;
@@ -131,90 +95,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         }
         coeffs.height()
     }
-}
-
-impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
-    #[instrument(skip_all, fields(dims = %coeffs.dimensions()))]
-    pub fn evaluate(domain: CircleDomain<F>, mut coeffs: RowMajorMatrix<F>) -> Self {
-        let log_n = log2_strict_usize(coeffs.height());
-        assert!(log_n <= domain.log_n);
-
-        if log_n < domain.log_n {
-            // We could simply pad coeffs like this:
-            // coeffs.pad_to_height(target_domain.size(), F::zero());
-            // But the first `added_bits` layers will simply fill out the zeros
-            // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
-            // both `x_1` and `x_2` are set to `x_1`).
-            // So instead we directly repeat the coeffs and skip the initial layers.
-            debug_span!("extend coeffs").in_scope(|| {
-                coeffs.values.reserve(domain.size() * coeffs.width());
-                for _ in log_n..domain.log_n {
-                    coeffs.values.extend_from_within(..);
-                }
-            });
-        }
-        assert_eq!(coeffs.height(), 1 << domain.log_n);
-
-        let mut twiddles = debug_span!("twiddles").in_scope(|| {
-            compute_twiddles(domain)
-                .into_iter()
-                .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
-                .rev()
-                .skip(domain.log_n - log_n)
-                .peekable()
-        });
-
-        for ts in twiddles.peeking_take_while(|ts| ts.len() < desired_num_jobs()) {
-            par_within_blk_layer(&mut coeffs.values, &ts);
-        }
-
-        let par_twiddles = twiddles.collect_vec();
-        if let Some(min_blks) = par_twiddles.first().map(|ts| ts.len()) {
-            let max_blk_sz = coeffs.height() / min_blks;
-            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
-                coeffs
-                    .par_row_chunks_exact_mut(max_blk_sz)
-                    .enumerate()
-                    .for_each(|(chunk_i, submat)| {
-                        for ts in &par_twiddles {
-                            let twiddle_chunk_sz = ts.len() / min_blks;
-                            let twiddle_chunk = &ts
-                                [(twiddle_chunk_sz * chunk_i)..(twiddle_chunk_sz * (chunk_i + 1))];
-                            serial_layer(submat.values, twiddle_chunk);
-                        }
-                    });
-            });
-        }
-
-        Self::from_cfft_order(domain, coeffs)
-    }
-}
-
-#[inline]
-fn serial_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
-    let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (lo, hi) = blk.split_at_mut(blk_sz / 2);
-        t.apply_to_rows(lo, hi);
-    }
-}
-
-#[inline]
-#[instrument(level = "debug", skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
-fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
-    let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (lo, hi) = blk.split_at_mut(blk_sz / 2);
-        let job_sz = core::cmp::max(1, lo.len() >> log2_ceil_usize(desired_num_jobs()));
-        lo.par_chunks_mut(job_sz)
-            .zip(hi.par_chunks_mut(job_sz))
-            .for_each(|(lo_job, hi_job)| t.apply_to_rows(lo_job, hi_job));
-    }
-}
-
-#[inline]
-fn desired_num_jobs() -> usize {
-    16 * current_num_threads()
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
@@ -280,6 +160,7 @@ mod tests {
     use itertools::iproduct;
     use p3_field::extension::BinomialExtensionField;
     use p3_mersenne_31::Mersenne31;
+    use par_chunked::ParChunkedCfft;
     use rand::{random, thread_rng};
 
     use super::*;
@@ -288,14 +169,27 @@ mod tests {
     type EF = BinomialExtensionField<F, 3>;
 
     #[test]
-    fn test_cfft_icfft() {
+    fn test_par_chunked_cfft() {
+        let cfft = ParChunkedCfft::default();
+        test_cfft_algo(&cfft);
+    }
+
+    fn test_cfft_algo<Cfft: CfftAlgorithm<F>>(cfft: &Cfft) {
+        test_cfft_icfft(cfft);
+        test_extrapolation(cfft);
+        eval_at_point_matches_cfft(cfft);
+        eval_at_point_matches_lde(cfft);
+    }
+
+    fn test_cfft_icfft<Cfft: CfftAlgorithm<F>>(cfft: &Cfft) {
         for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
             let shift = Point::generator(F::CIRCLE_TWO_ADICITY) * random();
             let domain = CircleDomain::<F>::new(log_n, shift);
             let trace = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, width);
-            let coeffs = CircleEvaluations::from_natural_order(domain, trace.clone()).interpolate();
+            let coeffs =
+                cfft.interpolate(CircleEvaluations::from_natural_order(domain, trace.clone()));
             assert_eq!(
-                CircleEvaluations::evaluate(domain, coeffs.clone())
+                cfft.evaluate(domain, coeffs.clone())
                     .to_natural_order()
                     .to_row_major_matrix(),
                 trace,
@@ -311,19 +205,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_extrapolation() {
+    fn test_extrapolation<Cfft: CfftAlgorithm<F>>(cfft: &Cfft) {
         for (log_n, log_blowup) in iproduct!(2..5, [1, 2, 3]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
                 RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, 11),
             );
-            let lde = evals
-                .clone()
-                .extrapolate(CircleDomain::standard(log_n + log_blowup));
+            let lde = cfft.extrapolate(CircleDomain::standard(log_n + log_blowup), evals.clone());
 
-            let coeffs = evals.interpolate();
-            let lde_coeffs = lde.interpolate();
+            let coeffs = cfft.interpolate(evals);
+            let lde_coeffs = cfft.interpolate(lde);
 
             for r in 0..coeffs.height() {
                 assert_eq!(&*coeffs.row_slice(r), &*lde_coeffs.row_slice(r));
@@ -334,8 +225,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn eval_at_point_matches_cfft() {
+    fn eval_at_point_matches_cfft<Cfft: CfftAlgorithm<F>>(cfft: &Cfft) {
         for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
@@ -346,34 +236,29 @@ mod tests {
 
             assert_eq!(
                 evals.clone().evaluate_at_point(pt),
-                evals
-                    .interpolate()
+                cfft.interpolate(evals)
                     .columnwise_dot_product(&circle_basis(pt, log_n))
             );
         }
     }
 
-    #[test]
-    fn eval_at_point_matches_lde() {
+    fn eval_at_point_matches_lde<Cfft: CfftAlgorithm<F>>(cfft: &Cfft) {
         for (log_n, width, log_blowup) in iproduct!(2..8, [1, 4, 11], [1, 2]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
                 RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, width),
             );
-            let lde = evals
-                .clone()
-                .extrapolate(CircleDomain::standard(log_n + log_blowup));
+            let lde = cfft.extrapolate(CircleDomain::standard(log_n + log_blowup), evals.clone());
             let zeta = Point::<EF>::from_projective_line(random());
             assert_eq!(evals.evaluate_at_point(zeta), lde.evaluate_at_point(zeta));
             assert_eq!(
                 evals.evaluate_at_point(zeta),
-                evals
-                    .interpolate()
+                cfft.interpolate(evals)
                     .columnwise_dot_product(&circle_basis(zeta, log_n))
             );
             assert_eq!(
                 lde.evaluate_at_point(zeta),
-                lde.interpolate()
+                cfft.interpolate(lde)
                     .columnwise_dot_product(&circle_basis(zeta, log_n + log_blowup))
             );
         }
