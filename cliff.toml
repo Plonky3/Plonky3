@@ -1,0 +1,47 @@
+# git-cliff ~ configuration file
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+# template for the changelog body
+# https://keats.github.io/tera/docs/#introduction
+body = """
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}\
+{% else %}\
+    ## [unreleased]\
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | upper_first }}
+    {% for commit in commits %}\
+        - {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }} ({{ commit.author.name }})
+    {% endfor %}\
+{% endfor %}\n
+"""
+
+# remove the leading and trailing whitespace from the templates
+trim = true
+
+[git]
+# parse the commits based on https://www.conventionalcommits.org
+conventional_commits = false
+# filter out the commits that are not conventional
+filter_unconventional = false
+# process each line of a commit as an individual commit
+split_commits = false
+
+# Take every commit and truncate all but the first line
+commit_preprocessors = [
+    { pattern = '(.*)(.|\n)*', replace = "$1" }
+]
+
+# Filter for PR merge commits
+commit_parsers = [
+    { message = '.*\(#[\d]+\).*', group = "Merged PRs" },
+]
+
+# filter out the commits that are not matched by commit parsers
+filter_commits = false
+# sort the tags topologically
+topo_order = false
+# sort the commits inside sections by oldest/newest order
+sort_commits = "oldest"
