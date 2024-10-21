@@ -1,8 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_baby_bear::BabyBear;
-use p3_field::PackedValue;
-use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use p3_symmetric::PseudoCompressionFunction;
 
 mod node_converter;
 
@@ -12,10 +10,10 @@ pub use node_converter::*;
 
 // TODO decide if converting the input to a reference brings about performance
 // improvements or at least doesn't incur overhead
-trait NodeConverter<W1, W2, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize> {
-    fn to_n2(n1: [W1; N1_ELEMS]) -> [W2; N2_ELEMS];
+trait NodeConverter<N1, N2> {
+    fn to_n2(n1: N1) -> N2;
 
-    fn to_n1(n2: [W2; N2_ELEMS]) -> [W1; N1_ELEMS];
+    fn to_n1(n2: N2) -> N1;
 }
 
 pub trait HybridPseudoCompressionFunction<T, const N: usize>: Clone {
@@ -23,30 +21,47 @@ pub trait HybridPseudoCompressionFunction<T, const N: usize>: Clone {
 }
 
 #[derive(Clone)]
-pub struct SimpleHybridCompressor<C1, C2, NC>
-where
+pub struct SimpleHybridCompressor<
+    C1,
+    C2,
+    W1,
+    W2,
+    const DIGEST_ELEMS_1: usize,
+    const DIGEST_ELEMS_2: usize,
+    NC,
+> where
     C1: Clone,
     C2: Clone,
+    W1: Clone,
+    W2: Clone,
     NC: Clone,
 {
     c1: C1,
     c2: C2,
-    nc: NC,
+    _marker: PhantomData<(W1, W2, NC)>,
 }
 
-impl<C1, C2, NC> SimpleHybridCompressor<C1, C2, NC>
+impl<C1, C2, W1, W2, NC, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize>
+    SimpleHybridCompressor<C1, C2, W1, W2, DIGEST_ELEMS_1, DIGEST_ELEMS_2, NC>
 where
     C1: Clone,
     C2: Clone,
     NC: Clone,
+    W1: Clone,
+    W2: Clone,
 {
-    pub fn new(c1: C1, c2: C2, nc: NC) -> Self {
-        Self { c1, c2, nc }
+    pub fn new(c1: C1, c2: C2) -> Self {
+        Self {
+            c1,
+            c2,
+            _marker: PhantomData,
+        }
     }
 }
 
-impl<C1, C2, W1, W2, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize, NC>
-    HybridPseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2> for SimpleHybridCompressor<C1, C2, NC>
+impl<C1, C2, W1, W2, NC, const DIGEST_ELEMS_1: usize, const DIGEST_ELEMS_2: usize>
+    HybridPseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2>
+    for SimpleHybridCompressor<C1, C2, W1, W2, DIGEST_ELEMS_1, DIGEST_ELEMS_2, NC>
 where
     C1: PseudoCompressionFunction<[W1; DIGEST_ELEMS_1], 2> + Clone,
     C2: PseudoCompressionFunction<[W2; DIGEST_ELEMS_2], 2> + Clone,
@@ -60,7 +75,6 @@ where
         sizes: &[usize],
         current_size: usize,
     ) -> [W1; DIGEST_ELEMS_1] {
-        // TODO
         if current_size == sizes[0] {
             self.c1.compress(input)
         } else {

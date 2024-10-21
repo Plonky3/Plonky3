@@ -23,9 +23,11 @@ use serde::Serialize;
 
 fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_poseidon2(criterion);
-    bench_bb_rescue(criterion);
-    bench_bb_blake3(criterion);
-    bench_bb_keccak(criterion);
+
+    // TODO reintroduce
+    // bench_bb_rescue(criterion);
+    // bench_bb_blake3(criterion);
+    // bench_bb_keccak(criterion);
 }
 
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
@@ -112,6 +114,14 @@ where
     let dims = matrix.dimensions();
     let leaves = vec![matrix];
 
+    // TODO remove
+    println!("\nF: {}", type_name::<P::Value>());
+    println!("\nP: {}", type_name::<P>());
+    println!("\nP::WIDTH: {}", P::WIDTH);
+    println!("\nDIGEST_ELEMENTS: {}", DIGEST_ELEMS);
+    println!("\nW: {}", type_name::<PW::Value>());
+    println!("\nPW: {}", type_name::<PW>());
+
     let name = format!(
         "MerkleTree::<{}, {}>::new",
         type_name::<H>(),
@@ -130,3 +140,27 @@ where
 
 criterion_group!(benches, bench_merkle_trees);
 criterion_main!(benches);
+
+// W = F
+
+// PW = [F0, F1, F2, F3]
+
+// [PW; DIGEST_ELEMENTS] = [
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+//     [F0, F1, F2, F3],
+// ]
+
+// [PW; DIGEST_ELEMENTS].unpack() =
+
+// SimpleHybridCompressor<NC>: HybridCompressionFunction<[BabyBear; 8], 2>
+// NC: [BabyBear; 8] <-> [u8; 32]
+
+// SimpleHybridCompressor<NC>: HybridCompressionFunction<[[BabyBear; 4]; 8], 2>
+//                                                      <[PW; DIGEST_ELEMENTS], 2>
+//                                                      <[PackedMontyField31Neon; 8]
