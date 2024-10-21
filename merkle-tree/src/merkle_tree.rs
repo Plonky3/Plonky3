@@ -275,7 +275,7 @@ where
 
 /// Converts a packed array `[P; N]` into its underlying `P::WIDTH` scalar arrays.
 #[inline]
-fn unpack_array<P: PackedValue, const N: usize>(
+pub(crate) fn unpack_array<P: PackedValue, const N: usize>(
     packed_digest: [P; N],
 ) -> impl Iterator<Item = [P::Value; N]> {
     (0..P::WIDTH).map(move |j| packed_digest.map(|p| p.as_slice()[j]))

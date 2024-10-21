@@ -1,13 +1,40 @@
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, BabyBearParameters};
-use p3_field::AbstractField;
+use p3_field::{AbstractField, PackedValue};
 use p3_monty_31::{MontyField31, MontyParameters};
 
 use super::NodeConverter;
+use crate::unpack_array;
 
 #[derive(Clone)]
 pub struct NodeConverter256BabyBearBytes {}
+
+impl<PW1, PW2> NodeConverter<[PW1; 8], [PW2; 32]> for NodeConverter256BabyBearBytes
+where
+    PW1: PackedValue<Value = BabyBear>,
+    PW2: PackedValue<Value = u8>,
+{
+    fn to_n1(input: [PW2; 32]) -> [PW1; 8] {
+        assert_eq!(PW1::WIDTH, PW2::WIDTH);
+
+        let values_w2 = unpack_array(input);
+        let values_w1 = values_w2
+            .map(|v| <Self as NodeConverter<[BabyBear; 8], [u8; 32]>>::to_n1(v))
+            .collect();
+        values_w1.try_into().unwrap()
+    }
+
+    fn to_n2(input: [PW1; 8]) -> [PW2; 32] {
+        assert_eq!(PW1::WIDTH, PW2::WIDTH);
+
+        let values_w1 = unpack_array(input);
+        let values_w2 = values_w1
+            .map(|v| <Self as NodeConverter<[BabyBear; 8], [u8; 32]>>::to_n2(v))
+            .collect();
+        values_w2.try_into().unwrap()
+    }
+}
 
 // TODO study endianness, security, etc.
 // TODO improve efficiency?
@@ -95,3 +122,37 @@ mod tests {
         }
     }
 }
+
+// SINGLE
+
+// 4. Construct the rest of the tree using Poseidon2 as the compression function
+//    (matrix of smaller sizes are digested into field elements already)
+
+// 3. Convert each [u8; 32] to one [BabyBear; 8]
+
+// 2. Compress each pair of [u8; 32] using Blake3
+
+// 1. Convert each node to one [u8; 32]
+
+// 0. Lowest level: digest rows into one [BabyBear; 8] each using Poseidon2
+
+// PACKED
+
+// 4. Construct the rest of the tree using Poseidon2 as the compression function
+//    (matrix of smaller sizes are digested into field elements already)
+
+// 3. Convert each [u8; 32] to one [BabyBear; 8]
+
+// 2. Compress each pair of [u8; 32] using Blake3
+
+// 1. Convert each WIDTH-package into one [[u8; WIDTH]; 32]
+
+// 0. Lowest level: digest rows into one [[BabyBear; WIDTH]; 8] per WIDTH-package each using Poseidon2
+
+// Poseidon2, packaged
+// C: PseudoCompressionFunction<[[BabyBear; 4]; 8], 2>
+// Packaged nodes have 128 bytes
+
+// Blake3, packaged
+// C: PseudoCompressionFunction<[[u8; 1]; 32], 2>
+// Packaged nodes have 32 bytes

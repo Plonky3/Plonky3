@@ -22,7 +22,9 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 fn bench_merkle_trees(criterion: &mut Criterion) {
-    bench_bb_poseidon2(criterion);
+    // TODO reintroduce
+    // bench_bb_poseidon2(criterion);
+    bench_bb_poseidon2_single(criterion);
 
     // TODO reintroduce
     // bench_bb_rescue(criterion);
@@ -47,6 +49,25 @@ fn bench_bb_poseidon2(criterion: &mut Criterion) {
     let c = C::new(perm);
 
     bench_merkle_tree::<<F as Field>::Packing, <F as Field>::Packing, H, C, 8>(criterion, h, c);
+}
+
+fn bench_bb_poseidon2_single(criterion: &mut Criterion) {
+    type F = BabyBear;
+
+    type Perm = Poseidon2<BabyBear, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
+    let perm = Perm::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixBabyBear::default(),
+        &mut thread_rng(),
+    );
+
+    type H = PaddingFreeSponge<Perm, 16, 8, 8>;
+    let h = H::new(perm.clone());
+
+    type C = TruncatedPermutation<Perm, 2, 8, 16>;
+    let c = C::new(perm);
+
+    bench_merkle_tree::<F, F, H, C, 8>(criterion, h, c);
 }
 
 fn bench_bb_rescue(criterion: &mut Criterion) {
