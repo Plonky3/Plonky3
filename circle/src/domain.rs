@@ -238,7 +238,7 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-    use crate::{par_chunked::ParChunkedCfft, CfftAlgorithm, CircleEvaluations};
+    use crate::{CfftAlgorithm, CircleEvaluations, ParChunkedCfft};
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
         let pts = d.points().collect_vec();

@@ -136,7 +136,7 @@ mod tests {
     use rand::{random, thread_rng};
 
     use super::*;
-    use crate::{par_chunked::ParChunkedCfft, CfftAlgorithm, CircleEvaluations};
+    use crate::{CfftAlgorithm, CircleEvaluations, ParChunkedCfft};
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;

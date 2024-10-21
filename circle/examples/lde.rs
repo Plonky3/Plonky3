@@ -2,8 +2,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use p3_baby_bear::BabyBear;
-use p3_circle::par_chunked::ParChunkedCfft;
-use p3_circle::{CfftAlgorithm, CircleDomain, CircleEvaluations};
+use p3_circle::{CfftAlgorithm, CircleDomain, CircleEvaluations, ParChunkedCfft};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::AbstractField;
 use p3_matrix::dense::RowMajorMatrix;

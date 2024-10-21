@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use p3_challenger::DuplexChallenger;
-use p3_circle::CirclePcs;
+use p3_circle::{CirclePcs, ParChunkedCfft};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
@@ -64,8 +64,12 @@ fn main() -> Result<(), impl Debug> {
         mmcs: challenge_mmcs,
     };
 
-    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+    type Cfft = ParChunkedCfft<Val>;
+    let cfft = Cfft::default();
+
+    type Pcs = CirclePcs<Val, Cfft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
+        cfft,
         mmcs: val_mmcs,
         fri_config,
         _phantom: PhantomData,

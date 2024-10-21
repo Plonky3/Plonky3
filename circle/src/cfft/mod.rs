@@ -14,7 +14,9 @@ use crate::domain::CircleDomain;
 use crate::point::{compute_lagrange_den_batched, Point};
 use crate::{cfft_permute_index, cfft_permute_slice, CfftPermutable, CfftView};
 
-pub mod par_chunked;
+mod par_chunked;
+
+pub use par_chunked::ParChunkedCfft;
 
 pub trait CfftAlgorithm<F: ComplexExtendable> {
     fn interpolate<M: Matrix<F>>(&self, evals: CircleEvaluations<F, M>) -> RowMajorMatrix<F>;

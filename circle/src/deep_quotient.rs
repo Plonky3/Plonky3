@@ -129,7 +129,7 @@ mod tests {
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};
 
-    use crate::{par_chunked::ParChunkedCfft, CfftAlgorithm};
+    use crate::{CfftAlgorithm, ParChunkedCfft};
 
     use super::*;
 

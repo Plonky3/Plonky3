@@ -489,7 +489,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
-    use crate::par_chunked::ParChunkedCfft;
+    use crate::ParChunkedCfft;
 
     use super::*;
 

@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
-use p3_circle::CirclePcs;
+use p3_circle::{CirclePcs, ParChunkedCfft};
 use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -292,8 +292,12 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         mmcs: challenge_mmcs,
     };
 
-    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+    type Cfft = ParChunkedCfft<Val>;
+    let cfft = Cfft::default();
+
+    type Pcs = CirclePcs<Val, Cfft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
+        cfft,
         mmcs: val_mmcs,
         fri_config,
         _phantom: PhantomData,
