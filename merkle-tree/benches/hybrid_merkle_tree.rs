@@ -43,10 +43,10 @@ fn main() {
     // println!("Size of value: {} bytes", std::mem::size_of::<<<BabyBear as Field>::Packing as PackedValue>::Value>());
     // println!("Width: {}", <<BabyBear as Field>::Packing as PackedValue>::WIDTH);
 
-    let h_hybrid: SimpleHybridHasher<HPoseidon, HBlake3, BabyBear, BabyBear, u8, 8, 32> =
-        SimpleHybridHasher::new::<<BabyBear as Field>::Packing, <BabyBear as Field>::Packing>(
-            h_poseidon, h_blake3,
-        );
+    // let h_hybrid: SimpleHybridHasher<HPoseidon, HBlake3, BabyBear, BabyBear, u8, 8, 32> =
+    //     SimpleHybridHasher::new::<<BabyBear as Field>::Packing, <BabyBear as Field>::Packing>(
+    //         h_poseidon, h_blake3,
+    //     );
 
     // let c_hybrid = SimpleHybridCompressor::<_, _, <BabyBear as Field>::Packing, <BabyBear as Field>::Packing::new(c_poseidon, c_blake3);
     // let c_hybrid = SimpleHybridCompressor::new(c_poseidon, c_blake3);
@@ -57,7 +57,7 @@ fn main() {
 
     println!("ELEMENTS:\n{:?}\n{:?}", dat1, dat2);
 
-    let dig1 = h_hybrid.hash_iter(dat1);
+    // let dig1 = h_hybrid.hash_iter(dat1);
     // let dig2 = h_hybrid.hash_iter(dat2);
 
     // c_hybrid.compress([[0; 16]; 2], &[8, 8], 16);

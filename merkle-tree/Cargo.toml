@@ -27,8 +27,10 @@ rand = "0.8.5"
 
 [[bench]]
 name = "merkle_tree"
+path = "benches/merkle_tree.rs"
 harness = false
 
 [[bench]]
 name = "hybrid_merkle_tree"
+path = "benches/hybrid_merkle_tree.rs"
 harness = false
