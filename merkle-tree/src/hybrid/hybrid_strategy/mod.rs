@@ -1,5 +1,6 @@
 use core::marker::PhantomData;
 
+use log::log;
 use p3_symmetric::PseudoCompressionFunction;
 
 mod node_converter;
@@ -76,8 +77,22 @@ where
         current_size: usize,
     ) -> [W1; DIGEST_ELEMS_1] {
         if current_size == sizes[0] {
+            // TODO remove
+            log::info!(
+                " - compressing with H1 (sizes: {:?}, current_size: {})",
+                sizes,
+                current_size
+            );
+
             self.c1.compress(input)
         } else {
+            // TODO remove
+            log::info!(
+                " - compressing with H2 (sizes: {:?}, current_size: {})",
+                sizes,
+                current_size
+            );
+
             let [input_0, input_1] = input;
             let input_w2 = [NC::to_n2(input_0), NC::to_n2(input_1)];
             NC::to_n1(self.c2.compress(input_w2))
