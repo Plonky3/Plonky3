@@ -4,7 +4,7 @@
 //! > For the partial rounds, the MDS property is not required anymore, and
 //! > we can set up the matrix MI focusing only on providing full diffusion, breaking
 //! > arbitrarily long subspace trails, and ensuring that the polynomial representation
-//! > of the scheme is dense." (Section 5.2)
+//! > of the scheme is dense. (Section 5.2)
 //!
 //! This file implements a trait for linear layers that satisfy these three properties.
 

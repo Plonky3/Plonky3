@@ -38,7 +38,7 @@ fn main() -> Result<(), impl Debug> {
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(byte_hash);
 
-    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
 
     type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
@@ -47,8 +47,8 @@ fn main() -> Result<(), impl Debug> {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = SerializingChallenger64<Val, HashChallenger<u8, ByteHash, 32>>;
 

@@ -16,7 +16,6 @@ use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::thread_rng;
 
 /// For testing the public values feature
-
 pub struct FibonacciAir {}
 
 impl<F> BaseAir<F> for FibonacciAir {
@@ -58,8 +57,7 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
 pub fn generate_trace_rows<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajorMatrix<F> {
     assert!(n.is_power_of_two());
 
-    let mut trace =
-        RowMajorMatrix::new(vec![F::zero(); n * NUM_FIBONACCI_COLS], NUM_FIBONACCI_COLS);
+    let mut trace = RowMajorMatrix::new(F::zero_vec(n * NUM_FIBONACCI_COLS), NUM_FIBONACCI_COLS);
 
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<FibonacciRow<F>>() };
     assert!(prefix.is_empty(), "Alignment should match");
@@ -109,7 +107,7 @@ type ValMmcs =
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-type Dft = Radix2DitParallel;
+type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
@@ -120,7 +118,7 @@ fn test_public_value() {
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let dft = Dft {};
+    let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let fri_config = FriConfig {
         log_blowup: 2,
@@ -150,7 +148,7 @@ fn test_incorrect_public_value() {
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let dft = Dft {};
+    let dft = Dft::default();
     let fri_config = FriConfig {
         log_blowup: 2,
         num_queries: 28,

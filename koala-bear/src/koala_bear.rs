@@ -208,7 +208,11 @@ mod tests {
 
     test_field_dft!(radix2dit, crate::KoalaBear, p3_dft::Radix2Dit<_>);
     test_field_dft!(bowers, crate::KoalaBear, p3_dft::Radix2Bowers);
-    test_field_dft!(parallel, crate::KoalaBear, p3_dft::Radix2DitParallel);
+    test_field_dft!(
+        parallel,
+        crate::KoalaBear,
+        p3_dft::Radix2DitParallel::<crate::KoalaBear>
+    );
     test_field_dft!(
         recur_dft,
         crate::KoalaBear,

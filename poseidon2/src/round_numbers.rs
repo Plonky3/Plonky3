@@ -15,7 +15,7 @@
 //!
 //! Thus, if some tuple (M, p, WIDTH, D, RF, RP) satisfies all constraints, then so will
 //! the tuple (M, q, WIDTH, D, RF, RP) for any 2^30 < q < p.
-//! Moreover if RF, RP are the "optimal" round numbers (Optimal meaning minimising the number of s-box operations we need to perform)
+//! Moreover if RF, RP are the "optimal" round numbers (Optimal meaning minimising the number of S-box operations we need to perform)
 //! for two tuples (M, p, WIDTH, D) and (M, q, WIDTH, D), then
 //! they will also be optimal for (M, r, WIDTH, D) for any q < r < p.
 //!

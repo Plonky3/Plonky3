@@ -1,4 +1,5 @@
 use alloc::rc::Rc;
+use core::cmp;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -9,7 +10,7 @@ use crate::symbolic_variable::SymbolicVariable;
 
 /// An expression over `SymbolicVariable`s.
 #[derive(Clone, Debug)]
-pub enum SymbolicExpression<F: Field> {
+pub enum SymbolicExpression<F> {
     Variable(SymbolicVariable<F>),
     IsFirstRow,
     IsLastRow,
@@ -36,7 +37,7 @@ pub enum SymbolicExpression<F: Field> {
     },
 }
 
-impl<F: Field> SymbolicExpression<F> {
+impl<F> SymbolicExpression<F> {
     /// Returns the multiple of `n` (the trace length) in this expression's degree.
     pub const fn degree_multiple(&self) -> usize {
         match self {
@@ -131,81 +132,76 @@ impl<F: Field> AbstractField for SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> Add for SymbolicExpression<F> {
+impl<F: Field, T> Add<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
     type Output = Self;
 
-    fn add(self, rhs: Self) -> Self {
-        let degree_multiple = self.degree_multiple().max(rhs.degree_multiple());
-        Self::Add {
-            x: Rc::new(self),
-            y: Rc::new(rhs),
-            degree_multiple,
+    fn add(self, rhs: T) -> Self {
+        let rhs = rhs.into();
+        match (self, rhs) {
+            (Self::Constant(lhs), Self::Constant(rhs)) => Self::Constant(lhs + rhs),
+            (lhs, rhs) => {
+                let degree_multiple = cmp::max(lhs.degree_multiple(), rhs.degree_multiple());
+                Self::Add {
+                    x: Rc::new(lhs),
+                    y: Rc::new(rhs),
+                    degree_multiple,
+                }
+            }
         }
     }
 }
 
-impl<F: Field> Add<F> for SymbolicExpression<F> {
+impl<F: Field, T> AddAssign<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
+    fn add_assign(&mut self, rhs: T) {
+        *self = self.clone() + rhs.into();
+    }
+}
+
+impl<F: Field, T> Sum<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
+    fn sum<I: Iterator<Item = T>>(iter: I) -> Self {
+        iter.map(Into::into)
+            .reduce(|x, y| x + y)
+            .unwrap_or(Self::zero())
+    }
+}
+
+impl<F: Field, T> Sub<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
     type Output = Self;
 
-    fn add(self, rhs: F) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl<F: Field> AddAssign for SymbolicExpression<F> {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = self.clone() + rhs;
-    }
-}
-
-impl<F: Field> AddAssign<F> for SymbolicExpression<F> {
-    fn add_assign(&mut self, rhs: F) {
-        *self += Self::from(rhs);
-    }
-}
-
-impl<F: Field> Sum for SymbolicExpression<F> {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
-    }
-}
-
-impl<F: Field> Sum<F> for SymbolicExpression<F> {
-    fn sum<I: Iterator<Item = F>>(iter: I) -> Self {
-        iter.map(|x| Self::from(x)).sum()
-    }
-}
-
-impl<F: Field> Sub for SymbolicExpression<F> {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self {
-        let degree_multiple = self.degree_multiple().max(rhs.degree_multiple());
-        Self::Sub {
-            x: Rc::new(self),
-            y: Rc::new(rhs),
-            degree_multiple,
+    fn sub(self, rhs: T) -> Self {
+        let rhs = rhs.into();
+        match (self, rhs) {
+            (Self::Constant(lhs), Self::Constant(rhs)) => Self::Constant(lhs - rhs),
+            (lhs, rhs) => {
+                let degree_multiple = cmp::max(lhs.degree_multiple(), rhs.degree_multiple());
+                Self::Sub {
+                    x: Rc::new(lhs),
+                    y: Rc::new(rhs),
+                    degree_multiple,
+                }
+            }
         }
     }
 }
 
-impl<F: Field> Sub<F> for SymbolicExpression<F> {
-    type Output = Self;
-
-    fn sub(self, rhs: F) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl<F: Field> SubAssign for SymbolicExpression<F> {
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = self.clone() - rhs;
-    }
-}
-
-impl<F: Field> SubAssign<F> for SymbolicExpression<F> {
-    fn sub_assign(&mut self, rhs: F) {
-        *self -= Self::from(rhs);
+impl<F: Field, T> SubAssign<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
+    fn sub_assign(&mut self, rhs: T) {
+        *self = self.clone() - rhs.into();
     }
 }
 
@@ -213,56 +209,58 @@ impl<F: Field> Neg for SymbolicExpression<F> {
     type Output = Self;
 
     fn neg(self) -> Self {
-        let degree_multiple = self.degree_multiple();
-        Self::Neg {
-            x: Rc::new(self),
-            degree_multiple,
+        match self {
+            Self::Constant(c) => Self::Constant(-c),
+            expr => {
+                let degree_multiple = expr.degree_multiple();
+                Self::Neg {
+                    x: Rc::new(expr),
+                    degree_multiple,
+                }
+            }
         }
     }
 }
 
-impl<F: Field> Mul for SymbolicExpression<F> {
+impl<F: Field, T> Mul<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
     type Output = Self;
 
-    fn mul(self, rhs: Self) -> Self {
-        #[allow(clippy::suspicious_arithmetic_impl)]
-        let degree_multiple = self.degree_multiple() + rhs.degree_multiple();
-        Self::Mul {
-            x: Rc::new(self),
-            y: Rc::new(rhs),
-            degree_multiple,
+    fn mul(self, rhs: T) -> Self {
+        let rhs = rhs.into();
+        match (self, rhs) {
+            (Self::Constant(lhs), Self::Constant(rhs)) => Self::Constant(lhs * rhs),
+            (lhs, rhs) => {
+                #[allow(clippy::suspicious_arithmetic_impl)]
+                let degree_multiple = lhs.degree_multiple() + rhs.degree_multiple();
+                Self::Mul {
+                    x: Rc::new(lhs),
+                    y: Rc::new(rhs),
+                    degree_multiple,
+                }
+            }
         }
     }
 }
 
-impl<F: Field> Mul<F> for SymbolicExpression<F> {
-    type Output = Self;
-
-    fn mul(self, rhs: F) -> Self {
-        self * Self::from(rhs)
+impl<F: Field, T> MulAssign<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
+    fn mul_assign(&mut self, rhs: T) {
+        *self = self.clone() * rhs.into();
     }
 }
 
-impl<F: Field> MulAssign for SymbolicExpression<F> {
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = self.clone() * rhs;
-    }
-}
-
-impl<F: Field> MulAssign<F> for SymbolicExpression<F> {
-    fn mul_assign(&mut self, rhs: F) {
-        *self *= Self::from(rhs);
-    }
-}
-
-impl<F: Field> Product for SymbolicExpression<F> {
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
-    }
-}
-
-impl<F: Field> Product<F> for SymbolicExpression<F> {
-    fn product<I: Iterator<Item = F>>(iter: I) -> Self {
-        iter.map(|x| Self::from(x)).product()
+impl<F: Field, T> Product<T> for SymbolicExpression<F>
+where
+    T: Into<Self>,
+{
+    fn product<I: Iterator<Item = T>>(iter: I) -> Self {
+        iter.map(Into::into)
+            .reduce(|x, y| x * y)
+            .unwrap_or(Self::one())
     }
 }

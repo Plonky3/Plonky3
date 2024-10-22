@@ -107,7 +107,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         //                    = (1/2 + beta/2 g_inv^i) p(g^i)
         //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
         let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-        let one_half = F::two().inverse();
+        let one_half = F::one().halve();
         let half_beta = beta * one_half;
 
         // TODO: vectorize this (after we have packed extension fields)

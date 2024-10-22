@@ -1,3 +1,4 @@
+use core::iter::Chain;
 use core::ops::Deref;
 
 use crate::Matrix;
@@ -5,8 +6,15 @@ use crate::Matrix;
 /// A combination of two matrices, stacked together vertically.
 #[derive(Copy, Clone, Debug)]
 pub struct VerticalPair<First, Second> {
-    first: First,
-    second: Second,
+    pub first: First,
+    pub second: Second,
+}
+
+/// A combination of two matrices, stacked together horizontally.
+#[derive(Copy, Clone, Debug)]
+pub struct HorizontalPair<First, Second> {
+    pub first: First,
+    pub second: Second,
 }
 
 impl<First, Second> VerticalPair<First, Second> {
@@ -17,6 +25,18 @@ impl<First, Second> VerticalPair<First, Second> {
         Second: Matrix<T>,
     {
         assert_eq!(first.width(), second.width());
+        Self { first, second }
+    }
+}
+
+impl<First, Second> HorizontalPair<First, Second> {
+    pub fn new<T>(first: First, second: Second) -> Self
+    where
+        T: Send + Sync,
+        First: Matrix<T>,
+        Second: Matrix<T>,
+    {
+        assert_eq!(first.height(), second.height());
         Self { first, second }
     }
 }
@@ -59,6 +79,35 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         } else {
             EitherRow::Right(self.second.row_slice(r - self.first.height()))
         }
+    }
+}
+
+impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
+    for HorizontalPair<First, Second>
+{
+    fn width(&self) -> usize {
+        self.first.width() + self.second.width()
+    }
+
+    fn height(&self) -> usize {
+        self.first.height()
+    }
+
+    fn get(&self, r: usize, c: usize) -> T {
+        if c < self.first.width() {
+            self.first.get(r, c)
+        } else {
+            self.second.get(r, c - self.first.width())
+        }
+    }
+
+    type Row<'a>
+        = Chain<First::Row<'a>, Second::Row<'a>>
+    where
+        Self: 'a;
+
+    fn row(&self, r: usize) -> Self::Row<'_> {
+        self.first.row(r).chain(self.second.row(r))
     }
 }
 

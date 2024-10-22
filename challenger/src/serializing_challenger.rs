@@ -77,6 +77,16 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
     }
 }
 
+impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u64, N>>
+    for SerializingChallenger32<F, Inner>
+{
+    fn observe(&mut self, values: Hash<F, u64, N>) {
+        for value in values {
+            self.inner.observe_slice(&value.to_le_bytes());
+        }
+    }
+}
+
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
@@ -86,7 +96,8 @@ where
     fn sample(&mut self) -> EF {
         let modulus = F::ORDER_U64 as u32;
         let log_size = log2_ceil_u64(F::ORDER_U64);
-        let pow_of_two_bound = (1 << log_size) - 1;
+        // We use u64 to avoid overflow in the case that log_size = 32.
+        let pow_of_two_bound = ((1u64 << log_size) - 1) as u32;
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
             let value = u32::from_le_bytes(inner.sample_array::<4>());
@@ -183,8 +194,10 @@ where
 {
     fn sample(&mut self) -> EF {
         let modulus = F::ORDER_U64;
-        let log_size = log2_ceil_u64(F::ORDER_U64);
-        let pow_of_two_bound = (1 << log_size) - 1;
+        let log_size = log2_ceil_u64(F::ORDER_U64) as u32;
+        // We use u128 to avoid overflow in the case that log_size = 64.
+        let pow_of_two_bound = ((1u128 << log_size) - 1) as u64;
+
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
             let value = u64::from_le_bytes(inner.sample_array::<8>());

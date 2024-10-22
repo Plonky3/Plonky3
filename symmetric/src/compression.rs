@@ -1,11 +1,11 @@
-use core::marker::PhantomData;
-
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
 
-/// An `n`-to-1 compression function, like `CompressionFunction`, except that it need only be
-/// collision-resistant in a hash tree setting, where the preimage of a non-leaf node must consist
-/// of compression outputs.
+/// An `N`-to-1 compression function collision-resistant in a hash tree setting.
+///
+/// Unlike `CompressionFunction`, it may not be collision-resistant in general.
+/// Instead it is only collision-resistant in hash-tree like settings where
+/// the preimage of a non-leaf node must consist of compression outputs.
 pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
     fn compress(&self, input: [T; N]) -> T;
 }
@@ -44,30 +44,18 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub struct CompressionFunctionFromHasher<T, H, const N: usize, const CHUNK: usize>
-where
-    T: Clone,
-    H: CryptographicHasher<T, [T; CHUNK]>,
-{
+pub struct CompressionFunctionFromHasher<H, const N: usize, const CHUNK: usize> {
     hasher: H,
-    _phantom: PhantomData<T>,
 }
 
-impl<T, H, const N: usize, const CHUNK: usize> CompressionFunctionFromHasher<T, H, N, CHUNK>
-where
-    T: Clone,
-    H: CryptographicHasher<T, [T; CHUNK]>,
-{
+impl<H, const N: usize, const CHUNK: usize> CompressionFunctionFromHasher<H, N, CHUNK> {
     pub const fn new(hasher: H) -> Self {
-        Self {
-            hasher,
-            _phantom: PhantomData,
-        }
+        Self { hasher }
     }
 }
 
 impl<T, H, const N: usize, const CHUNK: usize> PseudoCompressionFunction<[T; CHUNK], N>
-    for CompressionFunctionFromHasher<T, H, N, CHUNK>
+    for CompressionFunctionFromHasher<H, N, CHUNK>
 where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
@@ -78,7 +66,7 @@ where
 }
 
 impl<T, H, const N: usize, const CHUNK: usize> CompressionFunction<[T; CHUNK], N>
-    for CompressionFunctionFromHasher<T, H, N, CHUNK>
+    for CompressionFunctionFromHasher<H, N, CHUNK>
 where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,

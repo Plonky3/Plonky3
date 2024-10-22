@@ -1,9 +1,11 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -481,6 +483,12 @@ impl AbstractField for PackedMersenne31AVX2 {
             _ => self.exp_u64(POWER),
         }
     }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+    }
 }
 
 impl Add<Mersenne31> for PackedMersenne31AVX2 {
@@ -728,7 +736,9 @@ unsafe impl PackedValue for PackedMersenne31AVX2 {
 
 unsafe impl PackedField for PackedMersenne31AVX2 {
     type Scalar = Mersenne31;
+}
 
+unsafe impl PackedFieldPow2 for PackedMersenne31AVX2 {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());

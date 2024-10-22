@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -48,7 +48,7 @@ fn interleave<T: Copy + Default>(arr1: &[T], arr2: &[T], i: usize) -> (Vec<T>, V
 
 fn test_interleave<PF>(i: usize)
 where
-    PF: PackedField + Eq,
+    PF: PackedFieldPow2 + Eq,
     Standard: Distribution<PF::Scalar>,
 {
     assert!(PF::WIDTH % i == 0);
@@ -78,7 +78,7 @@ where
 
 pub fn test_interleaves<PF>()
 where
-    PF: PackedField + Eq,
+    PF: PackedFieldPow2 + Eq,
     Standard: Distribution<PF::Scalar>,
 {
     let mut i = 1;

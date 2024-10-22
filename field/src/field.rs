@@ -44,11 +44,38 @@ pub trait AbstractField:
     fn neg_one() -> Self;
 
     fn from_f(f: Self::F) -> Self;
+
+    /// Convert from a `bool`.
     fn from_bool(b: bool) -> Self;
+
+    /// Convert from a canonical `u8`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u8(n: u8) -> Self;
+
+    /// Convert from a canonical `u16`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u16(n: u16) -> Self;
+
+    /// Convert from a canonical `u32`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u32(n: u32) -> Self;
+
+    /// Convert from a canonical `u64`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_u64(n: u64) -> Self;
+
+    /// Convert from a canonical `usize`.
+    ///
+    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
+    /// behavior is undefined.
     fn from_canonical_usize(n: usize) -> Self;
 
     fn from_wrapped_u32(n: u32) -> Self;
@@ -156,6 +183,18 @@ pub trait AbstractField:
         Self: Mul<Rhs>,
     {
         rhs.try_inverse().map(|inv| self * inv)
+    }
+
+    /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
+    /// before assigning them to a userspace process. In that case, our process should not need to
+    /// write zeros, which would be redundant. However, the compiler may not always recognize this.
+    ///
+    /// In particular, `vec![Self::zero(); len]` appears to result in redundant userspace zeroing.
+    /// This is the default implementation, but implementors may wish to provide their own
+    /// implementation which transmutes something like `vec![0u32; len]`.
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        vec![Self::zero(); len]
     }
 }
 
@@ -301,6 +340,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// Similar to `core:array::from_fn`, with the same caveats as
     /// `from_base_slice`.
     fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
+    fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
 
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
@@ -384,6 +424,10 @@ impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
     fn from_base_slice(bs: &[AF]) -> Self {
         assert_eq!(bs.len(), 1);
         bs[0].clone()
+    }
+
+    fn from_base_iter<I: Iterator<Item = AF>>(mut iter: I) -> Self {
+        iter.next().unwrap()
     }
 
     fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {

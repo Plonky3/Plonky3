@@ -18,7 +18,7 @@ fn bench_lde(c: &mut Criterion) {
     g.sample_size(10);
     lde_cfft(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2Dit<_>, _>(&mut g, log_n, log_w);
-    lde_twoadic::<BabyBear, Radix2DitParallel, _>(&mut g, log_n, log_w);
+    lde_twoadic::<BabyBear, Radix2DitParallel<_>, _>(&mut g, log_n, log_w);
     lde_twoadic::<BabyBear, Radix2Bowers, _>(&mut g, log_n, log_w);
 }
 

@@ -1,5 +1,6 @@
 use alloc::format;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
@@ -7,6 +8,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
+use p3_util::convert_vec;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
@@ -18,7 +20,8 @@ use crate::{
     field_to_array, AbstractExtensionField, AbstractField, ExtensionField, Packable, TwoAdicField,
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
+#[repr(transparent)] // to make the zero_vec implementation safe
 pub struct BinomialExtensionField<AF, const D: usize> {
     #[serde(
         with = "p3_util::array_serialization",
@@ -117,63 +120,77 @@ where
 {
     type F = BinomialExtensionField<AF::F, D>;
 
+    #[inline]
     fn zero() -> Self {
         Self {
-            value: field_to_array::<AF, D>(AF::zero()),
+            value: array::from_fn(|_| AF::zero()),
         }
     }
+
+    #[inline]
     fn one() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::one()),
         }
     }
+
+    #[inline]
     fn two() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::two()),
         }
     }
+
+    #[inline]
     fn neg_one() -> Self {
         Self {
             value: field_to_array::<AF, D>(AF::neg_one()),
         }
     }
 
+    #[inline]
     fn from_f(f: Self::F) -> Self {
         Self {
             value: f.value.map(AF::from_f),
         }
     }
 
+    #[inline]
     fn from_bool(b: bool) -> Self {
         AF::from_bool(b).into()
     }
 
+    #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         AF::from_canonical_u8(n).into()
     }
 
+    #[inline]
     fn from_canonical_u16(n: u16) -> Self {
         AF::from_canonical_u16(n).into()
     }
 
+    #[inline]
     fn from_canonical_u32(n: u32) -> Self {
         AF::from_canonical_u32(n).into()
     }
 
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
     fn from_canonical_u64(n: u64) -> Self {
         AF::from_canonical_u64(n).into()
     }
 
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
     fn from_canonical_usize(n: usize) -> Self {
         AF::from_canonical_usize(n).into()
     }
 
+    #[inline]
     fn from_wrapped_u32(n: u32) -> Self {
         AF::from_wrapped_u32(n).into()
     }
 
+    #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         AF::from_wrapped_u64(n).into()
     }
@@ -194,14 +211,19 @@ where
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
-            3 => Self {
-                value: cubic_square(&self.value, AF::F::w())
-                    .to_vec()
-                    .try_into()
-                    .unwrap(),
-            },
+            3 => {
+                let mut res = Self::default();
+                cubic_square(&self.value, &mut res.value, AF::F::w());
+                res
+            }
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
         }
+    }
+
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(AF::zero_vec(len * D)) }
     }
 }
 
@@ -297,10 +319,9 @@ where
     type Output = Self;
 
     #[inline]
-    fn add(self, rhs: AF) -> Self {
-        let mut res = self.value;
-        res[0] += rhs;
-        Self { value: res }
+    fn add(mut self, rhs: AF) -> Self {
+        self.value[0] += rhs;
+        self
     }
 }
 
@@ -309,8 +330,11 @@ where
     AF: AbstractField,
     AF::F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        *self = self.clone() + rhs;
+        for i in 0..D {
+            self.value[i] += rhs.value[i].clone();
+        }
     }
 }
 
@@ -319,8 +343,9 @@ where
     AF: AbstractField,
     AF::F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn add_assign(&mut self, rhs: AF) {
-        *self = self.clone() + rhs;
+        self.value[0] += rhs;
     }
 }
 
@@ -402,21 +427,18 @@ where
     fn mul(self, rhs: Self) -> Self {
         let a = self.value;
         let b = rhs.value;
+        let mut res = Self::default();
         let w = AF::F::w();
         let w_af = AF::from_f(w);
 
         match D {
             2 => {
-                let mut res = Self::default();
                 res.value[0] = a[0].clone() * b[0].clone() + a[1].clone() * w_af * b[1].clone();
                 res.value[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
-                res
             }
-            3 => Self {
-                value: cubic_mul(&a, &b, w).to_vec().try_into().unwrap(),
-            },
-            _ => {
-                let mut res = Self::default();
+            3 => cubic_mul(&a, &b, &mut res.value, w_af),
+            _ =>
+            {
                 #[allow(clippy::needless_range_loop)]
                 for i in 0..D {
                     for j in 0..D {
@@ -427,9 +449,9 @@ where
                         }
                     }
                 }
-                res
             }
         }
+        res
     }
 }
 
@@ -468,6 +490,7 @@ where
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         self * rhs.inverse()
     }
@@ -521,9 +544,7 @@ where
 
     #[inline]
     fn from_base_slice(bs: &[AF]) -> Self {
-        Self {
-            value: bs.to_vec().try_into().expect("slice has wrong length"),
-        }
+        Self::from_base_fn(|i| bs[i].clone())
     }
 
     #[inline]
@@ -531,6 +552,15 @@ where
         Self {
             value: array::from_fn(f),
         }
+    }
+
+    #[inline]
+    fn from_base_iter<I: Iterator<Item = AF>>(iter: I) -> Self {
+        let mut res = Self::default();
+        for (i, b) in iter.enumerate() {
+            res.value[i] = b;
+        }
+        res
     }
 
     #[inline]
@@ -596,33 +626,38 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-fn cubic_mul<AF: AbstractField>(a: &[AF], b: &[AF], w: AF::F) -> [AF; 3] {
+fn cubic_mul<AF: AbstractField, const D: usize>(
+    a: &[AF; D],
+    b: &[AF; D],
+    res: &mut [AF; D],
+    w: AF,
+) {
+    assert_eq!(D, 3);
+
     let a0_b0 = a[0].clone() * b[0].clone();
     let a1_b1 = a[1].clone() * b[1].clone();
     let a2_b2 = a[2].clone() * b[2].clone();
 
-    let c0 = a0_b0.clone()
+    res[0] = a0_b0.clone()
         + ((a[1].clone() + a[2].clone()) * (b[1].clone() + b[2].clone())
             - a1_b1.clone()
             - a2_b2.clone())
-            * AF::from_f(w);
-    let c1 = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
+            * w.clone();
+    res[1] = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
         - a0_b0.clone()
         - a1_b1.clone()
-        + a2_b2.clone() * AF::from_f(w);
-    let c2 = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
-
-    [c0, c1, c2]
+        + a2_b2.clone() * w;
+    res[2] = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
 }
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_square<AF: AbstractField>(a: &[AF], w: AF::F) -> [AF; 3] {
+fn cubic_square<AF: AbstractField, const D: usize>(a: &[AF; D], res: &mut [AF; D], w: AF::F) {
+    assert_eq!(D, 3);
+
     let w_a2 = a[2].clone() * AF::from_f(w);
 
-    let c0 = a[0].square() + (a[1].clone() * w_a2.clone()).double();
-    let c1 = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
-    let c2 = a[1].square() + (a[0].clone() * a[2].clone()).double();
-
-    [c0, c1, c2]
+    res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
+    res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
+    res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
 }

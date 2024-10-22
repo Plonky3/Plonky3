@@ -48,5 +48,5 @@ fn main() {
     black_box(go(black_box(evals), log_n + 1));
 
     let m = RowMajorMatrix::<BabyBear>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
-    black_box(Radix2DitParallel.coset_lde_batch(black_box(m), 1, BabyBear::generator()));
+    black_box(Radix2DitParallel::default().coset_lde_batch(black_box(m), 1, BabyBear::generator()));
 }

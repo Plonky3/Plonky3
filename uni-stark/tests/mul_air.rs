@@ -57,7 +57,7 @@ impl MulAir {
         Standard: Distribution<F>,
     {
         let mut rng = thread_rng();
-        let mut trace_values = vec![F::default(); rows * TRACE_WIDTH];
+        let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
 
@@ -153,12 +153,12 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Perm = Poseidon2BabyBear<16>;
     let perm = Perm::new_from_rng_128(&mut thread_rng());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    type Pcs = TrivialPcs<Val, Radix2DitParallel>;
+    type Pcs = TrivialPcs<Val, Radix2DitParallel<Val>>;
     let pcs = TrivialPcs {
         dft,
         log_n,
@@ -211,8 +211,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
@@ -265,7 +265,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(byte_hash);
 
-    type MyCompress = CompressionFunctionFromHasher<u8, ByteHash, 2, 32>;
+    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
 
     type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;

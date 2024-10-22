@@ -71,6 +71,7 @@ where
 
 /// Extend a field `AF` element `x` to an array of length `D`
 /// by filling zeros.
+#[inline]
 pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
     let mut arr = array::from_fn(|_| AF::zero());
     arr[0] = x;

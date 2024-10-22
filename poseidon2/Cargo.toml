@@ -5,7 +5,12 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-nightly-features = ["p3-baby-bear/nightly-features", "p3-koala-bear/nightly-features"]
+nightly-features = [
+    "p3-koala-bear/nightly-features",
+    "p3-baby-bear/nightly-features",
+    "p3-mersenne-31/nightly-features",
+    "p3-goldilocks/nightly-features",
+]
 
 [dependencies]
 gcd = "2.3.0"
