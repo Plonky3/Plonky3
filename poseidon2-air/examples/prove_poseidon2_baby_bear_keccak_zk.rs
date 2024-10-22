@@ -14,6 +14,7 @@ use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, Serializing
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::rngs::ThreadRng;
 use rand::{random, thread_rng};
+#[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
