@@ -204,7 +204,7 @@ mod m31_fri_pcs {
     use std::marker::PhantomData;
 
     use p3_challenger::{HashChallenger, SerializingChallenger32};
-    use p3_circle::CirclePcs;
+    use p3_circle::{CirclePcs, ParChunkedCfft};
     use p3_keccak::Keccak256Hash;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
@@ -225,7 +225,9 @@ mod m31_fri_pcs {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+    type Cfft = ParChunkedCfft<Val>;
+
+    type Pcs = CirclePcs<Val, Cfft, ValMmcs, ChallengeMmcs>;
 
     fn get_pcs(log_blowup: usize) -> (Pcs, Challenger) {
         let byte_hash = ByteHash {};
@@ -240,6 +242,7 @@ mod m31_fri_pcs {
             mmcs: challenge_mmcs,
         };
         let pcs = Pcs {
+            cfft: ParChunkedCfft::default(),
             mmcs: val_mmcs,
             fri_config,
             _phantom: PhantomData,
