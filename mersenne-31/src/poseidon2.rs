@@ -1,7 +1,9 @@
-use p3_field::{Field, PrimeField32};
+use core::ops::Mul;
+
+use p3_field::{AbstractField, Field, PrimeField32};
 use p3_poseidon2::{
     external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
-    ExternalLayer, InternalLayer, MDSMat4, Poseidon2,
+    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
 };
 
 use crate::{
@@ -128,8 +130,6 @@ impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
             &self.internal_constants,
         )
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [Mersenne31; 16] = POSEIDON2_INTERNAL_MATRIX_DIAG_16;
 }
 
 impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
@@ -142,8 +142,6 @@ impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
             &self.internal_constants,
         )
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [Mersenne31; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24;
 }
 
 impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGREE>
@@ -167,6 +165,60 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
             &MDSMat4,
         );
         state
+    }
+}
+
+pub struct GenericPoseidon2LinearLayersMersenne31 {}
+
+impl<AF> GenericPoseidon2LinearLayers<AF, 16> for GenericPoseidon2LinearLayersMersenne31
+where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+{
+    fn internal_linear_layer(state: &mut [AF; 16]) {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use the mul_2exp_u64 method.
+        // We need state[1..] as POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS
+        // doesn't include the shift for the 0'th element as it is -2.
+        state[1..]
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS)
+            .skip(2)
+            .for_each(|(val, diag_shift)| {
+                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+            });
+    }
+}
+
+impl<AF> GenericPoseidon2LinearLayers<AF, 24> for GenericPoseidon2LinearLayersMersenne31
+where
+    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+{
+    fn internal_linear_layer(state: &mut [AF; 24]) {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use the mul_2exp_u64 method.
+        // We need state[1..] as POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS
+        // doesn't include the shift for the 0'th element as it is -2.
+        state[1..]
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS)
+            .skip(2)
+            .for_each(|(val, diag_shift)| {
+                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+            });
     }
 }
 

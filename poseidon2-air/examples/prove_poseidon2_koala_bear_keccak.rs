@@ -5,10 +5,8 @@ use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_koala_bear::{KoalaBear, KoalaBearDiffusionMatrixParameters, KoalaBearParameters};
+use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_monty_31::GenericDiffusionMatrixMontyField31;
-use p3_poseidon2::Poseidon2ExternalMatrixGeneral;
 use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -26,7 +24,7 @@ use tracing_subscriber::{EnvFilter, Registry};
 static GLOBAL: Jemalloc = Jemalloc;
 
 const WIDTH: usize = 16;
-const SBOX_DEGREE: usize = 3;
+const SBOX_DEGREE: u64 = 3;
 const SBOX_REGISTERS: usize = 0;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
@@ -79,19 +77,11 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    type MdsLight = Poseidon2ExternalMatrixGeneral;
-    let external_linear_layer = MdsLight {};
-
-    type Diffusion =
-        GenericDiffusionMatrixMontyField31<KoalaBearParameters, KoalaBearDiffusionMatrixParameters>;
-    let internal_linear_layer = Diffusion::new();
-
     let constants = RoundConstants::from_rng(&mut thread_rng());
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_vectorized_trace_rows::<
         Val,
-        MdsLight,
-        Diffusion,
+        GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -102,8 +92,7 @@ fn main() -> Result<(), impl Debug> {
 
     let air: VectorizedPoseidon2Air<
         Val,
-        MdsLight,
-        Diffusion,
+        GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,

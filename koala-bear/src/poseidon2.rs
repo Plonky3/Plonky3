@@ -13,10 +13,13 @@
 //* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2^24, -1/2^24]
 //* See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use p3_field::{AbstractField, Field};
+use core::ops::Mul;
+
+use p3_field::{AbstractField, Field, PrimeField32};
 use p3_monty_31::{
-    mul_2_exp_neg_n, InternalLayerBaseParameters, InternalLayerParameters, MontyField31,
-    Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
+    mul_2_exp_neg_n, GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters,
+    InternalLayerParameters, MontyField31, Poseidon2ExternalLayerMonty31,
+    Poseidon2InternalLayerMonty31,
 };
 use p3_poseidon2::Poseidon2;
 
@@ -45,8 +48,63 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     KOALABEAR_S_BOX_DEGREE,
 >;
 
-const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([1; 16]);
-const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([1; 24]);
+pub type GenericPoseidon2LinearLayersKoalaBear =
+    GenericPoseidon2LinearLayersMonty31<KoalaBearParameters, KoalaBearInternalLayerParameters>;
+
+// In order to use KoalaBear::new_array we need to convert our vector to a vector of u32's.
+// To do this we make use of the fact that KoalaBear::ORDER_U32 - 1 = 127 * 2^24 so for 0 <= n <= 24:
+// -1/2^n = (KoalaBear::ORDER_U32 - 1) >> n
+// 1/2^n = -(-1/2^n) = KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> n)
+
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/8, -1/8, -1/16, 1/2^24, -1/2^24]
+/// saved as an array of KoalaBear elements.
+const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([
+    KoalaBear::ORDER_U32 - 2,
+    1,
+    2,
+    (KoalaBear::ORDER_U32 + 1) >> 1,
+    3,
+    4,
+    (KoalaBear::ORDER_U32 - 1) >> 1,
+    KoalaBear::ORDER_U32 - 3,
+    KoalaBear::ORDER_U32 - 4,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
+    (KoalaBear::ORDER_U32 - 1) >> 8,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
+    (KoalaBear::ORDER_U32 - 1) >> 3,
+    (KoalaBear::ORDER_U32 - 1) >> 4,
+    KoalaBear::ORDER_U32 - 127,
+    127,
+]);
+
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2^24, -1/2^24]
+/// saved as an array of KoalaBear elements.
+const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([
+    KoalaBear::ORDER_U32 - 2,
+    1,
+    2,
+    (KoalaBear::ORDER_U32 + 1) >> 1,
+    3,
+    4,
+    (KoalaBear::ORDER_U32 - 1) >> 1,
+    KoalaBear::ORDER_U32 - 3,
+    KoalaBear::ORDER_U32 - 4,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
+    (KoalaBear::ORDER_U32 - 1) >> 8,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 2),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
+    (KoalaBear::ORDER_U32 - 1) >> 3,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 4),
+    (KoalaBear::ORDER_U32 - 1) >> 4,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 5),
+    (KoalaBear::ORDER_U32 - 1) >> 5,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 6),
+    (KoalaBear::ORDER_U32 - 1) >> 6,
+    (KoalaBear::ORDER_U32 - 1) >> 7,
+    (KoalaBear::ORDER_U32 - 1) >> 9,
+    KoalaBear::ORDER_U32 - 127,
+    127,
+]);
 
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
@@ -86,6 +144,30 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         state[14] += sum;
         state[15] = mul_2_exp_neg_n::<KoalaBearParameters>(state[15], 24);
         state[15] = sum - state[15];
+    }
+
+    fn generic_internal_linear_layer<AF>(state: &mut [AF; 16])
+    where
+        AF: AbstractField + Mul<KoalaBear, Output = AF>,
+    {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use multiplication.
+        // This could probably be improved slightly by making use of the
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        state
+            .iter_mut()
+            .zip(INTERNAL_DIAG_MONTY_16)
+            .skip(3)
+            .for_each(|(val, diag_elem)| {
+                *val = full_sum.clone() + val.clone() * diag_elem;
+            });
     }
 }
 
@@ -141,6 +223,30 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         state[23] = mul_2_exp_neg_n::<KoalaBearParameters>(state[23], 24);
         state[23] = sum - state[23];
     }
+
+    fn generic_internal_linear_layer<AF>(state: &mut [AF; 24])
+    where
+        AF: AbstractField + core::ops::Mul<KoalaBear, Output = AF>,
+    {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use multiplication.
+        // This could probably be improved slightly by making use of the
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        state
+            .iter_mut()
+            .zip(INTERNAL_DIAG_MONTY_24)
+            .skip(3)
+            .for_each(|(val, diag_elem)| {
+                *val = full_sum.clone() + val.clone() * diag_elem;
+            });
+    }
 }
 
 impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {}
@@ -153,7 +259,7 @@ pub struct KoalaBearExternalLayerParameters;
 mod tests {
     use p3_field::AbstractField;
     use p3_symmetric::Permutation;
-    use rand::SeedableRng;
+    use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
@@ -217,5 +323,39 @@ mod tests {
 
         perm.permute_mut(&mut input);
         assert_eq!(input, expected);
+    }
+
+    #[test]
+    fn test_generic_internal_linear_layer_16() {
+        let mut rng = rand::thread_rng();
+        let mut input1: [F; 16] = rng.gen();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().cloned().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        KoalaBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        KoalaBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
+    }
+
+    #[test]
+    fn test_generic_internal_linear_layer_24() {
+        let mut rng = rand::thread_rng();
+        let mut input1: [F; 24] = rng.gen();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().cloned().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        KoalaBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        KoalaBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
     }
 }

@@ -3,7 +3,7 @@ use core::borrow::{Borrow, BorrowMut};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::Field;
 use p3_matrix::Matrix;
-use p3_poseidon2::{ExternalLayer, InternalLayer};
+use p3_poseidon2::GenericPoseidon2LinearLayers;
 
 use crate::air::eval;
 use crate::constants::RoundConstants;
@@ -130,8 +130,7 @@ impl<
 /// A "vectorized" version of Poseidon2Air, for computing multiple Poseidon2 permutations per row.
 pub struct VectorizedPoseidon2Air<
     F: Field,
-    MdsLight,
-    Diffusion,
+    LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -141,8 +140,7 @@ pub struct VectorizedPoseidon2Air<
 > {
     air: Poseidon2Air<
         F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -153,8 +151,7 @@ pub struct VectorizedPoseidon2Air<
 
 impl<
         F: Field,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         const WIDTH: usize,
         const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
@@ -164,8 +161,7 @@ impl<
     >
     VectorizedPoseidon2Air<
         F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -183,8 +179,7 @@ impl<
 
 impl<
         F: Field,
-        MdsLight: Sync,
-        Diffusion: Sync,
+        LinearLayers: Sync,
         const WIDTH: usize,
         const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
@@ -194,8 +189,7 @@ impl<
     > BaseAir<F>
     for VectorizedPoseidon2Air<
         F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -211,8 +205,7 @@ impl<
 
 impl<
         AB: AirBuilder,
-        MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
-        Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+        LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
         const WIDTH: usize,
         const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
@@ -222,8 +215,7 @@ impl<
     > Air<AB>
     for VectorizedPoseidon2Air<
         AB::F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,

@@ -1,7 +1,10 @@
+use core::marker::PhantomData;
+use core::ops::Mul;
+
 use p3_field::AbstractField;
 use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, ExternalLayer, InternalLayer,
-    MDSMat4,
+    external_initial_permute_state, external_terminal_permute_state, ExternalLayer,
+    GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
 };
 
 use crate::{
@@ -24,6 +27,10 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
+
+    fn generic_internal_linear_layer<AF: AbstractField + Mul<MontyField31<MP>, Output = AF>>(
+        state: &mut [AF; WIDTH],
+    );
 }
 
 /// Some code needed by the PackedField implementation can be shared between the different WIDTHS and architectures.
@@ -93,8 +100,6 @@ where
             P2P::internal_layer_mat_mul(state, full_sum);
         })
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [MontyField31<FP>; WIDTH] = P2P::INTERNAL_DIAG_MONTY;
 }
 
 impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
@@ -122,5 +127,22 @@ where
             &MDSMat4,
         );
         state
+    }
+}
+
+pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
+    _phantom1: PhantomData<FP>,
+    _phantom2: PhantomData<ILBP>,
+}
+
+impl<FP, AF, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<AF, WIDTH>
+    for GenericPoseidon2LinearLayersMonty31<FP, ILBP>
+where
+    FP: FieldParameters,
+    AF: AbstractField + Mul<MontyField31<FP>, Output = AF>,
+    ILBP: InternalLayerBaseParameters<FP, WIDTH>,
+{
+    fn internal_linear_layer(state: &mut [AF; WIDTH]) {
+        ILBP::generic_internal_linear_layer(state);
     }
 }

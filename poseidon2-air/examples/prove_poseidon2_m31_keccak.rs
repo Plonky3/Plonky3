@@ -8,9 +8,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::FriConfig;
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_mersenne_31::{
-    Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
-};
+use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31};
 use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -80,8 +78,7 @@ fn main() -> Result<(), impl Debug> {
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_vectorized_trace_rows::<
         Val,
-        Poseidon2ExternalLayerMersenne31<WIDTH>,
-        Poseidon2InternalLayerMersenne31,
+        GenericPoseidon2LinearLayersMersenne31,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -92,8 +89,7 @@ fn main() -> Result<(), impl Debug> {
 
     let air: VectorizedPoseidon2Air<
         Val,
-        Poseidon2ExternalLayerMersenne31<WIDTH>,
-        Poseidon2InternalLayerMersenne31,
+        GenericPoseidon2LinearLayersMersenne31,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,

@@ -233,11 +233,6 @@ where
     /// Input state will be in appropriate form from Internal Layer.
     /// Output state will be [AF; WIDTH].
     fn permute_state_terminal(&self, state: Self::InternalState) -> [AF; WIDTH];
-
-    fn generic_external_linear_layer<AF2: AbstractField<F = AF::F>>(state: &mut [AF2; WIDTH]) {
-        let mat4 = MDSMat4 {};
-        mds_light_permutation(state, &mat4);
-    }
 }
 
 /// A helper method which allow any field to easily implement the terminal External Layer.

@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_field::PrimeField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_poseidon2::{ExternalLayer, InternalLayer};
+use p3_poseidon2::GenericPoseidon2LinearLayers;
 use tracing::instrument;
 
 use crate::columns::{num_cols, Poseidon2Cols};
@@ -12,8 +12,7 @@ use crate::{FullRound, PartialRound, RoundConstants, SBox};
 #[instrument(name = "generate vectorized Poseidon2 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
-    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
-    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -52,8 +51,7 @@ pub fn generate_vectorized_trace_rows<
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
         generate_trace_rows_for_perm::<
             F,
-            MdsLight,
-            Diffusion,
+            LinearLayers,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
@@ -69,8 +67,7 @@ pub fn generate_vectorized_trace_rows<
 #[instrument(name = "generate Poseidon2 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
-    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
-    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -106,8 +103,7 @@ pub fn generate_trace_rows<
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
         generate_trace_rows_for_perm::<
             F,
-            MdsLight,
-            Diffusion,
+            LinearLayers,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
@@ -122,8 +118,7 @@ pub fn generate_trace_rows<
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<
     F: PrimeField,
-    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
-    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -144,14 +139,14 @@ fn generate_trace_rows_for_perm<
     perm.export = F::one();
     perm.inputs = state;
 
-    MdsLight::generic_external_linear_layer(&mut state);
+    LinearLayers::external_linear_layer(&mut state);
 
     for (full_round, constants) in perm
         .beginning_full_rounds
         .iter_mut()
         .zip(&constants.beginning_full_round_constants)
     {
-        generate_full_round::<F, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_full_round::<F, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state, full_round, constants,
         );
     }
@@ -161,7 +156,7 @@ fn generate_trace_rows_for_perm<
         .iter_mut()
         .zip(&constants.partial_round_constants)
     {
-        generate_partial_round::<F, Diffusion, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_partial_round::<F, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             partial_round,
             *constant,
@@ -173,7 +168,7 @@ fn generate_trace_rows_for_perm<
         .iter_mut()
         .zip(&constants.ending_full_round_constants)
     {
-        generate_full_round::<F, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_full_round::<F, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state, full_round, constants,
         );
     }
@@ -182,7 +177,7 @@ fn generate_trace_rows_for_perm<
 #[inline]
 fn generate_full_round<
     F: PrimeField,
-    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -197,14 +192,14 @@ fn generate_full_round<
     for (state_i, sbox_i) in state.iter_mut().zip(full_round.sbox.iter_mut()) {
         generate_sbox(sbox_i, state_i);
     }
-    MdsLight::generic_external_linear_layer(state);
+    LinearLayers::external_linear_layer(state);
     full_round.post = *state;
 }
 
 #[inline]
 fn generate_partial_round<
     F: PrimeField,
-    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -216,7 +211,7 @@ fn generate_partial_round<
     state[0] += round_constant;
     generate_sbox(&mut partial_round.sbox, &mut state[0]);
     partial_round.post_sbox = state[0];
-    Diffusion::generic_internal_linear_layer(state);
+    LinearLayers::internal_linear_layer(state);
 }
 
 #[inline]

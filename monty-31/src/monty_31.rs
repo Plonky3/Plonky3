@@ -219,6 +219,13 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
         Self::new_monty(to_monty_64::<FP>(n))
     }
 
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        let product = (self.value as u64) << exp;
+        let value = (product % (FP::PRIME as u64)) as u32;
+        Self::new_monty(value)
+    }
+
     #[inline(always)]
     fn generator() -> Self {
         FP::MONTY_GEN
@@ -260,13 +267,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         ),
     )))]
     type Packing = Self;
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        let product = (self.value as u64) << exp;
-        let value = (product % (FP::PRIME as u64)) as u32;
-        Self::new_monty(value)
-    }
 
     #[inline]
     fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {

@@ -253,8 +253,6 @@ where
 {
     type InternalState = InternalLayer16<FP>;
 
-    const DIFFUSION_MATRIX_DIAGONAL: [MontyField31<FP>; 16] = ILP::INTERNAL_DIAG_MONTY;
-
     /// Compute a collection of Poseidon2 internal layers.
     /// One layer for every constant supplied.
     fn permute_state(&self, state: &mut Self::InternalState) {
@@ -299,8 +297,6 @@ where
         + InternalLayerBaseParameters<FP, 24>,
 {
     type InternalState = InternalLayer24<FP>;
-
-    const DIFFUSION_MATRIX_DIAGONAL: [MontyField31<FP>; 24] = ILP::INTERNAL_DIAG_MONTY;
 
     /// Compute a collection of Poseidon2 internal layers.
     /// One layer for every constant supplied.

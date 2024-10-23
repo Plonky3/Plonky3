@@ -62,7 +62,7 @@ impl HasTwoAdicBionmialExtension<2> for Mersenne31 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, PrimeField32};
+    use p3_field::PrimeField32;
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;

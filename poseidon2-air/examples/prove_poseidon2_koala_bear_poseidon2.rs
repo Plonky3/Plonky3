@@ -6,10 +6,8 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_monty_31::GenericDiffusionMatrixMontyField31;
-use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air, RoundConstants};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -27,7 +25,7 @@ use tracing_subscriber::{EnvFilter, Registry};
 static GLOBAL: Jemalloc = Jemalloc;
 
 const WIDTH: usize = 16;
-const SBOX_DEGREE: usize = 3;
+const SBOX_DEGREE: u64 = 3;
 const SBOX_REGISTERS: usize = 0;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
@@ -68,41 +66,27 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    type MdsLight = Poseidon2ExternalMatrixGeneral;
-    let external_linear_layer = MdsLight {};
-
-    type Diffusion =
-        GenericDiffusionMatrixMontyField31<KoalaBearParameters, KoalaBearDiffusionMatrixParameters>;
-    let internal_linear_layer = Diffusion::new();
-
     let constants = RoundConstants::from_rng(&mut thread_rng());
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<
         Val,
-        MdsLight,
-        Diffusion,
+        GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
-    >(
-        inputs,
-        &constants,
-        &external_linear_layer,
-        &internal_linear_layer,
-    );
+    >(inputs, &constants);
 
     let air: Poseidon2Air<
         Val,
-        MdsLight,
-        Diffusion,
+        GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
-    > = Poseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
+    > = Poseidon2Air::new(constants);
 
     let fri_config = FriConfig {
         log_blowup: 1,

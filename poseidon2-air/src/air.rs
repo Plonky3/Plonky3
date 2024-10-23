@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{AbstractField, Field};
 use p3_matrix::Matrix;
-use p3_poseidon2::{ExternalLayer, InternalLayer};
+use p3_poseidon2::GenericPoseidon2LinearLayers;
 
 use crate::columns::{num_cols, Poseidon2Cols};
 use crate::constants::RoundConstants;
@@ -14,8 +14,7 @@ use crate::{FullRound, PartialRound, SBox};
 #[derive(Debug)]
 pub struct Poseidon2Air<
     F: Field,
-    MdsLight,
-    Diffusion,
+    LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -23,14 +22,12 @@ pub struct Poseidon2Air<
     const PARTIAL_ROUNDS: usize,
 > {
     constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-    _phantom1: PhantomData<MdsLight>,
-    _phantom2: PhantomData<Diffusion>,
+    _phantom: PhantomData<LinearLayers>,
 }
 
 impl<
         F: Field,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         const WIDTH: usize,
         const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
@@ -39,8 +36,7 @@ impl<
     >
     Poseidon2Air<
         F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -51,16 +47,14 @@ impl<
     pub fn new(constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>) -> Self {
         Self {
             constants,
-            _phantom1: PhantomData,
-            _phantom2: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
 impl<
         F: Field,
-        MdsLight: Sync,
-        Diffusion: Sync,
+        LinearLayers: Sync,
         const WIDTH: usize,
         const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
@@ -69,8 +63,7 @@ impl<
     > BaseAir<F>
     for Poseidon2Air<
         F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -85,8 +78,7 @@ impl<
 
 pub(crate) fn eval<
     AB: AirBuilder,
-    MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
-    Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -95,8 +87,7 @@ pub(crate) fn eval<
 >(
     air: &Poseidon2Air<
         AB::F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -115,10 +106,10 @@ pub(crate) fn eval<
 ) {
     let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
 
-    MdsLight::generic_external_linear_layer(&mut state);
+    LinearLayers::external_linear_layer(&mut state);
 
     for round in 0..HALF_FULL_ROUNDS {
-        eval_full_round::<AB, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_full_round::<AB, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.beginning_full_rounds[round],
             &air.constants.beginning_full_round_constants[round],
@@ -127,7 +118,7 @@ pub(crate) fn eval<
     }
 
     for round in 0..PARTIAL_ROUNDS {
-        eval_partial_round::<AB, Diffusion, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_partial_round::<AB, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.partial_rounds[round],
             &air.constants.partial_round_constants[round],
@@ -136,7 +127,7 @@ pub(crate) fn eval<
     }
 
     for round in 0..HALF_FULL_ROUNDS {
-        eval_full_round::<AB, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_full_round::<AB, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.ending_full_rounds[round],
             &air.constants.ending_full_round_constants[round],
@@ -147,8 +138,7 @@ pub(crate) fn eval<
 
 impl<
         AB: AirBuilder,
-        MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
-        Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+        LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
         const WIDTH: usize,
         const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
@@ -157,8 +147,7 @@ impl<
     > Air<AB>
     for Poseidon2Air<
         AB::F,
-        MdsLight,
-        Diffusion,
+        LinearLayers,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -181,8 +170,7 @@ impl<
 
         eval::<
             AB,
-            MdsLight,
-            Diffusion,
+            LinearLayers,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
@@ -195,7 +183,7 @@ impl<
 #[inline]
 fn eval_full_round<
     AB: AirBuilder,
-    MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -209,7 +197,7 @@ fn eval_full_round<
         *s = s.clone() + *r;
         eval_sbox(&full_round.sbox[i], s, builder);
     }
-    MdsLight::generic_external_linear_layer(state);
+    LinearLayers::external_linear_layer(state);
     for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
         builder.assert_eq(state_i.clone(), post_i);
         *state_i = post_i.into();
@@ -219,7 +207,7 @@ fn eval_full_round<
 #[inline]
 fn eval_partial_round<
     AB: AirBuilder,
-    Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -235,7 +223,7 @@ fn eval_partial_round<
     builder.assert_eq(state[0].clone(), partial_round.post_sbox);
     state[0] = partial_round.post_sbox.into();
 
-    Diffusion::generic_internal_linear_layer(state);
+    LinearLayers::internal_linear_layer(state);
 }
 
 /// Evaluates the S-box over a degree-1 expression `x`.

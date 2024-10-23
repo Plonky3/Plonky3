@@ -166,6 +166,16 @@ impl AbstractField for Mersenne31 {
         Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
+        let exp = exp % 31;
+        let left = (self.value << exp) & ((1 << 31) - 1);
+        let right = self.value >> (31 - exp);
+        let rotated = left | right;
+        Self::new(rotated)
+    }
+
     // Sage: GF(2^31 - 1).multiplicative_generator()
     #[inline]
     fn generator() -> Self {
@@ -212,16 +222,6 @@ impl Field for Mersenne31 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
-        let exp = exp % 31;
-        let left = (self.value << exp) & ((1 << 31) - 1);
-        let right = self.value >> (31 - exp);
-        let rotated = left | right;
-        Self::new(rotated)
     }
 
     #[inline]

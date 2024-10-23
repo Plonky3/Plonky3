@@ -134,8 +134,6 @@ impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 8, GOLDILOCKS_S_BOX_DE
             &self.internal_constants,
         )
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [Goldilocks; 8] = MATRIX_DIAG_8_GOLDILOCKS;
 }
 
 impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 12, GOLDILOCKS_S_BOX_DEGREE>
@@ -150,8 +148,6 @@ impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 12, GOLDILOCKS_S_BOX_D
             &self.internal_constants,
         )
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [Goldilocks; 12] = MATRIX_DIAG_12_GOLDILOCKS;
 }
 
 impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 16, GOLDILOCKS_S_BOX_DEGREE>
@@ -166,8 +162,6 @@ impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 16, GOLDILOCKS_S_BOX_D
             &self.internal_constants,
         )
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [Goldilocks; 16] = MATRIX_DIAG_16_GOLDILOCKS;
 }
 
 impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 20, GOLDILOCKS_S_BOX_DEGREE>
@@ -182,8 +176,6 @@ impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 20, GOLDILOCKS_S_BOX_D
             &self.internal_constants,
         )
     }
-
-    const DIFFUSION_MATRIX_DIAGONAL: [Goldilocks; 20] = MATRIX_DIAG_20_GOLDILOCKS;
 }
 
 #[derive(Clone)]
