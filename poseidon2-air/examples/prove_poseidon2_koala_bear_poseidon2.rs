@@ -8,7 +8,7 @@ use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air, RoundConstants};
+use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
@@ -30,7 +30,9 @@ const SBOX_REGISTERS: usize = 0;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
-const NUM_HASHES: usize = 1 << 16;
+const NUM_ROWS: usize = 1 << 16;
+const VECTOR_LEN: usize = 1 << 3;
+const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -67,8 +69,8 @@ fn main() -> Result<(), impl Debug> {
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<
+    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_vectorized_trace_rows::<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
@@ -76,9 +78,10 @@ fn main() -> Result<(), impl Debug> {
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
+        VECTOR_LEN,
     >(inputs, &constants);
 
-    let air: Poseidon2Air<
+    let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
@@ -86,7 +89,8 @@ fn main() -> Result<(), impl Debug> {
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
-    > = Poseidon2Air::new(constants);
+        VECTOR_LEN,
+    > = VectorizedPoseidon2Air::new(constants);
 
     let fri_config = FriConfig {
         log_blowup: 1,
