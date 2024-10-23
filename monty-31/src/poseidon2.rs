@@ -41,7 +41,7 @@ pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
-    InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersNeon<WIDTH>
+    InternalLayerBaseParameters<FP, WIDTH>
 {
 }
 #[cfg(all(

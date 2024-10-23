@@ -1,34 +1,140 @@
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
+//! Eventually this will hold a Vectorized Neon implementation of Poseidon2 for MontyField31
+//! Currently this is essentially a placeholder to allow compilation on Neon devices.
+//!
+//! Converting the AVX2/AVX512 code across to Neon is on the TODO list.
 
-use crate::{
-    DiffusionMatrixMontyField31, DiffusionMatrixParameters, FieldParameters, MontyField31,
-    PackedFieldPoseidon2Helpers, PackedMontyField31Neon,
+use alloc::vec::Vec;
+use core::marker::PhantomData;
+
+use p3_poseidon2::{
+    mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
+    InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-// We need to change from the standard implementation as we are interpreting the matrix (1 + Diag(vec)) as the monty form of the matrix not the raw form.
-// matmul_internal internal performs a standard matrix multiplication so we need to additional rescale by the inverse monty constant.
-// These will be removed once we have architecture specific implementations.
+use crate::{
+    FieldParameters, InternalLayerBaseParameters, MontyField31, MontyParameters,
+    PackedMontyField31Neon,
+};
 
-impl<FP, const WIDTH: usize, MP> Permutation<[PackedMontyField31Neon<FP>; WIDTH]>
-    for DiffusionMatrixMontyField31<MP>
-where
-    FP: FieldParameters,
-    MP: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
+#[derive(Debug, Clone)]
+pub struct Poseidon2InternalLayerMonty31<
+    MP: MontyParameters,
+    const WIDTH: usize,
+    ILP: InternalLayerBaseParameters<MP, WIDTH>,
+> {
+    pub(crate) internal_constants: Vec<MontyField31<MP>>,
+    _phantom: PhantomData<ILP>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize> {
+    pub(crate) external_constants: ExternalLayerConstants<MontyField31<MP>, WIDTH>,
+}
+
+impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<FP, WIDTH>>
+    InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
-    fn permute_mut(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
-        matmul_internal::<MontyField31<FP>, PackedMontyField31Neon<FP>, WIDTH>(
-            state,
-            MP::INTERNAL_DIAG_MONTY,
-        );
-        state.iter_mut().for_each(|i| *i *= MP::MONTY_INVERSE);
+    fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
+        Self {
+            internal_constants,
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl<FP, const WIDTH: usize, MP> DiffusionPermutation<PackedMontyField31Neon<FP>, WIDTH>
-    for DiffusionMatrixMontyField31<MP>
+impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
+    for Poseidon2ExternalLayerMonty31<FP, WIDTH>
+{
+    fn new_from_constants(
+        external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
+    ) -> Self {
+        Self { external_constants }
+    }
+}
+
+impl<FP, ILP, const WIDTH: usize, const D: u64> InternalLayer<PackedMontyField31Neon<FP>, WIDTH, D>
+    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 where
     FP: FieldParameters,
-    MP: DiffusionMatrixParameters<FP, WIDTH> + PackedFieldPoseidon2Helpers<FP>,
+    ILP: InternalLayerBaseParameters<FP, WIDTH>,
 {
+    type InternalState = [PackedMontyField31Neon<FP>; WIDTH];
+
+    /// Compute a collection of Poseidon2 internal layers.
+    /// One layer for every constant supplied.
+    fn permute_state(&self, state: &mut Self::InternalState) {
+        unsafe {
+            self.packed_internal_constants.iter().for_each(|&rc| {
+                state.s0 += rc;
+                state.s0 = state.s0.exp_const_u64::<D>();
+                ILP::generic_internal_linear_layer(state);
+            })
+        }
+    }
+}
+
+/// Compute a collection of Poseidon2 external layers.
+/// One layer for every constant supplied.
+#[inline]
+fn external_rounds<FP, const WIDTH: usize, const D: u64>(
+    state: &mut [PackedMontyField31Neon<FP>; WIDTH],
+    packed_external_constants: &[[__m256i; WIDTH]],
+) where
+    FP: FieldParameters,
+{
+    /*
+        The external layer consists of the following 2 operations:
+
+        s -> s + rc
+        s -> s^d
+        s -> Ms
+
+        Where by s^d we mean to apply this power function element wise.
+
+        Multiplication by M is implemented efficiently in p3_poseidon2/matrix.
+    */
+    packed_external_constants.iter().for_each(|round_consts| {
+        state
+            .iter_mut()
+            .zip(round_consts.iter())
+            .for_each(|(val, &rc)| {
+                *val += rc;
+                *val = val.exp_const_u64::<D>();
+            });
+        mds_light_permutation(state, &MDSMat4);
+    });
+}
+
+impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31Neon<FP>, WIDTH, D>
+    for Poseidon2ExternalLayerMonty31<FP, WIDTH>
+where
+    FP: FieldParameters,
+{
+    type InternalState = [PackedMontyField31Neon<FP>; WIDTH];
+
+    /// Compute the first half of the Poseidon2 external layers.
+    fn permute_state_initial(
+        &self,
+        mut state: [PackedMontyField31Neon<FP>; WIDTH],
+    ) -> Self::InternalState {
+        mds_light_permutation(&mut state, &MDSMat4);
+
+        external_rounds::<FP, WIDTH, D>(&mut state, &self.packed_initial_external_constants);
+
+        state
+    }
+
+    /// Compute the second half of the Poseidon2 external layers.
+    fn permute_state_terminal(
+        &self,
+        state: Self::InternalState,
+    ) -> [PackedMontyField31Neon<FP>; WIDTH] {
+        let mut output_state = state;
+
+        external_rounds::<FP, WIDTH, D>(
+            &mut output_state,
+            &self.packed_terminal_external_constants,
+        );
+        output_state
+    }
 }

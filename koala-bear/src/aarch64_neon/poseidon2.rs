@@ -1,16 +1,14 @@
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{DiffusionMatrixKoalaBear, KoalaBear, PackedKoalaBearNeon};
+    use crate::{KoalaBear, PackedKoalaBearNeon, Poseidon2KoalaBear};
 
     type F = KoalaBear;
-    const D: u64 = 7;
-    type Perm16 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, D>;
-    type Perm24 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, D>;
+    type Perm16 = Poseidon2KoalaBear<16>;
+    type Perm24 = Poseidon2KoalaBear<24>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
@@ -18,11 +16,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixKoalaBear::default(),
-            &mut rng,
-        );
+        let poseidon2 = Perm16::new_from_rng_128(&mut rng);
 
         let input: [F; 16] = rng.gen();
 
@@ -43,11 +37,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixKoalaBear::default(),
-            &mut rng,
-        );
+        let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
         let input: [F; 24] = rng.gen();
 
