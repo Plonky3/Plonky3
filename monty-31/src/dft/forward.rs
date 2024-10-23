@@ -5,8 +5,6 @@
 //! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
 
 extern crate alloc;
-//use core::arch::x86_64::__m512;
-//use core::mem::transmute;
 
 use alloc::vec::Vec;
 
@@ -38,30 +36,165 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 }
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+    #[inline]
+    fn forward_small_s0(a: &mut [Self], roots: &[Self]) {
+        let n = a.len();
+        // lg_m = lg_n - 1
+        // s = 0
+        // m = n/2
+        // i = 0
+        // offset = 0
+
+        let packed_vec = <MontyField31<MP> as Field>::Packing::pack_slice_mut(a);
+        let packed_roots = <MontyField31<MP> as Field>::Packing::pack_slice(roots);
+
+        let m = n / 2;
+        assert_eq!(m % <MontyField31<MP> as Field>::Packing::WIDTH, 0);
+        let m_elts = m / <MontyField31<MP> as Field>::Packing::WIDTH;
+        let (a0, a1) = unsafe { packed_vec.split_at_mut_unchecked(m_elts) };
+
+        for k in 0..m_elts {
+            let x = a0[k];
+            let y = a1[k];
+            //let t = MP::PRIME + x.value - y.value;
+            let t = x - y;
+            a0[k] = x + y;
+            //a1[k] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+            a1[k] = t * packed_roots[k];
+        }
+    }
+
+    #[inline]
+    fn forward_small_s1(a: &mut [Self], roots: &[Self]) {
+        let n = a.len();
+        // s = 1
+        // lg_m = lg_n - 2
+        // m = n/4
+        // i = 0, 1
+        // offset = 0, n/2
+
+        let (u, v) = unsafe { a.split_at_mut_unchecked(n / 2) };
+        let (u0, u1) = unsafe { u.split_at_mut_unchecked(n / 4) };
+        let (v0, v1) = unsafe { v.split_at_mut_unchecked(n / 4) };
+
+        let m = n / 4;
+        assert_eq!(m % <MontyField31<MP> as Field>::Packing::WIDTH, 0);
+        let m_elts = m / <MontyField31<MP> as Field>::Packing::WIDTH;
+        let u0 = <MontyField31<MP> as Field>::Packing::pack_slice_mut(u0);
+        let u1 = <MontyField31<MP> as Field>::Packing::pack_slice_mut(u1);
+        let v0 = <MontyField31<MP> as Field>::Packing::pack_slice_mut(v0);
+        let v1 = <MontyField31<MP> as Field>::Packing::pack_slice_mut(v1);
+        let packed_roots = <MontyField31<MP> as Field>::Packing::pack_slice(roots);
+
+        for k in 0..m_elts {
+            // i = 0
+            // offset = 0
+            let x = u0[k];
+            let y = u1[k];
+            let r = packed_roots[k];
+            let t = x - y;
+            u0[k] = x + y;
+            u1[k] = t * r;
+            // i = 1
+            // offset = n / 2
+            let x = v0[k];
+            let y = v1[k];
+            let t = x - y;
+            v0[k] = x + y;
+            v1[k] = t * r;
+        }
+    }
+
+    #[inline]
+    fn _forward_small_s0(a: &mut [Self], roots: &[Self]) {
+        let n = a.len();
+        // lg_m = lg_n - 1
+        // s = 0
+        // m = n/2
+        // i = 0
+        // offset = 0
+
+        let m = n / 2;
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(m) };
+
+        for k in 0..m {
+            let x = a0[k];
+            let y = a1[k];
+            let t = MP::PRIME + x.value - y.value;
+            a0[k] = x + y;
+            a1[k] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+        }
+    }
+
+    #[inline]
+    fn _forward_small_s1(a: &mut [Self], roots: &[Self]) {
+        let n = a.len();
+        // s = 1
+        // lg_m = lg_n - 2
+        // m = n/4
+        // i = 0, 1
+        // offset = 0, n/2
+
+        let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
+
+        // i = 0
+        // offset = 0
+        let m = n / 4;
+
+        for k in 0..m {
+            let x = a0[k];
+            let y = a0[k + m];
+            let t = MP::PRIME + x.value - y.value;
+            a0[k] = x + y;
+            a0[k + m] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+        }
+
+        // i = 1
+        // offset = n / 2
+        for k in 0..m {
+            let x = a1[k];
+            let y = a1[k + m];
+            let t = MP::PRIME + x.value - y.value;
+            a1[k] = x + y;
+            a1[k + m] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+        }
+    }
+
     /// Breadth-first DIF FFT for small vectors
     #[inline]
     fn forward_small(a: &mut [Self], root_table: &[Vec<Self>]) {
-        let lg_n = log2_strict_usize(a.len());
+        let n = a.len();
+        let lg_n = log2_strict_usize(n);
 
-        for j in (0..lg_n).rev() {
-            let s = lg_n - j - 1;
-            let l = 1 << j;
+        let packing_width = <MontyField31<MP> as Field>::Packing::WIDTH;
+        //assert_eq!(n % packing_width, 0);
+
+        for lg_m in (0..lg_n).rev() {
+            let s = lg_n - lg_m - 1;
+            let m = 1 << lg_m;
 
             // TODO: specialise betterer
             let blah = [Self::one(); 1];
-            let roots = if j != 0 { &root_table[s] } else { &blah[..] };
-            assert_eq!(roots.len(), l);
+            let roots = if lg_m != 0 { &root_table[s] } else { &blah[..] };
+            assert_eq!(roots.len(), m);
 
-            for i in 0..(1 << s) {
-                let offset = i << (j + 1);
+            if s == 0 && packing_width <= n / 2 {
+                Self::forward_small_s0(a, roots);
+            } else if s == 1 && packing_width <= n / 4 {
+                Self::forward_small_s1(a, roots);
+            } else {
+                // TODO: Packing
+                for i in 0..(1 << s) {
+                    let offset = i << (lg_m + 1);
 
-                for k in 0..l {
-                    let x = a[offset + k];
-                    let y = a[offset + k + l];
-                    let t = MP::PRIME + x.value - y.value;
-                    a[offset + k] = x + y;
-                    a[offset + k + l] =
-                        Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+                    for k in 0..m {
+                        let x = a[offset + k];
+                        let y = a[offset + k + m];
+                        let t = MP::PRIME + x.value - y.value;
+                        a[offset + k] = x + y;
+                        a[offset + k + m] =
+                            Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
+                    }
                 }
             }
         }
@@ -214,7 +347,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             return;
         }
 
-        if n > 2 {
+        if n > 2 && n <= 1024 {
             Self::forward_small(a, root_table);
             return;
         }
