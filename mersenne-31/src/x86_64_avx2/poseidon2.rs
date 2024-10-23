@@ -6,7 +6,10 @@ use p3_poseidon2::{
     ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
+use crate::{
+    exp5, Mersenne31, PackedMersenne31AVX2, P, POSEIDON2_INTERNAL_MATRIX_DIAG_16,
+    POSEIDON2_INTERNAL_MATRIX_DIAG_24, P_AVX2,
+};
 
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
@@ -214,6 +217,8 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
             .iter()
             .for_each(|&rc| internal_16(state, rc))
     }
+
+    const DIFFUSION_MATRIX_DIAGONAL: [Mersenne31; 16] = POSEIDON2_INTERNAL_MATRIX_DIAG_16;
 }
 
 /// Compute a single Poseidon2 internal layer on a state of width 24.
@@ -236,6 +241,8 @@ impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersen
             .iter()
             .for_each(|&rc| internal_24(state, rc))
     }
+
+    const DIFFUSION_MATRIX_DIAGONAL: [Mersenne31; 24] = POSEIDON2_INTERNAL_MATRIX_DIAG_24;
 }
 
 /// Compute a collection of Poseidon2 external layers.

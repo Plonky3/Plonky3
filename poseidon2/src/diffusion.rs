@@ -64,6 +64,19 @@ where
     /// Compute the internal part of the Poseidon2 permutation.
     /// Implementations will usually not use both constants fields.
     fn permute_state(&self, state: &mut Self::InternalState);
+
+    const DIFFUSION_MATRIX_DIAGONAL: [AF::F; WIDTH];
+
+    fn generic_internal_linear_layer<AF2: AbstractField<F = AF::F>>(state: &mut [AF2; WIDTH]) {
+        let sum: AF2 = state.iter().cloned().sum();
+        state
+            .iter_mut()
+            .zip(Self::DIFFUSION_MATRIX_DIAGONAL)
+            .for_each(|(elem, diagonal_elem)| {
+                *elem *= AF2::from_f(diagonal_elem);
+                *elem += sum.clone();
+            });
+    }
 }
 
 /// A helper method which allows any field to easily implement Internal Layer.

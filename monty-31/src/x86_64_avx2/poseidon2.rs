@@ -12,7 +12,8 @@ use p3_poseidon2::{
 
 use crate::{
     apply_func_to_even_odd, packed_exp_3, packed_exp_5, packed_exp_7, FieldParameters,
-    MontyField31, MontyParameters, PackedMontyField31AVX2, PackedMontyParameters,
+    InternalLayerBaseParameters, MontyField31, MontyParameters, PackedMontyField31AVX2,
+    PackedMontyParameters,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently
@@ -247,9 +248,12 @@ impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 16, D>
     for Poseidon2InternalLayerMonty31<FP, 16, ILP>
 where
     FP: FieldParameters,
-    ILP: InternalLayerParametersAVX2<16, ArrayLike = [__m256i; 15]>,
+    ILP: InternalLayerParametersAVX2<16, ArrayLike = [__m256i; 15]>
+        + InternalLayerBaseParameters<FP, 16>,
 {
     type InternalState = InternalLayer16<FP>;
+
+    const DIFFUSION_MATRIX_DIAGONAL: [MontyField31<FP>; 16] = ILP::INTERNAL_DIAG_MONTY;
 
     /// Compute a collection of Poseidon2 internal layers.
     /// One layer for every constant supplied.
@@ -291,9 +295,12 @@ impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 24, D>
     for Poseidon2InternalLayerMonty31<FP, 24, ILP>
 where
     FP: FieldParameters,
-    ILP: InternalLayerParametersAVX2<24, ArrayLike = [__m256i; 23]>,
+    ILP: InternalLayerParametersAVX2<24, ArrayLike = [__m256i; 23]>
+        + InternalLayerBaseParameters<FP, 24>,
 {
     type InternalState = InternalLayer24<FP>;
+
+    const DIFFUSION_MATRIX_DIAGONAL: [MontyField31<FP>; 24] = ILP::INTERNAL_DIAG_MONTY;
 
     /// Compute a collection of Poseidon2 internal layers.
     /// One layer for every constant supplied.

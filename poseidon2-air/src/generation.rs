@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_field::PrimeField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_poseidon2::{DiffusionPermutation, MdsLightPermutation};
+use p3_poseidon2::{ExternalLayer, InternalLayer};
 use tracing::instrument;
 
 use crate::columns::{num_cols, Poseidon2Cols};
@@ -12,10 +12,10 @@ use crate::{FullRound, PartialRound, RoundConstants, SBox};
 #[instrument(name = "generate vectorized Poseidon2 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
-    MdsLight: MdsLightPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
+    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -23,8 +23,6 @@ pub fn generate_vectorized_trace_rows<
 >(
     inputs: Vec<[F; WIDTH]>,
     round_constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-    external_linear_layer: &MdsLight,
-    internal_linear_layer: &Diffusion,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
     assert!(
@@ -52,13 +50,16 @@ pub fn generate_vectorized_trace_rows<
     assert_eq!(perms.len(), n);
 
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
-        generate_trace_rows_for_perm(
-            perm,
-            input,
-            round_constants,
-            external_linear_layer,
-            internal_linear_layer,
-        );
+        generate_trace_rows_for_perm::<
+            F,
+            MdsLight,
+            Diffusion,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(perm, input, round_constants);
     });
 
     trace
@@ -68,18 +69,16 @@ pub fn generate_vectorized_trace_rows<
 #[instrument(name = "generate Poseidon2 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
-    MdsLight: MdsLightPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
+    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 >(
     inputs: Vec<[F; WIDTH]>,
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-    external_linear_layer: &MdsLight,
-    internal_linear_layer: &Diffusion,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
     assert!(
@@ -105,13 +104,16 @@ pub fn generate_trace_rows<
     assert_eq!(perms.len(), n);
 
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
-        generate_trace_rows_for_perm(
-            perm,
-            input,
-            constants,
-            external_linear_layer,
-            internal_linear_layer,
-        );
+        generate_trace_rows_for_perm::<
+            F,
+            MdsLight,
+            Diffusion,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(perm, input, constants);
     });
 
     trace
@@ -120,10 +122,10 @@ pub fn generate_trace_rows<
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<
     F: PrimeField,
-    MdsLight: MdsLightPermutation<F, WIDTH>,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
+    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -138,13 +140,11 @@ fn generate_trace_rows_for_perm<
     >,
     mut state: [F; WIDTH],
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-    external_linear_layer: &MdsLight,
-    internal_linear_layer: &Diffusion,
 ) {
     perm.export = F::one();
     perm.inputs = state;
 
-    external_linear_layer.permute_mut(&mut state);
+    MdsLight::generic_external_linear_layer(&mut state);
 
     for (full_round, constants) in perm
         .beginning_full_rounds
@@ -152,10 +152,7 @@ fn generate_trace_rows_for_perm<
         .zip(&constants.beginning_full_round_constants)
     {
         generate_full_round::<F, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
-            &mut state,
-            full_round,
-            constants,
-            external_linear_layer,
+            &mut state, full_round, constants,
         );
     }
 
@@ -168,7 +165,6 @@ fn generate_trace_rows_for_perm<
             &mut state,
             partial_round,
             *constant,
-            internal_linear_layer,
         );
     }
 
@@ -178,10 +174,7 @@ fn generate_trace_rows_for_perm<
         .zip(&constants.ending_full_round_constants)
     {
         generate_full_round::<F, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
-            &mut state,
-            full_round,
-            constants,
-            external_linear_layer,
+            &mut state, full_round, constants,
         );
     }
 }
@@ -189,15 +182,14 @@ fn generate_trace_rows_for_perm<
 #[inline]
 fn generate_full_round<
     F: PrimeField,
-    MdsLight: MdsLightPermutation<F, WIDTH>,
+    MdsLight: ExternalLayer<F, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [F; WIDTH],
     full_round: &mut FullRound<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[F; WIDTH],
-    external_linear_layer: &MdsLight,
 ) {
     for (state_i, const_i) in state.iter_mut().zip(round_constants) {
         *state_i += *const_i;
@@ -205,31 +197,30 @@ fn generate_full_round<
     for (state_i, sbox_i) in state.iter_mut().zip(full_round.sbox.iter_mut()) {
         generate_sbox(sbox_i, state_i);
     }
-    external_linear_layer.permute_mut(state);
+    MdsLight::generic_external_linear_layer(state);
     full_round.post = *state;
 }
 
 #[inline]
 fn generate_partial_round<
     F: PrimeField,
-    Diffusion: DiffusionPermutation<F, WIDTH>,
+    Diffusion: InternalLayer<F, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [F; WIDTH],
     partial_round: &mut PartialRound<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: F,
-    internal_linear_layer: &Diffusion,
 ) {
     state[0] += round_constant;
     generate_sbox(&mut partial_round.sbox, &mut state[0]);
     partial_round.post_sbox = state[0];
-    internal_linear_layer.permute_mut(state);
+    Diffusion::generic_internal_linear_layer(state);
 }
 
 #[inline]
-fn generate_sbox<F: PrimeField, const DEGREE: usize, const REGISTERS: usize>(
+fn generate_sbox<F: PrimeField, const DEGREE: u64, const REGISTERS: usize>(
     sbox: &mut SBox<F, DEGREE, REGISTERS>,
     x: &mut F,
 ) {

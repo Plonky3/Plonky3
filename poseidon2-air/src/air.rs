@@ -1,9 +1,10 @@
 use core::borrow::Borrow;
+use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{AbstractField, Field};
 use p3_matrix::Matrix;
-use p3_poseidon2::{DiffusionPermutation, MdsLightPermutation};
+use p3_poseidon2::{ExternalLayer, InternalLayer};
 
 use crate::columns::{num_cols, Poseidon2Cols};
 use crate::constants::RoundConstants;
@@ -16,14 +17,14 @@ pub struct Poseidon2Air<
     MdsLight,
     Diffusion,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 > {
     constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-    external_linear_layer: MdsLight,
-    internal_linear_layer: Diffusion,
+    _phantom1: PhantomData<MdsLight>,
+    _phantom2: PhantomData<Diffusion>,
 }
 
 impl<
@@ -31,7 +32,7 @@ impl<
         MdsLight,
         Diffusion,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -47,15 +48,11 @@ impl<
         PARTIAL_ROUNDS,
     >
 {
-    pub fn new(
-        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-        external_linear_layer: MdsLight,
-        internal_linear_layer: Diffusion,
-    ) -> Self {
+    pub fn new(constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>) -> Self {
         Self {
             constants,
-            external_linear_layer,
-            internal_linear_layer,
+            _phantom1: PhantomData,
+            _phantom2: PhantomData,
         }
     }
 }
@@ -65,7 +62,7 @@ impl<
         MdsLight: Sync,
         Diffusion: Sync,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -88,10 +85,10 @@ impl<
 
 pub(crate) fn eval<
     AB: AirBuilder,
-    MdsLight: MdsLightPermutation<AB::Expr, WIDTH>,
-    Diffusion: DiffusionPermutation<AB::Expr, WIDTH>,
+    MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+    Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -118,34 +115,31 @@ pub(crate) fn eval<
 ) {
     let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
 
-    air.external_linear_layer.permute_mut(&mut state);
+    MdsLight::generic_external_linear_layer(&mut state);
 
     for round in 0..HALF_FULL_ROUNDS {
-        eval_full_round(
+        eval_full_round::<AB, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.beginning_full_rounds[round],
             &air.constants.beginning_full_round_constants[round],
-            &air.external_linear_layer,
             builder,
         );
     }
 
     for round in 0..PARTIAL_ROUNDS {
-        eval_partial_round(
+        eval_partial_round::<AB, Diffusion, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.partial_rounds[round],
             &air.constants.partial_round_constants[round],
-            &air.internal_linear_layer,
             builder,
         );
     }
 
     for round in 0..HALF_FULL_ROUNDS {
-        eval_full_round(
+        eval_full_round::<AB, MdsLight, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.ending_full_rounds[round],
             &air.constants.ending_full_round_constants[round],
-            &air.external_linear_layer,
             builder,
         );
     }
@@ -153,10 +147,10 @@ pub(crate) fn eval<
 
 impl<
         AB: AirBuilder,
-        MdsLight: MdsLightPermutation<AB::Expr, WIDTH>,
-        Diffusion: DiffusionPermutation<AB::Expr, WIDTH>,
+        MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+        Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -201,22 +195,21 @@ impl<
 #[inline]
 fn eval_full_round<
     AB: AirBuilder,
-    MdsLight: MdsLightPermutation<AB::Expr, WIDTH>,
+    MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
     full_round: &FullRound<AB::Var, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[AB::F; WIDTH],
-    external_linear_layer: &MdsLight,
     builder: &mut AB,
 ) {
     for (i, (s, r)) in state.iter_mut().zip(round_constants.iter()).enumerate() {
         *s = s.clone() + *r;
         eval_sbox(&full_round.sbox[i], s, builder);
     }
-    external_linear_layer.permute_mut(state);
+    MdsLight::generic_external_linear_layer(state);
     for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
         builder.assert_eq(state_i.clone(), post_i);
         *state_i = post_i.into();
@@ -226,15 +219,14 @@ fn eval_full_round<
 #[inline]
 fn eval_partial_round<
     AB: AirBuilder,
-    Diffusion: DiffusionPermutation<AB::Expr, WIDTH>,
+    Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
     partial_round: &PartialRound<AB::Var, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: &AB::F,
-    internal_linear_layer: &Diffusion,
     builder: &mut AB,
 ) {
     state[0] = state[0].clone() + *round_constant;
@@ -243,7 +235,7 @@ fn eval_partial_round<
     builder.assert_eq(state[0].clone(), partial_round.post_sbox);
     state[0] = partial_round.post_sbox.into();
 
-    internal_linear_layer.permute_mut(state);
+    Diffusion::generic_internal_linear_layer(state);
 }
 
 /// Evaluates the S-box over a degree-1 expression `x`.
@@ -254,7 +246,7 @@ fn eval_partial_round<
 /// `DEGREE` or if the `DEGREE` is not supported by the S-box. The supported degrees are
 /// `3`, `5`, `7`, and `11`.
 #[inline]
-fn eval_sbox<AB, const DEGREE: usize, const REGISTERS: usize>(
+fn eval_sbox<AB, const DEGREE: u64, const REGISTERS: usize>(
     sbox: &SBox<AB::Var, DEGREE, REGISTERS>,
     x: &mut AB::Expr,
     builder: &mut AB,

@@ -58,6 +58,9 @@ impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2Intern
             &self.internal_constants,
         )
     }
+
+    // Need to get a constant function which generates the right matrix.
+    const DIFFUSION_MATRIX_DIAGONAL: [Bn254Fr; 3] = todo!();
 }
 
 pub type Poseidon2ExternalLayerBn254<const WIDTH: usize> = ExternalLayerConstants<Bn254Fr, WIDTH>;

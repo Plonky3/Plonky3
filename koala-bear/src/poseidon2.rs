@@ -45,11 +45,16 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     KOALABEAR_S_BOX_DEGREE,
 >;
 
+const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([1; 16]);
+const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([1; 24]);
+
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
 
 impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
+
+    const INTERNAL_DIAG_MONTY: [MontyField31<KoalaBearParameters>; 16] = INTERNAL_DIAG_MONTY_16;
 
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.
@@ -86,6 +91,8 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
 
 impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [MontyField31<KoalaBearParameters>; 23];
+
+    const INTERNAL_DIAG_MONTY: [MontyField31<KoalaBearParameters>; 24] = INTERNAL_DIAG_MONTY_24;
 
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.

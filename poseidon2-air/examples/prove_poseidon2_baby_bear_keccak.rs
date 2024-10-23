@@ -98,12 +98,7 @@ fn main() -> Result<(), impl Debug> {
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
         VECTOR_LEN,
-    >(
-        inputs,
-        &constants,
-        &external_linear_layer,
-        &internal_linear_layer,
-    );
+    >(inputs, &constants);
 
     let air: VectorizedPoseidon2Air<
         Val,
@@ -115,7 +110,7 @@ fn main() -> Result<(), impl Debug> {
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
         VECTOR_LEN,
-    > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
+    > = VectorizedPoseidon2Air::new(constants);
 
     let dft = Dft::default();
 

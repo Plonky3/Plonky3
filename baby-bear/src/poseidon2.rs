@@ -45,11 +45,16 @@ pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     BABYBEAR_S_BOX_DEGREE,
 >;
 
+const INTERNAL_DIAG_MONTY_16: [BabyBear; 16] = BabyBear::new_array([1; 16]);
+const INTERNAL_DIAG_MONTY_24: [BabyBear; 24] = BabyBear::new_array([1; 24]);
+
 #[derive(Debug, Clone, Default)]
 pub struct BabyBearInternalLayerParameters;
 
 impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {
     type ArrayLike = [MontyField31<BabyBearParameters>; 15];
+
+    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = INTERNAL_DIAG_MONTY_16;
 
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.
@@ -86,6 +91,8 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
 
 impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {
     type ArrayLike = [MontyField31<BabyBearParameters>; 23];
+
+    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = INTERNAL_DIAG_MONTY_24;
 
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.

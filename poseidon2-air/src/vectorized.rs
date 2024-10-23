@@ -3,7 +3,7 @@ use core::borrow::{Borrow, BorrowMut};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::Field;
 use p3_matrix::Matrix;
-use p3_poseidon2::{DiffusionPermutation, MdsLightPermutation};
+use p3_poseidon2::{ExternalLayer, InternalLayer};
 
 use crate::air::eval;
 use crate::constants::RoundConstants;
@@ -14,7 +14,7 @@ use crate::{Poseidon2Air, Poseidon2Cols};
 pub struct VectorizedPoseidon2Cols<
     T,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -28,7 +28,7 @@ pub struct VectorizedPoseidon2Cols<
 impl<
         T,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -79,7 +79,7 @@ impl<
 impl<
         T,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -133,7 +133,7 @@ pub struct VectorizedPoseidon2Air<
     MdsLight,
     Diffusion,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -156,7 +156,7 @@ impl<
         MdsLight,
         Diffusion,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -174,13 +174,9 @@ impl<
         VECTOR_LEN,
     >
 {
-    pub fn new(
-        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
-        external_linear_layer: MdsLight,
-        internal_linear_layer: Diffusion,
-    ) -> Self {
+    pub fn new(constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>) -> Self {
         Self {
-            air: Poseidon2Air::new(constants, external_linear_layer, internal_linear_layer),
+            air: Poseidon2Air::new(constants),
         }
     }
 }
@@ -190,7 +186,7 @@ impl<
         MdsLight: Sync,
         Diffusion: Sync,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -215,10 +211,10 @@ impl<
 
 impl<
         AB: AirBuilder,
-        MdsLight: MdsLightPermutation<AB::Expr, WIDTH>,
-        Diffusion: DiffusionPermutation<AB::Expr, WIDTH>,
+        MdsLight: ExternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
+        Diffusion: InternalLayer<AB::Expr, WIDTH, SBOX_DEGREE>,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
