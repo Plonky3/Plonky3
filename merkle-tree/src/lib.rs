@@ -1,4 +1,3 @@
-// TODO re-introduced; removed so we can println
 #![no_std]
 
 extern crate alloc;
@@ -9,6 +8,8 @@ mod mmcs;
 
 pub use hybrid::hybrid_merkle_tree::*;
 pub use hybrid::hybrid_mmcs::*;
+pub use hybrid::hybrid_strategy::node_converter::*;
+pub use hybrid::hybrid_strategy::utils::*;
 pub use hybrid::hybrid_strategy::*;
 pub use merkle_tree::*;
 pub use mmcs::*;

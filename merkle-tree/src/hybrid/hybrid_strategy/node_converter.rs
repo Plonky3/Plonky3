@@ -57,6 +57,20 @@ where
     }
 }
 
+impl<PW1, PW2> NodeConverter<[PW1; 32], [PW2; 8]> for NodeConverter256BabyBearBytes
+where
+    PW1: PackedValue<Value = u8>,
+    PW2: PackedValue<Value = BabyBear>,
+{
+    fn to_n1(input: [PW2; 8]) -> [PW1; 32] {
+        <Self as NodeConverter<[PW2; 8], [PW1; 32]>>::to_n2(input)
+    }
+
+    fn to_n2(input: [PW1; 32]) -> [PW2; 8] {
+        <Self as NodeConverter<[PW2; 8], [PW1; 32]>>::to_n1(input)
+    }
+}
+
 // TODO study endianness, security, etc.
 // TODO improve efficiency?
 fn bytes32_to_bb8(input: [u8; 32]) -> [BabyBear; 8] {

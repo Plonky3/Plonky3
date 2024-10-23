@@ -188,13 +188,7 @@ where
 {
     let prev_len = prev_layer.len();
 
-    // TODO remove
-    log::info!("Prev len: {}", prev_len);
-
     if matrices_to_inject.is_empty() {
-        // TODO remove
-        log::info!("Skipping injection");
-
         return compress::<PW, C, DIGEST_ELEMS>(prev_layer, c, sizes, prev_len);
     }
 
@@ -212,9 +206,6 @@ where
             let first_row = i * width;
             let left = array::from_fn(|j| PW::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
             let right = array::from_fn(|j| PW::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
-
-            // TODO remove
-            log::info!("Calling compress with prev_len: {}", prev_len);
 
             let mut packed_digest = c.compress([left, right], sizes, prev_len);
             let tallest_digest = h.hash_iter(

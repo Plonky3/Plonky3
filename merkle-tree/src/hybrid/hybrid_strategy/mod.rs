@@ -1,11 +1,14 @@
+use core::any::type_name;
 use core::marker::PhantomData;
 
-use log::log;
 use p3_symmetric::PseudoCompressionFunction;
 
-mod node_converter;
+pub(crate) mod node_converter;
+pub(crate) mod utils;
 
-pub use node_converter::*;
+pub(crate) use node_converter::*;
+
+use crate::pretty_hash_type;
 
 // TODO add to doc: closely mimics CryptographicHasher but
 
@@ -39,6 +42,7 @@ pub struct SimpleHybridCompressor<
 {
     c1: C1,
     c2: C2,
+    bottom_c1: bool,
     _marker: PhantomData<(W1, W2, NC)>,
 }
 
@@ -51,10 +55,11 @@ where
     W1: Clone,
     W2: Clone,
 {
-    pub fn new(c1: C1, c2: C2) -> Self {
+    pub fn new(c1: C1, c2: C2, bottom_c1: bool) -> Self {
         Self {
             c1,
             c2,
+            bottom_c1,
             _marker: PhantomData,
         }
     }
@@ -76,26 +81,27 @@ where
         sizes: &[usize],
         current_size: usize,
     ) -> [W1; DIGEST_ELEMS_1] {
-        if current_size == sizes[0] {
-            // TODO remove
-            log::info!(
-                " - compressing with H1 (sizes: {:?}, current_size: {})",
-                sizes,
-                current_size
-            );
-
-            self.c1.compress(input)
-        } else {
-            // TODO remove
-            log::info!(
-                " - compressing with H2 (sizes: {:?}, current_size: {})",
-                sizes,
-                current_size
-            );
+        if (current_size == sizes[0]) ^ self.bottom_c1 {
+            // TODO potentially remove or handle differently to avoid overhead
+            // log::debug!(
+            //     " - compressing with H2 hash: {}, (sizes: {:?}, current_size: {})",
+            //     &pretty_hash_type::<C2>(),
+            //     sizes,
+            //     current_size,
+            // );
 
             let [input_0, input_1] = input;
             let input_w2 = [NC::to_n2(input_0), NC::to_n2(input_1)];
             NC::to_n1(self.c2.compress(input_w2))
+        } else {
+            // log::debug!(
+            //     " - compressing with H1 hash: {}, (sizes: {:?}, current_size: {})",
+            //     &pretty_hash_type::<C1>(),
+            //     sizes,
+            //     current_size,
+            // );
+
+            self.c1.compress(input)
         }
     }
 }
