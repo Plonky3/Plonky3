@@ -5,18 +5,18 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-util = { path = "../util" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-matrix = { path = "../matrix", version = "0.3.0" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 tracing = "0.1.37"
 itertools = "0.13.0"
 
 [dev-dependencies]
-p3-monty-31 = { path = "../monty-31" }
-p3-baby-bear = { path = "../baby-bear" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
+p3-monty-31 = { path = "../monty-31", version = "0.3.0" }
+p3-baby-bear = { path = "../baby-bear", version = "0.3.0" }
+p3-goldilocks = { path = "../goldilocks", version = "0.3.0" }
+p3-mersenne-31 = { path = "../mersenne-31", version = "0.3.0" }
 criterion = "0.5.1"
 rand = "0.8.5"
 

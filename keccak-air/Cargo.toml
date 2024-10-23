@@ -5,33 +5,33 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-air = { path = "../air" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-util = { path = "../util" }
+p3-air = { path = "../air", version = "0.3.0" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-matrix = { path = "../matrix", version = "0.3.0" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 tracing = "0.1.37"
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
-p3-koala-bear = { path = "../koala-bear" }
-p3-challenger = { path = "../challenger" }
-p3-circle = { path = "../circle" }
-p3-commit = { path = "../commit" }
-p3-dft = { path = "../dft" }
-p3-fri = { path = "../fri" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-blake3 = { path = "../blake3" }
-p3-keccak = { path = "../keccak" }
-p3-mds = { path = "../mds" }
-p3-merkle-tree = { path = "../merkle-tree" }
-p3-mersenne-31 = { path = "../mersenne-31" }
-p3-monty-31 = { path = "../monty-31" }
-p3-poseidon = { path = "../poseidon" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-sha256 = { path = "../sha256" }
-p3-symmetric = { path = "../symmetric" }
-p3-uni-stark = { path = "../uni-stark" }
+p3-baby-bear = { path = "../baby-bear", version = "0.3.0" }
+p3-koala-bear = { path = "../koala-bear", version = "0.3.0" }
+p3-challenger = { path = "../challenger", version = "0.3.0" }
+p3-circle = { path = "../circle", version = "0.3.0" }
+p3-commit = { path = "../commit", version = "0.3.0" }
+p3-dft = { path = "../dft", version = "0.3.0" }
+p3-fri = { path = "../fri", version = "0.3.0" }
+p3-goldilocks = { path = "../goldilocks", version = "0.3.0" }
+p3-blake3 = { path = "../blake3", version = "0.3.0" }
+p3-keccak = { path = "../keccak", version = "0.3.0" }
+p3-mds = { path = "../mds", version = "0.3.0" }
+p3-merkle-tree = { path = "../merkle-tree", version = "0.3.0" }
+p3-mersenne-31 = { path = "../mersenne-31", version = "0.3.0" }
+p3-monty-31 = { path = "../monty-31", version = "0.3.0" }
+p3-poseidon = { path = "../poseidon", version = "0.3.0" }
+p3-poseidon2 = { path = "../poseidon2", version = "0.3.0" }
+p3-sha256 = { path = "../sha256", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric", version = "0.3.0" }
+p3-uni-stark = { path = "../uni-stark", version = "0.3.0" }
 rand = "0.8.5"
 tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
 tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }

@@ -5,9 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-util = { path = "../util" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-matrix = { path = "../matrix", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
+p3-baby-bear = { path = "../baby-bear", version = "0.3.0" }
