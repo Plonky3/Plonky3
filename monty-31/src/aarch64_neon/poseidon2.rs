@@ -6,6 +6,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_field::AbstractField;
 use p3_poseidon2::{
     mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
     InternalLayer, InternalLayerConstructor, MDSMat4,
@@ -32,7 +33,8 @@ pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<FP, WIDTH>>
-    InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
+    InternalLayerConstructor<PackedMontyField31Neon<FP>>
+    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
         Self {
@@ -42,7 +44,8 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<F
     }
 }
 
-impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
+impl<FP: FieldParameters, const WIDTH: usize>
+    ExternalLayerConstructor<PackedMontyField31Neon<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     fn new_from_constants(
@@ -63,13 +66,11 @@ where
     /// Compute a collection of Poseidon2 internal layers.
     /// One layer for every constant supplied.
     fn permute_state(&self, state: &mut Self::InternalState) {
-        unsafe {
-            self.packed_internal_constants.iter().for_each(|&rc| {
-                state.s0 += rc;
-                state.s0 = state.s0.exp_const_u64::<D>();
-                ILP::generic_internal_linear_layer(state);
-            })
-        }
+        self.internal_constants.iter().for_each(|&rc| {
+            state[0] += rc;
+            state[0] = state[0].exp_const_u64::<D>();
+            ILP::generic_internal_linear_layer(state);
+        })
     }
 }
 
@@ -78,7 +79,7 @@ where
 #[inline]
 fn external_rounds<FP, const WIDTH: usize, const D: u64>(
     state: &mut [PackedMontyField31Neon<FP>; WIDTH],
-    packed_external_constants: &[[__m256i; WIDTH]],
+    packed_external_constants: &[[MontyField31<FP>; WIDTH]],
 ) where
     FP: FieldParameters,
 {
@@ -119,7 +120,10 @@ where
     ) -> Self::InternalState {
         mds_light_permutation(&mut state, &MDSMat4);
 
-        external_rounds::<FP, WIDTH, D>(&mut state, &self.packed_initial_external_constants);
+        external_rounds::<FP, WIDTH, D>(
+            &mut state,
+            &self.external_constants.get_initial_constants(),
+        );
 
         state
     }
@@ -133,7 +137,7 @@ where
 
         external_rounds::<FP, WIDTH, D>(
             &mut output_state,
-            &self.packed_terminal_external_constants,
+            &self.external_constants.get_terminal_constants(),
         );
         output_state
     }

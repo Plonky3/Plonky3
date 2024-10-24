@@ -5,11 +5,11 @@
 
 use alloc::vec::Vec;
 
+use p3_field::AbstractField;
 use p3_poseidon2::{
     mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
-    InternalLayer, InternalLayerConstructor, MDSMat4,
+    GenericPoseidon2LinearLayers, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
-use p3_symmetric::Permutation;
 
 use crate::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon};
 
@@ -23,13 +23,13 @@ pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
 }
 
-impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
+impl InternalLayerConstructor<PackedMersenne31Neon> for Poseidon2InternalLayerMersenne31 {
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
         Self { internal_constants }
     }
 }
 
-impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31Neon, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
@@ -40,20 +40,19 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
 impl<const WIDTH: usize, const D: u64> InternalLayer<PackedMersenne31Neon, WIDTH, D>
     for Poseidon2InternalLayerMersenne31
 where
-    GenericPoseidon2LinearLayersMersenne31: GenericPoseidon2LinearLayers<AF, WIDTH>,
+    GenericPoseidon2LinearLayersMersenne31:
+        GenericPoseidon2LinearLayers<PackedMersenne31Neon, WIDTH>,
 {
     type InternalState = [PackedMersenne31Neon; WIDTH];
 
     /// Compute a collection of Poseidon2 internal layers.
     /// One layer for every constant supplied.
     fn permute_state(&self, state: &mut Self::InternalState) {
-        unsafe {
-            self.packed_internal_constants.iter().for_each(|&rc| {
-                state.s0 += rc;
-                state.s0 = state.s0.exp_const_u64::<D>();
-                GenericPoseidon2LinearLayersMersenne31::internal_linear_layer(state);
-            })
-        }
+        self.internal_constants.iter().for_each(|&rc| {
+            state[0] += rc;
+            state[0] = state[0].exp_const_u64::<D>();
+            GenericPoseidon2LinearLayersMersenne31::internal_linear_layer(state);
+        })
     }
 }
 
@@ -62,7 +61,7 @@ where
 #[inline]
 fn external_rounds<const WIDTH: usize, const D: u64>(
     state: &mut [PackedMersenne31Neon; WIDTH],
-    packed_external_constants: &[[__m256i; WIDTH]],
+    packed_external_constants: &[[Mersenne31; WIDTH]],
 ) {
     /*
         The external layer consists of the following 2 operations:
@@ -99,7 +98,7 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
     ) -> Self::InternalState {
         mds_light_permutation(&mut state, &MDSMat4);
 
-        external_rounds::<WIDTH, D>(&mut state, &self.packed_initial_external_constants);
+        external_rounds::<WIDTH, D>(&mut state, &self.external_constants.get_initial_constants());
 
         state
     }
@@ -108,7 +107,10 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
     fn permute_state_terminal(&self, state: Self::InternalState) -> [PackedMersenne31Neon; WIDTH] {
         let mut output_state = state;
 
-        external_rounds::<WIDTH, D>(&mut output_state, &self.packed_terminal_external_constants);
+        external_rounds::<WIDTH, D>(
+            &mut output_state,
+            &self.external_constants.get_terminal_constants(),
+        );
         output_state
     }
 }
