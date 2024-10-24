@@ -116,15 +116,14 @@ mod tests {
             I: IntoIterator<Item = &'a [F]>,
             F: 'a,
         {
-            let (sum, len) =
-                input
-                    .into_iter()
-                    .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), n| {
-                        (
-                            acc_sum + n.iter().fold(F::ZERO, |acc, f| acc + *f),
-                            acc_len + n.len(),
-                        )
-                    });
+            let (sum, len) = input
+                .into_iter()
+                .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), n| {
+                    (
+                        acc_sum + n.iter().fold(F::ZERO, |acc, f| acc + *f),
+                        acc_len + n.len(),
+                    )
+                });
             [sum, F::from_canonical_usize(len)]
         }
     }
