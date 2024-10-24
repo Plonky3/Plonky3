@@ -51,18 +51,25 @@ fn main() -> Result<(), impl Debug> {
     type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>;
-    let perm = Perm::new_from_rng_128(
+    type Perm16 = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>;
+    let perm16 = Perm16::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
         DiffusionMatrixKoalaBear::default(),
         &mut thread_rng(),
     );
 
-    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-    let hash = MyHash::new(perm.clone());
+    type Perm24 = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 24, 3>;
+    let perm24 = Perm24::new_from_rng_128(
+        Poseidon2ExternalMatrixGeneral,
+        DiffusionMatrixKoalaBear::default(),
+        &mut thread_rng(),
+    );
 
-    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-    let compress = MyCompress::new(perm.clone());
+    type MyHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
+    let hash = MyHash::new(perm24.clone());
+
+    type MyCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
+    let compress = MyCompress::new(perm16.clone());
 
     type ValMmcs =
         MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
@@ -74,7 +81,7 @@ fn main() -> Result<(), impl Debug> {
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
 
-    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
     type MdsLight = Poseidon2ExternalMatrixGeneral;
     let external_linear_layer = MdsLight {};
@@ -126,9 +133,9 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    let mut challenger = Challenger::new(perm.clone());
+    let mut challenger = Challenger::new(perm24.clone());
     let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
 
-    let mut challenger = Challenger::new(perm);
+    let mut challenger = Challenger::new(perm24);
     verify(&config, &air, &mut challenger, &proof, &vec![])
 }
