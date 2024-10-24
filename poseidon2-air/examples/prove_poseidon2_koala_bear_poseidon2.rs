@@ -12,7 +12,7 @@ use p3_koala_bear::{
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::GenericDiffusionMatrixMontyField31;
 use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
-use p3_poseidon2_air::{generate_trace_rows, Poseidon2Air, RoundConstants};
+use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
@@ -34,7 +34,9 @@ const SBOX_REGISTERS: usize = 0;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
-const NUM_HASHES: usize = 1 << 16;
+const NUM_ROWS: usize = 1 << 16;
+const VECTOR_LEN: usize = 1 << 3;
+const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -82,8 +84,8 @@ fn main() -> Result<(), impl Debug> {
     let internal_linear_layer = Diffusion::new();
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<
+    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_vectorized_trace_rows::<
         Val,
         MdsLight,
         Diffusion,
@@ -92,6 +94,7 @@ fn main() -> Result<(), impl Debug> {
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
+        VECTOR_LEN,
     >(
         inputs,
         &constants,
@@ -99,7 +102,7 @@ fn main() -> Result<(), impl Debug> {
         &internal_linear_layer,
     );
 
-    let air: Poseidon2Air<
+    let air: VectorizedPoseidon2Air<
         Val,
         MdsLight,
         Diffusion,
@@ -108,7 +111,8 @@ fn main() -> Result<(), impl Debug> {
         SBOX_REGISTERS,
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
-    > = Poseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
+        VECTOR_LEN,
+    > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
 
     let fri_config = FriConfig {
         log_blowup: 1,
