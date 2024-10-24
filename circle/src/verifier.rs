@@ -95,7 +95,7 @@ where
     M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
-    let mut folded_eval = F::zero();
+    let mut folded_eval = F::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
 
     for (log_folded_height, (&beta, comm, opening)) in izip!((0..log_max_height).rev(), steps) {

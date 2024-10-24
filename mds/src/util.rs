@@ -47,7 +47,7 @@ pub fn apply_circulant<AF: AbstractField, const N: usize>(
 ) -> [AF; N] {
     let mut matrix: [AF; N] = circ_matrix.map(AF::from_canonical_u64);
 
-    let mut output = array::from_fn(|_| AF::zero());
+    let mut output = array::from_fn(|_| AF::ZERO);
     for out_i in output.iter_mut().take(N - 1) {
         *out_i = AF::dot_product(&matrix, &input);
         matrix.rotate_right(1);

@@ -74,7 +74,7 @@ mod tests {
     fn add() {
         // real part
         assert_eq!(Fi::one() + Fi::one(), Fi::two());
-        assert_eq!(Fi::neg_one() + Fi::one(), Fi::zero());
+        assert_eq!(Fi::neg_one() + Fi::one(), Fi::ZERO);
         assert_eq!(Fi::neg_one() + Fi::two(), Fi::one());
         assert_eq!(
             (Fi::neg_one() + Fi::neg_one()).real(),
@@ -88,7 +88,7 @@ mod tests {
         );
         assert_eq!(
             Fi::new_imag(F::neg_one()) + Fi::new_imag(F::one()),
-            Fi::new_imag(F::zero())
+            Fi::new_imag(F::ZERO)
         );
         assert_eq!(
             Fi::new_imag(F::neg_one()) + Fi::new_imag(F::two()),
@@ -106,7 +106,7 @@ mod tests {
         );
         assert_eq!(
             Fi::new(F::neg_one(), F::neg_one()) + Fi::new(F::one(), F::one()),
-            Fi::zero()
+            Fi::ZERO
         );
         assert_eq!(
             Fi::new(F::neg_one(), F::one()) + Fi::new(F::two(), F::new(F::ORDER_U32 - 2)),
@@ -117,25 +117,25 @@ mod tests {
     #[test]
     fn sub() {
         // real part
-        assert_eq!(Fi::one() - Fi::one(), Fi::zero());
-        assert_eq!(Fi::two() - Fi::two(), Fi::zero());
-        assert_eq!(Fi::neg_one() - Fi::neg_one(), Fi::zero());
+        assert_eq!(Fi::one() - Fi::one(), Fi::ZERO);
+        assert_eq!(Fi::two() - Fi::two(), Fi::ZERO);
+        assert_eq!(Fi::neg_one() - Fi::neg_one(), Fi::ZERO);
         assert_eq!(Fi::two() - Fi::one(), Fi::one());
-        assert_eq!(Fi::neg_one() - Fi::zero(), Fi::neg_one());
+        assert_eq!(Fi::neg_one() - Fi::ZERO, Fi::neg_one());
 
         // complex part
-        assert_eq!(Fi::new_imag(F::one()) - Fi::new_imag(F::one()), Fi::zero());
-        assert_eq!(Fi::new_imag(F::two()) - Fi::new_imag(F::two()), Fi::zero());
+        assert_eq!(Fi::new_imag(F::one()) - Fi::new_imag(F::one()), Fi::ZERO);
+        assert_eq!(Fi::new_imag(F::two()) - Fi::new_imag(F::two()), Fi::ZERO);
         assert_eq!(
             Fi::new_imag(F::neg_one()) - Fi::new_imag(F::neg_one()),
-            Fi::zero()
+            Fi::ZERO
         );
         assert_eq!(
             Fi::new_imag(F::two()) - Fi::new_imag(F::one()),
             Fi::new_imag(F::one())
         );
         assert_eq!(
-            Fi::new_imag(F::neg_one()) - Fi::zero(),
+            Fi::new_imag(F::neg_one()) - Fi::ZERO,
             Fi::new_imag(F::neg_one())
         );
     }

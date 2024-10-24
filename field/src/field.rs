@@ -38,7 +38,7 @@ pub trait AbstractField:
 {
     type F: Field;
 
-    fn zero() -> Self;
+    const ZERO: Self;
     fn one() -> Self;
     fn two() -> Self;
     fn neg_one() -> Self;
@@ -189,12 +189,12 @@ pub trait AbstractField:
     /// before assigning them to a userspace process. In that case, our process should not need to
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.
     ///
-    /// In particular, `vec![Self::zero(); len]` appears to result in redundant userspace zeroing.
+    /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
     /// This is the default implementation, but implementors may wish to provide their own
     /// implementation which transmutes something like `vec![0u32; len]`.
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        vec![Self::zero(); len]
+        vec![Self::ZERO; len]
     }
 }
 
@@ -216,7 +216,7 @@ pub trait Field:
     type Packing: PackedField<Scalar = Self>;
 
     fn is_zero(&self) -> bool {
-        *self == Self::zero()
+        *self == Self::ZERO
     }
 
     fn is_one(&self) -> bool {
@@ -371,7 +371,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// different f might have been used.
     fn monomial(exponent: usize) -> Self {
         assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::zero(); Self::D];
+        let mut vec = vec![Base::ZERO; Self::D];
         vec[exponent] = Base::one();
         Self::from_base_slice(&vec)
     }

@@ -44,7 +44,7 @@ where
     let mds = Mds::default();
     let sbox = BasicSboxLayer::for_alpha(ALPHA);
     let rescue = Rescue::<AF::F, Mds, _, WIDTH>::new(NUM_ROUNDS, round_constants, mds, sbox);
-    let input: [AF; WIDTH] = array::from_fn(|_| AF::zero());
+    let input: [AF; WIDTH] = array::from_fn(|_| AF::ZERO);
     let name = format!("rescue::<{}, {}>", type_name::<AF>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {

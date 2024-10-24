@@ -120,12 +120,12 @@ where
     );
     assert_eq!(
         vec0 + (-vec0),
-        PF::zero(),
+        PF::ZERO,
         "Error when testing additive inverse."
     );
     assert_eq!(
         vec0 - vec0,
-        PF::zero(),
+        PF::ZERO,
         "Error when testing subtracting of self."
     );
     assert_eq!(
@@ -185,12 +185,12 @@ where
     );
     assert_eq!(
         vec0 * zeros,
-        PF::zero(),
+        PF::ZERO,
         "Error when testing right multiplication by 0."
     );
     assert_eq!(
         zeros * vec0,
-        PF::zero(),
+        PF::ZERO,
         "Error when testing left multiplication by 0."
     );
     assert_eq!(

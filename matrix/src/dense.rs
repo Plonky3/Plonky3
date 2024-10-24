@@ -285,7 +285,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         //     reverse_matrix_index_bits(mat);
         //     mat
         //         .values
-        //         .resize(mat.values.len() << added_bits, F::zero());
+        //         .resize(mat.values.len() << added_bits, F::ZERO);
         //     reverse_matrix_index_bits(mat);
         // But rather than implement it with bit reversals, we directly construct the resulting matrix,
         // whose rows are zero except for rows whose low `added_bits` bits are zero.

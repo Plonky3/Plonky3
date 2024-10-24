@@ -92,9 +92,8 @@ impl Distribution<Goldilocks> for Standard {
 impl AbstractField for Goldilocks {
     type F = Self;
 
-    fn zero() -> Self {
-        Self::new(0)
-    }
+    const ZERO: Self = Self::new(0);
+
     fn one() -> Self {
         Self::new(1)
     }
@@ -319,7 +318,7 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
 
         // This sum will not overflow so long as iter.len() < 2^64.
         let sum = iter.map(|x| x.value as u128).sum::<u128>();
@@ -517,7 +516,7 @@ mod tests {
         let f_1 = F::new(1);
         let f_1_copy = F::new(1);
 
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::new(2);
@@ -531,7 +530,7 @@ mod tests {
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
         let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
         let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);

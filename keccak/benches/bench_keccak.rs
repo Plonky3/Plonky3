@@ -47,7 +47,7 @@ pub fn keccak_field_32_hash(c: &mut Criterion) {
     type P = [F; VECTOR_LEN];
     const PACKED_ELEMS_PER_HASH: usize = 100;
     const BYTES_PER_HASH: usize = size_of::<P>() * PACKED_ELEMS_PER_HASH;
-    let input = vec![[F::zero(); VECTOR_LEN]; PACKED_ELEMS_PER_HASH];
+    let input = vec![[F::ZERO; VECTOR_LEN]; PACKED_ELEMS_PER_HASH];
 
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
     let u64_hash = U64Hash::new(KeccakF {});

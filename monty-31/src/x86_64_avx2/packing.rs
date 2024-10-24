@@ -455,7 +455,7 @@ impl<FP: FieldParameters> Sum for PackedMontyField31AVX2<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -472,10 +472,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
 impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     type F = MontyField31<FP>;
 
-    #[inline]
-    fn zero() -> Self {
-        MontyField31::zero().into()
-    }
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
 
     #[inline]
     fn one() -> Self {

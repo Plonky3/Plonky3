@@ -275,7 +275,7 @@ where
             for (mat, points_for_mat) in izip!(mats, points) {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
-                    .get_or_insert_with(|| vec![Challenge::zero(); mat.height()]);
+                    .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
@@ -412,7 +412,7 @@ where
 
                     let (alpha_pow, ro) = reduced_openings
                         .entry(log_height)
-                        .or_insert((Challenge::one(), Challenge::zero()));
+                        .or_insert((Challenge::one(), Challenge::ZERO));
 
                     for (z, ps_at_z) in mat_points_and_values {
                         for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {

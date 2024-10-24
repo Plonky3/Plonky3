@@ -200,7 +200,7 @@ mod tests {
         let zeta: Point<EF> = Point::from_projective_line(random());
 
         let mut alpha_offset = EF::one();
-        let mut ros = vec![EF::zero(); 1 << lde_domain.log_n];
+        let mut ros = vec![EF::ZERO; 1 << lde_domain.log_n];
 
         for _ in 0..4 {
             let evals = CircleEvaluations::from_cfft_order(
@@ -229,7 +229,7 @@ mod tests {
         let log_n = 5;
         for log_blowup in [1, 2, 3] {
             let mut coeffs = RowMajorMatrix::<F>::rand(&mut thread_rng(), (1 << log_n) + 1, 1);
-            coeffs.pad_to_height(1 << (log_n + log_blowup), F::zero());
+            coeffs.pad_to_height(1 << (log_n + log_blowup), F::ZERO);
 
             let domain = CircleDomain::standard(log_n + log_blowup);
             let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone()).values;
@@ -243,7 +243,7 @@ mod tests {
                     .values;
             assert_eq!(&coeffs2[..(1 << log_n)], &coeffs.values[..(1 << log_n)]);
             assert_eq!(lambda, coeffs.values[1 << log_n]);
-            assert_eq!(coeffs2[1 << log_n], F::zero());
+            assert_eq!(coeffs2[1 << log_n], F::ZERO);
             assert_eq!(
                 &coeffs2[(1 << log_n) + 1..],
                 &coeffs.values[(1 << log_n) + 1..]

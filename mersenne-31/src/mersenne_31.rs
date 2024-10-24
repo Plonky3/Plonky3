@@ -93,9 +93,8 @@ impl Distribution<Mersenne31> for Standard {
 impl AbstractField for Mersenne31 {
     type F = Self;
 
-    fn zero() -> Self {
-        Self::new(0)
-    }
+    const ZERO: Self = Self { value: 0 };
+
     fn one() -> Self {
         Self::new(1)
     }
@@ -336,7 +335,7 @@ impl AddAssign for Mersenne31 {
 impl Sum for Mersenne31 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length >= 6.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
         // It assumes that iter.len() < 2^31.
 
         // This sum will not overflow so long as iter.len() < 2^33.
@@ -450,18 +449,18 @@ mod tests {
     #[test]
     fn add() {
         assert_eq!(F::one() + F::one(), F::two());
-        assert_eq!(F::neg_one() + F::one(), F::zero());
+        assert_eq!(F::neg_one() + F::one(), F::ZERO);
         assert_eq!(F::neg_one() + F::two(), F::one());
         assert_eq!(F::neg_one() + F::neg_one(), F::new(F::ORDER_U32 - 2));
     }
 
     #[test]
     fn sub() {
-        assert_eq!(F::one() - F::one(), F::zero());
-        assert_eq!(F::two() - F::two(), F::zero());
-        assert_eq!(F::neg_one() - F::neg_one(), F::zero());
+        assert_eq!(F::one() - F::one(), F::ZERO);
+        assert_eq!(F::two() - F::two(), F::ZERO);
+        assert_eq!(F::neg_one() - F::neg_one(), F::ZERO);
         assert_eq!(F::two() - F::one(), F::one());
-        assert_eq!(F::neg_one() - F::zero(), F::neg_one());
+        assert_eq!(F::neg_one() - F::ZERO, F::neg_one());
     }
 
     #[test]

@@ -27,7 +27,7 @@ mod tests {
 
     test_packed_field!(
         crate::PackedBabyBearNeon,
-        crate::PackedBabyBearNeon::zero(),
+        crate::PackedBabyBearNeon::ZERO,
         p3_monty_31::PackedMontyField31Neon::<crate::BabyBearParameters>(super::SPECIAL_VALS)
     );
 }

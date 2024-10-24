@@ -60,7 +60,7 @@ fn poseidon2<F, MdsLight, Diffusion, const WIDTH: usize, const D: u64>(
         internal_linear_layer,
         &mut rng,
     );
-    let input = [F::Packing::zero(); WIDTH];
+    let input = [F::Packing::ZERO; WIDTH];
     let name = format!(
         "poseidon2::<{}, {}, {}, {}>",
         type_name::<F::Packing>(),
@@ -89,7 +89,7 @@ where
         internal_linear_layer,
         &mut rng,
     );
-    let input = [F::Packing::zero(); WIDTH];
+    let input = [F::Packing::ZERO; WIDTH];
     let name = format!(
         "poseidon2::<{}, {}, {}>",
         type_name::<F::Packing>(),

@@ -152,7 +152,7 @@ mod tests {
         let f_1 = F::one();
         let f_1_copy = F::from_canonical_u32(1);
 
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::two();
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
         let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
         let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);

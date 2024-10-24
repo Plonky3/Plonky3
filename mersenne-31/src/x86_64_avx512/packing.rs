@@ -318,7 +318,7 @@ impl Sum for PackedMersenne31AVX512 {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -335,10 +335,7 @@ impl Product for PackedMersenne31AVX512 {
 impl AbstractField for PackedMersenne31AVX512 {
     type F = Mersenne31;
 
-    #[inline]
-    fn zero() -> Self {
-        Mersenne31::zero().into()
-    }
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
 
     #[inline]
     fn one() -> Self {

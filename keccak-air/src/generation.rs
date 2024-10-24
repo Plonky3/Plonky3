@@ -126,7 +126,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
             for limb in 0..U64_LIMBS {
                 row.a_prime_prime[y][x][limb] = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                     .rev()
-                    .fold(F::zero(), |acc, z| {
+                    .fold(F::ZERO, |acc, z| {
                         let bit = xor([
                             row.b(x, y, z),
                             andn(row.b((x + 1) % 5, y, z), row.b((x + 2) % 5, y, z)),

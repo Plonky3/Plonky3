@@ -21,8 +21,9 @@ impl<F: Field> Point<F> {
         debug_assert_eq!(x.square() + y.square(), F::one());
         Point { x, y, _private: () }
     }
+
     pub fn zero() -> Self {
-        Self::new(F::one(), F::zero())
+        Self::new(F::one(), F::ZERO)
     }
 
     /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
