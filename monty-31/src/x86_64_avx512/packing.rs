@@ -378,10 +378,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX512<FP> {
 impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
     type F = MontyField31<FP>;
 
-    #[inline]
-    fn zero() -> Self {
-        MontyField31::ZERO.into()
-    }
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
 
     #[inline]
     fn one() -> Self {

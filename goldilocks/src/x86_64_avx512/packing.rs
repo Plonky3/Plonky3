@@ -158,10 +158,7 @@ impl Product for PackedGoldilocksAVX512 {
 impl AbstractField for PackedGoldilocksAVX512 {
     type F = Goldilocks;
 
-    #[inline]
-    fn zero() -> Self {
-        Goldilocks::ZERO.into()
-    }
+    const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
 
     #[inline]
     fn one() -> Self {

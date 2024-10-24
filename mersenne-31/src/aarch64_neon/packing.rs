@@ -311,10 +311,7 @@ impl Product for PackedMersenne31Neon {
 impl AbstractField for PackedMersenne31Neon {
     type F = Mersenne31;
 
-    #[inline]
-    fn zero() -> Self {
-        Mersenne31::ZERO.into()
-    }
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
 
     #[inline]
     fn one() -> Self {

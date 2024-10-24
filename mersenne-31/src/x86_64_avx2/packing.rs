@@ -315,7 +315,7 @@ impl Product for PackedMersenne31AVX2 {
 impl AbstractField for PackedMersenne31AVX2 {
     type F = Mersenne31;
 
-    const ZERO: Self = Self([Mersenne31::ZERO; WIDTH]);
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
 
     #[inline]
     fn one() -> Self {
