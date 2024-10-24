@@ -240,9 +240,16 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
                 };
 
                 // Subsequent layers.
+                let mut backwards = true;
                 for layer in 1..mid {
                     let layer_rev = log_h - 1 - layer;
-                    dit_layer(&mut dst_submat, layer, twiddles[layer_rev].iter().copied());
+                    dit_layer(
+                        &mut dst_submat,
+                        layer,
+                        twiddles[layer_rev].iter().copied(),
+                        backwards,
+                    );
+                    backwards = !backwards;
                 }
             });
     });
@@ -262,6 +269,7 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
         dst.par_row_chunks_exact_mut(1 << (log_h - mid))
             .enumerate()
             .for_each(|(thread, mut submat)| {
+                let mut backwards = false;
                 for layer in mid..log_h {
                     let layer_rev = log_h - 1 - layer;
                     let first_block = thread << (layer - mid);
@@ -270,7 +278,9 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
                         log_h,
                         layer,
                         twiddles[layer_rev][first_block..].iter().copied(),
+                        backwards,
                     );
+                    backwards = !backwards;
                 }
             });
     });
@@ -294,9 +304,16 @@ fn coset_dft_in_place<F: TwoAdicField + Ord>(
     info_span!("modified first_half_dit").in_scope(|| {
         mat.par_row_chunks_exact_mut(1 << mid)
             .for_each(|mut submat| {
+                let mut backwards = false;
                 for layer in 0..mid {
                     let layer_rev = log_h - 1 - layer;
-                    dit_layer(&mut submat, layer, twiddles[layer_rev].iter().copied());
+                    dit_layer(
+                        &mut submat,
+                        layer,
+                        twiddles[layer_rev].iter().copied(),
+                        backwards,
+                    );
+                    backwards = !backwards;
                 }
             });
     });
@@ -309,6 +326,7 @@ fn coset_dft_in_place<F: TwoAdicField + Ord>(
         mat.par_row_chunks_exact_mut(1 << (log_h - mid))
             .enumerate()
             .for_each(|(thread, mut submat)| {
+                let mut backwards = false;
                 for layer in mid..log_h {
                     let layer_rev = log_h - 1 - layer;
                     let first_block = thread << (layer - mid);
@@ -317,7 +335,9 @@ fn coset_dft_in_place<F: TwoAdicField + Ord>(
                         log_h,
                         layer,
                         twiddles[layer_rev][first_block..].iter().copied(),
+                        backwards,
                     );
+                    backwards = !backwards;
                 }
             });
     });
@@ -331,6 +351,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
     // max block size: 2^mid
     mat.par_row_chunks_exact_mut(1 << mid)
         .for_each(|mut submat| {
+            let mut backwards = false;
             for layer in 0..mid {
                 let layer_rev = log_h - 1 - layer;
                 let layer_pow = 1 << layer_rev;
@@ -338,7 +359,9 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                     &mut submat,
                     layer,
                     twiddles.iter().copied().step_by(layer_pow),
+                    backwards,
                 );
+                backwards = !backwards;
             }
         });
 }
@@ -352,6 +375,7 @@ fn second_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles_rev: 
     mat.par_row_chunks_exact_mut(1 << (log_h - mid))
         .enumerate()
         .for_each(|(thread, mut submat)| {
+            let mut backwards = false;
             for layer in mid..log_h {
                 let first_block = thread << (layer - mid);
                 dit_layer_rev(
@@ -359,7 +383,9 @@ fn second_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles_rev: 
                     log_h,
                     layer,
                     twiddles_rev[first_block..].iter().copied(),
+                    backwards,
                 );
+                backwards = !backwards;
             }
         });
 }
@@ -369,13 +395,14 @@ fn dit_layer<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     layer: usize,
     twiddles: impl Iterator<Item = F> + Clone,
+    backwards: bool,
 ) {
     let half_block_size = 1 << layer;
     let block_size = half_block_size * 2;
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for block in submat.values.chunks_mut(block_size * width) {
+    let process_block = |block: &mut [F]| {
         let (lows, highs) = block.split_at_mut(half_block_size * width);
 
         for (lo, hi, twiddle) in izip!(
@@ -384,6 +411,17 @@ fn dit_layer<F: Field>(
             twiddles.clone()
         ) {
             DitButterfly(twiddle).apply_to_rows(lo, hi);
+        }
+    };
+
+    let blocks = submat.values.chunks_mut(block_size * width);
+    if backwards {
+        for block in blocks.rev() {
+            process_block(block);
+        }
+    } else {
+        for block in blocks {
+            process_block(block);
         }
     }
 }
@@ -425,7 +463,8 @@ fn dit_layer_rev<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
     layer: usize,
-    twiddles_rev: impl Iterator<Item = F>,
+    twiddles_rev: impl DoubleEndedIterator<Item = F> + ExactSizeIterator,
+    backwards: bool,
 ) {
     let layer_rev = log_h - 1 - layer;
 
@@ -434,12 +473,19 @@ fn dit_layer_rev<F: Field>(
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    for (block, twiddle) in submat
+    let blocks_and_twiddles = submat
         .values
         .chunks_mut(block_size * width)
-        .zip(twiddles_rev)
-    {
-        let (lo, hi) = block.split_at_mut(half_block_size * width);
-        DitButterfly(twiddle).apply_to_rows(lo, hi)
+        .zip(twiddles_rev);
+    if backwards {
+        for (block, twiddle) in blocks_and_twiddles.rev() {
+            let (lo, hi) = block.split_at_mut(half_block_size * width);
+            DitButterfly(twiddle).apply_to_rows(lo, hi)
+        }
+    } else {
+        for (block, twiddle) in blocks_and_twiddles {
+            let (lo, hi) = block.split_at_mut(half_block_size * width);
+            DitButterfly(twiddle).apply_to_rows(lo, hi)
+        }
     }
 }
