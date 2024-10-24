@@ -44,12 +44,12 @@ impl<AF: AbstractField> Complex<AF> {
 
     #[inline(always)]
     pub fn new_real(real: AF) -> Self {
-        Self::new(real, AF::zero())
+        Self::new(real, AF::ZERO)
     }
 
     #[inline(always)]
     pub fn new_imag(imag: AF) -> Self {
-        Self::new(AF::zero(), imag)
+        Self::new(AF::ZERO, imag)
     }
 
     #[inline(always)]

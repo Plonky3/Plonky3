@@ -98,7 +98,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let a_limb = local.a[y][x][limb];
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
-                        .fold(AB::Expr::zero(), |acc, z| {
+                        .fold(AB::Expr::ZERO, |acc, z| {
                             builder.assert_bool(local.a_prime[y][x][z]);
                             acc.double() + get_bit(z)
                         });
@@ -134,7 +134,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 for limb in 0..U64_LIMBS {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
-                        .fold(AB::Expr::zero(), |acc, z| acc.double() + get_bit(z));
+                        .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_bit(z));
                     builder.assert_eq(computed_limb, local.a_prime_prime[y][x][limb]);
                 }
             }
@@ -145,7 +145,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             let computed_a_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
-                .fold(AB::Expr::zero(), |acc, z| {
+                .fold(AB::Expr::ZERO, |acc, z| {
                     builder.assert_bool(local.a_prime_prime_0_0_bits[z]);
                     acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
@@ -154,7 +154,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         }
 
         let get_xored_bit = |i| {
-            let mut rc_bit_i = AB::Expr::zero();
+            let mut rc_bit_i = AB::Expr::ZERO;
             for r in 0..NUM_ROUNDS {
                 let this_round = local.step_flags[r];
                 let this_round_constant = AB::Expr::from_canonical_u8(rc_value_bit(r, i));
@@ -169,7 +169,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             let computed_a_prime_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
-                .fold(AB::Expr::zero(), |acc, z| acc.double() + get_xored_bit(z));
+                .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_xored_bit(z));
             builder.assert_eq(
                 computed_a_prime_prime_prime_0_0_limb,
                 a_prime_prime_prime_0_0_limb,

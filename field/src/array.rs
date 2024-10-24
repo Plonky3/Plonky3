@@ -19,7 +19,7 @@ impl<F: Field, const N: usize> FieldArray<F, N> {
 
 impl<F: Field, const N: usize> Default for FieldArray<F, N> {
     fn default() -> Self {
-        Self::zero()
+        Self::ZERO
     }
 }
 
@@ -38,9 +38,8 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
     type F = F;
 
-    fn zero() -> Self {
-        FieldArray([F::zero(); N])
-    }
+    const ZERO: Self = FieldArray([F::ZERO; N]);
+
     fn one() -> Self {
         FieldArray([F::one(); N])
     }
@@ -243,7 +242,7 @@ impl<F: Field, const N: usize> Div<F> for FieldArray<F, N> {
 impl<F: Field, const N: usize> Sum for FieldArray<F, N> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 

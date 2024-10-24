@@ -151,10 +151,7 @@ impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
-    #[inline(always)]
-    fn zero() -> Self {
-        FP::MONTY_ZERO
-    }
+    const ZERO: Self = FP::MONTY_ZERO;
 
     #[inline(always)]
     fn one() -> Self {
@@ -344,7 +341,7 @@ impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
 impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
         // There might be a faster reduction method possible for lengths <= 16 which avoids %.
 
         // This sum will not overflow so long as iter.len() < 2^33.
@@ -377,7 +374,7 @@ impl<FP: FieldParameters> Neg for MontyField31<FP> {
 
     #[inline]
     fn neg(self) -> Self::Output {
-        Self::zero() - self
+        Self::ZERO - self
     }
 }
 

@@ -103,7 +103,7 @@ mod tests {
         {
             let (sum, len) = input
                 .into_iter()
-                .fold((F::zero(), 0_usize), |(acc_sum, acc_len), f| {
+                .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), f| {
                     (acc_sum + f, acc_len + 1)
                 });
             [sum, F::from_canonical_usize(len)]
@@ -119,9 +119,9 @@ mod tests {
             let (sum, len) =
                 input
                     .into_iter()
-                    .fold((F::zero(), 0_usize), |(acc_sum, acc_len), n| {
+                    .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), n| {
                         (
-                            acc_sum + n.iter().fold(F::zero(), |acc, f| acc + *f),
+                            acc_sum + n.iter().fold(F::ZERO, |acc, f| acc + *f),
                             acc_len + n.len(),
                         )
                     });

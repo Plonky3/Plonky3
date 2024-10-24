@@ -25,7 +25,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     coeffs: &RowMajorMatrix<F>,
     x: EF,
 ) -> Vec<EF> {
-    let mut acc = vec![EF::zero(); coeffs.width()];
+    let mut acc = vec![EF::ZERO; coeffs.width()];
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r);
         for (acc_c, row_c) in acc.iter_mut().zip(row.as_ref().iter()) {
@@ -99,7 +99,7 @@ where
         assert!(domain.log_n >= self.log_n);
         coeffs.values.resize(
             coeffs.values.len() << (domain.log_n - self.log_n),
-            Val::zero(),
+            Val::ZERO,
         );
         self.dft.coset_dft_batch(coeffs, domain.shift)
     }

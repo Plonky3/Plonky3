@@ -81,7 +81,7 @@ impl Debug for PackedGoldilocksAVX2 {
 impl Default for PackedGoldilocksAVX2 {
     #[inline]
     fn default() -> Self {
-        Self::zero()
+        Self::ZERO
     }
 }
 
@@ -159,10 +159,7 @@ impl Product for PackedGoldilocksAVX2 {
 impl AbstractField for PackedGoldilocksAVX2 {
     type F = Goldilocks;
 
-    #[inline]
-    fn zero() -> Self {
-        Goldilocks::zero().into()
-    }
+    const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
 
     #[inline]
     fn one() -> Self {
@@ -322,7 +319,7 @@ impl SubAssign<Goldilocks> for PackedGoldilocksAVX2 {
 impl Sum for PackedGoldilocksAVX2 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
@@ -608,7 +605,7 @@ mod tests {
 
     test_packed_field!(
         crate::PackedGoldilocksAVX2,
-        crate::PackedGoldilocksAVX2::zero(),
+        crate::PackedGoldilocksAVX2::ZERO,
         crate::PackedGoldilocksAVX2(super::SPECIAL_VALS)
     );
 }

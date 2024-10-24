@@ -30,7 +30,7 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // ```
     #[inline(always)]
     fn ext_generator() -> [Self; 3] {
-        [Self::new(10), Self::new(1), Self::zero()]
+        [Self::new(10), Self::new(1), Self::ZERO]
     }
 }
 
@@ -76,11 +76,11 @@ impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
         assert!(bits <= 33);
         if bits == 33 {
             [
-                Complex::zero(),
+                Complex::ZERO,
                 Complex::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
             ]
         } else {
-            [Complex::two_adic_generator(bits), Complex::zero()]
+            [Complex::two_adic_generator(bits), Complex::ZERO]
         }
     }
 }
@@ -116,7 +116,7 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
         [
             Complex::new_real(Mersenne31::new(5)),
             Complex::new_real(Mersenne31::one()),
-            Complex::zero(),
+            Complex::ZERO,
         ]
     }
 }

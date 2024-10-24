@@ -141,7 +141,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
 
         if log_n < domain.log_n {
             // We could simply pad coeffs like this:
-            // coeffs.pad_to_height(target_domain.size(), F::zero());
+            // coeffs.pad_to_height(target_domain.size(), F::ZERO);
             // But the first `added_bits` layers will simply fill out the zeros
             // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
             // both `x_1` and `x_2` are set to `x_1`).

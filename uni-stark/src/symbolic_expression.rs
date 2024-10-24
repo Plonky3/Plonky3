@@ -64,7 +64,7 @@ impl<F> SymbolicExpression<F> {
 
 impl<F: Field> Default for SymbolicExpression<F> {
     fn default() -> Self {
-        Self::Constant(F::zero())
+        Self::Constant(F::ZERO)
     }
 }
 
@@ -77,9 +77,8 @@ impl<F: Field> From<F> for SymbolicExpression<F> {
 impl<F: Field> AbstractField for SymbolicExpression<F> {
     type F = F;
 
-    fn zero() -> Self {
-        Self::Constant(F::zero())
-    }
+    const ZERO: Self = Self::Constant(F::ZERO);
+
     fn one() -> Self {
         Self::Constant(F::one())
     }
@@ -170,7 +169,7 @@ where
     fn sum<I: Iterator<Item = T>>(iter: I) -> Self {
         iter.map(Into::into)
             .reduce(|x, y| x + y)
-            .unwrap_or(Self::zero())
+            .unwrap_or(Self::ZERO)
     }
 }
 

@@ -92,9 +92,8 @@ impl Debug for Bn254Fr {
 impl AbstractField for Bn254Fr {
     type F = Self;
 
-    fn zero() -> Self {
-        Self::new(FFBn254Fr::ZERO)
-    }
+    const ZERO: Self = Self::new(FFBn254Fr::ZERO);
+
     fn one() -> Self {
         Self::new(FFBn254Fr::ONE)
     }
@@ -213,7 +212,7 @@ impl AddAssign for Bn254Fr {
 
 impl Sum for Bn254Fr {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
@@ -312,7 +311,7 @@ mod tests {
         let f_1 = F::new(FFBn254Fr::from_u128(1));
         let f_1_copy = F::new(FFBn254Fr::from_u128(1));
 
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::new(FFBn254Fr::from_u128(2));
@@ -328,7 +327,7 @@ mod tests {
         let f_r_minus_1 = F::new(
             FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap(),
         );
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 + f_r_minus_1, expected_result);
 
         let f_r_minus_2 = F::new(

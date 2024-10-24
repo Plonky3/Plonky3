@@ -230,7 +230,7 @@ mod tests {
 
         let mut conv = Vec::with_capacity(N);
         for i in 0..N {
-            let mut t = Base::zero();
+            let mut t = Base::ZERO;
             for j in 0..N {
                 t += a.values[j] * b.values[(N + i - j) % N];
             }

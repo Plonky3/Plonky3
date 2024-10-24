@@ -73,7 +73,7 @@ where
 /// by filling zeros.
 #[inline]
 pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
-    let mut arr = array::from_fn(|_| AF::zero());
+    let mut arr = array::from_fn(|_| AF::ZERO);
     arr[0] = x;
     arr
 }
@@ -81,7 +81,7 @@ pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
 /// Naive polynomial multiplication.
 pub fn naive_poly_mul<AF: AbstractField>(a: &[AF], b: &[AF]) -> Vec<AF> {
     // Grade school algorithm
-    let mut product = vec![AF::zero(); a.len() + b.len() - 1];
+    let mut product = vec![AF::ZERO; a.len() + b.len() - 1];
     for (i, c1) in a.iter().enumerate() {
         for (j, c2) in b.iter().enumerate() {
             product[i + j] += c1.clone() * c2.clone();
@@ -92,7 +92,7 @@ pub fn naive_poly_mul<AF: AbstractField>(a: &[AF], b: &[AF]) -> Vec<AF> {
 
 /// Expand a product of binomials (x - roots[0])(x - roots[1]).. into polynomial coefficients.
 pub fn binomial_expand<AF: AbstractField>(roots: &[AF]) -> Vec<AF> {
-    let mut coeffs = vec![AF::zero(); roots.len() + 1];
+    let mut coeffs = vec![AF::ZERO; roots.len() + 1];
     coeffs[0] = AF::one();
     for (i, x) in roots.iter().enumerate() {
         for j in (1..i + 2).rev() {
@@ -104,7 +104,7 @@ pub fn binomial_expand<AF: AbstractField>(roots: &[AF]) -> Vec<AF> {
 }
 
 pub fn eval_poly<AF: AbstractField>(poly: &[AF], x: AF) -> AF {
-    let mut acc = AF::zero();
+    let mut acc = AF::ZERO;
     for coeff in poly.iter().rev() {
         acc *= x.clone();
         acc += coeff.clone();
@@ -143,7 +143,7 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
     let po2 = TF::from_canonical_u64(1u64 << 32);
-    let mut result = TF::zero();
+    let mut result = TF::ZERO;
     for val in vals.iter().rev() {
         result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());
     }
@@ -165,7 +165,7 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         if !digit_u64s.is_empty() {
             result.push(TF::from_wrapped_u64(digit_u64s[0]));
         } else {
-            result.push(TF::zero())
+            result.push(TF::ZERO)
         }
         val /= po2.clone();
     }

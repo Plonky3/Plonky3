@@ -294,7 +294,7 @@ impl Sum for PackedMersenne31Neon {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -313,7 +313,7 @@ impl AbstractField for PackedMersenne31Neon {
 
     #[inline]
     fn zero() -> Self {
-        Mersenne31::zero().into()
+        Mersenne31::ZERO.into()
     }
 
     #[inline]

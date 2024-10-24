@@ -33,7 +33,7 @@ pub struct BinomialExtensionField<AF, const D: usize> {
 impl<AF: AbstractField, const D: usize> Default for BinomialExtensionField<AF, D> {
     fn default() -> Self {
         Self {
-            value: array::from_fn(|_| AF::zero()),
+            value: array::from_fn(|_| AF::ZERO),
         }
     }
 }
@@ -80,7 +80,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             z0 *= F::dth_root();
         }
 
-        let mut res = [F::zero(); D];
+        let mut res = [F::ZERO; D];
         for (i, z) in z0.powers().take(D).enumerate() {
             res[i] = arr[i] * z;
         }
@@ -101,7 +101,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         // coefficient rather than the full product.
         let a = self.value;
         let b = f.value;
-        let mut g = F::zero();
+        let mut g = F::ZERO;
         for i in 1..D {
             g += a[i] * b[D - i];
         }
@@ -120,12 +120,9 @@ where
 {
     type F = BinomialExtensionField<AF::F, D>;
 
-    #[inline]
-    fn zero() -> Self {
-        Self {
-            value: array::from_fn(|_| AF::zero()),
-        }
-    }
+    const ZERO: Self = Self {
+        value: [AF::ZERO; D],
+    };
 
     #[inline]
     fn one() -> Self {
@@ -356,7 +353,7 @@ where
 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         let zero = Self {
-            value: field_to_array::<AF, D>(AF::zero()),
+            value: field_to_array::<AF, D>(AF::ZERO),
         };
         iter.fold(zero, |acc, x| acc + x)
     }
@@ -575,7 +572,7 @@ where
     Standard: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
-        let mut res = [F::zero(); D];
+        let mut res = [F::ZERO; D];
         for r in res.iter_mut() {
             *r = Standard.sample(rng);
         }

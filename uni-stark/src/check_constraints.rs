@@ -82,7 +82,7 @@ where
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         assert_eq!(
             x.into(),
-            F::zero(),
+            F::ZERO,
             "constraints had nonzero value on row {}",
             self.row_index
         );
