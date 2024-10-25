@@ -163,10 +163,7 @@ mod tests {
 
         // complex part
         // i * 2^0 = i.
-        assert_eq!(
-            Fi::new_imag(F::ONE).mul_2exp_u64(0),
-            Fi::new_imag(F::ONE)
-        );
+        assert_eq!(Fi::new_imag(F::ONE).mul_2exp_u64(0), Fi::new_imag(F::ONE));
         // (2i) * 2^30 = (2^31) * i = i.
         assert_eq!(
             Fi::new_imag(F::two()).mul_2exp_u64(30),

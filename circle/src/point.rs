@@ -54,10 +54,7 @@ impl<F: Field> Point<F> {
     /// The "squaring map", or doubling in additive notation, denoted π(x,y)
     /// Circle STARKs, Section 3.1, Equation 1: (page 5 of the first revision PDF)
     pub fn double(self) -> Self {
-        Self::new(
-            self.x.square().double() - F::ONE,
-            self.x.double() * self.y,
-        )
+        Self::new(self.x.square().double() - F::ONE, self.x.double() * self.y)
     }
 
     /// Evaluate the vanishing polynomial for the standard position coset of size 2^log_n
