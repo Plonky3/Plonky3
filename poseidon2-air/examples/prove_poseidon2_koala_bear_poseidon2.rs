@@ -33,6 +33,9 @@ const PARTIAL_ROUNDS: usize = 20;
 const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
+const NUM_ROWS: usize = 1 << 16;
+const VECTOR_LEN: usize = 1 << 3;
+const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -50,11 +53,11 @@ fn main() -> Result<(), impl Debug> {
     type Perm = Poseidon2KoalaBear<16>;
     let perm = Perm::new_from_rng_128(&mut thread_rng());
 
-    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-    let hash = MyHash::new(perm.clone());
+    type MyHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
+    let hash = MyHash::new(perm24.clone());
 
-    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-    let compress = MyCompress::new(perm.clone());
+    type MyCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
+    let compress = MyCompress::new(perm16.clone());
 
     type ValMmcs =
         MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
@@ -71,6 +74,8 @@ fn main() -> Result<(), impl Debug> {
     let constants = RoundConstants::from_rng(&mut thread_rng());
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_vectorized_trace_rows::<
+    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_vectorized_trace_rows::<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,
         WIDTH,
@@ -81,6 +86,7 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     >(inputs, &constants);
 
+    let air: VectorizedPoseidon2Air<
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,
@@ -104,9 +110,9 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    let mut challenger = Challenger::new(perm.clone());
+    let mut challenger = Challenger::new(perm24.clone());
     let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
 
-    let mut challenger = Challenger::new(perm);
+    let mut challenger = Challenger::new(perm24);
     verify(&config, &air, &mut challenger, &proof, &vec![])
 }
