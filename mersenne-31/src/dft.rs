@@ -101,7 +101,7 @@ fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
     // NB: The original real matrix had length 2h, hence log2(2h) = log2(h) + 1.
     // omega is a 2n-th root of unity
     let omega = C::two_adic_generator(log2_h + 1).inverse();
-    let mut omega_j = C::one();
+    let mut omega_j = C::ONE;
 
     let mut output = Vec::with_capacity(h * input.width());
     // TODO: Specialise j = 0 and j = n (which we know must be real)?

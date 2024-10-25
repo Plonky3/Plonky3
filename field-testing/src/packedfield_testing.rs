@@ -145,8 +145,8 @@ where
         vec0 + (-vec1),
         "Error when testing addition of negation"
     );
-    assert_eq!(PF::one() + PF::one(), PF::two(), "Error 1 + 1 =/= 2");
-    assert_eq!(PF::neg_one() + PF::two(), PF::one(), "Error -1 + 2 =/= 1");
+    assert_eq!(PF::ONE + PF::ONE, PF::two(), "Error 1 + 1 =/= 2");
+    assert_eq!(PF::neg_one() + PF::two(), PF::ONE, "Error -1 + 2 =/= 1");
     assert_eq!(
         vec0.double(),
         vec0 + vec0,
@@ -175,12 +175,12 @@ where
     );
     assert_eq!(
         vec0,
-        vec0 * PF::one(),
+        vec0 * PF::ONE,
         "Error when testing multiplicative identity right."
     );
     assert_eq!(
         vec0,
-        PF::one() * vec0,
+        PF::ONE * vec0,
         "Error when testing multiplicative identity left."
     );
     assert_eq!(
@@ -429,7 +429,7 @@ where
     let res = vec * vec_inv;
     assert_eq!(
         res,
-        PF::one(),
+        PF::ONE,
         "Error when testing multiplication by inverse."
     );
 }

@@ -75,7 +75,7 @@ mod tests {
                     F::from_canonical_u8(9),
                     F::from_canonical_u8(5),
                     F::ZERO,
-                    F::one(),
+                    F::ONE,
                     F::neg_one(),
                     F::ZERO,
                 ],

@@ -112,14 +112,14 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             .collect()
     }
     fn zp_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
-        (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::one()
+        (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::ONE
     }
 
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
         let unshifted_point = point * self.shift.inverse();
-        let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::one();
+        let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::ONE;
         LagrangeSelectors {
-            is_first_row: z_h / (unshifted_point - Ext::one()),
+            is_first_row: z_h / (unshifted_point - Ext::ONE),
             is_last_row: z_h / (unshifted_point - self.gen().inverse()),
             is_transition: unshifted_point - self.gen().inverse(),
             inv_zeroifier: z_h.inverse(),
@@ -127,8 +127,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     }
 
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
-        assert_eq!(self.shift, Val::one());
-        assert_ne!(coset.shift, Val::one());
+        assert_eq!(self.shift, Val::ONE);
+        assert_ne!(coset.shift, Val::ONE);
         assert!(coset.log_n >= self.log_n);
         let rate_bits = coset.log_n - self.log_n;
 
@@ -137,7 +137,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         let evals = Val::two_adic_generator(rate_bits)
             .powers()
             .take(1 << rate_bits)
-            .map(|x| s_pow_n * x - Val::one())
+            .map(|x| s_pow_n * x - Val::ONE)
             .collect_vec();
 
         let xs = cyclic_subgroup_coset_known_order(coset.gen(), coset.shift, 1 << coset.log_n)

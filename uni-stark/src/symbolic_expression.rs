@@ -78,10 +78,8 @@ impl<F: Field> AbstractField for SymbolicExpression<F> {
     type F = F;
 
     const ZERO: Self = Self::Constant(F::ZERO);
+    const ONE: Self = Self::Constant(F::ONE);
 
-    fn one() -> Self {
-        Self::Constant(F::one())
-    }
     fn two() -> Self {
         Self::Constant(F::two())
     }
@@ -260,6 +258,6 @@ where
     fn product<I: Iterator<Item = T>>(iter: I) -> Self {
         iter.map(Into::into)
             .reduce(|x, y| x * y)
-            .unwrap_or(Self::one())
+            .unwrap_or(Self::ONE)
     }
 }

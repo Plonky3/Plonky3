@@ -55,7 +55,7 @@ where
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset {
             log_n: log2_strict_usize(degree),
-            shift: Val::one(),
+            shift: Val::ONE,
         }
     }
 

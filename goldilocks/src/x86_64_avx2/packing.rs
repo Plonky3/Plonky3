@@ -152,7 +152,7 @@ impl Neg for PackedGoldilocksAVX2 {
 impl Product for PackedGoldilocksAVX2 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
@@ -160,11 +160,7 @@ impl AbstractField for PackedGoldilocksAVX2 {
     type F = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
-
-    #[inline]
-    fn one() -> Self {
-        Goldilocks::one().into()
-    }
+    const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
 
     #[inline]
     fn two() -> Self {

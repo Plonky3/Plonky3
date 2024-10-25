@@ -107,7 +107,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         //                    = (1/2 + beta/2 g_inv^i) p(g^i)
         //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
         let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-        let one_half = F::one().halve();
+        let one_half = F::ONE.halve();
         let half_beta = beta * one_half;
 
         // TODO: vectorize this (after we have packed extension fields)
@@ -150,7 +150,7 @@ where
         let log_n = log2_strict_usize(degree);
         TwoAdicMultiplicativeCoset {
             log_n,
-            shift: Val::one(),
+            shift: Val::ONE,
         }
     }
 
@@ -412,7 +412,7 @@ where
 
                     let (alpha_pow, ro) = reduced_openings
                         .entry(log_height)
-                        .or_insert((Challenge::one(), Challenge::ZERO));
+                        .or_insert((Challenge::ONE, Challenge::ZERO));
 
                     for (z, ps_at_z) in mat_points_and_values {
                         for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {

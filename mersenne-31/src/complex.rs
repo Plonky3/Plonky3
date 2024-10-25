@@ -20,7 +20,7 @@ impl ComplexExtendable for Mersenne31 {
     // u + 12
     #[inline(always)]
     fn complex_generator() -> Complex<Self> {
-        Complex::new(Mersenne31::new(12), Mersenne31::one())
+        Complex::new(Mersenne31::new(12), Mersenne31::ONE)
     }
 
     fn circle_two_adic_generator(bits: usize) -> Complex<Self> {
@@ -73,9 +73,9 @@ mod tests {
     #[test]
     fn add() {
         // real part
-        assert_eq!(Fi::one() + Fi::one(), Fi::two());
-        assert_eq!(Fi::neg_one() + Fi::one(), Fi::ZERO);
-        assert_eq!(Fi::neg_one() + Fi::two(), Fi::one());
+        assert_eq!(Fi::ONE + Fi::ONE, Fi::two());
+        assert_eq!(Fi::neg_one() + Fi::ONE, Fi::ZERO);
+        assert_eq!(Fi::neg_one() + Fi::two(), Fi::ONE);
         assert_eq!(
             (Fi::neg_one() + Fi::neg_one()).real(),
             F::new(F::ORDER_U32 - 2)
@@ -83,16 +83,16 @@ mod tests {
 
         // complex part
         assert_eq!(
-            Fi::new_imag(F::one()) + Fi::new_imag(F::one()),
+            Fi::new_imag(F::ONE) + Fi::new_imag(F::ONE),
             Fi::new_imag(F::two())
         );
         assert_eq!(
-            Fi::new_imag(F::neg_one()) + Fi::new_imag(F::one()),
+            Fi::new_imag(F::neg_one()) + Fi::new_imag(F::ONE),
             Fi::new_imag(F::ZERO)
         );
         assert_eq!(
             Fi::new_imag(F::neg_one()) + Fi::new_imag(F::two()),
-            Fi::new_imag(F::one())
+            Fi::new_imag(F::ONE)
         );
         assert_eq!(
             (Fi::new_imag(F::neg_one()) + Fi::new_imag(F::neg_one())).imag(),
@@ -101,38 +101,38 @@ mod tests {
 
         // further tests
         assert_eq!(
-            Fi::new(F::one(), F::two()) + Fi::new(F::one(), F::one()),
+            Fi::new(F::ONE, F::two()) + Fi::new(F::ONE, F::ONE),
             Fi::new(F::two(), F::new(3))
         );
         assert_eq!(
-            Fi::new(F::neg_one(), F::neg_one()) + Fi::new(F::one(), F::one()),
+            Fi::new(F::neg_one(), F::neg_one()) + Fi::new(F::ONE, F::ONE),
             Fi::ZERO
         );
         assert_eq!(
-            Fi::new(F::neg_one(), F::one()) + Fi::new(F::two(), F::new(F::ORDER_U32 - 2)),
-            Fi::new(F::one(), F::neg_one())
+            Fi::new(F::neg_one(), F::ONE) + Fi::new(F::two(), F::new(F::ORDER_U32 - 2)),
+            Fi::new(F::ONE, F::neg_one())
         );
     }
 
     #[test]
     fn sub() {
         // real part
-        assert_eq!(Fi::one() - Fi::one(), Fi::ZERO);
+        assert_eq!(Fi::ONE - Fi::ONE, Fi::ZERO);
         assert_eq!(Fi::two() - Fi::two(), Fi::ZERO);
         assert_eq!(Fi::neg_one() - Fi::neg_one(), Fi::ZERO);
-        assert_eq!(Fi::two() - Fi::one(), Fi::one());
+        assert_eq!(Fi::two() - Fi::ONE, Fi::ONE);
         assert_eq!(Fi::neg_one() - Fi::ZERO, Fi::neg_one());
 
         // complex part
-        assert_eq!(Fi::new_imag(F::one()) - Fi::new_imag(F::one()), Fi::ZERO);
+        assert_eq!(Fi::new_imag(F::ONE) - Fi::new_imag(F::ONE), Fi::ZERO);
         assert_eq!(Fi::new_imag(F::two()) - Fi::new_imag(F::two()), Fi::ZERO);
         assert_eq!(
             Fi::new_imag(F::neg_one()) - Fi::new_imag(F::neg_one()),
             Fi::ZERO
         );
         assert_eq!(
-            Fi::new_imag(F::two()) - Fi::new_imag(F::one()),
-            Fi::new_imag(F::one())
+            Fi::new_imag(F::two()) - Fi::new_imag(F::ONE),
+            Fi::new_imag(F::ONE)
         );
         assert_eq!(
             Fi::new_imag(F::neg_one()) - Fi::ZERO,
@@ -152,9 +152,9 @@ mod tests {
     fn mul_2exp_u64() {
         // real part
         // 1 * 2^0 = 1.
-        assert_eq!(Fi::one().mul_2exp_u64(0), Fi::one());
+        assert_eq!(Fi::ONE.mul_2exp_u64(0), Fi::ONE);
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(Fi::two().mul_2exp_u64(30), Fi::one());
+        assert_eq!(Fi::two().mul_2exp_u64(30), Fi::ONE);
         // 5 * 2^2 = 20.
         assert_eq!(
             Fi::new_real(F::new(5)).mul_2exp_u64(2),
@@ -164,13 +164,13 @@ mod tests {
         // complex part
         // i * 2^0 = i.
         assert_eq!(
-            Fi::new_imag(F::one()).mul_2exp_u64(0),
-            Fi::new_imag(F::one())
+            Fi::new_imag(F::ONE).mul_2exp_u64(0),
+            Fi::new_imag(F::ONE)
         );
         // (2i) * 2^30 = (2^31) * i = i.
         assert_eq!(
             Fi::new_imag(F::two()).mul_2exp_u64(30),
-            Fi::new_imag(F::one())
+            Fi::new_imag(F::ONE)
         );
         // 5i * 2^2 = 20i.
         assert_eq!(

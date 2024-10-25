@@ -39,7 +39,7 @@ pub trait AbstractField:
     type F: Field;
 
     const ZERO: Self;
-    fn one() -> Self;
+    const ONE: Self;
     fn two() -> Self;
     fn neg_one() -> Self;
 
@@ -115,7 +115,7 @@ pub trait AbstractField:
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         match POWER {
-            0 => Self::one(),
+            0 => Self::ONE,
             1 => self.clone(),
             2 => self.square(),
             3 => self.cube(),
@@ -143,7 +143,7 @@ pub trait AbstractField:
 
     #[must_use]
     fn powers(&self) -> Powers<Self> {
-        self.shifted_powers(Self::one())
+        self.shifted_powers(Self::ONE)
     }
 
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
@@ -154,7 +154,7 @@ pub trait AbstractField:
     }
 
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
-        self.shifted_powers_packed(Self::one())
+        self.shifted_powers_packed(Self::ONE)
     }
 
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
@@ -220,7 +220,7 @@ pub trait Field:
     }
 
     fn is_one(&self) -> bool {
-        *self == Self::one()
+        *self == Self::ONE
     }
 
     /// self * 2^exp
@@ -372,7 +372,7 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     fn monomial(exponent: usize) -> Self {
         assert!(exponent < Self::D, "requested monomial of too high degree");
         let mut vec = vec![Base::ZERO; Self::D];
-        vec[exponent] = Base::one();
+        vec[exponent] = Base::ONE;
         Self::from_base_slice(&vec)
     }
 }

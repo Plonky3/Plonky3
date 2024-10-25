@@ -465,7 +465,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
@@ -473,11 +473,7 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     type F = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
-
-    #[inline]
-    fn one() -> Self {
-        MontyField31::one().into()
-    }
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
 
     #[inline]
     fn two() -> Self {
@@ -550,7 +546,7 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
         // The other powers could be specialised similarly but we ignore this for now.
         // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
-            0 => Self::one(),
+            0 => Self::ONE,
             1 => *self,
             2 => self.square(),
             3 => self.cube(),

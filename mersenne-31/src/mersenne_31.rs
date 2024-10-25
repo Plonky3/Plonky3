@@ -94,10 +94,8 @@ impl AbstractField for Mersenne31 {
     type F = Self;
 
     const ZERO: Self = Self { value: 0 };
+    const ONE: Self = Self { value: 1 };
 
-    fn one() -> Self {
-        Self::new(1)
-    }
     fn two() -> Self {
         Self::new(2)
     }
@@ -399,7 +397,7 @@ impl MulAssign for Mersenne31 {
 impl Product for Mersenne31 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
@@ -448,27 +446,27 @@ mod tests {
 
     #[test]
     fn add() {
-        assert_eq!(F::one() + F::one(), F::two());
-        assert_eq!(F::neg_one() + F::one(), F::ZERO);
-        assert_eq!(F::neg_one() + F::two(), F::one());
+        assert_eq!(F::ONE + F::ONE, F::two());
+        assert_eq!(F::neg_one() + F::ONE, F::ZERO);
+        assert_eq!(F::neg_one() + F::two(), F::ONE);
         assert_eq!(F::neg_one() + F::neg_one(), F::new(F::ORDER_U32 - 2));
     }
 
     #[test]
     fn sub() {
-        assert_eq!(F::one() - F::one(), F::ZERO);
+        assert_eq!(F::ONE - F::ONE, F::ZERO);
         assert_eq!(F::two() - F::two(), F::ZERO);
         assert_eq!(F::neg_one() - F::neg_one(), F::ZERO);
-        assert_eq!(F::two() - F::one(), F::one());
+        assert_eq!(F::two() - F::ONE, F::ONE);
         assert_eq!(F::neg_one() - F::ZERO, F::neg_one());
     }
 
     #[test]
     fn mul_2exp_u64() {
         // 1 * 2^0 = 1.
-        assert_eq!(F::one().mul_2exp_u64(0), F::one());
+        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::two().mul_2exp_u64(30), F::one());
+        assert_eq!(F::two().mul_2exp_u64(30), F::ONE);
         // 5 * 2^2 = 20.
         assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
     }
@@ -476,7 +474,7 @@ mod tests {
     #[test]
     fn div_2exp_u64() {
         // 1 / 2^0 = 1.
-        assert_eq!(F::one().div_2exp_u64(0), F::one());
+        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
         // 2 / 2^0 = 2.
         assert_eq!(F::two().div_2exp_u64(0), F::two());
         // 32 / 2^5 = 1.

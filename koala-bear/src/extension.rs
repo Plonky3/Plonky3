@@ -17,13 +17,13 @@ mod test_quartic_extension {
     #[test]
     fn display() {
         assert_eq!(format!("{}", EF::ZERO), "0");
-        assert_eq!(format!("{}", EF::one()), "1");
+        assert_eq!(format!("{}", EF::ONE), "1");
         assert_eq!(format!("{}", EF::two()), "2");
 
         assert_eq!(
             format!(
                 "{}",
-                EF::from_base_slice(&[F::two(), F::one(), F::ZERO, F::two()])
+                EF::from_base_slice(&[F::two(), F::ONE, F::ZERO, F::two()])
             ),
             "2 + X + 2 X^3"
         );

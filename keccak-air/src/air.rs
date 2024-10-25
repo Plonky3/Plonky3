@@ -32,7 +32,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
 
         let first_step = local.step_flags[0];
         let final_step = local.step_flags[NUM_ROUNDS - 1];
-        let not_final_step = AB::Expr::one() - final_step;
+        let not_final_step = AB::Expr::ONE - final_step;
 
         // If this is the first step, the input A must match the preimage.
         for y in 0..5 {

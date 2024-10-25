@@ -93,10 +93,8 @@ impl AbstractField for Bn254Fr {
     type F = Self;
 
     const ZERO: Self = Self::new(FFBn254Fr::ZERO);
+    const ONE: Self = Self::new(FFBn254Fr::ONE);
 
-    fn one() -> Self {
-        Self::new(FFBn254Fr::ONE)
-    }
     fn two() -> Self {
         Self::new(FFBn254Fr::from(2u64))
     }
@@ -254,7 +252,7 @@ impl MulAssign for Bn254Fr {
 
 impl Product for Bn254Fr {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 

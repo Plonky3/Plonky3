@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::array;
 use core::iter::Sum;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Mul;
 
 use num_bigint::BigUint;
@@ -11,7 +11,7 @@ use crate::{AbstractField, PackedValue, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
-    x.exp_power_of_2(log_n) - F::one()
+    x.exp_power_of_2(log_n) - F::ONE
 }
 
 /// Computes `Z_{sH}(x)`, where `Z_{sH}` is the zerofier of the given coset of a multiplicative
@@ -69,13 +69,37 @@ where
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
 
+union HackyWorkAround<T, const D: usize> {
+    complete: ManuallyDrop<MaybeUninit<[T; D]>>,
+    elements: ManuallyDrop<[MaybeUninit<T>; D]>,
+}
+
+impl<T, const D: usize> HackyWorkAround<T, D> {
+    const fn complete(arr: [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]> {
+        let transpose = Self {
+            elements: ManuallyDrop::new(arr),
+        };
+        unsafe { ManuallyDrop::into_inner(transpose.complete) }
+    }
+}
+
 /// Extend a field `AF` element `x` to an array of length `D`
 /// by filling zeros.
 #[inline]
-pub fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
-    let mut arr = array::from_fn(|_| AF::ZERO);
-    arr[0] = x;
-    arr
+pub const fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D] {
+    let mut arr: [MaybeUninit<AF>; D] = unsafe { MaybeUninit::uninit().assume_init() };
+
+    arr[0] = MaybeUninit::new(x);
+    let mut acc = 1;
+    loop {
+        if acc == D {
+            break;
+        }
+        arr[acc] = MaybeUninit::new(AF::ZERO);
+        acc += 1;
+    }
+
+    unsafe { HackyWorkAround::complete(arr).assume_init() }
 }
 
 /// Naive polynomial multiplication.
@@ -93,7 +117,7 @@ pub fn naive_poly_mul<AF: AbstractField>(a: &[AF], b: &[AF]) -> Vec<AF> {
 /// Expand a product of binomials (x - roots[0])(x - roots[1]).. into polynomial coefficients.
 pub fn binomial_expand<AF: AbstractField>(roots: &[AF]) -> Vec<AF> {
     let mut coeffs = vec![AF::ZERO; roots.len() + 1];
-    coeffs[0] = AF::one();
+    coeffs[0] = AF::ONE;
     for (i, x) in roots.iter().enumerate() {
         for j in (1..i + 2).rev() {
             coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();

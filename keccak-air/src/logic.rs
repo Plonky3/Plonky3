@@ -26,5 +26,5 @@ pub(crate) fn andn<F: PrimeField64>(x: F, y: F) -> F {
 }
 
 pub(crate) fn andn_gen<AF: AbstractField>(x: AF, y: AF) -> AF {
-    (AF::one() - x) * y
+    (AF::ONE - x) * y
 }

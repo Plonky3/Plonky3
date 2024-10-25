@@ -149,7 +149,7 @@ mod tests {
         let f = F::from_wrapped_u32(F::ORDER_U32);
         assert!(f.is_zero());
 
-        let f_1 = F::one();
+        let f_1 = F::ONE;
         let f_1_copy = F::from_canonical_u32(1);
 
         let expected_result = F::ZERO;

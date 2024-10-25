@@ -47,7 +47,7 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // ```
     #[inline(always)]
     fn w() -> Complex<Self> {
-        Complex::new(Mersenne31::new(2), Mersenne31::one())
+        Complex::new(Mersenne31::new(2), Mersenne31::ONE)
     }
 
     // DTH_ROOT = W^((p^2 - 1)/2).
@@ -65,7 +65,7 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // ```
     #[inline(always)]
     fn ext_generator() -> [Complex<Self>; 2] {
-        [Complex::new_real(Mersenne31::new(6)), Complex::one()]
+        [Complex::new_real(Mersenne31::new(6)), Complex::ONE]
     }
 }
 
@@ -115,7 +115,7 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
     fn ext_generator() -> [Complex<Self>; 3] {
         [
             Complex::new_real(Mersenne31::new(5)),
-            Complex::new_real(Mersenne31::one()),
+            Complex::new_real(Mersenne31::ONE),
             Complex::ZERO,
         ]
     }

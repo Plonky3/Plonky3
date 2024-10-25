@@ -199,7 +199,7 @@ mod tests {
         let alpha: EF = random();
         let zeta: Point<EF> = Point::from_projective_line(random());
 
-        let mut alpha_offset = EF::one();
+        let mut alpha_offset = EF::ONE;
         let mut ros = vec![EF::ZERO; 1 << lde_domain.log_n];
 
         for _ in 0..4 {

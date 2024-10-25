@@ -54,8 +54,8 @@ where
     let x = rng.gen::<F>();
     let y = rng.gen::<F>();
     let z = rng.gen::<F>();
-    assert_eq!(x * x.inverse(), F::one());
-    assert_eq!(x.inverse() * x, F::one());
+    assert_eq!(x * x.inverse(), F::ONE);
+    assert_eq!(x.inverse() * x, F::ONE);
     assert_eq!(x.square().inverse(), x.inverse().square());
     assert_eq!((x / y) * y, x);
     assert_eq!(x / (y * z), (x / y) / z);
@@ -68,7 +68,7 @@ where
 {
     assert_eq!(None, F::ZERO.try_inverse());
 
-    assert_eq!(Some(F::one()), F::one().try_inverse());
+    assert_eq!(Some(F::ONE), F::ONE.try_inverse());
 
     let mut rng = rand::thread_rng();
     for _ in 0..1000 {
@@ -76,7 +76,7 @@ where
         if !x.is_zero() && !x.is_one() {
             let z = x.inverse();
             assert_ne!(x, z);
-            assert_eq!(x * z, F::one());
+            assert_eq!(x * z, F::ONE);
         }
     }
 }
@@ -217,8 +217,8 @@ mod tests {
         type F = BabyBear;
         // (x - 1)(x - 2) = x^2 - 3x + 2
         assert_eq!(
-            binomial_expand(&[F::one(), F::two()]),
-            vec![F::two(), -F::from_canonical_usize(3), F::one()]
+            binomial_expand(&[F::ONE, F::two()]),
+            vec![F::two(), -F::from_canonical_usize(3), F::ONE]
         );
     }
 }

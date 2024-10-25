@@ -179,7 +179,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         LagrangeSelectors {
             is_first_row: self.s_p(self.shift, point),
             is_last_row: self.s_p(-self.shift, point),
-            is_transition: Ext::one() - self.s_p_normalized(-self.shift, point),
+            is_transition: Ext::ONE - self.s_p_normalized(-self.shift, point),
             inv_zeroifier: self.zeroifier(point).inverse(),
         }
     }
@@ -390,7 +390,7 @@ mod tests {
             z_coeffs,
             iter::empty()
                 .chain(iter::repeat(F::ZERO).take(n))
-                .chain(iter::once(F::one()))
+                .chain(iter::once(F::ONE))
                 .chain(iter::repeat(F::ZERO).take(n - 1))
                 .collect_vec()
         );

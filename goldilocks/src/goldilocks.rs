@@ -93,10 +93,8 @@ impl AbstractField for Goldilocks {
     type F = Self;
 
     const ZERO: Self = Self::new(0);
+    const ONE: Self = Self::new(1);
 
-    fn one() -> Self {
-        Self::new(1)
-    }
     fn two() -> Self {
         Self::new(2)
     }
@@ -383,7 +381,7 @@ impl MulAssign for Goldilocks {
 
 impl Product for Goldilocks {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 

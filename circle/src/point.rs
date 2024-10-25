@@ -18,12 +18,12 @@ pub struct Point<F> {
 impl<F: Field> Point<F> {
     #[inline]
     pub fn new(x: F, y: F) -> Point<F> {
-        debug_assert_eq!(x.square() + y.square(), F::one());
+        debug_assert_eq!(x.square() + y.square(), F::ONE);
         Point { x, y, _private: () }
     }
 
     pub fn zero() -> Self {
-        Self::new(F::one(), F::ZERO)
+        Self::new(F::ONE, F::ZERO)
     }
 
     /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
@@ -34,8 +34,8 @@ impl<F: Field> Point<F> {
     /// (on the projective *circle*) (1 : ±i : 0)
     pub fn from_projective_line(t: F) -> Self {
         let t2 = t.square();
-        let inv_denom = (F::one() + t2).try_inverse().expect("t^2 = -1");
-        Self::new((F::one() - t2) * inv_denom, t.double() * inv_denom)
+        let inv_denom = (F::ONE + t2).try_inverse().expect("t^2 = -1");
+        Self::new((F::ONE - t2) * inv_denom, t.double() * inv_denom)
     }
 
     /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
@@ -48,14 +48,14 @@ impl<F: Field> Point<F> {
     /// and a simple pole at (-1,0), which in the paper is called v_0
     /// Circle STARKs, Section 5.1, Lemma 11 (page 21 of the first revision PDF)
     pub fn to_projective_line(self) -> Option<F> {
-        self.y.try_div(self.x + F::one())
+        self.y.try_div(self.x + F::ONE)
     }
 
     /// The "squaring map", or doubling in additive notation, denoted π(x,y)
     /// Circle STARKs, Section 3.1, Equation 1: (page 5 of the first revision PDF)
     pub fn double(self) -> Self {
         Self::new(
-            self.x.square().double() - F::one(),
+            self.x.square().double() - F::ONE,
             self.x.double() * self.y,
         )
     }
@@ -65,7 +65,7 @@ impl<F: Field> Point<F> {
     /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)
     pub fn v_n(mut self, log_n: usize) -> F {
         for _ in 0..(log_n - 1) {
-            self.x = self.x.square().double() - F::one(); // TODO: replace this by a custom field impl.
+            self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
         }
         self.x
     }
@@ -73,11 +73,11 @@ impl<F: Field> Point<F> {
     /// Compute a product of successive `v_n`'s.
     ///
     /// More explicitely this computes `(1..log_n).map(|i| self.v_n(i)).product()`
-    /// but uses far fewer `self.x.square().double() - F::one()` steps compared to the naive implementation.
+    /// but uses far fewer `self.x.square().double() - F::ONE` steps compared to the naive implementation.
     pub fn v_n_prod(mut self, log_n: usize) -> F {
         let mut output = self.x;
         for _ in 0..(log_n - 2) {
-            self.x = self.x.square().double() - F::one(); // TODO: replace this by a custom field impl.
+            self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
             output *= self.x;
         }
         output
@@ -103,7 +103,7 @@ impl<F: Field> Point<F> {
     /// Circle STARKs, Section 3.3, Equation 11 (page 11 of the first edition PDF).
     pub fn v_p<EF: ExtensionField<F>>(self, at: Point<EF>) -> (EF, EF) {
         let diff = -at + self;
-        (EF::one() - diff.x, -diff.y)
+        (EF::ONE - diff.x, -diff.y)
     }
 }
 
@@ -121,7 +121,7 @@ pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
         .iter()
         .map(|&pt| {
             let diff = at - pt;
-            let numer = diff.x + F::one();
+            let numer = diff.x + F::ONE;
             let denom = diff.y * pt.s_p_at_p(log_n);
             (numer, denom)
         })

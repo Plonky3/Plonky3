@@ -92,7 +92,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     fn frobenius_inv(&self) -> Self {
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = Self::one();
+        let mut f = Self::ONE;
         for _ in 1..D {
             f = (f * *self).frobenius();
         }
@@ -124,12 +124,9 @@ where
         value: [AF::ZERO; D],
     };
 
-    #[inline]
-    fn one() -> Self {
-        Self {
-            value: field_to_array::<AF, D>(AF::one()),
-        }
-    }
+    const ONE: Self = Self {
+        value: field_to_array::<AF, D>(AF::ONE),
+    };
 
     #[inline]
     fn two() -> Self {
@@ -474,7 +471,7 @@ where
 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         let one = Self {
-            value: field_to_array::<AF, D>(AF::one()),
+            value: field_to_array::<AF, D>(AF::ONE),
         };
         iter.fold(one, |acc, x| acc * x)
     }
@@ -610,7 +607,7 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
     // scalar = (a0^3+wa1^3+w^2a2^3-3wa0a1a2)^-1
     let scalar = (a0_square * a[0] + w * a[1] * a1_square + a2_w.square() * a[2]
-        - (F::one() + F::two()) * a2_w * a0_a1)
+        - (F::ONE + F::two()) * a2_w * a0_a1)
         .inverse();
 
     //scalar*[a0^2-wa1a2, wa2^2-a0a1, a1^2-a0a2]

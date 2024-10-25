@@ -308,7 +308,7 @@ impl Product for PackedMersenne31AVX2 {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
@@ -316,11 +316,7 @@ impl AbstractField for PackedMersenne31AVX2 {
     type F = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-
-    #[inline]
-    fn one() -> Self {
-        Mersenne31::one().into()
-    }
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
 
     #[inline]
     fn two() -> Self {

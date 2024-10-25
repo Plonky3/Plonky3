@@ -141,7 +141,7 @@ fn generate_trace_rows_for_perm<
     external_linear_layer: &MdsLight,
     internal_linear_layer: &Diffusion,
 ) {
-    perm.export = F::one();
+    perm.export = F::ONE;
     perm.inputs = state;
 
     external_linear_layer.permute_mut(&mut state);

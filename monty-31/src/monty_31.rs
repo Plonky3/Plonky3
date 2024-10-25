@@ -152,11 +152,7 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
     const ZERO: Self = FP::MONTY_ZERO;
-
-    #[inline(always)]
-    fn one() -> Self {
-        FP::MONTY_ONE
-    }
+    const ONE: Self = FP::MONTY_ONE;
 
     #[inline(always)]
     fn two() -> Self {
@@ -398,7 +394,7 @@ impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
 impl<FP: FieldParameters> Product for MontyField31<FP> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 

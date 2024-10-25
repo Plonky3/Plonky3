@@ -23,7 +23,7 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Mat: Matrix<F>,
 {
-    interpolate_coset(subgroup_evals, F::one(), point)
+    interpolate_coset(subgroup_evals, F::ONE, point)
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two

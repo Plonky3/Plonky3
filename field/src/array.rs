@@ -39,10 +39,8 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
     type F = F;
 
     const ZERO: Self = FieldArray([F::ZERO; N]);
+    const ONE: Self = FieldArray([F::ONE; N]);
 
-    fn one() -> Self {
-        FieldArray([F::one(); N])
-    }
     fn two() -> Self {
         FieldArray([F::two(); N])
     }
@@ -249,6 +247,6 @@ impl<F: Field, const N: usize> Sum for FieldArray<F, N> {
 impl<F: Field, const N: usize> Product for FieldArray<F, N> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
