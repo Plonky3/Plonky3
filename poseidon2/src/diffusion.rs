@@ -31,6 +31,7 @@ use alloc::vec::Vec;
 
 use p3_field::{AbstractField, Field};
 
+/// Initialize an internal layer from a set of constants.
 pub trait InternalLayerConstructor<AF>
 where
     AF: AbstractField,
@@ -52,6 +53,7 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
     }
 }
 
+/// A trait containing all data needed to implement the internal layers of Poseidon2.
 pub trait InternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
 where
     AF: AbstractField,

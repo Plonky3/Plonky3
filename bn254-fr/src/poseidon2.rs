@@ -18,8 +18,9 @@ use crate::Bn254Fr;
 /// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 const BN254_S_BOX_DEGREE: u64 = 5;
 
-/// Poseidon2Bn254 contains the implementation of Poseidon2 for the Bn254Fr field.
-/// It acts on arrays of the form [Bn254Fr; WIDTH].
+/// An implementation of the Poseidon2 hash function for the Bn254Fr field.
+///
+/// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
 pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
     Bn254Fr,
     Poseidon2ExternalLayerBn254<WIDTH>,

@@ -14,12 +14,12 @@ use crate::{
 
 /// Trait which handles the Poseidon2 internal layers.
 ///
-/// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + Diag(vec).
-/// vec is assumed to be of the form [-2, ...] with all entries after the first being small powers of 2.
+/// Everything needed to compute multiplication by a `WIDTH x WIDTH` diffusion matrix whose monty form is `1 + Diag(vec)`.
+/// vec is assumed to be of the form `[-2, ...]` with all entries after the first being small powers of `2`.
 pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     Clone + Sync
 {
-    // Most of the time, ArrayLike will be [u8; WIDTH - 1].
+    // Most of the time, ArrayLike will be `[u8; WIDTH - 1]`.
     type ArrayLike: AsRef<[MontyField31<MP>]> + Sized;
 
     // Long term INTERNAL_DIAG_MONTY will be removed.
@@ -30,15 +30,11 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     /// We ignore `state[0]` as it is handled separately.
     fn internal_layer_mat_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
 
+    /// Perform the internal matrix multiplication for any Abstract field
+    /// which implements multiplication by MontyField31 elements.
     fn generic_internal_linear_layer<AF: AbstractField + Mul<MontyField31<MP>, Output = AF>>(
         state: &mut [AF; WIDTH],
     );
-}
-
-/// Some code needed by the PackedField implementation can be shared between the different WIDTHS and architectures.
-/// This will likely be deleted once we have vectorized implementations.
-pub trait PackedFieldPoseidon2Helpers<MP: MontyParameters> {
-    const MONTY_INVERSE: MontyField31<MP> = MontyField31::new_monty(1);
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -132,6 +128,11 @@ where
     }
 }
 
+/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on `[AF; WIDTH]` for any AbstractField which implements multiplication by `Monty<31>` field elements.
+/// This will usually be slower than the Poseidon2 permutation built from `Poseidon2InternalLayerMonty31` and
+/// `Poseidon2ExternalLayerMonty31` but it does work in more cases.
 pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
     _phantom1: PhantomData<FP>,
     _phantom2: PhantomData<ILBP>,
@@ -144,6 +145,8 @@ where
     AF: AbstractField + Mul<MontyField31<FP>, Output = AF>,
     ILBP: InternalLayerBaseParameters<FP, WIDTH>,
 {
+    /// Perform the external matrix multiplication for any Abstract field
+    /// which implements multiplication by MontyField31 elements.
     fn internal_linear_layer(state: &mut [AF; WIDTH]) {
         ILBP::generic_internal_linear_layer(state);
     }

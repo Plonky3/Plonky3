@@ -1,27 +1,3 @@
-use core::ops::Mul;
-
-use p3_field::{AbstractField, Field, PrimeField32};
-use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
-    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
-};
-
-use crate::{
-    from_u62, to_mersenne31_array, Mersenne31, Poseidon2ExternalLayerMersenne31,
-    Poseidon2InternalLayerMersenne31,
-};
-
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimised diffusion matrices for Mersenne31/16:
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17]
-// Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536]
-//                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
-//
-// Optimised diffusion matrices for Mersenne31/24:
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24]
-// Power of 2 entries: [-2,  1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304]
-//                   = [?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
-//
 //* Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
 //*
 //* For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
@@ -37,14 +13,27 @@ use crate::{
 //* [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
 //* See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
+use core::ops::Mul;
+
+use p3_field::{AbstractField, Field};
+use p3_poseidon2::{
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
+    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
+};
+
+use crate::{
+    from_u62, Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
+};
+
 /// Degree of the chosen permutation polynomial for Mersenne31, used as the Poseidon2 S-Box.
 ///
 /// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 
-/// Poseidon2Mersenne31 contains the implementations of Poseidon2
-/// specialised to run on the current architecture. It acts on
-/// arrays of the form either [Mersenne31::Packing; WIDTH] or [Mersenne31; WIDTH]
+/// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
+///
+/// It acts on arrays of the form either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]`. For speed purposes,
+/// wherever possible, input arrays should of the form `[Mersenne31::Packing; WIDTH]`.
 pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     <Mersenne31 as Field>::Packing,
     Poseidon2ExternalLayerMersenne31<WIDTH>,
@@ -53,63 +42,25 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     MERSENNE31_S_BOX_DEGREE,
 >;
 
-// Long term, POSEIDON2_INTERNAL_MATRIX_DIAG_16, POSEIDON2_INTERNAL_MATRIX_DIAG_24 can be removed.
-// Currently they are needed for packed field implementations.
-// They need to be pub and not pub(crate) as otherwise clippy gets annoyed if no vector intrinsics are available.
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_16: [Mersenne31; 16] = to_mersenne31_array([
-    Mersenne31::ORDER_U32 - 2,
-    1,
-    1 << 1,
-    1 << 2,
-    1 << 3,
-    1 << 4,
-    1 << 5,
-    1 << 6,
-    1 << 7,
-    1 << 8,
-    1 << 10,
-    1 << 12,
-    1 << 13,
-    1 << 14,
-    1 << 15,
-    1 << 16,
-]);
+/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by Mersenne31 field elements.
+/// If you have either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]` it will be much faster
+/// to use `Poseidon2Mersenne31<WIDTH>` instead of building a Poseidon2 permutation using this.
+pub struct GenericPoseidon2LinearLayersMersenne31 {}
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS: [u8; 15] =
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16];
-
-pub const POSEIDON2_INTERNAL_MATRIX_DIAG_24: [Mersenne31; 24] = to_mersenne31_array([
-    Mersenne31::ORDER_U32 - 2,
-    1,
-    1 << 1,
-    1 << 2,
-    1 << 3,
-    1 << 4,
-    1 << 5,
-    1 << 6,
-    1 << 7,
-    1 << 8,
-    1 << 9,
-    1 << 10,
-    1 << 11,
-    1 << 12,
-    1 << 13,
-    1 << 14,
-    1 << 15,
-    1 << 16,
-    1 << 17,
-    1 << 18,
-    1 << 19,
-    1 << 20,
-    1 << 21,
-    1 << 22,
-]);
 
 const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ];
 
+/// Multiply state by the matrix (1 + Diag(V))
+///
+/// Here V is the vector [-2] + 1 << shifts. This used delayed reduction to be slightly faster.
 fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
+    debug_assert_eq!(shifts.len() + 1, N);
     let part_sum: u64 = state[1..].iter().map(|x| x.value as u64).sum();
     let full_sum = part_sum + (state[0].value as u64);
     let s0 = part_sum + (-state[0]).value as u64;
@@ -167,8 +118,6 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
         state
     }
 }
-
-pub struct GenericPoseidon2LinearLayersMersenne31 {}
 
 impl<AF> GenericPoseidon2LinearLayers<AF, 16> for GenericPoseidon2LinearLayersMersenne31
 where

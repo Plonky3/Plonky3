@@ -23,8 +23,11 @@ use crate::{to_goldilocks_array, Goldilocks};
 /// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
 const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
 
-/// Poseidon2Goldilocks contains the implementation of Poseidon2 for the Goldilocks field..
-/// It acts on arrays of the form [Goldilocks; WIDTH]
+/// An implementation of the Poseidon2 hash function for the Goldilocks field.
+///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]`.
+/// Currently the internal layers are unoptimized. These could be sped up in a similar way to
+/// how it was done for Monty31 fields.
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     <Goldilocks as Field>::Packing,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
@@ -33,6 +36,12 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     GOLDILOCKS_S_BOX_DEGREE,
 >;
 
+/// A recreating of the Poseidon2 implementation by Horizen Labs for the Goldilocks field.
+///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]`
+/// The original implementation can be found here: https://github.com/HorizenLabs/poseidon2.
+/// This implementation is slightly slower than `Poseidon2Goldilocks` as is uses a slower matrix
+/// for the external rounds.
 pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
     <Goldilocks as Field>::Packing,
     Poseidon2ExternalLayerGoldilocksHL<WIDTH>,
@@ -109,6 +118,7 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = to_goldilocks_array([
     0x0b3694a940bd2394,
 ]);
 
+/// The internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerGoldilocks {
     internal_constants: Vec<Goldilocks>,
@@ -178,6 +188,7 @@ impl<AF: AbstractField<F = Goldilocks>> InternalLayer<AF, 20, GOLDILOCKS_S_BOX_D
     }
 }
 
+/// The external layers of the Poseidon2 permutation.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
@@ -215,6 +226,7 @@ impl<AF: AbstractField<F = Goldilocks>, const WIDTH: usize>
     }
 }
 
+/// The external layers of the Poseidon2 permutation used by Horizen Labs.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,

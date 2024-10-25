@@ -1,3 +1,8 @@
+//! Eventually this will hold a Vectorized Neon implementation of Poseidon2 for PackedBabyBearNeon
+//! Currently this is essentially a placeholder to allow compilation and testing on Neon devices.
+//!
+//! Converting the AVX2/AVX512 code across to Neon is on the TODO list.
+
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;

@@ -22,9 +22,12 @@ pub trait GenericPoseidon2LinearLayers<AF: AbstractField, const WIDTH: usize>: S
 
     /// A generic implementation of the external linear layer.
     fn external_linear_layer(state: &mut [AF; WIDTH]) {
-        // TODO: Not loving this line. Would be good to see if there is a way around it.
-        // Can we save this somewhere? Or something similar?
+        // TODO: Not loving having to initialise mat4 every time. Would ideally be able to find a way around it
+        // while still supporting the option for the user to change their choice of external layer matrix.
+        // Want to avoid having to pass another argument to the function to.
+        // Might involve refactoring mds_light_permutation.
         let mat4 = MDSMat4 {};
+
         mds_light_permutation(state, &mat4);
     }
 }

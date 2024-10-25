@@ -112,7 +112,7 @@ impl InternalLayerParametersAVX512<16> for KoalaBearInternalLayerParameters {
 impl InternalLayerParametersAVX512<24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m512i; 23];
 
-    /// For the KoalaBear field and width 16 we multiply by the diagonal matrix:
+    /// For the KoalaBear field and width 24 we multiply by the diagonal matrix:
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2**24, -1/2**24]
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided

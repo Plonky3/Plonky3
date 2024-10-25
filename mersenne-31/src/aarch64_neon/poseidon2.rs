@@ -1,4 +1,4 @@
-//! Eventually this will hold a Vectorized Neon implementation of Poseidon2 for Mersenne31
+//! Eventually this will hold a Vectorized Neon implementation of Poseidon2 for PackedMersenne31Neon
 //! Currently this is essentially a placeholder to allow compilation on Neon devices.
 //!
 //! Converting the AVX2/AVX512 code across to Neon is on the TODO list.
@@ -13,11 +13,13 @@ use p3_poseidon2::{
 
 use crate::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon};
 
+/// The internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
 }
 
+/// The external layers of the Poseidon2 permutation.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,

@@ -102,7 +102,9 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     }
 }
 
-/// A struct containing the constants and methods needed to perform the internal layers of the Poseidon2 permutation.
+/// The internal layers of the Poseidon2 permutation for Monty31 fields.
+///
+/// This is optimized for the AVX2 architecture.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMonty31<
     PMP: PackedMontyParameters,
@@ -134,7 +136,9 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<W
     }
 }
 
-/// A struct containing the constants and methods needed to perform the external layers of the Poseidon2 permutation.
+/// The external layers of the Poseidon2 permutation for Monty31 fields.
+///
+/// This is optimized for the AVX2 architecture.
 #[derive(Debug, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<PMP>, WIDTH>,

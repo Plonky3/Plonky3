@@ -8,6 +8,9 @@ use p3_poseidon2::{
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
 
+/// The internal layers of the Poseidon2 permutation for Mersenne31.
+///
+/// This is optimized for the AVX2 architecture.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
@@ -22,6 +25,9 @@ impl InternalLayerConstructor<PackedMersenne31AVX2> for Poseidon2InternalLayerMe
     }
 }
 
+/// The external layers of the Poseidon2 permutation for Mersenne31.
+///
+/// This is optimized for the AVX2 architecture.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
@@ -115,17 +121,17 @@ fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> Pa
     }
 }
 
-/// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
+/// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + Diag(V))
 /// In the Mersenne31, WIDTH = 16 case, the diagonal minus 1 is:
 /// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16]
-/// i.e. The first entry is -2 and all other entires a power of 2.
+/// i.e. The first entry is -2 and all other entries are powers of 2.
 #[inline(always)]
 fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
     // state[0] -> -2*state[0] is handled by the calling code.
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
-    // For the remaining entires we use our fast shift code.
+    // For the remaining entries we use our fast shift code.
     state[3] = mul_2exp_i::<2, 29>(state[3]);
     state[4] = mul_2exp_i::<3, 28>(state[4]);
     state[5] = mul_2exp_i::<4, 27>(state[5]);
@@ -138,20 +144,20 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     state[12] = mul_2exp_i::<13, 18>(state[12]);
     state[13] = mul_2exp_i::<14, 17>(state[13]);
     state[14] = mul_2exp_i::<15, 16>(state[14]);
-    state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a faster method for 15.
+    state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a possibly slightly faster method for 15.
 }
 
-/// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + D)
+/// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + Diag(V))
 /// In the Mersenne31, WIDTH = 24 case, the diagonal minus 1 is:
 /// [-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
-/// i.e. The first entry is -2 and all other entires a power of 2.
+/// i.e. The first entry is -2 and all other entries are powers of 2.
 #[inline(always)]
 fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
     // state[0] -> -2*state[0] is handled by the calling code.
     state[2] = state[2] + state[2]; // add is 3 instructions whereas shift is 4.
 
-    // For the remaining entires we use our fast shift code.
+    // For the remaining entries we use our fast shift code.
     state[3] = mul_2exp_i::<2, 29>(state[3]);
     state[4] = mul_2exp_i::<3, 28>(state[4]);
     state[5] = mul_2exp_i::<4, 27>(state[5]);
@@ -164,7 +170,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[12] = mul_2exp_i::<11, 20>(state[12]);
     state[13] = mul_2exp_i::<12, 19>(state[13]);
     state[14] = mul_2exp_i::<13, 18>(state[14]);
-    state[15] = mul_2exp_i::<14, 17>(state[15]); // TODO: There is a faster method for 15.
+    state[15] = mul_2exp_i::<14, 17>(state[15]); // TODO: There is a possibly slightly faster method for 15.
     state[16] = mul_2exp_i::<15, 16>(state[16]);
     state[17] = mul_2exp_i::<16, 15>(state[17]);
     state[18] = mul_2exp_i::<17, 14>(state[18]);

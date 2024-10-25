@@ -17,6 +17,9 @@ use crate::{
     PackedMontyField31Neon,
 };
 
+/// The internal layers of the Poseidon2 permutation for Monty31 fields.
+///
+/// This is currently not optimized for the Neon architecture but this is on the TODO list.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMonty31<
     MP: MontyParameters,
@@ -27,6 +30,9 @@ pub struct Poseidon2InternalLayerMonty31<
     _phantom: PhantomData<ILP>,
 }
 
+/// The external layers of the Poseidon2 permutation for Monty31 fields.
+///
+/// This is currently not optimized for the Neon architecture but this is on the TODO list.
 #[derive(Debug, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<MP>, WIDTH>,

@@ -56,7 +56,9 @@ where
     x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]
 }
 
-// The 4x4 MDS matrix used by the Horizon Labs implementation of Poseidon2.
+/// The 4x4 MDS matrix used by the Horizon Labs implementation of Poseidon2.
+///
+/// This requires 10 additions and 4 doubles to compute.
 #[derive(Clone, Default)]
 pub struct HLMDSMat4;
 
@@ -75,6 +77,9 @@ impl<AF: AbstractField> Permutation<[AF; 4]> for HLMDSMat4 {
 }
 impl<AF: AbstractField> MdsPermutation<AF, 4> for HLMDSMat4 {}
 
+/// The fastest 4x4 MDS matrix.
+///
+/// This requires 7 additions and 2 doubles to compute.
 #[derive(Clone, Default)]
 pub struct MDSMat4;
 
@@ -93,6 +98,10 @@ impl<AF: AbstractField> Permutation<[AF; 4]> for MDSMat4 {
 }
 impl<AF: AbstractField> MdsPermutation<AF, 4> for MDSMat4 {}
 
+/// Implement the matrix multiplication used by the external layer.
+///
+/// Given a 4x4 MDS matrix M, we multiply by the `4N x 4N` matrix
+/// `[[2M M  ... M], [M  2M ... M], ..., [M  M ... 2M]]`.
 #[inline(always)]
 pub fn mds_light_permutation<
     AF: AbstractField,
@@ -146,7 +155,7 @@ pub fn mds_light_permutation<
     }
 }
 
-/// A simple struct which holds the constants for the external layer.
+/// A struct which holds the constants for the external layer.
 #[derive(Debug, Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
     // Once initialised, these constants should be immutable.
@@ -201,6 +210,7 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     }
 }
 
+/// Initialize an external layer from a set of constants.
 pub trait ExternalLayerConstructor<AF, const WIDTH: usize>
 where
     AF: AbstractField,

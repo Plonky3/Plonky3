@@ -4,7 +4,7 @@
 //* vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
 //*
 //* This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
-//* and, inverse powers of 2 where it is possible to avoid monty reduction can be avoided.
+//* and inverse powers of 2 where it is possible to avoid monty reductions.
 //* Additionally, for technical reasons, having the first entry be -2 is useful.
 //*
 //* Optimized Diagonal for KoalaBear16:
@@ -37,9 +37,10 @@ pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
 /// Experimentation suggests that the optimal choice is the smallest available one, namely 3.
 const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 
-/// Poseidon2KoalaBear contains the implementations of Poseidon2
-/// specialised to run on the current architecture. It acts on
-/// arrays of the form either [KoalaBear::Packing; WIDTH] or [KoalaBear; WIDTH]
+/// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
+///
+/// It acts on arrays of the form either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]`. For speed purposes,
+/// wherever possible, input arrays should of the form `[KoalaBear::Packing; WIDTH]`.
 pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     <KoalaBear as Field>::Packing,
     Poseidon2ExternalLayerKoalaBear<WIDTH>,
@@ -48,6 +49,11 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     KOALABEAR_S_BOX_DEGREE,
 >;
 
+/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by KoalaBear field elements.
+/// If you have either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]` it will be much faster
+/// to use `Poseidon2KoalaBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersKoalaBear =
     GenericPoseidon2LinearLayersMonty31<KoalaBearParameters, KoalaBearInternalLayerParameters>;
 
@@ -106,6 +112,7 @@ const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([
     127,
 ]);
 
+/// Contains data needed to define the internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
 
@@ -252,9 +259,6 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
 impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {}
 impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {}
 
-#[derive(Debug, Clone, Default)]
-pub struct KoalaBearExternalLayerParameters;
-
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
@@ -325,6 +329,8 @@ mod tests {
         assert_eq!(input, expected);
     }
 
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_16() {
         let mut rng = rand::thread_rng();
@@ -342,6 +348,8 @@ mod tests {
         assert_eq!(input1, input2);
     }
 
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_24() {
         let mut rng = rand::thread_rng();

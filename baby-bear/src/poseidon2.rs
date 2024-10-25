@@ -4,7 +4,7 @@
 //* vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
 //*
 //* This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
-//* and, inverse powers of 2 where it is possible to avoid monty reduction can be avoided.
+//* and inverse powers of 2 where it is possible to avoid monty reductions.
 //* Additionally, for technical reasons, having the first entry be -2 is useful.
 //*
 //* Optimized Diagonal for BabyBear16:
@@ -37,9 +37,10 @@ pub type Poseidon2ExternalLayerBabyBear<const WIDTH: usize> =
 /// Instead we use the next smallest available value, namely 7.
 const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 
-/// Poseidon2BabyBear contains the implementations of Poseidon2
-/// specialised to run on the current architecture. It acts on
-/// arrays of the form either [BabyBear::Packing; WIDTH] or [BabyBear; WIDTH].
+/// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
+///
+/// It acts on arrays of the form either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]`. For speed purposes,
+/// wherever possible, input arrays should of the form `[BabyBear::Packing; WIDTH]`.
 pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     <BabyBear as Field>::Packing,
     Poseidon2ExternalLayerBabyBear<WIDTH>,
@@ -48,6 +49,11 @@ pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     BABYBEAR_S_BOX_DEGREE,
 >;
 
+/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by BabyBear field elements.
+/// If you have either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]` it will be much faster
+/// to use `Poseidon2BabyBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersBabyBear =
     GenericPoseidon2LinearLayersMonty31<BabyBearParameters, BabyBearInternalLayerParameters>;
 
@@ -56,7 +62,7 @@ pub type GenericPoseidon2LinearLayersBabyBear =
 // -1/2^n = (BabyBear::ORDER_U32 - 1) >> n
 // 1/2^n = -(-1/2^n) = BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> n)
 
-/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]
+/// The vector `[-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]`
 /// saved as an array of BabyBear elements.
 const INTERNAL_DIAG_MONTY_16: [BabyBear; 16] = BabyBear::new_array([
     BabyBear::ORDER_U32 - 2,
@@ -106,6 +112,7 @@ const INTERNAL_DIAG_MONTY_24: [BabyBear; 24] = BabyBear::new_array([
     15,
 ]);
 
+/// Contains data needed to define the internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
 pub struct BabyBearInternalLayerParameters;
 
@@ -252,9 +259,6 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
 impl InternalLayerParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {}
 impl InternalLayerParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {}
 
-#[derive(Debug, Clone, Default)]
-pub struct BabyBearExternalLayerParameters;
-
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
@@ -326,6 +330,8 @@ mod tests {
         assert_eq!(input, expected);
     }
 
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_16() {
         let mut rng = rand::thread_rng();
@@ -343,6 +349,8 @@ mod tests {
         assert_eq!(input1, input2);
     }
 
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 24.
     #[test]
     fn test_generic_internal_linear_layer_24() {
         let mut rng = rand::thread_rng();

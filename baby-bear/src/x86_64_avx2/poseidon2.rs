@@ -105,7 +105,7 @@ impl InternalLayerParametersAVX2<16> for BabyBearInternalLayerParameters {
 impl InternalLayerParametersAVX2<24> for BabyBearInternalLayerParameters {
     type ArrayLike = [__m256i; 23];
 
-    /// For the BabyBear field and width 16 we multiply by the diagonal matrix:
+    /// For the BabyBear field and width 24 we multiply by the diagonal matrix:
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, -1/4, 1/8, -1/8, 1/16, -1/16, -1/32, -1/64, 1/2^7, -1/2^7, 1/2^9, 1/2^27, -1/2^27]
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided

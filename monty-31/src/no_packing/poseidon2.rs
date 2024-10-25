@@ -1,4 +1,6 @@
 //! These are just simple wrapper structs allowing us to implement Poseidon2 Internal/ExternalLayer on top of them.
+//!
+//! They are used only in the case that none of the vectorization architectures (AVX2/AVX512/NEON) are available.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -7,6 +9,7 @@ use p3_poseidon2::{ExternalLayerConstants, ExternalLayerConstructor, InternalLay
 
 use crate::{FieldParameters, InternalLayerBaseParameters, MontyField31, MontyParameters};
 
+/// The internal layers of the Poseidon2 permutation for Monty31 fields.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMonty31<
     MP: MontyParameters,
@@ -17,6 +20,7 @@ pub struct Poseidon2InternalLayerMonty31<
     _phantom: PhantomData<ILP>,
 }
 
+/// The external layers of the Poseidon2 permutation for Monty31 fields.
 #[derive(Debug, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<MP>, WIDTH>,
