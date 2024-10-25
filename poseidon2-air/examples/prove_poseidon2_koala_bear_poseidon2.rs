@@ -33,9 +33,6 @@ const PARTIAL_ROUNDS: usize = 20;
 const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
-const NUM_ROWS: usize = 1 << 16;
-const VECTOR_LEN: usize = 1 << 3;
-const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -50,8 +47,11 @@ fn main() -> Result<(), impl Debug> {
     type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2KoalaBear<16>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    type Perm16 = Poseidon2KoalaBear<16>;
+    let perm16 = Perm16::new_from_rng_128(&mut thread_rng());
+
+    type Perm24 = Poseidon2KoalaBear<24>;
+    let perm24 = Perm24::new_from_rng_128(&mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
     let hash = MyHash::new(perm24.clone());
@@ -69,11 +69,9 @@ fn main() -> Result<(), impl Debug> {
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
 
-    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
-    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_vectorized_trace_rows::<
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_vectorized_trace_rows::<
         Val,
@@ -86,7 +84,6 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     >(inputs, &constants);
 
-    let air: VectorizedPoseidon2Air<
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,
