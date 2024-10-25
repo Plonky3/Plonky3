@@ -349,10 +349,7 @@ where
     AF::F: BinomiallyExtendable<D>,
 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        let zero = Self {
-            value: field_to_array::<AF, D>(AF::ZERO),
-        };
-        iter.fold(zero, |acc, x| acc + x)
+        iter.fold(Self::ZERO, |acc, x| acc + x)
     }
 }
 
@@ -470,10 +467,7 @@ where
     AF::F: BinomiallyExtendable<D>,
 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        let one = Self {
-            value: field_to_array::<AF, D>(AF::ONE),
-        };
-        iter.fold(one, |acc, x| acc * x)
+        iter.fold(Self::ONE, |acc, x| acc * x)
     }
 }
 

@@ -22,9 +22,11 @@ impl<F: Field> Point<F> {
         Point { x, y, _private: () }
     }
 
-    pub fn zero() -> Self {
-        Self::new(F::ONE, F::ZERO)
-    }
+    const ZERO: Self = Self {
+        x: F::ONE,
+        y: F::ZERO,
+        _private: (),
+    };
 
     /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
     /// ```ignore
@@ -179,7 +181,7 @@ impl<F: Field, EF: ExtensionField<F>> Sub<Point<F>> for Point<EF> {
 impl<F: Field> Mul<usize> for Point<F> {
     type Output = Self;
     fn mul(mut self, mut rhs: usize) -> Self::Output {
-        let mut res = Self::zero();
+        let mut res = Self::ZERO;
         while rhs != 0 {
             if rhs & 1 == 1 {
                 res += self;
@@ -203,11 +205,11 @@ mod tests {
     #[test]
     fn test_arithmetic() {
         let one = Pt::generator(3);
-        assert_eq!(one - one, Pt::zero());
+        assert_eq!(one - one, Pt::ZERO);
         assert_eq!(one + one, one * 2);
         assert_eq!(one + one + one, one * 3);
         assert_eq!(one * 7, -one);
-        assert_eq!(one * 8, Pt::zero());
+        assert_eq!(one * 8, Pt::ZERO);
 
         let gen = Pt::generator(10);
         let log_n = 10;
