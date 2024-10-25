@@ -207,38 +207,6 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         }
     }
 
-    fn forward_small_t1_helper(a: &mut [Self], roots: &[Self]) {
-        // lg_m = 1
-        // m = 2
-        // s = lg_n - 2
-        // i in 0..n/4
-        // offset = 4*i
-        // k in 0 .. 2
-        let n = a.len();
-        let r1 = roots[1];
-
-        for i in 0..n / 4 {
-            // lg_m = 1
-            let offset = 4 * i;
-
-            // m = 2
-
-            // k = 0
-            let x = a[offset];
-            let y = a[offset + 2];
-            let t = x - y;
-            a[offset] = x + y;
-            a[offset + 2] = t; // roots[0] == 1
-
-            // k = 1
-            let x = a[offset + 1];
-            let y = a[offset + 3];
-            let t = x - y;
-            a[offset + 1] = x + y;
-            a[offset + 3] = t * r1;
-        }
-    }
-
     #[inline]
     fn forward_small_t1(a: &mut [Self], roots: &[Self]) {
         // lg_m = 1
@@ -277,8 +245,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         }
     }
 
+    // TODO: use izip!
+    // TODO: refactor all these functions using a const generic
     #[inline]
-    fn forward_small_t0(a: &mut [Self], _roots: &[Self]) {
+    fn forward_small_t0(a: &mut [Self]) {
         // lg_m = 0
         // m = 1
         // s = lg_n - 1
@@ -313,34 +283,22 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let lg_n = log2_strict_usize(n);
 
         let packing_width = <Self as Field>::Packing::WIDTH;
-        //assert_eq!(n % packing_width, 0);
+        assert!(n >= 2 * packing_width);
 
-        for lg_m in (0..lg_n).rev() {
+        // Specialise the first few iterations; improves performance a little.
+
+        // TODO: Need to avoid overlap with specialisation at the other end of the loop
+        //Self::forward_small_s0(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        //Self::forward_small_s1(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
+
+        for lg_m in (4..lg_n).rev() {
             let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
-            // TODO: specialise betterer
-            let blah = [Self::one(); 1];
-            let roots = if lg_m != 0 { &root_table[s] } else { &blah[..] };
+            let roots = &root_table[s];
             assert_eq!(roots.len(), m);
 
-            // TODO: Don't I rather want to specialise the cases at the
-            // other end of the loop?
-            if s == 0 && packing_width <= n / 2 {
-                Self::forward_small_s0(a, roots);
-            } else if s == 1 && packing_width <= n / 2 {
-                Self::forward_small_s1(a, roots);
-            // TODO: Move these out to the front of the for loop
-            // then loop starting lg_n-5 or whatever.
-            } else if s == lg_n - 4 && packing_width <= n / 2 {
-                Self::forward_small_t3(a, roots);
-            } else if s == lg_n - 3 && packing_width <= n / 2 {
-                Self::forward_small_t2(a, roots);
-            } else if s == lg_n - 2 && packing_width <= n / 2 {
-                Self::forward_small_t1(a, roots);
-            } else if s == lg_n - 1 && packing_width <= n / 2 {
-                Self::forward_small_t0(a, roots);
-            } else if packing_width <= n / (2 << s) {
+            if packing_width <= n / (2 << s) {
                 let packed_roots = <Self as Field>::Packing::pack_slice(roots);
                 for i in 0..(1 << s) {
                     let offset = i << (lg_m + 1);
@@ -358,20 +316,16 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                     });
                 }
             } else {
-                for i in 0..(1 << s) {
-                    let offset = i << (lg_m + 1);
-
-                    for k in 0..m {
-                        let x = a[offset + k];
-                        let y = a[offset + k + m];
-                        let t = MP::PRIME + x.value - y.value;
-                        a[offset + k] = x + y;
-                        a[offset + k + m] =
-                            Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
-                    }
-                }
+                panic!(
+                    "shouldn't be here: s = {}; lg_m = {}; m = {}; n = {};",
+                    s, lg_m, m, n
+                );
             }
         }
+        Self::forward_small_t3(a, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
+        Self::forward_small_t2(a, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
+        Self::forward_small_t1(a, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
+        Self::forward_small_t0(a); // lg_m = 0; s = lg_n - 1
     }
 
     #[inline(always)]
