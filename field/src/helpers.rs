@@ -69,13 +69,48 @@ where
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
 
+// The ideas for the following work around come from the construe crate along with
+// the playground example linked in the following comment:
+// https://github.com/rust-lang/rust/issues/115403#issuecomment-1701000117
+
+// The goal is to want to make field_to_array a const function in order
+// to allow us to convert AF constants to BinomialExtensionField<AF, D> constants.
+//
+// The natural approach would be:
+// fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D]
+//      let mut arr: [AF; D] = [AF::ZERO; D];
+//      arr[0] = x
+//      arr
+//
+// Unfortunately this doesn't compile as AF does not implement Copy and so instead
+// implements Drop which cannot be run in constant contexts. Clearly nothing should
+// actually be dropped by the above function but the compiler is unable to determine this.
+// There is a rust issue for this: https://github.com/rust-lang/rust/issues/73255
+// but it seems unlikely to be stabilized anytime soon.
+//
+// The natural workaround for this is to use MaybeUninit and set each element of the list
+// separately. This mostly works but we end up with an array of the form [MaybeUninit<T>; N]
+// and there is not currently a way in the standard library to convert this to [T; N].
+// There is a method on nightly: array_assume_init so this function should be reworked after
+// that has stabilized (More details in Rust issue: https://github.com/rust-lang/rust/issues/96097).
+//
+// Annoyingly, both transmute and transmute_copy fail here. The first because it cannot handle
+// const generics and the second due to interior mutability and the unability to use &mut in const
+// functions.
+//
+// The solution is to implement the map [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]>
+// using Union types and ManuallyDrop to essentially do a manual transmute.
+
 union HackyWorkAround<T, const D: usize> {
     complete: ManuallyDrop<MaybeUninit<[T; D]>>,
     elements: ManuallyDrop<[MaybeUninit<T>; D]>,
 }
 
 impl<T, const D: usize> HackyWorkAround<T, D> {
-    const fn complete(arr: [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]> {
+    const fn transpose(arr: [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]> {
+        // This is safe as [MaybeUninit<T>; D]> and MaybeUninit<[T; D]> are
+        // the same type regardless of T. Both are an array or size equal to [T; D]
+        // with some data potentially not initialized.
         let transpose = Self {
             elements: ManuallyDrop::new(arr),
         };
@@ -98,8 +133,10 @@ pub const fn field_to_array<AF: AbstractField, const D: usize>(x: AF) -> [AF; D]
         arr[acc] = MaybeUninit::new(AF::ZERO);
         acc += 1;
     }
+    // If the code has reached this point every element of arr is correctly initialized.
+    // Hence we are safe to reintepret the array as [AF; D].
 
-    unsafe { HackyWorkAround::complete(arr).assume_init() }
+    unsafe { HackyWorkAround::transpose(arr).assume_init() }
 }
 
 /// Naive polynomial multiplication.
