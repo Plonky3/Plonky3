@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Trait which handles the Poseidon2 internal layers.
-/// 
+///
 /// Everything needed to compute multiplication by a WIDTH x WIDTH diffusion matrix whose monty form is 1 + Diag(vec).
 /// vec is assumed to be of the form [-2, ...] with all entries after the first being small powers of 2.
 pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:

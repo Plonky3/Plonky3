@@ -56,7 +56,7 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 }
 
 /// Multiply the given MontyField31 element by 2^{-n}.
-/// 
+///
 /// This makes use of the fact that, as the monty constant is 2^32,
 /// the monty form of 2^{-n} is 2^{32 - n}. Monty reduction works
 /// provided the input is < 2^32P so this works for 0 <= n <= 32.
