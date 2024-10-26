@@ -157,7 +157,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for r in 0..NUM_ROUNDS {
                 let this_round = local.step_flags[r];
                 let this_round_constant = AB::Expr::from_canonical_u8(rc_value_bit(r, i));
-                rc_bit_i += this_round * this_round_constant;
+                rc_bit_i = rc_bit_i.clone() + this_round * this_round_constant;
             }
 
             xor_gen::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)

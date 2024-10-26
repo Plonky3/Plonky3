@@ -23,7 +23,7 @@ pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
 ) {
     let sum: AF = state.iter().cloned().sum();
     for i in 0..WIDTH {
-        state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
-        state[i] += sum.clone();
+        state[i] = state[i].clone() * AF::from_f(mat_internal_diag_m_1[i]);
+        state[i] = state[i].clone() + sum.clone();
     }
 }

@@ -389,7 +389,7 @@ impl<AF: AbstractField> Iterator for Powers<AF> {
 
     fn next(&mut self) -> Option<AF> {
         let result = self.current.clone();
-        self.current *= self.base.clone();
+        self.current = self.current.clone() * self.base.clone();
         Some(result)
     }
 }
