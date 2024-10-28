@@ -219,10 +219,8 @@ fn internal_16(state: &mut [PackedMersenne31AVX512; 16], rc: __m512i) {
 }
 
 impl InternalLayer<PackedMersenne31AVX512, 16, 5> for Poseidon2InternalLayerMersenne31 {
-    type InternalState = [PackedMersenne31AVX512; 16];
-
-    /// Compute the full Poseidon2 internal layer on a state of width 16.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMersenne31AVX512; 16]) {
         self.packed_internal_constants
             .iter()
             .for_each(|&rc| internal_16(state, rc))
@@ -241,10 +239,8 @@ fn internal_24(state: &mut [PackedMersenne31AVX512; 24], rc: __m512i) {
 }
 
 impl InternalLayer<PackedMersenne31AVX512, 24, 5> for Poseidon2InternalLayerMersenne31 {
-    type InternalState = [PackedMersenne31AVX512; 24];
-
-    /// Compute the full Poseidon2 internal layer on a state of width 24.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMersenne31AVX512; 24]) {
         self.packed_internal_constants
             .iter()
             .for_each(|&rc| internal_24(state, rc))
@@ -270,25 +266,15 @@ fn external_rounds<const WIDTH: usize>(
 impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX512, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
-    type InternalState = [PackedMersenne31AVX512; WIDTH];
-
-    /// Compute the first half of the Poseidon2 external layers.
-    fn permute_state_initial(
-        &self,
-        mut state: [PackedMersenne31AVX512; WIDTH],
-    ) -> [PackedMersenne31AVX512; WIDTH] {
-        mds_light_permutation(&mut state, &MDSMat4);
-        external_rounds(&mut state, &self.packed_initial_external_constants);
-        state
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [PackedMersenne31AVX512; WIDTH]) {
+        mds_light_permutation(state, &MDSMat4);
+        external_rounds(state, &self.packed_initial_external_constants);
     }
 
-    /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_terminal(
-        &self,
-        mut state: [PackedMersenne31AVX512; WIDTH],
-    ) -> [PackedMersenne31AVX512; WIDTH] {
-        external_rounds(&mut state, &self.packed_terminal_external_constants);
-        state
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [PackedMersenne31AVX512; WIDTH]) {
+        external_rounds(state, &self.packed_terminal_external_constants);
     }
 }
 
