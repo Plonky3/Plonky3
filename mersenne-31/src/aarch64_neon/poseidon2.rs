@@ -5,7 +5,6 @@
 
 use alloc::vec::Vec;
 
-use p3_field::AbstractField;
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
@@ -62,7 +61,7 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [PackedMersenne31AVX2; WIDTH]) {
+    fn permute_state_initial(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
