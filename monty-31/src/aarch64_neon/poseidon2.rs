@@ -68,7 +68,7 @@ where
     ILP: InternalLayerBaseParameters<FP, WIDTH>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    fn permute_state(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         self.internal_constants.iter().for_each(|&rc| {
             state[0] += rc;
             state[0] = state[0].exp_const_u64::<D>();

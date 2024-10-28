@@ -254,7 +254,7 @@ where
     ILP: InternalLayerParametersAVX512<16, ArrayLike = [__m512i; 15]>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [PackedMontyField31AVX2<FP>; 16]) {
+    fn permute_state(&self, state: &mut [PackedMontyField31AVX512<FP>; 16]) {
         unsafe {
             // Safety: This return values in canonical form when given values in canonical form.
             /*
@@ -304,7 +304,7 @@ where
     ILP: InternalLayerParametersAVX512<24, ArrayLike = [__m512i; 23]>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [PackedMontyField31AVX2<FP>; 24]) {
+    fn permute_state(&self, state: &mut [PackedMontyField31AVX512<FP>; 24]) {
         unsafe {
             // Safety: This return values in canonical form when given values in canonical form.
 
@@ -382,8 +382,6 @@ impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31AVX51
 where
     FP: FieldParameters,
 {
-    type InternalState = InternalLayerWIDTH<FP>;
-
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {
         mds_light_permutation(state, &MDSMat4);
