@@ -100,25 +100,17 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         // i in 0..n/2
         // offset = 2*i
         // k in 0 .. 1
-        let packing_width = <Self as Field>::Packing::WIDTH;
-        let n = a.len();
-        let n_elts = (n / 2) / packing_width;
         let a = <Self as Field>::Packing::pack_slice_mut(a);
-        for i in 0..n_elts {
-            // lg_m = 0
-            let offset = 2 * i;
-
-            // k = 0
-            // m = 1
-            let x = a[offset];
-            let y = a[offset + 1];
+        a.chunks_exact_mut(2).for_each(|pair| {
+            let x = pair[0];
+            let y = pair[1];
             let (mut x, y) = x.interleave(y, 1);
             let t = x - y; // roots[0] == 1
             x += y;
             let (x, y) = x.interleave(t, 1);
-            a[offset] = x;
-            a[offset + 1] = y;
-        }
+            pair[0] = x;
+            pair[1] = y;
+        });
     }
 
     #[inline]
@@ -139,27 +131,20 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let packing_width = <Self as Field>::Packing::WIDTH;
         assert_eq!((n / 2) % packing_width, 0);
         assert!((n / 2) >= packing_width);
-        // TODO: Store n_elts in caller and pass it in.
-        let n_elts = (n / 2) / packing_width;
         let a = <Self as Field>::Packing::pack_slice_mut(a);
-
-        for i in 0..n_elts {
-            // lg_m = 1
-            let offset = 2 * i;
-
-            // m = 2
-            let x = a[offset];
-            let y = a[offset + 1];
+        a.chunks_exact_mut(2).for_each(|pair| {
+            let x = pair[0];
+            let y = pair[1];
             let (mut x, y) = x.interleave(y, N);
             let t = (x - y) * r;
             x += y;
             let (x, y) = x.interleave(t, N);
-            a[offset] = x;
-            a[offset + 1] = y;
-        }
+            pair[0] = x;
+            pair[1] = y;
+        });
     }
 
-    /// Breadth-first DIF FFT for small vectors
+    /// Breadth-first DIF FFT for smallish vectors (must be >= 64)
     #[inline]
     fn forward_small(a: &mut [Self], root_table: &[Vec<Self>]) {
         let n = a.len();
@@ -168,41 +153,36 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let packing_width = <Self as Field>::Packing::WIDTH;
         assert!(n >= 2 * packing_width);
 
+        // Needed to avoid overlap with specialisation at the other end of the loop
+        assert!(lg_n >= 6);
+
         // Specialise the first few iterations; improves performance a little.
+        Self::forward_small_s0(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        Self::forward_small_s1(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
 
-        // TODO: Need to avoid overlap with specialisation at the other end of the loop
-        //Self::forward_small_s0(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
-        //Self::forward_small_s1(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
-
-        for lg_m in (4..lg_n).rev() {
+        for lg_m in (4..(lg_n - 2)).rev() {
             let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
             let roots = &root_table[s];
-            assert_eq!(roots.len(), m);
+            debug_assert_eq!(roots.len(), m);
+            let packed_roots = <Self as Field>::Packing::pack_slice(roots);
 
-            if packing_width <= n / (2 << s) {
-                let packed_roots = <Self as Field>::Packing::pack_slice(roots);
-                for i in 0..(1 << s) {
-                    let offset = i << (lg_m + 1);
+            debug_assert!(packing_width <= n / (2 << s));
+            for i in 0..(1 << s) {
+                let offset = i << (lg_m + 1);
 
-                    let b = &mut a[offset..];
-                    let (b0, b1) = unsafe { b.split_at_mut_unchecked(m) };
+                let b = &mut a[offset..];
+                let (b0, b1) = unsafe { b.split_at_mut_unchecked(m) };
 
-                    let b0 = <Self as Field>::Packing::pack_slice_mut(b0);
-                    let b1 = <Self as Field>::Packing::pack_slice_mut(b1);
+                let b0 = <Self as Field>::Packing::pack_slice_mut(b0);
+                let b1 = <Self as Field>::Packing::pack_slice_mut(b1);
 
-                    izip!(b0, b1, packed_roots).for_each(|(x, y, &root)| {
-                        let t = (*x - *y) * root;
-                        *x += *y;
-                        *y = t;
-                    });
-                }
-            } else {
-                panic!(
-                    "shouldn't be here: s = {}; lg_m = {}; m = {}; n = {};",
-                    s, lg_m, m, n
-                );
+                izip!(b0, b1, packed_roots).for_each(|(x, y, &root)| {
+                    let t = (*x - *y) * root;
+                    *x += *y;
+                    *y = t;
+                });
             }
         }
         // FIXME: This might not work on AVX2 where WIDTH == 8
@@ -356,7 +336,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Assumes `a.len() > 8`
     #[inline]
     fn forward_fft_recur(a: &mut [Self], root_table: &[Vec<Self>]) {
-        const ITERATIVE_FFT_THRESHOLD: usize = 1024;
+        const ITERATIVE_FFT_THRESHOLD: usize = 512;
 
         let n = a.len();
         if n <= ITERATIVE_FFT_THRESHOLD {
