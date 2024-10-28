@@ -86,7 +86,7 @@ fn bench_bb_blake3(criterion: &mut Criterion) {
     let b = Blake3 {};
     let c = C::new(b);
 
-    bench_mmcs::<F, u8, H, C, 32>(criterion, h.clone(), c.clone());
+    bench_mmcs::<F, u8, H, C, 32>(criterion, h, c.clone());
     bench_merkle_tree::<F, u8, H, C, 32>(criterion, h, c);
 }
 
@@ -100,7 +100,7 @@ fn bench_bb_keccak(criterion: &mut Criterion) {
     type C = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
     let c = C::new(k);
 
-    bench_mmcs::<F, u8, H, C, 32>(criterion, h.clone(), c.clone());
+    bench_mmcs::<F, u8, H, C, 32>(criterion, h, c.clone());
     bench_merkle_tree::<F, u8, H, C, 32>(criterion, h, c);
 }
 
