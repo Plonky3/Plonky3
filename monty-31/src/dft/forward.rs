@@ -91,15 +91,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         });
     }
 
-    // TODO: use izip!
     #[inline]
-    fn forward_small_interleave_1(a: &mut [Self]) {
-        // lg_m = 0
-        // m = 1
-        // s = lg_n - 1
-        // i in 0..n/2
-        // offset = 2*i
-        // k in 0 .. 1
+    fn forward_iterative_radix_2(a: &mut [Self]) {
         let a = <Self as Field>::Packing::pack_slice_mut(a);
         a.chunks_exact_mut(2).for_each(|pair| {
             let x = pair[0];
@@ -114,19 +107,12 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    fn forward_small_interleave<const N: usize>(a: &mut [Self], roots: &[Self]) {
-        // lg_m = 1
-        // m = 2
-        // s = lg_n - 2
-        // i in 0..n/4
-        // offset = 4*i
-        // k in 0 .. 2
+    fn forward_iterative_radix_r<const HALF_RADIX: usize>(a: &mut [Self], roots: &[Self]) {
         let n = a.len();
 
-        // TODO: Not sure this is the cleanest/fastest way to set r:
         // roots[0] == 1
-        // r = [1, roots[1], 1, roots[1], ...]
-        let r = <Self as Field>::Packing::from_fn(|i| roots[i % N]);
+        // roots <-- [1, roots[1], ..., roots[HALF_RADIX-1], 1, roots[1], ...]
+        let roots = <Self as Field>::Packing::from_fn(|i| roots[i % HALF_RADIX]);
 
         let packing_width = <Self as Field>::Packing::WIDTH;
         assert_eq!((n / 2) % packing_width, 0);
@@ -135,10 +121,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         a.chunks_exact_mut(2).for_each(|pair| {
             let x = pair[0];
             let y = pair[1];
-            let (mut x, y) = x.interleave(y, N);
-            let t = (x - y) * r;
+            let (mut x, y) = x.interleave(y, HALF_RADIX);
+            let t = (x - y) * roots;
             x += y;
-            let (x, y) = x.interleave(t, N);
+            let (x, y) = x.interleave(t, HALF_RADIX);
             pair[0] = x;
             pair[1] = y;
         });
@@ -146,7 +132,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
     /// Breadth-first DIF FFT for smallish vectors (must be >= 64)
     #[inline]
-    fn forward_small(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_iterative(a: &mut [Self], root_table: &[Vec<Self>]) {
         let n = a.len();
         let lg_n = log2_strict_usize(n);
 
@@ -154,13 +140,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert!(n >= 2 * packing_width);
 
         // Needed to avoid overlap with specialisation at the other end of the loop
-        assert!(lg_n >= 6);
+        assert!(lg_n >= 4);
 
         // Specialise the first few iterations; improves performance a little.
-        Self::forward_small_s0(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
-        Self::forward_small_s1(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
+        //Self::forward_small_s0(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        //Self::forward_small_s1(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
 
-        for lg_m in (4..(lg_n - 2)).rev() {
+        for lg_m in (4..lg_n).rev() {
             let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
@@ -185,12 +171,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                 });
             }
         }
-        // FIXME: This might not work on AVX2 where WIDTH == 8
-        Self::forward_small_interleave::<8>(a, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
-
-        Self::forward_small_interleave::<4>(a, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
-        Self::forward_small_interleave::<2>(a, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
-        Self::forward_small_interleave_1(a); // lg_m = 0; s = lg_n - 1
+        Self::forward_iterative_radix_r::<8>(a, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
+        Self::forward_iterative_radix_r::<4>(a, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
+        Self::forward_iterative_radix_r::<2>(a, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
+        Self::forward_iterative_radix_2(a); // lg_m = 0; s = lg_n - 1
     }
 
     #[inline(always)]
@@ -340,7 +324,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         let n = a.len();
         if n <= ITERATIVE_FFT_THRESHOLD {
-            Self::forward_small(a, root_table);
+            Self::forward_iterative(a, root_table);
         } else {
             assert_eq!(n, 1 << (root_table.len() + 1));
             Self::forward_pass(a, &root_table[0]);
