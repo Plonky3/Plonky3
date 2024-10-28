@@ -91,164 +91,9 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         });
     }
 
-    #[inline]
-    fn _forward_small_s0(a: &mut [Self], roots: &[Self]) {
-        let n = a.len();
-        // lg_m = lg_n - 1
-        // s = 0
-        // m = n/2
-        // i = 0
-        // offset = 0
-
-        let m = n / 2;
-        let (a0, a1) = unsafe { a.split_at_mut_unchecked(m) };
-
-        for k in 0..m {
-            let x = a0[k];
-            let y = a1[k];
-            let t = MP::PRIME + x.value - y.value;
-            a0[k] = x + y;
-            a1[k] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
-        }
-    }
-
-    #[inline]
-    fn _forward_small_s1(a: &mut [Self], roots: &[Self]) {
-        let n = a.len();
-        // s = 1
-        // lg_m = lg_n - 2
-        // m = n/4
-        // i = 0, 1
-        // offset = 0, n/2
-
-        let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
-
-        // i = 0
-        // offset = 0
-        let m = n / 4;
-
-        for k in 0..m {
-            let x = a0[k];
-            let y = a0[k + m];
-            let t = MP::PRIME + x.value - y.value;
-            a0[k] = x + y;
-            a0[k + m] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
-        }
-
-        // i = 1
-        // offset = n / 2
-        for k in 0..m {
-            let x = a1[k];
-            let y = a1[k + m];
-            let t = MP::PRIME + x.value - y.value;
-            a1[k] = x + y;
-            a1[k + m] = Self::new_monty(monty_reduce::<MP>(t as u64 * roots[k].value as u64));
-        }
-    }
-
-    // FIXME: This might not work on AVX2 where WIDTH == 8
-    #[inline]
-    fn forward_small_t3(a: &mut [Self], roots: &[Self]) {
-        let n = a.len();
-
-        // TODO: Not sure this is the cleanest/fastest way to set r:
-        // roots[0] == 1
-        // r = [1, roots[1], 1, roots[1], ...]
-        let r = <Self as Field>::Packing::from_fn(|i| roots[i % 8]);
-
-        let packing_width = <Self as Field>::Packing::WIDTH;
-        assert_eq!((n / 2) % packing_width, 0);
-        assert!((n / 2) >= packing_width);
-        let n_elts = (n / 2) / packing_width;
-        let a = <Self as Field>::Packing::pack_slice_mut(a);
-
-        for i in 0..n_elts {
-            // lg_m = 1
-            let offset = 2 * i;
-
-            let x = a[offset];
-            let y = a[offset + 1];
-            let (mut x, y) = x.interleave(y, 8);
-            let t = (x - y) * r;
-            x += y;
-            let (x, y) = x.interleave(t, 8);
-            a[offset] = x;
-            a[offset + 1] = y;
-        }
-    }
-
-    #[inline]
-    fn forward_small_t2(a: &mut [Self], roots: &[Self]) {
-        let n = a.len();
-
-        // TODO: Not sure this is the cleanest/fastest way to set r:
-        // roots[0] == 1
-        // r = [1, roots[1], 1, roots[1], ...]
-        let r = <Self as Field>::Packing::from_fn(|i| roots[i % 4]);
-
-        let packing_width = <Self as Field>::Packing::WIDTH;
-        assert_eq!((n / 2) % packing_width, 0);
-        assert!((n / 2) >= packing_width);
-        let n_elts = (n / 2) / packing_width;
-        let a = <Self as Field>::Packing::pack_slice_mut(a);
-
-        for i in 0..n_elts {
-            // lg_m = 1
-            let offset = 2 * i;
-
-            let x = a[offset];
-            let y = a[offset + 1];
-            let (mut x, y) = x.interleave(y, 4);
-            let t = (x - y) * r;
-            x += y;
-            let (x, y) = x.interleave(t, 4);
-            a[offset] = x;
-            a[offset + 1] = y;
-        }
-    }
-
-    #[inline]
-    fn forward_small_t1(a: &mut [Self], roots: &[Self]) {
-        // lg_m = 1
-        // m = 2
-        // s = lg_n - 2
-        // i in 0..n/4
-        // offset = 4*i
-        // k in 0 .. 2
-        let n = a.len();
-
-        // TODO: Not sure this is the cleanest/fastest way to set r:
-        // roots[0] == 1
-        // r = [1, roots[1], 1, roots[1], ...]
-        let r = <Self as Field>::Packing::from_fn(|i| roots[i % 2]);
-
-        let packing_width = <Self as Field>::Packing::WIDTH;
-        assert_eq!((n / 2) % packing_width, 0);
-        assert!((n / 2) >= packing_width);
-        // TODO: Store n_elts in caller and pass it in.
-        let n_elts = (n / 2) / packing_width;
-        let a = <Self as Field>::Packing::pack_slice_mut(a);
-
-        for i in 0..n_elts {
-            // lg_m = 1
-            let offset = 2 * i;
-
-            // m = 2
-            let x = a[offset];
-            let y = a[offset + 1];
-            let (mut x, y) = x.interleave(y, 2);
-            let t = (x - y) * r;
-            x += y;
-            let (x, y) = x.interleave(t, 2);
-            a[offset] = x;
-            a[offset + 1] = y;
-        }
-    }
-
     // TODO: use izip!
-    // TODO: refactor all these functions using a const generic
     #[inline]
-    fn forward_small_t0(a: &mut [Self]) {
+    fn forward_small_interleave_1(a: &mut [Self]) {
         // lg_m = 0
         // m = 1
         // s = lg_n - 1
@@ -271,6 +116,44 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             let t = x - y; // roots[0] == 1
             x += y;
             let (x, y) = x.interleave(t, 1);
+            a[offset] = x;
+            a[offset + 1] = y;
+        }
+    }
+
+    #[inline]
+    fn forward_small_interleave<const N: usize>(a: &mut [Self], roots: &[Self]) {
+        // lg_m = 1
+        // m = 2
+        // s = lg_n - 2
+        // i in 0..n/4
+        // offset = 4*i
+        // k in 0 .. 2
+        let n = a.len();
+
+        // TODO: Not sure this is the cleanest/fastest way to set r:
+        // roots[0] == 1
+        // r = [1, roots[1], 1, roots[1], ...]
+        let r = <Self as Field>::Packing::from_fn(|i| roots[i % N]);
+
+        let packing_width = <Self as Field>::Packing::WIDTH;
+        assert_eq!((n / 2) % packing_width, 0);
+        assert!((n / 2) >= packing_width);
+        // TODO: Store n_elts in caller and pass it in.
+        let n_elts = (n / 2) / packing_width;
+        let a = <Self as Field>::Packing::pack_slice_mut(a);
+
+        for i in 0..n_elts {
+            // lg_m = 1
+            let offset = 2 * i;
+
+            // m = 2
+            let x = a[offset];
+            let y = a[offset + 1];
+            let (mut x, y) = x.interleave(y, N);
+            let t = (x - y) * r;
+            x += y;
+            let (x, y) = x.interleave(t, N);
             a[offset] = x;
             a[offset + 1] = y;
         }
@@ -322,10 +205,12 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                 );
             }
         }
-        Self::forward_small_t3(a, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
-        Self::forward_small_t2(a, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
-        Self::forward_small_t1(a, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
-        Self::forward_small_t0(a); // lg_m = 0; s = lg_n - 1
+        // FIXME: This might not work on AVX2 where WIDTH == 8
+        Self::forward_small_interleave::<8>(a, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
+
+        Self::forward_small_interleave::<4>(a, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
+        Self::forward_small_interleave::<2>(a, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
+        Self::forward_small_interleave_1(a); // lg_m = 0; s = lg_n - 1
     }
 
     #[inline(always)]
