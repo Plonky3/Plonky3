@@ -16,6 +16,12 @@ use p3_field::AbstractField;
 
 use crate::{mds_light_permutation, MDSMat4};
 
+/// A generic method performing the transformation:
+///
+/// `s -> (s + rc)^D`
+///
+/// This is a little slower than field specific implementations (particularly for packed fields) so should
+/// only be used in non performance critical places.
 #[inline(always)]
 pub fn add_rc_and_sbox_generic<AF: AbstractField, const D: u64>(val: &mut AF, rc: AF::F) {
     *val += AF::from_f(rc);
