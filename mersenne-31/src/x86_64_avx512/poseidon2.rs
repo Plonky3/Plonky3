@@ -149,7 +149,7 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX512; 16]) {
     state[12] = mul_2exp_i::<13, 18>(state[12]);
     state[13] = mul_2exp_i::<14, 17>(state[13]);
     state[14] = mul_2exp_i::<15, 16>(state[14]);
-    state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a possibly slightly faster method for 15.
+    state[15] = mul_2exp_i::<16, 15>(state[15]);
 }
 
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + Diag(V))
@@ -177,7 +177,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
     state[12] = mul_2exp_i::<11, 20>(state[12]);
     state[13] = mul_2exp_i::<12, 19>(state[13]);
     state[14] = mul_2exp_i::<13, 18>(state[14]);
-    state[15] = mul_2exp_i::<14, 17>(state[15]); // TODO: There is a possibly slightly faster method for 15.
+    state[15] = mul_2exp_i::<14, 17>(state[15]);
     state[16] = mul_2exp_i::<15, 16>(state[16]);
     state[17] = mul_2exp_i::<16, 15>(state[17]);
     state[18] = mul_2exp_i::<17, 14>(state[18]);
