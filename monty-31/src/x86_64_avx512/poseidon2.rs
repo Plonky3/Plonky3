@@ -193,7 +193,6 @@ fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m512i) -> __m512i 
 /// Each entry of the output will be represented by an element in canonical form.
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline(always)]
-#[must_use]
 fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
     val: &mut PackedMontyField31AVX512<PMP>,
     rc: __m512i,
@@ -353,7 +352,7 @@ where
     FP: FieldParameters,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
+    fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {
         external_initial_permute_state(
             state,
             &self.packed_initial_external_constants,
@@ -363,7 +362,7 @@ where
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_terminal(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
+    fn permute_state_terminal(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {
         external_terminal_permute_state(
             state,
             &self.packed_terminal_external_constants,
