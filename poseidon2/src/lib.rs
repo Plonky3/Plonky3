@@ -8,16 +8,16 @@
 
 extern crate alloc;
 
-mod diffusion;
+mod external;
 mod generic;
-mod matrix;
+mod internal;
 mod round_numbers;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-pub use diffusion::*;
+pub use external::*;
 pub use generic::*;
-pub use matrix::*;
+pub use internal::*;
 use p3_field::{AbstractField, Field, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
