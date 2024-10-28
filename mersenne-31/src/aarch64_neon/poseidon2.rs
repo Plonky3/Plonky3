@@ -45,11 +45,8 @@ where
     GenericPoseidon2LinearLayersMersenne31:
         GenericPoseidon2LinearLayers<PackedMersenne31Neon, WIDTH>,
 {
-    type InternalState = [PackedMersenne31Neon; WIDTH];
-
-    /// Compute a collection of Poseidon2 internal layers.
-    /// One layer for every constant supplied.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
         self.internal_constants.iter().for_each(|&rc| {
             state[0] += rc;
             state[0] = state[0].exp_const_u64::<D>();
@@ -91,29 +88,15 @@ fn external_rounds<const WIDTH: usize, const D: u64>(
 impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH, D>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
-    type InternalState = [PackedMersenne31Neon; WIDTH];
-
-    /// Compute the first half of the Poseidon2 external layers.
-    fn permute_state_initial(
-        &self,
-        mut state: [PackedMersenne31Neon; WIDTH],
-    ) -> Self::InternalState {
-        mds_light_permutation(&mut state, &MDSMat4);
-
-        external_rounds::<WIDTH, D>(&mut state, &self.external_constants.get_initial_constants());
-
-        state
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
+        mds_light_permutation(state, &MDSMat4);
+        external_rounds::<WIDTH, D>(state, &self.external_constants.get_initial_constants());
     }
 
-    /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_terminal(&self, state: Self::InternalState) -> [PackedMersenne31Neon; WIDTH] {
-        let mut output_state = state;
-
-        external_rounds::<WIDTH, D>(
-            &mut output_state,
-            &self.external_constants.get_terminal_constants(),
-        );
-        output_state
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
+        external_rounds::<WIDTH, D>(state, &self.external_constants.get_terminal_constants());
     }
 }
 

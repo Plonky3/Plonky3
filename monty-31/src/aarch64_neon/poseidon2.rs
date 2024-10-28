@@ -67,10 +67,7 @@ where
     FP: FieldParameters,
     ILP: InternalLayerBaseParameters<FP, WIDTH>,
 {
-    type InternalState = [PackedMontyField31Neon<FP>; WIDTH];
-
-    /// Compute a collection of Poseidon2 internal layers.
-    /// One layer for every constant supplied.
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut Self::InternalState) {
         self.internal_constants.iter().for_each(|&rc| {
             state[0] += rc;
@@ -117,34 +114,14 @@ impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31Neon<
 where
     FP: FieldParameters,
 {
-    type InternalState = [PackedMontyField31Neon<FP>; WIDTH];
-
-    /// Compute the first half of the Poseidon2 external layers.
-    fn permute_state_initial(
-        &self,
-        mut state: [PackedMontyField31Neon<FP>; WIDTH],
-    ) -> Self::InternalState {
-        mds_light_permutation(&mut state, &MDSMat4);
-
-        external_rounds::<FP, WIDTH, D>(
-            &mut state,
-            &self.external_constants.get_initial_constants(),
-        );
-
-        state
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
+        mds_light_permutation(state, &MDSMat4);
+        external_rounds::<FP, WIDTH, D>(state, &self.external_constants.get_initial_constants());
     }
 
-    /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_terminal(
-        &self,
-        state: Self::InternalState,
-    ) -> [PackedMontyField31Neon<FP>; WIDTH] {
-        let mut output_state = state;
-
-        external_rounds::<FP, WIDTH, D>(
-            &mut output_state,
-            &self.external_constants.get_terminal_constants(),
-        );
-        output_state
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
+        external_rounds::<FP, WIDTH, D>(state, &self.external_constants.get_terminal_constants());
     }
 }
