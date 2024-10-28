@@ -12,7 +12,7 @@ use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use tracing::{debug_span, info_span, instrument};
+use tracing::{debug_span, instrument};
 
 use crate::butterflies::{Butterfly, DitButterfly};
 use crate::{divide_by_height, TwoAdicSubgroupDft};
@@ -174,11 +174,11 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
             let coset_idx = reverse_bits_len(coset_idx, added_bits);
             let dest = &mut rest_cosets_mat[coset_idx - 1]; // - 1 because we removed the first matrix.
-            coset_dft_out_of_place(self, &first_coset_mat.as_view(), dest, total_shift);
+            coset_dft_oop(self, &first_coset_mat.as_view(), dest, total_shift);
         }
 
         // Now run a forward DFT on the very first coset, this time in-place.
-        coset_dft_in_place(self, &mut first_coset_mat.as_view_mut(), shift);
+        coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
 
         // SAFETY: We wrote all values above.
         unsafe {
@@ -188,7 +188,32 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     }
 }
 
-fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
+#[instrument(level = "debug", skip_all)]
+fn coset_dft<F: TwoAdicField + Ord>(
+    dft: &Radix2DitParallel<F>,
+    mat: &mut RowMajorMatrixViewMut<F>,
+    shift: F,
+) {
+    let log_h = log2_strict_usize(mat.height());
+    let mid = log_h.div_ceil(2);
+
+    let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
+    let twiddles = twiddles_ref_mut
+        .entry((log_h, shift))
+        .or_insert_with(|| compute_coset_twiddles(log_h, shift));
+
+    // The first half looks like a normal DIT.
+    first_half_general(mat, mid, twiddles);
+
+    // For the second half, we flip the DIT, working in bit-reversed order.
+    reverse_matrix_index_bits(mat);
+
+    second_half_general(mat, mid, twiddles);
+}
+
+/// Like `coset_dft`, except out-of-place.
+#[instrument(level = "debug", skip_all)]
+fn coset_dft_oop<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
     src: &RowMajorMatrixView<F>,
     dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
@@ -216,44 +241,7 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
         .or_insert_with(|| compute_coset_twiddles(log_h, shift));
 
     // The first half looks like a normal DIT.
-    // first_half(&mut mat, mid, &old_twiddles.twiddles);
-    info_span!("modified first_half_dit").in_scope(|| {
-        src.par_row_chunks_exact(1 << mid)
-            .zip(dst_maybe.par_row_chunks_exact_mut(1 << mid))
-            .for_each(|(src_submat, mut dst_submat_maybe)| {
-                debug_assert_eq!(src_submat.dimensions(), dst_submat_maybe.dimensions());
-
-                // The first layer is special, done out-of-place.
-                // (Recall from the mid definition that there must be at least one layer here.)
-                let layer_rev = log_h - 1;
-                dit_layer_oop(
-                    &src_submat,
-                    &mut dst_submat_maybe,
-                    0,
-                    twiddles[layer_rev].iter().copied(),
-                );
-
-                // submat is now initialized.
-                let mut dst_submat = unsafe {
-                    transmute::<RowMajorMatrixViewMut<MaybeUninit<F>>, RowMajorMatrixViewMut<F>>(
-                        dst_submat_maybe,
-                    )
-                };
-
-                // Subsequent layers.
-                let mut backwards = true;
-                for layer in 1..mid {
-                    let layer_rev = log_h - 1 - layer;
-                    dit_layer(
-                        &mut dst_submat,
-                        layer,
-                        twiddles[layer_rev].iter().copied(),
-                        backwards,
-                    );
-                    backwards = !backwards;
-                }
-            });
-    });
+    first_half_general_oop(src, dst_maybe, mid, twiddles);
 
     // dst is now initialized.
     let dst = unsafe {
@@ -265,45 +253,7 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(dst);
 
-    second_half_modified(dst, mid, twiddles);
-}
-
-fn coset_dft_in_place<F: TwoAdicField + Ord>(
-    dft: &Radix2DitParallel<F>,
-    mat: &mut RowMajorMatrixViewMut<F>,
-    shift: F,
-) {
-    let log_h = log2_strict_usize(mat.height());
-    let mid = log_h.div_ceil(2);
-
-    let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
-    let twiddles = twiddles_ref_mut
-        .entry((log_h, shift))
-        .or_insert_with(|| compute_coset_twiddles(log_h, shift));
-
-    // The first half looks like a normal DIT.
-    // first_half(&mut mat, mid, &old_twiddles.twiddles);
-    info_span!("modified first_half_dit").in_scope(|| {
-        mat.par_row_chunks_exact_mut(1 << mid)
-            .for_each(|mut submat| {
-                let mut backwards = false;
-                for layer in 0..mid {
-                    let layer_rev = log_h - 1 - layer;
-                    dit_layer(
-                        &mut submat,
-                        layer,
-                        twiddles[layer_rev].iter().copied(),
-                        backwards,
-                    );
-                    backwards = !backwards;
-                }
-            });
-    });
-
-    // For the second half, we flip the DIT, working in bit-reversed order.
-    reverse_matrix_index_bits(mat);
-
-    second_half_modified(mat, mid, twiddles);
+    second_half_general(dst, mid, twiddles);
 }
 
 /// This can be used as the first half of a DIT butterfly network.
@@ -322,6 +272,77 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                     &mut submat,
                     layer,
                     twiddles.iter().copied().step_by(layer_pow),
+                    backwards,
+                );
+                backwards = !backwards;
+            }
+        });
+}
+
+/// Like `first_half`, except supporting different twiddle factors per layer, enabling coset shifts
+/// to be baked into them.
+#[instrument(level = "debug", skip_all)]
+fn first_half_general<F: Field>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    mid: usize,
+    twiddles: &[Vec<F>],
+) {
+    let log_h = log2_strict_usize(mat.height());
+    mat.par_row_chunks_exact_mut(1 << mid)
+        .for_each(|mut submat| {
+            let mut backwards = false;
+            for layer in 0..mid {
+                let layer_rev = log_h - 1 - layer;
+                dit_layer(
+                    &mut submat,
+                    layer,
+                    twiddles[layer_rev].iter().copied(),
+                    backwards,
+                );
+                backwards = !backwards;
+            }
+        });
+}
+
+/// Like `first_half_general`, except out-of-place.
+#[instrument(level = "debug", skip_all)]
+fn first_half_general_oop<F: Field>(
+    src: &RowMajorMatrixView<F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    mid: usize,
+    twiddles: &[Vec<F>],
+) {
+    let log_h = log2_strict_usize(src.height());
+    src.par_row_chunks_exact(1 << mid)
+        .zip(dst_maybe.par_row_chunks_exact_mut(1 << mid))
+        .for_each(|(src_submat, mut dst_submat_maybe)| {
+            debug_assert_eq!(src_submat.dimensions(), dst_submat_maybe.dimensions());
+
+            // The first layer is special, done out-of-place.
+            // (Recall from the mid definition that there must be at least one layer here.)
+            let layer_rev = log_h - 1;
+            dit_layer_oop(
+                &src_submat,
+                &mut dst_submat_maybe,
+                0,
+                twiddles[layer_rev].iter().copied(),
+            );
+
+            // submat is now initialized.
+            let mut dst_submat = unsafe {
+                transmute::<RowMajorMatrixViewMut<MaybeUninit<F>>, RowMajorMatrixViewMut<F>>(
+                    dst_submat_maybe,
+                )
+            };
+
+            // Subsequent layers.
+            let mut backwards = true;
+            for layer in 1..mid {
+                let layer_rev = log_h - 1 - layer;
+                dit_layer(
+                    &mut dst_submat,
+                    layer,
+                    twiddles[layer_rev].iter().copied(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -353,32 +374,32 @@ fn second_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles_rev: 
         });
 }
 
-/// Like `second_half`, except with coset shifts baked in to the twiddle factors.
-fn second_half_modified<F: Field>(
+/// Like `second_half`, except supporting different twiddle factors per layer, enabling coset shifts
+/// to be baked into them.
+#[instrument(level = "debug", skip_all)]
+fn second_half_general<F: Field>(
     mat: &mut RowMajorMatrixViewMut<F>,
     mid: usize,
     twiddles_rev: &[Vec<F>],
 ) {
     let log_h = log2_strict_usize(mat.height());
-    info_span!("modified second_half_dit").in_scope(|| {
-        mat.par_row_chunks_exact_mut(1 << (log_h - mid))
-            .enumerate()
-            .for_each(|(thread, mut submat)| {
-                let mut backwards = false;
-                for layer in mid..log_h {
-                    let layer_rev = log_h - 1 - layer;
-                    let first_block = thread << (layer - mid);
-                    dit_layer_rev(
-                        &mut submat,
-                        log_h,
-                        layer,
-                        twiddles_rev[layer_rev][first_block..].iter().copied(),
-                        backwards,
-                    );
-                    backwards = !backwards;
-                }
-            });
-    });
+    mat.par_row_chunks_exact_mut(1 << (log_h - mid))
+        .enumerate()
+        .for_each(|(thread, mut submat)| {
+            let mut backwards = false;
+            for layer in mid..log_h {
+                let layer_rev = log_h - 1 - layer;
+                let first_block = thread << (layer - mid);
+                dit_layer_rev(
+                    &mut submat,
+                    log_h,
+                    layer,
+                    twiddles_rev[layer_rev][first_block..].iter().copied(),
+                    backwards,
+                );
+                backwards = !backwards;
+            }
+        });
 }
 
 /// One layer of a DIT butterfly network.
