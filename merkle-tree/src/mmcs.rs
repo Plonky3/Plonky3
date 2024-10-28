@@ -258,6 +258,24 @@ mod tests {
     }
 
     #[test]
+    fn commit_single_8x1() {
+        let perm = Perm::new_from_rng_128(
+            Poseidon2ExternalMatrixGeneral,
+            DiffusionMatrixBabyBear::default(),
+            &mut thread_rng(),
+        );
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+
+        let mat = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8);
+        let (commit, _) = mmcs.commit(vec![mat.clone()]);
+
+        let expected_result = hash.hash_iter(mat.clone().vertically_packed_row(0));
+        assert_eq!(commit, expected_result);
+    }
+
+    #[test]
     fn commit_single_2x2() {
         let perm = Perm::new_from_rng_128(
             Poseidon2ExternalMatrixGeneral,
@@ -333,17 +351,41 @@ mod tests {
         //   0 1
         //   2 1
         //   2 2
+        //   2 1
+        //   2 2
         // ]
         let mat_1 = RowMajorMatrix::new(
-            vec![F::zero(), F::one(), F::two(), F::one(), F::two(), F::two()],
+            vec![
+                F::zero(),
+                F::one(),
+                F::two(),
+                F::one(),
+                F::two(),
+                F::two(),
+                F::two(),
+                F::one(),
+                F::two(),
+                F::two(),
+            ],
             2,
         );
         // mat_2 = [
         //   1 2 1
         //   0 2 2
+        //   1 2 1
         // ]
         let mat_2 = RowMajorMatrix::new(
-            vec![F::one(), F::two(), F::one(), F::zero(), F::two(), F::two()],
+            vec![
+                F::one(),
+                F::two(),
+                F::one(),
+                F::zero(),
+                F::two(),
+                F::two(),
+                F::one(),
+                F::two(),
+                F::one(),
+            ],
             3,
         );
 
@@ -353,22 +395,35 @@ mod tests {
             hash.hash_slice(&[F::zero(), F::one()]),
             hash.hash_slice(&[F::two(), F::one()]),
             hash.hash_slice(&[F::two(), F::two()]),
+            hash.hash_slice(&[F::two(), F::one()]),
+            hash.hash_slice(&[F::two(), F::two()]),
         ];
         let mat_2_leaf_hashes = [
             hash.hash_slice(&[F::one(), F::two(), F::one()]),
             hash.hash_slice(&[F::zero(), F::two(), F::two()]),
+            hash.hash_slice(&[F::one(), F::two(), F::one()]),
         ];
 
         let expected_result = compress.compress([
             compress.compress([
-                compress.compress([mat_1_leaf_hashes[0], mat_1_leaf_hashes[1]]),
-                mat_2_leaf_hashes[0],
+                compress.compress([
+                    compress.compress([mat_1_leaf_hashes[0], mat_1_leaf_hashes[1]]),
+                    mat_2_leaf_hashes[0],
+                ]),
+                compress.compress([
+                    compress.compress([mat_1_leaf_hashes[2], mat_1_leaf_hashes[3]]),
+                    mat_2_leaf_hashes[1],
+                ]),
             ]),
             compress.compress([
-                compress.compress([mat_1_leaf_hashes[2], default_digest]),
-                mat_2_leaf_hashes[1],
+                compress.compress([
+                    compress.compress([mat_1_leaf_hashes[4], default_digest]),
+                    mat_2_leaf_hashes[2],
+                ]),
+                default_digest,
             ]),
         ]);
+
         assert_eq!(commit, expected_result);
 
         let (opened_values, _proof) = mmcs.open_batch(2, &prover_data);
@@ -496,10 +551,18 @@ mod tests {
             width: 8,
         });
 
+        // 7 tiny mat with 1 row, 8 columns
+        let tiny_mats = (0..7).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8));
+        let tiny_mat_dims = (0..7).map(|_| Dimensions {
+            height: 1,
+            width: 8,
+        });
+
         let (commit, prover_data) = mmcs.commit(
             large_mats
                 .chain(medium_mats)
                 .chain(small_mats)
+                .chain(tiny_mats)
                 .collect_vec(),
         );
 
@@ -510,6 +573,7 @@ mod tests {
             &large_mat_dims
                 .chain(medium_mat_dims)
                 .chain(small_mat_dims)
+                .chain(tiny_mat_dims)
                 .collect_vec(),
             6,
             &opened_values,
