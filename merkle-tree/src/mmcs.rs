@@ -254,11 +254,7 @@ mod tests {
 
     #[test]
     fn commit_single_8x1() {
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut thread_rng(),
-        );
+        let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
