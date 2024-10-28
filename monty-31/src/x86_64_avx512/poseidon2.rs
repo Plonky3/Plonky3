@@ -6,8 +6,9 @@ use core::marker::PhantomData;
 use core::mem::transmute;
 
 use p3_poseidon2::{
-    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
+    external_initial_permute_state, external_terminal_permute_state, sum_15, sum_23, ExternalLayer,
+    ExternalLayerConstants, ExternalLayerConstructor, InternalLayer, InternalLayerConstructor,
+    MDSMat4,
 };
 
 use crate::{
@@ -194,9 +195,9 @@ fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m512i) -> __m512i 
 #[inline(always)]
 #[must_use]
 fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
-    val: PackedMontyField31AVX512<PMP>,
+    val: &mut PackedMontyField31AVX512<PMP>,
     rc: __m512i,
-) -> PackedMontyField31AVX512<PMP> {
+) {
     unsafe {
         // As our exponential functions simply assume that
         // the input lies in [-P, P] we do not need to perform a reduction provided
@@ -205,7 +206,7 @@ fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
         let val_plus_rc = x86_64::_mm512_add_epi32(vec_val, rc);
         let output = apply_func_to_even_odd::<PMP>(val_plus_rc, exp_small::<PMP, D>);
 
-        PackedMontyField31AVX512::<PMP>::from_vector(output)
+        *val = PackedMontyField31AVX512::<PMP>::from_vector(output);
     }
 }
 
@@ -276,7 +277,7 @@ where
             let mut internal_state = InternalLayer16::from_packed_field_array(*state);
 
             self.packed_internal_constants.iter().for_each(|&rc| {
-                internal_state.s0 = add_rc_and_sbox::<FP, D>(internal_state.s0, rc); // s0 -> (s0 + rc)^D
+                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
                 let sum_non_0 = sum_15(&transmute::<
                     [__m512i; 15],
                     [PackedMontyField31AVX512<FP>; 15],
@@ -325,7 +326,7 @@ where
             let mut internal_state = InternalLayer24::from_packed_field_array(*state);
 
             self.packed_internal_constants.iter().for_each(|&rc| {
-                internal_state.s0 = add_rc_and_sbox::<FP, D>(internal_state.s0, rc); // s0 -> (s0 + rc)^D
+                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
                 let sum_non_0 = sum_23(&transmute::<
                     [__m512i; 23],
                     [PackedMontyField31AVX512<FP>; 23],
@@ -346,50 +347,28 @@ where
     }
 }
 
-/// Compute a collection of Poseidon2 external layers.
-/// One layer for every constant supplied.
-#[inline]
-fn external_rounds<FP, const WIDTH: usize, const D: u64>(
-    state: &mut [PackedMontyField31AVX512<FP>; WIDTH],
-    packed_external_constants: &[[__m512i; WIDTH]],
-) where
-    FP: FieldParameters,
-{
-    /*
-        The external layer consists of the following 2 operations:
-
-        s -> s + rc
-        s -> s^d
-        s -> Ms
-
-        Where by s^d we mean to apply this power function element wise.
-
-        Multiplication by M is implemented efficiently in p3_poseidon2/matrix.
-    */
-    packed_external_constants.iter().for_each(|round_consts| {
-        state
-            .iter_mut()
-            .zip(round_consts.iter())
-            .for_each(|(val, &rc)| {
-                *val = add_rc_and_sbox::<FP, D>(*val, rc);
-            });
-        mds_light_permutation(state, &MDSMat4);
-    });
-}
-
 impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31AVX512<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
     FP: FieldParameters,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {
-        mds_light_permutation(state, &MDSMat4);
-        external_rounds::<FP, WIDTH, D>(state, &self.packed_initial_external_constants);
+    fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
+        external_initial_permute_state(
+            state,
+            &self.packed_initial_external_constants,
+            add_rc_and_sbox::<FP, D>,
+            &MDSMat4,
+        );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_terminal(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {
-        external_rounds::<FP, WIDTH, D>(state, &self.packed_terminal_external_constants);
+    fn permute_state_terminal(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
+        external_terminal_permute_state(
+            state,
+            &self.packed_terminal_external_constants,
+            add_rc_and_sbox::<FP, D>,
+            &MDSMat4,
+        );
     }
 }

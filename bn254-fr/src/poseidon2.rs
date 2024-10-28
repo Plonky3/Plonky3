@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 
 use p3_field::AbstractField;
 use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
-    matmul_internal, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4,
-    InternalLayer, InternalLayerConstructor, Poseidon2,
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
+    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, Poseidon2,
 };
 
 use crate::Bn254Fr;
@@ -75,18 +75,20 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [Bn254Fr; WIDTH]) {
-        external_initial_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
+        external_initial_permute_state(
             state,
             self.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, BN254_S_BOX_DEGREE>,
             &HLMDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [Bn254Fr; WIDTH]) {
-        external_terminal_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
+        external_terminal_permute_state(
             state,
             self.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, BN254_S_BOX_DEGREE>,
             &HLMDSMat4,
         );
     }

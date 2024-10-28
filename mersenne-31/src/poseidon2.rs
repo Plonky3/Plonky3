@@ -17,8 +17,9 @@ use core::ops::Mul;
 
 use p3_field::{AbstractField, Field};
 use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
-    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    internal_permute_state, ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
+    Poseidon2,
 };
 
 use crate::{
@@ -28,7 +29,9 @@ use crate::{
 /// Degree of the chosen permutation polynomial for Mersenne31, used as the Poseidon2 S-Box.
 ///
 /// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-const MERSENNE31_S_BOX_DEGREE: u64 = 5;
+/// Currently pub(crate) as it is used in the default neon implementation. Once that is optimized
+/// this should no longer be public.
+pub(crate) const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 
 /// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
 ///
@@ -98,18 +101,20 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [Mersenne31; WIDTH]) {
-        external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
+        external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>,
             &MDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [Mersenne31; WIDTH]) {
-        external_terminal_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
+        external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>,
             &MDSMat4,
         );
     }

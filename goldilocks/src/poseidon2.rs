@@ -11,9 +11,10 @@ use alloc::vec::Vec;
 
 use p3_field::{AbstractField, Field};
 use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
-    matmul_internal, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4,
-    InternalLayer, InternalLayerConstructor, MDSMat4, Poseidon2,
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
+    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, MDSMat4,
+    Poseidon2,
 };
 
 use crate::{to_goldilocks_array, Goldilocks};
@@ -203,18 +204,20 @@ impl<AF: AbstractField<F = Goldilocks>, const WIDTH: usize>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [AF; WIDTH]) {
-        external_initial_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
+        external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
             &MDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [AF; WIDTH]) {
-        external_terminal_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
+        external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
             &MDSMat4,
         );
     }
@@ -240,18 +243,20 @@ impl<AF: AbstractField<F = Goldilocks>, const WIDTH: usize>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [AF; WIDTH]) {
-        external_initial_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
+        external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
             &HLMDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [AF; WIDTH]) {
-        external_terminal_permute_state::<_, _, WIDTH, GOLDILOCKS_S_BOX_DEGREE>(
+        external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
             &HLMDSMat4,
         );
     }

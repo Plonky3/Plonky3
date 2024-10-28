@@ -236,47 +236,42 @@ where
 }
 
 /// A helper method which allow any field to easily implement the terminal External Layer.
-/// This should only be used in places where performance is not critical.
 #[inline]
 pub fn external_terminal_permute_state<
     AF: AbstractField,
+    CT: Copy, // Whatever type the constants are stored as.
     MdsPerm4: MdsPermutation<AF, 4>,
     const WIDTH: usize,
-    const D: u64,
 >(
     state: &mut [AF; WIDTH],
-    terminal_external_constants: &[[AF::F; WIDTH]],
+    terminal_external_constants: &[[CT; WIDTH]],
+    add_rc_and_sbox: fn(&mut AF, CT),
     mat4: &MdsPerm4,
 ) {
     for elem in terminal_external_constants.iter() {
         state
             .iter_mut()
             .zip(elem.iter())
-            .for_each(|(s, rc)| *s += AF::from_f(*rc));
-        state.iter_mut().for_each(|s| *s = s.exp_const_u64::<D>());
+            .for_each(|(s, &rc)| add_rc_and_sbox(s, rc));
         mds_light_permutation(state, mat4);
     }
 }
 
 /// A helper method which allow any field to easily implement the initial External Layer.
-/// This should only be used in places where performance is not critical.
 #[inline]
 pub fn external_initial_permute_state<
     AF: AbstractField,
+    CT: Copy, // Whatever type the constants are stored as.
     MdsPerm4: MdsPermutation<AF, 4>,
     const WIDTH: usize,
-    const D: u64,
 >(
     state: &mut [AF; WIDTH],
-    initial_external_constants: &[[AF::F; WIDTH]],
+    initial_external_constants: &[[CT; WIDTH]],
+    add_rc_and_sbox: fn(&mut AF, CT),
     mat4: &MdsPerm4,
 ) {
     mds_light_permutation(state, mat4);
     // After the initial mds_light_permutation, the remaining layers are identical
     // to the terminal permutation simply with different constants.
-    external_terminal_permute_state::<AF, MdsPerm4, WIDTH, D>(
-        state,
-        initial_external_constants,
-        mat4,
-    )
+    external_terminal_permute_state(state, initial_external_constants, add_rc_and_sbox, mat4)
 }

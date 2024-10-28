@@ -31,6 +31,8 @@ use alloc::vec::Vec;
 
 use p3_field::{AbstractField, Field};
 
+use crate::add_rc_and_sbox_generic;
+
 /// Initialize an internal layer from a set of constants.
 pub trait InternalLayerConstructor<AF>
 where
@@ -71,8 +73,7 @@ pub fn internal_permute_state<AF: AbstractField, const WIDTH: usize, const D: u6
     internal_constants: &[AF::F],
 ) {
     for elem in internal_constants.iter() {
-        state[0] += AF::from_f(*elem);
-        state[0] = state[0].exp_const_u64::<D>();
+        add_rc_and_sbox_generic::<AF, D>(&mut state[0], *elem);
         diffusion_mat(state);
     }
 }

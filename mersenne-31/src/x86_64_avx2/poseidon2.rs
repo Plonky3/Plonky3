@@ -2,8 +2,9 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 
 use p3_poseidon2::{
-    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
+    external_initial_permute_state, external_terminal_permute_state, sum_15, sum_23, ExternalLayer,
+    ExternalLayerConstants, ExternalLayerConstructor, InternalLayer, InternalLayerConstructor,
+    MDSMat4,
 };
 
 use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
@@ -187,7 +188,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
 /// If the inputs do not conform to these representations, the result is undefined.
 /// The output will be represented as a value in {0..P}.
 #[inline(always)]
-fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31AVX2 {
+fn add_rc_and_sbox(input: &mut PackedMersenne31AVX2, rc: __m256i) {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let input_vec = input.to_vector();
@@ -196,14 +197,14 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX2, rc: __m256i) -> PackedMersenne31
         // Due to the representations of input and rc, input_plus_rc is in {-P, ..., P}.
         // This is exactly the required bound to apply sbox.
         let input_post_sbox = exp5(input_plus_rc);
-        PackedMersenne31AVX2::from_vector(input_post_sbox)
+        *input = PackedMersenne31AVX2::from_vector(input_post_sbox);
     }
 }
 
 /// Compute a single Poseidon2 internal layer on a state of width 16.
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
-    state[0] = add_rc_and_sbox(state[0], rc);
+    add_rc_and_sbox(&mut state[0], rc);
     let sum_non_0 = sum_15(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
@@ -223,7 +224,7 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
 /// Compute a single Poseidon2 internal layer on a state of width 24.
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
-    state[0] = add_rc_and_sbox(state[0], rc);
+    add_rc_and_sbox(&mut state[0], rc);
     let sum_non_0 = sum_23(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
@@ -240,34 +241,27 @@ impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersen
     }
 }
 
-/// Compute a collection of Poseidon2 external layers.
-/// One layer for every constant supplied.
-#[inline]
-fn external_rounds<const WIDTH: usize>(
-    state: &mut [PackedMersenne31AVX2; WIDTH],
-    packed_external_constants: &[[__m256i; WIDTH]],
-) {
-    packed_external_constants.iter().for_each(|round_consts| {
-        state
-            .iter_mut()
-            .zip(round_consts.iter())
-            .for_each(|(val, &rc)| *val = add_rc_and_sbox(*val, rc));
-        mds_light_permutation(state, &MDSMat4);
-    });
-}
-
 impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMersenne31AVX2; WIDTH]) {
-        mds_light_permutation(state, &MDSMat4);
-        external_rounds(state, &self.packed_initial_external_constants);
+        external_initial_permute_state(
+            state,
+            &self.packed_initial_external_constants,
+            add_rc_and_sbox,
+            &MDSMat4,
+        );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [PackedMersenne31AVX2; WIDTH]) {
-        external_rounds(state, &self.packed_terminal_external_constants);
+        external_terminal_permute_state(
+            state,
+            &self.packed_terminal_external_constants,
+            add_rc_and_sbox,
+            &MDSMat4,
+        );
     }
 }
 

@@ -8,8 +8,9 @@ use core::marker::PhantomData;
 
 use p3_field::AbstractField;
 use p3_poseidon2::{
-    mds_light_permutation, ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor,
-    InternalLayer, InternalLayerConstructor, MDSMat4,
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4,
 };
 
 use crate::{
@@ -70,43 +71,10 @@ where
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         self.internal_constants.iter().for_each(|&rc| {
-            state[0] += rc;
-            state[0] = state[0].exp_const_u64::<D>();
+            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>(&mut state[0], rc);
             ILP::generic_internal_linear_layer(state);
         })
     }
-}
-
-/// Compute a collection of Poseidon2 external layers.
-/// One layer for every constant supplied.
-#[inline]
-fn external_rounds<FP, const WIDTH: usize, const D: u64>(
-    state: &mut [PackedMontyField31Neon<FP>; WIDTH],
-    packed_external_constants: &[[MontyField31<FP>; WIDTH]],
-) where
-    FP: FieldParameters,
-{
-    /*
-        The external layer consists of the following 2 operations:
-
-        s -> s + rc
-        s -> s^d
-        s -> Ms
-
-        Where by s^d we mean to apply this power function element wise.
-
-        Multiplication by M is implemented efficiently in p3_poseidon2/matrix.
-    */
-    packed_external_constants.iter().for_each(|round_consts| {
-        state
-            .iter_mut()
-            .zip(round_consts.iter())
-            .for_each(|(val, &rc)| {
-                *val += rc;
-                *val = val.exp_const_u64::<D>();
-            });
-        mds_light_permutation(state, &MDSMat4);
-    });
 }
 
 impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31Neon<FP>, WIDTH, D>
@@ -116,12 +84,21 @@ where
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
-        mds_light_permutation(state, &MDSMat4);
-        external_rounds::<FP, WIDTH, D>(state, &self.external_constants.get_initial_constants());
+        external_initial_permute_state(
+            state,
+            self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, D>,
+            &MDSMat4,
+        );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
-        external_rounds::<FP, WIDTH, D>(state, &self.external_constants.get_terminal_constants());
+        external_terminal_permute_state(
+            state,
+            self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, D>,
+            &MDSMat4,
+        );
     }
 }

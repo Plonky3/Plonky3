@@ -16,18 +16,18 @@ use p3_field::AbstractField;
 
 use crate::{mds_light_permutation, MDSMat4};
 
+#[inline(always)]
+pub fn add_rc_and_sbox_generic<AF: AbstractField, const D: u64>(val: &mut AF, rc: AF::F) {
+    *val += AF::from_f(rc);
+    *val = val.exp_const_u64::<D>();
+}
+
 pub trait GenericPoseidon2LinearLayers<AF: AbstractField, const WIDTH: usize>: Sync {
     /// A generic implementation of the internal linear layer.
     fn internal_linear_layer(state: &mut [AF; WIDTH]);
 
     /// A generic implementation of the external linear layer.
     fn external_linear_layer(state: &mut [AF; WIDTH]) {
-        // TODO: Not loving having to initialise mat4 every time. Would ideally be able to find a way around it
-        // while still supporting the option for the user to change their choice of external layer matrix.
-        // Want to avoid having to pass another argument to the function to.
-        // Might involve refactoring mds_light_permutation.
-        let mat4 = MDSMat4 {};
-
-        mds_light_permutation(state, &mat4);
+        mds_light_permutation(state, &MDSMat4);
     }
 }
