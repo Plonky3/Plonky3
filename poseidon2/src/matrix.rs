@@ -225,24 +225,14 @@ pub trait ExternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
 where
     AF: AbstractField,
 {
-    /// The type used internally by the Poseidon2 implementation.
-    /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
-    type InternalState;
-
     // permute_state_initial, permute_state_terminal are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.
 
-    /// Compute the initial external permutation.
-    /// Implementations will usually not use both constants fields.
-    /// Input state will be [AF; WIDTH], output state will be
-    /// in appropriate form to feed into the Internal Layer.
-    fn permute_state_initial(&self, state: [AF; WIDTH]) -> Self::InternalState;
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [AF; WIDTH]);
 
-    /// Compute the terminal external permutation.
-    /// Implementations will usually not use both constants fields.
-    /// Input state will be in appropriate form from Internal Layer.
-    /// Output state will be [AF; WIDTH].
-    fn permute_state_terminal(&self, state: Self::InternalState) -> [AF; WIDTH];
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [AF; WIDTH]);
 }
 
 /// A helper method which allow any field to easily implement the terminal External Layer.

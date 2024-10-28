@@ -58,14 +58,8 @@ pub trait InternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
 where
     AF: AbstractField,
 {
-    /// The type used internally by the Poseidon2 implementation.
-    /// In the scalar case, InternalState = [AF; WIDTH] but for PackedFields it's faster to use packed vectors.
-    /// This must be the same as the InternalState field used in the corresponding External Layer.
-    type InternalState;
-
-    /// Compute the internal part of the Poseidon2 permutation.
-    /// Implementations will usually not use both constants fields.
-    fn permute_state(&self, state: &mut Self::InternalState);
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [AF; WIDTH]);
 }
 
 /// A helper method which allows any field to easily implement Internal Layer.

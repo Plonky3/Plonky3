@@ -72,9 +72,8 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
 }
 
 impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
-    type InternalState = [Mersenne31; 16];
-
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [Mersenne31; 16]) {
         internal_permute_state::<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE>(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
@@ -84,9 +83,8 @@ impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
 }
 
 impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
-    type InternalState = [Mersenne31; 24];
-
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [Mersenne31; 24]) {
         internal_permute_state::<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE>(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
@@ -98,24 +96,22 @@ impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
 impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGREE>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
-    type InternalState = [Mersenne31; WIDTH];
-
-    fn permute_state_initial(&self, mut state: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [Mersenne31; WIDTH]) {
         external_initial_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
-            &mut state,
+            state,
             self.external_constants.get_initial_constants(),
             &MDSMat4,
         );
-        state
     }
 
-    fn permute_state_terminal(&self, mut state: Self::InternalState) -> [Mersenne31; WIDTH] {
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [Mersenne31; WIDTH]) {
         external_terminal_permute_state::<Mersenne31, MDSMat4, WIDTH, MERSENNE31_S_BOX_DEGREE>(
-            &mut state,
+            state,
             self.external_constants.get_terminal_constants(),
             &MDSMat4,
         );
-        state
     }
 }
 

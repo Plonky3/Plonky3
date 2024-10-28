@@ -50,9 +50,8 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
 }
 
 impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
-    type InternalState = [Bn254Fr; BN254_WIDTH];
-
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [Bn254Fr; BN254_WIDTH]) {
         internal_permute_state::<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE>(
             state,
             |x| matmul_internal(x, *get_diffusion_matrix_3()),
@@ -74,24 +73,22 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
 impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
     for Poseidon2ExternalLayerBn254<WIDTH>
 {
-    type InternalState = [Bn254Fr; WIDTH];
-
-    fn permute_state_initial(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [Bn254Fr; WIDTH]) {
         external_initial_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
-            &mut state,
+            state,
             self.get_initial_constants(),
             &HLMDSMat4,
         );
-        state
     }
 
-    fn permute_state_terminal(&self, mut state: [Bn254Fr; WIDTH]) -> [Bn254Fr; WIDTH] {
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [Bn254Fr; WIDTH]) {
         external_terminal_permute_state::<_, _, WIDTH, BN254_S_BOX_DEGREE>(
-            &mut state,
+            state,
             self.get_terminal_constants(),
             &HLMDSMat4,
         );
-        state
     }
 }
 

@@ -99,18 +99,12 @@ where
     AF: AbstractField + Sync,
     AF::F: PrimeField,
     ExternalPerm: ExternalLayer<AF, WIDTH, D>,
-    InternalPerm: InternalLayer<AF, WIDTH, D, InternalState = ExternalPerm::InternalState>,
+    InternalPerm: InternalLayer<AF, WIDTH, D>,
 {
-    fn permute(&self, state: [AF; WIDTH]) -> [AF; WIDTH] {
-        let mut internal_state = self.external_layer.permute_state_initial(state);
-
-        self.internal_layer.permute_state(&mut internal_state);
-
-        self.external_layer.permute_state_terminal(internal_state)
-    }
-
     fn permute_mut(&self, state: &mut [AF; WIDTH]) {
-        *state = self.permute((*state).clone())
+        self.external_layer.permute_state_initial(state);
+        self.internal_layer.permute_state(state);
+        self.external_layer.permute_state_terminal(state);
     }
 }
 
@@ -121,6 +115,6 @@ where
     AF: AbstractField + Sync,
     AF::F: PrimeField,
     ExternalPerm: ExternalLayer<AF, WIDTH, D>,
-    InternalPerm: InternalLayer<AF, WIDTH, D, InternalState = ExternalPerm::InternalState>,
+    InternalPerm: InternalLayer<AF, WIDTH, D>,
 {
 }

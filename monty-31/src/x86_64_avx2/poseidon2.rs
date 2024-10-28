@@ -255,12 +255,11 @@ where
     ILP: InternalLayerParametersAVX2<16, ArrayLike = [__m256i; 15]>
         + InternalLayerBaseParameters<FP, 16>,
 {
-    type InternalState = InternalLayer16<FP>;
-
-    /// Compute a collection of Poseidon2 internal layers.
-    /// One layer for every constant supplied.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMontyField31AVX2<FP>; 16]) {
         unsafe {
+            // Safety: This return values in canonical form when given values in canonical form.
+
             /*
                 Fix a vector v and let Diag(v) denote the diagonal matrix with diagonal given by v.
                 Additionally, let 1 denote the matrix with all elements equal to 1.
@@ -270,25 +269,32 @@ where
                 s0 -> (s0 + rc)^d
                 s -> (1 + Diag(v))s
 
-                Note that this matrix multiplication can be implemented as:
+                Note that this matrix multiplication is implemented as:
                 sum = sum_i s_i
-                s_i -> sum + s_iv_i
-
-                which is essentially how we implement it.
+                s_i -> sum + s_iv_i.
             */
+
+            let mut internal_state = InternalLayer16::from_packed_field_array(*state);
+
             self.packed_internal_constants.iter().for_each(|&rc| {
-                state.s0 = add_rc_and_sbox::<FP, D>(state.s0, rc); // s0 -> (s0 + rc)^D
+                internal_state.s0 = add_rc_and_sbox::<FP, D>(internal_state.s0, rc); // s0 -> (s0 + rc)^D
                 let sum_non_0 = sum_15(
-                    &transmute::<[__m256i; 15], [PackedMontyField31AVX2<FP>; 15]>(state.s_hi),
+                    &transmute::<[__m256i; 15], [PackedMontyField31AVX2<FP>; 15]>(
+                        internal_state.s_hi,
+                    ),
                 ); // Get the sum of all elements other than s0.
-                ILP::diagonal_mul(&mut state.s_hi); // si -> vi * si for all i > 0.
-                let sum = sum_non_0 + state.s0; // Get the full sum.
-                state.s0 = sum_non_0 - state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
+                ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
+                let sum = sum_non_0 + internal_state.s0; // Get the full sum.
+                internal_state.s0 = sum_non_0 - internal_state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
                 ILP::add_sum(
-                    &mut state.s_hi,
+                    &mut internal_state.s_hi,
                     transmute::<PackedMontyField31AVX2<FP>, __m256i>(sum),
                 ); // si -> si + sum for all i > 0.
-            })
+            });
+
+            // This transformation is safe as the above function returns elements
+            // in canonical form when given elements in canonical form.
+            *state = InternalLayer16::to_packed_field_array(internal_state);
         }
     }
 }
@@ -300,12 +306,11 @@ where
     ILP: InternalLayerParametersAVX2<24, ArrayLike = [__m256i; 23]>
         + InternalLayerBaseParameters<FP, 24>,
 {
-    type InternalState = InternalLayer24<FP>;
-
-    /// Compute a collection of Poseidon2 internal layers.
-    /// One layer for every constant supplied.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMontyField31AVX2<FP>; 24]) {
         unsafe {
+            // Safety: This return values in canonical form when given values in canonical form.
+
             /*
                 Fix a vector v and let Diag(v) denote the diagonal matrix with diagonal given by v.
                 Additionally, let 1 denote the matrix with all elements equal to 1.
@@ -315,26 +320,32 @@ where
                 s0 -> (s0 + rc)^d
                 s -> (1 + Diag(v))s
 
-                Note that this matrix multiplication can be implemented as:
+                Note that this matrix multiplication is implemented as:
                 sum = sum_i s_i
-                s_i -> sum + s_iv_i
-
-                which is essentially how we implement it.
+                s_i -> sum + s_iv_i.
             */
 
+            let mut internal_state = InternalLayer24::from_packed_field_array(*state);
+
             self.packed_internal_constants.iter().for_each(|&rc| {
-                state.s0 = add_rc_and_sbox::<FP, D>(state.s0, rc); // s0 -> (s0 + rc)^D
+                internal_state.s0 = add_rc_and_sbox::<FP, D>(internal_state.s0, rc); // s0 -> (s0 + rc)^D
                 let sum_non_0 = sum_23(
-                    &transmute::<[__m256i; 23], [PackedMontyField31AVX2<FP>; 23]>(state.s_hi),
+                    &transmute::<[__m256i; 23], [PackedMontyField31AVX2<FP>; 23]>(
+                        internal_state.s_hi,
+                    ),
                 ); // Get the sum of all elements other than s0.
-                ILP::diagonal_mul(&mut state.s_hi); // si -> vi * si for all i > 0.
-                let sum = sum_non_0 + state.s0; // Get the full sum.
-                state.s0 = sum_non_0 - state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
+                ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
+                let sum = sum_non_0 + internal_state.s0; // Get the full sum.
+                internal_state.s0 = sum_non_0 - internal_state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
                 ILP::add_sum(
-                    &mut state.s_hi,
+                    &mut internal_state.s_hi,
                     transmute::<PackedMontyField31AVX2<FP>, __m256i>(sum),
                 ); // si -> si + sum for all i > 0.
-            })
+            });
+
+            // This transformation is safe as the above function returns elements
+            // in canonical form when given elements in canonical form.
+            *state = InternalLayer24::to_packed_field_array(internal_state);
         }
     }
 }
@@ -370,72 +381,19 @@ fn external_rounds<FP, const WIDTH: usize, const D: u64>(
     });
 }
 
-impl<FP, const D: u64> ExternalLayer<PackedMontyField31AVX2<FP>, 16, D>
-    for Poseidon2ExternalLayerMonty31<FP, 16>
+impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31AVX2<FP>, WIDTH, D>
+    for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
     FP: FieldParameters,
 {
-    type InternalState = InternalLayer16<FP>;
-
-    /// Compute the first half of the Poseidon2 external layers.
-    fn permute_state_initial(
-        &self,
-        mut state: [PackedMontyField31AVX2<FP>; 16],
-    ) -> Self::InternalState {
-        mds_light_permutation(&mut state, &MDSMat4);
-
-        external_rounds::<FP, 16, D>(&mut state, &self.packed_initial_external_constants);
-
-        InternalLayer16::from_packed_field_array(state)
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
+        mds_light_permutation(state, &MDSMat4);
+        external_rounds::<FP, WIDTH, D>(state, &self.packed_initial_external_constants);
     }
 
-    /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_terminal(
-        &self,
-        state: Self::InternalState,
-    ) -> [PackedMontyField31AVX2<FP>; 16] {
-        let mut output_state = unsafe {
-            // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
-            // Thus to_packed_field_array is safe to use.
-            state.to_packed_field_array()
-        };
-
-        external_rounds::<FP, 16, D>(&mut output_state, &self.packed_terminal_external_constants);
-        output_state
-    }
-}
-
-impl<FP, const D: u64> ExternalLayer<PackedMontyField31AVX2<FP>, 24, D>
-    for Poseidon2ExternalLayerMonty31<FP, 24>
-where
-    FP: FieldParameters,
-{
-    type InternalState = InternalLayer24<FP>;
-
-    /// Compute the first half of the Poseidon2 external layers.
-    fn permute_state_initial(
-        &self,
-        mut state: [PackedMontyField31AVX2<FP>; 24],
-    ) -> Self::InternalState {
-        mds_light_permutation(&mut state, &MDSMat4);
-
-        external_rounds::<FP, 24, D>(&mut state, &self.packed_initial_external_constants);
-
-        InternalLayer24::from_packed_field_array(state)
-    }
-
-    /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_terminal(
-        &self,
-        state: Self::InternalState,
-    ) -> [PackedMontyField31AVX2<FP>; 24] {
-        let mut output_state = unsafe {
-            // SAFETY: The internal layer outputs elements in canonical form when given elements in canonical form.
-            // Thus to_packed_field_array is safe to use.
-            state.to_packed_field_array()
-        };
-
-        external_rounds::<FP, 24, D>(&mut output_state, &self.packed_terminal_external_constants);
-        output_state
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {
+        external_rounds::<FP, WIDTH, D>(state, &self.packed_terminal_external_constants);
     }
 }

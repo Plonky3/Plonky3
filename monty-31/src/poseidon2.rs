@@ -84,11 +84,8 @@ where
     FP: FieldParameters,
     P2P: InternalLayerParameters<FP, WIDTH>,
 {
-    type InternalState = [MontyField31<FP>; WIDTH];
-
-    /// Compute a collection of Poseidon2 internal layers.
-    /// One layer for every constant supplied.
-    fn permute_state(&self, state: &mut Self::InternalState) {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [MontyField31<FP>; WIDTH]) {
         self.internal_constants.iter().for_each(|rc| {
             state[0] += *rc;
             state[0] = state[0].exp_const_u64::<D>();
@@ -105,26 +102,22 @@ impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH
 where
     FP: FieldParameters,
 {
-    type InternalState = [MontyField31<FP>; WIDTH];
-
-    /// Compute the first half of the Poseidon2 external layers.
-    fn permute_state_initial(&self, mut state: [MontyField31<FP>; WIDTH]) -> Self::InternalState {
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [MontyField31<FP>; WIDTH]) {
         external_initial_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(
-            &mut state,
+            state,
             self.external_constants.get_initial_constants(),
             &MDSMat4,
         );
-        state
     }
 
-    /// Compute the second half of the Poseidon2 external layers.
-    fn permute_state_terminal(&self, mut state: Self::InternalState) -> [MontyField31<FP>; WIDTH] {
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [MontyField31<FP>; WIDTH]) {
         external_terminal_permute_state::<MontyField31<FP>, MDSMat4, WIDTH, D>(
-            &mut state,
+            state,
             self.external_constants.get_terminal_constants(),
             &MDSMat4,
         );
-        state
     }
 }
 
