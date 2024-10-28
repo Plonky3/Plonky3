@@ -6,7 +6,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::AbstractField;
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
@@ -71,7 +70,7 @@ where
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         self.internal_constants.iter().for_each(|&rc| {
-            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>(&mut state[0], rc);
+            add_rc_and_sbox_generic::<_, D>(&mut state[0], rc);
             ILP::generic_internal_linear_layer(state);
         })
     }
