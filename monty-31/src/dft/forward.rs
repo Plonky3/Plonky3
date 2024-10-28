@@ -37,14 +37,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     #[inline]
-    fn forward_small_s0(a: &mut [Self], roots: &[Self]) {
+    fn forward_iterative_layer_1(a: &mut [Self], roots: &[Self]) {
         let n = a.len();
-        // lg_m = lg_n - 1
-        // s = 0
-        // m = n/2
-        // i = 0
-        // offset = 0
-
         let packed_vec = <Self as Field>::Packing::pack_slice_mut(a);
         let packed_roots = <Self as Field>::Packing::pack_slice(roots);
 
@@ -61,14 +55,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    fn forward_small_s1(a: &mut [Self], roots: &[Self]) {
+    fn forward_iterative_layer_2(a: &mut [Self], roots: &[Self]) {
         let n = a.len();
-        // s = 1
-        // lg_m = lg_n - 2
-        // m = n/4
-        // i = 0, 1
-        // offset = 0, n/2
-
         let (u, v) = unsafe { a.split_at_mut_unchecked(n / 2) };
         let (u0, u1) = unsafe { u.split_at_mut_unchecked(n / 4) };
         let (v0, v1) = unsafe { v.split_at_mut_unchecked(n / 4) };
@@ -140,13 +128,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert!(n >= 2 * packing_width);
 
         // Needed to avoid overlap with specialisation at the other end of the loop
-        assert!(lg_n >= 4);
+        assert!(lg_n >= 6);
 
         // Specialise the first few iterations; improves performance a little.
-        //Self::forward_small_s0(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
-        //Self::forward_small_s1(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
+        Self::forward_iterative_layer_1(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        Self::forward_iterative_layer_2(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
 
-        for lg_m in (4..lg_n).rev() {
+        for lg_m in (4..(lg_n - 2)).rev() {
             let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
@@ -345,7 +333,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         }
         assert_eq!(n, 1 << (root_table.len() + 1));
         match n {
-            // TODO: Note that the limit is 8 for AVX2 and 16 (as imposed here) for AVX512
+            // Note that the limit is 8 for AVX2 and 16 (as imposed here) for AVX512
             16 => Self::forward_16(a),
             8 => Self::forward_8(a),
             4 => Self::forward_4(a),
