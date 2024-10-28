@@ -59,7 +59,10 @@ fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
 
 #[instrument(level = "debug", skip_all)]
 fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<Vec<F>> {
-    let mid = log_h / 2;
+    // In general either div_floor or div_ceil would work, but here we prefer div_ceil because it
+    // lets us assume below that the "first half" of the network has at least one layer of
+    // butterflies, even in the case of log_h = 1.
+    let mid = log_h.div_ceil(2);
     let h = 1 << log_h;
     let root = F::two_adic_generator(log_h);
 
@@ -109,7 +112,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             .entry(log_h)
             .or_insert_with(|| compute_twiddles(log_h));
 
-        let mid = log_h / 2;
+        let mid = log_h.div_ceil(2);
 
         // The first half looks like a normal DIT.
         reverse_matrix_index_bits(&mut mat);
@@ -132,7 +135,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let w = mat.width;
         let h = mat.height();
         let log_h = log2_strict_usize(h);
-        let mid = log_h / 2;
+        let mid = log_h.div_ceil(2);
 
         let mut inverse_twiddles_ref_mut = self.inverse_twiddles.borrow_mut();
         let inverse_twiddles = inverse_twiddles_ref_mut
@@ -196,7 +199,8 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
     let log_h = log2_strict_usize(dst_maybe.height());
 
     if log_h == 0 {
-        // The entire network has zero layers of butterflies, so just copy.
+        // This is an edge case where the "first layer" logic doesn't apply, as the entire network
+        // has no layers, so we just copy.
         let src_maybe = unsafe {
             transmute::<&RowMajorMatrixView<F>, &RowMajorMatrixView<MaybeUninit<F>>>(src)
         };
@@ -204,9 +208,6 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
         return;
     }
 
-    // In general either div_floor or div_ceil would work, but here we prefer div_ceil because it
-    // lets us assume below that the "first half" of the network has at least one layer of
-    // butterflies, even in the case of log_h = 1.
     let mid = log_h.div_ceil(2);
 
     let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
@@ -264,26 +265,7 @@ fn coset_dft_out_of_place<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(dst);
 
-    // second_half(&mut mat, mid, &old_twiddles.bit_reversed_twiddles);
-    info_span!("modified second_half_dit").in_scope(|| {
-        dst.par_row_chunks_exact_mut(1 << (log_h - mid))
-            .enumerate()
-            .for_each(|(thread, mut submat)| {
-                let mut backwards = false;
-                for layer in mid..log_h {
-                    let layer_rev = log_h - 1 - layer;
-                    let first_block = thread << (layer - mid);
-                    dit_layer_rev(
-                        &mut submat,
-                        log_h,
-                        layer,
-                        twiddles[layer_rev][first_block..].iter().copied(),
-                        backwards,
-                    );
-                    backwards = !backwards;
-                }
-            });
-    });
+    second_half_modified(dst, mid, twiddles);
 }
 
 fn coset_dft_in_place<F: TwoAdicField + Ord>(
@@ -292,7 +274,7 @@ fn coset_dft_in_place<F: TwoAdicField + Ord>(
     shift: F,
 ) {
     let log_h = log2_strict_usize(mat.height());
-    let mid = log_h / 2;
+    let mid = log_h.div_ceil(2);
 
     let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
     let twiddles = twiddles_ref_mut
@@ -321,26 +303,7 @@ fn coset_dft_in_place<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(mat);
 
-    // second_half(&mut mat, mid, &old_twiddles.bit_reversed_twiddles);
-    info_span!("modified second_half_dit").in_scope(|| {
-        mat.par_row_chunks_exact_mut(1 << (log_h - mid))
-            .enumerate()
-            .for_each(|(thread, mut submat)| {
-                let mut backwards = false;
-                for layer in mid..log_h {
-                    let layer_rev = log_h - 1 - layer;
-                    let first_block = thread << (layer - mid);
-                    dit_layer_rev(
-                        &mut submat,
-                        log_h,
-                        layer,
-                        twiddles[layer_rev][first_block..].iter().copied(),
-                        backwards,
-                    );
-                    backwards = !backwards;
-                }
-            });
-    });
+    second_half_modified(mat, mid, twiddles);
 }
 
 /// This can be used as the first half of a DIT butterfly network.
@@ -388,6 +351,34 @@ fn second_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles_rev: 
                 backwards = !backwards;
             }
         });
+}
+
+/// Like `second_half`, except with coset shifts baked in to the twiddle factors.
+fn second_half_modified<F: Field>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    mid: usize,
+    twiddles_rev: &[Vec<F>],
+) {
+    let log_h = log2_strict_usize(mat.height());
+    info_span!("modified second_half_dit").in_scope(|| {
+        mat.par_row_chunks_exact_mut(1 << (log_h - mid))
+            .enumerate()
+            .for_each(|(thread, mut submat)| {
+                let mut backwards = false;
+                for layer in mid..log_h {
+                    let layer_rev = log_h - 1 - layer;
+                    let first_block = thread << (layer - mid);
+                    dit_layer_rev(
+                        &mut submat,
+                        log_h,
+                        layer,
+                        twiddles_rev[layer_rev][first_block..].iter().copied(),
+                        backwards,
+                    );
+                    backwards = !backwards;
+                }
+            });
+    });
 }
 
 /// One layer of a DIT butterfly network.
