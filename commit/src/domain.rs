@@ -83,7 +83,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     fn create_disjoint_domain(&self, min_size: usize) -> Self {
         Self {
             log_n: log2_ceil_usize(min_size),
-            shift: self.shift * Val::generator(),
+            shift: self.shift * Val::GENERATOR,
         }
     }
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {

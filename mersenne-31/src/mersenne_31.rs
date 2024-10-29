@@ -95,13 +95,10 @@ impl AbstractField for Mersenne31 {
 
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
-
-    fn two() -> Self {
-        Self::new(2)
-    }
-    fn neg_one() -> Self {
-        Self::new(Self::ORDER_U32 - 1)
-    }
+    const TWO: Self = Self { value: 2 };
+    const NEG_ONE: Self = Self {
+        value: Self::ORDER_U32 - 1,
+    };
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -163,12 +160,6 @@ impl AbstractField for Mersenne31 {
         Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
-    // Sage: GF(2^31 - 1).multiplicative_generator()
-    #[inline]
-    fn generator() -> Self {
-        Self::new(7)
-    }
-
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
@@ -205,6 +196,9 @@ impl Field for Mersenne31 {
         ),
     )))]
     type Packing = Self;
+
+    // Sage: GF(2^31 - 1).multiplicative_generator()
+    const GENERATOR: Self = Self::new(7);
 
     #[inline]
     fn is_zero(&self) -> bool {
@@ -446,19 +440,19 @@ mod tests {
 
     #[test]
     fn add() {
-        assert_eq!(F::ONE + F::ONE, F::two());
-        assert_eq!(F::neg_one() + F::ONE, F::ZERO);
-        assert_eq!(F::neg_one() + F::two(), F::ONE);
-        assert_eq!(F::neg_one() + F::neg_one(), F::new(F::ORDER_U32 - 2));
+        assert_eq!(F::ONE + F::ONE, F::TWO);
+        assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
+        assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
+        assert_eq!(F::NEG_ONE + F::NEG_ONE, F::new(F::ORDER_U32 - 2));
     }
 
     #[test]
     fn sub() {
         assert_eq!(F::ONE - F::ONE, F::ZERO);
-        assert_eq!(F::two() - F::two(), F::ZERO);
-        assert_eq!(F::neg_one() - F::neg_one(), F::ZERO);
-        assert_eq!(F::two() - F::ONE, F::ONE);
-        assert_eq!(F::neg_one() - F::ZERO, F::neg_one());
+        assert_eq!(F::TWO - F::TWO, F::ZERO);
+        assert_eq!(F::NEG_ONE - F::NEG_ONE, F::ZERO);
+        assert_eq!(F::TWO - F::ONE, F::ONE);
+        assert_eq!(F::NEG_ONE - F::ZERO, F::NEG_ONE);
     }
 
     #[test]
@@ -466,7 +460,7 @@ mod tests {
         // 1 * 2^0 = 1.
         assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::two().mul_2exp_u64(30), F::ONE);
+        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
         // 5 * 2^2 = 20.
         assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
     }
@@ -476,7 +470,7 @@ mod tests {
         // 1 / 2^0 = 1.
         assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
         // 2 / 2^0 = 2.
-        assert_eq!(F::two().div_2exp_u64(0), F::two());
+        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
         // 32 / 2^5 = 1.
         assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
     }
@@ -490,7 +484,7 @@ mod tests {
 
         assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
         assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::two().exp_u64(1717986917).exp_const_u64::<5>(), F::two());
+        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
     }
 
     test_field!(crate::Mersenne31);

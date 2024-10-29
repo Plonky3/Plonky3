@@ -447,16 +447,8 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
     const ONE: Self = Self::broadcast(MontyField31::ONE);
-
-    #[inline]
-    fn two() -> Self {
-        MontyField31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        MontyField31::neg_one().into()
-    }
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -495,11 +487,6 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         MontyField31::from_wrapped_u64(n).into()
-    }
-
-    #[inline]
-    fn generator() -> Self {
-        MontyField31::generator().into()
     }
 
     #[inline]

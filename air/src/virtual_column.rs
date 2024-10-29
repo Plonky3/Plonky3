@@ -98,13 +98,13 @@ impl<F: Field> VirtualPairCol<F> {
     /// `a - b`, where `a` and `b` are columns in the preprocessed trace.
     #[must_use]
     pub fn diff_preprocessed(a_col: usize, b_col: usize) -> Self {
-        Self::new_preprocessed(vec![(a_col, F::ONE), (b_col, F::neg_one())], F::ZERO)
+        Self::new_preprocessed(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
     }
 
     /// `a - b`, where `a` and `b` are columns in the main trace.
     #[must_use]
     pub fn diff_main(a_col: usize, b_col: usize) -> Self {
-        Self::new_main(vec![(a_col, F::ONE), (b_col, F::neg_one())], F::ZERO)
+        Self::new_main(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
     }
 
     pub fn apply<Expr, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Expr

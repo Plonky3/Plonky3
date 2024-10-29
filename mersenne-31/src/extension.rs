@@ -28,10 +28,7 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // ```sage
     // F.extension(x^3 - 5, 'u').multiplicative_generator()
     // ```
-    #[inline(always)]
-    fn ext_generator() -> [Self; 3] {
-        [Self::new(10), Self::new(1), Self::ZERO]
-    }
+    const EXT_GENERATOR: [Self; 3] = [Self::new(10), Self::new(1), Self::ZERO];
 }
 
 impl HasComplexBinomialExtension<2> for Mersenne31 {
@@ -63,10 +60,7 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // for f in factor(p^4 - 1):
     //   assert g^((p^4-1) // f) != 1
     // ```
-    #[inline(always)]
-    fn ext_generator() -> [Complex<Self>; 2] {
-        [Complex::new_real(Mersenne31::new(6)), Complex::ONE]
-    }
+    const EXT_GENERATOR: [Complex<Self>; 2] = [Complex::new_real(Mersenne31::new(6)), Complex::ONE];
 }
 
 impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
@@ -112,13 +106,11 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
     // for f in factor(p^6 - 1):
     //   assert g^((p^6-1) // f) != 1
     // ```
-    fn ext_generator() -> [Complex<Self>; 3] {
-        [
-            Complex::new_real(Mersenne31::new(5)),
-            Complex::new_real(Mersenne31::ONE),
-            Complex::ZERO,
-        ]
-    }
+    const EXT_GENERATOR: [Complex<Self>; 3] = [
+        Complex::new_real(Mersenne31::new(5)),
+        Complex::new_real(Mersenne31::ONE),
+        Complex::ZERO,
+    ];
 }
 
 impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {

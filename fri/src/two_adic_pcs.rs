@@ -162,7 +162,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
-                let shift = Val::generator() / domain.shift;
+                let shift = Val::GENERATOR / domain.shift;
                 // Commit to the bit-reversed LDE.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
@@ -181,7 +181,7 @@ where
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
         // todo: handle extrapolation for LDEs we don't have
-        assert_eq!(domain.shift, Val::generator());
+        assert_eq!(domain.shift, Val::GENERATOR);
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
         lde.split_rows(domain.size()).0.bit_reverse_rows()
@@ -263,7 +263,7 @@ where
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::generator());
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR);
 
         let mut all_opened_values: OpenedValues<Challenge> = vec![];
 
@@ -290,7 +290,7 @@ where
                                 mat.split_rows(mat.height() >> self.fri.log_blowup);
                             interpolate_coset(
                                 &BitReversalPerm::new_view(low_coset),
-                                Val::generator(),
+                                Val::GENERATOR,
                                 point,
                             )
                         });
@@ -407,7 +407,7 @@ where
 
                     // todo: this can be nicer with domain methods?
 
-                    let x = Val::generator()
+                    let x = Val::GENERATOR
                         * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
                     let (alpha_pow, ro) = reduced_openings

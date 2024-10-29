@@ -78,7 +78,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::AbstractField;
+    use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
 
     use crate::{interpolate_coset, interpolate_subgroup};
@@ -101,7 +101,7 @@ mod tests {
     fn test_interpolate_coset() {
         // x^2 + 2 x + 3
         type F = BabyBear;
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let evals = [
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
         ]

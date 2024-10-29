@@ -20,7 +20,7 @@ use crate::Packable;
 /// A generalization of `Field` which permits things like
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
-/// - a vector of field elements
+/// - a array of field elements
 pub trait AbstractField:
     Sized
     + Default
@@ -40,8 +40,8 @@ pub trait AbstractField:
 
     const ZERO: Self;
     const ONE: Self;
-    fn two() -> Self;
-    fn neg_one() -> Self;
+    const TWO: Self;
+    const NEG_ONE: Self;
 
     fn from_f(f: Self::F) -> Self;
 
@@ -80,9 +80,6 @@ pub trait AbstractField:
 
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
-
-    /// A generator of this field's entire multiplicative group.
-    fn generator() -> Self;
 
     #[must_use]
     fn double(&self) -> Self {
@@ -215,6 +212,9 @@ pub trait Field:
 {
     type Packing: PackedField<Scalar = Self>;
 
+    /// A generator of this field's entire multiplicative group.
+    const GENERATOR: Self;
+
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
     }
@@ -227,14 +227,14 @@ pub trait Field:
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::two().exp_u64(exp)
+        *self * Self::TWO.exp_u64(exp)
     }
 
     /// self / 2^exp
     #[must_use]
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::two().exp_u64(exp)
+        *self / Self::TWO.exp_u64(exp)
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
@@ -264,7 +264,7 @@ pub trait Field:
     /// Will error if the field characteristic is 2.
     #[must_use]
     fn halve(&self) -> Self {
-        let half = Self::two()
+        let half = Self::TWO
             .try_inverse()
             .expect("Cannot divide by 2 in fields with characteristic 2");
         *self * half

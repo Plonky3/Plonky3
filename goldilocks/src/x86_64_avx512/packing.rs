@@ -160,16 +160,8 @@ impl AbstractField for PackedGoldilocksAVX512 {
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
     const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
-
-    #[inline]
-    fn two() -> Self {
-        Goldilocks::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        Goldilocks::neg_one().into()
-    }
+    const TWO: Self = Self([Goldilocks::TWO; WIDTH]);
+    const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -208,11 +200,6 @@ impl AbstractField for PackedGoldilocksAVX512 {
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         Goldilocks::from_wrapped_u64(n).into()
-    }
-
-    #[inline]
-    fn generator() -> Self {
-        Goldilocks::generator().into()
     }
 
     #[inline]

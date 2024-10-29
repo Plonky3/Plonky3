@@ -153,16 +153,8 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
 
     const ZERO: Self = FP::MONTY_ZERO;
     const ONE: Self = FP::MONTY_ONE;
-
-    #[inline(always)]
-    fn two() -> Self {
-        FP::MONTY_TWO
-    }
-
-    #[inline(always)]
-    fn neg_one() -> Self {
-        FP::MONTY_NEG_ONE
-    }
+    const TWO: Self = FP::MONTY_TWO;
+    const NEG_ONE: Self = FP::MONTY_NEG_ONE;
 
     #[inline(always)]
     fn from_f(f: Self::F) -> Self {
@@ -212,11 +204,6 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
         Self::new_monty(to_monty_64::<FP>(n))
     }
 
-    #[inline(always)]
-    fn generator() -> Self {
-        FP::MONTY_GEN
-    }
-
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
@@ -253,6 +240,8 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         ),
     )))]
     type Packing = Self;
+
+    const GENERATOR: Self = FP::MONTY_GEN;
 
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {

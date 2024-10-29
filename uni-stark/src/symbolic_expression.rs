@@ -79,13 +79,8 @@ impl<F: Field> AbstractField for SymbolicExpression<F> {
 
     const ZERO: Self = Self::Constant(F::ZERO);
     const ONE: Self = Self::Constant(F::ONE);
-
-    fn two() -> Self {
-        Self::Constant(F::two())
-    }
-    fn neg_one() -> Self {
-        Self::Constant(F::neg_one())
-    }
+    const TWO: Self = Self::Constant(F::TWO);
+    const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -122,10 +117,6 @@ impl<F: Field> AbstractField for SymbolicExpression<F> {
 
     fn from_wrapped_u64(n: u64) -> Self {
         Self::Constant(F::from_wrapped_u64(n))
-    }
-
-    fn generator() -> Self {
-        Self::Constant(F::generator())
     }
 }
 

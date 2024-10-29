@@ -22,10 +22,7 @@ where
         <FP as BinomialExtensionData<WIDTH>>::DTH_ROOT
     }
 
-    #[inline(always)]
-    fn ext_generator() -> [Self; WIDTH] {
-        FP::EXT_GENERATOR
-    }
+    const EXT_GENERATOR: [Self; WIDTH] = FP::EXT_GENERATOR;
 }
 
 impl<const WIDTH: usize, FP> HasTwoAdicBionmialExtension<WIDTH> for MontyField31<FP>

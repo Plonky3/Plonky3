@@ -15,12 +15,10 @@ impl BinomiallyExtendable<2> for Goldilocks {
         Self::new(18446744069414584320)
     }
 
-    fn ext_generator() -> [Self; 2] {
-        [
-            Self::new(18081566051660590251),
-            Self::new(16121475356294670766),
-        ]
-    }
+    const EXT_GENERATOR: [Self; 2] = [
+        Self::new(18081566051660590251),
+        Self::new(16121475356294670766),
+    ];
 }
 
 impl HasTwoAdicBionmialExtension<2> for Goldilocks {

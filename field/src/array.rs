@@ -40,13 +40,8 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
 
     const ZERO: Self = FieldArray([F::ZERO; N]);
     const ONE: Self = FieldArray([F::ONE; N]);
-
-    fn two() -> Self {
-        FieldArray([F::two(); N])
-    }
-    fn neg_one() -> Self {
-        FieldArray([F::neg_one(); N])
-    }
+    const TWO: Self = FieldArray([F::TWO; N]);
+    const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -83,10 +78,6 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
 
     fn from_wrapped_u64(n: u64) -> Self {
         [F::from_wrapped_u64(n); N].into()
-    }
-
-    fn generator() -> Self {
-        [F::generator(); N].into()
     }
 }
 

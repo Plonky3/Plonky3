@@ -145,8 +145,8 @@ where
         vec0 + (-vec1),
         "Error when testing addition of negation"
     );
-    assert_eq!(PF::ONE + PF::ONE, PF::two(), "Error 1 + 1 =/= 2");
-    assert_eq!(PF::neg_one() + PF::two(), PF::ONE, "Error -1 + 2 =/= 1");
+    assert_eq!(PF::ONE + PF::ONE, PF::TWO, "Error 1 + 1 =/= 2");
+    assert_eq!(PF::NEG_ONE + PF::TWO, PF::ONE, "Error -1 + 2 =/= 1");
     assert_eq!(
         vec0.double(),
         vec0 + vec0,
@@ -194,18 +194,18 @@ where
         "Error when testing left multiplication by 0."
     );
     assert_eq!(
-        vec0 * PF::neg_one(),
+        vec0 * PF::NEG_ONE,
         -(vec0),
         "Error when testing right multiplication by -1."
     );
     assert_eq!(
-        PF::neg_one() * vec0,
+        PF::NEG_ONE * vec0,
         -(vec0),
         "Error when testing left multiplication by -1."
     );
     assert_eq!(
         vec0.double(),
-        PF::two() * vec0,
+        PF::TWO * vec0,
         "Error when comparing x.double() to 2 * x."
     );
     assert_eq!(

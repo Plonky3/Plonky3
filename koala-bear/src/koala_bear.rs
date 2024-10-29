@@ -135,7 +135,7 @@ mod tests {
         let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
 
-        let expected_result = F::two();
+        let expected_result = F::TWO;
         assert_eq!(f_1 + f_1_copy, expected_result);
 
         let f_2 = F::from_canonical_u32(2);

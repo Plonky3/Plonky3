@@ -94,13 +94,8 @@ impl AbstractField for Goldilocks {
 
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
-
-    fn two() -> Self {
-        Self::new(2)
-    }
-    fn neg_one() -> Self {
-        Self::new(Self::ORDER_U64 - 1)
-    }
+    const TWO: Self = Self::new(2);
+    const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -144,11 +139,6 @@ impl AbstractField for Goldilocks {
         Self::new(n)
     }
 
-    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
-    fn generator() -> Self {
-        Self::new(7)
-    }
-
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
@@ -185,6 +175,9 @@ impl Field for Goldilocks {
         ),
     )))]
     type Packing = Self;
+
+    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
+    const GENERATOR: Self = Self::new(7);
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U64
@@ -509,7 +502,7 @@ mod tests {
         let f = F::from_canonical_u64(F::ORDER_U64);
         assert!(f.is_zero());
 
-        assert_eq!(F::generator().as_canonical_u64(), 7_u64);
+        assert_eq!(F::GENERATOR.as_canonical_u64(), 7_u64);
 
         let f_1 = F::new(1);
         let f_1_copy = F::new(1);
@@ -549,7 +542,7 @@ mod tests {
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(7);
-        assert_eq!(F::generator(), expected_multiplicative_group_generator);
+        assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
 
         // Check on `reduce_u128`
         let x = u128::MAX;

@@ -317,16 +317,8 @@ impl AbstractField for PackedMersenne31AVX2 {
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
     const ONE: Self = Self::broadcast(Mersenne31::ONE);
-
-    #[inline]
-    fn two() -> Self {
-        Mersenne31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        Mersenne31::neg_one().into()
-    }
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -365,11 +357,6 @@ impl AbstractField for PackedMersenne31AVX2 {
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         Mersenne31::from_wrapped_u64(n).into()
-    }
-
-    #[inline]
-    fn generator() -> Self {
-        Mersenne31::generator().into()
     }
 
     #[inline(always)]

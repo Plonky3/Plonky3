@@ -104,7 +104,7 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
     // < v_d, v_d >
     // This formula was determined experimentally...
-    let v_d_2 = F::two().exp_u64(log_lde_size as u64 - 1);
+    let v_d_2 = F::TWO.exp_u64(log_lde_size as u64 - 1);
 
     let v_d = v_d.take(lde.len()).collect_vec();
     let v_d = cfft_permute_slice(&v_d);

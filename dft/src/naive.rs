@@ -36,7 +36,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::AbstractField;
+    use p3_field::{AbstractField, Field};
     use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
     use rand::thread_rng;
@@ -76,7 +76,7 @@ mod tests {
                     F::from_canonical_u8(5),
                     F::ZERO,
                     F::ONE,
-                    F::neg_one(),
+                    F::NEG_ONE,
                     F::ZERO,
                 ],
                 3,
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn coset_dft_idft_consistency() {
         type F = Goldilocks;
-        let generator = F::generator();
+        let generator = F::GENERATOR;
         let mut rng = thread_rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.coset_dft_batch(original.clone(), generator);

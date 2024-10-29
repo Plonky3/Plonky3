@@ -128,19 +128,13 @@ where
         value: field_to_array::<AF, D>(AF::ONE),
     };
 
-    #[inline]
-    fn two() -> Self {
-        Self {
-            value: field_to_array::<AF, D>(AF::two()),
-        }
-    }
+    const TWO: Self = Self {
+        value: field_to_array::<AF, D>(AF::TWO),
+    };
 
-    #[inline]
-    fn neg_one() -> Self {
-        Self {
-            value: field_to_array::<AF, D>(AF::neg_one()),
-        }
-    }
+    const NEG_ONE: Self = Self {
+        value: field_to_array::<AF, D>(AF::NEG_ONE),
+    };
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -189,12 +183,6 @@ where
         AF::from_wrapped_u64(n).into()
     }
 
-    fn generator() -> Self {
-        Self {
-            value: AF::F::ext_generator().map(AF::from_f),
-        }
-    }
-
     #[inline(always)]
     fn square(&self) -> Self {
         match D {
@@ -223,6 +211,10 @@ where
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
+
+    const GENERATOR: Self = Self {
+        value: F::EXT_GENERATOR,
+    };
 
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
@@ -601,7 +593,7 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
     // scalar = (a0^3+wa1^3+w^2a2^3-3wa0a1a2)^-1
     let scalar = (a0_square * a[0] + w * a[1] * a1_square + a2_w.square() * a[2]
-        - (F::ONE + F::two()) * a2_w * a0_a1)
+        - (F::ONE + F::TWO) * a2_w * a0_a1)
         .inverse();
 
     //scalar*[a0^2-wa1a2, wa2^2-a0a1, a1^2-a0a2]
