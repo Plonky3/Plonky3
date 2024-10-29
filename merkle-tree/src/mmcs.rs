@@ -300,10 +300,7 @@ mod tests {
         //   2 1
         //   2 2
         // ]
-        let mat = RowMajorMatrix::new(
-            vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO],
-            2,
-        );
+        let mat = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO], 2);
 
         let (commit, _) = mmcs.commit(vec![mat]);
 
@@ -334,18 +331,12 @@ mod tests {
         //   2 1
         //   2 2
         // ]
-        let mat_1 = RowMajorMatrix::new(
-            vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO],
-            2,
-        );
+        let mat_1 = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO], 2);
         // mat_2 = [
         //   1 2 1
         //   0 2 2
         // ]
-        let mat_2 = RowMajorMatrix::new(
-            vec![F::ONE, F::TWO, F::ONE, F::ZERO, F::TWO, F::TWO],
-            3,
-        );
+        let mat_2 = RowMajorMatrix::new(vec![F::ONE, F::TWO, F::ONE, F::ZERO, F::TWO, F::TWO], 3);
 
         let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
 

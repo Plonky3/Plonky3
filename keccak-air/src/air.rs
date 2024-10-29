@@ -115,8 +115,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
                 let four = AB::Expr::from_canonical_u8(4);
-                builder
-                    .assert_zero(diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four));
+                builder.assert_zero(diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four));
             }
         }
 
