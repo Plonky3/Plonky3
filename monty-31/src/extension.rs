@@ -12,15 +12,9 @@ impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
-    #[inline(always)]
-    fn w() -> Self {
-        <FP as BinomialExtensionData<WIDTH>>::W
-    }
+    const W: Self = <FP as BinomialExtensionData<WIDTH>>::W;
 
-    #[inline(always)]
-    fn dth_root() -> Self {
-        <FP as BinomialExtensionData<WIDTH>>::DTH_ROOT
-    }
+    const DTH_ROOT: Self = <FP as BinomialExtensionData<WIDTH>>::DTH_ROOT;
 
     const EXT_GENERATOR: [Self; WIDTH] = FP::EXT_GENERATOR;
 }

@@ -13,15 +13,16 @@ pub use binomial_extension::*;
 pub use complex::*;
 
 /// Binomial extension field trait.
-/// A extension field with a irreducible polynomial X^d-W
-/// such that the extension is `F[X]/(X^d-W)`.
+///
+/// This exists if the polynomial ring `F[X]` has an irreducible polynomial `X^d-W`
+/// allowing us to define the binomial extension field `F[X]/(X^d-W)`.
 pub trait BinomiallyExtendable<const D: usize>: Field {
-    fn w() -> Self;
+    const W: Self;
 
     // DTH_ROOT = W^((n - 1)/D).
     // n is the order of base field.
     // Only works when exists k such that n = kD + 1.
-    fn dth_root() -> Self;
+    const DTH_ROOT: Self;
 
     const EXT_GENERATOR: [Self; D];
 }

@@ -12,18 +12,12 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // R.<x> = F[]
     // assert (x^3 - 5).is_irreducible()
     // ```
-    #[inline(always)]
-    fn w() -> Self {
-        Self::new(5)
-    }
+    const W: Self = Self::new(5);
 
     // ```sage
     // F(5)^((p-1)/3)
     // ```
-    #[inline(always)]
-    fn dth_root() -> Self {
-        Self::new(1513477735)
-    }
+    const DTH_ROOT: Self = Self::new(1513477735);
 
     // ```sage
     // F.extension(x^3 - 5, 'u').multiplicative_generator()
@@ -42,16 +36,10 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // f2 = y^2 - i - 2
     // assert f2.is_irreducible()
     // ```
-    #[inline(always)]
-    fn w() -> Complex<Self> {
-        Complex::new(Mersenne31::new(2), Mersenne31::ONE)
-    }
+    const W: Complex<Self> = Complex::new(Mersenne31::new(2), Mersenne31::ONE);
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    #[inline(always)]
-    fn dth_root() -> Complex<Self> {
-        Complex::new_real(Mersenne31::new(2147483646))
-    }
+    const DTH_ROOT: Complex<Self> = Complex::new_real(Mersenne31::new(2147483646));
 
     // Verifiable in Sage with
     // ```sage
@@ -90,14 +78,10 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
     // f2 = y^3 - 5*i
     // assert f2.is_irreducible()
     // ```
-    fn w() -> Complex<Self> {
-        Complex::new_imag(Mersenne31::new(5))
-    }
+    const W: Complex<Self> = Complex::new_imag(Mersenne31::new(5));
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    fn dth_root() -> Complex<Self> {
-        Complex::new_real(Mersenne31::new(634005911))
-    }
+    const DTH_ROOT: Complex<Self> = Complex::new_real(Mersenne31::new(634005911));
 
     // Verifiable in Sage with
     // ```sage

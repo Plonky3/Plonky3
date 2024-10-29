@@ -75,9 +75,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         let arr: &[F] = self.as_base_slice();
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
-        let mut z0 = F::dth_root();
+        let mut z0 = F::DTH_ROOT;
         for _ in 1..count {
-            z0 *= F::dth_root();
+            z0 *= F::DTH_ROOT;
         }
 
         let mut res = [F::ZERO; D];
@@ -105,7 +105,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         for i in 1..D {
             g += a[i] * b[D - i];
         }
-        g *= F::w();
+        g *= F::W;
         g += a[0] * b[0];
         debug_assert_eq!(Self::from(g), *self * f);
 
@@ -189,13 +189,13 @@ where
             2 => {
                 let a = self.value.clone();
                 let mut res = Self::default();
-                res.value[0] = a[0].square() + a[1].square() * AF::from_f(AF::F::w());
+                res.value[0] = a[0].square() + a[1].square() * AF::from_f(AF::F::W);
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
             3 => {
                 let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value, AF::F::w());
+                cubic_square(&self.value, &mut res.value, AF::F::W);
                 res
             }
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
@@ -222,8 +222,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         match D {
-            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::w()))),
-            3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::w()))),
+            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::W))),
+            3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::W))),
             _ => Some(self.frobenius_inv()),
         }
     }
@@ -411,7 +411,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        let w = AF::F::w();
+        let w = AF::F::W;
         let w_af = AF::from_f(w);
 
         match D {
