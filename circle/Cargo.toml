@@ -24,11 +24,11 @@ serde = "1"
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-keccak = { path = "../keccak", version = "0.3.0" }
-p3-mds = { path = "../mds", version = "0.3.0" }
+p3-keccak = { path = "../keccak" }
+p3-mds = { path = "../mds" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-merkle-tree = { path = "../merkle-tree" }
-p3-symmetric = { path = "../symmetric", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric" }
 
 hashbrown = "0.15.0"
 rand = "0.8.5"
