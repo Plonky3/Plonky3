@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::mem;
 
 use p3_baby_bear::BabyBear;
 use p3_field::{AbstractField, PackedValue};
@@ -83,6 +84,8 @@ fn bytes32_to_bb8(input: [u8; 32]) -> [BabyBear; 8] {
 
     values
 }
+
+// Blake3: PseudoCompressionFunction<[[u8; ]; 32], 2>
 
 fn bb8_to_bytes32(input: [BabyBear; 8]) -> [u8; 32] {
     let mut values = [0u8; 32];

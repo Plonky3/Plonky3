@@ -1,10 +1,12 @@
-use core::any::type_name;
 use core::marker::PhantomData;
 
 use p3_symmetric::PseudoCompressionFunction;
 
 pub(crate) mod node_converter;
 pub(crate) mod utils;
+
+#[cfg(feature = "unsafe-conversion")]
+pub(crate) mod unsafe_node_converter;
 
 pub(crate) use node_converter::*;
 
@@ -105,3 +107,11 @@ where
         }
     }
 }
+
+// PackedNodeType for poseidon:
+// - Morally: [[BabyBear; 8]; 4]
+// - Really: [[BabyBear; 4]; 8]
+
+// PackedNode for Blake3:
+// - Morally: [[u8; 32]; 4]
+// - Really: [[u8; 4]; 32]

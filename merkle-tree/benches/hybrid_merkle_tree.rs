@@ -98,6 +98,26 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_hybrid(criterion);
 }
 
+// [[u8; 1]; 32]
+// [[BabyBear; 1]; 8]
+
+// single leaf: [BabyBear; 8]
+// packaged leaf: [[BabyBear; WIDTH]; 8] = tranpose of WIDTH-many [BabyBear; 8]
+
+// [[BabyBear; 1]; 8]
+// [[u8; 1]; 32]
+
+// [
+// [bb1_1 bb1_2 bb1_3 bb1_4]
+// [bb2_1 bb2_2 bb2_3 bb2_4]
+// [bb3_1 bb3_2 bb3_3 bb3_4]
+// [bb4_1 bb4_2 bb4_3 bb4_4]
+// [bb5_1 bb5_2 bb5_3 bb5_4]
+// [bb6_1 bb6_2 bb6_3 bb6_4]
+// [bb7_1 bb7_2 bb7_3 bb7_4]
+// [bb8_1 bb8_2 bb8_3 bb8_4]
+// ]
+
 const MAX_ROWS: usize = 1 << 15;
 const MAX_COLS: usize = 2;
 const NUM_MATRICES: usize = 50;
@@ -146,7 +166,7 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
     );
 
     let h_poseidon = HPoseidon::new(perm_poseidon.clone());
-    let h_blake3 = Blake3;
+    // let h_blake3 = Blake3;
 
     let c_poseidon = CPoseidon::new(perm_poseidon);
     let c_blake3 = CBlake3::new(Blake3 {});
@@ -156,39 +176,40 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
             c_blake3.clone(),
             false,
         );
-    let c_hybrid_blake3_leaves = SimpleHybridCompressor::<
-        CBlake3,
-        CPoseidon,
-        u8,
-        BabyBear,
-        32,
-        8,
-        NodeConverter256BabyBearBytes,
-    >::new(c_blake3.clone(), c_poseidon, true);
+
+    // let c_hybrid_blake3_leaves = SimpleHybridCompressor::<
+    //     CBlake3,
+    //     CPoseidon,
+    //     u8,
+    //     BabyBear,
+    //     32,
+    //     8,
+    //     NodeConverter256BabyBearBytes,
+    // >::new(c_blake3.clone(), c_poseidon, true);
 
     // let leaves = get_random_leaves();
 
     let leaves_babybear = get_random_leaves();
 
-    let leaves_u8: Vec<RowMajorMatrix<u8>> = leaves_babybear
-        .iter()
-        .map(|m| {
-            let new_rows = m
-                .rows()
-                .map(|r| {
-                    let new_r: Vec<u8> = r
-                        .map(|x| BabyBear::to_u32(&x).to_le_bytes())
-                        .flatten()
-                        .collect();
+    // let leaves_u8: Vec<RowMajorMatrix<u8>> = leaves_babybear
+    //     .iter()
+    //     .map(|m| {
+    //         let new_rows = m
+    //             .rows()
+    //             .map(|r| {
+    //                 let new_r: Vec<u8> = r
+    //                     .map(|x| BabyBear::to_u32(&x).to_le_bytes())
+    //                     .flatten()
+    //                     .collect();
 
-                    new_r
-                })
-                .flatten()
-                .collect();
+    //                 new_r
+    //             })
+    //             .flatten()
+    //             .collect();
 
-            RowMajorMatrix::<u8>::new(new_rows, m.width())
-        })
-        .collect();
+    //         RowMajorMatrix::<u8>::new(new_rows, m.width())
+    //     })
+    //     .collect();
 
     // TODO remove
     // let leaves = get_random_leaves_u8();
@@ -200,13 +221,13 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
         .rev()
         .collect::<Vec<_>>();
 
-    println!(
-        "Digest: {}, Compressors: {{{}, SimpleHybridCompressor<{}, {}>>}}",
-        pretty_hash_type::<HPoseidon>(),
-        pretty_hash_type::<CPoseidon>(),
-        pretty_hash_type::<CPoseidon>(),
-        pretty_hash_type::<CBlake3>()
-    );
+    // println!(
+    //     "Digest: {}, Compressors: {{{}, SimpleHybridCompressor<{}, {}>>}}",
+    //     pretty_hash_type::<HPoseidon>(),
+    //     pretty_hash_type::<CPoseidon>(),
+    //     pretty_hash_type::<CPoseidon>(),
+    //     pretty_hash_type::<CBlake3>()
+    // );
 
     println!("Sizes: {:?}", sizes);
     println!(
@@ -223,7 +244,7 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
 
     // group.bench_function(BenchmarkId::from_parameter("Single compressor, WIDTH = 4"), |b| {
     //     b.iter_batched(
-    //         || leaves.clone(),
+    //         || leaves_babybear.clone(),
     //         |input| {
     //             // MerkleTree::new::<<BabyBear as Field>::Packing, _, _, _>(
     //             MerkleTree::new::<BabyBearPacking, BabyBearPacking, _, _>(
@@ -238,10 +259,10 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
 
     // group.bench_function(BenchmarkId::from_parameter("Single compressor, WIDTH = 1"), |b| {
     //     b.iter_batched(
-    //         || leaves.clone(),
+    //         || leaves_babybear.clone(),
     //         |input| {
     //             MerkleTree::new::<BabyBear, BabyBear, _, _>(
-    //                 &h_blake3,
+    //                 &h_poseidon,
     //                 &c_poseidon,
     //                 input,
     //             )
@@ -250,13 +271,13 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
     //     )
     // });
 
-    // group.bench_function(BenchmarkId::from_parameter("Hybrid compressor"), |b| {
-    //     b.iter_batched(
-    //         || leaves.clone(),
-    //         |input| HybridMerkleTree::new(&h_poseidon, &c_hybrid_poseidon_leaves, input),
-    //         BatchSize::SmallInput,
-    //     )
-    // });
+    group.bench_function(BenchmarkId::from_parameter("Hybrid compressor"), |b| {
+        b.iter_batched(
+            || leaves_babybear.clone(),
+            |input| HybridMerkleTree::new(&h_poseidon, &c_hybrid_poseidon_leaves, input),
+            BatchSize::SmallInput,
+        )
+    });
 
     // group.bench_function(BenchmarkId::from_parameter("Single compressor"), |b| {
     //     b.iter_batched(
@@ -266,34 +287,38 @@ fn bench_bb_hybrid(criterion: &mut Criterion) {
     //     )
     // });
 
-    group.bench_function(
-        BenchmarkId::from_parameter("Hybrid compressor BabyBear leaves"),
-        |b| {
-            b.iter_batched(
-                || leaves_babybear.clone(),
-                |input| HybridMerkleTree::new(&h_poseidon, &c_hybrid_poseidon_leaves, input),
-                BatchSize::SmallInput,
-            )
-        },
-    );
+    // group.bench_function(
+    //     BenchmarkId::from_parameter("Hybrid compressor BabyBear leaves"),
+    //     |b| {
+    //         b.iter_batched(
+    //             || leaves_babybear.clone(),
+    //             |input| HybridMerkleTree::new(&h_poseidon, &c_hybrid_poseidon_leaves, input),
+    //             BatchSize::SmallInput,
+    //         )
+    //     },
+    // );
 
-    group.bench_function(
-        BenchmarkId::from_parameter("Hybrid compressor u8 leaves"),
-        |b| {
-            b.iter_batched(
-                || leaves_u8.clone(),
-                |input| HybridMerkleTree::new(&h_blake3, &c_hybrid_blake3_leaves, input),
-                BatchSize::SmallInput,
-            )
-        },
-    );
+    // group.bench_function(
+    //     BenchmarkId::from_parameter("Hybrid compressor u8 leaves"),
+    //     |b| {
+    //         b.iter_batched(
+    //             || leaves_u8.clone(),
+    //             |input| HybridMerkleTree::new(&h_blake3, &c_hybrid_blake3_leaves, input),
+    //             BatchSize::SmallInput,
+    //         )
+    //     },
+    // );
 }
+
+// [[u8; 10]; 10]
 
 fn main() {
     // hybrid_compression_single();
 
     // TODO remove
     env_logger::init();
+
+    // println!("Slice size: {}", std::mem::size_of::<[[u8; 16]; 4]>());
 
     bench_bb_hybrid(&mut Criterion::default());
 }
