@@ -20,7 +20,7 @@ use crate::Packable;
 /// A generalization of `Field` which permits things like
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
-/// - a array of field elements
+/// - an array of field elements
 pub trait AbstractField:
     Sized
     + Default
