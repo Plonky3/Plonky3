@@ -23,14 +23,14 @@ serde = { version = "1.0", default-features = false, features = ["derive", "allo
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-commit = { path = "../commit", version = "0.3.0", features = ["test-utils"] }
-p3-circle = { path = "../circle", version = "0.3.0" }
-p3-fri = { path = "../fri", version = "0.3.0" }
-p3-keccak = { path = "../keccak", version = "0.3.0" }
-p3-mds = { path = "../mds", version = "0.3.0" }
+p3-commit = { path = "../commit", features = ["test-utils"] }
+p3-circle = { path = "../circle" }
+p3-fri = { path = "../fri" }
+p3-keccak = { path = "../keccak" }
+p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-poseidon2 = { path = "../poseidon2" }
-p3-symmetric = { path = "../symmetric", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric" }
 rand = "0.8.5"
 postcard = { version = "1.0.0", default-features = false, features = ["alloc"] }
