@@ -52,7 +52,7 @@ fn main() -> Result<(), impl Debug> {
 
     const PROOFS: usize = 2;
     for _ in 1..PROOFS {
-        let _ = prove_and_verify()?;
+        prove_and_verify()?;
     }
     prove_and_verify()
 }
