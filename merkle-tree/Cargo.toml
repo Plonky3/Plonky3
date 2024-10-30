@@ -34,24 +34,19 @@ path = "benches/merkle_tree.rs"
 harness = false
 
 [[bench]]
-name = "hybrid_merkle_tree"
-path = "benches/hybrid_merkle_tree.rs"
-harness = false
-
-[[bench]]
 name = "unsafe_vs_safe"
 path = "benches/unsafe_vs_safe.rs"
 harness = false
 required-features = ["unsafe-conversion"]
 
 [[bench]]
-name = "hybrid_vs_plain_width_1_and_4"
-path = "benches/hybrid_vs_plain_width_1_and_4.rs"
+name = "hybrid_vs_plain"
+path = "benches/hybrid_vs_plain.rs"
 harness = false
 
 [[bench]]
-name = "hybrid_vs_plain_width_1_identity_hasher"
-path = "benches/hybrid_vs_plain_width_1_identity_hasher.rs"
+name = "hybrid_vs_plain_identity_hasher"
+path = "benches/hybrid_vs_plain_identity_hasher.rs"
 harness = false
 
 [features]

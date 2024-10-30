@@ -4,7 +4,6 @@
 extern crate alloc;
 
 mod hybrid;
-mod identity_hasher;
 mod merkle_tree;
 mod mmcs;
 
@@ -15,6 +14,5 @@ pub use hybrid::hybrid_strategy::node_converter::*;
 pub use hybrid::hybrid_strategy::unsafe_node_converter::*;
 pub use hybrid::hybrid_strategy::utils::*;
 pub use hybrid::hybrid_strategy::*;
-pub use identity_hasher::*;
 pub use merkle_tree::*;
 pub use mmcs::*;
