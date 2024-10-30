@@ -25,7 +25,7 @@ pub fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
     */
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
-        const ONE: __m256i = unsafe { transmute([1; 8]) };
+        const ONE: __m256i = unsafe { transmute([1u32; 8]) };
         let half: __m256i = transmute([(MP::PRIME + 1) / 2; 8]); // Compiler realises this is constant.
 
         let least_bit = x86_64::_mm256_and_si256(input, ONE); // Determine the parity of val.
