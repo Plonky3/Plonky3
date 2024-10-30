@@ -20,7 +20,7 @@ use crate::Packable;
 /// A generalization of `Field` which permits things like
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
-/// - a vector of field elements
+/// - an array of field elements
 pub trait AbstractField:
     Sized
     + Default
@@ -38,10 +38,10 @@ pub trait AbstractField:
 {
     type F: Field;
 
-    fn zero() -> Self;
-    fn one() -> Self;
-    fn two() -> Self;
-    fn neg_one() -> Self;
+    const ZERO: Self;
+    const ONE: Self;
+    const TWO: Self;
+    const NEG_ONE: Self;
 
     fn from_f(f: Self::F) -> Self;
 
@@ -81,9 +81,6 @@ pub trait AbstractField:
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
 
-    /// A generator of this field's entire multiplicative group.
-    fn generator() -> Self;
-
     #[must_use]
     fn double(&self) -> Self {
         self.clone() + self.clone()
@@ -115,7 +112,7 @@ pub trait AbstractField:
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         match POWER {
-            0 => Self::one(),
+            0 => Self::ONE,
             1 => self.clone(),
             2 => self.square(),
             3 => self.cube(),
@@ -143,7 +140,7 @@ pub trait AbstractField:
 
     #[must_use]
     fn powers(&self) -> Powers<Self> {
-        self.shifted_powers(Self::one())
+        self.shifted_powers(Self::ONE)
     }
 
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
@@ -154,7 +151,7 @@ pub trait AbstractField:
     }
 
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
-        self.shifted_powers_packed(Self::one())
+        self.shifted_powers_packed(Self::ONE)
     }
 
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
@@ -189,12 +186,12 @@ pub trait AbstractField:
     /// before assigning them to a userspace process. In that case, our process should not need to
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.
     ///
-    /// In particular, `vec![Self::zero(); len]` appears to result in redundant userspace zeroing.
+    /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
     /// This is the default implementation, but implementors may wish to provide their own
     /// implementation which transmutes something like `vec![0u32; len]`.
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        vec![Self::zero(); len]
+        vec![Self::ZERO; len]
     }
 }
 
@@ -215,26 +212,29 @@ pub trait Field:
 {
     type Packing: PackedField<Scalar = Self>;
 
+    /// A generator of this field's entire multiplicative group.
+    const GENERATOR: Self;
+
     fn is_zero(&self) -> bool {
-        *self == Self::zero()
+        *self == Self::ZERO
     }
 
     fn is_one(&self) -> bool {
-        *self == Self::one()
+        *self == Self::ONE
     }
 
     /// self * 2^exp
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::two().exp_u64(exp)
+        *self * Self::TWO.exp_u64(exp)
     }
 
     /// self / 2^exp
     #[must_use]
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::two().exp_u64(exp)
+        *self / Self::TWO.exp_u64(exp)
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
@@ -264,7 +264,7 @@ pub trait Field:
     /// Will error if the field characteristic is 2.
     #[must_use]
     fn halve(&self) -> Self {
-        let half = Self::two()
+        let half = Self::TWO
             .try_inverse()
             .expect("Cannot divide by 2 in fields with characteristic 2");
         *self * half
@@ -371,8 +371,8 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     /// different f might have been used.
     fn monomial(exponent: usize) -> Self {
         assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::zero(); Self::D];
-        vec[exponent] = Base::one();
+        let mut vec = vec![Base::ZERO; Self::D];
+        vec[exponent] = Base::ONE;
         Self::from_base_slice(&vec)
     }
 }

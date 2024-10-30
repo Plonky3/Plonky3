@@ -191,7 +191,7 @@ mod tests {
             .for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
 
         let should_be_sponge_state: [F; WIDTH] = [
-            vec![F::zero(); WIDTH / 2],
+            vec![F::ZERO; WIDTH / 2],
             (0..WIDTH / 2)
                 .rev()
                 .map(F::from_canonical_usize)
@@ -225,7 +225,7 @@ mod tests {
             assert_eq!(duplex_challenger.input_buffer, vec![]);
             assert_eq!(
                 duplex_challenger.output_buffer,
-                vec![F::zero(); WIDTH / 2 - i - 1]
+                vec![F::ZERO; WIDTH / 2 - i - 1]
             );
             assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state)
         })

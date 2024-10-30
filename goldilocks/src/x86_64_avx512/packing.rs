@@ -80,7 +80,7 @@ impl Debug for PackedGoldilocksAVX512 {
 impl Default for PackedGoldilocksAVX512 {
     #[inline]
     fn default() -> Self {
-        Self::zero()
+        Self::ZERO
     }
 }
 
@@ -151,32 +151,17 @@ impl Neg for PackedGoldilocksAVX512 {
 impl Product for PackedGoldilocksAVX512 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
 impl AbstractField for PackedGoldilocksAVX512 {
     type F = Goldilocks;
 
-    #[inline]
-    fn zero() -> Self {
-        Goldilocks::zero().into()
-    }
-
-    #[inline]
-    fn one() -> Self {
-        Goldilocks::one().into()
-    }
-
-    #[inline]
-    fn two() -> Self {
-        Goldilocks::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        Goldilocks::neg_one().into()
-    }
+    const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
+    const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
+    const TWO: Self = Self([Goldilocks::TWO; WIDTH]);
+    const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -215,11 +200,6 @@ impl AbstractField for PackedGoldilocksAVX512 {
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         Goldilocks::from_wrapped_u64(n).into()
-    }
-
-    #[inline]
-    fn generator() -> Self {
-        Goldilocks::generator().into()
     }
 
     #[inline]
@@ -322,7 +302,7 @@ impl SubAssign<Goldilocks> for PackedGoldilocksAVX512 {
 impl Sum for PackedGoldilocksAVX512 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
@@ -509,7 +489,7 @@ mod tests {
 
     test_packed_field!(
         crate::PackedGoldilocksAVX512,
-        crate::PackedGoldilocksAVX512::zero(),
+        crate::PackedGoldilocksAVX512::ZERO,
         crate::PackedGoldilocksAVX512(super::SPECIAL_VALS)
     );
 }

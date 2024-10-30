@@ -120,12 +120,12 @@ where
     );
     assert_eq!(
         vec0 + (-vec0),
-        PF::zero(),
+        PF::ZERO,
         "Error when testing additive inverse."
     );
     assert_eq!(
         vec0 - vec0,
-        PF::zero(),
+        PF::ZERO,
         "Error when testing subtracting of self."
     );
     assert_eq!(
@@ -145,8 +145,8 @@ where
         vec0 + (-vec1),
         "Error when testing addition of negation"
     );
-    assert_eq!(PF::one() + PF::one(), PF::two(), "Error 1 + 1 =/= 2");
-    assert_eq!(PF::neg_one() + PF::two(), PF::one(), "Error -1 + 2 =/= 1");
+    assert_eq!(PF::ONE + PF::ONE, PF::TWO, "Error 1 + 1 =/= 2");
+    assert_eq!(PF::NEG_ONE + PF::TWO, PF::ONE, "Error -1 + 2 =/= 1");
     assert_eq!(
         vec0.double(),
         vec0 + vec0,
@@ -175,37 +175,37 @@ where
     );
     assert_eq!(
         vec0,
-        vec0 * PF::one(),
+        vec0 * PF::ONE,
         "Error when testing multiplicative identity right."
     );
     assert_eq!(
         vec0,
-        PF::one() * vec0,
+        PF::ONE * vec0,
         "Error when testing multiplicative identity left."
     );
     assert_eq!(
         vec0 * zeros,
-        PF::zero(),
+        PF::ZERO,
         "Error when testing right multiplication by 0."
     );
     assert_eq!(
         zeros * vec0,
-        PF::zero(),
+        PF::ZERO,
         "Error when testing left multiplication by 0."
     );
     assert_eq!(
-        vec0 * PF::neg_one(),
+        vec0 * PF::NEG_ONE,
         -(vec0),
         "Error when testing right multiplication by -1."
     );
     assert_eq!(
-        PF::neg_one() * vec0,
+        PF::NEG_ONE * vec0,
         -(vec0),
         "Error when testing left multiplication by -1."
     );
     assert_eq!(
         vec0.double(),
-        PF::two() * vec0,
+        PF::TWO * vec0,
         "Error when comparing x.double() to 2 * x."
     );
     assert_eq!(
@@ -429,7 +429,7 @@ where
     let res = vec * vec_inv;
     assert_eq!(
         res,
-        PF::one(),
+        PF::ONE,
         "Error when testing multiplication by inverse."
     );
 }

@@ -27,7 +27,7 @@ impl<F: TwoAdicField> ZerofierOnCoset<F> {
         let evals = F::two_adic_generator(rate_bits)
             .powers()
             .take(1 << rate_bits)
-            .map(|x| s_pow_n * x - F::one())
+            .map(|x| s_pow_n * x - F::ONE)
             .collect::<Vec<_>>();
         let inverses = batch_multiplicative_inverse(&evals);
         Self {
@@ -51,7 +51,7 @@ impl<F: TwoAdicField> ZerofierOnCoset<F> {
 
     /// Like `eval_inverse`, but for a range of indices starting with `i_start`.
     pub fn eval_inverse_packed<P: PackedField<Scalar = F>>(&self, i_start: usize) -> P {
-        let mut packed = P::zero();
+        let mut packed = P::ZERO;
         packed
             .as_slice_mut()
             .iter_mut()

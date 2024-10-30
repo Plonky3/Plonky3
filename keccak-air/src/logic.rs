@@ -1,7 +1,7 @@
 use p3_field::{AbstractField, PrimeField64};
 
 pub(crate) fn xor<F: PrimeField64, const N: usize>(xs: [F; N]) -> F {
-    xs.into_iter().fold(F::zero(), |acc, x| {
+    xs.into_iter().fold(F::ZERO, |acc, x| {
         debug_assert!(x.is_zero() || x.is_one());
         F::from_canonical_u64(acc.as_canonical_u64() ^ x.as_canonical_u64())
     })
@@ -26,5 +26,5 @@ pub(crate) fn andn<F: PrimeField64>(x: F, y: F) -> F {
 }
 
 pub(crate) fn andn_gen<AF: AbstractField>(x: AF, y: AF) -> AF {
-    (AF::one() - x) * y
+    (AF::ONE - x) * y
 }

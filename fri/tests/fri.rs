@@ -52,7 +52,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let (perm, fc) = get_ldt_for_testing(rng);
     let dft = Radix2Dit::default();
 
-    let shift = Val::generator();
+    let shift = Val::GENERATOR;
 
     let ldes: Vec<RowMajorMatrix<Val>> = (3..10)
         .map(|deg_bits| {

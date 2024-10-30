@@ -34,7 +34,7 @@ where
         reverse_slice_index_bits(&mut fft_twiddles);
         reverse_slice_index_bits(&mut ifft_twiddles);
 
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let mut weights: [F; N] = shift
             .powers()
             .take(N)
@@ -157,7 +157,7 @@ fn bowers_g_t_layer<AF: AbstractField, const N: usize>(
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::AbstractField;
+    use p3_field::{AbstractField, Field};
     use p3_symmetric::Permutation;
     use rand::{thread_rng, Rng};
 
@@ -171,7 +171,7 @@ mod tests {
         let mut rng = thread_rng();
         let mut arr: [F; N] = rng.gen();
 
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let mut coset_lde_naive = NaiveDft.coset_lde(arr.to_vec(), 0, shift);
         coset_lde_naive
             .iter_mut()

@@ -455,7 +455,7 @@ impl<FP: FieldParameters> Sum for PackedMontyField31AVX2<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -465,32 +465,17 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
 impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     type F = MontyField31<FP>;
 
-    #[inline]
-    fn zero() -> Self {
-        MontyField31::zero().into()
-    }
-
-    #[inline]
-    fn one() -> Self {
-        MontyField31::one().into()
-    }
-
-    #[inline]
-    fn two() -> Self {
-        MontyField31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        MontyField31::neg_one().into()
-    }
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -532,11 +517,6 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
     }
 
     #[inline]
-    fn generator() -> Self {
-        MontyField31::generator().into()
-    }
-
-    #[inline]
     fn cube(&self) -> Self {
         let val = self.to_vector();
         unsafe {
@@ -553,7 +533,7 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
         // The other powers could be specialised similarly but we ignore this for now.
         // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
-            0 => Self::one(),
+            0 => Self::ONE,
             1 => *self,
             2 => self.square(),
             3 => self.cube(),

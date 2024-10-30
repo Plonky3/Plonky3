@@ -185,7 +185,7 @@ where
 
                         let (alpha_offset, reduced_opening_for_log_height) =
                             reduced_openings.entry(log_height).or_insert_with(|| {
-                                (Challenge::one(), vec![Challenge::zero(); 1 << log_height])
+                                (Challenge::ONE, vec![Challenge::ZERO; 1 << log_height])
                             });
 
                         points_for_mat
@@ -397,7 +397,7 @@ where
 
                         let (alpha_offset, ro) = reduced_openings
                             .entry(log_height)
-                            .or_insert((Challenge::one(), Challenge::zero()));
+                            .or_insert((Challenge::ONE, Challenge::ZERO));
                         let alpha_pow_width_2 = alpha.exp_u64(ps_at_x.len() as u64).square();
 
                         for (zeta_uni, ps_at_zeta) in mat_points_and_values {

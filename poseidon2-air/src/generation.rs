@@ -152,7 +152,7 @@ fn generate_trace_rows_for_perm<
     external_linear_layer: &MdsLight,
     internal_linear_layer: &Diffusion,
 ) {
-    perm.export.write(F::one());
+    perm.export.write(F::ONE);
     perm.inputs
         .iter_mut()
         .zip(state.iter())

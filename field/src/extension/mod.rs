@@ -13,17 +13,18 @@ pub use binomial_extension::*;
 pub use complex::*;
 
 /// Binomial extension field trait.
-/// A extension field with a irreducible polynomial X^d-W
-/// such that the extension is `F[X]/(X^d-W)`.
+///
+/// This exists if the polynomial ring `F[X]` has an irreducible polynomial `X^d-W`
+/// allowing us to define the binomial extension field `F[X]/(X^d-W)`.
 pub trait BinomiallyExtendable<const D: usize>: Field {
-    fn w() -> Self;
+    const W: Self;
 
     // DTH_ROOT = W^((n - 1)/D).
     // n is the order of base field.
     // Only works when exists k such that n = kD + 1.
-    fn dth_root() -> Self;
+    const DTH_ROOT: Self;
 
-    fn ext_generator() -> [Self; D];
+    const EXT_GENERATOR: [Self; D];
 }
 
 pub trait HasFrobenius<F: Field>: ExtensionField<F> {
@@ -32,9 +33,9 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     fn frobenius_inv(&self) -> Self;
 
     fn minimal_poly(mut self) -> Vec<F> {
-        let mut m = vec![Self::one()];
+        let mut m = vec![Self::ONE];
         for _ in 0..Self::D {
-            m = naive_poly_mul(&m, &[-self, Self::one()]);
+            m = naive_poly_mul(&m, &[-self, Self::ONE]);
             self = self.frobenius();
         }
         let mut m_iter = m
@@ -42,7 +43,7 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
             .map(|c| c.as_base().expect("Extension is not algebraic?"));
         let m: Vec<F> = m_iter.by_ref().take(Self::D + 1).collect();
         debug_assert_eq!(m.len(), Self::D + 1);
-        debug_assert_eq!(m.last(), Some(&F::one()));
+        debug_assert_eq!(m.last(), Some(&F::ONE));
         debug_assert!(m_iter.all(|c| c.is_zero()));
         m
     }

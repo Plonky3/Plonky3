@@ -29,12 +29,17 @@ where
     let x = rng.gen::<F>();
     let y = rng.gen::<F>();
     let z = rng.gen::<F>();
-    assert_eq!(x + (-x), F::zero());
-    assert_eq!(-x, F::zero() - x);
-    assert_eq!(x + x, x * F::two());
-    assert_eq!(x, x.halve() * F::two());
+    assert_eq!(F::ONE + F::NEG_ONE, F::ZERO);
+    assert_eq!(x + (-x), F::ZERO);
+    assert_eq!(F::ONE + F::ONE, F::TWO);
+    assert_eq!(-x, F::ZERO - x);
+    assert_eq!(x + x, x * F::TWO);
+    assert_eq!(x * F::TWO, x.double());
+    assert_eq!(x, x.halve() * F::TWO);
     assert_eq!(x * (-x), -x.square());
     assert_eq!(x + y, y + x);
+    assert_eq!(x * F::ZERO, F::ZERO);
+    assert_eq!(x * F::ONE, x);
     assert_eq!(x * y, y * x);
     assert_eq!(x * (y * z), (x * y) * z);
     assert_eq!(x - (y + z), (x - y) - z);
@@ -54,8 +59,8 @@ where
     let x = rng.gen::<F>();
     let y = rng.gen::<F>();
     let z = rng.gen::<F>();
-    assert_eq!(x * x.inverse(), F::one());
-    assert_eq!(x.inverse() * x, F::one());
+    assert_eq!(x * x.inverse(), F::ONE);
+    assert_eq!(x.inverse() * x, F::ONE);
     assert_eq!(x.square().inverse(), x.inverse().square());
     assert_eq!((x / y) * y, x);
     assert_eq!(x / (y * z), (x / y) / z);
@@ -66,9 +71,9 @@ pub fn test_inverse<F: Field>()
 where
     Standard: Distribution<F>,
 {
-    assert_eq!(None, F::zero().try_inverse());
+    assert_eq!(None, F::ZERO.try_inverse());
 
-    assert_eq!(Some(F::one()), F::one().try_inverse());
+    assert_eq!(Some(F::ONE), F::ONE.try_inverse());
 
     let mut rng = rand::thread_rng();
     for _ in 0..1000 {
@@ -76,7 +81,7 @@ where
         if !x.is_zero() && !x.is_one() {
             let z = x.inverse();
             assert_ne!(x, z);
-            assert_eq!(x * z, F::one());
+            assert_eq!(x * z, F::ONE);
         }
     }
 }
@@ -94,7 +99,7 @@ pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
         let g = F::two_adic_generator(log_n);
         for x in cyclic_subgroup_known_order(g, 1 << log_n) {
             let zerofier_eval = two_adic_subgroup_zerofier(log_n, x);
-            assert_eq!(zerofier_eval, F::zero());
+            assert_eq!(zerofier_eval, F::ZERO);
         }
     }
 }
@@ -102,10 +107,10 @@ pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
 pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         for x in cyclic_subgroup_coset_known_order(g, shift, 1 << log_n) {
             let zerofier_eval = two_adic_coset_zerofier(log_n, shift, x);
-            assert_eq!(zerofier_eval, F::zero());
+            assert_eq!(zerofier_eval, F::ZERO);
         }
     }
 }
@@ -217,8 +222,8 @@ mod tests {
         type F = BabyBear;
         // (x - 1)(x - 2) = x^2 - 3x + 2
         assert_eq!(
-            binomial_expand(&[F::one(), F::two()]),
-            vec![F::two(), -F::from_canonical_usize(3), F::one()]
+            binomial_expand(&[F::ONE, F::TWO]),
+            vec![F::TWO, -F::from_canonical_usize(3), F::ONE]
         );
     }
 }

@@ -42,7 +42,7 @@ pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     for _ in 0..REPS {
         input.push(rng.gen::<[F; N]>())
     }
-    let mut output = [F::zero(); REPS];
+    let mut output = [F::ZERO; REPS];
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
             for i in 0..REPS {
@@ -69,7 +69,7 @@ pub fn benchmark_add_latency<AF: AbstractField + Copy, const N: usize>(
                 }
                 vec
             },
-            |x| x.iter().fold(AF::zero(), |x, y| x + *y),
+            |x| x.iter().fold(AF::ZERO, |x, y| x + *y),
             BatchSize::SmallInput,
         )
     });
@@ -136,7 +136,7 @@ pub fn benchmark_sub_latency<AF: AbstractField + Copy, const N: usize>(
                 }
                 vec
             },
-            |x| x.iter().fold(AF::zero(), |x, y| x - *y),
+            |x| x.iter().fold(AF::ZERO, |x, y| x - *y),
             BatchSize::SmallInput,
         )
     });
@@ -203,7 +203,7 @@ pub fn benchmark_mul_latency<AF: AbstractField + Copy, const N: usize>(
                 }
                 vec
             },
-            |x| x.iter().fold(AF::zero(), |x, y| x * *y),
+            |x| x.iter().fold(AF::ZERO, |x, y| x * *y),
             BatchSize::SmallInput,
         )
     });

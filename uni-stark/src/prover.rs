@@ -173,7 +173,7 @@ where
                 width,
             );
 
-            let accumulator = PackedChallenge::<SC>::zero();
+            let accumulator = PackedChallenge::<SC>::ZERO;
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 public_values,

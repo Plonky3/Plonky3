@@ -23,7 +23,7 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
         let log_n = log2_strict_usize(N);
         let root = F::two_adic_generator(log_n);
         let root_inv = root.inverse();
-        let coset_shift = F::generator();
+        let coset_shift = F::GENERATOR;
 
         let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
         reverse_slice_index_bits(&mut ifft_twiddles);
@@ -119,7 +119,7 @@ fn bowers_g_t_layer<AF: AbstractField, const N: usize>(
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::AbstractField;
+    use p3_field::{AbstractField, Field};
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
     use rand::{thread_rng, Rng};
@@ -137,7 +137,7 @@ mod tests {
         let mut arr_rev = arr.to_vec();
         reverse_slice_index_bits(&mut arr_rev);
 
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let mut coset_lde_naive = NaiveDft.coset_lde(arr_rev, 0, shift);
         reverse_slice_index_bits(&mut coset_lde_naive);
         coset_lde_naive

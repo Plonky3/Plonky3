@@ -4,33 +4,24 @@ use crate::{AbstractExtensionField, AbstractField, Field};
 pub type Complex<AF> = BinomialExtensionField<AF, 2>;
 
 /// A field for which `p = 3 (mod 4)`. Equivalently, `-1` is not a square,
-/// so the complex extension can be defined `F[X]/(X^2+1)`.
+/// so the complex extension can be defined `F[i] = F[X]/(X^2+1)`.
 pub trait ComplexExtendable: Field {
     /// The two-adicity of `p+1`, the order of the circle group.
     const CIRCLE_TWO_ADICITY: usize;
 
-    fn complex_generator() -> Complex<Self>;
+    const COMPLEX_GENERATOR: Complex<Self>;
 
     fn circle_two_adic_generator(bits: usize) -> Complex<Self>;
 }
 
 impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
-    #[inline(always)]
-    fn w() -> Self {
-        F::neg_one()
-    }
+    const W: Self = F::NEG_ONE;
 
-    #[inline(always)]
-    fn dth_root() -> Self {
-        // since `p = 3 (mod 4)`, `(p-1)/2` is always odd,
-        // so `(-1)^((p-1)/2) = -1`
-        F::neg_one()
-    }
+    // since `p = 3 (mod 4)`, `(p-1)/2` is always odd,
+    // so `(-1)^((p-1)/2) = -1`
+    const DTH_ROOT: Self = F::NEG_ONE;
 
-    #[inline(always)]
-    fn ext_generator() -> [Self; 2] {
-        F::complex_generator().value
-    }
+    const EXT_GENERATOR: [Self; 2] = F::COMPLEX_GENERATOR.value;
 }
 
 /// Convenience methods for complex extensions
@@ -43,13 +34,13 @@ impl<AF: AbstractField> Complex<AF> {
     }
 
     #[inline(always)]
-    pub fn new_real(real: AF) -> Self {
-        Self::new(real, AF::zero())
+    pub const fn new_real(real: AF) -> Self {
+        Self::new(real, AF::ZERO)
     }
 
     #[inline(always)]
-    pub fn new_imag(imag: AF) -> Self {
-        Self::new(AF::zero(), imag)
+    pub const fn new_imag(imag: AF) -> Self {
+        Self::new(AF::ZERO, imag)
     }
 
     #[inline(always)]
@@ -88,32 +79,29 @@ impl<AF: AbstractField> Complex<AF> {
 }
 
 /// The complex extension of this field has a binomial extension.
+///
+/// This exists if the polynomial ring `F[i][X]` has an irreducible polynomial `X^d-W`
+/// allowing us to define the binomial extension field `F[i][X]/(X^d-W)`.
 pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
-    fn w() -> Complex<Self>;
+    const W: Complex<Self>;
 
-    fn dth_root() -> Complex<Self>;
+    // DTH_ROOT = W^((n - 1)/D).
+    // n is the order of base field.
+    // Only works when exists k such that n = kD + 1.
+    const DTH_ROOT: Complex<Self>;
 
-    fn ext_generator() -> [Complex<Self>; D];
+    const EXT_GENERATOR: [Complex<Self>; D];
 }
 
 impl<F, const D: usize> BinomiallyExtendable<D> for Complex<F>
 where
     F: HasComplexBinomialExtension<D>,
 {
-    #[inline(always)]
-    fn w() -> Self {
-        <F as HasComplexBinomialExtension<D>>::w()
-    }
+    const W: Self = <F as HasComplexBinomialExtension<D>>::W;
 
-    #[inline(always)]
-    fn dth_root() -> Self {
-        <F as HasComplexBinomialExtension<D>>::dth_root()
-    }
+    const DTH_ROOT: Self = <F as HasComplexBinomialExtension<D>>::DTH_ROOT;
 
-    #[inline(always)]
-    fn ext_generator() -> [Self; D] {
-        <F as HasComplexBinomialExtension<D>>::ext_generator()
-    }
+    const EXT_GENERATOR: [Self; D] = F::EXT_GENERATOR;
 }
 
 /// The complex extension of this field has a two-adic binomial extension.

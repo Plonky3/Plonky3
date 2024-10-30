@@ -33,7 +33,7 @@ pub struct BinomialExtensionField<AF, const D: usize> {
 impl<AF: AbstractField, const D: usize> Default for BinomialExtensionField<AF, D> {
     fn default() -> Self {
         Self {
-            value: array::from_fn(|_| AF::zero()),
+            value: array::from_fn(|_| AF::ZERO),
         }
     }
 }
@@ -75,12 +75,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         let arr: &[F] = self.as_base_slice();
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
-        let mut z0 = F::dth_root();
+        let mut z0 = F::DTH_ROOT;
         for _ in 1..count {
-            z0 *= F::dth_root();
+            z0 *= F::DTH_ROOT;
         }
 
-        let mut res = [F::zero(); D];
+        let mut res = [F::ZERO; D];
         for (i, z) in z0.powers().take(D).enumerate() {
             res[i] = arr[i] * z;
         }
@@ -92,7 +92,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     fn frobenius_inv(&self) -> Self {
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = Self::one();
+        let mut f = Self::ONE;
         for _ in 1..D {
             f = (f * *self).frobenius();
         }
@@ -101,11 +101,11 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         // coefficient rather than the full product.
         let a = self.value;
         let b = f.value;
-        let mut g = F::zero();
+        let mut g = F::ZERO;
         for i in 1..D {
             g += a[i] * b[D - i];
         }
-        g *= F::w();
+        g *= F::W;
         g += a[0] * b[0];
         debug_assert_eq!(Self::from(g), *self * f);
 
@@ -120,33 +120,21 @@ where
 {
     type F = BinomialExtensionField<AF::F, D>;
 
-    #[inline]
-    fn zero() -> Self {
-        Self {
-            value: array::from_fn(|_| AF::zero()),
-        }
-    }
+    const ZERO: Self = Self {
+        value: [AF::ZERO; D],
+    };
 
-    #[inline]
-    fn one() -> Self {
-        Self {
-            value: field_to_array::<AF, D>(AF::one()),
-        }
-    }
+    const ONE: Self = Self {
+        value: field_to_array::<AF, D>(AF::ONE),
+    };
 
-    #[inline]
-    fn two() -> Self {
-        Self {
-            value: field_to_array::<AF, D>(AF::two()),
-        }
-    }
+    const TWO: Self = Self {
+        value: field_to_array::<AF, D>(AF::TWO),
+    };
 
-    #[inline]
-    fn neg_one() -> Self {
-        Self {
-            value: field_to_array::<AF, D>(AF::neg_one()),
-        }
-    }
+    const NEG_ONE: Self = Self {
+        value: field_to_array::<AF, D>(AF::NEG_ONE),
+    };
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -195,25 +183,19 @@ where
         AF::from_wrapped_u64(n).into()
     }
 
-    fn generator() -> Self {
-        Self {
-            value: AF::F::ext_generator().map(AF::from_f),
-        }
-    }
-
     #[inline(always)]
     fn square(&self) -> Self {
         match D {
             2 => {
                 let a = self.value.clone();
                 let mut res = Self::default();
-                res.value[0] = a[0].square() + a[1].square() * AF::from_f(AF::F::w());
+                res.value[0] = a[0].square() + a[1].square() * AF::from_f(AF::F::W);
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
             3 => {
                 let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value, AF::F::w());
+                cubic_square(&self.value, &mut res.value, AF::F::W);
                 res
             }
             _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
@@ -230,14 +212,18 @@ where
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
 
+    const GENERATOR: Self = Self {
+        value: F::EXT_GENERATOR,
+    };
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
         }
 
         match D {
-            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::w()))),
-            3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::w()))),
+            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::W))),
+            3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::W))),
             _ => Some(self.frobenius_inv()),
         }
     }
@@ -355,10 +341,7 @@ where
     AF::F: BinomiallyExtendable<D>,
 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        let zero = Self {
-            value: field_to_array::<AF, D>(AF::zero()),
-        };
-        iter.fold(zero, |acc, x| acc + x)
+        iter.fold(Self::ZERO, |acc, x| acc + x)
     }
 }
 
@@ -428,7 +411,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        let w = AF::F::w();
+        let w = AF::F::W;
         let w_af = AF::from_f(w);
 
         match D {
@@ -476,10 +459,7 @@ where
     AF::F: BinomiallyExtendable<D>,
 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        let one = Self {
-            value: field_to_array::<AF, D>(AF::one()),
-        };
-        iter.fold(one, |acc, x| acc * x)
+        iter.fold(Self::ONE, |acc, x| acc * x)
     }
 }
 
@@ -575,7 +555,7 @@ where
     Standard: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
-        let mut res = [F::zero(); D];
+        let mut res = [F::ZERO; D];
         for r in res.iter_mut() {
             *r = Standard.sample(rng);
         }
@@ -613,7 +593,7 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
     // scalar = (a0^3+wa1^3+w^2a2^3-3wa0a1a2)^-1
     let scalar = (a0_square * a[0] + w * a[1] * a1_square + a2_w.square() * a[2]
-        - (F::one() + F::two()) * a2_w * a0_a1)
+        - (F::ONE + F::TWO) * a2_w * a0_a1)
         .inverse();
 
     //scalar*[a0^2-wa1a2, wa2^2-a0a1, a1^2-a0a2]
