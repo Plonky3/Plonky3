@@ -145,6 +145,7 @@ impl AbstractField for Bn254Fr {
 impl Field for Bn254Fr {
     type Packing = Self;
 
+    // generator is 5
     const GENERATOR: Self = Self::new(FFBn254Fr::from_raw([5u64, 0, 0, 0]));
 
     fn is_zero(&self) -> bool {
