@@ -28,7 +28,7 @@ pub mod stack;
 pub mod strided;
 pub mod util;
 
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,

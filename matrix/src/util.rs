@@ -1,16 +1,22 @@
+use core::borrow::BorrowMut;
+
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use tracing::instrument;
 
-use crate::dense::RowMajorMatrix;
+use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use crate::Matrix;
 
 #[instrument(level = "debug", skip_all)]
-pub fn reverse_matrix_index_bits<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>) {
+pub fn reverse_matrix_index_bits<'a, F, S>(mat: &mut DenseMatrix<F, S>)
+where
+    F: Clone + Send + Sync + 'a,
+    S: DenseStorage<F> + BorrowMut<[F]>,
+{
     let w = mat.width();
     let h = mat.height();
     let log_h = log2_strict_usize(h);
-    let values = mat.values.as_mut_ptr() as usize;
+    let values = mat.values.borrow_mut().as_mut_ptr() as usize;
 
     (0..h).into_par_iter().for_each(|i| {
         let values = values as *mut F;

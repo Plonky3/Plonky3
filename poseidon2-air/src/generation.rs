@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
 
 use p3_field::PrimeField;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_poseidon2::{DiffusionPermutation, MdsLightPermutation};
 use tracing::instrument;
@@ -35,11 +36,13 @@ pub fn generate_vectorized_trace_rows<
     let nrows = n.div_ceil(VECTOR_LEN);
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
         * VECTOR_LEN;
-    let mut trace = RowMajorMatrix::new(F::zero_vec(nrows * ncols), ncols);
+    let mut vec = Vec::with_capacity(nrows * ncols * 2);
+    let trace: &mut [MaybeUninit<F>] = &mut vec.spare_capacity_mut()[..nrows * ncols];
+    let trace: RowMajorMatrixViewMut<MaybeUninit<F>> = RowMajorMatrixViewMut::new(trace, ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
-            F,
+            MaybeUninit<F>,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
@@ -61,7 +64,10 @@ pub fn generate_vectorized_trace_rows<
         );
     });
 
-    trace
+    unsafe {
+        vec.set_len(nrows * ncols);
+    }
+    RowMajorMatrix::new(vec, ncols)
 }
 
 // TODO: Take generic iterable
@@ -88,11 +94,13 @@ pub fn generate_trace_rows<
     );
 
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
-    let mut trace = RowMajorMatrix::new(F::zero_vec(n * ncols), ncols);
+    let mut vec = Vec::with_capacity(n * ncols * 2);
+    let trace: &mut [MaybeUninit<F>] = &mut vec.spare_capacity_mut()[..n * ncols];
+    let trace: RowMajorMatrixViewMut<MaybeUninit<F>> = RowMajorMatrixViewMut::new(trace, ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
-            F,
+            MaybeUninit<F>,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
@@ -114,7 +122,10 @@ pub fn generate_trace_rows<
         );
     });
 
-    trace
+    unsafe {
+        vec.set_len(n * ncols);
+    }
+    RowMajorMatrix::new(vec, ncols)
 }
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
@@ -129,7 +140,7 @@ fn generate_trace_rows_for_perm<
     const PARTIAL_ROUNDS: usize,
 >(
     perm: &mut Poseidon2Cols<
-        F,
+        MaybeUninit<F>,
         WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
@@ -141,8 +152,13 @@ fn generate_trace_rows_for_perm<
     external_linear_layer: &MdsLight,
     internal_linear_layer: &Diffusion,
 ) {
-    perm.export = F::ONE;
-    perm.inputs = state;
+    perm.export.write(F::ONE);
+    perm.inputs
+        .iter_mut()
+        .zip(state.iter())
+        .for_each(|(input, &x)| {
+            input.write(x);
+        });
 
     external_linear_layer.permute_mut(&mut state);
 
@@ -195,7 +211,7 @@ fn generate_full_round<
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [F; WIDTH],
-    full_round: &mut FullRound<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
+    full_round: &mut FullRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[F; WIDTH],
     external_linear_layer: &MdsLight,
 ) {
@@ -206,7 +222,13 @@ fn generate_full_round<
         generate_sbox(sbox_i, state_i);
     }
     external_linear_layer.permute_mut(state);
-    full_round.post = *state;
+    full_round
+        .post
+        .iter_mut()
+        .zip(*state)
+        .for_each(|(post, x)| {
+            post.write(x);
+        });
 }
 
 #[inline]
@@ -218,19 +240,19 @@ fn generate_partial_round<
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [F; WIDTH],
-    partial_round: &mut PartialRound<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
+    partial_round: &mut PartialRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: F,
     internal_linear_layer: &Diffusion,
 ) {
     state[0] += round_constant;
     generate_sbox(&mut partial_round.sbox, &mut state[0]);
-    partial_round.post_sbox = state[0];
+    partial_round.post_sbox.write(state[0]);
     internal_linear_layer.permute_mut(state);
 }
 
 #[inline]
 fn generate_sbox<F: PrimeField, const DEGREE: usize, const REGISTERS: usize>(
-    sbox: &mut SBox<F, DEGREE, REGISTERS>,
+    sbox: &mut SBox<MaybeUninit<F>, DEGREE, REGISTERS>,
     x: &mut F,
 ) {
     *x = match (DEGREE, REGISTERS) {
@@ -240,20 +262,20 @@ fn generate_sbox<F: PrimeField, const DEGREE: usize, const REGISTERS: usize>(
         (5, 1) => {
             let x2 = x.square();
             let x3 = x2 * *x;
-            sbox.0[0] = x3;
+            sbox.0[0].write(x3);
             x3 * x2
         }
         (7, 1) => {
             let x3 = x.cube();
-            sbox.0[0] = x3;
+            sbox.0[0].write(x3);
             x3 * x3 * *x
         }
         (11, 2) => {
             let x2 = x.square();
             let x3 = x2 * *x;
             let x9 = x3.cube();
-            sbox.0[0] = x3;
-            sbox.0[1] = x9;
+            sbox.0[0].write(x3);
+            sbox.0[1].write(x9);
             x9 * x2
         }
         _ => panic!(
