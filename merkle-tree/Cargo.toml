@@ -13,6 +13,7 @@ p3-commit = { path = "../commit" }
 p3-util = { path = "../util" }
 p3-baby-bear = { path = "../baby-bear" }
 p3-monty-31 = { path = "../monty-31" }
+blake3 = "1.5"
 itertools = "0.13.0"
 tracing = "0.1.37"
 serde = { version = "1.0", default-features = false, features = ["alloc"] }
@@ -37,7 +38,6 @@ harness = false
 name = "unsafe_vs_safe"
 path = "benches/unsafe_vs_safe.rs"
 harness = false
-required-features = ["unsafe-conversion"]
 
 [[bench]]
 name = "hybrid_vs_plain"
@@ -49,5 +49,7 @@ name = "hybrid_vs_plain_identity_hasher"
 path = "benches/hybrid_vs_plain_identity_hasher.rs"
 harness = false
 
-[features]
-unsafe-conversion = []
+[[bench]]
+name = "hybrid_optimal_vs_plain_identity_hasher"
+path = "benches/hybrid_optimal_vs_plain_identity_hasher.rs"
+harness = false

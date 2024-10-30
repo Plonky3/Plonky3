@@ -8,7 +8,7 @@ use itertools::Itertools;
 use p3_field::PackedValue;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
-use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
+use p3_symmetric::{CryptographicHasher, Hash};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 

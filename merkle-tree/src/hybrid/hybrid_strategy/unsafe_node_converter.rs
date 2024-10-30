@@ -1,17 +1,20 @@
 use core::mem;
 
 use p3_baby_bear::BabyBear;
-use p3_field::AbstractField;
+use p3_field::{AbstractField, Field, PackedValue};
 
 use super::NodeConverter;
 
 #[derive(Clone)]
 pub struct UnsafeNodeConverter256BabyBearBytes {}
 
-impl<const WIDTH: usize> NodeConverter<[[BabyBear; WIDTH]; 8], [[u8; WIDTH]; 32]>
+type BabyBearPacking = <BabyBear as Field>::Packing;
+const BB_WIDTH: usize = BabyBearPacking::WIDTH;
+
+impl NodeConverter<[BabyBearPacking; 8], [[u8; BB_WIDTH]; 32]>
     for UnsafeNodeConverter256BabyBearBytes
 {
-    fn to_n1(input: [[u8; WIDTH]; 32]) -> [[BabyBear; WIDTH]; 8] {
+    fn to_n1(input: [[u8; BB_WIDTH]; 32]) -> [BabyBearPacking; 8] {
         // TODO try to avoid copying; cannot use transmute() because of WIDTH
         // unsafe {
         //     let u32_array = mem::transmute_copy::<[[u8; WIDTH]; 32], [u32; WIDTH * 8]>(&input);
@@ -24,7 +27,7 @@ impl<const WIDTH: usize> NodeConverter<[[BabyBear; WIDTH]; 8], [[u8; WIDTH]; 32]
         unimplemented!()
     }
 
-    fn to_n2(input: [[BabyBear; WIDTH]; 8]) -> [[u8; WIDTH]; 32] {
+    fn to_n2(input: [BabyBearPacking; 8]) -> [[u8; BB_WIDTH]; 32] {
         // let u8_array: Vec<u8> = input.into_iter().flatten().map(bb_to_bytes).into_iter().collect();
 
         // let u8_subarrays: Vec<[u8; WIDTH]> = u8_array.chunks(WIDTH).map(|chunk| chunk.try_into().unwrap()).collect();
@@ -37,7 +40,7 @@ impl<const WIDTH: usize> NodeConverter<[[BabyBear; WIDTH]; 8], [[u8; WIDTH]; 32]
         // }
 
         // TODO try to avoid copying; cannot use transmute() because of WIDTH
-        unsafe { mem::transmute_copy::<[[BabyBear; WIDTH]; 8], [[u8; WIDTH]; 32]>(&input) }
+        unsafe { mem::transmute_copy::<[BabyBearPacking; 8], [[u8; BB_WIDTH]; 32]>(&input) }
     }
 }
 

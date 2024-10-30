@@ -3,11 +3,8 @@ use core::marker::PhantomData;
 use p3_symmetric::PseudoCompressionFunction;
 
 pub(crate) mod node_converter;
-pub(crate) mod utils;
-
-#[cfg(feature = "unsafe-conversion")]
 pub(crate) mod unsafe_node_converter;
-
+pub(crate) mod utils;
 pub(crate) use node_converter::*;
 
 use crate::pretty_hash_type;
@@ -115,3 +112,18 @@ where
 // PackedNode for Blake3:
 // - Morally: [[u8; 32]; 4]
 // - Really: [[u8; 4]; 32]
+
+// - Compression above bottom level: Poseidon2<...>: PseudoCompressionFunction<[NeonBabyBear; DIGEST_ELEMS]; 2>,
+//   where NeonBabyBear: PackedValue<BabyBear, WIDTH=4>
+// - HybridPseudoCompressionFunction:
+
+// (!) [[BabyBear; WIDTH]; DIGEST_ELEMENTS] -> [u8; ]
+
+//                                  to_n1            Blake3            to_n2
+// [BabyBear; DIGEST_ELEMENTS = 8]    ->   [u8; 32] --------> [u8; 32] -> [BabyBear; 8]
+
+//                                        to_n2                   Blake3WithWidth                     to_n1
+// [[BabyBear; WIDTH]; DIGEST_ELEMENTS = 8] -> [[u8; WIDTH]; 32] -----------------> [[u8; WIDTH]; 32] -------> [BabyBear; WIDTH * 8]
+
+// N1: [[BabyBear; WIDTH]; 8]
+// N2: [[u8; WIDTH]; 32]
