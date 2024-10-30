@@ -9,7 +9,7 @@ use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 /// Halve a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline(always)]
-pub fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
+pub(crate) fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
     /*
         We want this to compile to:
             vpand    least_bit, val, ONE
@@ -44,7 +44,10 @@ pub fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
 /// conform to the expected representation. Each element of lhs must lie in [0, P) and
 /// each element of rhs in (-P, P).
 #[inline(always)]
-pub unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(
+    lhs: __m256i,
+    rhs: __m256i,
+) -> __m256i {
     /*
         We want this to compile to:
             vpsignd  pos_neg_P,  P,     rhs

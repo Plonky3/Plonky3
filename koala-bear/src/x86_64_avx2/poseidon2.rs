@@ -2,9 +2,8 @@ use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
 use p3_monty_31::{
-    add, halve_avx2, mul_2_exp_neg_n_avx2, mul_2_exp_neg_two_adicity_avx2,
-    mul_neg_2_exp_neg_n_avx2, mul_neg_2_exp_neg_two_adicity_avx2, signed_add_avx2, sub,
-    InternalLayerParametersAVX2,
+    mul_2_exp_neg_n_avx2, mul_2_exp_neg_two_adicity_avx2, mul_neg_2_exp_neg_n_avx2,
+    mul_neg_2_exp_neg_two_adicity_avx2, InternalLayerParametersAVX2,
 };
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
@@ -90,56 +89,21 @@ unsafe fn mul_neg_2_exp_neg_8(input: __m256i) -> __m256i {
     }
 }
 
-impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
+impl InternalLayerParametersAVX2<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m256i; 15];
 
     /// For the KoalaBear field and width 16 we multiply by the diagonal matrix:
+    ///
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/8, -1/8, -1/16, 1/2^24, -1/2^24].
+    /// The first 9 entries are handled elsewhere, this function handles all the positive/negative inverse powers of two.
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
     /// the output is piped directly into add_sum the vector will be modified such that x[i] = D[i]*x[i] + sum.
     #[inline(always)]
-    unsafe fn diagonal_mul(input: &mut [__m256i; 15]) {
+    unsafe fn diagonal_mul_remainder(input: &mut [__m256i; 15]) {
         // As far as we know this is optimal in that it need the fewest instructions to perform all of these
         // multiplications. (Note that -1, 0 are not allowed on the diagonal for technical reasons).
         // If there exist other number b for which x*b mod P can be computed quickly this diagonal can be updated.
-
-        // The strategy is very simple. 2, 3, 4, -3, -4 are implemented using addition.
-        //                              1/2, -1/2 using the custom half function.
-        //                              and the remainder utilizing the custom functions for multiplication by 2^{-n}.
-
-        // Note that for -3, -4, -1/2 we actually output 3x, 4x, x/2 and the negative is dealt with in add_sum by subtracting
-        // this from the summation instead of adding it.
-
-        // Note that input only contains the last 15 elements of the state.
-        // The first element is handled separately as we need to apply the s-box to it.
-
-        // input[0] is being multiplied by 1 so we can also ignore it.
-
-        // input[1]-> sum + 2*input[1]
-        input[1] = add::<KoalaBearParameters>(input[1], input[1]);
-
-        // input[2]-> sum + input[2]/2
-        input[2] = halve_avx2::<KoalaBearParameters>(input[2]);
-
-        // input[3]-> sum + 3*input[3]
-        let acc3 = add::<KoalaBearParameters>(input[3], input[3]);
-        input[3] = add::<KoalaBearParameters>(acc3, input[3]);
-
-        // input[4]-> sum + 4*input[4]
-        let acc4 = add::<KoalaBearParameters>(input[4], input[4]);
-        input[4] = add::<KoalaBearParameters>(acc4, acc4);
-
-        // input[5]-> sum - input[5]/2
-        input[5] = halve_avx2::<KoalaBearParameters>(input[5]);
-
-        // input[6]-> sum - 3*input[6]
-        let acc6 = add::<KoalaBearParameters>(input[6], input[6]);
-        input[6] = add::<KoalaBearParameters>(acc6, input[6]);
-
-        // input[7]-> sum - 4*input[7]
-        let acc7 = add::<KoalaBearParameters>(input[7], input[7]);
-        input[7] = add::<KoalaBearParameters>(acc7, acc7);
 
         // input[8]-> sum + input[8]/2^8
         input[8] = mul_2_exp_neg_8(input[8]);
@@ -162,78 +126,23 @@ impl InternalLayerParametersAVX2<16> for KoalaBearInternalLayerParameters {
         // input[14] -> sum - input[14]/2^24
         input[14] = mul_neg_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[14]);
     }
-
-    /// Add sum to every element of input.
-    /// Sum must be in canonical form and input must be exactly the output of diagonal mul.
-    /// If either of these does not hold, the result is undefined.
-    unsafe fn add_sum(input: &mut [__m256i; 15], sum: __m256i) {
-        input[..5]
-            .iter_mut()
-            .for_each(|x| *x = add::<KoalaBearParameters>(sum, *x));
-
-        // Diagonal mul multiplied these by 1/2, 3, 4 instead of -1/2, -3, -4 so we need to subtract instead of adding.
-        input[5..8]
-            .iter_mut()
-            .for_each(|x| *x = sub::<KoalaBearParameters>(sum, *x));
-
-        // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
-        input[8..]
-            .iter_mut()
-            .for_each(|x| *x = signed_add_avx2::<KoalaBearParameters>(sum, *x));
-    }
 }
 
-impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
+impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m256i; 23];
 
     /// For the KoalaBear field and width 1246 we multiply by the diagonal matrix:
+    ///
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2**24, -1/2**24]
+    /// The first 9 entries are handled elsewhere, this function handles all the positive/negative inverse powers of two.
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
     /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
     #[inline(always)]
-    unsafe fn diagonal_mul(input: &mut [__m256i; 23]) {
+    unsafe fn diagonal_mul_remainder(input: &mut [__m256i; 23]) {
         // As far as we know this is optimal in that it need the fewest instructions to perform all of these
         // multiplications. (Note that -1, 0 are not allowed on the diagonal for technical reasons).
         // If there exist other number b for which x*b mod P can be computed quickly this diagonal can be updated.
-
-        // The strategy is very simple. 2, 3, 4, -3, -4 are implemented using addition.
-        //                              1/2, -1/2 using the custom half function.
-        //                              and the remainder utilizing the custom functions for multiplication by 2^{-n}.
-
-        // Note that for -3, -4, -1/2 we actually output 3x, 4x, x/2 and the negative is dealt with in add_sum by subtracting
-        // this from the summation instead of adding it.
-
-        // Note that input only contains the last 23 elements of the state.
-        // The first element is handled separately as we need to apply the s-box to it.
-
-        // input[0] is being multiplied by 1 so we can also ignore it.
-
-        // input[1] -> sum + 2*input[1]
-        input[1] = add::<KoalaBearParameters>(input[1], input[1]);
-
-        // input[2] -> sum + input[2]/2
-        input[2] = halve_avx2::<KoalaBearParameters>(input[2]);
-
-        // input[3] -> sum + 3*input[3]
-        let acc3 = add::<KoalaBearParameters>(input[3], input[3]);
-        input[3] = add::<KoalaBearParameters>(acc3, input[3]);
-
-        // input[4] -> sum + 4*input[4]
-        let acc4 = add::<KoalaBearParameters>(input[4], input[4]);
-        input[4] = add::<KoalaBearParameters>(acc4, acc4);
-
-        // input[5] -> sum - input[5]/2
-        input[5] = halve_avx2::<KoalaBearParameters>(input[5]);
-
-        // input[6] -> sum - 3*input[6]
-        let acc6 = add::<KoalaBearParameters>(input[6], input[6]);
-        input[6] = add::<KoalaBearParameters>(acc6, input[6]);
-
-        // input[7] -> sum - 4*input[7]
-        let acc7 = add::<KoalaBearParameters>(input[7], input[7]);
-        input[7] = add::<KoalaBearParameters>(acc7, acc7);
 
         // input[8] -> sum + input[8]/2^8
         input[8] = mul_2_exp_neg_8(input[8]);
@@ -279,26 +188,6 @@ impl InternalLayerParametersAVX2<24> for KoalaBearInternalLayerParameters {
 
         // input[22] -> sum - input[22]/2^24
         input[22] = mul_neg_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[22]);
-    }
-
-    /// Add sum to every element of input.
-    /// Sum must be in canonical form and input must be exactly the output of diagonal mul.
-    /// If either of these does not hold, the result is undefined.
-    unsafe fn add_sum(input: &mut [__m256i; 23], sum: __m256i) {
-        input[..5]
-            .iter_mut()
-            .for_each(|x| *x = add::<KoalaBearParameters>(sum, *x));
-
-        // Diagonal mul multiplied these by 1/2, 3, 4 instead of -1/2, -3, -4 so we need to subtract instead of adding.
-        input[5..8]
-            .iter_mut()
-            .for_each(|x| *x = sub::<KoalaBearParameters>(sum, *x));
-
-        // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
-        input[8..]
-            .iter_mut()
-            .for_each(|x| *x = signed_add_avx2::<KoalaBearParameters>(sum, *x));
     }
 }
 

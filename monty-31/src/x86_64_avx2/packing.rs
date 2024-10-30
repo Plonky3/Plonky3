@@ -122,7 +122,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-pub fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -391,7 +391,7 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-pub fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
