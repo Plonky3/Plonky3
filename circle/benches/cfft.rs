@@ -1,7 +1,7 @@
 use criterion::measurement::Measurement;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
-use p3_circle::{CircleDomain, CircleEvaluations};
+use p3_circle::{CfftAlgorithm, CircleDomain, CircleEvaluations, ParChunkedCfft};
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
@@ -24,6 +24,7 @@ fn bench_lde(c: &mut Criterion) {
 
 fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usize) {
     type F = Mersenne31;
+    let cfft = ParChunkedCfft::default();
     let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
     g.bench_with_input(
         BenchmarkId::new("Cfft<M31>", format!("log_n={log_n},log_w={log_w}")),
@@ -34,7 +35,7 @@ fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usiz
                 |m| {
                     let evals =
                         CircleEvaluations::from_natural_order(CircleDomain::standard(log_n), m);
-                    evals.extrapolate(CircleDomain::standard(log_n + 1))
+                    cfft.extrapolate(CircleDomain::standard(log_n + 1), evals)
                 },
                 criterion::BatchSize::LargeInput,
             )
