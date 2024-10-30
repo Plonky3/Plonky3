@@ -4,7 +4,7 @@ use core::mem::transmute;
 use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
-// https://godbolt.org/z/WW3GYjsTn
+// https://godbolt.org/z/dvW7r1zjj
 
 /// Halve a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
@@ -25,7 +25,7 @@ pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         const ONE: __m512i = unsafe { transmute([1; 16]) };
-        let half: __m512i = transmute([(MP::PRIME + 1) / 2; 16]); // Compiler realises this is constant.
+        let half = x86_64::_mm512_set1_epi32((MP::PRIME as i32 + 1) / 2); // Compiler realises this is constant.
 
         let least_bit = x86_64::_mm512_test_epi32_mask(input, ONE); // Determine the parity of val.
         let t = x86_64::_mm512_srli_epi32::<1>(input);
@@ -50,7 +50,7 @@ pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
 
     Using intrinsics we can efficiently output r2^{j - N} x_lo - x_hi if x_lo > 0 and P - x_hi if x_lo = 0.
     Whilst this means the output will not be canonical and instead will lie in [0, P] this will be handled by
-    a seperate function.
+    a separate function.
 
     It remains to understand how to efficiently compute r2^{j - N} x_lo. This splits into several cases:
 
@@ -93,8 +93,8 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<
     unsafe {
         assert_eq!(N + N_PRIME, TAD::TWO_ADICITY as u32); // Compiler removes this provided it is satisfied.
 
-        let odd_factor: __m512i = transmute([TAD::ODD_FACTOR; 16]); // This is [r; 16]. Compiler realises this is a constant.
-        let mask: __m512i = transmute([(1 << N) - 1; 16]); // Compiler realises this is a constant.
+        let odd_factor = x86_64::_mm512_set1_epi32(TAD::ODD_FACTOR); // This is [r; 16]. Compiler realises this is a constant.
+        let mask = x86_64::_mm512_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
 
         let hi = x86_64::_mm512_srli_epi32::<N>(input);
         let lo = x86_64::_mm512_and_si512(input, mask);
@@ -112,7 +112,7 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<
         // When lo > 0, lo_shft = r2^{j - N} x_lo
         let lo_shft = x86_64::_mm512_mask_slli_epi32::<N_PRIME>(TAD::PACKED_P, lo_mask, lo_x_r);
 
-        // As hi < r2^{j - N} < P, the output is always in [0, P]. It is equal to P only when input t = 0.
+        // As hi < r2^{j - N} < P, the output is always in [0, P]. It is equal to P only when input x = 0.
         x86_64::_mm512_sub_epi32(lo_shft, hi)
     }
 }
@@ -144,10 +144,10 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx512<
     unsafe {
         assert_eq!(8 + N_PRIME, TAD::TWO_ADICITY as u32); // Compiler removes this provided it is satisfied.
 
-        let odd_factor: __m512i = transmute([TAD::ODD_FACTOR; 16]); // This is [r; 16]. Compiler realises this is a constant.
+        let odd_factor = x86_64::_mm512_set1_epi32(TAD::ODD_FACTOR); // This is [r; 16]. Compiler realises this is a constant.
         let hi = x86_64::_mm512_srli_epi32::<8>(input);
 
-        let mask: __m512i = transmute([(1 << 8) - 1; 16]); // Compiler realises this is a constant.
+        let mask = x86_64::_mm512_set1_epi32((1_i32 << 8) - 1_i32); // Compiler realises this is a constant.
 
         // Determine the non 0 values of lo.
         let lo_mask = x86_64::_mm512_test_epi32_mask(input, mask);
@@ -163,7 +163,7 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx512<
         // When lo > 0, lo_shft = r2^{j - N} x_lo
         let lo_shft = x86_64::_mm512_mask_slli_epi32::<N_PRIME>(TAD::PACKED_P, lo_mask, lo_x_r);
 
-        // As hi < r2^{j - N} < P, the output is always in [0, P]. It is equal to P only when input t = 0.
+        // As hi < r2^{j - N} < P, the output is always in [0, P]. It is equal to P only when input x = 0.
         x86_64::_mm512_sub_epi32(lo_shft, hi)
     }
 }
@@ -198,7 +198,7 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
         assert_eq!(N, (TAD::TWO_ADICITY as u32)); // Compiler removes this provided it is satisfied.
         assert_eq!(N + N_PRIME, 31); // Compiler removes this provided it is satisfied.
 
-        let mask: __m512i = transmute([(1 << N) - 1; 16]); // Compiler realises this is a constant.
+        let mask = x86_64::_mm512_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
         let hi = x86_64::_mm512_srli_epi32::<N>(input);
 
         // Provided overflow does not occur, (2^{31 - N} - 1)*x = (x << {31 - N}) - 1.

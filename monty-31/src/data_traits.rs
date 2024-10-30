@@ -87,7 +87,7 @@ pub trait TwoAdicData: MontyParameters {
     const TWO_ADICITY: usize;
 
     /// The odd constant r such that p = r * 2^n + 1
-    const ODD_FACTOR: u32 = (Self::PRIME >> Self::TWO_ADICITY);
+    const ODD_FACTOR: i32 = (Self::PRIME >> Self::TWO_ADICITY) as i32;
 
     /// ArrayLike should usually be `&'static [MontyField31]`.
     type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;

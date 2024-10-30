@@ -4,7 +4,7 @@ use core::mem::transmute;
 use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
-// https://godbolt.org/z/xK91MKsdd
+// https://godbolt.org/z/9P71nYrqh
 
 /// Halve a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
@@ -26,7 +26,7 @@ pub(crate) fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         const ONE: __m256i = unsafe { transmute([1u32; 8]) };
-        let half: __m256i = transmute([(MP::PRIME + 1) / 2; 8]); // Compiler realises this is constant.
+        let half = x86_64::_mm256_set1_epi32((MP::PRIME as i32 + 1) / 2); // Compiler realises this is constant.
 
         let least_bit = x86_64::_mm256_and_si256(input, ONE); // Determine the parity of val.
         let t = x86_64::_mm256_srli_epi32::<1>(input);
@@ -137,8 +137,8 @@ pub unsafe fn mul_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_PRIME
     unsafe {
         assert_eq!(N + N_PRIME, TAD::TWO_ADICITY as i32); // Compiler removes this provided it is satisfied.
 
-        let odd_factor: __m256i = transmute([TAD::ODD_FACTOR; 8]); // This is [r; 8]. Compiler realises this is a constant.
-        let mask: __m256i = transmute([(1 << N) - 1; 8]); // Compiler realises this is a constant.
+        let odd_factor = x86_64::_mm256_set1_epi32(TAD::ODD_FACTOR); // This is [r; 8]. Compiler realises this is a constant.
+        let mask = x86_64::_mm256_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
 
         let hi = x86_64::_mm256_srli_epi32::<N>(input);
         let val_lo = x86_64::_mm256_and_si256(input, mask);
@@ -177,8 +177,8 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx2<TAD: TwoAdicData, const N: i32, const N_P
     unsafe {
         assert_eq!(N + N_PRIME, TAD::TWO_ADICITY as i32); // Compiler removes this provided it is satisfied.
 
-        let odd_factor: __m256i = transmute([TAD::ODD_FACTOR; 8]); // This is [r; 8]. Compiler realises this is a constant.
-        let mask: __m256i = transmute([(1 << N) - 1; 8]); // Compiler realises this is a constant.
+        let odd_factor = x86_64::_mm256_set1_epi32(TAD::ODD_FACTOR); // This is [r; 8]. Compiler realises this is a constant.
+        let mask = x86_64::_mm256_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
 
         let hi = x86_64::_mm256_srli_epi32::<N>(input);
         let lo = x86_64::_mm256_and_si256(input, mask);
@@ -215,7 +215,7 @@ pub unsafe fn mul_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
     unsafe {
         assert_eq!(8 + N_PRIME, TAD::TWO_ADICITY as i32); // Compiler removes this provided it is satisfied.
 
-        let odd_factor: __m256i = transmute([TAD::ODD_FACTOR; 8]); // This is [r; 8]. Compiler realises this is a constant.
+        let odd_factor = x86_64::_mm256_set1_epi32(TAD::ODD_FACTOR); // This is [r; 8]. Compiler realises this is a constant.
 
         // Get the hi 16 bits shifted down.
         let hi = x86_64::_mm256_srli_epi32::<8>(input);
@@ -254,7 +254,7 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx2<TAD: TwoAdicData, const N_PRIME: i32>(
     unsafe {
         assert_eq!(8 + N_PRIME, TAD::TWO_ADICITY as i32); // Compiler removes this provided it is satisfied.
 
-        let odd_factor: __m256i = transmute([TAD::ODD_FACTOR; 8]); // This is [r; 8]. Compiler realises this is a constant.
+        let odd_factor = x86_64::_mm256_set1_epi32(TAD::ODD_FACTOR); // This is [r; 8]. Compiler realises this is a constant.
 
         // Get the hi 16 bits shifted down.
         let hi = x86_64::_mm256_srli_epi32::<8>(input);
@@ -285,7 +285,7 @@ pub unsafe fn mul_2_exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: i32, con
         We want this to compile to:
             vpsrld  hi, 	 	val,        N
             vpand   lo, 	 	val,     	2^{N} - 1
-            vpslrd  lo_shft,   	lo,         31 - N
+            vpslld  lo_shft,   	lo,         31 - N
             vpaddd  lo_plus_hi, lo,         hi
             vpsubd  res 		lo_plus_hi, lo_shft,
         throughput: 1.67
@@ -295,7 +295,7 @@ pub unsafe fn mul_2_exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: i32, con
         assert_eq!(N, (TAD::TWO_ADICITY as i32)); // Compiler removes this provided it is satisfied.
         assert_eq!(N + N_PRIME, 31); // Compiler removes this provided it is satisfied.
 
-        let mask: __m256i = transmute([(1 << N) - 1; 8]); // Compiler realises this is a constant.
+        let mask = x86_64::_mm256_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
         let hi = x86_64::_mm256_srli_epi32::<N>(input);
 
         // Provided overflow does not occur, (2^{31 - N} - 1)*x = (x << {31 - N}) - 1.
@@ -325,7 +325,7 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx2<
         We want this to compile to:
             vpsrld  hi, 	 	val,      N
             vpand   lo, 	 	val,      2^{N} - 1
-            vpslrd  lo_shft,   	lo,       31 - N
+            vpslld  lo_shft,   	lo,       31 - N
             vpaddd  lo_plus_hi, lo,       hi
             vpsubd  res 		lo_shft,  lo_plus_hi
         throughput: 1.67
@@ -335,7 +335,7 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx2<
         assert_eq!(N, (TAD::TWO_ADICITY as i32)); // Compiler removes this provided it is satisfied.
         assert_eq!(N + N_PRIME, 31); // Compiler removes this provided it is satisfied.
 
-        let mask: __m256i = transmute([(1 << N) - 1; 8]); // Compiler realises this is a constant.
+        let mask = x86_64::_mm256_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
         let hi = x86_64::_mm256_srli_epi32::<N>(input);
 
         // Provided overflow does not occur, (2^{31 - N} - 1)*x = (x << {31 - N}) - 1.
