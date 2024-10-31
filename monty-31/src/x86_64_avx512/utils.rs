@@ -184,7 +184,7 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
 ) -> __m512i {
     /*
         We want this to compile to:
-            mov         lo_shft,            P           This can be a mov or a load. It will not affect throughput/latency.
+            vmovdqu32   lo_shft,            P           // This can be a mov or a load. It will not affect throughput/latency.
             vpsrld      hi,                 val,        N
             vpandd      lo,                 val,        2^N - 1
             vptestmd    lo_MASK,            val,        2^N - 1
