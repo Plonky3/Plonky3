@@ -14,13 +14,29 @@ use tracing::instrument;
 
 use crate::{unpack_array, HybridPseudoCompressionFunction};
 
-/// A hybrid binary Merkle tree for packed data. It has leaves of type `F` and digests of type
-/// `[W; DIGEST_ELEMS]`.
+/// A hybrid binary Merkle tree for packed data. It has leaves of type `F` and
+/// digests of type `[W; DIGEST_ELEMS]`.
 ///
-/// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
-/// see `MerkleTreeMmcs`.
-///
-/// This structure is a direct copy of [MerkleTree] (but its methods are not)
+/// **Important note**: Secure Merkle-tree construction relies on cryptographic
+/// properties of the hash function(s) used. Conversion between types of nodes
+/// so that one can use different hashes to compress at different levels can
+/// interact dangerously with the hashes in question. For instance, grouping
+/// together 4 elements of type `u8` into into a field element of ~32 bits is
+/// *not* an injective operation - even further, finding several preimages of
+/// the same field element is trivial. This could easily break the
+/// second-preimage resistance needed for the Merkle tree to be binding. By way
+/// of example, if one uses an [IdentityHasher][p3_symmetric::IdentityHasher] to
+/// digest the leaves of a tree as elements of a field F1, and then casts them
+/// to a field F2 of order |F2| < |F1| before compressing them with `Poseidon2`,
+/// it becomes trivial to produce distincts sets of matrices committing to the
+/// same root. Caution and security analysis are advised when implementing and
+/// using the provided trait and structure system, especially as far as the
+/// interplay between the following three elements is concerned:
+/// - The hash function used to digest the leaves
+/// - The compression functions used at the various levels of the tree
+/// - The node converters used to convert between types of nodes
+//
+// This structure is a direct copy of this crate's `MerkleTree` (but its methods are not).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HybridMerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     pub(crate) leaves: Vec<M>,
@@ -37,6 +53,10 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 {
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
+    //
+    // This method is largely the same as `MerkleTree::new`, but it passes
+    // around the layer size information so that the hybrid strategy can decide
+    // which compressor to use.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self

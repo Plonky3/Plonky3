@@ -1,3 +1,7 @@
+/// This module contains the logic for hybrid compression strategies, which
+/// expose a common input type but can internally use different compressors
+/// based on a size list and the current size (meant to represent the current
+/// layer of a Merkle tree under construction).
 use core::marker::PhantomData;
 
 use p3_symmetric::PseudoCompressionFunction;
@@ -5,17 +9,46 @@ use p3_symmetric::PseudoCompressionFunction;
 pub(crate) mod node_converter;
 pub(crate) mod unsafe_node_converter;
 
-// TODO add to doc: closely mimics CryptographicHasher but
-
-trait NodeConverter<N1, N2> {
-    fn to_n2(n1: N1) -> N2;
-
-    fn to_n1(n2: N2) -> N1;
-}
-
+/// A hybrid analogue of [`PseudoCompressionFunction`] for use in MMCS. It
+/// exposes a single input type, regardless of the internal compressors it uses
+/// and their particular input types. The only difference with
+/// [`PseudoCompressionFunction`] is the addition of the `sizes` and
+/// `current_size` arguments to the `compress` method, which give the
+/// implementor information to decide which compressor to use. These are meant
+/// to represent the numbers of rows of the matrices being committed to and the
+/// number of nodes in the current tree level, respectively.
 pub trait HybridPseudoCompressionFunction<T, const N: usize>: Clone {
     fn compress(&self, input: [T; N], sizes: &[usize], current_size: usize) -> T;
 }
+
+/// A converter between two types of nodes (for instance, `[BabyBear; 8]` and
+/// `[u8; 32]` to be used in hybrid compressors using exactly two compressors
+/// (for instance, [`Poseidon2`] and [`Blake3`]).
+trait NodeConverter<N1, N2> {
+    fn to_n2(n1: N1) -> N2;
+    fn to_n1(n2: N2) -> N1;
+}
+
+/// A simple hybrid compressor using exactly two compressors: one to compress
+/// the bottom-layer digests (and inject the next-to-bottom digests, if any) and
+/// one to perform compression (and injection) at all other levels.
+//
+// Design consideration: Due to the need for `HybridPseudoCompressionFunction`
+// to always receive the same type of input, which is chosen as `C1`'s input
+// type in the `impl` below, whenever `C2` is used, one is forced to convert the
+// input to `C1`'s input type, apply `C2`, and then convert back to (half of)
+// `C1`'s input type. Therefore, if there are matrices of half the number of
+// rows as the biggest matrix (so that `C2` would be used both to compress and
+// inject), the structure is forced to perform an unfortunate unnecessary
+// conversion:
+//
+// 1. Compress bottom layer leaves:
+//                  convert                    C2                            convert
+//    Leaf type T1 ---------> C2's input type ----> half of C2's input type ---------> Half of C1's input type
+//
+// 2. Prepare bottom-layer digests for injection:
+//                  convert                C2
+//    Leaf type T1 ----> C2's input type ----> half of C2's input type
 
 #[derive(Clone)]
 pub struct SimpleHybridCompressor<
