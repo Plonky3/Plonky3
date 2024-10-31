@@ -1,13 +1,12 @@
-use std::collections::HashMap;
-
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
 use p3_field::Field;
-use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{
     HybridMerkleTree, MerkleTree, SimpleHybridCompressor, UnsafeNodeConverter256BabyBearBytes,
 };
 use p3_symmetric::IdentityHasher;
+use rand::thread_rng;
 
 mod common;
 use common::*;
@@ -15,9 +14,7 @@ use common::*;
 type BabyBearPacking = <BabyBear as Field>::Packing;
 type HIdentityBabyBear256 = IdentityHasher<8>;
 
-const MAX_ROWS: usize = 1 << 15;
-const MAX_COLS: usize = 2;
-const NUM_MATRICES: usize = 200;
+const ROWS: usize = 1 << 20;
 
 fn main() {
     let mut criterion = Criterion::default();
@@ -33,25 +30,13 @@ fn main() {
             false,
         );
 
-    let leaves = get_random_leaves(NUM_MATRICES, MAX_ROWS, MAX_COLS);
-
-    let mut pow_2_seen = HashMap::new();
-
-    // Filter out extra matrices with heights that occur more than 8 times,
-    // this done in order to prevent the IdentityHasher from panicking.
-    let filtered_leaves = leaves
-        .into_iter()
-        .filter(|l| {
-            let n_rows = l.height();
-            let n_rows = pow_2_seen
-                .entry(n_rows)
-                .and_modify(|v| *v += 1)
-                .or_insert(1);
-            *n_rows <= 8
-        })
+    // Generate 8 random matrices of height ROWS and 8 random matrices of height ROWS / 2
+    let leaves = (0..8)
+        .map(|_| RowMajorMatrix::<BabyBear>::rand(&mut thread_rng(), ROWS, 1))
+        .chain((0..8).map(|_| RowMajorMatrix::<BabyBear>::rand(&mut thread_rng(), ROWS >> 1, 1)))
         .collect::<Vec<_>>();
 
-    let mut group = criterion.benchmark_group("MerkleTree vs HybridMerkleTree with IdentityHasher");
+    let mut group = criterion.benchmark_group("MerkleTree vs HybridMerkleTree Last Two Layers");
     group.sample_size(10);
 
     bench_plain_merkle_tree!(
@@ -59,7 +44,7 @@ fn main() {
         "Poseidon2 compressor, WIDTH = 1",
         &h_identity,
         &c_poseidon,
-        filtered_leaves,
+        leaves,
         1
     );
 
@@ -68,7 +53,7 @@ fn main() {
         "Poseidon2 compressor, WIDTH = 4",
         &h_identity,
         &c_poseidon,
-        filtered_leaves,
+        leaves,
         4
     );
 
@@ -77,6 +62,6 @@ fn main() {
         "Hybrid Blake3/Poseidon2 compressor, WIDTH = 1",
         &h_identity,
         &c_hybrid_poseidon_leaves,
-        filtered_leaves
+        leaves
     );
 }
