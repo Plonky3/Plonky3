@@ -12,9 +12,9 @@ use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     /*
         We want this to compile to:
-            vptestmd least_bit, val, ONE
-            vpsrld   t, val, 1
-            vpaddd   res, least_bit, t, maybe_half
+            vptestmd  least_bit, val, ONE
+            vpsrld    res, val, 1
+            vpaddd    res{least_bit}, res, maybe_half
         throughput: 2 cyc/vec
         latency: 4 cyc
 
