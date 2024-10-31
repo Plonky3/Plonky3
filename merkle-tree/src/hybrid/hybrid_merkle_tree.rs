@@ -14,11 +14,13 @@ use tracing::instrument;
 
 use crate::{unpack_array, HybridPseudoCompressionFunction};
 
-/// A binary Merkle tree for packed data. It has leaves of type `F` and digests of type
+/// A hybrid binary Merkle tree for packed data. It has leaves of type `F` and digests of type
 /// `[W; DIGEST_ELEMS]`.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `MerkleTreeMmcs`.
+///
+/// This structure is a direct copy of [MerkleTree] (but its methods are not)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HybridMerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     pub(crate) leaves: Vec<M>,

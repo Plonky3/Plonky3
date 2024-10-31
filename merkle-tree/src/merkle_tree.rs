@@ -25,7 +25,7 @@ pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     // Enable deserialization for this type whenever the underlying array type supports it (len 1-32).
     #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
     pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
-    _phantom: PhantomData<F>,
+    pub(crate) _phantom: PhantomData<F>,
 }
 
 impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>

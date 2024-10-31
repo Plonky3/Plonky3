@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::mem;
 
 use p3_baby_bear::BabyBear;
 use p3_field::{AbstractField, PackedValue};
@@ -72,8 +71,6 @@ where
     }
 }
 
-// TODO study endianness, security, etc.
-// TODO improve efficiency?
 fn bytes32_to_bb8(input: [u8; 32]) -> [BabyBear; 8] {
     let mut values = [BabyBear::default(); 8];
 
@@ -85,8 +82,6 @@ fn bytes32_to_bb8(input: [u8; 32]) -> [BabyBear; 8] {
     values
 }
 
-// Blake3: PseudoCompressionFunction<[[u8; ]; 32], 2>
-
 fn bb8_to_bytes32(input: [BabyBear; 8]) -> [u8; 32] {
     let mut values = [0u8; 32];
     for i in 0..8 {
@@ -95,11 +90,12 @@ fn bb8_to_bytes32(input: [BabyBear; 8]) -> [u8; 32] {
     values
 }
 
+#[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::{BabyBear, BabyBearParameters};
-    use p3_monty_31::{MontyField31, MontyParameters};
+    use p3_monty_31::MontyParameters;
 
     use crate::hybrid::hybrid_strategy::NodeConverter;
     use crate::NodeConverter256BabyBearBytes;
@@ -134,12 +130,12 @@ mod tests {
             assert_eq!(reduced_bytes, NodeConverter256BabyBearBytes::to_n2(elems));
         }
 
-        // - on random values
+        // On random values
         for _ in 0..1000 {
             test_bytes(rand::random());
         }
 
-        // - on wrap-around values
+        // On wrap-around values
         let test_vector = [
             [P, P + 2, P, P, P + 1, P + 2, P + 3, P + 4],
             [P - 1, P + 42, P - 1000, P + 7, P, P + 2, P + 9, P + 123],
@@ -158,37 +154,3 @@ mod tests {
         }
     }
 }
-
-// SINGLE
-
-// 4. Construct the rest of the tree using Poseidon2 as the compression function
-//    (matrix of smaller sizes are digested into field elements already)
-
-// 3. Convert each [u8; 32] to one [BabyBear; 8]
-
-// 2. Compress each pair of [u8; 32] using Blake3
-
-// 1. Convert each node to one [u8; 32]
-
-// 0. Lowest level: digest rows into one [BabyBear; 8] each using Poseidon2
-
-// PACKED
-
-// 4. Construct the rest of the tree using Poseidon2 as the compression function
-//    (matrix of smaller sizes are digested into field elements already)
-
-// 3. Convert each [u8; 32] to one [BabyBear; 8]
-
-// 2. Compress each pair of [u8; 32] using Blake3
-
-// 1. Convert each WIDTH-package into one [[u8; WIDTH]; 32]
-
-// 0. Lowest level: digest rows into one [[BabyBear; WIDTH]; 8] per WIDTH-package each using Poseidon2
-
-// Poseidon2, packaged
-// C: PseudoCompressionFunction<[[BabyBear; 4]; 8], 2>
-// Packaged nodes have 128 bytes
-
-// Blake3, packaged
-// C: PseudoCompressionFunction<[[u8; 1]; 32], 2>
-// Packaged nodes have 32 bytes

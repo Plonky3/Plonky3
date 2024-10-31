@@ -130,27 +130,3 @@ where
 
 criterion_group!(benches, bench_merkle_trees);
 criterion_main!(benches);
-
-// W = F
-
-// PW = [F0, F1, F2, F3]
-
-// [PW; DIGEST_ELEMENTS] = [
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-//     [F0, F1, F2, F3],
-// ]
-
-// [PW; DIGEST_ELEMENTS].unpack() =
-
-// SimpleHybridCompressor<NC>: HybridCompressionFunction<[BabyBear; 8], 2>
-// NC: [BabyBear; 8] <-> [u8; 32]
-
-// SimpleHybridCompressor<NC>: HybridCompressionFunction<[[BabyBear; 4]; 8], 2>
-//                                                      <[PW; DIGEST_ELEMENTS], 2>
-//                                                      <[PackedMontyField31Neon; 8]

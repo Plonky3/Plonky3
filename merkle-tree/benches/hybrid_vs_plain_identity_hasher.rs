@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
 use p3_blake3::Blake3;
 use p3_field::Field;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{
     HybridMerkleTree, MerkleTree, SimpleHybridCompressor, UnsafeNodeConverter256BabyBearBytes,
 };
 use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{CompressionFunctionFromHasher, IdentityHasher, TruncatedPermutation};
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
+
+mod common;
+use common::get_random_leaves;
 
 type BabyBearPacking = <BabyBear as Field>::Packing;
 type PermPoseidon =
@@ -32,24 +32,6 @@ const NUM_MATRICES: usize = 8;
 
 // TODO allow for more matrices, control only that no more than 8 are concatenated
 
-fn get_random_leaves() -> Vec<RowMajorMatrix<BabyBear>> {
-    let mut pow2_to_size = HashMap::new();
-    (0..NUM_MATRICES)
-        .map(|_| {
-            let mut n_rows = rand::thread_rng().gen_range(1..MAX_ROWS);
-            let n_cols = rand::thread_rng().gen_range(1..MAX_COLS);
-
-            // Same-power-of-two row numbers must match
-            n_rows = pow2_to_size
-                .entry(n_rows.next_power_of_two())
-                .or_insert(n_rows)
-                .to_owned();
-
-            RowMajorMatrix::<BabyBear>::rand(&mut thread_rng(), n_rows, n_cols)
-        })
-        .collect()
-}
-
 fn main() {
     let mut criterion = Criterion::default();
 
@@ -70,7 +52,7 @@ fn main() {
             false,
         );
 
-    let leaves = get_random_leaves();
+    let leaves = get_random_leaves(MAX_ROWS, MAX_COLS, NUM_MATRICES);
 
     let mut group = criterion.benchmark_group("MerkleTree vs HybridMerkleTree with IdentityHasher");
     group.sample_size(10);

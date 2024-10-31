@@ -4,15 +4,9 @@ use p3_symmetric::PseudoCompressionFunction;
 
 pub(crate) mod node_converter;
 pub(crate) mod unsafe_node_converter;
-pub(crate) mod utils;
-pub(crate) use node_converter::*;
-
-use crate::pretty_hash_type;
 
 // TODO add to doc: closely mimics CryptographicHasher but
 
-// TODO decide if converting the input to a reference brings about performance
-// improvements or at least doesn't incur overhead
 trait NodeConverter<N1, N2> {
     fn to_n2(n1: N1) -> N2;
 
@@ -81,49 +75,11 @@ where
         current_size: usize,
     ) -> [W1; DIGEST_ELEMS_1] {
         if (current_size == sizes[0]) ^ self.bottom_c1 {
-            // TODO potentially remove or handle differently to avoid overhead
-            // log::debug!(
-            //     " - compressing with H2 hash: {}, (sizes: {:?}, current_size: {})",
-            //     &pretty_hash_type::<C2>(),
-            //     sizes,
-            //     current_size,
-            // );
-
             let [input_0, input_1] = input;
             let input_w2 = [NC::to_n2(input_0), NC::to_n2(input_1)];
             NC::to_n1(self.c2.compress(input_w2))
         } else {
-            // log::debug!(
-            //     " - compressing with H1 hash: {}, (sizes: {:?}, current_size: {})",
-            //     &pretty_hash_type::<C1>(),
-            //     sizes,
-            //     current_size,
-            // );
-
             self.c1.compress(input)
         }
     }
 }
-
-// PackedNodeType for poseidon:
-// - Morally: [[BabyBear; 8]; 4]
-// - Really: [[BabyBear; 4]; 8]
-
-// PackedNode for Blake3:
-// - Morally: [[u8; 32]; 4]
-// - Really: [[u8; 4]; 32]
-
-// - Compression above bottom level: Poseidon2<...>: PseudoCompressionFunction<[NeonBabyBear; DIGEST_ELEMS]; 2>,
-//   where NeonBabyBear: PackedValue<BabyBear, WIDTH=4>
-// - HybridPseudoCompressionFunction:
-
-// (!) [[BabyBear; WIDTH]; DIGEST_ELEMENTS] -> [u8; ]
-
-//                                  to_n1            Blake3            to_n2
-// [BabyBear; DIGEST_ELEMENTS = 8]    ->   [u8; 32] --------> [u8; 32] -> [BabyBear; 8]
-
-//                                        to_n2                   Blake3WithWidth                     to_n1
-// [[BabyBear; WIDTH]; DIGEST_ELEMENTS = 8] -> [[u8; WIDTH]; 32] -----------------> [[u8; WIDTH]; 32] -------> [BabyBear; WIDTH * 8]
-
-// N1: [[BabyBear; WIDTH]; 8]
-// N2: [[u8; WIDTH]; 32]

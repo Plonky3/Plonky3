@@ -35,8 +35,8 @@ path = "benches/merkle_tree.rs"
 harness = false
 
 [[bench]]
-name = "unsafe_vs_safe"
-path = "benches/unsafe_vs_safe.rs"
+name = "hybrid_unsafe_vs_safe"
+path = "benches/hybrid_unsafe_vs_safe.rs"
 harness = false
 
 [[bench]]
@@ -47,9 +47,4 @@ harness = false
 [[bench]]
 name = "hybrid_vs_plain_identity_hasher"
 path = "benches/hybrid_vs_plain_identity_hasher.rs"
-harness = false
-
-[[bench]]
-name = "hybrid_optimal_vs_plain_identity_hasher"
-path = "benches/hybrid_optimal_vs_plain_identity_hasher.rs"
 harness = false
