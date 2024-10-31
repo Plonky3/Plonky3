@@ -12,9 +12,9 @@ use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     /*
         We want this to compile to:
-            vptestmd least_bit, val, ONE
-            vpsrld   t, val, 1
-            vpaddd   res, least_bit, t, maybe_half
+            vptestmd  least_bit, val, ONE
+            vpsrld    res, val, 1
+            vpaddd    res{least_bit}, res, maybe_half
         throughput: 2 cyc/vec
         latency: 4 cyc
 
@@ -184,7 +184,7 @@ pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
 ) -> __m512i {
     /*
         We want this to compile to:
-            mov         lo_shft,            P           This can be a mov or a load. It will not affect throughput/latency.
+            vmovdqu32   lo_shft,            P           // This can be a mov or a load. It will not affect throughput/latency.
             vpsrld      hi,                 val,        N
             vpandd      lo,                 val,        2^N - 1
             vptestmd    lo_MASK,            val,        2^N - 1
