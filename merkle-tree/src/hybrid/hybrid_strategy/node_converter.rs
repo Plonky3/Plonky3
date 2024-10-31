@@ -6,9 +6,17 @@ use p3_field::{AbstractField, PackedValue};
 use super::NodeConverter;
 use crate::unpack_array;
 
+/// Converter for 256-bit nodes between `BabyBear` representation (8 field
+/// elements) and `u8` representation (32 elements). This converter treats
+/// `PackedValue`s over those two basic types (such as `PackedBabyBearNeon`)
+/// abstractly and is therefore forced to use its methods, which involve
+/// copying/cloning from references and are therefore not very performant. For a
+/// more optimal implementation which works only for arrays, cf.
+/// [`UnsafeNodeConverter256BabyBearBytes`].
 #[derive(Clone)]
 pub struct NodeConverter256BabyBearBytes {}
 
+/// Converting with WIDTH > 1 is done through a transposition (as opposed to )
 impl<PW1, PW2> NodeConverter<[PW1; 8], [PW2; 32]> for NodeConverter256BabyBearBytes
 where
     PW1: PackedValue<Value = BabyBear>,
@@ -57,6 +65,7 @@ where
     }
 }
 
+// Implementation of conversion in the other direction.
 impl<PW1, PW2> NodeConverter<[PW1; 32], [PW2; 8]> for NodeConverter256BabyBearBytes
 where
     PW1: PackedValue<Value = u8>,
@@ -71,6 +80,7 @@ where
     }
 }
 
+// Converts an array of 32 bytes into an array of 8 BabyBear field elements
 fn bytes32_to_bb8(input: [u8; 32]) -> [BabyBear; 8] {
     let mut values = [BabyBear::default(); 8];
 
@@ -82,6 +92,7 @@ fn bytes32_to_bb8(input: [u8; 32]) -> [BabyBear; 8] {
     values
 }
 
+// Converts an array of 8 BabyBear field elements into an array of 32 bytes
 fn bb8_to_bytes32(input: [BabyBear; 8]) -> [u8; 32] {
     let mut values = [0u8; 32];
     for i in 0..8 {

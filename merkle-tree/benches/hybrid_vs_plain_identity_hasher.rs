@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use p3_baby_bear::BabyBear;
 use p3_field::Field;
+use p3_matrix::Matrix;
 use p3_merkle_tree::{
     HybridMerkleTree, MerkleTree, SimpleHybridCompressor, UnsafeNodeConverter256BabyBearBytes,
 };
@@ -20,9 +23,7 @@ type HIdentityBabyBear256 = IdentityHasher<8>;
 
 const MAX_ROWS: usize = 1 << 15;
 const MAX_COLS: usize = 2;
-const NUM_MATRICES: usize = 8;
-
-// TODO allow for more matrices, control only that no more than 8 are concatenated
+const NUM_MATRICES: usize = 200;
 
 fn main() {
     let mut criterion = Criterion::default();
@@ -38,7 +39,23 @@ fn main() {
             false,
         );
 
-    let leaves = get_random_leaves(MAX_ROWS, MAX_COLS, NUM_MATRICES);
+    let leaves = get_random_leaves(NUM_MATRICES, MAX_ROWS, MAX_COLS);
+
+    let mut pow_2_seen = HashMap::new();
+
+    // Filter out extra matrices with heights that occur more than 8 times,
+    // this done in order to prevent the IdentityHasher from panicking.
+    let filtered_leaves = leaves
+        .into_iter()
+        .filter(|l| {
+            let n_rows = l.height();
+            let n_rows = pow_2_seen
+                .entry(n_rows)
+                .and_modify(|v| *v += 1)
+                .or_insert(1);
+            *n_rows <= 8
+        })
+        .collect::<Vec<_>>();
 
     let mut group = criterion.benchmark_group("MerkleTree vs HybridMerkleTree with IdentityHasher");
     group.sample_size(10);
@@ -48,7 +65,7 @@ fn main() {
         "Poseidon2 compressor, WIDTH = 1",
         &h_identity,
         &c_poseidon,
-        leaves,
+        filtered_leaves,
         1
     );
 
@@ -57,7 +74,7 @@ fn main() {
         "Poseidon2 compressor, WIDTH = 4",
         &h_identity,
         &c_poseidon,
-        leaves,
+        filtered_leaves,
         4
     );
 
@@ -66,6 +83,6 @@ fn main() {
         "Hybrid Blake3/Poseidon2 compressor, WIDTH = 1",
         &h_identity,
         &c_hybrid_poseidon_leaves,
-        leaves
+        filtered_leaves
     );
 }

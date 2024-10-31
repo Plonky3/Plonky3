@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
