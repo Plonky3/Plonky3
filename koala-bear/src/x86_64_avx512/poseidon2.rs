@@ -15,6 +15,7 @@ impl InternalLayerParametersAVX512<KoalaBearParameters, 16> for KoalaBearInterna
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
     /// the output is piped directly into add_sum the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [__m512i; 15]) {
         // As far as we know this is optimal in that it need the fewest instructions to perform all of these
         // multiplications. (Note that -1, 0 are not allowed on the diagonal for technical reasons).
