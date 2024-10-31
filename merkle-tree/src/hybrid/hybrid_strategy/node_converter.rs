@@ -7,16 +7,30 @@ use super::NodeConverter;
 use crate::unpack_array;
 
 /// Converter for 256-bit nodes between `BabyBear` representation (8 field
-/// elements) and `u8` representation (32 elements). This converter treats
+/// elements) and `u8` representation (32 bytes). This converter treats
 /// `PackedValue`s over those two basic types (such as `PackedBabyBearNeon`)
-/// abstractly and is therefore forced to use its methods, which involve
+/// abstractly and is therefore forced the trait methods, which involve
 /// copying/cloning from references and are therefore not very performant. For a
-/// more optimal implementation which works only for arrays, cf.
-/// [`UnsafeNodeConverter256BabyBearBytes`].
+/// more optimal implementation which works only for arrays and uses hard-casts,
+/// cf.
+/// [UnsafeNodeConverter256BabyBearBytes][crate::UnsafeNodeConverter256BabyBearBytes].
+///
+/// Converting packed types with `WIDTH` > 1 is done through a transposition (to
+/// match the expected relation between the types) and therefore incurs some
+/// overhead (also avoided in
+/// [UnsafeNodeConverter256BabyBearBytes][crate::UnsafeNodeConverter256BabyBearBytes]).
+/// Suppose, for instance, that `PW1::WIDTH` and `PW2::WIDTH` are 2,
+/// `PW1::Value` is `u8`, and `PW2::Value` is `BabyBear`. Then conversion of an
+/// input of type `[PW2; 8]` into `[PW1; 32]` proceeds roughly as follows:
+/// 1. Unpack `[PW2; 8]` into `[[BabyBear; 2]; 8]`
+/// 2. Transpose the result into `[[BabyBear; 8]; 2]`
+/// 3. Convert each `[BabyBear; 8]` into `[u8; 32]`, resulting in `[[u8; 32];
+///    2]`
+/// 4. Transpose into `[[u8; 2]; 32]`
+/// 5. Pack the result into `[PW1; 32]`
 #[derive(Clone)]
 pub struct NodeConverter256BabyBearBytes {}
 
-/// Converting with WIDTH > 1 is done through a transposition (as opposed to )
 impl<PW1, PW2> NodeConverter<[PW1; 8], [PW2; 32]> for NodeConverter256BabyBearBytes
 where
     PW1: PackedValue<Value = BabyBear>,
