@@ -14,7 +14,7 @@ use common::*;
 type BabyBearPacking = <BabyBear as Field>::Packing;
 type HIdentityBabyBear256 = IdentityHasher<8>;
 
-const ROWS: usize = 1 << 20;
+const ROWS: usize = 1 << 15;
 
 fn main() {
     let mut criterion = Criterion::default();
