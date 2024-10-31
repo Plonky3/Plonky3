@@ -132,7 +132,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
-pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+pub(crate) fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -162,7 +162,7 @@ pub fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m51
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline]
 #[must_use]
-pub fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+pub(crate) fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P

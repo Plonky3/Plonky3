@@ -11,6 +11,7 @@ use p3_poseidon2::{
     MDSMat4,
 };
 
+use super::{add, halve_avx512, sub};
 use crate::{
     apply_func_to_even_odd, packed_exp_3, packed_exp_5, packed_exp_7, FieldParameters,
     MontyField31, MontyParameters, PackedMontyField31AVX512, PackedMontyParameters,
@@ -109,14 +110,14 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
 pub struct Poseidon2InternalLayerMonty31<
     PMP: PackedMontyParameters,
     const WIDTH: usize,
-    ILP: InternalLayerParametersAVX512<WIDTH>,
+    ILP: InternalLayerParametersAVX512<PMP, WIDTH>,
 > {
     pub(crate) internal_constants: Vec<MontyField31<PMP>>,
     packed_internal_constants: Vec<__m512i>,
     _phantom: PhantomData<ILP>,
 }
 
-impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX512<WIDTH>>
+impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX512<FP, WIDTH>>
     InternalLayerConstructor<PackedMontyField31AVX512<FP>>
     for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
@@ -211,8 +212,10 @@ fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
 
 /// A trait containing the specific information needed to
 /// implement the Poseidon2 Permutation for Monty31 Fields.
-pub trait InternalLayerParametersAVX512<const WIDTH: usize>: Clone + Sync {
-    type ArrayLike;
+pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH: usize>:
+    Clone + Sync
+{
+    type ArrayLike: AsMut<[__m512i]>;
 
     // diagonal_mul and add_sum morally should be one function but are split because diagonal_mul can happen simultaneously to
     // the sbox being applied to the first element of the state which is advantageous as this s-box has very high latency.
@@ -226,15 +229,85 @@ pub trait InternalLayerParametersAVX512<const WIDTH: usize>: Clone + Sync {
 
     // For these reason we mark both functions as unsafe.
 
+    // All 4 implementation of this trait (Field = BabyBear/KoalaBear, WIDTH = 16/24) have a similarly structured
+    // diagonal matrix. The first 9 elements of this matrix are: [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4] the next few are
+    // positive inverse powers of two and the remainder are negative inverse powers of two.
+
     /// # Safety
     ///
     /// This function assumes its output is piped directly into add_sum.
-    unsafe fn diagonal_mul(input: &mut Self::ArrayLike);
+    #[inline(always)]
+    unsafe fn diagonal_mul(input: &mut Self::ArrayLike) {
+        Self::diagonal_mul_first_eight(input);
+        Self::diagonal_mul_remainder(input);
+    }
+
+    /// # Safety
+    ///
+    /// This function assumes its output is piped directly into add_sum.
+    #[inline(always)]
+    unsafe fn diagonal_mul_first_eight(input: &mut Self::ArrayLike) {
+        let input = input.as_mut();
+        // The first 5 elements should be multiplied by: 1, 2, 1/2, 3, 4
+
+        // input[0] is being multiplied by 1 so we ignore it.
+
+        input[1] = add::<PMP>(input[1], input[1]);
+        input[2] = halve_avx512::<PMP>(input[2]);
+
+        let acc3 = add::<PMP>(input[3], input[3]);
+        input[3] = add::<PMP>(acc3, input[3]);
+
+        let acc4 = add::<PMP>(input[4], input[4]);
+        input[4] = add::<PMP>(acc4, acc4);
+
+        // For the final 3 elements we multiply by 1/2, 3, 4.
+        // This gives the negative of the correct answer which
+        // will be handled by add_sum().
+
+        input[5] = halve_avx512::<PMP>(input[5]);
+
+        let acc6 = add::<PMP>(input[6], input[6]);
+        input[6] = add::<PMP>(acc6, input[6]);
+
+        let acc7 = add::<PMP>(input[7], input[7]);
+        input[7] = add::<PMP>(acc7, acc7);
+    }
+
+    /// # Safety
+    ///
+    /// This function assumes its output is piped directly into add_sum.
+    unsafe fn diagonal_mul_remainder(input: &mut Self::ArrayLike);
+
+    /// The number of positive inverse powers of two after in the diagonal matrix after the 4.
+    const NUM_POS: usize;
 
     /// # Safety
     ///
     /// This function assumes its input is taken directly from diagonal_mul.
-    unsafe fn add_sum(input: &mut Self::ArrayLike, sum: __m512i);
+    /// Add sum to every element of input.
+    /// Sum must be in canonical form and input must be exactly the output of diagonal mul.
+    /// If either of these does not hold, the result is undefined.
+    #[inline(always)]
+    unsafe fn add_sum(input: &mut Self::ArrayLike, sum: __m512i) {
+        // Diagonal mul multiplied these by 1, 2, 1/2, 3, 4 so we simply need to add the sum.
+        input.as_mut()[..5]
+            .iter_mut()
+            .for_each(|x| *x = add::<PMP>(sum, *x));
+
+        // Diagonal mul multiplied these by 1/2, 3, 4 instead of -1/2, -3, -4 so we need to subtract instead of adding.
+        // Similarly we can only cheaply multiply by negative inverse powers of two so we also need to subtract for all
+        // the positive powers of two.
+        input.as_mut()[5..(8 + Self::NUM_POS)]
+            .iter_mut()
+            .for_each(|x| *x = sub::<PMP>(sum, *x));
+
+        // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
+        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
+        input.as_mut()[8 + Self::NUM_POS..]
+            .iter_mut()
+            .for_each(|x| *x = add::<PMP>(sum, *x));
+    }
 }
 
 /// Convert elements from canonical form [0, P) to a negative form in [-P, ..., 0) and copy into a vector.
@@ -251,7 +324,7 @@ impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX512<FP>, 16, D>
     for Poseidon2InternalLayerMonty31<FP, 16, ILP>
 where
     FP: FieldParameters,
-    ILP: InternalLayerParametersAVX512<16, ArrayLike = [__m512i; 15]>,
+    ILP: InternalLayerParametersAVX512<FP, 16, ArrayLike = [__m512i; 15]>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMontyField31AVX512<FP>; 16]) {
@@ -301,7 +374,7 @@ impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX512<FP>, 24, D>
     for Poseidon2InternalLayerMonty31<FP, 24, ILP>
 where
     FP: FieldParameters,
-    ILP: InternalLayerParametersAVX512<24, ArrayLike = [__m512i; 23]>,
+    ILP: InternalLayerParametersAVX512<FP, 24, ArrayLike = [__m512i; 23]>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMontyField31AVX512<FP>; 24]) {

@@ -9,7 +9,7 @@ use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 /// Halve a vector of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline(always)]
-pub fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
+pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     /*
         We want this to compile to:
             vptestmd least_bit, val, ONE

@@ -94,7 +94,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 16> for KoalaBearInternalL
 
     /// For the KoalaBear field and width 16 we multiply by the diagonal matrix:
     ///
-    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/8, -1/8, -1/16, 1/2^24, -1/2^24].
+    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
     /// The first 9 entries are handled elsewhere, this function handles all the positive/negative inverse powers of two.
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
@@ -108,20 +108,20 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 16> for KoalaBearInternalL
         // input[8]-> sum + input[8]/2^8
         input[8] = mul_2_exp_neg_8(input[8]);
 
-        // input[9] -> sum - input[9]/2^8
-        input[9] = mul_neg_2_exp_neg_8(input[9]);
+        // input[9] -> sum + input[9]/2^3
+        input[9] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[9]);
 
-        // input[10] -> sum + input[10]/2^3
-        input[10] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[10]);
+        // input[10] -> sum + input[10]/2^24
+        input[10] = mul_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[10]);
 
-        // input[11] -> sum - input[11]/2^3
-        input[11] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[11]);
+        // input[11] -> sum - input[11]/2^8
+        input[11] = mul_neg_2_exp_neg_8(input[11]);
 
-        // input[12] -> sum - input[12]/2^4
-        input[12] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 4, 20>(input[12]);
+        // input[12] -> sum - input[12]/2^3
+        input[12] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[12]);
 
-        // input[13] -> sum + input[13]/2^24
-        input[13] = mul_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[13]);
+        // input[13] -> sum - input[13]/2^4
+        input[13] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 4, 20>(input[13]);
 
         // input[14] -> sum - input[14]/2^24
         input[14] = mul_neg_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[14]);
@@ -133,7 +133,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalL
 
     /// For the KoalaBear field and width 1246 we multiply by the diagonal matrix:
     ///
-    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2**24, -1/2**24]
+    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
     /// The first 9 entries are handled elsewhere, this function handles all the positive/negative inverse powers of two.
     /// The inputs must be in canonical form, otherwise the result is undefined.
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
@@ -147,44 +147,44 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalL
         // input[8] -> sum + input[8]/2^8
         input[8] = mul_2_exp_neg_8(input[8]);
 
-        // input[9] -> sum - input[9]/2^8
-        input[9] = mul_neg_2_exp_neg_8(input[9]);
+        // input[9] -> sum + input[9]/2^2
+        input[9] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 2, 22>(input[9]);
 
-        // input[10] -> sum + input[10]/2^2
-        input[10] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 2, 22>(input[10]);
+        // input[10] -> sum + input[10]/2^3
+        input[10] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[10]);
 
-        // input[11] -> sum + input[11]/2^3
-        input[11] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[11]);
+        // input[11] -> sum + input[11]/2^4
+        input[11] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 4, 20>(input[11]);
 
-        // input[12] -> sum - input[12]/2^3
-        input[12] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[12]);
+        // input[12] -> sum + input[12]/2^5
+        input[12] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 5, 19>(input[12]);
 
-        // input[13] -> sum + input[13]/2^4
-        input[13] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 4, 20>(input[13]);
+        // input[13] -> sum + input[13]/2^6
+        input[13] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 6, 18>(input[13]);
 
-        // input[14] -> sum - input[14]/2^4
-        input[14] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 4, 20>(input[14]);
+        // input[14] -> sum + input[14]/2^24
+        input[14] = mul_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[14]);
 
-        // input[15] -> sum + input[15]/2^5
-        input[15] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 5, 19>(input[15]);
+        // input[15] -> sum - input[15]/2^8
+        input[15] = mul_neg_2_exp_neg_8(input[15]);
 
-        // input[16] -> sum - input[16]/2^5
-        input[16] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 5, 19>(input[16]);
+        // input[16] -> sum - input[16]/2^3
+        input[16] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 3, 21>(input[16]);
 
-        // input[17] -> sum + input[17]/2^6
-        input[17] = mul_2_exp_neg_n_avx2::<KoalaBearParameters, 6, 18>(input[17]);
+        // input[17] -> sum - input[17]/2^4
+        input[17] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 4, 20>(input[17]);
 
-        // input[18] -> sum - input[18]/2^6
-        input[18] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 6, 18>(input[18]);
+        // input[18] -> sum - input[18]/2^5
+        input[18] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 5, 19>(input[18]);
 
-        // input[19] -> sum - input[19]/2^7
-        input[19] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 7, 17>(input[19]);
+        // input[19] -> sum - input[19]/2^6
+        input[19] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 6, 18>(input[19]);
 
-        // input[20] -> sum - input[20]/2^9
-        input[20] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 9, 15>(input[20]);
+        // input[20] -> sum - input[20]/2^7
+        input[20] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 7, 17>(input[20]);
 
-        // input[21] -> sum + input[21]/2^24
-        input[21] = mul_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[21]);
+        // input[21] -> sum - input[21]/2^9
+        input[21] = mul_neg_2_exp_neg_n_avx2::<KoalaBearParameters, 9, 15>(input[21]);
 
         // input[22] -> sum - input[22]/2^24
         input[22] = mul_neg_2_exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[22]);

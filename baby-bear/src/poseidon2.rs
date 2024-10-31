@@ -8,9 +8,9 @@
 //* Additionally, for technical reasons, having the first entry be -2 is useful.
 //*
 //* Optimized Diagonal for BabyBear16:
-//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]
+//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27].
 //* Optimized Diagonal for BabyBear24:
-//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, -1/4, 1/8, -1/8, 1/16, -1/16, -1/32, -1/64, 1/2^7, -1/2^7, 1/2^9, 1/2^27, -1/2^27]
+//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
 //* See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 use core::ops::Mul;
@@ -62,7 +62,7 @@ pub type GenericPoseidon2LinearLayersBabyBear =
 // -1/2^n = (BabyBear::ORDER_U32 - 1) >> n
 // 1/2^n = -(-1/2^n) = BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> n)
 
-/// The vector `[-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]`
+/// The vector `[-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]`
 /// saved as an array of BabyBear elements.
 const INTERNAL_DIAG_MONTY_16: [BabyBear; 16] = BabyBear::new_array([
     BabyBear::ORDER_U32 - 2,
@@ -75,15 +75,15 @@ const INTERNAL_DIAG_MONTY_16: [BabyBear; 16] = BabyBear::new_array([
     BabyBear::ORDER_U32 - 3,
     BabyBear::ORDER_U32 - 4,
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 8),
-    (BabyBear::ORDER_U32 - 1) >> 8,
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 2),
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 3),
-    (BabyBear::ORDER_U32 - 1) >> 4,
     BabyBear::ORDER_U32 - 15,
+    (BabyBear::ORDER_U32 - 1) >> 8,
+    (BabyBear::ORDER_U32 - 1) >> 4,
     15,
 ]);
 
-/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, -1/4, 1/8, -1/8, 1/16, -1/16, -1/32, -1/64, 1/2^7, -1/2^7, 1/2^9, 1/2^27, -1/2^27]
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
 /// saved as an array of BabyBear elements.
 const INTERNAL_DIAG_MONTY_24: [BabyBear; 24] = BabyBear::new_array([
     BabyBear::ORDER_U32 - 2,
@@ -96,19 +96,19 @@ const INTERNAL_DIAG_MONTY_24: [BabyBear; 24] = BabyBear::new_array([
     BabyBear::ORDER_U32 - 3,
     BabyBear::ORDER_U32 - 4,
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 8),
-    (BabyBear::ORDER_U32 - 1) >> 8,
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 2),
-    (BabyBear::ORDER_U32 - 1) >> 2,
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 3),
-    (BabyBear::ORDER_U32 - 1) >> 3,
     BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 4),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 7),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 9),
+    BabyBear::ORDER_U32 - 15,
+    (BabyBear::ORDER_U32 - 1) >> 8,
+    (BabyBear::ORDER_U32 - 1) >> 2,
+    (BabyBear::ORDER_U32 - 1) >> 3,
     (BabyBear::ORDER_U32 - 1) >> 4,
     (BabyBear::ORDER_U32 - 1) >> 5,
     (BabyBear::ORDER_U32 - 1) >> 6,
-    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 7),
     (BabyBear::ORDER_U32 - 1) >> 7,
-    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 9),
-    BabyBear::ORDER_U32 - 15,
     15,
 ]);
 
@@ -128,7 +128,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         sum: MontyField31<BabyBearParameters>,
     ) {
         // The diagonal matrix is defined by the vector:
-        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/16, 1/2^27, -1/2^27]
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -139,16 +139,16 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[8] = sum - state[8].double().double();
         state[9] = mul_2_exp_neg_n::<BabyBearParameters>(state[9], 8);
         state[9] += sum;
-        state[10] = mul_2_exp_neg_n::<BabyBearParameters>(state[10], 8);
-        state[10] = sum - state[10];
-        state[11] = mul_2_exp_neg_n::<BabyBearParameters>(state[11], 2);
+        state[10] = mul_2_exp_neg_n::<BabyBearParameters>(state[10], 2);
+        state[10] += sum;
+        state[11] = mul_2_exp_neg_n::<BabyBearParameters>(state[11], 3);
         state[11] += sum;
-        state[12] = mul_2_exp_neg_n::<BabyBearParameters>(state[12], 3);
+        state[12] = mul_2_exp_neg_n::<BabyBearParameters>(state[12], 27);
         state[12] += sum;
-        state[13] = mul_2_exp_neg_n::<BabyBearParameters>(state[13], 4);
+        state[13] = mul_2_exp_neg_n::<BabyBearParameters>(state[13], 8);
         state[13] = sum - state[13];
-        state[14] = mul_2_exp_neg_n::<BabyBearParameters>(state[14], 27);
-        state[14] += sum;
+        state[14] = mul_2_exp_neg_n::<BabyBearParameters>(state[14], 4);
+        state[14] = sum - state[14];
         state[15] = mul_2_exp_neg_n::<BabyBearParameters>(state[15], 27);
         state[15] = sum - state[15];
     }
@@ -190,7 +190,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         sum: MontyField31<BabyBearParameters>,
     ) {
         // The diagonal matrix is defined by the vector:
-        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, -1/4, 1/8, -1/8, 1/16, -1/16, -1/32, -1/64, 1/2^7, -1/2^7, 1/2^9, 1/2^27, -1/2^27]
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -201,32 +201,32 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[8] = sum - state[8].double().double();
         state[9] = mul_2_exp_neg_n::<BabyBearParameters>(state[9], 8);
         state[9] += sum;
-        state[10] = mul_2_exp_neg_n::<BabyBearParameters>(state[10], 8);
-        state[10] = sum - state[10];
-        state[11] = mul_2_exp_neg_n::<BabyBearParameters>(state[11], 2);
+        state[10] = mul_2_exp_neg_n::<BabyBearParameters>(state[10], 2);
+        state[10] += sum;
+        state[11] = mul_2_exp_neg_n::<BabyBearParameters>(state[11], 3);
         state[11] += sum;
-        state[12] = mul_2_exp_neg_n::<BabyBearParameters>(state[12], 2);
-        state[12] = sum - state[12];
-        state[13] = mul_2_exp_neg_n::<BabyBearParameters>(state[13], 3);
+        state[12] = mul_2_exp_neg_n::<BabyBearParameters>(state[12], 4);
+        state[12] += sum;
+        state[13] = mul_2_exp_neg_n::<BabyBearParameters>(state[13], 7);
         state[13] += sum;
-        state[14] = mul_2_exp_neg_n::<BabyBearParameters>(state[14], 3);
-        state[14] = sum - state[14];
-        state[15] = mul_2_exp_neg_n::<BabyBearParameters>(state[15], 4);
+        state[14] = mul_2_exp_neg_n::<BabyBearParameters>(state[14], 9);
+        state[14] += sum;
+        state[15] = mul_2_exp_neg_n::<BabyBearParameters>(state[15], 27);
         state[15] += sum;
-        state[16] = mul_2_exp_neg_n::<BabyBearParameters>(state[16], 4);
+        state[16] = mul_2_exp_neg_n::<BabyBearParameters>(state[16], 8);
         state[16] = sum - state[16];
-        state[17] = mul_2_exp_neg_n::<BabyBearParameters>(state[17], 5);
+        state[17] = mul_2_exp_neg_n::<BabyBearParameters>(state[17], 2);
         state[17] = sum - state[17];
-        state[18] = mul_2_exp_neg_n::<BabyBearParameters>(state[18], 6);
+        state[18] = mul_2_exp_neg_n::<BabyBearParameters>(state[18], 3);
         state[18] = sum - state[18];
-        state[19] = mul_2_exp_neg_n::<BabyBearParameters>(state[19], 7);
-        state[19] += sum;
-        state[20] = mul_2_exp_neg_n::<BabyBearParameters>(state[20], 7);
+        state[19] = mul_2_exp_neg_n::<BabyBearParameters>(state[19], 4);
+        state[19] = sum - state[19];
+        state[20] = mul_2_exp_neg_n::<BabyBearParameters>(state[20], 5);
         state[20] = sum - state[20];
-        state[21] = mul_2_exp_neg_n::<BabyBearParameters>(state[21], 9);
-        state[21] += sum;
-        state[22] = mul_2_exp_neg_n::<BabyBearParameters>(state[22], 27);
-        state[22] += sum;
+        state[21] = mul_2_exp_neg_n::<BabyBearParameters>(state[21], 6);
+        state[21] = sum - state[21];
+        state[22] = mul_2_exp_neg_n::<BabyBearParameters>(state[22], 7);
+        state[22] = sum - state[22];
         state[23] = mul_2_exp_neg_n::<BabyBearParameters>(state[23], 27);
         state[23] = sum - state[23];
     }

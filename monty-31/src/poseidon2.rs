@@ -57,7 +57,7 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     target_feature = "avx512f"
 ))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
-    InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersAVX512<WIDTH>
+    InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersAVX512<FP, WIDTH>
 {
 }
 #[cfg(not(any(

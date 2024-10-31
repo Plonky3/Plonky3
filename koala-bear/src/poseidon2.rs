@@ -8,9 +8,9 @@
 //* Additionally, for technical reasons, having the first entry be -2 is useful.
 //*
 //* Optimized Diagonal for KoalaBear16:
-//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/8, -1/8, -1/16, 1/2^24, -1/2^24]
+//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
 //* Optimized Diagonal for KoalaBear24:
-//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2^24, -1/2^24]
+//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
 //* See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 use core::ops::Mul;
@@ -62,7 +62,7 @@ pub type GenericPoseidon2LinearLayersKoalaBear =
 // -1/2^n = (KoalaBear::ORDER_U32 - 1) >> n
 // 1/2^n = -(-1/2^n) = KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> n)
 
-/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/8, -1/8, -1/16, 1/2^24, -1/2^24]
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
 /// saved as an array of KoalaBear elements.
 const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([
     KoalaBear::ORDER_U32 - 2,
@@ -75,15 +75,15 @@ const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([
     KoalaBear::ORDER_U32 - 3,
     KoalaBear::ORDER_U32 - 4,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
-    (KoalaBear::ORDER_U32 - 1) >> 8,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
+    KoalaBear::ORDER_U32 - 127,
+    (KoalaBear::ORDER_U32 - 1) >> 8,
     (KoalaBear::ORDER_U32 - 1) >> 3,
     (KoalaBear::ORDER_U32 - 1) >> 4,
-    KoalaBear::ORDER_U32 - 127,
     127,
 ]);
 
-/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2^24, -1/2^24]
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
 /// saved as an array of KoalaBear elements.
 const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([
     KoalaBear::ORDER_U32 - 2,
@@ -96,19 +96,19 @@ const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([
     KoalaBear::ORDER_U32 - 3,
     KoalaBear::ORDER_U32 - 4,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
-    (KoalaBear::ORDER_U32 - 1) >> 8,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 2),
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
-    (KoalaBear::ORDER_U32 - 1) >> 3,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 4),
-    (KoalaBear::ORDER_U32 - 1) >> 4,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 5),
-    (KoalaBear::ORDER_U32 - 1) >> 5,
     KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 6),
+    KoalaBear::ORDER_U32 - 127,
+    (KoalaBear::ORDER_U32 - 1) >> 8,
+    (KoalaBear::ORDER_U32 - 1) >> 3,
+    (KoalaBear::ORDER_U32 - 1) >> 4,
+    (KoalaBear::ORDER_U32 - 1) >> 5,
     (KoalaBear::ORDER_U32 - 1) >> 6,
     (KoalaBear::ORDER_U32 - 1) >> 7,
     (KoalaBear::ORDER_U32 - 1) >> 9,
-    KoalaBear::ORDER_U32 - 127,
     127,
 ]);
 
@@ -128,7 +128,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         sum: MontyField31<KoalaBearParameters>,
     ) {
         // The diagonal matrix is defined by the vector:
-        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/8, -1/8, -1/16, 1/2^24, -1/2^24]
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -139,16 +139,16 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         state[8] = sum - state[8].double().double();
         state[9] = mul_2_exp_neg_n::<KoalaBearParameters>(state[9], 8);
         state[9] += sum;
-        state[10] = mul_2_exp_neg_n::<KoalaBearParameters>(state[10], 8);
-        state[10] = sum - state[10];
-        state[11] = mul_2_exp_neg_n::<KoalaBearParameters>(state[11], 3);
+        state[10] = mul_2_exp_neg_n::<KoalaBearParameters>(state[10], 3);
+        state[10] += sum;
+        state[11] = mul_2_exp_neg_n::<KoalaBearParameters>(state[11], 24);
         state[11] += sum;
-        state[12] = mul_2_exp_neg_n::<KoalaBearParameters>(state[12], 3);
+        state[12] = mul_2_exp_neg_n::<KoalaBearParameters>(state[12], 8);
         state[12] = sum - state[12];
-        state[13] = mul_2_exp_neg_n::<KoalaBearParameters>(state[13], 4);
+        state[13] = mul_2_exp_neg_n::<KoalaBearParameters>(state[13], 3);
         state[13] = sum - state[13];
-        state[14] = mul_2_exp_neg_n::<KoalaBearParameters>(state[14], 24);
-        state[14] += sum;
+        state[14] = mul_2_exp_neg_n::<KoalaBearParameters>(state[14], 4);
+        state[14] = sum - state[14];
         state[15] = mul_2_exp_neg_n::<KoalaBearParameters>(state[15], 24);
         state[15] = sum - state[15];
     }
@@ -190,7 +190,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         sum: MontyField31<KoalaBearParameters>,
     ) {
         // The diagonal matrix is defined by the vector:
-        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, -1/2^8, 1/4, 1/8, -1/8, 1/16, -1/16, 1/32, -1/32, 1/64, -1/64, -1/2^7, -1/2^9, 1/2^24, -1/2^24]
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
         state[1] += sum;
         state[2] = state[2].double() + sum;
         state[3] = state[3].halve() + sum;
@@ -201,32 +201,32 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         state[8] = sum - state[8].double().double();
         state[9] = mul_2_exp_neg_n::<KoalaBearParameters>(state[9], 8);
         state[9] += sum;
-        state[10] = mul_2_exp_neg_n::<KoalaBearParameters>(state[10], 8);
-        state[10] = sum - state[10];
-        state[11] = mul_2_exp_neg_n::<KoalaBearParameters>(state[11], 2);
+        state[10] = mul_2_exp_neg_n::<KoalaBearParameters>(state[10], 2);
+        state[10] += sum;
+        state[11] = mul_2_exp_neg_n::<KoalaBearParameters>(state[11], 3);
         state[11] += sum;
-        state[12] = mul_2_exp_neg_n::<KoalaBearParameters>(state[12], 3);
+        state[12] = mul_2_exp_neg_n::<KoalaBearParameters>(state[12], 4);
         state[12] += sum;
-        state[13] = mul_2_exp_neg_n::<KoalaBearParameters>(state[13], 3);
-        state[13] = sum - state[13];
-        state[14] = mul_2_exp_neg_n::<KoalaBearParameters>(state[14], 4);
+        state[13] = mul_2_exp_neg_n::<KoalaBearParameters>(state[13], 5);
+        state[13] += sum;
+        state[14] = mul_2_exp_neg_n::<KoalaBearParameters>(state[14], 6);
         state[14] += sum;
-        state[15] = mul_2_exp_neg_n::<KoalaBearParameters>(state[15], 4);
-        state[15] = sum - state[15];
-        state[16] = mul_2_exp_neg_n::<KoalaBearParameters>(state[16], 5);
-        state[16] += sum;
-        state[17] = mul_2_exp_neg_n::<KoalaBearParameters>(state[17], 5);
+        state[15] = mul_2_exp_neg_n::<KoalaBearParameters>(state[15], 24);
+        state[15] += sum;
+        state[16] = mul_2_exp_neg_n::<KoalaBearParameters>(state[16], 8);
+        state[16] = sum - state[16];
+        state[17] = mul_2_exp_neg_n::<KoalaBearParameters>(state[17], 3);
         state[17] = sum - state[17];
-        state[18] = mul_2_exp_neg_n::<KoalaBearParameters>(state[18], 6);
-        state[18] += sum;
-        state[19] = mul_2_exp_neg_n::<KoalaBearParameters>(state[19], 6);
+        state[18] = mul_2_exp_neg_n::<KoalaBearParameters>(state[18], 4);
+        state[18] = sum - state[18];
+        state[19] = mul_2_exp_neg_n::<KoalaBearParameters>(state[19], 5);
         state[19] = sum - state[19];
-        state[20] = mul_2_exp_neg_n::<KoalaBearParameters>(state[20], 7);
+        state[20] = mul_2_exp_neg_n::<KoalaBearParameters>(state[20], 6);
         state[20] = sum - state[20];
-        state[21] = mul_2_exp_neg_n::<KoalaBearParameters>(state[21], 9);
+        state[21] = mul_2_exp_neg_n::<KoalaBearParameters>(state[21], 7);
         state[21] = sum - state[21];
-        state[22] = mul_2_exp_neg_n::<KoalaBearParameters>(state[22], 24);
-        state[22] += sum;
+        state[22] = mul_2_exp_neg_n::<KoalaBearParameters>(state[22], 9);
+        state[22] = sum - state[22];
         state[23] = mul_2_exp_neg_n::<KoalaBearParameters>(state[23], 24);
         state[23] = sum - state[23];
     }
