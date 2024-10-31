@@ -12,7 +12,7 @@ use rand::Rng;
 use crate::Mersenne31;
 
 const WIDTH: usize = 16;
-pub(crate) const P_AVX512: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 const EVENS: __mmask16 = 0b0101010101010101;
 const ODDS: __mmask16 = 0b1010101010101010;
 const EVENS4: __mmask16 = 0x0f0f;
@@ -137,7 +137,7 @@ fn add(lhs: __m512i, rhs: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_add_epi32(lhs, rhs);
-        let u = x86_64::_mm512_sub_epi32(t, P_AVX512);
+        let u = x86_64::_mm512_sub_epi32(t, P);
         x86_64::_mm512_min_epu32(t, u)
     }
 }
@@ -246,7 +246,7 @@ fn neg(val: __m512i) -> __m512i {
     // ..., P}.
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        x86_64::_mm512_xor_epi32(val, P_AVX512)
+        x86_64::_mm512_xor_epi32(val, P)
     }
 }
 
@@ -272,7 +272,7 @@ fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, P_AVX512);
+        let u = x86_64::_mm512_add_epi32(t, P);
         x86_64::_mm512_min_epu32(t, u)
     }
 }
@@ -286,11 +286,19 @@ fn partial_reduce_neg(x: __m512i) -> __m512i {
         // Get the top bits shifted down.
         let hi = x86_64::_mm512_srli_epi64::<31>(x);
 
-        // nand instead of and means this returns P - lo.
-        let neg_lo = x86_64::_mm512_maskz_andnot_epi32(EVENS, x, P_AVX512);
+        const LOW31: __m512i = unsafe { transmute::<[u64; 8], _>([0x7fffffff; 8]) };
 
-        // TODO: Check if we can use sub_epi64. Currently this breaks for large inputs.
-        x86_64::_mm512_sub_epi32(hi, neg_lo)
+        // nand instead of and means this returns P - lo.
+        let neg_lo = x86_64::_mm512_andnot_si512(x, LOW31);
+
+        // we could also try:
+        // let neg_lo = x86_64::_mm512_maskz_andnot_epi32(EVENS, x, P);
+        // but this seems to get compiled badly and likes outputting vpternlogd.
+        // See: https://godbolt.org/z/WPze9e3f3
+
+        // Compiling with sub_epi64 vs sub_epi32 both produce reasonable code so we use
+        // sub_epi64 for the slightly greater flexibility.
+        x86_64::_mm512_sub_epi64(hi, neg_lo)
     }
 }
 
@@ -338,9 +346,9 @@ pub(crate) fn exp5(x: __m512i) -> __m512i {
 
         let zero = x86_64::_mm512_setzero_si512();
         let signs = x86_64::_mm512_movepi32_mask(hi);
-        let corr = x86_64::_mm512_mask_sub_epi32(P_AVX512, signs, zero, P_AVX512);
+        let corr = x86_64::_mm512_mask_sub_epi32(P, signs, zero, P);
 
-        let lo = x86_64::_mm512_and_si512(lo_dirty, P_AVX512);
+        let lo = x86_64::_mm512_and_si512(lo_dirty, P);
 
         let t = x86_64::_mm512_add_epi32(hi, lo);
         let u = x86_64::_mm512_sub_epi32(t, corr);

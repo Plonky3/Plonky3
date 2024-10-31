@@ -1,17 +1,20 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 
+use p3_field::PrimeField32;
 use p3_poseidon2::{
     external_initial_permute_state, external_terminal_permute_state, sum_15, sum_23, ExternalLayer,
     ExternalLayerConstants, ExternalLayerConstructor, InternalLayer, InternalLayerConstructor,
     MDSMat4,
 };
 
-use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P, P_AVX2};
+use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P};
 
 /// The internal layers of the Poseidon2 permutation for Mersenne31.
 ///
-/// This is optimized for the AVX2 architecture.
+/// The packed constants are stored in negative form as this allows some optimizations.
+/// This means given a constant `x`, we treat it as an `i32` and
+/// pack 8 copies of `x - P` into the corresponding `__m256i` packed constant.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
@@ -28,7 +31,9 @@ impl InternalLayerConstructor<PackedMersenne31AVX2> for Poseidon2InternalLayerMe
 
 /// The external layers of the Poseidon2 permutation for Mersenne31.
 ///
-/// This is optimized for the AVX2 architecture.
+/// The packed constants are stored in negative form as this allows some optimizations.
+/// This means given a constant `x`, we treat it as an `i32` and
+/// pack 8 copies of `x - P` into the corresponding `__m256i` packed constant.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
@@ -46,7 +51,7 @@ impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX2, WIDTH>
 
 /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0} and copy into a vector
 fn convert_to_vec_neg_form(input: i32) -> __m256i {
-    let input_sub_p = input - (P as i32);
+    let input_sub_p = input - (Mersenne31::ORDER_U32 as i32);
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         x86_64::_mm256_set1_epi32(input_sub_p)
@@ -114,7 +119,7 @@ fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> Pa
         let lo_bits = x86_64::_mm256_srli_epi32::<I_PRIME>(input);
 
         // Clear the sign bit.
-        let hi_bits = x86_64::_mm256_and_si256(hi_bits_dirty, P_AVX2);
+        let hi_bits = x86_64::_mm256_and_si256(hi_bits_dirty, P);
 
         // Combine the lo and high bits.
         let output = x86_64::_mm256_or_si256(lo_bits, hi_bits);

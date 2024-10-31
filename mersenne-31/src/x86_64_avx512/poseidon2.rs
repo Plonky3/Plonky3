@@ -6,11 +6,13 @@ use p3_poseidon2::{
     ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-use crate::{exp5, Mersenne31, PackedMersenne31AVX512, P, P_AVX512};
+use crate::{exp5, Mersenne31, PackedMersenne31AVX512, P};
 
 /// The internal layers of the Poseidon2 permutation for Mersenne31.
 ///
-/// This is optimized for the AVX512 architecture.
+/// The packed constants are stored in negative form as this allows some optimizations.
+/// This means given a constant `x`, we treat it as an `i32` and
+/// pack 16 copies of `x - P` into the corresponding `__m512i` packed constant.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMersenne31 {
     pub(crate) internal_constants: Vec<Mersenne31>,
@@ -27,7 +29,9 @@ impl InternalLayerConstructor<PackedMersenne31AVX512> for Poseidon2InternalLayer
 
 /// The external layers of the Poseidon2 permutation for Mersenne31.
 ///
-/// This is optimized for the AVX512 architecture.
+/// The packed constants are stored in negative form as this allows some optimizations.
+/// This means given a constant `x`, we treat it as an `i32` and
+/// pack 16 copies of `x - P` into the corresponding `__m512i` packed constant.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
@@ -45,7 +49,7 @@ impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX512, WIDTH>
 
 /// Convert elements from the standard form {0, ..., P} to {-P, ..., 0} and copy into a vector
 fn convert_to_vec_neg_form(input: i32) -> __m512i {
-    let input_sub_p = input - (P as i32);
+    let input_sub_p = input - (Mersenne31::ORDER_U32 as i32);
     unsafe {
         // Safety: If this code got compiled then AVX512-F intrinsics are available.
         x86_64::_mm512_set1_epi32(input_sub_p)
@@ -118,8 +122,7 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
         // The simplest description of the operation we want is lo OR (hi_dirty AND P) which has bit pattern:
         // 111 => 1, 110 => 1, 101 => 1, 100 => 1, 011 => 1, 010 => 0, 001 => 0, 000 => 0
         // Note that the input patters: 111, 110, 100 cannot occur so any constant of the form **1*1000 should work.
-        let output =
-            x86_64::_mm512_ternarylogic_epi32::<0b11111000>(lo_bits, hi_bits_dirty, P_AVX512);
+        let output = x86_64::_mm512_ternarylogic_epi32::<0b11111000>(lo_bits, hi_bits_dirty, P);
         PackedMersenne31AVX512::from_vector(output)
     }
 }

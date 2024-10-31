@@ -24,7 +24,7 @@ pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
     */
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
-        const ONE: __m512i = unsafe { transmute([1; 16]) };
+        const ONE: __m512i = unsafe { transmute([1u32; 16]) };
         let half = x86_64::_mm512_set1_epi32((MP::PRIME as i32 + 1) / 2); // Compiler realises this is constant.
 
         let least_bit = x86_64::_mm512_test_epi32_mask(input, ONE); // Determine the parity of val.

@@ -105,7 +105,9 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
 
 /// The internal layers of the Poseidon2 permutation for Monty31 fields.
 ///
-/// This is optimized for the AVX512 architecture.
+/// The packed constants are stored in negative form as this allows some optimizations.
+/// This means given a constant `x`, we treat it as an `i32` and
+/// pack 16 copies of `x - P` into the corresponding `__m512i` packed constant.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMonty31<
     PMP: PackedMontyParameters,
@@ -139,7 +141,9 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX512
 
 /// The external layers of the Poseidon2 permutation for Monty31 fields.
 ///
-/// This is optimized for the AVX512 architecture.
+/// The packed constants are stored in negative form as this allows some optimizations.
+/// This means given a constant `x`, we treat it as an `i32` and
+/// pack 16 copies of `x - P` into the corresponding `__m512i` packed constant.
 #[derive(Debug, Clone)]
 pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<PMP>, WIDTH>,
