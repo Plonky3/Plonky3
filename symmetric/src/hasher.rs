@@ -22,10 +22,18 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     }
 }
 
+/// Transparent structure implementing `CryptographicHasher` by padding the
+/// received elements to a predetermined length (with `Default`), panicking if
+/// the input exceeds it.
+///
+/// Caution is advised when using this as a hasher, since it does not satisfy
+/// most security properties required of a cryptographic hash function. For
+/// instance, to avoid second-preimage attacks, all parties should know
+/// beforehand the number of elements that will be fed as input before padding
+/// (otherwise, an attacker could simply add Defaults at the end of
+/// non-maximally-sized inputs).
 #[derive(Clone)]
 pub struct IdentityHasher<const N: usize>;
-
-// CryptographicHasher<BabyBear, [BabyBear; 8]>
 
 impl<Item, Out, const N: usize> CryptographicHasher<Item, Out> for IdentityHasher<N>
 where
@@ -36,14 +44,12 @@ where
     where
         I: IntoIterator<Item = Item>,
     {
-        // TODO try to avoid dummy cloning
         let mut input_vec = input.into_iter().collect::<Vec<Item>>();
 
         if input_vec.len() > N {
             panic!("Input length is greater than the maximum number of items");
         }
 
-        // TODO is this a safe way to pad?
         input_vec.resize(N, Item::default());
 
         match input_vec.try_into() {

@@ -19,14 +19,13 @@ fn main() {
     let c_poseidon = poseidon2_compressor();
     let c_blake3 = blake3_compressor();
 
-    let c_hybrid_poseidon_leaves =
-        SimpleHybridCompressor::<_, _, _, _, 8, 32, NodeConverter256BabyBearBytes>::new(
-            c_poseidon.clone(),
-            c_blake3.clone(),
-            false,
-        );
+    let c_hybrid = SimpleHybridCompressor::<_, _, _, _, 8, 32, NodeConverter256BabyBearBytes>::new(
+        c_poseidon.clone(),
+        c_blake3.clone(),
+        false,
+    );
 
-    let c_unsafe_hybrid_poseidon_leaves =
+    let c_hybrid_unsafe =
         SimpleHybridCompressor::<_, _, _, _, 8, 32, UnsafeNodeConverter256BabyBearBytes>::new(
             c_poseidon.clone(),
             c_blake3.clone(),
@@ -41,7 +40,7 @@ fn main() {
         &mut group,
         "Safe hybrid compressor",
         &h_poseidon,
-        &c_hybrid_poseidon_leaves,
+        &c_hybrid,
         leaves
     );
 
@@ -49,7 +48,7 @@ fn main() {
         &mut group,
         "Unsafe hybrid compressor",
         &h_poseidon,
-        &c_unsafe_hybrid_poseidon_leaves,
+        &c_hybrid_unsafe,
         leaves
     );
 }

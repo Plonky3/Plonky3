@@ -48,8 +48,3 @@ harness = false
 name = "hybrid_vs_plain_identity_hasher"
 path = "benches/hybrid_vs_plain_identity_hasher.rs"
 harness = false
-
-[[bench]]
-name = "hybrid_vs_plain_last_two_layers"
-path = "benches/hybrid_vs_plain_last_two_layers.rs"
-harness = false

@@ -21,7 +21,7 @@ fn main() {
     let c_poseidon = poseidon2_compressor();
     let c_blake3 = blake3_compressor();
 
-    let c_hybrid_poseidon_leaves =
+    let c_hybrid =
         SimpleHybridCompressor::<_, _, _, _, 8, 32, UnsafeNodeConverter256BabyBearBytes>::new(
             c_poseidon.clone(),
             c_blake3.clone(),
@@ -55,7 +55,7 @@ fn main() {
         &mut group,
         "Hybrid Blake3/Poseidon2 compressor, WIDTH = 1",
         &h_poseidon,
-        &c_hybrid_poseidon_leaves,
+        &c_hybrid,
         leaves
     );
 }
