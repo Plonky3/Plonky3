@@ -294,17 +294,21 @@ fn movehdup_epi32(a: __m512i) -> __m512i {
 #[must_use]
 fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     // The instruction is only available in the floating-point flavor; this distinction is only for
-    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+    // historical reasons and no longer matters.
 
-    // Annoyingly, when inlined into the mul function, this seems to compile
-    // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
-    //
-    // Hopefully this should be only a negligible difference to throughput and so we don't
-    // fix it right now. Maybe the compiler works it out when mul is inlined?
+    // Annoyingly, when inlined into the mul function, an intrinsic seems to compile
+    // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3. We use inline
+    // assembly to force the compiler to do the right thing.
     unsafe {
-        let src = x86_64::_mm512_castsi512_ps(src);
-        let a = x86_64::_mm512_castsi512_ps(a);
-        x86_64::_mm512_castps_si512(x86_64::_mm512_mask_movehdup_ps(src, k, a))
+        let dst: __m512i;
+        asm!(
+            "vmovshdup {src_dst}{{{k}}}, {a}",
+            src_dst = inlateout(zmm_reg) src => dst,
+            k = in(kreg) k,
+            a = in(zmm_reg) a,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+        dst
     }
 }
 
