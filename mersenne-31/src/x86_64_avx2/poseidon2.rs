@@ -1,5 +1,8 @@
 use alloc::vec::Vec;
-use core::arch::x86_64::{self, __m256i};
+use core::{
+    arch::x86_64::{self, __m256i},
+    mem::transmute,
+};
 
 use p3_field::PrimeField32;
 use p3_poseidon2::{
@@ -97,12 +100,22 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
     }
 }
 
-/// Compute the map x -> 2^I x on Mersenne-31 field elements.
-/// x must be represented as a value in {0..P}.
-/// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
+/// Compute the map `x -> 2^I x` on Mersenne-31 field elements.
+///
+/// `x` must be represented as a value in `[0, P]`.
+/// This requires 2 generic parameters, `I` and `I_PRIME` satisfying `I + I_PRIME = 31`.
 /// If the inputs do not conform to this representations, the result is undefined.
 #[inline(always)]
 fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
+    /*
+        We want this to compile to:
+            vpslld   hi_dirty, val,      I
+            vpsrld   lo,       val,      31 - I
+            vpand    hi,       hi_dirty, P
+            vpor     res,      lo,       hi
+        throughput: 1.33 cyc/vec
+        latency: 3 cyc
+    */
     assert_eq!(I + I_PRIME, 31);
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
@@ -123,6 +136,60 @@ fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> Pa
 
         // Combine the lo and high bits.
         let output = x86_64::_mm256_or_si256(lo_bits, hi_bits);
+        PackedMersenne31AVX2::from_vector(output)
+    }
+}
+
+/// Compute the map `x -> 2^15 x` on Mersenne-31 field elements.
+///
+/// `x` must be represented as a value in `[0, P]`.
+/// If the input does not conform to this representations, the result is undefined.
+/// This has higher throughput and higher latency than mul_2exp_i so should be used
+/// in contexts where latency is less important.
+#[inline(always)]
+fn mul_2exp_15(val: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
+    /*
+        We want this to compile to:
+            vpmaddwd  neg_madds,     val,           C
+            vpaddd    dirty_neg_res, neg_madds,     P
+            vpandn    res,           dirty_neg_res, P
+        throughput: 1 cyc/vec
+        latency: 7 cyc
+
+        The following is a proof that this works:
+        Let our input be x which we can decompose as (x_lo + 2^{16}x_hi).
+        Additionally let x_n denote the n'th binary digit of x.
+
+        Our goal is to output y = 2^15x = 2^15x_lo + 2^{31}x_hi = x_hi + 2^{15}x_lo
+        Note additionally that x_hi + 2^{15}x_lo < 2^31 as x_lo < 2^16 and x_hi < 2^15.
+
+        On each 32 bit lane vpmaddwd signed multiplies matching 16 bit integers and adds the result.
+        Hence setting C = [[-2^{15}, -1]; 8], the first instruction outputs
+
+        -x_hi - 2^{15}(x_lo - 2^{16}x_{16})  (The x_{16} appears as we interpret x_lo as a signed integer).
+        = -(x_hi + 2^{15}x_lo) + 2^{31}x_{16}
+        = -y + 2^{31}x_{16}
+
+        Next, we add P = 2^31 - 1 to this, giving us:
+        -y + 2^{31}x_{16} + P = 2^31(1 + x_{16}) + (- y - 1) mod 2^32.
+        Note that -y-1 is exactly (NOT y) as y + (NOT y) = - 1 so we are left with:
+
+        2^31(1 + x_{16}) + (NOT y)
+
+        As we know y < 2^31, we simply do a NOT followed by clearing the sign bit
+        this is exactly what vpandn accomplishes (with third argument equal to P.)
+
+    */
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let input = val.to_vector();
+
+        const C: __m256i = unsafe { transmute([[(-1_i16) << 15, -1_i16]; 8]) };
+
+        let neg_madds = x86_64::_mm256_madd_epi16(input, C);
+        let dirty_neg_output = x86_64::_mm256_add_epi32(neg_madds, P);
+        let output = x86_64::_mm256_andnot_si256(dirty_neg_output, P);
+
         PackedMersenne31AVX2::from_vector(output)
     }
 }
@@ -149,8 +216,8 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX2; 16]) {
     state[11] = mul_2exp_i::<12, 19>(state[11]);
     state[12] = mul_2exp_i::<13, 18>(state[12]);
     state[13] = mul_2exp_i::<14, 17>(state[13]);
-    state[14] = mul_2exp_i::<15, 16>(state[14]); // TODO: There is a possibly slightly faster method for 15 using _mm256_shuffle_epi8 or _mm256_madd_epi16.
-    state[15] = mul_2exp_i::<16, 15>(state[15]); // TODO: There is a possibly slightly faster method for 16 using _mm256_shuffle_epi8.
+    state[14] = mul_2exp_15(state[14]);
+    state[15] = mul_2exp_i::<16, 15>(state[15]);
 }
 
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + Diag(V))
@@ -177,8 +244,8 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX2; 24]) {
     state[13] = mul_2exp_i::<12, 19>(state[13]);
     state[14] = mul_2exp_i::<13, 18>(state[14]);
     state[15] = mul_2exp_i::<14, 17>(state[15]);
-    state[16] = mul_2exp_i::<15, 16>(state[16]); // TODO: There is a possibly slightly faster method for 15 using _mm256_shuffle_epi8 or _mm256_madd_epi16.
-    state[17] = mul_2exp_i::<16, 15>(state[17]); // TODO: There is a possibly slightly faster method for 16 using _mm256_shuffle_epi8.
+    state[16] = mul_2exp_15(state[16]);
+    state[17] = mul_2exp_i::<16, 15>(state[17]);
     state[18] = mul_2exp_i::<17, 14>(state[18]);
     state[19] = mul_2exp_i::<18, 13>(state[19]);
     state[20] = mul_2exp_i::<19, 12>(state[20]);
