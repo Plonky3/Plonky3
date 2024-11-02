@@ -102,10 +102,11 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 /// If the inputs do not conform to this representations, the result is undefined.
 #[cfg(not(any(target_feature="avx512vbmi", target_feature="avx512vbmi2")))]
 #[inline(always)]
-fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+fn mul_2exp_i<const I: u32, const Ii: i32, const I_PRIME: u32>(
     val: PackedMersenne31AVX512,
 ) -> PackedMersenne31AVX512 {
     assert_eq!(I + I_PRIME, 31);
+    assert_eq!(I, Ii as u32);
     unsafe {
         // Safety: If this code got compiled then AVX512-F intrinsics are available.
         let input = val.to_vector();
@@ -133,12 +134,13 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
 /// If the inputs do not conform to this representations, the result is undefined.
 #[cfg(all(target_feature="avx512vbmi", not(target_feature="avx512vbmi2")))]
 #[inline(always)]
-fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+fn mul_2exp_i<const I: u32, const Ii: i32, const I_PRIME: u32>(
     val: PackedMersenne31AVX512,
 ) -> PackedMersenne31AVX512 {
     // Tbh, not sure if this special case is worth it. The only CPUs that have VBMI but not VBMI2
     // are Cannon Lakes, which haven't been made for 5 years now.
     assert_eq!(I + I_PRIME, 31);
+    assert_eq!(I, Ii as u32);
     unsafe {
         // Safety: If this code got compiled then AVX-512 F and AVX-512 VBMI intrinsics are
         // available.
@@ -173,16 +175,17 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
 /// If the inputs do not conform to this representations, the result is undefined.
 #[cfg(target_feature="avx512vbmi2")]
 #[inline(always)]
-fn mul_2exp_i<const I: i32, const I_PRIME: i32>(
+fn mul_2exp_i<const I: u32, const Ii: i32, const I_PRIME: u32>(
     val: PackedMersenne31AVX512,
 ) -> PackedMersenne31AVX512 {
     assert_eq!(I + I_PRIME, 31);
+    assert_eq!(I, Ii as u32);
     unsafe {
         // Safety: If this code got compiled then AVX-512 F and AVX-512 VBMI2 intrinsics are
         // available.
         let val = val.to_vector();
         let val_dbl = x86_64::_mm512_add_epi32(val, val);
-        let res_dirty = x86_64::_mm512_shldi_epi32::<I>(val, val_dbl);
+        let res_dirty = x86_64::_mm512_shldi_epi32::<Ii>(val, val_dbl);
         let res = x86_64::_mm512_and_epi32(res_dirty, P);
         PackedMersenne31AVX512::from_vector(res)
     }
@@ -197,23 +200,20 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31AVX512; 16]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
     // state[0] -> -2*state[0] is handled by the calling code.
 
-    // We could use mul_2exp_i here as it is also 3 instructions but add should have better throughput as its instructions work on more ports.
-    state[2] = state[2] + state[2];
-
-    // For the remaining entries we use our fast shift code.
-    state[3] = mul_2exp_i::<2, 29>(state[3]);
-    state[4] = mul_2exp_i::<3, 28>(state[4]);
-    state[5] = mul_2exp_i::<4, 27>(state[5]);
-    state[6] = mul_2exp_i::<5, 26>(state[6]);
-    state[7] = mul_2exp_i::<6, 25>(state[7]);
-    state[8] = mul_2exp_i::<7, 24>(state[8]);
-    state[9] = mul_2exp_i::<8, 23>(state[9]);
-    state[10] = mul_2exp_i::<10, 21>(state[10]);
-    state[11] = mul_2exp_i::<12, 19>(state[11]);
-    state[12] = mul_2exp_i::<13, 18>(state[12]);
-    state[13] = mul_2exp_i::<14, 17>(state[13]);
-    state[14] = mul_2exp_i::<15, 16>(state[14]);
-    state[15] = mul_2exp_i::<16, 15>(state[15]);
+    state[2] = mul_2exp_i::<1, 1, 30>(state[2]);
+    state[3] = mul_2exp_i::<2, 2, 29>(state[3]);
+    state[4] = mul_2exp_i::<3, 3, 28>(state[4]);
+    state[5] = mul_2exp_i::<4, 4, 27>(state[5]);
+    state[6] = mul_2exp_i::<5, 5, 26>(state[6]);
+    state[7] = mul_2exp_i::<6, 6, 25>(state[7]);
+    state[8] = mul_2exp_i::<7, 7, 24>(state[8]);
+    state[9] = mul_2exp_i::<8, 8, 23>(state[9]);
+    state[10] = mul_2exp_i::<10, 10, 21>(state[10]);
+    state[11] = mul_2exp_i::<12, 12, 19>(state[11]);
+    state[12] = mul_2exp_i::<13, 13, 18>(state[12]);
+    state[13] = mul_2exp_i::<14, 14, 17>(state[13]);
+    state[14] = mul_2exp_i::<15, 15, 16>(state[14]);
+    state[15] = mul_2exp_i::<16, 16, 15>(state[15]);
 }
 
 /// We hard code multiplication by the diagonal minus 1 of our internal matrix (1 + Diag(V))
@@ -225,31 +225,29 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
     // The first three entries involve multiplication by -2, 1, 2 which are simple:
     // state[0] -> -2*state[0] is handled by the calling code.
 
-    // We could use mul_2exp_i here as it is also 3 instructions but add should have better throughput as its instructions work on more ports.
-    state[2] = state[2] + state[2];
-
     // For the remaining entries we use our fast shift code.
-    state[3] = mul_2exp_i::<2, 29>(state[3]);
-    state[4] = mul_2exp_i::<3, 28>(state[4]);
-    state[5] = mul_2exp_i::<4, 27>(state[5]);
-    state[6] = mul_2exp_i::<5, 26>(state[6]);
-    state[7] = mul_2exp_i::<6, 25>(state[7]);
-    state[8] = mul_2exp_i::<7, 24>(state[8]);
-    state[9] = mul_2exp_i::<8, 23>(state[9]);
-    state[10] = mul_2exp_i::<9, 22>(state[10]);
-    state[11] = mul_2exp_i::<10, 21>(state[11]);
-    state[12] = mul_2exp_i::<11, 20>(state[12]);
-    state[13] = mul_2exp_i::<12, 19>(state[13]);
-    state[14] = mul_2exp_i::<13, 18>(state[14]);
-    state[15] = mul_2exp_i::<14, 17>(state[15]);
-    state[16] = mul_2exp_i::<15, 16>(state[16]);
-    state[17] = mul_2exp_i::<16, 15>(state[17]);
-    state[18] = mul_2exp_i::<17, 14>(state[18]);
-    state[19] = mul_2exp_i::<18, 13>(state[19]);
-    state[20] = mul_2exp_i::<19, 12>(state[20]);
-    state[21] = mul_2exp_i::<20, 11>(state[21]);
-    state[22] = mul_2exp_i::<21, 10>(state[22]);
-    state[23] = mul_2exp_i::<22, 9>(state[23]);
+    state[2] = mul_2exp_i::<1, 1, 30>(state[2]);
+    state[3] = mul_2exp_i::<2, 2, 29>(state[3]);
+    state[4] = mul_2exp_i::<3, 3, 28>(state[4]);
+    state[5] = mul_2exp_i::<4, 4, 27>(state[5]);
+    state[6] = mul_2exp_i::<5, 5, 26>(state[6]);
+    state[7] = mul_2exp_i::<6, 6, 25>(state[7]);
+    state[8] = mul_2exp_i::<7, 7, 24>(state[8]);
+    state[9] = mul_2exp_i::<8, 8, 23>(state[9]);
+    state[10] = mul_2exp_i::<9, 9, 22>(state[10]);
+    state[11] = mul_2exp_i::<10, 10, 21>(state[11]);
+    state[12] = mul_2exp_i::<11, 11, 20>(state[12]);
+    state[13] = mul_2exp_i::<12, 12, 19>(state[13]);
+    state[14] = mul_2exp_i::<13, 13, 18>(state[14]);
+    state[15] = mul_2exp_i::<14, 14, 17>(state[15]);
+    state[16] = mul_2exp_i::<15, 15, 16>(state[16]);
+    state[17] = mul_2exp_i::<16, 16, 15>(state[17]);
+    state[18] = mul_2exp_i::<17, 17, 14>(state[18]);
+    state[19] = mul_2exp_i::<18, 18, 13>(state[19]);
+    state[20] = mul_2exp_i::<19, 19, 12>(state[20]);
+    state[21] = mul_2exp_i::<20, 20, 11>(state[21]);
+    state[22] = mul_2exp_i::<21, 21, 10>(state[22]);
+    state[23] = mul_2exp_i::<22, 22, 9>(state[23]);
 }
 
 /// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
