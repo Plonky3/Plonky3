@@ -100,6 +100,7 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 /// x must be represented as a value in {0..P}.
 /// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
 /// If the inputs do not conform to this representations, the result is undefined.
+#[cfg(not(any(target_feature="avx512vbmi", target_feature="avx512vbmi2")))]
 #[inline(always)]
 fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
     val: PackedMersenne31AVX512,
@@ -120,11 +121,70 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
         let lo_bits = x86_64::_mm512_srli_epi32::<I_PRIME>(input);
 
         // Clear the sign bit and combine the lo and high bits.
-        // The simplest description of the operation we want is lo OR (hi_dirty AND P) which has bit pattern:
-        // 111 => 1, 110 => 1, 101 => 1, 100 => 1, 011 => 1, 010 => 0, 001 => 0, 000 => 0
-        // Note that the input patters: 111, 110, 100 cannot occur so any constant of the form **1*1000 should work.
-        let output = x86_64::_mm512_ternarylogic_epi32::<0b11111000>(lo_bits, hi_bits_dirty, P);
+        // Perform (lo_bits OR hi_bits_dirty) AND P.
+        let output = x86_64::_mm512_ternarylogic_epi32::<0b10101000>(lo_bits, hi_bits_dirty, P);
         PackedMersenne31AVX512::from_vector(output)
+    }
+}
+
+/// Compute the map x -> 2^I x on Mersenne-31 field elements.
+/// x must be represented as a value in {0..P}.
+/// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
+/// If the inputs do not conform to this representations, the result is undefined.
+#[cfg(all(target_feature="avx512vbmi", not(target_feature="avx512vbmi2")))]
+#[inline(always)]
+fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+    val: PackedMersenne31AVX512,
+) -> PackedMersenne31AVX512 {
+    // Tbh, not sure if this special case is worth it. The only CPUs that have VBMI but not VBMI2
+    // are Cannon Lakes, which haven't been made for 5 years now.
+    assert_eq!(I + I_PRIME, 31);
+    unsafe {
+        // Safety: If this code got compiled then AVX-512 F and AVX-512 VBMI intrinsics are
+        // available.
+
+        // These are compile-time constants, and they should get optimized out.
+        let sel_mask = x86_64::_mm512_set1_epi32(((1u32 << 31) - (1u32 << I)) as i32);
+        let left_shft_ctl = x86_64::_mm512_set1_epi64(
+            (-(I as i64) & 0x3f)
+            | (0o10 - I as i64 & 0x3f) << 0o10
+            | (0o20 - I as i64 & 0x3f) << 0o20
+            | (0o30 - I as i64 & 0x3f) << 0o30
+            | (0o40 - I as i64 & 0x3f) << 0o40
+            | (0o50 - I as i64 & 0x3f) << 0o50
+            | (0o60 - I as i64 & 0x3f) << 0o60
+            | (0o70 - I as i64 & 0x3f) << 0o70);
+
+        let val = val.to_vector();
+
+        let left_shftd = x86_64::_mm512_multishift_epi64_epi8(left_shft_ctl, val);
+        let right_shftd = x86_64::_mm512_srli_epi32::<I_PRIME>(val);
+
+        // bitwise select (if c then b else a)
+        let res = x86_64::_mm512_ternarylogic_epi32::<0b11011000>(right_shftd, left_shftd, sel_mask);
+        
+        PackedMersenne31AVX512::from_vector(res)
+    }
+}
+
+/// Compute the map x -> 2^I x on Mersenne-31 field elements.
+/// x must be represented as a value in {0..P}.
+/// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
+/// If the inputs do not conform to this representations, the result is undefined.
+#[cfg(target_feature="avx512vbmi2")]
+#[inline(always)]
+fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+    val: PackedMersenne31AVX512,
+) -> PackedMersenne31AVX512 {
+    assert_eq!(I + I_PRIME, 31);
+    unsafe {
+        // Safety: If this code got compiled then AVX-512 F and AVX-512 VBMI2 intrinsics are
+        // available.
+        let val = val.to_vector();
+        let val_dbl = x86_64::_mm512_add_epi32(val, val);
+        let res_dirty = x86_64::_mm512_shldi_epi32::<N>(val, val_dbl);
+        let res = x86_64::_mm512_and_epi32(res_dirty, P);
+        PackedMersenne31AVX512::from_vector(res)
     }
 }
 
