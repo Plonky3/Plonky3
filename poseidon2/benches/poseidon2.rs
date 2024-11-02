@@ -47,7 +47,13 @@ where
     let input = [F::Packing::zero(); WIDTH];
     let name = format!("poseidon2::<{}, {}>", pretty_name::<F::Packing>(), WIDTH);
     let id = BenchmarkId::new(name, WIDTH);
-    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));
+    c.bench_with_input(id, &input, |b, &input| b.iter(|| {
+        let mut state = input;
+        for i in 0..1000 {
+            state = poseidon2.permute(state);
+        }
+        state
+    }));
 }
 
 criterion_group!(benches, bench_poseidon2);
