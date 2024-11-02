@@ -173,7 +173,7 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
 /// If the inputs do not conform to this representations, the result is undefined.
 #[cfg(target_feature="avx512vbmi2")]
 #[inline(always)]
-fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+fn mul_2exp_i<const I: i32, const I_PRIME: i32>(
     val: PackedMersenne31AVX512,
 ) -> PackedMersenne31AVX512 {
     assert_eq!(I + I_PRIME, 31);
