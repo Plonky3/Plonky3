@@ -146,14 +146,14 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
         // These are compile-time constants, and they should get optimized out.
         let sel_mask = x86_64::_mm512_set1_epi32(((1u32 << 31) - (1u32 << I)) as i32);
         let left_shft_ctl = x86_64::_mm512_set1_epi64(
-            (-(I as i64) & 0x3f)
-            | (0o10 - I as i64 & 0x3f) << 0o10
-            | (0o20 - I as i64 & 0x3f) << 0o20
-            | (0o30 - I as i64 & 0x3f) << 0o30
-            | (0o40 - I as i64 & 0x3f) << 0o40
-            | (0o50 - I as i64 & 0x3f) << 0o50
-            | (0o60 - I as i64 & 0x3f) << 0o60
-            | (0o70 - I as i64 & 0x3f) << 0o70);
+            (-(I as i64) & 0o77)
+            | (0o10 - I as i64 & 0o77) << 0o10
+            | (0o20 - I as i64 & 0o77) << 0o20
+            | (0o30 - I as i64 & 0o77) << 0o30
+            | (0o40 - I as i64 & 0o77) << 0o40
+            | (0o50 - I as i64 & 0o77) << 0o50
+            | (0o60 - I as i64 & 0o77) << 0o60
+            | (0o70 - I as i64 & 0o77) << 0o70);
 
         let val = val.to_vector();
 
@@ -182,7 +182,7 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
         // available.
         let val = val.to_vector();
         let val_dbl = x86_64::_mm512_add_epi32(val, val);
-        let res_dirty = x86_64::_mm512_shldi_epi32::<N>(val, val_dbl);
+        let res_dirty = x86_64::_mm512_shldi_epi32::<I>(val, val_dbl);
         let res = x86_64::_mm512_and_epi32(res_dirty, P);
         PackedMersenne31AVX512::from_vector(res)
     }
