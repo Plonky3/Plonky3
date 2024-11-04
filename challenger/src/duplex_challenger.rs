@@ -193,7 +193,7 @@ mod tests {
         (0..12).for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
 
         let state_after_duplexing: Vec<_> = (0..12)
-            .map(|i| F::from_canonical_u8(i))
+            .map(F::from_canonical_u8)
             .chain(iter::repeat(F::ZERO).take(12))
             .rev()
             .collect();
