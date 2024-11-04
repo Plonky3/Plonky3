@@ -15,7 +15,7 @@ p3-challenger = { path = "../challenger", version = "0.3.0" }
 p3-commit = { path = "../commit", version = "0.3.0" }
 p3-dft = { path = "../dft", version = "0.3.0" }
 p3-matrix = { path = "../matrix", version = "0.3.0" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.3.0" }
 p3-util = { path = "../util", version = "0.3.0" }
 itertools = "0.13.0"
 tracing = "0.1.37"
