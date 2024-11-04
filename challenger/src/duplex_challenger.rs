@@ -47,7 +47,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        self.output_buffer.extend(self.sponge_state);
+        self.output_buffer.extend(&self.sponge_state[..RATE]);
     }
 }
 
