@@ -35,61 +35,66 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 }
 
-#[inline]
-fn forward_iterative_layer_1<T: PackedField>(a: &mut [T], roots: &[T::Scalar]) {
-    let packed_roots = T::pack_slice(roots);
-    let n = a.len();
-    let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
+#[inline(always)]
+fn forward_butterfly<T: PackedField>(x: T, y: T, roots: T) -> (T, T) {
+    let t = x - y;
+    (x + y, t * roots)
+}
 
-    izip!(a0, a1, packed_roots).for_each(|(x, y, &root)| {
-        let t = (*x - *y) * root;
-        *x += *y;
-        *y = t;
-    });
+#[inline(always)]
+fn forward_butterfly_interleaved<const HALF_RADIX: usize, T: PackedField>(
+    x: T,
+    y: T,
+    roots: T,
+) -> (T, T) {
+    let (a, b) = x.interleave(y, HALF_RADIX);
+    let (a, b) = forward_butterfly(a, b, roots);
+    a.interleave(b, HALF_RADIX)
 }
 
 #[inline]
-fn forward_iterative_layer_2<T: PackedField>(a: &mut [T], roots: &[T::Scalar]) {
+fn forward_iterative_layer_1<T: PackedField>(input: &mut [T], roots: &[T::Scalar]) {
     let packed_roots = T::pack_slice(roots);
-    let n = a.len();
-    let (u, v) = unsafe { a.split_at_mut_unchecked(n / 2) };
-    let (u0, u1) = unsafe { u.split_at_mut_unchecked(n / 4) };
-    let (v0, v1) = unsafe { v.split_at_mut_unchecked(n / 4) };
+    let n = input.len();
+    let (xs, ys) = unsafe { input.split_at_mut_unchecked(n / 2) };
 
-    izip!(u0, u1, v0, v1, packed_roots).for_each(|(x, y, z, w, &root)| {
-        let t1 = (*x - *y) * root;
-        let t2 = (*z - *w) * root;
-        *x += *y;
-        *z += *w;
-        *y = t1;
-        *w = t2;
+    izip!(xs, ys, packed_roots)
+        .for_each(|(x, y, &roots)| (*x, *y) = forward_butterfly(*x, *y, roots));
+}
+
+#[inline]
+fn forward_iterative_layer_2<T: PackedField>(input: &mut [T], roots: &[T::Scalar]) {
+    let packed_roots = T::pack_slice(roots);
+    let n = input.len();
+    let (top_half, bottom_half) = unsafe { input.split_at_mut_unchecked(n / 2) };
+    let (xs, ys) = unsafe { top_half.split_at_mut_unchecked(n / 4) };
+    let (zs, ws) = unsafe { bottom_half.split_at_mut_unchecked(n / 4) };
+
+    izip!(xs, ys, zs, ws, packed_roots).for_each(|(x, y, z, w, &root)| {
+        (*x, *y) = forward_butterfly(*x, *y, root);
+        (*z, *w) = forward_butterfly(*z, *w, root);
     });
 }
 
 #[inline]
 fn forward_iterative_radix_r<const HALF_RADIX: usize, T: PackedField>(
-    a: &mut [T],
+    input: &mut [T],
     roots: &[T::Scalar],
 ) {
     // roots[0] == 1
     // roots <-- [1, roots[1], ..., roots[HALF_RADIX-1], 1, roots[1], ...]
     let roots = T::from_fn(|i| roots[i % HALF_RADIX]);
 
-    a.chunks_exact_mut(2).for_each(|pair| {
-        let x = pair[0];
-        let y = pair[1];
-        let (mut x, y) = x.interleave(y, HALF_RADIX);
-        let t = (x - y) * roots;
-        x += y;
-        let (x, y) = x.interleave(t, HALF_RADIX);
+    input.chunks_exact_mut(2).for_each(|pair| {
+        let (x, y) = forward_butterfly_interleaved::<HALF_RADIX, _>(pair[0], pair[1], roots);
         pair[0] = x;
         pair[1] = y;
     });
 }
 
 #[inline]
-fn forward_iterative_radix_2<T: PackedField>(a: &mut [T]) {
-    a.chunks_exact_mut(2).for_each(|pair| {
+fn forward_iterative_radix_2<T: PackedField>(input: &mut [T]) {
+    input.chunks_exact_mut(2).for_each(|pair| {
         let x = pair[0];
         let y = pair[1];
         let (mut x, y) = x.interleave(y, 1);
@@ -104,8 +109,8 @@ fn forward_iterative_radix_2<T: PackedField>(a: &mut [T]) {
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Breadth-first DIF FFT for smallish vectors (must be >= 64)
     #[inline]
-    fn forward_iterative(a: &mut [Self], root_table: &[Vec<Self>]) {
-        let n = a.len();
+    fn forward_iterative(input: &mut [Self], root_table: &[Vec<Self>]) {
+        let n = input.len();
         let lg_n = log2_strict_usize(n);
 
         // Needed to avoid overlap with specialisation at the other end of the loop
@@ -114,11 +119,11 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let packing_width = <Self as Field>::Packing::WIDTH;
         assert!(n >= 2 * packing_width);
 
-        let a = <Self as Field>::Packing::pack_slice_mut(a);
+        let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
 
         // Specialise the first few iterations; improves performance a little.
-        forward_iterative_layer_1(a, &root_table[0]); // lg_m == lg_n - 1, s == 0
-        forward_iterative_layer_2(a, &root_table[1]); // lg_m == lg_n - 2, s == 1
+        forward_iterative_layer_1(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        forward_iterative_layer_2(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
 
         for lg_m in (4..(lg_n - 2)).rev() {
             let s = lg_n - lg_m - 1;
@@ -140,20 +145,17 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                 // divides m
                 let m = m / packing_width;
 
-                let b = &mut a[offset..];
-                let (b0, b1) = unsafe { b.split_at_mut_unchecked(m) };
+                let block = &mut packed_input[offset..];
+                let (xs, ys) = unsafe { block.split_at_mut_unchecked(m) };
 
-                izip!(b0, b1, packed_roots).for_each(|(x, y, &root)| {
-                    let t = (*x - *y) * root;
-                    *x += *y;
-                    *y = t;
-                });
+                izip!(xs, ys, packed_roots)
+                    .for_each(|(x, y, &root)| (*x, *y) = forward_butterfly(*x, *y, root));
             }
         }
-        forward_iterative_radix_r::<8, _>(a, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
-        forward_iterative_radix_r::<4, _>(a, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
-        forward_iterative_radix_r::<2, _>(a, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
-        forward_iterative_radix_2(a); // lg_m = 0; s = lg_n - 1
+        forward_iterative_radix_r::<8, _>(packed_input, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
+        forward_iterative_radix_r::<4, _>(packed_input, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
+        forward_iterative_radix_r::<2, _>(packed_input, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
+        forward_iterative_radix_2(packed_input); // lg_m = 0; s = lg_n - 1
     }
 
     #[inline(always)]
@@ -166,29 +168,23 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    fn forward_pass(a: &mut [Self], roots: &[Self]) {
-        let half_n = a.len() / 2;
+    fn forward_pass(input: &mut [Self], roots: &[Self]) {
+        let half_n = input.len() / 2;
         assert_eq!(roots.len(), half_n);
 
-        // Safe because 0 <= half_n < a.len()
-        let (top, tail) = unsafe { a.split_at_mut_unchecked(half_n) };
-
         if half_n >= <Self as Field>::Packing::WIDTH {
-            let top_packed = <Self as Field>::Packing::pack_slice_mut(top);
-            let tail_packed = <Self as Field>::Packing::pack_slice_mut(tail);
-            let roots_packed = <Self as Field>::Packing::pack_slice(roots);
-            izip!(top_packed, tail_packed, roots_packed).for_each(|(x, y, &root)| {
-                let t = (*x - *y) * root;
-                *x += *y;
-                *y = t;
-            });
+            let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
+            forward_iterative_layer_1(packed_input, roots);
         } else {
-            let s = top[0] + tail[0];
-            let t = top[0] - tail[0];
-            top[0] = s;
-            tail[0] = t;
+            // Safe because 0 <= half_n < a.len()
+            let (xs, ys) = unsafe { input.split_at_mut_unchecked(half_n) };
 
-            izip!(&mut top[1..], &mut tail[1..], &roots[1..]).for_each(|(x, y, &root)| {
+            let s = xs[0] + ys[0];
+            let t = xs[0] - ys[0];
+            xs[0] = s;
+            ys[0] = t;
+
+            izip!(&mut xs[1..], &mut ys[1..], &roots[1..]).for_each(|(x, y, &root)| {
                 (*x, *y) = Self::forward_butterfly(*x, *y, root);
             });
         }
@@ -262,18 +258,18 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
     /// Assumes `a.len() > 8`
     #[inline]
-    fn forward_fft_recur(a: &mut [Self], root_table: &[Vec<Self>]) {
-        const ITERATIVE_FFT_THRESHOLD: usize = 512;
+    fn forward_fft_recur(input: &mut [Self], root_table: &[Vec<Self>]) {
+        const ITERATIVE_FFT_THRESHOLD: usize = 2048;
 
-        let n = a.len();
+        let n = input.len();
         if n <= ITERATIVE_FFT_THRESHOLD {
-            Self::forward_iterative(a, root_table);
+            Self::forward_iterative(input, root_table);
         } else {
             assert_eq!(n, 1 << (root_table.len() + 1));
-            Self::forward_pass(a, &root_table[0]);
+            Self::forward_pass(input, &root_table[0]);
 
             // Safe because a.len() > ITERATIVE_FFT_THRESHOLD
-            let (a0, a1) = unsafe { a.split_at_mut_unchecked(n / 2) };
+            let (a0, a1) = unsafe { input.split_at_mut_unchecked(n / 2) };
 
             Self::forward_fft_recur(a0, &root_table[1..]);
             Self::forward_fft_recur(a1, &root_table[1..]);
