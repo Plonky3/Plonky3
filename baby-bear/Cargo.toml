@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-nightly-features = []
+nightly-features = ["p3-monty-31/nightly-features"]
 
 [dependencies]
 p3-field = { path = "../field" }

@@ -10,8 +10,6 @@ use crate::constants::RoundConstants;
 use crate::{FullRound, PartialRound, SBox};
 
 /// Assumes the field size is at least 16 bits.
-///
-/// ***WARNING***: this is a stub for now, not ready to use.
 #[derive(Debug)]
 pub struct Poseidon2Air<
     F: Field,

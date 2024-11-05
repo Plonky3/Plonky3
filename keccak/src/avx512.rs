@@ -348,17 +348,17 @@ fn round(i: usize, state: [__m512i; 25]) -> [__m512i; 25] {
     flatten(state)
 }
 
-fn keccak_perm(buf: &mut [__m512i; 25]) {
-    let mut state = *buf;
+fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
+    let mut state: [__m512i; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = state;
+    *buf = unsafe { transmute::<[__m512i; 25], [[u64; VECTOR_LEN]; 25]>(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
     fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
-        keccak_perm(unsafe { transmute(state) });
+        keccak_perm(state);
     }
 }
 
@@ -366,10 +366,6 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
-
-    use core::arch::x86_64::{_mm512_setr_epi64, _mm512_setzero_si512};
-    use core::mem::transmute_copy;
-
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -593,37 +589,34 @@ mod tests {
         ],
     ];
 
+    #[allow(clippy::needless_range_loop)]
     fn our_res() -> [[u64; 25]; 8] {
-        let mut packed_result = [unsafe { _mm512_setzero_si512() }; 25];
-        for i in 0..25 {
-            packed_result[i] = unsafe {
-                _mm512_setr_epi64(
-                    STATES[0][i] as i64,
-                    STATES[1][i] as i64,
-                    STATES[2][i] as i64,
-                    STATES[3][i] as i64,
-                    STATES[4][i] as i64,
-                    STATES[5][i] as i64,
-                    STATES[6][i] as i64,
-                    STATES[7][i] as i64,
-                )
-            };
+        let mut packed_result = [[0; 8]; 25];
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            *packed_res = [
+                STATES[0][i],
+                STATES[1][i],
+                STATES[2][i],
+                STATES[3][i],
+                STATES[4][i],
+                STATES[5][i],
+                STATES[6][i],
+                STATES[7][i],
+            ];
         }
 
         keccak_perm(&mut packed_result);
 
-        let packed_result_arr: [[u64; 8]; 25] = unsafe { transmute_copy(&packed_result) };
-
         let mut result = [[0; 25]; 8];
-        for i in 0..25 {
-            result[0][i] = packed_result_arr[i][0];
-            result[1][i] = packed_result_arr[i][1];
-            result[2][i] = packed_result_arr[i][2];
-            result[3][i] = packed_result_arr[i][3];
-            result[4][i] = packed_result_arr[i][4];
-            result[5][i] = packed_result_arr[i][5];
-            result[6][i] = packed_result_arr[i][6];
-            result[7][i] = packed_result_arr[i][7];
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            result[0][i] = packed_res[0];
+            result[1][i] = packed_res[1];
+            result[2][i] = packed_res[2];
+            result[3][i] = packed_res[3];
+            result[4][i] = packed_res[4];
+            result[5][i] = packed_res[5];
+            result[6][i] = packed_res[6];
+            result[7][i] = packed_res[7];
         }
         result
     }

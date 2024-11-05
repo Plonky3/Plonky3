@@ -57,12 +57,24 @@ Hashes
 - [x] Monolith
 
 
-## Benchmark
+## Benchmarks
 
-We sometimes use a Keccak AIR to compare Plonky3's performance to other libraries like Plonky2. Several variations are possible here, with different fields and so forth, but here is one example:
+Many variations are possible, with different fields, hashes and so forth, but here are a couple examples of Plonky3 benchmarks.
+
+Prove 2^19 Poseidon2 permutations of width 16, using the `KoalaBear` field and Keccak in the Merkle tree:
+Poseidon2
 ```
-RUST_LOG=info cargo run --example prove_baby_bear_keccak --release --features parallel
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_poseidon2_koala_bear_keccak --release --features parallel
 ```
+
+Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the Merkle tree.
+```
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_baby_bear_keccak --release --features parallel
+```
+
+Extra speedups may be possible with some configuration changes:
+- `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
+- Adding `lto = "fat"` in the top-level `Cargo.toml` may improve performance slightly, at the cost of longer compilation times.
 
 ## CPU features
 

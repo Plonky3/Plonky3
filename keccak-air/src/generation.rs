@@ -1,11 +1,9 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::iter::repeat;
 use p3_maybe_rayon::prelude::*;
-use p3_util::ceil_div_usize;
 use tracing::instrument;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
@@ -17,14 +15,13 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 #[instrument(name = "generate Keccak trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
     let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
-    let mut trace =
-        RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
+    let mut trace = RowMajorMatrix::new(F::zero_vec(num_rows * NUM_KECCAK_COLS), NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
     assert!(prefix.is_empty(), "Alignment should match");
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
-    let num_padding_inputs = ceil_div_usize(num_rows, NUM_ROUNDS) - inputs.len();
+    let num_padding_inputs = num_rows.div_ceil(NUM_ROUNDS) - inputs.len();
     let padded_inputs = inputs
         .into_par_iter()
         .chain(repeat([0; 25]).take(num_padding_inputs));
@@ -80,7 +77,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
 }
 
 fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round: usize) {
-    row.step_flags[round] = F::one();
+    row.step_flags[round] = F::ONE;
 
     // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).
     for x in 0..5 {
@@ -129,7 +126,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
             for limb in 0..U64_LIMBS {
                 row.a_prime_prime[y][x][limb] = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                     .rev()
-                    .fold(F::zero(), |acc, z| {
+                    .fold(F::ZERO, |acc, z| {
                         let bit = xor([
                             row.b(x, y, z),
                             andn(row.b((x + 1) % 5, y, z), row.b((x + 2) % 5, y, z)),

@@ -1,15 +1,25 @@
 use core::array;
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::{AbstractField, Field};
+use crate::batch_inverse::batch_multiplicative_inverse_general;
+use crate::{AbstractField, Field, PackedValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)] // This needed to make `transmute`s safe.
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
+
+impl<F: Field, const N: usize> FieldArray<F, N> {
+    pub(crate) fn inverse(&self) -> Self {
+        let mut result = Self::default();
+        batch_multiplicative_inverse_general(&self.0, &mut result.0, |x| x.inverse());
+        result
+    }
+}
 
 impl<F: Field, const N: usize> Default for FieldArray<F, N> {
     fn default() -> Self {
-        Self::zero()
+        Self::ZERO
     }
 }
 
@@ -28,18 +38,10 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
     type F = F;
 
-    fn zero() -> Self {
-        FieldArray([F::zero(); N])
-    }
-    fn one() -> Self {
-        FieldArray([F::one(); N])
-    }
-    fn two() -> Self {
-        FieldArray([F::two(); N])
-    }
-    fn neg_one() -> Self {
-        FieldArray([F::neg_one(); N])
-    }
+    const ZERO: Self = FieldArray([F::ZERO; N]);
+    const ONE: Self = FieldArray([F::ONE; N]);
+    const TWO: Self = FieldArray([F::TWO; N]);
+    const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -77,9 +79,36 @@ impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
     fn from_wrapped_u64(n: u64) -> Self {
         [F::from_wrapped_u64(n); N].into()
     }
+}
 
-    fn generator() -> Self {
-        [F::generator(); N].into()
+unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
+    type Value = F;
+
+    const WIDTH: usize = N;
+
+    fn from_slice(slice: &[Self::Value]) -> &Self {
+        assert_eq!(slice.len(), Self::WIDTH);
+        unsafe { &*slice.as_ptr().cast() }
+    }
+
+    fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        assert_eq!(slice.len(), Self::WIDTH);
+        unsafe { &mut *slice.as_mut_ptr().cast() }
+    }
+
+    fn from_fn<Fn>(f: Fn) -> Self
+    where
+        Fn: FnMut(usize) -> Self::Value,
+    {
+        Self(array::from_fn(f))
+    }
+
+    fn as_slice(&self) -> &[Self::Value] {
+        &self.0
+    }
+
+    fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+        &mut self.0
     }
 }
 
@@ -188,16 +217,27 @@ impl<F: Field, const N: usize> MulAssign<F> for FieldArray<F, N> {
     }
 }
 
+impl<F: Field, const N: usize> Div<F> for FieldArray<F, N> {
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
+    fn div(self, rhs: F) -> Self::Output {
+        let rhs_inv = rhs.inverse();
+        self * rhs_inv
+    }
+}
+
 impl<F: Field, const N: usize> Sum for FieldArray<F, N> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
 impl<F: Field, const N: usize> Product for FieldArray<F, N> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }

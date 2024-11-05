@@ -1,9 +1,11 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -296,7 +298,7 @@ impl Sum for PackedMersenne31AVX2 {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -306,32 +308,17 @@ impl Product for PackedMersenne31AVX2 {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
 impl AbstractField for PackedMersenne31AVX2 {
     type F = Mersenne31;
 
-    #[inline]
-    fn zero() -> Self {
-        Mersenne31::zero().into()
-    }
-
-    #[inline]
-    fn one() -> Self {
-        Mersenne31::one().into()
-    }
-
-    #[inline]
-    fn two() -> Self {
-        Mersenne31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        Mersenne31::neg_one().into()
-    }
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -372,9 +359,10 @@ impl AbstractField for PackedMersenne31AVX2 {
         Mersenne31::from_wrapped_u64(n).into()
     }
 
-    #[inline]
-    fn generator() -> Self {
-        Mersenne31::generator().into()
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
     }
 }
 
@@ -623,7 +611,9 @@ unsafe impl PackedValue for PackedMersenne31AVX2 {
 
 unsafe impl PackedField for PackedMersenne31AVX2 {
     type Scalar = Mersenne31;
+}
 
+unsafe impl PackedFieldPow2 for PackedMersenne31AVX2 {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());

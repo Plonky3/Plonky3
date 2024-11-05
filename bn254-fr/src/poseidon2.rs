@@ -13,7 +13,7 @@ use crate::Bn254Fr;
 #[inline]
 fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
     static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; 3]> = OnceLock::new();
-    MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::one(), Bn254Fr::one(), Bn254Fr::two()])
+    MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::ONE, Bn254Fr::ONE, Bn254Fr::TWO])
 }
 
 #[derive(Debug, Clone, Default)]

@@ -32,14 +32,14 @@ const SBOX_REGISTERS: usize = 0;
 const HALF_FULL_ROUNDS: usize = 4;
 const PARTIAL_ROUNDS: usize = 20;
 
-const NUM_ROWS: usize = 1 << 18;
+const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;
 const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
-// #[cfg(feature = "parallel")]
-// type Dft = p3_dft::Radix2DitParallel;
-// #[cfg(not(feature = "parallel"))]
-type Dft = p3_monty_31::dft::RecursiveDft<KoalaBear>;
+#[cfg(feature = "parallel")]
+type Dft = p3_dft::Radix2DitParallel<KoalaBear>;
+#[cfg(not(feature = "parallel"))]
+type Dft = p3_dft::Radix2Bowers;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -51,6 +51,14 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
+    const PROOFS: usize = 2;
+    for _ in 1..PROOFS {
+        prove_and_verify()?;
+    }
+    prove_and_verify()
+}
+
+fn prove_and_verify() -> Result<(), impl Debug> {
     type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
@@ -118,13 +126,14 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants, external_linear_layer, internal_linear_layer);
 
+    let dft = Dft::default();
+
     let fri_config = FriConfig {
         log_blowup: 1,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
-    let dft = Dft::new(trace.height() << fri_config.log_blowup);
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

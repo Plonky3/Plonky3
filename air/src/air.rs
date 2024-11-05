@@ -14,6 +14,13 @@ pub trait BaseAir<F>: Sync {
     }
 }
 
+///  An AIR with 0 or more public values.
+pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
+    fn num_public_values(&self) -> usize {
+        0
+    }
+}
+
 /// An AIR that works with a particular `AirBuilder`.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     fn eval(&self, builder: &mut AB);
@@ -96,7 +103,7 @@ pub trait AirBuilder: Sized {
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
     fn assert_one<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.assert_zero(x.into() - Self::Expr::one());
+        self.assert_zero(x.into() - Self::Expr::ONE);
     }
 
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
@@ -106,7 +113,7 @@ pub trait AirBuilder: Sized {
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::Expr::one()));
+        self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
 }
 
@@ -143,7 +150,7 @@ pub trait ExtensionBuilder: AirBuilder {
     where
         I: Into<Self::ExprEF>,
     {
-        self.assert_eq_ext(x, Self::ExprEF::one())
+        self.assert_eq_ext(x, Self::ExprEF::ONE)
     }
 }
 

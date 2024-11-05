@@ -12,21 +12,17 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // R.<x> = F[]
     // assert (x^3 - 5).is_irreducible()
     // ```
-    fn w() -> Self {
-        Self::new(5)
-    }
+    const W: Self = Self::new(5);
+
     // ```sage
     // F(5)^((p-1)/3)
     // ```
-    fn dth_root() -> Self {
-        Self::new(1513477735)
-    }
+    const DTH_ROOT: Self = Self::new(1513477735);
+
     // ```sage
     // F.extension(x^3 - 5, 'u').multiplicative_generator()
     // ```
-    fn ext_generator() -> [Self; 3] {
-        [Self::new(10), Self::new(1), Self::zero()]
-    }
+    const EXT_GENERATOR: [Self; 3] = [Self::new(10), Self::new(1), Self::ZERO];
 }
 
 impl HasComplexBinomialExtension<2> for Mersenne31 {
@@ -40,14 +36,10 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // f2 = y^2 - i - 2
     // assert f2.is_irreducible()
     // ```
-    fn w() -> Complex<Self> {
-        Complex::new(Mersenne31::new(2), Mersenne31::one())
-    }
+    const W: Complex<Self> = Complex::new(Mersenne31::new(2), Mersenne31::ONE);
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    fn dth_root() -> Complex<Self> {
-        Complex::new_real(Mersenne31::new(2147483646))
-    }
+    const DTH_ROOT: Complex<Self> = Complex::new_real(Mersenne31::new(2147483646));
 
     // Verifiable in Sage with
     // ```sage
@@ -56,9 +48,7 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // for f in factor(p^4 - 1):
     //   assert g^((p^4-1) // f) != 1
     // ```
-    fn ext_generator() -> [Complex<Self>; 2] {
-        [Complex::new_real(Mersenne31::new(6)), Complex::one()]
-    }
+    const EXT_GENERATOR: [Complex<Self>; 2] = [Complex::new_real(Mersenne31::new(6)), Complex::ONE];
 }
 
 impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
@@ -68,11 +58,11 @@ impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
         assert!(bits <= 33);
         if bits == 33 {
             [
-                Complex::zero(),
+                Complex::ZERO,
                 Complex::new(Mersenne31::new(1437746044), Mersenne31::new(946469285)),
             ]
         } else {
-            [Complex::two_adic_generator(bits), Complex::zero()]
+            [Complex::two_adic_generator(bits), Complex::ZERO]
         }
     }
 }
@@ -88,14 +78,10 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
     // f2 = y^3 - 5*i
     // assert f2.is_irreducible()
     // ```
-    fn w() -> Complex<Self> {
-        Complex::new_imag(Mersenne31::new(5))
-    }
+    const W: Complex<Self> = Complex::new_imag(Mersenne31::new(5));
 
     // DTH_ROOT = W^((p^2 - 1)/2).
-    fn dth_root() -> Complex<Self> {
-        Complex::new_real(Mersenne31::new(634005911))
-    }
+    const DTH_ROOT: Complex<Self> = Complex::new_real(Mersenne31::new(634005911));
 
     // Verifiable in Sage with
     // ```sage
@@ -104,13 +90,11 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
     // for f in factor(p^6 - 1):
     //   assert g^((p^6-1) // f) != 1
     // ```
-    fn ext_generator() -> [Complex<Self>; 3] {
-        [
-            Complex::new_real(Mersenne31::new(5)),
-            Complex::new_real(Mersenne31::one()),
-            Complex::zero(),
-        ]
-    }
+    const EXT_GENERATOR: [Complex<Self>; 3] = [
+        Complex::new_real(Mersenne31::new(5)),
+        Complex::new_real(Mersenne31::ONE),
+        Complex::ZERO,
+    ];
 }
 
 impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {

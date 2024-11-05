@@ -1,11 +1,9 @@
 //! An implementation of the FFT for `MontyField31`
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::iter;
-use core::mem::transmute;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
@@ -114,7 +112,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                 .iter()
                 .map(|ts| {
                     // The first twiddle is still one, we reverse and negate the rest...
-                    iter::once(MontyField31::one())
+                    iter::once(MontyField31::ONE)
                         .chain(
                             ts[1..]
                                 .iter()
@@ -255,13 +253,10 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let mat = mat.bit_reverse_rows().to_row_major_matrix();
 
         // Allocate space for the output and the intermediate state.
-        // NB: The unsafe version below takes well under 1ms, whereas doing
-        //   vec![MontyField31::zero(); output_size])
-        // takes 100s of ms. Safety is expensive.
-        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| unsafe {
+        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| {
             // Safety: These are pretty dodgy, but work because MontyField31 is #[repr(transparent)]
-            let output = transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
-            let padded = transmute::<Vec<u32>, Vec<MontyField31<MP>>>(vec![0u32; output_size]);
+            let output = MontyField31::<MP>::zero_vec(output_size);
+            let padded = MontyField31::<MP>::zero_vec(output_size);
             (output, padded)
         });
 

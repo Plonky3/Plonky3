@@ -16,9 +16,16 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 criterion = "0.5.1"
+p3-baby-bear = { path = "../baby-bear" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+rand_chacha = "0.3.1"
 
 [[bench]]
 name = "transpose_benchmark"
 path = "benches/transpose_benchmark.rs"
+harness = false
+
+[[bench]]
+name = "columnwise_dot_product"
+path = "benches/columnwise_dot_product.rs"
 harness = false

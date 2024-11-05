@@ -68,7 +68,7 @@ fn compute_twiddles<F: ComplexExtendable>(log_n: usize, shift: Complex<F>) -> Ve
                     .iter()
                     .take(size / 2)
                     // When we square a point, the real part changes as x -> 2x^2 - 1.
-                    .map(|x| x.square().double() - F::one())
+                    .map(|x| x.square().double() - F::ONE)
                     .collect();
                 mem::replace(&mut working_domain, new_working_domain)
             };

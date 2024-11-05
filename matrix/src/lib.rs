@@ -4,15 +4,17 @@
 
 extern crate alloc;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
 use itertools::{izip, Itertools};
-use p3_field::{dot_product, AbstractExtensionField, ExtensionField, Field, PackedValue};
+use p3_field::{
+    dot_product, AbstractExtensionField, AbstractField, ExtensionField, Field, PackedValue,
+};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
+use tracing::instrument;
 
 use crate::dense::RowMajorMatrix;
 
@@ -26,7 +28,7 @@ pub mod stack;
 pub mod strided;
 pub mod util;
 
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,
@@ -124,7 +126,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Clone + Default + 'a,
     {
         let mut row_iter = self.row(r);
-        let num_elems = self.width().next_multiple_of(P::WIDTH);
+        let num_elems = self.width().div_ceil(P::WIDTH);
         // array::from_fn currently always calls in order, but it's not clear whether that's guaranteed.
         (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
     }
@@ -158,12 +160,52 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .map(|r| self.padded_horizontally_packed_row(r))
     }
 
-    /// Wraps at the end.
+    /// Pack together a collection of adjacent rows from the matrix.
+    ///
+    /// Returns an iterator whose i'th element is packing of the i'th element of the
+    /// rows r through r + P::WIDTH - 1. If we exceed the height of the matrix,
+    /// wrap around and include initial rows.
+    #[inline]
     fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
+        T: Copy,
         P: PackedValue<Value = T>,
     {
-        (0..self.width()).map(move |c| P::from_fn(|i| self.get((r + i) % self.height(), c)))
+        let rows = (0..(P::WIDTH))
+            .map(|c| self.row_slice((r + c) % self.height()))
+            .collect_vec();
+        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
+    }
+
+    /// Pack together a collection of rows and "next" rows from the matrix.
+    ///
+    /// Returns a vector corresponding to 2 packed rows. The i'th element of the first
+    /// row contains the packing of the i'th element of the rows r through r + P::WIDTH - 1.
+    /// The i'th element of the second row contains the packing of the i'th element of the
+    /// rows r + step through r + step + P::WIDTH - 1. If at some point we exceed the
+    /// height of the matrix, wrap around and include initial rows.
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
+        // tests seem to indicate that combining them in the same function is slightly faster.
+        // It's probably allowing the compiler to make some optimizations on the fly.
+
+        let rows = (0..P::WIDTH)
+            .map(|c| self.row_slice((r + c) % self.height()))
+            .collect_vec();
+
+        let next_rows = (0..P::WIDTH)
+            .map(|c| self.row_slice((r + c + step) % self.height()))
+            .collect_vec();
+
+        (0..self.width())
+            .map(|c| P::from_fn(|i| rows[i][c]))
+            .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+            .collect_vec()
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
@@ -174,24 +216,42 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Compute Mᵀv, aka premultiply this matrix by the given vector,
-    /// aka scale each row by the corresponding entry in `v` and take the row-wise sum.
+    /// aka scale each row by the corresponding entry in `v` and take the sum across rows.
     /// `v` can be a vector of extension elements.
+    #[instrument(level = "debug", skip_all, fields(dims = %self.dimensions()))]
     fn columnwise_dot_product<EF>(&self, v: &[EF]) -> Vec<EF>
     where
         T: Field,
         EF: ExtensionField<T>,
     {
-        self.par_rows().zip(v).par_fold_reduce(
-            || vec![EF::zero(); self.width()],
-            |mut acc, (row, &scale)| {
-                izip!(&mut acc, row).for_each(|(a, x)| *a += scale * x);
-                acc
-            },
-            |mut acc_l, acc_r| {
-                izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
-                acc_l
-            },
-        )
+        let packed_width = self.width().div_ceil(T::Packing::WIDTH);
+
+        let packed_result = self
+            .par_padded_horizontally_packed_rows::<T::Packing>()
+            .zip(v)
+            .par_fold_reduce(
+                || EF::ExtensionPacking::zero_vec(packed_width),
+                |mut acc, (row, &scale)| {
+                    let scale = EF::ExtensionPacking::from_base_fn(|i| {
+                        T::Packing::from(scale.as_base_slice()[i])
+                    });
+                    izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
+                    acc
+                },
+                |mut acc_l, acc_r| {
+                    izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
+                    acc_l
+                },
+            );
+
+        packed_result
+            .into_iter()
+            .flat_map(|p| {
+                (0..T::Packing::WIDTH)
+                    .map(move |i| EF::from_base_fn(|j| p.as_base_slice()[j].as_slice()[i]))
+            })
+            .take(self.width())
+            .collect()
     }
 
     /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
@@ -217,5 +277,36 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 });
                 sum_of_packed
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use itertools::izip;
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::AbstractField;
+    use rand::thread_rng;
+
+    use super::*;
+
+    #[test]
+    fn test_columnwise_dot_product() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+
+        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
+
+        let mut expected = vec![EF::ZERO; m.width()];
+        for (row, &scale) in izip!(m.rows(), &v) {
+            for (l, r) in izip!(&mut expected, row) {
+                *l += scale * r;
+            }
+        }
+
+        assert_eq!(m.columnwise_dot_product(&v), expected);
     }
 }

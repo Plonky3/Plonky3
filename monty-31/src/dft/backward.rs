@@ -10,17 +10,17 @@ use alloc::vec::Vec;
 use itertools::izip;
 
 use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
-use p3_field::{Field, PackedField, PackedValue};
+use p3_field::{Field, PackedFieldPow2, PackedValue};
 use p3_util::log2_strict_usize;
 
 #[inline(always)]
-fn backward_butterfly<T: PackedField>(x: T, y: T, roots: T) -> (T, T) {
+fn backward_butterfly<T: PackedFieldPow2>(x: T, y: T, roots: T) -> (T, T) {
     let t = y * roots;
     (x + t, x - t)
 }
 
 #[inline(always)]
-fn backward_butterfly_interleaved<const HALF_RADIX: usize, T: PackedField>(
+fn backward_butterfly_interleaved<const HALF_RADIX: usize, T: PackedFieldPow2>(
     x: T,
     y: T,
     roots: T,
@@ -31,7 +31,7 @@ fn backward_butterfly_interleaved<const HALF_RADIX: usize, T: PackedField>(
 }
 
 #[inline]
-fn backward_iterative_layer_1<T: PackedField>(input: &mut [T], roots: &[T::Scalar]) {
+fn backward_iterative_layer_1<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Scalar]) {
     let packed_roots = T::pack_slice(roots);
     let n = input.len();
     let (xs, ys) = unsafe { input.split_at_mut_unchecked(n / 2) };
@@ -41,7 +41,7 @@ fn backward_iterative_layer_1<T: PackedField>(input: &mut [T], roots: &[T::Scala
 }
 
 #[inline]
-fn backward_iterative_layer_2<T: PackedField>(input: &mut [T], roots: &[T::Scalar]) {
+fn backward_iterative_layer_2<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Scalar]) {
     let packed_roots = T::pack_slice(roots);
     let n = input.len();
     let (top_half, bottom_half) = unsafe { input.split_at_mut_unchecked(n / 2) };
@@ -55,7 +55,7 @@ fn backward_iterative_layer_2<T: PackedField>(input: &mut [T], roots: &[T::Scala
 }
 
 #[inline]
-fn backward_iterative_radix_r<const HALF_RADIX: usize, T: PackedField>(
+fn backward_iterative_radix_r<const HALF_RADIX: usize, T: PackedFieldPow2>(
     input: &mut [T],
     roots: &[T::Scalar],
 ) {
@@ -71,7 +71,7 @@ fn backward_iterative_radix_r<const HALF_RADIX: usize, T: PackedField>(
 }
 
 #[inline]
-fn backward_iterative_radix_2<T: PackedField>(input: &mut [T]) {
+fn backward_iterative_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
     input.chunks_exact_mut(2).for_each(|pair| {
         let x = pair[0];
         let y = pair[1];

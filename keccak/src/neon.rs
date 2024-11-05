@@ -200,17 +200,17 @@ fn round(i: usize, state: [uint64x2_t; 25]) -> [uint64x2_t; 25] {
     flatten(state)
 }
 
-fn keccak_perm(buf: &mut [uint64x2_t; 25]) {
-    let mut state = *buf;
+fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
+    let mut state: [uint64x2_t; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = state;
+    *buf = unsafe { transmute::<[uint64x2_t; 25], [[u64; VECTOR_LEN]; 25]>(state) };
 }
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
     fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
-        keccak_perm(unsafe { transmute(state) });
+        keccak_perm(state);
     }
 }
 
@@ -218,9 +218,6 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
-
-    use core::arch::aarch64::{vcombine_u64, vdup_n_u64, vdupd_laneq_u64, vdupq_n_u64};
-
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -282,21 +279,19 @@ mod tests {
         ],
     ];
 
+    #[allow(clippy::needless_range_loop)]
     fn our_res() -> [[u64; 25]; 2] {
-        let mut packed_result = [unsafe { vdupq_n_u64(0) }; 25];
+        let mut packed_result = [[0; 2]; 25];
         for i in 0..25 {
-            packed_result[i] =
-                unsafe { vcombine_u64(vdup_n_u64(STATES[0][i]), vdup_n_u64(STATES[1][i])) };
+            packed_result[i] = [STATES[0][i], STATES[1][i]];
         }
 
         keccak_perm(&mut packed_result);
 
         let mut result = [[0; 25]; 2];
         for i in 0..25 {
-            unsafe {
-                result[0][i] = vdupd_laneq_u64(packed_result[i], 0);
-                result[1][i] = vdupd_laneq_u64(packed_result[i], 1);
-            }
+            result[0][i] = packed_result[i][0];
+            result[1][i] = packed_result[i][1];
         }
         result
     }

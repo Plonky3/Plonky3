@@ -1,3 +1,4 @@
+use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
@@ -10,7 +11,6 @@ use crate::AbstractField;
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
 /// # Safety
-/// - `WIDTH` is assumed to be a power of 2.
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
@@ -63,9 +63,31 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    fn pack_maybe_uninit_slice_mut(
+        buf: &mut [MaybeUninit<Self::Value>],
+    ) -> &mut [MaybeUninit<Self>] {
+        assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        assert!(
+            buf.len() % Self::WIDTH == 0,
+            "Slice length (got {}) must be a multiple of packed field width ({}).",
+            buf.len(),
+            Self::WIDTH
+        );
+        let buf_ptr = buf.as_mut_ptr().cast::<MaybeUninit<Self>>();
+        let n = buf.len() / Self::WIDTH;
+        unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
+    }
+
     fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
         let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice_mut(packed), suffix)
+    }
+
+    fn pack_maybe_uninit_slice_with_suffix_mut(
+        buf: &mut [MaybeUninit<Self::Value>],
+    ) -> (&mut [MaybeUninit<Self>], &mut [MaybeUninit<Self::Value>]) {
+        let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
+        (Self::pack_maybe_uninit_slice_mut(packed), suffix)
     }
 
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
@@ -81,10 +103,12 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     const WIDTH: usize = WIDTH;
 
     fn from_slice(slice: &[Self::Value]) -> &Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         slice.try_into().unwrap()
     }
 
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         slice.try_into().unwrap()
     }
 
@@ -118,8 +142,12 @@ pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {
-    type Scalar: Field + Add<Self, Output = Self> + Mul<Self, Output = Self> + Sub<Self, Output = Self>;
+    type Scalar: Field;
+}
 
+/// # Safety
+/// - `WIDTH` is assumed to be a power of 2.
+pub unsafe trait PackedFieldPow2: PackedField {
     /// Take interpret two vectors as chunks of `block_len` elements. Unpack and interleave those
     /// chunks. This is best seen with an example. If we have:
     /// ```text
@@ -188,7 +216,9 @@ unsafe impl<T: Packable> PackedValue for T {
 
 unsafe impl<F: Field> PackedField for F {
     type Scalar = Self;
+}
 
+unsafe impl<F: Field> PackedFieldPow2 for F {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         match block_len {
             1 => (*self, other),

@@ -58,7 +58,7 @@ impl MulAir {
         Standard: Distribution<F>,
     {
         let mut rng = thread_rng();
-        let mut trace_values = vec![F::default(); rows * TRACE_WIDTH];
+        let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
 
@@ -68,7 +68,7 @@ impl MulAir {
                 rng.gen()
             };
             *b = if self.uses_boundary_constraints && row == 0 {
-                a.square() + F::one()
+                a.square() + F::ONE
             } else {
                 rng.gen()
             };
@@ -76,7 +76,7 @@ impl MulAir {
 
             if !valid {
                 // make it invalid
-                *c *= F::two();
+                *c *= F::TWO;
             }
         }
         RowMajorMatrix::new(trace_values, TRACE_WIDTH)
@@ -102,9 +102,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let c = main_local[start + 2];
             builder.assert_zero(a.into().exp_u64(self.degree - 1) * b - c);
             if self.uses_boundary_constraints {
-                builder
-                    .when_first_row()
-                    .assert_eq(a * a + AB::Expr::one(), b);
+                builder.when_first_row().assert_eq(a * a + AB::Expr::ONE, b);
             }
             if self.uses_transition_constraints {
                 let next_a = main_next[start];
@@ -158,12 +156,12 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
         &mut thread_rng(),
     );
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    type Pcs = TrivialPcs<Val, Radix2DitParallel>;
+    type Pcs = TrivialPcs<Val, Radix2DitParallel<Val>>;
     let pcs = TrivialPcs {
         dft,
         log_n,
@@ -220,8 +218,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel;
-    let dft = Dft {};
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 

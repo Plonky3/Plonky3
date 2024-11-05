@@ -138,7 +138,7 @@ where
         is_last_row: sels.is_last_row,
         is_transition: sels.is_transition,
         alpha,
-        accumulator: SC::Challenge::zero(),
+        accumulator: SC::Challenge::ZERO,
     };
     air.eval(&mut folder);
     let folded_constraints = folder.accumulator;

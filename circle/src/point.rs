@@ -1,7 +1,8 @@
+use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
+use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -17,12 +18,15 @@ pub struct Point<F> {
 impl<F: Field> Point<F> {
     #[inline]
     pub fn new(x: F, y: F) -> Point<F> {
-        debug_assert_eq!(x.square() + y.square(), F::one());
+        debug_assert_eq!(x.square() + y.square(), F::ONE);
         Point { x, y, _private: () }
     }
-    pub fn zero() -> Self {
-        Self::new(F::one(), F::zero())
-    }
+
+    const ZERO: Self = Self {
+        x: F::ONE,
+        y: F::ZERO,
+        _private: (),
+    };
 
     /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
     /// ```ignore
@@ -32,8 +36,8 @@ impl<F: Field> Point<F> {
     /// (on the projective *circle*) (1 : ±i : 0)
     pub fn from_projective_line(t: F) -> Self {
         let t2 = t.square();
-        let inv_denom = (F::one() + t2).try_inverse().expect("t^2 = -1");
-        Self::new((F::one() - t2) * inv_denom, t.double() * inv_denom)
+        let inv_denom = (F::ONE + t2).try_inverse().expect("t^2 = -1");
+        Self::new((F::ONE - t2) * inv_denom, t.double() * inv_denom)
     }
 
     /// Circle STARKs, Section 3, Lemma 1: (page 4 of the first revision PDF)
@@ -46,16 +50,13 @@ impl<F: Field> Point<F> {
     /// and a simple pole at (-1,0), which in the paper is called v_0
     /// Circle STARKs, Section 5.1, Lemma 11 (page 21 of the first revision PDF)
     pub fn to_projective_line(self) -> Option<F> {
-        self.y.try_div(self.x + F::one())
+        self.y.try_div(self.x + F::ONE)
     }
 
     /// The "squaring map", or doubling in additive notation, denoted π(x,y)
     /// Circle STARKs, Section 3.1, Equation 1: (page 5 of the first revision PDF)
     pub fn double(self) -> Self {
-        Self::new(
-            self.x.square().double() - F::one(),
-            self.x.double() * self.y,
-        )
+        Self::new(self.x.square().double() - F::ONE, self.x.double() * self.y)
     }
 
     /// Evaluate the vanishing polynomial for the standard position coset of size 2^log_n
@@ -63,15 +64,22 @@ impl<F: Field> Point<F> {
     /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)
     pub fn v_n(mut self, log_n: usize) -> F {
         for _ in 0..(log_n - 1) {
-            self.x = self.x.square().double() - F::one();
+            self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
         }
         self.x
     }
 
-    /// Evaluate the formal derivative of `v_n` at `self`
-    /// Circle STARKs, Section 5.1, Remark 15 (page 21 of the first revision PDF)
-    pub fn v_n_prime(self, log_n: usize) -> F {
-        F::two().exp_u64((2 * (log_n - 1)) as u64) * (1..log_n).map(|i| self.v_n(i)).product()
+    /// Compute a product of successive `v_n`'s.
+    ///
+    /// More explicitely this computes `(1..log_n).map(|i| self.v_n(i)).product()`
+    /// but uses far fewer `self.x.square().double() - F::ONE` steps compared to the naive implementation.
+    pub fn v_n_prod(mut self, log_n: usize) -> F {
+        let mut output = self.x;
+        for _ in 0..(log_n - 2) {
+            self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
+            output *= self.x;
+        }
+        output
     }
 
     /// Evaluate the selector function which is zero at `self` and nonzero elsewhere, at `at`.
@@ -85,7 +93,7 @@ impl<F: Field> Point<F> {
     /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P=self, used for normalization.
     /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
     pub fn s_p_at_p(self, log_n: usize) -> F {
-        -F::two() * self.v_n_prime(log_n) * self.y
+        -self.v_n_prod(log_n).mul_2exp_u64((2 * log_n - 1) as u64) * self.y
     }
 
     /// Evaluate the alternate single-point vanishing function v_p(x), used for DEEP quotient.
@@ -94,8 +102,37 @@ impl<F: Field> Point<F> {
     /// Circle STARKs, Section 3.3, Equation 11 (page 11 of the first edition PDF).
     pub fn v_p<EF: ExtensionField<F>>(self, at: Point<EF>) -> (EF, EF) {
         let diff = -at + self;
-        (EF::one() - diff.x, -diff.y)
+        (EF::ONE - diff.x, -diff.y)
     }
+}
+
+/// Compute (ṽ_P(x,y) * s_p)^{-1} for each element in the list.
+/// This takes advantage of batched inversion.
+pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
+    points: &[Point<F>],
+    at: Point<EF>,
+    log_n: usize,
+) -> Vec<EF> {
+    // This following line costs about 2% of the runtime for example prove_poseidon2_m31_keccak.
+    // Would be nice to find further speedups.
+    // Maybe modify to use packed fields here?
+    let (numer, denom): (Vec<_>, Vec<_>) = points
+        .iter()
+        .map(|&pt| {
+            let diff = at - pt;
+            let numer = diff.x + F::ONE;
+            let denom = diff.y * pt.s_p_at_p(log_n);
+            (numer, denom)
+        })
+        .unzip();
+
+    let inv_d = batch_multiplicative_inverse(&denom);
+
+    numer
+        .iter()
+        .zip(inv_d.iter())
+        .map(|(&num, &inv_d)| num * inv_d)
+        .collect()
 }
 
 impl<F: ComplexExtendable> Point<F> {
@@ -134,14 +171,17 @@ impl<F: Field> AddAssign for Point<F> {
 impl<F: Field, EF: ExtensionField<F>> Sub<Point<F>> for Point<EF> {
     type Output = Self;
     fn sub(self, rhs: Point<F>) -> Self::Output {
-        self + (-rhs)
+        Self::new(
+            self.x * rhs.x + self.y * rhs.y,
+            self.y * rhs.x - self.x * rhs.y,
+        )
     }
 }
 
 impl<F: Field> Mul<usize> for Point<F> {
     type Output = Self;
     fn mul(mut self, mut rhs: usize) -> Self::Output {
-        let mut res = Self::zero();
+        let mut res = Self::ZERO;
         while rhs != 0 {
             if rhs & 1 == 1 {
                 res += self;
@@ -165,10 +205,15 @@ mod tests {
     #[test]
     fn test_arithmetic() {
         let one = Pt::generator(3);
-        assert_eq!(one - one, Pt::zero());
+        assert_eq!(one - one, Pt::ZERO);
         assert_eq!(one + one, one * 2);
         assert_eq!(one + one + one, one * 3);
         assert_eq!(one * 7, -one);
-        assert_eq!(one * 8, Pt::zero());
+        assert_eq!(one * 8, Pt::ZERO);
+
+        let gen = Pt::generator(10);
+        let log_n = 10;
+        let vn_prod_gen = (1..log_n).map(|i| gen.v_n(i)).product();
+        assert_eq!(gen.v_n_prod(log_n), vn_prod_gen);
     }
 }

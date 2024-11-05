@@ -12,15 +12,11 @@ impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
-    fn w() -> Self {
-        <FP as BinomialExtensionData<WIDTH>>::W
-    }
-    fn dth_root() -> Self {
-        <FP as BinomialExtensionData<WIDTH>>::DTH_ROOT
-    }
-    fn ext_generator() -> [Self; WIDTH] {
-        FP::EXT_GENERATOR
-    }
+    const W: Self = <FP as BinomialExtensionData<WIDTH>>::W;
+
+    const DTH_ROOT: Self = <FP as BinomialExtensionData<WIDTH>>::DTH_ROOT;
+
+    const EXT_GENERATOR: [Self; WIDTH] = FP::EXT_GENERATOR;
 }
 
 impl<const WIDTH: usize, FP> HasTwoAdicBionmialExtension<WIDTH> for MontyField31<FP>

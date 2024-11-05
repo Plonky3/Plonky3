@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{izip, Itertools};
 use p3_air::Air;
@@ -10,13 +9,12 @@ use p3_field::{AbstractExtensionField, AbstractField, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
 
-use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
 use crate::{
-    Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof, ProverConstraintFolder,
-    StarkGenericConfig, Val,
+    get_symbolic_constraints, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof,
+    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val,
 };
 
 #[instrument(skip_all)]
@@ -42,7 +40,14 @@ where
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
+    let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
+    let constraint_count = symbolic_constraints.len();
+    let constraint_degree = symbolic_constraints
+        .iter()
+        .map(SymbolicExpression::degree_multiple)
+        .max()
+        .unwrap_or(0);
+    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
@@ -71,6 +76,7 @@ where
         quotient_domain,
         trace_on_quotient_domain,
         alpha,
+        constraint_count,
     );
     let quotient_flat = RowMajorMatrix::new_col(quotient_values).flatten_to_base();
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
@@ -125,6 +131,7 @@ fn quotient_values<SC, A, Mat>(
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: Mat,
     alpha: SC::Challenge,
+    constraint_count: usize,
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
@@ -147,6 +154,9 @@ where
         sels.inv_zeroifier.push(Val::<SC>::default());
     }
 
+    let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
+    alpha_powers.reverse();
+
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -159,22 +169,20 @@ where
             let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
 
             let main = RowMajorMatrix::new(
-                iter::empty()
-                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start))
-                    .chain(trace_on_quotient_domain.vertically_packed_row(i_start + next_step))
-                    .collect_vec(),
+                trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
                 width,
             );
 
-            let accumulator = PackedChallenge::<SC>::zero();
+            let accumulator = PackedChallenge::<SC>::ZERO;
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 public_values,
                 is_first_row,
                 is_last_row,
                 is_transition,
-                alpha,
+                alpha_powers: &alpha_powers,
                 accumulator,
+                constraint_index: 0,
             };
             air.eval(&mut folder);
 

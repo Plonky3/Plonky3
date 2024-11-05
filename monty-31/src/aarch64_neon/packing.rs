@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::arch::aarch64::{self, int32x4_t, uint32x4_t};
 use core::arch::asm;
 use core::hint::unreachable_unchecked;
@@ -5,7 +6,8 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -426,7 +428,7 @@ impl<FP: FieldParameters> Sum for PackedMontyField31Neon<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -436,32 +438,17 @@ impl<FP: FieldParameters> Product for PackedMontyField31Neon<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
 impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
     type F = MontyField31<FP>;
 
-    #[inline]
-    fn zero() -> Self {
-        MontyField31::zero().into()
-    }
-
-    #[inline]
-    fn one() -> Self {
-        MontyField31::one().into()
-    }
-
-    #[inline]
-    fn two() -> Self {
-        MontyField31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        MontyField31::neg_one().into()
-    }
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -503,11 +490,6 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
     }
 
     #[inline]
-    fn generator() -> Self {
-        MontyField31::generator().into()
-    }
-
-    #[inline]
     fn cube(&self) -> Self {
         let val = self.to_vector();
         let res = cube::<FP>(val);
@@ -515,6 +497,12 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
             // Safety: `cube` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
     }
 }
 
@@ -702,7 +690,9 @@ unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31Neon<FP> {
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
     type Scalar = MontyField31<FP>;
+}
 
+unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31Neon<FP> {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());

@@ -95,6 +95,22 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         RowMajorMatrixViewMut::new(self.values.borrow_mut(), self.width)
     }
 
+    pub fn copy_from<S2>(&mut self, source: &DenseMatrix<T, S2>)
+    where
+        T: Copy,
+        S: BorrowMut<[T]>,
+        S2: DenseStorage<T>,
+    {
+        assert_eq!(self.dimensions(), source.dimensions());
+        // Equivalent to:
+        // self.values.borrow_mut().copy_from_slice(source.values.borrow());
+        self.par_rows_mut()
+            .zip(source.par_row_slices())
+            .for_each(|(dst, src)| {
+                dst.copy_from_slice(src);
+            });
+    }
+
     pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
     where
         T: ExtensionField<F>,
@@ -228,6 +244,20 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
+    pub fn row_chunks_exact_mut(
+        &mut self,
+        chunk_rows: usize,
+    ) -> impl Iterator<Item = RowMajorMatrixViewMut<T>>
+    where
+        T: Send,
+        S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow_mut()
+            .chunks_exact_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
+    }
+
     pub fn par_row_chunks_exact_mut(
         &mut self,
         chunk_rows: usize,
@@ -275,7 +305,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     #[instrument(level = "debug", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
-        T: Copy + Default + Send + Sync,
+        T: Field,
     {
         if added_bits == 0 {
             return self.to_row_major_matrix();
@@ -285,16 +315,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         //     reverse_matrix_index_bits(mat);
         //     mat
         //         .values
-        //         .resize(mat.values.len() << added_bits, F::zero());
+        //         .resize(mat.values.len() << added_bits, F::ZERO);
         //     reverse_matrix_index_bits(mat);
         // But rather than implement it with bit reversals, we directly construct the resulting matrix,
         // whose rows are zero except for rows whose low `added_bits` bits are zero.
 
         let w = self.width;
-        let mut padded = RowMajorMatrix::new(
-            vec![T::default(); self.values.borrow().len() << added_bits],
-            w,
-        );
+        let mut padded =
+            RowMajorMatrix::new(T::zero_vec(self.values.borrow().len() << added_bits), w);
         padded
             .par_row_chunks_exact_mut(1 << added_bits)
             .zip(self.par_row_slices())
@@ -305,9 +333,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
 }
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S> {
+    #[inline]
     fn width(&self) -> usize {
         self.width
     }
+
+    #[inline]
     fn height(&self) -> usize {
         if self.width == 0 {
             0
@@ -315,21 +346,29 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
             self.values.borrow().len() / self.width
         }
     }
+
+    #[inline]
     fn get(&self, r: usize, c: usize) -> T {
         self.values.borrow()[r * self.width + c].clone()
     }
+
     type Row<'a>
         = iter::Cloned<slice::Iter<'a, T>>
     where
         Self: 'a;
+
+    #[inline]
     fn row(&self, r: usize) -> Self::Row<'_> {
         self.values.borrow()[r * self.width..(r + 1) * self.width]
             .iter()
             .cloned()
     }
+
+    #[inline]
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         &self.values.borrow()[r * self.width..(r + 1) * self.width]
     }
+
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
@@ -338,6 +377,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
 
+    #[inline]
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
@@ -354,6 +394,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         (packed.iter().cloned(), sfx.iter().cloned())
     }
 
+    #[inline]
     fn padded_horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,

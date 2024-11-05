@@ -1,9 +1,11 @@
+use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedValue};
+use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
@@ -359,7 +361,7 @@ impl<FP: FieldParameters> Sum for PackedMontyField31AVX512<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -369,32 +371,17 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX512<FP> {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
 impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
     type F = MontyField31<FP>;
 
-    #[inline]
-    fn zero() -> Self {
-        MontyField31::zero().into()
-    }
-
-    #[inline]
-    fn one() -> Self {
-        MontyField31::one().into()
-    }
-
-    #[inline]
-    fn two() -> Self {
-        MontyField31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        MontyField31::neg_one().into()
-    }
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -435,9 +422,10 @@ impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX512<FP> {
         MontyField31::from_wrapped_u64(n).into()
     }
 
-    #[inline]
-    fn generator() -> Self {
-        MontyField31::generator().into()
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
     }
 }
 
@@ -766,7 +754,9 @@ unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX512<FP> {
     type Scalar = MontyField31<FP>;
+}
 
+unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31AVX512<FP> {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());

@@ -1,7 +1,10 @@
 //! An abstraction of 31-bit fields which use a MONTY approach for faster multiplication.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
+use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -31,6 +34,7 @@ pub struct MontyField31<MP: MontyParameters> {
 impl<MP: MontyParameters> MontyField31<MP> {
     // The standard way to crate a new element.
     // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
+    #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
             value: to_monty::<MP>(value),
@@ -41,6 +45,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
     // Create a new field element from something already in MONTY form.
     // This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
     // likely doing something fishy.
+    #[inline(always)]
     pub(crate) const fn new_monty(value: u32) -> Self {
         Self {
             value,
@@ -49,7 +54,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
     }
 
     /// Produce a u32 in range [0, P) from a field element corresponding to the true value.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn to_u32(elem: &Self) -> u32 {
         from_monty::<MP>(elem.value)
     }
@@ -146,70 +151,63 @@ impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
-    fn zero() -> Self {
-        FP::MONTY_ZERO
-    }
-    fn one() -> Self {
-        FP::MONTY_ONE
-    }
-    fn two() -> Self {
-        FP::MONTY_TWO
-    }
-    fn neg_one() -> Self {
-        FP::MONTY_NEG_ONE
-    }
+    const ZERO: Self = FP::MONTY_ZERO;
+    const ONE: Self = FP::MONTY_ONE;
+    const TWO: Self = FP::MONTY_TWO;
+    const NEG_ONE: Self = FP::MONTY_NEG_ONE;
 
-    #[inline]
+    #[inline(always)]
     fn from_f(f: Self::F) -> Self {
         f
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_bool(b: bool) -> Self {
         Self::from_canonical_u32(b as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u8(n: u8) -> Self {
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u16(n: u16) -> Self {
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u32(n: u32) -> Self {
         debug_assert!(n < FP::PRIME);
         Self::from_wrapped_u32(n)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_u64(n: u64) -> Self {
         debug_assert!(n < FP::PRIME as u64);
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_canonical_usize(n: usize) -> Self {
         debug_assert!(n < FP::PRIME as usize);
         Self::from_canonical_u32(n as u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_wrapped_u32(n: u32) -> Self {
         Self::new(n)
     }
 
-    #[inline]
+    #[inline(always)]
     fn from_wrapped_u64(n: u64) -> Self {
         Self::new_monty(to_monty_64::<FP>(n))
     }
 
     #[inline]
-    fn generator() -> Self {
-        FP::MONTY_GEN
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: repr(transparent) ensures transmutation safety.
+        unsafe { transmute(vec![0u32; len]) }
     }
 }
 
@@ -242,6 +240,8 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         ),
     )))]
     type Packing = Self;
+
+    const GENERATOR: Self = FP::MONTY_GEN;
 
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
@@ -326,7 +326,7 @@ impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
 impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
         // There might be a faster reduction method possible for lengths <= 16 which avoids %.
 
         // This sum will not overflow so long as iter.len() < 2^33.
@@ -359,7 +359,7 @@ impl<FP: FieldParameters> Neg for MontyField31<FP> {
 
     #[inline]
     fn neg(self) -> Self::Output {
-        Self::zero() - self
+        Self::ZERO - self
     }
 }
 
@@ -383,7 +383,7 @@ impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
 impl<FP: FieldParameters> Product for MontyField31<FP> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 

@@ -33,7 +33,7 @@ where
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let coset_dft_naive = NaiveDft.coset_dft_batch(mat.clone(), shift);
         let coset_dft_result = dft.coset_dft_batch(mat, shift);
         assert_eq!(coset_dft_naive, coset_dft_result.to_row_major_matrix());
@@ -68,7 +68,7 @@ where
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let idft_naive = NaiveDft.coset_idft_batch(mat.clone(), shift);
         let idft_result = dft.coset_idft_batch(mat, shift);
         assert_eq!(idft_naive, idft_result.to_row_major_matrix());
@@ -103,7 +103,7 @@ where
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let coset_lde_naive = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
         let coset_lde_result = dft.coset_lde_batch(mat, 1, shift);
         assert_eq!(coset_lde_naive, coset_lde_result.to_row_major_matrix());

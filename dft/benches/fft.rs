@@ -23,13 +23,13 @@ fn bench_fft(c: &mut Criterion) {
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    fft::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    fft::<Goldilocks, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
+    fft::<Goldilocks, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<Complex<Mersenne31>, Radix2Dit<_>, BATCH_SIZE>(c, log_half_sizes);
     fft::<Complex<Mersenne31>, Radix2Bowers, BATCH_SIZE>(c, log_half_sizes);
-    fft::<Complex<Mersenne31>, Radix2DitParallel, BATCH_SIZE>(c, log_half_sizes);
+    fft::<Complex<Mersenne31>, Radix2DitParallel<_>, BATCH_SIZE>(c, log_half_sizes);
 
     fft::<Complex<Mersenne31>, Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_half_sizes);
     m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -40,7 +40,7 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    coset_lde::<BabyBear, Radix2DitParallel, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
 }
 
@@ -151,7 +151,7 @@ where
         let dft = Dft::default();
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
-                dft.coset_lde_batch(messages.clone(), 1, F::generator());
+                dft.coset_lde_batch(messages.clone(), 1, F::GENERATOR);
             });
         });
     }

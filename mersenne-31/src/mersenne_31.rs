@@ -1,7 +1,10 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
+use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
@@ -18,6 +21,7 @@ const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
+#[repr(transparent)] // Packed field implementations rely on this!
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     pub(crate) value: u32,
@@ -89,18 +93,12 @@ impl Distribution<Mersenne31> for Standard {
 impl AbstractField for Mersenne31 {
     type F = Self;
 
-    fn zero() -> Self {
-        Self::new(0)
-    }
-    fn one() -> Self {
-        Self::new(1)
-    }
-    fn two() -> Self {
-        Self::new(2)
-    }
-    fn neg_one() -> Self {
-        Self::new(Self::ORDER_U32 - 1)
-    }
+    const ZERO: Self = Self { value: 0 };
+    const ONE: Self = Self { value: 1 };
+    const TWO: Self = Self { value: 2 };
+    const NEG_ONE: Self = Self {
+        value: Self::ORDER_U32 - 1,
+    };
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -162,10 +160,10 @@ impl AbstractField for Mersenne31 {
         Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
-    // Sage: GF(2^31 - 1).multiplicative_generator()
     #[inline]
-    fn generator() -> Self {
-        Self::new(7)
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: repr(transparent) ensures transmutation safety.
+        unsafe { transmute(vec![0u32; len]) }
     }
 }
 
@@ -198,6 +196,9 @@ impl Field for Mersenne31 {
         ),
     )))]
     type Packing = Self;
+
+    // Sage: GF(2^31 - 1).multiplicative_generator()
+    const GENERATOR: Self = Self::new(7);
 
     #[inline]
     fn is_zero(&self) -> bool {
@@ -326,7 +327,7 @@ impl AddAssign for Mersenne31 {
 impl Sum for Mersenne31 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length >= 6.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
         // It assumes that iter.len() < 2^31.
 
         // This sum will not overflow so long as iter.len() < 2^33.
@@ -390,7 +391,7 @@ impl MulAssign for Mersenne31 {
 impl Product for Mersenne31 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
@@ -439,27 +440,27 @@ mod tests {
 
     #[test]
     fn add() {
-        assert_eq!(F::one() + F::one(), F::two());
-        assert_eq!(F::neg_one() + F::one(), F::zero());
-        assert_eq!(F::neg_one() + F::two(), F::one());
-        assert_eq!(F::neg_one() + F::neg_one(), F::new(F::ORDER_U32 - 2));
+        assert_eq!(F::ONE + F::ONE, F::TWO);
+        assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
+        assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
+        assert_eq!(F::NEG_ONE + F::NEG_ONE, F::new(F::ORDER_U32 - 2));
     }
 
     #[test]
     fn sub() {
-        assert_eq!(F::one() - F::one(), F::zero());
-        assert_eq!(F::two() - F::two(), F::zero());
-        assert_eq!(F::neg_one() - F::neg_one(), F::zero());
-        assert_eq!(F::two() - F::one(), F::one());
-        assert_eq!(F::neg_one() - F::zero(), F::neg_one());
+        assert_eq!(F::ONE - F::ONE, F::ZERO);
+        assert_eq!(F::TWO - F::TWO, F::ZERO);
+        assert_eq!(F::NEG_ONE - F::NEG_ONE, F::ZERO);
+        assert_eq!(F::TWO - F::ONE, F::ONE);
+        assert_eq!(F::NEG_ONE - F::ZERO, F::NEG_ONE);
     }
 
     #[test]
     fn mul_2exp_u64() {
         // 1 * 2^0 = 1.
-        assert_eq!(F::one().mul_2exp_u64(0), F::one());
+        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
         // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::two().mul_2exp_u64(30), F::one());
+        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
         // 5 * 2^2 = 20.
         assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
     }
@@ -467,9 +468,9 @@ mod tests {
     #[test]
     fn div_2exp_u64() {
         // 1 / 2^0 = 1.
-        assert_eq!(F::one().div_2exp_u64(0), F::one());
+        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
         // 2 / 2^0 = 2.
-        assert_eq!(F::two().div_2exp_u64(0), F::two());
+        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
         // 32 / 2^5 = 1.
         assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
     }
@@ -483,7 +484,7 @@ mod tests {
 
         assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
         assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::two().exp_u64(1717986917).exp_const_u64::<5>(), F::two());
+        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
     }
 
     test_field!(crate::Mersenne31);
