@@ -428,7 +428,7 @@ where
             // trace matrix of height 1. In this case the reduced opening can be skipped as it will
             // not be checked against any commit phase commit.
             if let Some((_alpha_pow, ro)) = reduced_openings.remove(&self.fri.log_blowup) {
-                debug_assert_eq!(ro, Challenge::zero());
+                debug_assert!(ro.is_zero());
             }
 
             // Return reduced openings descending by log_height.
