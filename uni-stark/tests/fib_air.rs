@@ -112,8 +112,8 @@ type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
-#[test]
-fn test_public_value() {
+/// n-th Fibonacci number expected to be x
+fn test_public_value_impl(n: usize, x: u64) {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
         DiffusionMatrixBabyBear::default(),
@@ -124,7 +124,7 @@ fn test_public_value() {
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+    let trace = generate_trace_rows::<Val>(0, 1, n);
     let fri_config = FriConfig {
         log_blowup: 2,
         num_queries: 28,
@@ -137,11 +137,21 @@ fn test_public_value() {
     let pis = vec![
         BabyBear::from_canonical_u64(0),
         BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(21),
+        BabyBear::from_canonical_u64(x),
     ];
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
+}
+
+#[test]
+fn test_one_row_trace() {
+    test_public_value_impl(1, 1);
+}
+
+#[test]
+fn test_public_value() {
+    test_public_value_impl(1 << 3, 21);
 }
 
 #[cfg(debug_assertions)]
