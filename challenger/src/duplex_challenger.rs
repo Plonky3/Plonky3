@@ -47,7 +47,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        self.output_buffer.extend(self.sponge_state);
+        self.output_buffer.extend(&self.sponge_state[..RATE]);
     }
 }
 
@@ -158,6 +158,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
+
     use p3_field::AbstractField;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
@@ -182,52 +184,21 @@ mod tests {
     impl CryptographicPermutation<TestArray> for TestPermutation {}
 
     #[test]
-    fn test_duplex_challenger_randomized() {
+    fn test_duplex_challenger() {
+        type Chal = DuplexChallenger<F, TestPermutation, WIDTH, RATE>;
         let permutation = TestPermutation {};
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
-        // Observe WIDTH / 2 elements.
-        (0..WIDTH / 2)
-            .for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
+        // Observe 12 elements.
+        (0..12).for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
 
-        let should_be_sponge_state: [F; WIDTH] = [
-            vec![F::ZERO; WIDTH / 2],
-            (0..WIDTH / 2)
-                .rev()
-                .map(F::from_canonical_usize)
-                .collect::<Vec<_>>(),
-        ]
-        .concat()
-        .try_into()
-        .unwrap();
-
-        (0..WIDTH / 2).for_each(|element| {
-            assert_eq!(
-                <DuplexChallenger<F, TestPermutation, WIDTH, RATE> as CanSample<F>>::sample(
-                    &mut duplex_challenger
-                ),
-                F::from_canonical_u8(element as u8)
-            );
-            assert_eq!(
-                duplex_challenger.output_buffer,
-                should_be_sponge_state[..WIDTH - element - 1]
-            );
-            assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state);
-        });
-
-        (0..WIDTH / 2).for_each(|i| {
-            assert_eq!(
-                <DuplexChallenger<F, TestPermutation, WIDTH, RATE> as CanSample<F>>::sample(
-                    &mut duplex_challenger
-                ),
-                F::from_canonical_u8(0)
-            );
-            assert_eq!(duplex_challenger.input_buffer, vec![]);
-            assert_eq!(
-                duplex_challenger.output_buffer,
-                vec![F::ZERO; WIDTH / 2 - i - 1]
-            );
-            assert_eq!(duplex_challenger.sponge_state, should_be_sponge_state)
-        })
+        let state_after_duplexing: Vec<_> = (0..12)
+            .map(F::from_canonical_u8)
+            .chain(iter::repeat(F::ZERO).take(12))
+            .rev()
+            .collect();
+        let expected_samples: Vec<F> = state_after_duplexing[..16].iter().copied().rev().collect();
+        let samples = <Chal as CanSample<F>>::sample_vec(&mut duplex_challenger, 16);
+        assert_eq!(samples, expected_samples);
     }
 }
