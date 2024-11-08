@@ -1,6 +1,5 @@
-use core::array;
-
 use alloc::vec::Vec;
+use core::array;
 
 use p3_air::utils::{u32_to_bits, verifiable_add};
 use p3_field::{AbstractField, PrimeField64};
