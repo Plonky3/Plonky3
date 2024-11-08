@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use p3_air::utils::{checked_andn, checked_xor};
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::iter::repeat;
@@ -8,7 +9,6 @@ use tracing::instrument;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_limb;
-use crate::logic::{andn, xor};
 use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 // TODO: Take generic iterable
@@ -95,7 +95,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
     // Populate C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
     for x in 0..5 {
         for z in 0..64 {
-            row.c_prime[x][z] = xor([
+            row.c_prime[x][z] = checked_xor([
                 row.c[x][z],
                 row.c[(x + 4) % 5][z],
                 row.c[(x + 1) % 5][(z + 63) % 64],
@@ -114,7 +114,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
                 let bit_in_limb = z % BITS_PER_LIMB;
                 let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
                 let a_bit = F::from_bool(((a_limb >> bit_in_limb) & 1) != 0);
-                row.a_prime[y][x][z] = xor([a_bit, row.c[x][z], row.c_prime[x][z]]);
+                row.a_prime[y][x][z] = checked_xor([a_bit, row.c[x][z], row.c_prime[x][z]]);
             }
         }
     }
@@ -127,9 +127,9 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
                 row.a_prime_prime[y][x][limb] = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                     .rev()
                     .fold(F::ZERO, |acc, z| {
-                        let bit = xor([
+                        let bit = checked_xor([
                             row.b(x, y, z),
-                            andn(row.b((x + 1) % 5, y, z), row.b((x + 2) % 5, y, z)),
+                            checked_andn(row.b((x + 1) % 5, y, z), row.b((x + 2) % 5, y, z)),
                         ]);
                         acc.double() + bit
                     });

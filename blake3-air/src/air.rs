@@ -1,190 +1,437 @@
 use core::borrow::Borrow;
 
+use itertools::izip;
+use p3_air::utils::{double_add, triple_add, two_pack, xor, xor_32_shift};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
 use p3_matrix::Matrix;
 
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
-use crate::logic::{andn_gen, xor3_gen, xor_gen};
-use crate::round_flags::eval_round_flags;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
+use crate::constants::{permute, BITS_PER_LIMB, IV};
+use crate::{Blake3State, FullRound, QuarterRound};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
-pub struct KeccakAir {}
+pub struct Blake3Air {}
 
-impl<F> BaseAir<F> for KeccakAir {
-    fn width(&self) -> usize {
-        NUM_KECCAK_COLS
+impl Blake3Air {
+    /// Verify that the mixing round function has been correctly computed.
+    ///
+    /// We assume that the values in a, b, c, d have all been range checked to be
+    /// either boolean (for b, d) or < 2^16 (for a, c). This both range checks all x', x''
+    /// and auxiliary variables as well as checking the relevant constraints between
+    /// them to conclude that the outputs are correct given the inputs.
+    fn mixing_function<AB: AirBuilder>(
+        builder: &mut AB,
+        trace: &QuarterRound<<AB as AirBuilder>::Var, <AB as AirBuilder>::Expr>,
+    ) {
+        // We need to pack some bits together to verify the additions.
+        // First we verify a' = a + b + m_{2i} mod 2^32
+        let b_0_16 = two_pack(trace.b[..BITS_PER_LIMB].iter().copied());
+        let b_16_32 = two_pack(trace.b[BITS_PER_LIMB..].iter().copied());
+
+        triple_add(
+            builder,
+            trace.a_prime,
+            trace.a,
+            &[b_0_16, b_16_32],
+            trace.m_two_i,
+            trace.sum_1_aux,
+        );
+
+        // Next we verify that d' = (a' ^ d) >> 16 which is equivalently:  a' = d ^ (d' << 16)
+        // This also range checks d' and a'.
+        xor_32_shift(builder, trace.a_prime, trace.d, trace.d_prime, 16);
+
+        // Next we verify c' = c + d' mod 2^32
+        let d_prime_0_16 = two_pack(trace.d_prime[..BITS_PER_LIMB].iter().copied());
+        let d_prime_16_32 = two_pack(trace.d_prime[BITS_PER_LIMB..].iter().copied());
+        double_add(
+            builder,
+            trace.c_prime,
+            trace.c,
+            &[d_prime_0_16, d_prime_16_32],
+            trace.sum_2_aux,
+        );
+
+        // Next we verify that b' = (c' ^ b) >> 12 which is equivalently: c' = b ^ (b' << 12)
+        // This also range checks b' and c'.
+        xor_32_shift(builder, trace.c_prime, trace.b, trace.b_prime, 12);
+
+        // Next we verify a'' = a' + b' + m_{2i + 1} mod 2^32
+        let b_prime_0_16 = two_pack(trace.b_prime[..BITS_PER_LIMB].iter().copied());
+        let b_prime_16_32 = two_pack(trace.b_prime[BITS_PER_LIMB..].iter().copied());
+
+        triple_add(
+            builder,
+            trace.a_output,
+            trace.a_prime,
+            &[b_prime_0_16, b_prime_16_32],
+            trace.m_two_i_plus_one,
+            trace.sum_3_aux,
+        );
+
+        // Next we verify that d'' = (a'' ^ d') << 8 which is equivalently: a'' = d' ^ (d'' << 8)
+        // This also range checks d'' and a''.
+
+        xor_32_shift(builder, trace.a_output, trace.d_prime, trace.d_output, 8);
+
+        // Next we verify c'' = c' + d'' mod 2^32
+        let d_output_0_16 = two_pack(trace.d_output[..BITS_PER_LIMB].iter().copied());
+        let d_output_16_32 = two_pack(trace.d_output[BITS_PER_LIMB..].iter().copied());
+        double_add(
+            builder,
+            trace.c_output,
+            trace.c_prime,
+            &[d_output_0_16, d_output_16_32],
+            trace.sum_4_aux,
+        );
+
+        // Finally we verify that b'' = (c'' ^ b') << 7 which is equivalently: c'' = b' ^ (b'' << 7)
+        // This also range checks b'' and c''.
+        xor_32_shift(builder, trace.c_output, trace.b_prime, trace.b_output, 7);
+
+        // Assuming all checks pass, a'', b'', c'', d'' are the correct values and have all been range checked.
+    }
+
+    /// Given data for a full round, produce the data corresponding to a
+    /// single application of the mixing function on a column.
+    fn full_round_to_column_quarter_round<'a, T: Copy, U>(
+        input: &'a Blake3State<T>,
+        round_data: &'a FullRound<T>,
+        m_vector: &'a [[U; 2]; 16],
+        index: usize,
+    ) -> QuarterRound<'a, T, U> {
+        QuarterRound {
+            a: &input.row0[index],
+            b: &input.row1[index],
+            c: &input.row2[index],
+            d: &input.row3[index],
+
+            m_two_i: &m_vector[2 * index],
+            sum_1_aux: &round_data.aux_columns[index][0],
+            sum_2_aux: &round_data.aux_columns[index][1],
+
+            a_prime: &round_data.state_prime.row0[index],
+            b_prime: &round_data.state_prime.row1[index],
+            c_prime: &round_data.state_prime.row2[index],
+            d_prime: &round_data.state_prime.row3[index],
+
+            m_two_i_plus_one: &m_vector[2 * index + 1],
+            sum_3_aux: &round_data.aux_columns[index][2],
+            sum_4_aux: &round_data.aux_columns[index][3],
+
+            a_output: &round_data.state_middle.row0[index],
+            b_output: &round_data.state_middle.row1[index],
+            c_output: &round_data.state_middle.row2[index],
+            d_output: &round_data.state_middle.row3[index],
+        }
+    }
+
+    /// Given data for a full round, produce the data corresponding to a
+    /// single application of the mixing function on a diagonal.
+    fn full_round_to_diagonal_quarter_round<'a, T: Copy, U>(
+        round_data: &'a FullRound<T>,
+        m_vector: &'a [[U; 2]; 16],
+        index: usize,
+    ) -> QuarterRound<'a, T, U> {
+        QuarterRound {
+            a: &round_data.state_middle.row0[index],
+            b: &round_data.state_middle.row1[(index + 1) % 4],
+            c: &round_data.state_middle.row2[(index + 2) % 4],
+            d: &round_data.state_middle.row3[(index + 3) % 4],
+
+            m_two_i: &m_vector[2 * index + 8],
+            sum_1_aux: &round_data.aux_diagonals[index][0],
+            sum_2_aux: &round_data.aux_diagonals[index][1],
+
+            a_prime: &round_data.state_middle_prime.row0[index],
+            b_prime: &round_data.state_middle_prime.row1[(index + 1) % 4],
+            c_prime: &round_data.state_middle_prime.row2[(index + 2) % 4],
+            d_prime: &round_data.state_middle_prime.row3[(index + 3) % 4],
+
+            m_two_i_plus_one: &m_vector[2 * index + 9],
+            sum_3_aux: &round_data.aux_diagonals[index][2],
+            sum_4_aux: &round_data.aux_diagonals[index][3],
+
+            a_output: &round_data.state_output.row0[index],
+            b_output: &round_data.state_output.row1[(index + 1) % 4],
+            c_output: &round_data.state_output.row2[(index + 2) % 4],
+            d_output: &round_data.state_output.row3[(index + 3) % 4],
+        }
+    }
+
+    /// Verify a full round of the Blake-3 permutation.
+    fn verify_round<AB: AirBuilder>(
+        builder: &mut AB,
+        input: &Blake3State<AB::Var>,
+        round_data: &FullRound<AB::Var>,
+        m_vector: &[[AB::Expr; 2]; 16],
+    ) {
+        // First we mix the columns.
+
+        // The first column mixing function involves the states in position: 0, 4, 8, 12
+        // Along with the two m_vector elements in the 0 and 1 positions.
+        let trace_column_0 =
+            Self::full_round_to_column_quarter_round(input, round_data, m_vector, 0);
+        Self::mixing_function(builder, &trace_column_0);
+
+        // The next column mixing function involves the states in position: 1, 5, 9, 13
+        // Along with the two m_vector elements in the 2 and 3 positions.
+        let trace_column_1 =
+            Self::full_round_to_column_quarter_round(input, round_data, m_vector, 1);
+        Self::mixing_function(builder, &trace_column_1);
+
+        // The next column mixing function involves the states in position: 2, 6, 10, 14
+        // Along with the two m_vector elements in the 4 and 5 positions.
+        let trace_column_2 =
+            Self::full_round_to_column_quarter_round(input, round_data, m_vector, 2);
+        Self::mixing_function(builder, &trace_column_2);
+
+        // The final column mixing function involves the states in position: 3, 7, 11, 15
+        // Along with the two m_vector elements in the 6 and 7 positions.
+        let trace_column_3 =
+            Self::full_round_to_column_quarter_round(input, round_data, m_vector, 3);
+        Self::mixing_function(builder, &trace_column_3);
+
+        // Second we mix the diagonals.
+
+        // The first diagonal mixing function involves the states in position: 0, 5, 10, 15
+        // Along with the two m_vector elements in the 8 and 9 positions.
+        let trace_diagonal_0 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 0);
+        Self::mixing_function(builder, &trace_diagonal_0);
+
+        // The next diagonal mixing function involves the states in position: 1, 6, 11, 12
+        // Along with the two m_vector elements in the 10 and 11 positions.
+        let trace_diagonal_1 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 1);
+        Self::mixing_function(builder, &trace_diagonal_1);
+
+        // The next diagonal mixing function involves the states in position: 2, 7, 8, 13
+        // Along with the two m_vector elements in the 12 and 13 positions.
+        let trace_diagonal_2 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 2);
+        Self::mixing_function(builder, &trace_diagonal_2);
+
+        // The final diagonal mixing function involves the states in position: 3, 4, 9, 14
+        // Along with the two m_vector elements in the 14 and 15 positions.
+        let trace_diagonal_3 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 3);
+        Self::mixing_function(builder, &trace_diagonal_3);
     }
 }
 
-impl<AB: AirBuilder> Air<AB> for KeccakAir {
+impl<F> BaseAir<F> for Blake3Air {
+    fn width(&self) -> usize {
+        NUM_BLAKE3_COLS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for Blake3Air {
     #[inline]
     fn eval(&self, builder: &mut AB) {
-        eval_round_flags(builder);
-
         let main = builder.main();
-        let (local, next) = (main.row_slice(0), main.row_slice(1));
-        let local: &KeccakCols<AB::Var> = (*local).borrow();
-        let next: &KeccakCols<AB::Var> = (*next).borrow();
+        let local = main.row_slice(0);
+        let local: &Blake3Cols<AB::Var> = (*local).borrow();
 
-        let first_step = local.step_flags[0];
-        let final_step = local.step_flags[NUM_ROUNDS - 1];
-        let not_final_step = AB::Expr::ONE - final_step;
+        let initial_row_3 = [
+            local.counter_low,
+            local.counter_hi,
+            local.block_len,
+            local.flags,
+        ];
 
-        // If this is the first step, the input A must match the preimage.
-        for y in 0..5 {
-            for x in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    builder
-                        .when(first_step)
-                        .assert_eq(local.preimage[y][x][limb], local.a[y][x][limb]);
-                }
-            }
-        }
+        // We start by checking that all the initialization inputs are boolean values.
+        local
+            .inputs
+            .iter()
+            .chain(local.chaining_values[0].iter())
+            .chain(local.chaining_values[1].iter())
+            .chain(initial_row_3.iter())
+            .for_each(|elem| elem.iter().for_each(|&bool| builder.assert_bool(bool)));
 
-        // The export flag must be 0 or 1.
-        builder.assert_bool(local.export);
+        // Next we ensure that the row0 and row2 for our initial state have been initialized correctly.
 
-        // If this is not the final step, the export flag must be off.
-        builder
-            .when(not_final_step.clone())
-            .assert_zero(local.export);
+        // row0 should contain the packing of the first 4 chaining_values.
+        local.chaining_values[0]
+            .iter()
+            .zip(local.initial_row0)
+            .for_each(|(bits, word)| {
+                let low_16 = two_pack(bits[..BITS_PER_LIMB].iter().copied());
+                let hi_16 = two_pack(bits[BITS_PER_LIMB..].iter().copied());
+                builder.assert_eq(low_16, word[0]);
+                builder.assert_eq(hi_16, word[1]);
+            });
 
-        // If this is not the final step, the local and next preimages must match.
-        for y in 0..5 {
-            for x in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    builder
-                        .when(not_final_step.clone())
-                        .when_transition()
-                        .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
-                }
-            }
-        }
+        // row2 should contain the first four constants in IV.
+        local
+            .initial_row2
+            .iter()
+            .zip(IV)
+            .for_each(|(row_elem, constant)| {
+                builder.assert_eq(row_elem[0], AB::Expr::from_canonical_u32(constant[0]));
+                builder.assert_eq(row_elem[1], AB::Expr::from_canonical_u32(constant[1]));
+            });
 
-        // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
-        for x in 0..5 {
-            for z in 0..64 {
-                builder.assert_bool(local.c[x][z]);
-                let xor = xor3_gen::<AB::Expr>(
-                    local.c[x][z].into(),
-                    local.c[(x + 4) % 5][z].into(),
-                    local.c[(x + 1) % 5][(z + 63) % 64].into(),
-                );
-                let c_prime = local.c_prime[x][z];
-                builder.assert_eq(c_prime, xor);
-            }
-        }
+        let mut m_values: [[AB::Expr; 2]; 16] = local.inputs.map(|bits| {
+            [
+                two_pack(bits[..BITS_PER_LIMB].iter().copied()),
+                two_pack(bits[BITS_PER_LIMB..].iter().copied()),
+            ]
+        });
 
-        // Check that the input limbs are consistent with A' and D.
-        // A[x, y, z] = xor(A'[x, y, z], D[x, y, z])
-        //            = xor(A'[x, y, z], C[x - 1, z], C[x + 1, z - 1])
-        //            = xor(A'[x, y, z], C[x, z], C'[x, z]).
-        // The last step is valid based on the identity we checked above.
-        // It isn't required, but makes this check a bit cleaner.
-        for y in 0..5 {
-            for x in 0..5 {
-                let get_bit = |z| {
-                    let a_prime: AB::Var = local.a_prime[y][x][z];
-                    let c: AB::Var = local.c[x][z];
-                    let c_prime: AB::Var = local.c_prime[x][z];
-                    xor3_gen::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
-                };
-
-                for limb in 0..U64_LIMBS {
-                    let a_limb = local.a[y][x][limb];
-                    let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
-                        .rev()
-                        .fold(AB::Expr::ZERO, |acc, z| {
-                            builder.assert_bool(local.a_prime[y][x][z]);
-                            acc.double() + get_bit(z)
-                        });
-                    builder.assert_eq(computed_limb, a_limb);
-                }
-            }
-        }
-
-        // xor_{i=0}^4 A'[x, i, z] = C'[x, z], so for each x, z,
-        // diff * (diff - 2) * (diff - 4) = 0, where
-        // diff = sum_{i=0}^4 A'[x, i, z] - C'[x, z]
-        for x in 0..5 {
-            for z in 0..64 {
-                let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
-                let diff = sum - local.c_prime[x][z];
-                let four = AB::Expr::from_canonical_u8(4);
-                builder.assert_zero(diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four));
-            }
-        }
-
-        // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
-        for y in 0..5 {
-            for x in 0..5 {
-                let get_bit = |z| {
-                    let andn = andn_gen::<AB::Expr>(
-                        local.b((x + 1) % 5, y, z).into(),
-                        local.b((x + 2) % 5, y, z).into(),
-                    );
-                    xor_gen::<AB::Expr>(local.b(x, y, z).into(), andn)
-                };
-
-                for limb in 0..U64_LIMBS {
-                    let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
-                        .rev()
-                        .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_bit(z));
-                    builder.assert_eq(computed_limb, local.a_prime_prime[y][x][limb]);
-                }
-            }
-        }
-
-        // A'''[0, 0] = A''[0, 0] XOR RC
-        for limb in 0..U64_LIMBS {
-            let computed_a_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
-                ..(limb + 1) * BITS_PER_LIMB)
-                .rev()
-                .fold(AB::Expr::ZERO, |acc, z| {
-                    builder.assert_bool(local.a_prime_prime_0_0_bits[z]);
-                    acc.double() + local.a_prime_prime_0_0_bits[z]
-                });
-            let a_prime_prime_0_0_limb = local.a_prime_prime[0][0][limb];
-            builder.assert_eq(computed_a_prime_prime_0_0_limb, a_prime_prime_0_0_limb);
-        }
-
-        let get_xored_bit = |i| {
-            let mut rc_bit_i = AB::Expr::ZERO;
-            for r in 0..NUM_ROUNDS {
-                let this_round = local.step_flags[r];
-                let this_round_constant = AB::Expr::from_canonical_u8(rc_value_bit(r, i));
-                rc_bit_i += this_round * this_round_constant;
-            }
-
-            xor_gen::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
+        let initial_state = Blake3State {
+            row0: local.initial_row0,
+            row1: local.chaining_values[1],
+            row2: local.initial_row2,
+            row3: initial_row_3,
         };
 
-        for limb in 0..U64_LIMBS {
-            let a_prime_prime_prime_0_0_limb = local.a_prime_prime_prime_0_0_limbs[limb];
-            let computed_a_prime_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
-                ..(limb + 1) * BITS_PER_LIMB)
-                .rev()
-                .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_xored_bit(z));
-            builder.assert_eq(
-                computed_a_prime_prime_prime_0_0_limb,
-                a_prime_prime_prime_0_0_limb,
-            );
+        // Now we can move to verifying that each of the seven rounds have been computed correctly.
+
+        // Round 1:
+        Self::verify_round(builder, &initial_state, &local.full_rounds[0], &m_values);
+
+        // Permute the vector of m_values.
+        permute(&mut m_values);
+
+        // Round 2:
+        Self::verify_round(
+            builder,
+            &local.full_rounds[0].state_output,
+            &local.full_rounds[1],
+            &m_values,
+        );
+
+        // Permute the vector of m_values.
+        permute(&mut m_values);
+
+        // Round 3:
+        Self::verify_round(
+            builder,
+            &local.full_rounds[1].state_output,
+            &local.full_rounds[2],
+            &m_values,
+        );
+
+        // Permute the vector of m_values.
+        permute(&mut m_values);
+
+        // Round 4:
+        Self::verify_round(
+            builder,
+            &local.full_rounds[2].state_output,
+            &local.full_rounds[3],
+            &m_values,
+        );
+
+        // Permute the vector of m_values.
+        permute(&mut m_values);
+
+        // Round 5:
+        Self::verify_round(
+            builder,
+            &local.full_rounds[3].state_output,
+            &local.full_rounds[4],
+            &m_values,
+        );
+
+        // Permute the vector of m_values.
+        permute(&mut m_values);
+
+        // Round 6:
+        Self::verify_round(
+            builder,
+            &local.full_rounds[4].state_output,
+            &local.full_rounds[5],
+            &m_values,
+        );
+
+        // Permute the vector of m_values.
+        permute(&mut m_values);
+
+        // Round 7:
+        Self::verify_round(
+            builder,
+            &local.full_rounds[5].state_output,
+            &local.full_rounds[6],
+            &m_values,
+        );
+
+        // Verify the final set of xor's.
+        // For the first 8 of these we xor state[i] and state[i + 8] (i = 0, .., 7)
+
+        // When i = 0, 1, 2, 3 both inputs are given as 16 bit integers. Hence we need to get the individual bits
+        // of one of them in order to test this.
+
+        local
+            .final_round_helpers
+            .iter()
+            .zip(local.full_rounds[6].state_output.row2)
+            .for_each(|(bits, word)| {
+                let low_16 = two_pack(bits[..BITS_PER_LIMB].iter().copied());
+                let hi_16 = two_pack(bits[BITS_PER_LIMB..].iter().copied());
+                builder.assert_eq(low_16, word[0]);
+                builder.assert_eq(hi_16, word[1]);
+            });
+        // Additionally, we need to ensure that both local.final_round_helpers and local.outputs[0] are boolean.
+
+        local
+            .final_round_helpers
+            .iter()
+            .chain(local.outputs[0].iter())
+            .for_each(|bits| bits.iter().for_each(|&bit| builder.assert_bool(bit)));
+
+        // Finally we check the xor by xor'ing the output with final_round_helpers, packing the bits
+        // and comparing with the words in local.full_rounds[6].state_output.row0.
+
+        for (out_bits, left_words, right_bits) in izip!(
+            local.outputs[0],
+            local.full_rounds[6].state_output.row0,
+            local.final_round_helpers
+        ) {
+            // We can reuse xor_32_shift with a shift of 0.
+            // As a = b ^ c if and only if b = a ^ c we can perform our xor on the
+            // elements which we have the bits of and then check against a.
+            xor_32_shift(builder, &left_words, &out_bits, &right_bits, 0)
         }
 
-        // Enforce that this round's output equals the next round's input.
-        for x in 0..5 {
-            for y in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    let output = local.a_prime_prime_prime(y, x, limb);
-                    let input = next.a[y][x][limb];
-                    builder
-                        .when_transition()
-                        .when(not_final_step.clone())
-                        .assert_eq(output, input);
-                }
+        // When i = 4, 5, 6, 7 we already have the bits of state[i] and state[i + 8] making this easy.
+        // This check also ensures that local.outputs[1] contains only boolean values.
+
+        for (out_bits, left_bits, right_bits) in izip!(
+            local.outputs[1],
+            local.full_rounds[6].state_output.row1,
+            local.full_rounds[6].state_output.row3
+        ) {
+            for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
+                builder.assert_eq(out_bit, xor(left_bit.into(), right_bit.into()));
+            }
+        }
+
+        // For the remaining 8, we xor state[i] and chaining_value[i - 8] (i = 8, .., 15)
+
+        // When i = 8, 9, 10, 11, we have the bits state[i] already as we used then in the
+        // i = 0, 1, 2, 3 case. Additionally we also have the bits of chaining_value[i - 8].
+        // Hence we can directly check that the output is correct.
+
+        for (out_bits, left_bits, right_bits) in izip!(
+            local.outputs[2],
+            local.chaining_values[0],
+            local.final_round_helpers
+        ) {
+            for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
+                builder.assert_eq(out_bit, xor(left_bit.into(), right_bit.into()));
+            }
+        }
+
+        // This is easy when i = 12, 13, 14, 15 as we already have the bits.
+        // This check also ensures that local.outputs[3] contains only boolean values.
+
+        for (out_bits, left_bits, right_bits) in izip!(
+            local.outputs[3],
+            local.chaining_values[1],
+            local.full_rounds[6].state_output.row3
+        ) {
+            for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
+                builder.assert_eq(out_bit, xor(left_bit.into(), right_bit.into()));
             }
         }
     }
