@@ -96,10 +96,10 @@ pub fn verifiable_add(a: u32, b: u32) -> (u32, [bool; 2]) {
 ///
 /// We assume that a, b, c, d are all given as `2 16` bit limbs (e.g. `a = a[0] + 2^16a[1]` which
 /// have been range checked separately. This verifies that the auxiliary variables lie in {0, 1, 2} and satisfy
-/// ```
-/// 2^32 aux[0] + a = b + c + d mod P
-/// 2^16 aux[1] + a[0] = b[0] + c[0] + d[0] mod P
-/// ```
+///
+/// `2^32 aux[0] + a = b + c + d mod P`
+///
+/// `2^16 aux[1] + a[0] = b[0] + c[0] + d[0] mod P`
 pub fn triple_add<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
@@ -141,10 +141,10 @@ pub fn triple_add<AB: AirBuilder>(
 ///
 /// We assume that a, b, c are all given as `2 16` bit limbs (e.g. `a = a[0] + 2^16a[1]` which
 /// have been range checked separately. This verifies that the auxiliary variables lie in {0, 1} and satisfy
-/// ```
-/// 2^32 aux[0] + a = b + c mod P
-/// 2^16 aux[1] + a[0] = b[0] + c[0] mod P
-/// ```
+///
+/// `2^32 aux[0] + a = b + c mod P`
+///
+/// `2^16 aux[1] + a[0] = b[0] + c[0] mod P`
 pub fn double_add<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
