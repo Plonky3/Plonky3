@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, scale_vec,
-    two_adic_coset_zerofier, ExtensionField, Field, TwoAdicField,
+    two_adic_coset_zerofier, ExtensionField, TwoAdicField,
 };
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
