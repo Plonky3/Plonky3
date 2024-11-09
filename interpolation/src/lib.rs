@@ -62,17 +62,6 @@ where
     scale_vec(zerofier * denominator.inverse(), sum)
 }
 
-/// `x += y * s`, where `s` is a scalar.
-pub fn add_scaled_base_slice_in_place<F, EF, Y>(x: &mut [EF], y: Y, s: EF)
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    Y: Iterator<Item = F>,
-{
-    // TODO: Use PackedField
-    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += s * y_i);
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
