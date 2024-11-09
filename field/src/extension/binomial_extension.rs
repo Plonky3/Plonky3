@@ -543,7 +543,7 @@ where
         res
     }
 
-    #[inline]
+    #[inline(always)]
     fn as_base_slice(&self) -> &[AF] {
         &self.value
     }
