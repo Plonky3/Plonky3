@@ -4,7 +4,7 @@ use p3_baby_bear::{BabyBear, BabyBearDiffusionMatrixParameters, BabyBearParamete
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{FriConfig, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_monty_31::GenericDiffusionMatrixMontyField31;
@@ -12,8 +12,8 @@ use p3_poseidon2::Poseidon2ExternalMatrixGeneral;
 use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::rngs::ThreadRng;
-use rand::{random, thread_rng};
+use rand::rngs::{StdRng, ThreadRng};
+use rand::{random, thread_rng, SeedableRng};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
@@ -125,8 +125,8 @@ fn main() -> Result<(), impl Debug> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
-    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
+    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
