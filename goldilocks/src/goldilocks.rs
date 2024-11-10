@@ -103,19 +103,19 @@ impl AbstractField for Goldilocks {
     }
 
     fn from_bool(b: bool) -> Self {
-        Self::new(u64::from(b))
+        Self::new(b.into())
     }
 
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_canonical_u16(n: u16) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_canonical_u32(n: u32) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     #[inline(always)]
@@ -130,7 +130,7 @@ impl AbstractField for Goldilocks {
     fn from_wrapped_u32(n: u32) -> Self {
         // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
         // need for a reduction.
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
