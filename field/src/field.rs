@@ -384,9 +384,11 @@ pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
         + Send
         + Sync;
 
+    #[inline(always)]
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
+
     fn as_base(&self) -> Option<Base> {
         if self.is_in_basefield() {
             Some(self.as_base_slice()[0])
@@ -434,6 +436,7 @@ impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
         f(0)
     }
 
+    #[inline(always)]
     fn as_base_slice(&self) -> &[AF] {
         slice::from_ref(self)
     }
