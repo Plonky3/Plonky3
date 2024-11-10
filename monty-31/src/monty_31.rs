@@ -281,7 +281,7 @@ impl<FP: FieldParameters> PrimeField64 for MontyField31<FP> {
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
-        u64::from(self.as_canonical_u32())
+        self.as_canonical_u32().into()
     }
 }
 

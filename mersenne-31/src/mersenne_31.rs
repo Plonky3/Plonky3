@@ -112,12 +112,12 @@ impl AbstractField for Mersenne31 {
 
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(u32::from(n))
+        Self::new(n.into())
     }
 
     #[inline]
     fn from_canonical_u16(n: u16) -> Self {
-        Self::new(u32::from(n))
+        Self::new(n.into())
     }
 
     #[inline]
@@ -292,7 +292,7 @@ impl PrimeField64 for Mersenne31 {
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
-        u64::from(self.as_canonical_u32())
+        self.as_canonical_u32().into()
     }
 }
 
