@@ -282,7 +282,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+    use alloc::vec::Vec;
+    use alloc::{format, vec};
 
     use itertools::izip;
     use p3_baby_bear::BabyBear;
@@ -308,5 +309,146 @@ mod tests {
         }
 
         assert_eq!(m.columnwise_dot_product(&v), expected);
+    }
+
+    // Mock implementation for testing purposes
+    struct MockMatrix {
+        data: Vec<Vec<u32>>,
+        width: usize,
+        height: usize,
+    }
+
+    impl Matrix<u32> for MockMatrix {
+        type Row<'a> = alloc::vec::IntoIter<u32>;
+
+        fn width(&self) -> usize {
+            self.width
+        }
+
+        fn height(&self) -> usize {
+            self.height
+        }
+
+        fn row(&self, r: usize) -> Self::Row<'_> {
+            self.data[r].clone().into_iter()
+        }
+    }
+
+    #[test]
+    fn test_dimensions() {
+        let dims = Dimensions {
+            width: 3,
+            height: 5,
+        };
+        assert_eq!(dims.width, 3);
+        assert_eq!(dims.height, 5);
+        assert_eq!(format!("{:?}", dims), "3x5");
+        assert_eq!(format!("{}", dims), "3x5");
+    }
+
+    #[test]
+    fn test_mock_matrix_dimensions() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+        assert_eq!(matrix.width(), 3);
+        assert_eq!(matrix.height(), 3);
+        assert_eq!(
+            matrix.dimensions(),
+            Dimensions {
+                width: 3,
+                height: 3
+            }
+        );
+    }
+
+    #[test]
+    fn test_first_row() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+        let mut first_row = matrix.first_row();
+        assert_eq!(first_row.next(), Some(1));
+        assert_eq!(first_row.next(), Some(2));
+        assert_eq!(first_row.next(), Some(3));
+    }
+
+    #[test]
+    fn test_last_row() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+        let mut last_row = matrix.last_row();
+        assert_eq!(last_row.next(), Some(7));
+        assert_eq!(last_row.next(), Some(8));
+        assert_eq!(last_row.next(), Some(9));
+    }
+
+    #[test]
+    fn test_row_slice() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+        let row_slice = matrix.row_slice(1);
+        assert_eq!(row_slice.deref(), &[4, 5, 6]);
+    }
+
+    #[test]
+    fn test_to_row_major_matrix() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2], vec![3, 4]],
+            width: 2,
+            height: 2,
+        };
+        let row_major = matrix.to_row_major_matrix();
+        assert_eq!(row_major.values, vec![1, 2, 3, 4]);
+        assert_eq!(row_major.width, 2);
+    }
+
+    #[test]
+    fn test_matrix_get() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+        assert_eq!(matrix.get(0, 0), 1);
+        assert_eq!(matrix.get(1, 2), 6);
+        assert_eq!(matrix.get(2, 1), 8);
+    }
+
+    #[test]
+    fn test_matrix_row_iteration() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+
+        let mut row_iter = matrix.row(1);
+        assert_eq!(row_iter.next(), Some(4));
+        assert_eq!(row_iter.next(), Some(5));
+        assert_eq!(row_iter.next(), Some(6));
+        assert_eq!(row_iter.next(), None);
+    }
+
+    #[test]
+    fn test_matrix_rows() {
+        let matrix = MockMatrix {
+            data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            width: 3,
+            height: 3,
+        };
+
+        let all_rows: Vec<Vec<u32>> = matrix.rows().map(|row| row.collect()).collect();
+        assert_eq!(all_rows, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
     }
 }
