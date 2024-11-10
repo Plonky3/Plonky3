@@ -487,5 +487,24 @@ mod tests {
         assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
     }
 
+    #[test]
+    fn test_from_canonical_u32_valid() {
+        // Valid values within the canonical range
+        assert_eq!(Mersenne31::from_canonical_u32(0).value, 0);
+        assert_eq!(Mersenne31::from_canonical_u32(1).value, 1);
+        assert_eq!(Mersenne31::from_canonical_u32(123456).value, 123456);
+        assert_eq!(
+            Mersenne31::from_canonical_u32(Mersenne31::ORDER_U32 - 1).value,
+            Mersenne31::ORDER_U32 - 1
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_from_canonical_u32_invalid() {
+        // Invalid value: equal to ORDER_U32 (out of canonical range)
+        Mersenne31::from_canonical_u32(Mersenne31::ORDER_U32);
+    }
+
     test_field!(crate::Mersenne31);
 }
