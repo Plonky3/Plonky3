@@ -209,7 +209,7 @@ impl Field for Mersenne31 {
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
         let exp = exp % 31;
-        let left = (self.value << exp) & ((1 << 31) - 1);
+        let left = (self.value << exp) & P;
         let right = self.value >> (31 - exp);
         let rotated = left | right;
         Self::new(rotated)
@@ -220,7 +220,7 @@ impl Field for Mersenne31 {
         // In a Mersenne field, division by 2^k is just a right rotation by k bits.
         let exp = (exp % 31) as u8;
         let left = self.value >> exp;
-        let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
+        let right = (self.value << (31 - exp)) & P;
         let rotated = left | right;
         Self::new(rotated)
     }
