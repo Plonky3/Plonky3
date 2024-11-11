@@ -16,7 +16,12 @@ impl<F, EF, Inner> FlatMatrixView<F, EF, Inner> {
     pub fn new(inner: Inner) -> Self {
         Self(inner, PhantomData)
     }
-    pub fn inner_ref(&self) -> &Inner {
+}
+
+impl<F, EF, Inner> Deref for FlatMatrixView<F, EF, Inner> {
+    type Target = Inner;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }

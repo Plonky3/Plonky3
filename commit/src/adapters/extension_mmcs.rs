@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use core::ops::Deref;
 
 use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
@@ -55,7 +56,7 @@ where
         self.inner
             .get_matrices(prover_data)
             .into_iter()
-            .map(|mat| mat.inner_ref())
+            .map(|mat| mat.deref())
             .collect()
     }
 
