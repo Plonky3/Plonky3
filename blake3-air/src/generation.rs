@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::array;
 
-use p3_air::utils::{u32_to_bits, verifiable_add};
+use p3_air::utils::{u32_to_bits_le, verifiable_add};
 use p3_field::{AbstractField, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -45,18 +45,18 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
 ) {
     // We split the input into 2 parts.
     // The first 16 elements we treat as the inputs or block_words
-    row.inputs = array::from_fn(|i| u32_to_bits(input[i]));
+    row.inputs = array::from_fn(|i| u32_to_bits_le(input[i]));
 
     // the remaining 8 elements are interpreted as the chaining values.
     row.chaining_values =
-        array::from_fn(|i| array::from_fn(|j| u32_to_bits(input[16 + 4 * i + j])));
+        array::from_fn(|i| array::from_fn(|j| u32_to_bits_le(input[16 + 4 * i + j])));
 
-    row.counter_low = u32_to_bits(counter as u32);
-    row.counter_hi = u32_to_bits((counter >> 32) as u32);
-    row.block_len = u32_to_bits(block_len as u32);
+    row.counter_low = u32_to_bits_le(counter as u32);
+    row.counter_hi = u32_to_bits_le((counter >> 32) as u32);
+    row.block_len = u32_to_bits_le(block_len as u32);
 
     // We set the flags initial value to just be 0.
-    row.flags = u32_to_bits(0);
+    row.flags = u32_to_bits_le(0);
 
     row.initial_row0 = array::from_fn(|i| {
         [
@@ -103,12 +103,12 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
 
     // After performing all the rounds, all that is left to do is to populate the final xor data.
 
-    row.final_round_helpers = array::from_fn(|i| u32_to_bits(state[2][i]));
+    row.final_round_helpers = array::from_fn(|i| u32_to_bits_le(state[2][i]));
 
-    row.outputs[0] = array::from_fn(|i| u32_to_bits(state[0][i] ^ state[2][i]));
-    row.outputs[1] = array::from_fn(|i| u32_to_bits(state[1][i] ^ state[3][i]));
-    row.outputs[2] = array::from_fn(|i| u32_to_bits(state[2][i] ^ input[16 + i]));
-    row.outputs[3] = array::from_fn(|i| u32_to_bits(state[3][i] ^ input[20 + i]));
+    row.outputs[0] = array::from_fn(|i| u32_to_bits_le(state[0][i] ^ state[2][i]));
+    row.outputs[1] = array::from_fn(|i| u32_to_bits_le(state[1][i] ^ state[3][i]));
+    row.outputs[2] = array::from_fn(|i| u32_to_bits_le(state[2][i] ^ input[16 + i]));
+    row.outputs[3] = array::from_fn(|i| u32_to_bits_le(state[3][i] ^ input[20 + i]));
 }
 
 fn generate_trace_row_for_round<F: PrimeField64>(
@@ -245,12 +245,12 @@ fn save_state_to_trace<AF: AbstractField>(trace: &mut Blake3State<AF>, state: &[
             AF::from_canonical_u32(state[0][i] >> 16),
         ]
     });
-    trace.row1 = array::from_fn(|i| u32_to_bits(state[1][i]));
+    trace.row1 = array::from_fn(|i| u32_to_bits_le(state[1][i]));
     trace.row2 = array::from_fn(|i| {
         [
             AF::from_canonical_u16(state[2][i] as u16),
             AF::from_canonical_u32(state[2][i] >> 16),
         ]
     });
-    trace.row3 = array::from_fn(|i| u32_to_bits(state[3][i]));
+    trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i]));
 }

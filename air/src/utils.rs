@@ -9,7 +9,8 @@ use crate::AirBuilder;
 /// Pack a collection of bits into a number.
 ///
 /// Given vec = [v0, v1, ..., v_n] returns v0 + 2v_1 + ... + 2^n v_n
-pub fn two_pack<AF, Var, I>(iter: I) -> AF
+#[inline]
+pub fn pack_bits_le<AF, Var, I>(iter: I) -> AF
 where
     AF: AbstractField,
     Var: Into<AF> + Clone,
@@ -23,9 +24,10 @@ where
     output
 }
 
-/// Computes the arithmetic generalization boolean `xor`.
+/// Computes the arithmetic generalization of boolean `xor`.
 ///
 /// For boolean inputs, `x ^ y = x + y - 2 xy`.
+#[inline(always)]
 pub fn xor<AF: AbstractField>(x: AF, y: AF) -> AF {
     x.clone() + y.clone() - x * y.double()
 }
@@ -33,6 +35,7 @@ pub fn xor<AF: AbstractField>(x: AF, y: AF) -> AF {
 /// Computes the arithmetic generalization of a triple `xor`.
 ///
 /// For boolean inputs `x ^ y ^ z = x + y + z - 2(xy + xz + yz) + 4xyz`.
+#[inline(always)]
 pub fn xor3<AF: AbstractField>(x: AF, y: AF, z: AF) -> AF {
     // The cheapest way to implement this polynomial is to simply apply xor twice.
     // This costs 2 adds, 2 subs, 2 muls and 2 doubles.
@@ -42,6 +45,7 @@ pub fn xor3<AF: AbstractField>(x: AF, y: AF, z: AF) -> AF {
 /// Computes the arithmetic generalization of `andnot`.
 ///
 /// For boolean inputs `(!x) & y = (1 - x)y`
+#[inline(always)]
 pub fn andn<AF: AbstractField>(x: AF, y: AF) -> AF {
     (AF::ONE - x) * y
 }
@@ -49,6 +53,7 @@ pub fn andn<AF: AbstractField>(x: AF, y: AF) -> AF {
 /// Compute `xor` on a list of field elements using the arithmetic generalization.
 ///
 /// Additionally verifies at debug time that all inputs are boolean.
+#[inline(always)]
 pub fn checked_xor<F: Field, const N: usize>(xs: [F; N]) -> F {
     xs.into_iter().fold(F::ZERO, |acc, x| {
         debug_assert!(x.is_zero() || x.is_one());
@@ -59,6 +64,7 @@ pub fn checked_xor<F: Field, const N: usize>(xs: [F; N]) -> F {
 /// Compute the `andnot` on a pair of field elements using the arithmetic generalization.
 ///
 /// Additionally verifies at debug time that both inputs are boolean.
+#[inline(always)]
 pub fn checked_andn<F: Field>(x: F, y: F) -> F {
     debug_assert!(x.is_zero() || x.is_one());
     debug_assert!(y.is_zero() || y.is_one());
@@ -66,7 +72,10 @@ pub fn checked_andn<F: Field>(x: F, y: F) -> F {
 }
 
 /// Convert a 32-bit integer into an array of 32 0 or 1 field elements.
-pub fn u32_to_bits<AF: AbstractField>(val: u32) -> [AF; 32] {
+///
+/// The output array is in little-endian order.
+#[inline]
+pub fn u32_to_bits_le<AF: AbstractField>(val: u32) -> [AF; 32] {
     // We do this over F::from_canonical_u32 as from_canonical_u32 can be slow
     // like in the case of monty field.
     array::from_fn(|i| {
@@ -82,6 +91,7 @@ pub fn u32_to_bits<AF: AbstractField>(val: u32) -> [AF; 32] {
 ///
 /// The data we need is whether a + b > 2^32 and similarly
 /// whether (a mod 2^16) + (b mod 2^16) > 2^16;
+#[inline]
 pub fn verifiable_add(a: u32, b: u32) -> (u32, [bool; 2]) {
     let a_16 = a as u16;
     let b_16 = b as u16;
@@ -100,6 +110,7 @@ pub fn verifiable_add(a: u32, b: u32) -> (u32, [bool; 2]) {
 /// `2^32 aux[0] + a = b + c + d mod P`
 ///
 /// `2^16 aux[1] + a[0] = b[0] + c[0] + d[0] mod P`
+#[inline]
 pub fn triple_add<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
@@ -145,6 +156,7 @@ pub fn triple_add<AB: AirBuilder>(
 /// `2^32 aux[0] + a = b + c mod P`
 ///
 /// `2^16 aux[1] + a[0] = b[0] + c[0] mod P`
+#[inline]
 pub fn double_add<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
@@ -186,6 +198,7 @@ pub fn double_add<AB: AirBuilder>(
 /// We assume that a is given as `2 16` bit limbs and both b and c are unpacked into 32 individual bits.
 /// We assume that the bits of b have been range checked but not the inputs in c or a. Both of these are
 /// range checked as part of this function.
+#[inline]
 pub fn xor_32_shift<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
@@ -201,13 +214,13 @@ pub fn xor_32_shift<AB: AirBuilder>(
         .iter()
         .enumerate()
         .map(|(i, elem)| xor((*elem).into(), c[(32 + i - shift) % 32].into()));
-    let sum_0_16: <AB as AirBuilder>::Expr = two_pack(xor_shift_c_0_16);
+    let sum_0_16: <AB as AirBuilder>::Expr = pack_bits_le(xor_shift_c_0_16);
 
     let xor_shift_c_16_32 = b[16..]
         .iter()
         .enumerate()
         .map(|(i, elem)| xor((*elem).into(), c[(32 + (i + 16) - shift) % 32].into()));
-    let sum_16_32: <AB as AirBuilder>::Expr = two_pack(xor_shift_c_16_32);
+    let sum_16_32: <AB as AirBuilder>::Expr = pack_bits_le(xor_shift_c_16_32);
 
     // As both b and c have been range checked to be boolean, all the (b ^ (c << shift))
     // are also boolean and so this final check additionally has the effect of range checking a[0], a[1].

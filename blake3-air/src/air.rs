@@ -1,7 +1,7 @@
 use core::borrow::Borrow;
 
 use itertools::izip;
-use p3_air::utils::{double_add, triple_add, two_pack, xor, xor_32_shift};
+use p3_air::utils::{double_add, pack_bits_le, triple_add, xor, xor_32_shift};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
 use p3_matrix::Matrix;
@@ -27,8 +27,8 @@ impl Blake3Air {
     ) {
         // We need to pack some bits together to verify the additions.
         // First we verify a' = a + b + m_{2i} mod 2^32
-        let b_0_16 = two_pack(trace.b[..BITS_PER_LIMB].iter().copied());
-        let b_16_32 = two_pack(trace.b[BITS_PER_LIMB..].iter().copied());
+        let b_0_16 = pack_bits_le(trace.b[..BITS_PER_LIMB].iter().copied());
+        let b_16_32 = pack_bits_le(trace.b[BITS_PER_LIMB..].iter().copied());
 
         triple_add(
             builder,
@@ -44,8 +44,8 @@ impl Blake3Air {
         xor_32_shift(builder, trace.a_prime, trace.d, trace.d_prime, 16);
 
         // Next we verify c' = c + d' mod 2^32
-        let d_prime_0_16 = two_pack(trace.d_prime[..BITS_PER_LIMB].iter().copied());
-        let d_prime_16_32 = two_pack(trace.d_prime[BITS_PER_LIMB..].iter().copied());
+        let d_prime_0_16 = pack_bits_le(trace.d_prime[..BITS_PER_LIMB].iter().copied());
+        let d_prime_16_32 = pack_bits_le(trace.d_prime[BITS_PER_LIMB..].iter().copied());
         double_add(
             builder,
             trace.c_prime,
@@ -59,8 +59,8 @@ impl Blake3Air {
         xor_32_shift(builder, trace.c_prime, trace.b, trace.b_prime, 12);
 
         // Next we verify a'' = a' + b' + m_{2i + 1} mod 2^32
-        let b_prime_0_16 = two_pack(trace.b_prime[..BITS_PER_LIMB].iter().copied());
-        let b_prime_16_32 = two_pack(trace.b_prime[BITS_PER_LIMB..].iter().copied());
+        let b_prime_0_16 = pack_bits_le(trace.b_prime[..BITS_PER_LIMB].iter().copied());
+        let b_prime_16_32 = pack_bits_le(trace.b_prime[BITS_PER_LIMB..].iter().copied());
 
         triple_add(
             builder,
@@ -77,8 +77,8 @@ impl Blake3Air {
         xor_32_shift(builder, trace.a_output, trace.d_prime, trace.d_output, 8);
 
         // Next we verify c'' = c' + d'' mod 2^32
-        let d_output_0_16 = two_pack(trace.d_output[..BITS_PER_LIMB].iter().copied());
-        let d_output_16_32 = two_pack(trace.d_output[BITS_PER_LIMB..].iter().copied());
+        let d_output_0_16 = pack_bits_le(trace.d_output[..BITS_PER_LIMB].iter().copied());
+        let d_output_16_32 = pack_bits_le(trace.d_output[BITS_PER_LIMB..].iter().copied());
         double_add(
             builder,
             trace.c_output,
@@ -254,8 +254,8 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             .iter()
             .zip(local.initial_row0)
             .for_each(|(bits, word)| {
-                let low_16 = two_pack(bits[..BITS_PER_LIMB].iter().copied());
-                let hi_16 = two_pack(bits[BITS_PER_LIMB..].iter().copied());
+                let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().copied());
+                let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().copied());
                 builder.assert_eq(low_16, word[0]);
                 builder.assert_eq(hi_16, word[1]);
             });
@@ -272,8 +272,8 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
 
         let mut m_values: [[AB::Expr; 2]; 16] = local.inputs.map(|bits| {
             [
-                two_pack(bits[..BITS_PER_LIMB].iter().copied()),
-                two_pack(bits[BITS_PER_LIMB..].iter().copied()),
+                pack_bits_le(bits[..BITS_PER_LIMB].iter().copied()),
+                pack_bits_le(bits[BITS_PER_LIMB..].iter().copied()),
             ]
         });
 
@@ -366,8 +366,8 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             .iter()
             .zip(local.full_rounds[6].state_output.row2)
             .for_each(|(bits, word)| {
-                let low_16 = two_pack(bits[..BITS_PER_LIMB].iter().copied());
-                let hi_16 = two_pack(bits[BITS_PER_LIMB..].iter().copied());
+                let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().copied());
+                let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().copied());
                 builder.assert_eq(low_16, word[0]);
                 builder.assert_eq(hi_16, word[1]);
             });
