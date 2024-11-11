@@ -36,7 +36,6 @@ impl Blake3Air {
             trace.a,
             &[b_0_16, b_16_32],
             trace.m_two_i,
-            trace.sum_1_aux,
         );
 
         // Next we verify that d' = (a' ^ d) >> 16 which is equivalently:  a' = d ^ (d' << 16)
@@ -51,7 +50,6 @@ impl Blake3Air {
             trace.c_prime,
             trace.c,
             &[d_prime_0_16, d_prime_16_32],
-            trace.sum_2_aux,
         );
 
         // Next we verify that b' = (c' ^ b) >> 12 which is equivalently: c' = b ^ (b' << 12)
@@ -68,7 +66,6 @@ impl Blake3Air {
             trace.a_prime,
             &[b_prime_0_16, b_prime_16_32],
             trace.m_two_i_plus_one,
-            trace.sum_3_aux,
         );
 
         // Next we verify that d'' = (a'' ^ d') << 8 which is equivalently: a'' = d' ^ (d'' << 8)
@@ -84,7 +81,6 @@ impl Blake3Air {
             trace.c_output,
             trace.c_prime,
             &[d_output_0_16, d_output_16_32],
-            trace.sum_4_aux,
         );
 
         // Finally we verify that b'' = (c'' ^ b') << 7 which is equivalently: c'' = b' ^ (b'' << 7)
@@ -109,8 +105,6 @@ impl Blake3Air {
             d: &input.row3[index],
 
             m_two_i: &m_vector[2 * index],
-            sum_1_aux: &round_data.aux_columns[index][0],
-            sum_2_aux: &round_data.aux_columns[index][1],
 
             a_prime: &round_data.state_prime.row0[index],
             b_prime: &round_data.state_prime.row1[index],
@@ -118,8 +112,6 @@ impl Blake3Air {
             d_prime: &round_data.state_prime.row3[index],
 
             m_two_i_plus_one: &m_vector[2 * index + 1],
-            sum_3_aux: &round_data.aux_columns[index][2],
-            sum_4_aux: &round_data.aux_columns[index][3],
 
             a_output: &round_data.state_middle.row0[index],
             b_output: &round_data.state_middle.row1[index],
@@ -142,8 +134,6 @@ impl Blake3Air {
             d: &round_data.state_middle.row3[(index + 3) % 4],
 
             m_two_i: &m_vector[2 * index + 8],
-            sum_1_aux: &round_data.aux_diagonals[index][0],
-            sum_2_aux: &round_data.aux_diagonals[index][1],
 
             a_prime: &round_data.state_middle_prime.row0[index],
             b_prime: &round_data.state_middle_prime.row1[(index + 1) % 4],
@@ -151,8 +141,6 @@ impl Blake3Air {
             d_prime: &round_data.state_middle_prime.row3[(index + 3) % 4],
 
             m_two_i_plus_one: &m_vector[2 * index + 9],
-            sum_3_aux: &round_data.aux_diagonals[index][2],
-            sum_4_aux: &round_data.aux_diagonals[index][3],
 
             a_output: &round_data.state_output.row0[index],
             b_output: &round_data.state_output.row1[(index + 1) % 4],

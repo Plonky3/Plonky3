@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::array;
 
-use p3_air::utils::{u32_to_bits_le, verifiable_add};
+use p3_air::utils::u32_to_bits_le;
 use p3_field::{AbstractField, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -121,7 +121,6 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     // We start by performing the first half of the four column mixing functions.
     (0..4).for_each(|i| {
         (state[0][i], state[1][i], state[2][i], state[3][i]) = verifiable_half_round(
-            &mut round_data.aux_columns[i],
             state[0][i],
             state[1][i],
             state[2][i],
@@ -137,7 +136,6 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     // Next we do the second half of the four column mixing functions.
     (0..4).for_each(|i| {
         (state[0][i], state[1][i], state[2][i], state[3][i]) = verifiable_half_round(
-            &mut round_data.aux_columns[i],
             state[0][i],
             state[1][i],
             state[2][i],
@@ -160,7 +158,6 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[2][(i + 2) % 4],
             state[3][(i + 3) % 4],
         ) = verifiable_half_round(
-            &mut round_data.aux_diagonals[i],
             state[0][i],
             state[1][(i + 1) % 4],
             state[2][(i + 2) % 4],
@@ -181,7 +178,6 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[2][(i + 2) % 4],
             state[3][(i + 3) % 4],
         ) = verifiable_half_round(
-            &mut round_data.aux_diagonals[i],
             state[0][i],
             state[1][(i + 1) % 4],
             state[2][(i + 2) % 4],
@@ -197,10 +193,8 @@ fn generate_trace_row_for_round<F: PrimeField64>(
 
 /// Perform half of a mixing round on the given elements.
 ///
-/// Overflow data allowing verification of the summations is saved in aux_array.
 /// The boolean flag, indicates if this is the first (false) or second (true) half round.
-fn verifiable_half_round<AF: AbstractField>(
-    aux_array: &mut [[AF; 2]; 4],
+fn verifiable_half_round(
     mut a: u32,
     mut b: u32,
     mut c: u32,
@@ -208,15 +202,10 @@ fn verifiable_half_round<AF: AbstractField>(
     m: u32,
     flag: bool,
 ) -> (u32, u32, u32, u32) {
-    let (shft, rot_1, rot_2) = if flag { (2, 8, 7) } else { (0, 16, 12) };
+    let (rot_1, rot_2) = if flag { (8, 7) } else { (16, 12) };
 
-    let (sum, [overflow_1, overflow_1_16]) = verifiable_add(a, b);
-    let (res, [overflow_2, overflow_2_16]) = verifiable_add(sum, m);
-
-    a = res;
-
-    aux_array[shft][0] = AF::from_bool(overflow_1) + AF::from_bool(overflow_2);
-    aux_array[shft][1] = AF::from_bool(overflow_1_16) + AF::from_bool(overflow_2_16);
+    a += b;
+    a += m;
 
     // The first xor:
 
@@ -224,12 +213,7 @@ fn verifiable_half_round<AF: AbstractField>(
 
     // The second summation:
 
-    let (sum, [overflow, overflow_16]) = verifiable_add(c, d);
-
-    c = sum;
-
-    aux_array[shft + 1][0] = AF::from_bool(overflow);
-    aux_array[shft + 1][1] = AF::from_bool(overflow_16);
+    c += d;
 
     // The second xor:
 

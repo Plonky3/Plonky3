@@ -49,23 +49,17 @@ pub struct FullRound<T> {
     // A full round of the Blake3 hash consists of 8 applications of the mixing function.
     // the first four mixing functions act on the four columns and the second four
     // functions act on the diagonals.
-
+    //
     // We use the output of the previous row to get the input to this row.
+    //
     /// The outputs after applying the first half of the first 4 mixing functions
     pub state_prime: Blake3State<T>,
-
-    /// The helper values for the summations in the mixing functions operating on the columns.
-    /// The inner [T; 2] gives the number of overflows working mod 2^32 and 2^16 respectively.
-    pub aux_columns: [[[T; 2]; 4]; 4],
 
     /// The outputs after applying the first 4 row-mixing functions.
     pub state_middle: Blake3State<T>,
 
     /// The outputs after applying the first half of the diagonal mixing functions.
     pub state_middle_prime: Blake3State<T>,
-
-    /// The helper values for the summations in the mixing functions operating on the diagonals.
-    pub aux_diagonals: [[[T; 2]; 4]; 4],
 
     /// This will also be the input to the next row.
     pub state_output: Blake3State<T>,
@@ -81,8 +75,6 @@ pub(crate) struct QuarterRound<'a, T, U> {
     pub d: &'a [T; 32],
 
     pub m_two_i: &'a [U; U32_LIMBS], // m_{2i}
-    pub sum_1_aux: &'a [T; 2], // Auxillary variables used to verify a'  = a + b + m_{2i}  mod 2^32
-    pub sum_2_aux: &'a [T; 2], // Auxillary variables used to verify c'  = c + d mod 2^32
 
     pub a_prime: &'a [T; U32_LIMBS],
     pub b_prime: &'a [T; 32],
@@ -90,8 +82,6 @@ pub(crate) struct QuarterRound<'a, T, U> {
     pub d_prime: &'a [T; 32],
 
     pub m_two_i_plus_one: &'a [U; U32_LIMBS], // m_{2i + 1}
-    pub sum_3_aux: &'a [T; 2], // Auxillary variables used to verify a_output = a' + b' + m_{2i + 1}  mod 2^32
-    pub sum_4_aux: &'a [T; 2], // Auxillary variables used to verify c_output = c' + d' mod 2^32
 
     pub a_output: &'a [T; U32_LIMBS],
     pub b_output: &'a [T; 32],

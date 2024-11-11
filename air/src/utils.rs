@@ -87,29 +87,10 @@ pub fn u32_to_bits_le<AF: AbstractField>(val: u32) -> [AF; 32] {
     })
 }
 
-/// Compute a + b mod 2^32 returning the summation and data allowing us to verify the summation.
-///
-/// The data we need is whether a + b > 2^32 and similarly
-/// whether (a mod 2^16) + (b mod 2^16) > 2^16;
-#[inline]
-pub fn verifiable_add(a: u32, b: u32) -> (u32, [bool; 2]) {
-    let a_16 = a as u16;
-    let b_16 = b as u16;
-
-    let (_, overflow_16) = a_16.overflowing_add(b_16);
-    let (sum, overflow) = a.overflowing_add(b);
-
-    (sum, [overflow, overflow_16])
-}
-
 /// Verify that `a = b + c + d mod 2^32`
 ///
-/// We assume that a, b, c, d are all given as `2 16` bit limbs (e.g. `a = a[0] + 2^16a[1]` which
-/// have been range checked separately. This verifies that the auxiliary variables lie in {0, 1, 2} and satisfy
-///
-/// `2^32 aux[0] + a = b + c + d mod P`
-///
-/// `2^16 aux[1] + a[0] = b[0] + c[0] + d[0] mod P`
+/// We assume that a, b, c, d are all given as `2, 16` bit limbs (e.g. `a = a[0] + 2^16 a[1]`) and
+/// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
 #[inline]
 pub fn triple_add<AB: AirBuilder>(
     builder: &mut AB,
@@ -117,80 +98,94 @@ pub fn triple_add<AB: AirBuilder>(
     b: &[<AB as AirBuilder>::Var; 2],
     c: &[<AB as AirBuilder>::Expr; 2],
     d: &[<AB as AirBuilder>::Expr; 2],
-    aux: &[<AB as AirBuilder>::Var; 2],
 ) {
-    // We add four constraints:
+    // Define:
+    //  acc    = a - b - c - d (mod P)
+    //  acc_16 = a[0] - b[0] - c[0] - d[0] (mod P)
     //
-    // aux[0] * (aux[0] - 1) * (aux[0] - 2) = 0
-    // aux[1] * (aux[1] - 1) * (aux[1] - 2) = 0
-    // 2^32 aux[0] + a - b - c - d = 0
-    // 2^16 aux[1] + a[0] - b[0] - c[0] - d[0] = 0
+    // We perform 2 checks:
     //
-    // The first two check that both auxiliary variables lie in {0, 1, 2}.
-    // The third equation checks that the sum `2^32 aux[0] + a = b + c + d` holds mod P.
-    // For the final equation, note that overflow is impossible and `x[0] = x mod 2^16`.
-    // Thus if the final equation holds then `2^32 aux[0] + a = b + c + d mod 2^{16}`
+    // (1) acc*(acc + 2^32)*(acc + 2*2^32) = 0.
+    // (2) acc_16*(acc_16 + 2^16)*(acc_16 + 2*2^16) = 0.
     //
-    // Using the chinese remainder theorem we conclude `a = b + c + d mod 2^32`
+    // We give a short proof for why this lets us conclude that a = b + c + d mod 2^32:
+    //
+    // As all 16 bit limbs have been range checked, we know that a, b, c, d lie in [0, 2^32) and hence
+    // a = b + c + d mod 2^32 if and only if, over the integers, a - b - c - d = 0, -2^32 or -2*2^32.
+    //
+    // Equation (1) verifies that a - b - c - d mod P = 0, -2^32 or -2*2^32.
+    //
+    // Similarly, as overflow cannot occur when computing acc_16, equation (2) verifies that
+    // over the integers, a[0] - b[0] - c[0] - d[0] = 0, -2^16 or -2*2^16. Either way
+    // we can immediately conclude that a - b - c - d = 0 mod 2^16.
+    //
+    // Now we can use the chinese remainder theorem to combine these results to conclude that
+    // a - b - c - d mod 2^16P = 0, -2^32 or -2*2^32.
+    // No overflow can occur mod 2^16 P as 2^16 P ~ 2^47 and a, b, c, d < 2^32. Hence we conclude that
+    // over the integers a - b - c - d = 0, -2^32 or -2*2^32 which implies a = b + c + d mod 2^32.
 
-    builder.assert_tern(aux[0]);
-    builder.assert_tern(aux[1]);
-
-    // TODO: Ideally these should eventually be saved as constants. Or at the very least
+    // TODO: Ideally two_16, two_32 should be saved as constants. Or at the very least
     // there should be a quicker method of generating them than exp_u64.
     let two_16 = <AB as AirBuilder>::Expr::TWO.exp_u64(16);
-    let two_32 = <AB as AirBuilder>::Expr::TWO.exp_u64(32);
+    let two_32 = two_16.exp_u64(2);
 
-    let sum_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
-    let sum_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
+    let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
+    let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
+    let acc = acc_16.clone() + two_16.clone() * acc_32;
 
-    builder.assert_zero(two_32 * aux[0] + sum_16.clone() + two_16.clone() * sum_32);
-    builder.assert_zero(two_16 * aux[1] + sum_16);
+    builder.assert_zero(acc.clone() * (acc.clone() + two_32.clone()) * (acc + two_32.double()));
+    builder.assert_zero(
+        acc_16.clone() * (acc_16.clone() + two_16.clone()) * (acc_16 + two_16.double()),
+    );
 }
 
 /// Verify that `a = b + c mod 2^32`
 ///
-/// We assume that a, b, c are all given as `2 16` bit limbs (e.g. `a = a[0] + 2^16a[1]` which
-/// have been range checked separately. This verifies that the auxiliary variables lie in {0, 1} and satisfy
-///
-/// `2^32 aux[0] + a = b + c mod P`
-///
-/// `2^16 aux[1] + a[0] = b[0] + c[0] mod P`
+/// We assume that a, b, c are all given as `2, 16` bit limbs (e.g. `a = a[0] + 2^16 a[1]`) and
+/// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
 #[inline]
 pub fn double_add<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
     b: &[<AB as AirBuilder>::Var; 2],
     c: &[<AB as AirBuilder>::Expr; 2],
-    aux: &[<AB as AirBuilder>::Var; 2],
 ) {
-    // We add four constraints:
+    // Define:
+    //  acc    = a - b - c (mod P)
+    //  acc_16 = a[0] - b[0] - c[0] (mod P)
     //
-    // aux[0] * (aux[0] - 1) = 0
-    // aux[1] * (aux[1] - 1) = 0
-    // 2^32 aux[0] + a - b - c = 0
-    // 2^16 aux[1] + a[0] - b[0] - c[0] = 0
+    // We perform 2 checks:
     //
-    // The first two check that both auxiliary variables lie in {0, 1}.
-    // The third equation checks that the sum `2^32 aux[0] + a = b + c` holds mod P.
-    // For the final equation, note that overflow is impossible and `x[0] = x mod 2^16`.
-    // Thus if the final equation holds then `2^32 aux[0] + a = b + c mod 2^{16}`
+    // (1) acc*(acc + 2^32) = 0.
+    // (2) acc_16*(acc_16 + 2^16) = 0.
     //
-    // Using the chinese remainder theorem we conclude `a = b + c mod 2^32`
+    // We give a short proof for why this lets us conclude that a = b + c mod 2^32:
+    //
+    // As all 16 bit limbs have been range checked, we know that a, b, c lie in [0, 2^32) and hence
+    // a = b + c mod 2^32 if and only if, over the integers, a - b - c = 0 or -2^32.
+    //
+    // Equation (1) verifies that either a - b - c = 0 mod P or a - b - c = -2^32 mod P.
+    //
+    // Similarly, as overflow cannot occur when computing acc_16, equation (2) verifies that
+    // over the integers, a[0] - b[0] - c[0] = 0  or  a[0] - b[0] - c[0] = -2^16. Either way
+    // we can conclude that a - b - c = 0 mod 2^16.
+    //
+    // Now we can use the chinese remainder theorem to combine these results to conclude that
+    // either a - b - c = 0 mod 2^16 P or a - b - c = -2^32 mod 2^16 P.
+    // No overflow can occur mod 2^16 P as 2^16 P ~ 2^47 and a, b, c < 2^32. Hence we conclude that
+    // over the integers a - b - c = 0 or a - b - c = -2^32 which is equivalent to a = b + c mod 2^32.
 
-    builder.assert_bool(aux[0]);
-    builder.assert_bool(aux[1]);
-
-    // TODO: Ideally these should eventually be saved as constants. Or at the very least
+    // TODO: Ideally two_16, two_32 should be saved as constants. Or at the very least
     // there should be a quicker method of generating them than exp_u64.
     let two_16 = <AB as AirBuilder>::Expr::TWO.exp_u64(16);
-    let two_32 = <AB as AirBuilder>::Expr::TWO.exp_u64(32);
+    let two_32 = two_16.exp_u64(2);
 
-    let sum_16 = a[0] - b[0] - c[0].clone();
-    let sum_32 = a[1] - b[1] - c[1].clone();
+    let acc_16 = a[0] - b[0] - c[0].clone();
+    let acc_32 = a[1] - b[1] - c[1].clone();
+    let acc = acc_16.clone() + two_16.clone() * acc_32;
 
-    builder.assert_zero(two_32 * aux[0] + sum_16.clone() + two_16.clone() * sum_32);
-    builder.assert_zero(two_16 * aux[1] + sum_16);
+    builder.assert_zero(acc.clone() * (acc + two_32));
+    builder.assert_zero(acc_16.clone() * (acc_16 + two_16));
 }
 
 /// Verify that `a = (b ^ (c << shift))`
