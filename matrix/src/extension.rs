@@ -54,14 +54,12 @@ where
     }
 
     fn row_slice(&self, r: usize) -> impl Deref<Target = [F]> {
-        let ef_row: Vec<F> = self
-            .0
+        self.0
             .row_slice(r)
             .iter()
             .flat_map(|val| val.as_base_slice())
             .copied()
-            .collect();
-        ef_row
+            .collect::<Vec<_>>()
     }
 }
 
