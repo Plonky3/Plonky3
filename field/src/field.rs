@@ -16,6 +16,7 @@ use serde::Serialize;
 use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
+use crate::cipolla_sqrt::cipolla_sqrt;
 
 /// A generalization of `Field` which permits things like
 /// - an actual field element
@@ -221,6 +222,34 @@ pub trait Field:
 
     fn is_one(&self) -> bool {
         *self == Self::ONE
+    }
+
+    fn is_square(&self) -> bool {
+        self.legendre().is_one()
+    }
+
+    fn sqrt(&self) -> Option<Self> {
+        cipolla_sqrt(*self)
+    }
+
+    fn legendre(&self) -> Self {
+        let power = (Self::order() - BigUint::one()) / BigUint::from(2u8);
+        self.pow(&power)
+    }
+
+    fn pow(&self, power: &BigUint) -> Self {
+        let mut result = Self::one();
+        let mut base = *self;
+        let bits = power.bits();
+
+        for i in 0..bits {
+            if power.bit(i) {
+                result *= base;
+            }
+            base = base * base;
+        }
+
+        result
     }
 
     /// self * 2^exp
