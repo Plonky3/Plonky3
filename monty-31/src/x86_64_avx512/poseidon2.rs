@@ -283,7 +283,7 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
     /// This function assumes its output is piped directly into add_sum.
     unsafe fn diagonal_mul_remainder(input: &mut Self::ArrayLike);
 
-    /// The number of positive inverse powers of two after in the diagonal matrix after the 4.
+    /// The number of positive inverse powers of two in the diagonal matrix after the 4.
     const NUM_POS: usize;
 
     /// # Safety

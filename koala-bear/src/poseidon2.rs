@@ -1,17 +1,17 @@
-//* Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
-//*
-//* For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
-//* vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
-//*
-//* This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
-//* and inverse powers of 2 where it is possible to avoid monty reductions.
-//* Additionally, for technical reasons, having the first entry be -2 is useful.
-//*
-//* Optimized Diagonal for KoalaBear16:
-//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
-//* Optimized Diagonal for KoalaBear24:
-//* [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
-//* See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
+//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//!
+//! For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
+//! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
+//!
+//! This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
+//! and inverse powers of 2 where it is possible to avoid monty reductions.
+//! Additionally, for technical reasons, having the first entry be -2 is useful.
+//!
+//! Optimized Diagonal for KoalaBear16:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
+//! Optimized Diagonal for KoalaBear24:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
+//! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 use core::ops::Mul;
 
