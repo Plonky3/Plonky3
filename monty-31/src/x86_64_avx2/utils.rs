@@ -281,11 +281,11 @@ pub unsafe fn mul_2exp_neg_two_adicity_avx2<TAD: TwoAdicData, const N: i32, cons
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld  hi, 	 	val,        N
-            vpand   lo, 	 	val,     	2^{N} - 1
-            vpslld  lo_shft,   	lo,         31 - N
+            vpsrld  hi,         val,        N
+            vpand   lo,         val,        2^{N} - 1
+            vpslld  lo_shft,    lo,         31 - N
             vpaddd  lo_plus_hi, lo,         hi
-            vpsubd  res 		lo_plus_hi, lo_shft,
+            vpsubd  res         lo_plus_hi, lo_shft,
         throughput: 1.67
         latency: 3
     */
@@ -321,11 +321,11 @@ pub unsafe fn mul_neg_2exp_neg_two_adicity_avx2<
 ) -> __m256i {
     /*
         We want this to compile to:
-            vpsrld  hi, 	 	val,      N
-            vpand   lo, 	 	val,      2^{N} - 1
-            vpslld  lo_shft,   	lo,       31 - N
+            vpsrld  hi,         val,      N
+            vpand   lo,         val,      2^{N} - 1
+            vpslld  lo_shft,    lo,       31 - N
             vpaddd  lo_plus_hi, lo,       hi
-            vpsubd  res 		lo_shft,  lo_plus_hi
+            vpsubd  res         lo_shft,  lo_plus_hi
         throughput: 1.67
         latency: 3
     */
