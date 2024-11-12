@@ -1,8 +1,6 @@
 use alloc::vec::Vec;
-use core::{
-    arch::x86_64::{self, __m256i},
-    mem::transmute,
-};
+use core::arch::x86_64::{self, __m256i};
+use core::mem::transmute;
 
 use p3_field::PrimeField32;
 use p3_poseidon2::{

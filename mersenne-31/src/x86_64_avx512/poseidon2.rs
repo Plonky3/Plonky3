@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
-use p3_field::PrimeField32;
 use core::arch::x86_64::{self, __m512i};
 
+use p3_field::PrimeField32;
 use p3_poseidon2::{
     mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
     ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
