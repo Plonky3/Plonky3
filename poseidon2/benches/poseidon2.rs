@@ -44,7 +44,7 @@ where
     F: Field,
     Perm: Permutation<[F::Packing; WIDTH]>,
 {
-    let input = [F::Packing::zero(); WIDTH];
+    let input = [F::Packing::ZERO; WIDTH];
     let name = format!("poseidon2::<{}, {}>", pretty_name::<F::Packing>(), WIDTH);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));

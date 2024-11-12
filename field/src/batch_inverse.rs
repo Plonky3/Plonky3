@@ -67,7 +67,7 @@ where
         return;
     }
 
-    result[0] = F::one();
+    result[0] = F::ONE;
     for i in 1..n {
         result[i] = result[i - 1] * x[i - 1];
     }

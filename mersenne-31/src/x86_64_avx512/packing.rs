@@ -398,7 +398,7 @@ impl Sum for PackedMersenne31AVX512 {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::zero())
+        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
     }
 }
 
@@ -408,32 +408,17 @@ impl Product for PackedMersenne31AVX512 {
     where
         I: Iterator<Item = Self>,
     {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::one())
+        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
     }
 }
 
 impl AbstractField for PackedMersenne31AVX512 {
     type F = Mersenne31;
 
-    #[inline]
-    fn zero() -> Self {
-        Mersenne31::zero().into()
-    }
-
-    #[inline]
-    fn one() -> Self {
-        Mersenne31::one().into()
-    }
-
-    #[inline]
-    fn two() -> Self {
-        Mersenne31::two().into()
-    }
-
-    #[inline]
-    fn neg_one() -> Self {
-        Mersenne31::neg_one().into()
-    }
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -472,11 +457,6 @@ impl AbstractField for PackedMersenne31AVX512 {
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         Mersenne31::from_wrapped_u64(n).into()
-    }
-
-    #[inline]
-    fn generator() -> Self {
-        Mersenne31::generator().into()
     }
 
     #[inline(always)]

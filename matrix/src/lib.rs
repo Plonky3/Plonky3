@@ -28,7 +28,7 @@ pub mod stack;
 pub mod strided;
 pub mod util;
 
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Dimensions {
     pub width: usize,
     pub height: usize,
@@ -300,7 +300,7 @@ mod tests {
         let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
         let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
 
-        let mut expected = vec![EF::zero(); m.width()];
+        let mut expected = vec![EF::ZERO; m.width()];
         for (row, &scale) in izip!(m.rows(), &v) {
             for (l, r) in izip!(&mut expected, row) {
                 *l += scale * r;

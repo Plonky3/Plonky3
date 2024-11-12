@@ -141,7 +141,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
 
         if log_n < domain.log_n {
             // We could simply pad coeffs like this:
-            // coeffs.pad_to_height(target_domain.size(), F::zero());
+            // coeffs.pad_to_height(target_domain.size(), F::ZERO);
             // But the first `added_bits` layers will simply fill out the zeros
             // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
             // both `x_1` and `x_2` are set to `x_1`).
@@ -254,7 +254,7 @@ fn compute_twiddles<F: ComplexExtendable>(domain: CircleDomain<F>) -> Vec<Vec<F>
             let cur = prev
                 .iter()
                 .step_by(2)
-                .map(|x| x.square().double() - F::one())
+                .map(|x| x.square().double() - F::ONE)
                 .collect_vec();
             twiddles.push(cur);
         }
@@ -263,13 +263,13 @@ fn compute_twiddles<F: ComplexExtendable>(domain: CircleDomain<F>) -> Vec<Vec<F>
 }
 
 pub fn circle_basis<F: Field>(p: Point<F>, log_n: usize) -> Vec<F> {
-    let mut b = vec![F::one(), p.y];
+    let mut b = vec![F::ONE, p.y];
     let mut x = p.x;
     for _ in 0..(log_n - 1) {
         for i in 0..b.len() {
             b.push(b[i] * x);
         }
-        x = x.square().double() - F::one();
+        x = x.square().double() - F::ONE;
     }
     assert_eq!(b.len(), 1 << log_n);
     b

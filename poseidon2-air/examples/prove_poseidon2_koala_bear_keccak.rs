@@ -48,6 +48,14 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
+    const PROOFS: usize = 2;
+    for _ in 1..PROOFS {
+        prove_and_verify()?;
+    }
+    prove_and_verify()
+}
+
+fn prove_and_verify() -> Result<(), impl Debug> {
     type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 

@@ -67,7 +67,7 @@ impl MulAir {
                 rng.gen()
             };
             *b = if self.uses_boundary_constraints && row == 0 {
-                a.square() + F::one()
+                a.square() + F::ONE
             } else {
                 rng.gen()
             };
@@ -75,7 +75,7 @@ impl MulAir {
 
             if !valid {
                 // make it invalid
-                *c *= F::two();
+                *c *= F::TWO;
             }
         }
         RowMajorMatrix::new(trace_values, TRACE_WIDTH)
@@ -101,9 +101,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let c = main_local[start + 2];
             builder.assert_zero(a.into().exp_u64(self.degree - 1) * b - c);
             if self.uses_boundary_constraints {
-                builder
-                    .when_first_row()
-                    .assert_eq(a * a + AB::Expr::one(), b);
+                builder.when_first_row().assert_eq(a * a + AB::Expr::ONE, b);
             }
             if self.uses_transition_constraints {
                 let next_a = main_next[start];

@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, scale_vec,
-    two_adic_coset_zerofier, ExtensionField, Field, TwoAdicField,
+    two_adic_coset_zerofier, ExtensionField, TwoAdicField,
 };
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
@@ -23,7 +23,7 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Mat: Matrix<F>,
 {
-    interpolate_coset(subgroup_evals, F::one(), point)
+    interpolate_coset(subgroup_evals, F::ONE, point)
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the canonical power-of-two
@@ -62,23 +62,12 @@ where
     scale_vec(zerofier * denominator.inverse(), sum)
 }
 
-/// `x += y * s`, where `s` is a scalar.
-pub fn add_scaled_base_slice_in_place<F, EF, Y>(x: &mut [EF], y: Y, s: EF)
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    Y: Iterator<Item = F>,
-{
-    // TODO: Use PackedField
-    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += s * y_i);
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::AbstractField;
+    use p3_field::{AbstractField, Field};
     use p3_matrix::dense::RowMajorMatrix;
 
     use crate::{interpolate_coset, interpolate_subgroup};
@@ -101,7 +90,7 @@ mod tests {
     fn test_interpolate_coset() {
         // x^2 + 2 x + 3
         type F = BabyBear;
-        let shift = F::generator();
+        let shift = F::GENERATOR;
         let evals = [
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
         ]

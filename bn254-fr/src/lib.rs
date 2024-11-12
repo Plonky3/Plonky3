@@ -92,19 +92,17 @@ impl Debug for Bn254Fr {
 impl AbstractField for Bn254Fr {
     type F = Self;
 
-    fn zero() -> Self {
-        Self::new(FFBn254Fr::ZERO)
-    }
-    fn one() -> Self {
-        Self::new(FFBn254Fr::ONE)
-    }
-    fn two() -> Self {
-        Self::new(FFBn254Fr::from(2u64))
-    }
+    const ZERO: Self = Self::new(FFBn254Fr::ZERO);
+    const ONE: Self = Self::new(FFBn254Fr::ONE);
+    const TWO: Self = Self::new(FFBn254Fr::from_raw([2u64, 0, 0, 0]));
 
-    fn neg_one() -> Self {
-        Self::new(-FFBn254Fr::ONE)
-    }
+    // r - 1 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000
+    const NEG_ONE: Self = Self::new(FFBn254Fr::from_raw([
+        0x43e1f593f0000000,
+        0x2833e84879b97091,
+        0xb85045b68181585d,
+        0x30644e72e131a029,
+    ]));
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -142,14 +140,13 @@ impl AbstractField for Bn254Fr {
     fn from_wrapped_u64(n: u64) -> Self {
         Self::new(FFBn254Fr::from(n))
     }
-
-    fn generator() -> Self {
-        Self::new(FFBn254Fr::from(5u64))
-    }
 }
 
 impl Field for Bn254Fr {
     type Packing = Self;
+
+    // generator is 5
+    const GENERATOR: Self = Self::new(FFBn254Fr::from_raw([5u64, 0, 0, 0]));
 
     fn is_zero(&self) -> bool {
         self.value.is_zero().into()
@@ -213,7 +210,7 @@ impl AddAssign for Bn254Fr {
 
 impl Sum for Bn254Fr {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::zero())
+        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
 }
 
@@ -235,7 +232,7 @@ impl Neg for Bn254Fr {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        self * Self::neg_one()
+        self * Self::NEG_ONE
     }
 }
 
@@ -255,7 +252,7 @@ impl MulAssign for Bn254Fr {
 
 impl Product for Bn254Fr {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
@@ -307,12 +304,12 @@ mod tests {
         let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());
         assert!(f.is_zero());
 
-        assert_eq!(F::generator().as_canonical_biguint(), BigUint::new(vec![5]));
+        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::new(vec![5]));
 
         let f_1 = F::new(FFBn254Fr::from_u128(1));
         let f_1_copy = F::new(FFBn254Fr::from_u128(1));
 
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::new(FFBn254Fr::from_u128(2));
@@ -328,7 +325,7 @@ mod tests {
         let f_r_minus_1 = F::new(
             FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap(),
         );
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 + f_r_minus_1, expected_result);
 
         let f_r_minus_2 = F::new(
@@ -355,7 +352,7 @@ mod tests {
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(FFBn254Fr::from_u128(5));
-        assert_eq!(F::generator(), expected_multiplicative_group_generator);
+        assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();

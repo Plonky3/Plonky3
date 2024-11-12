@@ -162,25 +162,10 @@ impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
     type F = Self;
 
-    #[inline(always)]
-    fn zero() -> Self {
-        FP::MONTY_ZERO
-    }
-
-    #[inline(always)]
-    fn one() -> Self {
-        FP::MONTY_ONE
-    }
-
-    #[inline(always)]
-    fn two() -> Self {
-        FP::MONTY_TWO
-    }
-
-    #[inline(always)]
-    fn neg_one() -> Self {
-        FP::MONTY_NEG_ONE
-    }
+    const ZERO: Self = FP::MONTY_ZERO;
+    const ONE: Self = FP::MONTY_ONE;
+    const TWO: Self = FP::MONTY_TWO;
+    const NEG_ONE: Self = FP::MONTY_NEG_ONE;
 
     #[inline(always)]
     fn from_f(f: Self::F) -> Self {
@@ -237,11 +222,6 @@ impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
         Self::new_monty(value)
     }
 
-    #[inline(always)]
-    fn generator() -> Self {
-        FP::MONTY_GEN
-    }
-
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
@@ -279,6 +259,8 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     )))]
     type Packing = Self;
 
+    const GENERATOR: Self = FP::MONTY_GEN;
+
     #[inline]
     fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
         FP::exp_u64_generic(val, power)
@@ -310,7 +292,7 @@ impl<FP: FieldParameters> PrimeField64 for MontyField31<FP> {
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
-        u64::from(self.as_canonical_u32())
+        self.as_canonical_u32().into()
     }
 }
 
@@ -355,7 +337,7 @@ impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
 impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
         // There might be a faster reduction method possible for lengths <= 16 which avoids %.
 
         // This sum will not overflow so long as iter.len() < 2^33.
@@ -388,7 +370,7 @@ impl<FP: FieldParameters> Neg for MontyField31<FP> {
 
     #[inline]
     fn neg(self) -> Self::Output {
-        Self::zero() - self
+        Self::ZERO - self
     }
 }
 
@@ -412,7 +394,7 @@ impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
 impl<FP: FieldParameters> Product for MontyField31<FP> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 

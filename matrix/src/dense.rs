@@ -95,6 +95,22 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         RowMajorMatrixViewMut::new(self.values.borrow_mut(), self.width)
     }
 
+    pub fn copy_from<S2>(&mut self, source: &DenseMatrix<T, S2>)
+    where
+        T: Copy,
+        S: BorrowMut<[T]>,
+        S2: DenseStorage<T>,
+    {
+        assert_eq!(self.dimensions(), source.dimensions());
+        // Equivalent to:
+        // self.values.borrow_mut().copy_from_slice(source.values.borrow());
+        self.par_rows_mut()
+            .zip(source.par_row_slices())
+            .for_each(|(dst, src)| {
+                dst.copy_from_slice(src);
+            });
+    }
+
     pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
     where
         T: ExtensionField<F>,
@@ -228,6 +244,20 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
+    pub fn row_chunks_exact_mut(
+        &mut self,
+        chunk_rows: usize,
+    ) -> impl Iterator<Item = RowMajorMatrixViewMut<T>>
+    where
+        T: Send,
+        S: BorrowMut<[T]>,
+    {
+        self.values
+            .borrow_mut()
+            .chunks_exact_mut(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
+    }
+
     pub fn par_row_chunks_exact_mut(
         &mut self,
         chunk_rows: usize,
@@ -285,7 +315,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         //     reverse_matrix_index_bits(mat);
         //     mat
         //         .values
-        //         .resize(mat.values.len() << added_bits, F::zero());
+        //         .resize(mat.values.len() << added_bits, F::ZERO);
         //     reverse_matrix_index_bits(mat);
         // But rather than implement it with bit reversals, we directly construct the resulting matrix,
         // whose rows are zero except for rows whose low `added_bits` bits are zero.

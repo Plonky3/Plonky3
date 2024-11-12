@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use p3_baby_bear::BabyBear;
 use p3_circle::{CircleDomain, CircleEvaluations};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::AbstractField;
+use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mersenne_31::Mersenne31;
@@ -48,5 +48,5 @@ fn main() {
     black_box(go(black_box(evals), log_n + 1));
 
     let m = RowMajorMatrix::<BabyBear>::rand(&mut thread_rng(), 1 << log_n, 1 << log_w);
-    black_box(Radix2DitParallel::default().coset_lde_batch(black_box(m), 1, BabyBear::generator()));
+    black_box(Radix2DitParallel::default().coset_lde_batch(black_box(m), 1, BabyBear::GENERATOR));
 }

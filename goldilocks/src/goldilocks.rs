@@ -92,18 +92,10 @@ impl Distribution<Goldilocks> for Standard {
 impl AbstractField for Goldilocks {
     type F = Self;
 
-    fn zero() -> Self {
-        Self::new(0)
-    }
-    fn one() -> Self {
-        Self::new(1)
-    }
-    fn two() -> Self {
-        Self::new(2)
-    }
-    fn neg_one() -> Self {
-        Self::new(Self::ORDER_U64 - 1)
-    }
+    const ZERO: Self = Self::new(0);
+    const ONE: Self = Self::new(1);
+    const TWO: Self = Self::new(2);
+    const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {
@@ -111,19 +103,19 @@ impl AbstractField for Goldilocks {
     }
 
     fn from_bool(b: bool) -> Self {
-        Self::new(u64::from(b))
+        Self::new(b.into())
     }
 
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_canonical_u16(n: u16) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_canonical_u32(n: u32) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     #[inline(always)]
@@ -138,18 +130,13 @@ impl AbstractField for Goldilocks {
     fn from_wrapped_u32(n: u32) -> Self {
         // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
         // need for a reduction.
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
         // There's no need to reduce `n` to canonical form, as our internal encoding is
         // non-canonical, so there's no need for a reduction.
         Self::new(n)
-    }
-
-    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
-    fn generator() -> Self {
-        Self::new(7)
     }
 
     #[inline]
@@ -188,6 +175,9 @@ impl Field for Goldilocks {
         ),
     )))]
     type Packing = Self;
+
+    // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
+    const GENERATOR: Self = Self::new(7);
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U64
@@ -319,7 +309,7 @@ impl AddAssign for Goldilocks {
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::zero()) for iterators of length > 2.
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
 
         // This sum will not overflow so long as iter.len() < 2^64.
         let sum = iter.map(|x| x.value as u128).sum::<u128>();
@@ -384,7 +374,7 @@ impl MulAssign for Goldilocks {
 
 impl Product for Goldilocks {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::one())
+        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
 }
 
@@ -512,12 +502,12 @@ mod tests {
         let f = F::from_canonical_u64(F::ORDER_U64);
         assert!(f.is_zero());
 
-        assert_eq!(F::generator().as_canonical_u64(), 7_u64);
+        assert_eq!(F::GENERATOR.as_canonical_u64(), 7_u64);
 
         let f_1 = F::new(1);
         let f_1_copy = F::new(1);
 
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
 
         let expected_result = F::new(2);
@@ -531,7 +521,7 @@ mod tests {
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
         let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
-        let expected_result = F::zero();
+        let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
         let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);
@@ -552,7 +542,7 @@ mod tests {
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(7);
-        assert_eq!(F::generator(), expected_multiplicative_group_generator);
+        assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
 
         // Check on `reduce_u128`
         let x = u128::MAX;

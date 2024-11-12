@@ -107,7 +107,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         //                    = (1/2 + beta/2 g_inv^i) p(g^i)
         //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
         let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-        let one_half = F::one().halve();
+        let one_half = F::ONE.halve();
         let half_beta = beta * one_half;
 
         // TODO: vectorize this (after we have packed extension fields)
@@ -150,7 +150,7 @@ where
         let log_n = log2_strict_usize(degree);
         TwoAdicMultiplicativeCoset {
             log_n,
-            shift: Val::one(),
+            shift: Val::ONE,
         }
     }
 
@@ -162,7 +162,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
-                let shift = Val::generator() / domain.shift;
+                let shift = Val::GENERATOR / domain.shift;
                 // Commit to the bit-reversed LDE.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
@@ -181,7 +181,7 @@ where
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
         // todo: handle extrapolation for LDEs we don't have
-        assert_eq!(domain.shift, Val::generator());
+        assert_eq!(domain.shift, Val::GENERATOR);
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
         lde.split_rows(domain.size()).0.bit_reverse_rows()
@@ -263,7 +263,7 @@ where
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::generator());
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR);
 
         let mut all_opened_values: OpenedValues<Challenge> = vec![];
 
@@ -275,7 +275,7 @@ where
             for (mat, points_for_mat) in izip!(mats, points) {
                 let log_height = log2_strict_usize(mat.height());
                 let reduced_opening_for_log_height = reduced_openings[log_height]
-                    .get_or_insert_with(|| vec![Challenge::zero(); mat.height()]);
+                    .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 let opened_values_for_mat = opened_values_for_round.pushed_mut(vec![]);
@@ -290,7 +290,7 @@ where
                                 mat.split_rows(mat.height() >> self.fri.log_blowup);
                             interpolate_coset(
                                 &BitReversalPerm::new_view(low_coset),
-                                Val::generator(),
+                                Val::GENERATOR,
                                 point,
                             )
                         });
@@ -407,12 +407,12 @@ where
 
                     // todo: this can be nicer with domain methods?
 
-                    let x = Val::generator()
+                    let x = Val::GENERATOR
                         * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
                     let (alpha_pow, ro) = reduced_openings
                         .entry(log_height)
-                        .or_insert((Challenge::one(), Challenge::zero()));
+                        .or_insert((Challenge::ONE, Challenge::ZERO));
 
                     for (z, ps_at_z) in mat_points_and_values {
                         for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
@@ -422,6 +422,13 @@ where
                         }
                     }
                 }
+            }
+
+            // `reduced_openings` would have a log_height = log_blowup entry only if there was a
+            // trace matrix of height 1. In this case the reduced opening can be skipped as it will
+            // not be checked against any commit phase commit.
+            if let Some((_alpha_pow, ro)) = reduced_openings.remove(&self.fri.log_blowup) {
+                debug_assert!(ro.is_zero());
             }
 
             // Return reduced openings descending by log_height.

@@ -47,7 +47,7 @@ where
         mds,
         &mut rng,
     );
-    let input: [AF; WIDTH] = array::from_fn(|_| AF::zero());
+    let input: [AF; WIDTH] = array::from_fn(|_| AF::ZERO);
     let name = format!("poseidon::<{}, {}>", type_name::<AF>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
