@@ -224,31 +224,40 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
     // diagonal_mul and add_sum morally should be one function but are split because diagonal_mul can happen simultaneously to
     // the sbox being applied to the first element of the state which is advantageous as this s-box has very high latency.
     // However these functions should only ever be used together and we only make safety guarantees about the output
-    // of the combined function add_sum(diagonal_mul(state), sum) which will output field elements in canonical form provided inputs are in canonical form.
-
-    // Diagonal_mul will not output field elements in canonical form and indeed may even output incorrect values in places where
-    // it is efficient to pipe computation to add_sum. E.g. it might output 3*x instead of -3*x and then add_sum does sum - x.
-    // Similarly add_sum assumes its input has been piped directly from diagonal_mul so might assume that some inputs
-    // are the negative of the correct value or in some form other than canonical.
+    // of the combined function add_sum(diagonal_mul(state), sum) which will output field elements
+    // in canonical form provided inputs are in canonical form.
 
     // For these reason we mark both functions as unsafe.
 
     // All 4 implementation of this trait (Field = BabyBear/KoalaBear, WIDTH = 16/24) have a similarly structured
-    // diagonal matrix. The first 9 elements of this matrix are: [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4] and the remainder
+    // diagonal matrix. The first 9 elements of this matrix are always: [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4] and the remainder
     // are all positive or negative inverse powers of two. This common structure lets us write some default implementations.
 
     /// # Safety
     ///
-    /// This function assumes its output is piped directly into add_sum.
+    /// This function assumes its output is piped directly into `add_sum`.
+    ///
+    /// It might not output field elements in canonical form and indeed may even
+    /// output incorrect values in places where it is efficient to correct for
+    /// the computation in `add_sum`. For example it might output `3*x` instead of `-3*x`
+    /// and have `add_sum` compute `sum - x` instead of `x + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul(input: &mut Self::ArrayLike) {
-        Self::diagonal_mul_first_eight(input);
-        Self::diagonal_mul_remainder(input);
+        Self::diagonal_mul_first_eight(input); // This only affects the first 8 elements.
+
+        Self::diagonal_mul_remainder(input); // This leaves the first 8 elements unchanged.
     }
 
     /// # Safety
     ///
-    /// This function assumes its output is piped directly into add_sum.
+    /// Multiply the first 8 elements of input by the vector `[1, 2, 1/2, 3, 4, 1/2, 3, 4]`.
+    ///
+    /// In all implementations of this trait, the first 9 elements of the diagonal matrix are
+    /// `[-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4]`. The -2 is handled separately and this function handles
+    /// the remainder. Note that for the last three elements we multiply by `1/2, 3, 4` and not
+    /// `-1/2, -3, -4`. Hence the value in this location will be the negative of what is desired.
+    /// This will be handled by `add_sum` and so it is important these elements are not touched
+    /// before input is passed into `add_sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_first_eight(input: &mut Self::ArrayLike) {
         let input = input.as_mut();
@@ -280,15 +289,23 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
 
     /// # Safety
     ///
-    /// This function assumes its output is piped directly into add_sum.
+    /// This function must not touch the first 8 elements of input.
+    /// It may output values which might not be in canonical form or
+    /// will be the negative of the expected value. This will be
+    /// handled by `add_sum` so it is important these elements are
+    /// not touched before input is passed into `add_sum`.
     unsafe fn diagonal_mul_remainder(input: &mut Self::ArrayLike);
 
     /// # Safety
     ///
-    /// This function assumes its input is taken directly from diagonal_mul.
-    /// Add sum to every element of input.
-    /// Sum must be in canonical form and input must be exactly the output of diagonal mul.
+    /// Sum must be in canonical form and input must be exactly the output of `diagonal_mul`.
     /// If either of these does not hold, the result is undefined.
+    ///
+    /// Morally this function is computing `x -> x + sum` however there are some places where
+    /// the output of `diagonal_mul` is the negative of the expected value or not canonical.
+    /// It is the job of add_sum to correct for these irregularities. Where the output is negative
+    /// we compute `x -> sum - x` instead and when not in canonical form we use `signed_add_avx2`
+    /// where acts as add where one input is allowed to lie in `(-P, P)`.
     #[inline(always)]
     unsafe fn add_sum(input: &mut Self::ArrayLike, sum: __m256i) {
         // Diagonal mul multiplied these by 1, 2, 1/2, 3, 4 so we simply need to add the sum.
