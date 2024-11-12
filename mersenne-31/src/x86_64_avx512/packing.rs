@@ -472,7 +472,7 @@ impl AbstractField for PackedMersenne31AVX512 {
         // The other powers could be specialised similarly but we ignore this for now.
         // These ideas could also be used to speed up the more generic exp_u64.
         match POWER {
-            0 => Self::one(),
+            0 => Self::ONE,
             1 => *self,
             2 => self.square(),
             3 => self.cube(),
