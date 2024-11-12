@@ -17,7 +17,7 @@ use core::ops::Mul;
 
 use p3_field::{AbstractField, Field, PrimeField32};
 use p3_monty_31::{
-    mul_2_exp_neg_n, GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters,
+    mul_2exp_neg_n, GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters,
     InternalLayerParameters, MontyField31, Poseidon2ExternalLayerMonty31,
     Poseidon2InternalLayerMonty31,
 };
@@ -137,19 +137,19 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[6] = sum - state[6].halve();
         state[7] = sum - (state[7].double() + state[7]);
         state[8] = sum - state[8].double().double();
-        state[9] = mul_2_exp_neg_n::<BabyBearParameters>(state[9], 8);
+        state[9] = mul_2exp_neg_n::<BabyBearParameters>(state[9], 8);
         state[9] += sum;
-        state[10] = mul_2_exp_neg_n::<BabyBearParameters>(state[10], 2);
+        state[10] = mul_2exp_neg_n::<BabyBearParameters>(state[10], 2);
         state[10] += sum;
-        state[11] = mul_2_exp_neg_n::<BabyBearParameters>(state[11], 3);
+        state[11] = mul_2exp_neg_n::<BabyBearParameters>(state[11], 3);
         state[11] += sum;
-        state[12] = mul_2_exp_neg_n::<BabyBearParameters>(state[12], 27);
+        state[12] = mul_2exp_neg_n::<BabyBearParameters>(state[12], 27);
         state[12] += sum;
-        state[13] = mul_2_exp_neg_n::<BabyBearParameters>(state[13], 8);
+        state[13] = mul_2exp_neg_n::<BabyBearParameters>(state[13], 8);
         state[13] = sum - state[13];
-        state[14] = mul_2_exp_neg_n::<BabyBearParameters>(state[14], 4);
+        state[14] = mul_2exp_neg_n::<BabyBearParameters>(state[14], 4);
         state[14] = sum - state[14];
-        state[15] = mul_2_exp_neg_n::<BabyBearParameters>(state[15], 27);
+        state[15] = mul_2exp_neg_n::<BabyBearParameters>(state[15], 27);
         state[15] = sum - state[15];
     }
 
@@ -199,35 +199,35 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[6] = sum - state[6].halve();
         state[7] = sum - (state[7].double() + state[7]);
         state[8] = sum - state[8].double().double();
-        state[9] = mul_2_exp_neg_n::<BabyBearParameters>(state[9], 8);
+        state[9] = mul_2exp_neg_n::<BabyBearParameters>(state[9], 8);
         state[9] += sum;
-        state[10] = mul_2_exp_neg_n::<BabyBearParameters>(state[10], 2);
+        state[10] = mul_2exp_neg_n::<BabyBearParameters>(state[10], 2);
         state[10] += sum;
-        state[11] = mul_2_exp_neg_n::<BabyBearParameters>(state[11], 3);
+        state[11] = mul_2exp_neg_n::<BabyBearParameters>(state[11], 3);
         state[11] += sum;
-        state[12] = mul_2_exp_neg_n::<BabyBearParameters>(state[12], 4);
+        state[12] = mul_2exp_neg_n::<BabyBearParameters>(state[12], 4);
         state[12] += sum;
-        state[13] = mul_2_exp_neg_n::<BabyBearParameters>(state[13], 7);
+        state[13] = mul_2exp_neg_n::<BabyBearParameters>(state[13], 7);
         state[13] += sum;
-        state[14] = mul_2_exp_neg_n::<BabyBearParameters>(state[14], 9);
+        state[14] = mul_2exp_neg_n::<BabyBearParameters>(state[14], 9);
         state[14] += sum;
-        state[15] = mul_2_exp_neg_n::<BabyBearParameters>(state[15], 27);
+        state[15] = mul_2exp_neg_n::<BabyBearParameters>(state[15], 27);
         state[15] += sum;
-        state[16] = mul_2_exp_neg_n::<BabyBearParameters>(state[16], 8);
+        state[16] = mul_2exp_neg_n::<BabyBearParameters>(state[16], 8);
         state[16] = sum - state[16];
-        state[17] = mul_2_exp_neg_n::<BabyBearParameters>(state[17], 2);
+        state[17] = mul_2exp_neg_n::<BabyBearParameters>(state[17], 2);
         state[17] = sum - state[17];
-        state[18] = mul_2_exp_neg_n::<BabyBearParameters>(state[18], 3);
+        state[18] = mul_2exp_neg_n::<BabyBearParameters>(state[18], 3);
         state[18] = sum - state[18];
-        state[19] = mul_2_exp_neg_n::<BabyBearParameters>(state[19], 4);
+        state[19] = mul_2exp_neg_n::<BabyBearParameters>(state[19], 4);
         state[19] = sum - state[19];
-        state[20] = mul_2_exp_neg_n::<BabyBearParameters>(state[20], 5);
+        state[20] = mul_2exp_neg_n::<BabyBearParameters>(state[20], 5);
         state[20] = sum - state[20];
-        state[21] = mul_2_exp_neg_n::<BabyBearParameters>(state[21], 6);
+        state[21] = mul_2exp_neg_n::<BabyBearParameters>(state[21], 6);
         state[21] = sum - state[21];
-        state[22] = mul_2_exp_neg_n::<BabyBearParameters>(state[22], 7);
+        state[22] = mul_2exp_neg_n::<BabyBearParameters>(state[22], 7);
         state[22] = sum - state[22];
-        state[23] = mul_2_exp_neg_n::<BabyBearParameters>(state[23], 27);
+        state[23] = mul_2exp_neg_n::<BabyBearParameters>(state[23], 27);
         state[23] = sum - state[23];
     }
 

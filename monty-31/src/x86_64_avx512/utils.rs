@@ -71,7 +71,7 @@ pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
 /// Input must be given in canonical form.
 /// Output may not be in canonical form but will lie in [0, P].
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_n_avx512<
+pub unsafe fn mul_neg_2exp_neg_n_avx512<
     TAD: TwoAdicData + PackedMontyParameters,
     const N: u32,
     const N_PRIME: u32,
@@ -124,7 +124,7 @@ pub unsafe fn mul_neg_2_exp_neg_n_avx512<
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_8_avx512<
+pub unsafe fn mul_neg_2exp_neg_8_avx512<
     TAD: TwoAdicData + PackedMontyParameters,
     const N_PRIME: u32,
 >(
@@ -175,7 +175,7 @@ pub unsafe fn mul_neg_2_exp_neg_8_avx512<
 /// Input must be given in canonical form.
 /// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
 #[inline(always)]
-pub unsafe fn mul_neg_2_exp_neg_two_adicity_avx512<
+pub unsafe fn mul_neg_2exp_neg_two_adicity_avx512<
     TAD: TwoAdicData + PackedMontyParameters,
     const N: u32,
     const N_PRIME: u32,

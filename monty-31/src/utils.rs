@@ -62,11 +62,11 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 /// provided the input is < 2^32P so this works for 0 <= n <= 32.
 #[inline]
 #[must_use]
-pub const fn mul_2_exp_neg_n<MP: MontyParameters>(
+pub const fn mul_2exp_neg_n<MP: MontyParameters>(
     val: MontyField31<MP>,
     n: u32,
 ) -> MontyField31<MP> {
     assert!(n < 33);
-    let value_mul_2_exp_neg_n = (val.value as u64) << (32 - n);
-    MontyField31::new_monty(monty_reduce::<MP>(value_mul_2_exp_neg_n))
+    let value_mul_2exp_neg_n = (val.value as u64) << (32 - n);
+    MontyField31::new_monty(monty_reduce::<MP>(value_mul_2exp_neg_n))
 }
