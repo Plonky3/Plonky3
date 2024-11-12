@@ -9,7 +9,8 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 
-use crate::{monty_reduce, MontyField31, MontyParameters, TwoAdicData};
+use crate::utils::monty_reduce;
+use crate::{MontyField31, MontyParameters, TwoAdicData};
 
 impl<MP: MontyParameters + TwoAdicData> MontyField31<MP> {
     #[inline(always)]

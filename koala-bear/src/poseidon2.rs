@@ -17,9 +17,8 @@ use core::ops::Mul;
 
 use p3_field::{AbstractField, Field, PrimeField32};
 use p3_monty_31::{
-    mul_2exp_neg_n, GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters,
-    InternalLayerParameters, MontyField31, Poseidon2ExternalLayerMonty31,
-    Poseidon2InternalLayerMonty31,
+    GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
+    MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 use p3_poseidon2::Poseidon2;
 
@@ -137,19 +136,19 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         state[6] = sum - state[6].halve();
         state[7] = sum - (state[7].double() + state[7]);
         state[8] = sum - state[8].double().double();
-        state[9] = mul_2exp_neg_n::<KoalaBearParameters>(state[9], 8);
+        state[9] = state[9].mul_2exp_neg_n(8);
         state[9] += sum;
-        state[10] = mul_2exp_neg_n::<KoalaBearParameters>(state[10], 3);
+        state[10] = state[10].mul_2exp_neg_n(3);
         state[10] += sum;
-        state[11] = mul_2exp_neg_n::<KoalaBearParameters>(state[11], 24);
+        state[11] = state[11].mul_2exp_neg_n(24);
         state[11] += sum;
-        state[12] = mul_2exp_neg_n::<KoalaBearParameters>(state[12], 8);
+        state[12] = state[12].mul_2exp_neg_n(8);
         state[12] = sum - state[12];
-        state[13] = mul_2exp_neg_n::<KoalaBearParameters>(state[13], 3);
+        state[13] = state[13].mul_2exp_neg_n(3);
         state[13] = sum - state[13];
-        state[14] = mul_2exp_neg_n::<KoalaBearParameters>(state[14], 4);
+        state[14] = state[14].mul_2exp_neg_n(4);
         state[14] = sum - state[14];
-        state[15] = mul_2exp_neg_n::<KoalaBearParameters>(state[15], 24);
+        state[15] = state[15].mul_2exp_neg_n(24);
         state[15] = sum - state[15];
     }
 
@@ -199,35 +198,35 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         state[6] = sum - state[6].halve();
         state[7] = sum - (state[7].double() + state[7]);
         state[8] = sum - state[8].double().double();
-        state[9] = mul_2exp_neg_n::<KoalaBearParameters>(state[9], 8);
+        state[9] = state[9].mul_2exp_neg_n(8);
         state[9] += sum;
-        state[10] = mul_2exp_neg_n::<KoalaBearParameters>(state[10], 2);
+        state[10] = state[10].mul_2exp_neg_n(2);
         state[10] += sum;
-        state[11] = mul_2exp_neg_n::<KoalaBearParameters>(state[11], 3);
+        state[11] = state[11].mul_2exp_neg_n(3);
         state[11] += sum;
-        state[12] = mul_2exp_neg_n::<KoalaBearParameters>(state[12], 4);
+        state[12] = state[12].mul_2exp_neg_n(4);
         state[12] += sum;
-        state[13] = mul_2exp_neg_n::<KoalaBearParameters>(state[13], 5);
+        state[13] = state[13].mul_2exp_neg_n(5);
         state[13] += sum;
-        state[14] = mul_2exp_neg_n::<KoalaBearParameters>(state[14], 6);
+        state[14] = state[14].mul_2exp_neg_n(6);
         state[14] += sum;
-        state[15] = mul_2exp_neg_n::<KoalaBearParameters>(state[15], 24);
+        state[15] = state[15].mul_2exp_neg_n(24);
         state[15] += sum;
-        state[16] = mul_2exp_neg_n::<KoalaBearParameters>(state[16], 8);
+        state[16] = state[16].mul_2exp_neg_n(8);
         state[16] = sum - state[16];
-        state[17] = mul_2exp_neg_n::<KoalaBearParameters>(state[17], 3);
+        state[17] = state[17].mul_2exp_neg_n(3);
         state[17] = sum - state[17];
-        state[18] = mul_2exp_neg_n::<KoalaBearParameters>(state[18], 4);
+        state[18] = state[18].mul_2exp_neg_n(4);
         state[18] = sum - state[18];
-        state[19] = mul_2exp_neg_n::<KoalaBearParameters>(state[19], 5);
+        state[19] = state[19].mul_2exp_neg_n(5);
         state[19] = sum - state[19];
-        state[20] = mul_2exp_neg_n::<KoalaBearParameters>(state[20], 6);
+        state[20] = state[20].mul_2exp_neg_n(6);
         state[20] = sum - state[20];
-        state[21] = mul_2exp_neg_n::<KoalaBearParameters>(state[21], 7);
+        state[21] = state[21].mul_2exp_neg_n(7);
         state[21] = sum - state[21];
-        state[22] = mul_2exp_neg_n::<KoalaBearParameters>(state[22], 9);
+        state[22] = state[22].mul_2exp_neg_n(9);
         state[22] = sum - state[22];
-        state[23] = mul_2exp_neg_n::<KoalaBearParameters>(state[23], 24);
+        state[23] = state[23].mul_2exp_neg_n(24);
         state[23] = sum - state[23];
     }
 

@@ -17,10 +17,8 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{
-    from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, FieldParameters, MontyParameters,
-    TwoAdicData,
-};
+use crate::utils::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64};
+use crate::{FieldParameters, MontyParameters, TwoAdicData};
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
@@ -91,6 +89,19 @@ impl<MP: MontyParameters> MontyField31<MP> {
             i += 1;
         }
         output
+    }
+
+    /// Multiply the given MontyField31 element by `2^{-n}`.
+    ///
+    /// This makes use of the fact that, as the monty constant is `2^32`,
+    /// the monty form of `2^{-n}` is `2^{32 - n}`. Monty reduction works
+    /// provided the input is `< 2^32P` so this works for `0 <= n <= 32`.
+    #[inline]
+    #[must_use]
+    pub const fn mul_2exp_neg_n(&self, n: u32) -> Self {
+        assert!(n < 33);
+        let value_mul_2exp_neg_n = (self.value as u64) << (32 - n);
+        MontyField31::new_monty(monty_reduce::<MP>(value_mul_2exp_neg_n))
     }
 }
 

@@ -11,7 +11,8 @@ use itertools::izip;
 use p3_field::{AbstractField, TwoAdicField};
 use p3_util::log2_strict_usize;
 
-use crate::{monty_reduce, FieldParameters, MontyField31, MontyParameters, TwoAdicData};
+use crate::utils::monty_reduce;
+use crate::{FieldParameters, MontyField31, MontyParameters, TwoAdicData};
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Given a field element `gen` of order n where `n = 2^lg_n`,
