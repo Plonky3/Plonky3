@@ -12,7 +12,7 @@ use rand::Rng;
 use crate::Mersenne31;
 
 const WIDTH: usize = 8;
-const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +23,7 @@ impl PackedMersenne31AVX2 {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    pub(crate) fn to_vector(self) -> __m256i {
         unsafe {
             // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -40,7 +40,7 @@ impl PackedMersenne31AVX2 {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `Mersenne31` values. We must only reason about memory representations. `__m256i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
@@ -146,6 +146,16 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
     // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
     unsafe {
         x86_64::_mm256_castps_si256(x86_64::_mm256_movehdup_ps(x86_64::_mm256_castsi256_ps(x)))
+    }
+}
+
+#[inline]
+#[must_use]
+fn moveldup_epi32(x: __m256i) -> __m256i {
+    // This instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, duplicate, and cast back.
+    unsafe {
+        x86_64::_mm256_castps_si256(x86_64::_mm256_moveldup_ps(x86_64::_mm256_castsi256_ps(x)))
     }
 }
 
@@ -257,6 +267,76 @@ fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
+/// Reduce a representative in {0, ..., P^2}
+/// to a representative in [-P, P]. If the input is greater than P^2, the output will
+/// still correspond to the same class but will instead lie in [-P, 2^34].
+#[inline(always)]
+fn partial_reduce_neg(x: __m256i) -> __m256i {
+    unsafe {
+        // Get the top bits shifted down.
+        let hi = x86_64::_mm256_srli_epi64::<31>(x);
+
+        const LOW31: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
+        // nand instead of and means this returns P - lo.
+        let neg_lo = x86_64::_mm256_andnot_si256(x, LOW31);
+
+        // Compiling with sub_epi64 vs sub_epi32 both produce reasonable code so we use
+        // sub_epi64 for the slightly greater flexibility.
+        // See: https://godbolt.org/z/WPze9e3f3
+        x86_64::_mm256_sub_epi64(hi, neg_lo)
+    }
+}
+
+/// Compute the square of the Mersenne-31 field elements located in the even indices.
+/// These field elements are represented as values in {-P, ..., P}. If the even inputs
+/// do not conform to this representation, the result is undefined.
+/// Values in odd indices are ignored.
+/// Output will contain 0's in odd indices.
+#[inline(always)]
+fn square_unred(x: __m256i) -> __m256i {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let x2 = x86_64::_mm256_mul_epi32(x, x);
+        partial_reduce_neg(x2)
+    }
+}
+
+/// Compute the permutation x -> x^5 on Mersenne-31 field elements
+/// represented as values in {0, ..., P}. If the inputs do not conform
+/// to this representation, the result is undefined.
+#[inline(always)]
+pub(crate) fn exp5(x: __m256i) -> __m256i {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let input_evn = x;
+        let input_odd = movehdup_epi32(x);
+
+        let evn_sq = square_unred(input_evn);
+        let odd_sq = square_unred(input_odd);
+
+        let evn_4 = square_unred(evn_sq);
+        let odd_4 = square_unred(odd_sq);
+
+        let evn_5 = x86_64::_mm256_mul_epi32(evn_4, input_evn);
+        let odd_5 = x86_64::_mm256_mul_epi32(odd_4, input_odd);
+
+        // Marked dirty as the top bit needs to be cleared.
+        let odd_5_lo_dirty = moveldup_epi32(odd_5);
+        let odd_5_hi = x86_64::_mm256_add_epi64(odd_5, odd_5);
+        let evn_5_hi = x86_64::_mm256_srli_epi64::<31>(evn_5);
+
+        // Marked dirty as the top bit needs to be cleared.
+        let lo_dirty = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5, odd_5_lo_dirty);
+        let hi = x86_64::_mm256_blend_epi32::<0b10101010>(evn_5_hi, odd_5_hi);
+        let lo = x86_64::_mm256_and_si256(lo_dirty, P);
+        let corr = x86_64::_mm256_sign_epi32(P, hi);
+        let t = x86_64::_mm256_add_epi32(hi, lo);
+        let u = x86_64::_mm256_sub_epi32(t, corr);
+
+        x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
 impl From<Mersenne31> for PackedMersenne31AVX2 {
     #[inline]
     fn from(value: Mersenne31) -> Self {
@@ -357,6 +437,33 @@ impl AbstractField for PackedMersenne31AVX2 {
     #[inline]
     fn from_wrapped_u64(n: u64) -> Self {
         Mersenne31::from_wrapped_u64(n).into()
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(exp5(val))
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 
     #[inline(always)]

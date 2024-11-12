@@ -138,6 +138,13 @@ pub trait AbstractField:
         res
     }
 
+    /// self * 2^exp
+    #[must_use]
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        self.clone() * Self::TWO.exp_u64(exp)
+    }
+
     #[must_use]
     fn powers(&self) -> Powers<Self> {
         self.shifted_powers(Self::ONE)
@@ -221,13 +228,6 @@ pub trait Field:
 
     fn is_one(&self) -> bool {
         *self == Self::ONE
-    }
-
-    /// self * 2^exp
-    #[must_use]
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::TWO.exp_u64(exp)
     }
 
     /// self / 2^exp

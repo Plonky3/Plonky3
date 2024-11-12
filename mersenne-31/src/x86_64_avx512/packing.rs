@@ -12,7 +12,7 @@ use rand::Rng;
 use crate::Mersenne31;
 
 const WIDTH: usize = 16;
-const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 const EVENS: __mmask16 = 0b0101010101010101;
 const ODDS: __mmask16 = 0b1010101010101010;
 const EVENS4: __mmask16 = 0x0f0f;
@@ -26,7 +26,7 @@ impl PackedMersenne31AVX512 {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m512i {
+    pub(crate) fn to_vector(self) -> __m512i {
         unsafe {
             // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -43,7 +43,7 @@ impl PackedMersenne31AVX512 {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
-    unsafe fn from_vector(vector: __m512i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m512i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `Mersenne31` values. We must only reason about memory representations. `__m512i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
@@ -277,6 +277,86 @@ fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
     }
 }
 
+/// Reduce a representative in {0, ..., P^2}
+/// to a representative in [-P, P]. If the input is greater than P^2, the output will
+/// still correspond to the same class but will instead lie in [-P, 2^34].
+#[inline(always)]
+fn partial_reduce_neg(x: __m512i) -> __m512i {
+    unsafe {
+        // Get the top bits shifted down.
+        let hi = x86_64::_mm512_srli_epi64::<31>(x);
+
+        const LOW31: __m512i = unsafe { transmute::<[u64; 8], _>([0x7fffffff; 8]) };
+
+        // nand instead of and means this returns P - lo.
+        let neg_lo = x86_64::_mm512_andnot_si512(x, LOW31);
+
+        // we could also try:
+        // let neg_lo = x86_64::_mm512_maskz_andnot_epi32(EVENS, x, P);
+        // but this seems to get compiled badly and likes outputting vpternlogd.
+        // See: https://godbolt.org/z/WPze9e3f3
+
+        // Compiling with sub_epi64 vs sub_epi32 both produce reasonable code so we use
+        // sub_epi64 for the slightly greater flexibility.
+        x86_64::_mm512_sub_epi64(hi, neg_lo)
+    }
+}
+
+/// Compute the square of the Mersenne-31 field elements located in the even indices.
+/// These field elements are represented as values in {-P, ..., P}. If the even inputs
+/// do not conform to this representation, the result is undefined.
+/// The top half of each 64-bit lane is is ignored.
+/// The top half of each 64-bit lane in the result is 0.
+#[inline(always)]
+fn square_unred(x: __m512i) -> __m512i {
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let x2 = x86_64::_mm512_mul_epi32(x, x);
+        partial_reduce_neg(x2)
+    }
+}
+
+/// Compute the permutation x -> x^5 on Mersenne-31 field elements
+/// represented as values in {0, ..., P}. If the inputs do not conform
+/// to this representation, the result is undefined.
+#[inline(always)]
+pub(crate) fn exp5(x: __m512i) -> __m512i {
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let input_evn = x;
+        let input_odd = movehdup_epi32(x);
+
+        let evn_sq = square_unred(input_evn);
+        let odd_sq = square_unred(input_odd);
+
+        let evn_4 = square_unred(evn_sq);
+        let odd_4 = square_unred(odd_sq);
+
+        let evn_5 = x86_64::_mm512_mul_epi32(evn_4, input_evn);
+        let odd_5 = x86_64::_mm512_mul_epi32(odd_4, input_odd);
+
+        // Marked dirty as the top bit needs to be cleared.
+        let lo_dirty = mask_moveldup_epi32(evn_5, ODDS, odd_5);
+
+        // We could use 2 adds and mask_movehdup_epi32.
+        // instead of an add, a shift and a blend.
+        let odd_5_hi = x86_64::_mm512_add_epi64(odd_5, odd_5);
+        let evn_5_hi = x86_64::_mm512_srli_epi64::<31>(evn_5);
+        let hi = x86_64::_mm512_mask_blend_epi32(ODDS, evn_5_hi, odd_5_hi);
+
+        let zero = x86_64::_mm512_setzero_si512();
+        let signs = x86_64::_mm512_movepi32_mask(hi);
+        let corr = x86_64::_mm512_mask_sub_epi32(P, signs, zero, P);
+
+        let lo = x86_64::_mm512_and_si512(lo_dirty, P);
+
+        let t = x86_64::_mm512_add_epi32(hi, lo);
+        let u = x86_64::_mm512_sub_epi32(t, corr);
+
+        x86_64::_mm512_min_epu32(t, u)
+    }
+}
+
 impl From<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn from(value: Mersenne31) -> Self {
@@ -383,6 +463,33 @@ impl AbstractField for PackedMersenne31AVX512 {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+    }
+
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(exp5(val))
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 }
 

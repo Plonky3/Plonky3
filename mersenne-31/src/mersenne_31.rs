@@ -161,6 +161,16 @@ impl AbstractField for Mersenne31 {
     }
 
     #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
+        let exp = exp % 31;
+        let left = (self.value << exp) & ((1 << 31) - 1);
+        let right = self.value >> (31 - exp);
+        let rotated = left | right;
+        Self::new(rotated)
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u32; len]) }
@@ -203,16 +213,6 @@ impl Field for Mersenne31 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
-        let exp = exp % 31;
-        let left = (self.value << exp) & ((1 << 31) - 1);
-        let right = self.value >> (31 - exp);
-        let rotated = left | right;
-        Self::new(rotated)
     }
 
     #[inline]
@@ -416,7 +416,8 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 /// Convert a constant u32 array into a constant Mersenne31 array.
 #[inline]
 #[must_use]
-pub(crate) const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
+pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
+    // This is currently used only in the test crates of the vectorized implementations.
     let mut output = [Mersenne31 { value: 0 }; N];
     let mut i = 0;
     loop {

@@ -1,102 +1,268 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//!
+//! For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
+//! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
+//!
+//! This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
+//! and inverse powers of 2 where it is possible to avoid monty reductions.
+//! Additionally, for technical reasons, having the first entry be -2 is useful.
+//!
+//! Optimized Diagonal for KoalaBear16:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
+//! Optimized Diagonal for KoalaBear24:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
+//! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use p3_field::PrimeField32;
+use core::ops::Mul;
+
+use p3_field::{AbstractField, Field, PrimeField32};
 use p3_monty_31::{
-    DiffusionMatrixMontyField31, DiffusionMatrixParameters, PackedFieldPoseidon2Helpers,
+    GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
+    MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
+use p3_poseidon2::Poseidon2;
 
 use crate::{KoalaBear, KoalaBearParameters};
 
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimized Diffusion matrices for Koalabear16.
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17]
-// Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
-//                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    15]
-//
-// Optimized Diffusion matrices for Koalabear24.
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25]
-// Power of 2 entries: [-2, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 8388608]
-//                 = 2^[ ?, 0, 1, 2, 3,  4,  5,  6,   7,   8,   9,   10,   11,   12,   13,    14,    15,    16,     17,     18,     19,      20,      21,      23]
-//
-// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
-// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
-// such that (1 + Diag(vec)) is the monty form of the matrix. This allows for delayed reduction tricks.
+pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
+    Poseidon2InternalLayerMonty31<KoalaBearParameters, WIDTH, KoalaBearInternalLayerParameters>;
 
-// Long term, INTERNAL_DIAG_MONTY will be removed.
-// Currently we need them for each Packed field implementation so they are given here to prevent code duplication.
+pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
+    Poseidon2ExternalLayerMonty31<KoalaBearParameters, WIDTH>;
 
-pub type DiffusionMatrixKoalaBear = DiffusionMatrixMontyField31<KoalaBearDiffusionMatrixParameters>;
+/// Degree of the chosen permutation polynomial for KoalaBear, used as the Poseidon2 S-Box.
+///
+/// As p - 1 = 127 * 2^{24} we have a a lot of choice in degree D satisfying gcd(p - 1, D) = 1.
+/// Experimentation suggests that the optimal choice is the smallest available one, namely 3.
+const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 
+/// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
+///
+/// It acts on arrays of the form either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]`. For speed purposes,
+/// wherever possible, input arrays should of the form `[KoalaBear::Packing; WIDTH]`.
+pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
+    <KoalaBear as Field>::Packing,
+    Poseidon2ExternalLayerKoalaBear<WIDTH>,
+    Poseidon2InternalLayerKoalaBear<WIDTH>,
+    WIDTH,
+    KOALABEAR_S_BOX_DEGREE,
+>;
+
+/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by KoalaBear field elements.
+/// If you have either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]` it will be much faster
+/// to use `Poseidon2KoalaBear<WIDTH>` instead of building a Poseidon2 permutation using this.
+pub type GenericPoseidon2LinearLayersKoalaBear =
+    GenericPoseidon2LinearLayersMonty31<KoalaBearParameters, KoalaBearInternalLayerParameters>;
+
+// In order to use KoalaBear::new_array we need to convert our vector to a vector of u32's.
+// To do this we make use of the fact that KoalaBear::ORDER_U32 - 1 = 127 * 2^24 so for 0 <= n <= 24:
+// -1/2^n = (KoalaBear::ORDER_U32 - 1) >> n
+// 1/2^n = -(-1/2^n) = KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> n)
+
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
+/// saved as an array of KoalaBear elements.
+const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([
+    KoalaBear::ORDER_U32 - 2,
+    1,
+    2,
+    (KoalaBear::ORDER_U32 + 1) >> 1,
+    3,
+    4,
+    (KoalaBear::ORDER_U32 - 1) >> 1,
+    KoalaBear::ORDER_U32 - 3,
+    KoalaBear::ORDER_U32 - 4,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
+    KoalaBear::ORDER_U32 - 127,
+    (KoalaBear::ORDER_U32 - 1) >> 8,
+    (KoalaBear::ORDER_U32 - 1) >> 3,
+    (KoalaBear::ORDER_U32 - 1) >> 4,
+    127,
+]);
+
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
+/// saved as an array of KoalaBear elements.
+const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([
+    KoalaBear::ORDER_U32 - 2,
+    1,
+    2,
+    (KoalaBear::ORDER_U32 + 1) >> 1,
+    3,
+    4,
+    (KoalaBear::ORDER_U32 - 1) >> 1,
+    KoalaBear::ORDER_U32 - 3,
+    KoalaBear::ORDER_U32 - 4,
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 2),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 4),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 5),
+    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 6),
+    KoalaBear::ORDER_U32 - 127,
+    (KoalaBear::ORDER_U32 - 1) >> 8,
+    (KoalaBear::ORDER_U32 - 1) >> 3,
+    (KoalaBear::ORDER_U32 - 1) >> 4,
+    (KoalaBear::ORDER_U32 - 1) >> 5,
+    (KoalaBear::ORDER_U32 - 1) >> 6,
+    (KoalaBear::ORDER_U32 - 1) >> 7,
+    (KoalaBear::ORDER_U32 - 1) >> 9,
+    127,
+]);
+
+/// Contains data needed to define the internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
-pub struct KoalaBearDiffusionMatrixParameters;
+pub struct KoalaBearInternalLayerParameters;
 
-impl DiffusionMatrixParameters<KoalaBearParameters, 16> for KoalaBearDiffusionMatrixParameters {
-    type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
+    type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
 
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 16] = KoalaBear::new_array([
-        KoalaBear::ORDER_U32 - 2,
-        1,
-        1 << 1,
-        1 << 2,
-        1 << 3,
-        1 << 4,
-        1 << 5,
-        1 << 6,
-        1 << 7,
-        1 << 8,
-        1 << 9,
-        1 << 10,
-        1 << 11,
-        1 << 12,
-        1 << 13,
-        1 << 15,
-    ]);
+    const INTERNAL_DIAG_MONTY: [MontyField31<KoalaBearParameters>; 16] = INTERNAL_DIAG_MONTY_16;
+
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
+    fn internal_layer_mat_mul(
+        state: &mut [MontyField31<KoalaBearParameters>; 16],
+        sum: MontyField31<KoalaBearParameters>,
+    ) {
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
+        state[1] += sum;
+        state[2] = state[2].double() + sum;
+        state[3] = state[3].halve() + sum;
+        state[4] = sum + state[4].double() + state[4];
+        state[5] = sum + state[5].double().double();
+        state[6] = sum - state[6].halve();
+        state[7] = sum - (state[7].double() + state[7]);
+        state[8] = sum - state[8].double().double();
+        state[9] = state[9].mul_2exp_neg_n(8);
+        state[9] += sum;
+        state[10] = state[10].mul_2exp_neg_n(3);
+        state[10] += sum;
+        state[11] = state[11].mul_2exp_neg_n(24);
+        state[11] += sum;
+        state[12] = state[12].mul_2exp_neg_n(8);
+        state[12] = sum - state[12];
+        state[13] = state[13].mul_2exp_neg_n(3);
+        state[13] = sum - state[13];
+        state[14] = state[14].mul_2exp_neg_n(4);
+        state[14] = sum - state[14];
+        state[15] = state[15].mul_2exp_neg_n(24);
+        state[15] = sum - state[15];
+    }
+
+    fn generic_internal_linear_layer<AF>(state: &mut [AF; 16])
+    where
+        AF: AbstractField + Mul<KoalaBear, Output = AF>,
+    {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use multiplication.
+        // This could probably be improved slightly by making use of the
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        state
+            .iter_mut()
+            .zip(INTERNAL_DIAG_MONTY_16)
+            .skip(3)
+            .for_each(|(val, diag_elem)| {
+                *val = full_sum.clone() + val.clone() * diag_elem;
+            });
+    }
 }
 
-impl DiffusionMatrixParameters<KoalaBearParameters, 24> for KoalaBearDiffusionMatrixParameters {
-    type ArrayLike = [u8; 23];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23,
-    ];
+impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
+    type ArrayLike = [MontyField31<KoalaBearParameters>; 23];
 
-    const INTERNAL_DIAG_MONTY: [KoalaBear; 24] = KoalaBear::new_array([
-        KoalaBear::ORDER_U32 - 2,
-        1,
-        1 << 1,
-        1 << 2,
-        1 << 3,
-        1 << 4,
-        1 << 5,
-        1 << 6,
-        1 << 7,
-        1 << 8,
-        1 << 9,
-        1 << 10,
-        1 << 11,
-        1 << 12,
-        1 << 13,
-        1 << 14,
-        1 << 15,
-        1 << 16,
-        1 << 17,
-        1 << 18,
-        1 << 19,
-        1 << 20,
-        1 << 21,
-        1 << 23,
-    ]);
+    const INTERNAL_DIAG_MONTY: [MontyField31<KoalaBearParameters>; 24] = INTERNAL_DIAG_MONTY_24;
+
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
+    fn internal_layer_mat_mul(
+        state: &mut [MontyField31<KoalaBearParameters>; 24],
+        sum: MontyField31<KoalaBearParameters>,
+    ) {
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
+        state[1] += sum;
+        state[2] = state[2].double() + sum;
+        state[3] = state[3].halve() + sum;
+        state[4] = sum + state[4].double() + state[4];
+        state[5] = sum + state[5].double().double();
+        state[6] = sum - state[6].halve();
+        state[7] = sum - (state[7].double() + state[7]);
+        state[8] = sum - state[8].double().double();
+        state[9] = state[9].mul_2exp_neg_n(8);
+        state[9] += sum;
+        state[10] = state[10].mul_2exp_neg_n(2);
+        state[10] += sum;
+        state[11] = state[11].mul_2exp_neg_n(3);
+        state[11] += sum;
+        state[12] = state[12].mul_2exp_neg_n(4);
+        state[12] += sum;
+        state[13] = state[13].mul_2exp_neg_n(5);
+        state[13] += sum;
+        state[14] = state[14].mul_2exp_neg_n(6);
+        state[14] += sum;
+        state[15] = state[15].mul_2exp_neg_n(24);
+        state[15] += sum;
+        state[16] = state[16].mul_2exp_neg_n(8);
+        state[16] = sum - state[16];
+        state[17] = state[17].mul_2exp_neg_n(3);
+        state[17] = sum - state[17];
+        state[18] = state[18].mul_2exp_neg_n(4);
+        state[18] = sum - state[18];
+        state[19] = state[19].mul_2exp_neg_n(5);
+        state[19] = sum - state[19];
+        state[20] = state[20].mul_2exp_neg_n(6);
+        state[20] = sum - state[20];
+        state[21] = state[21].mul_2exp_neg_n(7);
+        state[21] = sum - state[21];
+        state[22] = state[22].mul_2exp_neg_n(9);
+        state[22] = sum - state[22];
+        state[23] = state[23].mul_2exp_neg_n(24);
+        state[23] = sum - state[23];
+    }
+
+    fn generic_internal_linear_layer<AF>(state: &mut [AF; 24])
+    where
+        AF: AbstractField + core::ops::Mul<KoalaBear, Output = AF>,
+    {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use multiplication.
+        // This could probably be improved slightly by making use of the
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        state
+            .iter_mut()
+            .zip(INTERNAL_DIAG_MONTY_24)
+            .skip(3)
+            .for_each(|(val, diag_elem)| {
+                *val = full_sum.clone() + val.clone() * diag_elem;
+            });
+    }
 }
 
-impl PackedFieldPoseidon2Helpers<KoalaBearParameters> for KoalaBearDiffusionMatrixParameters {}
+impl InternalLayerParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {}
+impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{DiffusionPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral};
     use p3_symmetric::Permutation;
-    use rand::SeedableRng;
+    use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
@@ -105,22 +271,6 @@ mod tests {
 
     // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
-
-    // Our Poseidon2 Implementation for KoalaBear
-    fn poseidon2_koalabear<const WIDTH: usize, const D: u64, DiffusionMatrix>(
-        input: &mut [F; WIDTH],
-        diffusion_matrix: DiffusionMatrix,
-    ) where
-        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
-    {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
-
-        poseidon2.permute_mut(input);
-    }
 
     /// Test on a roughly random input.
     /// This random input is generated by the following sage code:
@@ -136,13 +286,16 @@ mod tests {
         .map(F::from_canonical_u32);
 
         let expected: [F; 16] = [
-            575479740, 1350824762, 2117880331, 1034350182, 1722317281, 988412135, 1272198010,
-            2022533539, 1465703323, 648698653, 439658904, 878238659, 1163940027, 287402877,
-            685135400, 1397893936,
+            652590279, 1200629963, 1013089423, 1840372851, 19101828, 561050015, 1714865585,
+            994637181, 498949829, 729884572, 1957973925, 263012103, 535029297, 2121808603,
+            964663675, 1473622080,
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<16, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -161,14 +314,55 @@ mod tests {
         .map(F::from_canonical_u32);
 
         let expected: [F; 24] = [
-            960059210, 1580868478, 1801196597, 904704071, 855821469, 1913275695, 1509383446,
-            1044214192, 627721401, 905385372, 1577681198, 1162796264, 2082498994, 488108023,
-            909588461, 1160073886, 1386956787, 10169827, 1492928499, 843558832, 580466197,
-            1008002900, 1086108283, 697296755,
+            3825456, 486989921, 613714063, 282152282, 1027154688, 1171655681, 879344953,
+            1090688809, 1960721991, 1604199242, 1329947150, 1535171244, 781646521, 1156559780,
+            1875690339, 368140677, 457503063, 304208551, 1919757655, 835116474, 1293372648,
+            1254825008, 810923913, 1773631109,
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_koalabear::<24, 3, _>(&mut input, DiffusionMatrixKoalaBear::default());
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
         assert_eq!(input, expected);
+    }
+
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 16.
+    #[test]
+    fn test_generic_internal_linear_layer_16() {
+        let mut rng = rand::thread_rng();
+        let mut input1: [F; 16] = rng.gen();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().cloned().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        KoalaBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        KoalaBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
+    }
+
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 16.
+    #[test]
+    fn test_generic_internal_linear_layer_24() {
+        let mut rng = rand::thread_rng();
+        let mut input1: [F; 24] = rng.gen();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().cloned().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        KoalaBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        KoalaBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
     }
 }

@@ -1,99 +1,268 @@
 //! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//!
+//! For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
+//! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
+//!
+//! This leads to using small values (e.g. 1, 2, 3, 4) where multiplication is implemented using addition
+//! and inverse powers of 2 where it is possible to avoid monty reductions.
+//! Additionally, for technical reasons, having the first entry be -2 is useful.
+//!
+//! Optimized Diagonal for BabyBear16:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27].
+//! Optimized Diagonal for BabyBear24:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
+//! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use p3_field::PrimeField32;
+use core::ops::Mul;
+
+use p3_field::{AbstractField, Field, PrimeField32};
 use p3_monty_31::{
-    DiffusionMatrixMontyField31, DiffusionMatrixParameters, PackedFieldPoseidon2Helpers,
+    GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
+    MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
+use p3_poseidon2::Poseidon2;
 
 use crate::{BabyBear, BabyBearParameters};
 
-// See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
-// Optimized diffusion matrices for Babybear16:
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16]
-// Power of 2 entries: [-2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 32768]
-//                   = [ ?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^15]
-//
-// Optimized diffusion matrices for Babybear24:
-// Small entries: [-2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24]
-// Power of 2 entries: [-2,   1,   2,   4,   8,  16,  32,  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 262144, 524288, 1048576, 2097152, 4194304, 8388608]
-//                   = [ ?, 2^0, 2^1, 2^2, 2^3, 2^4, 2^5, 2^6, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^18,   2^19,    2^20,    2^21,    2^22,    2^23]
-//
-// In order to use these to their fullest potential we need to slightly reimagine what the matrix looks like.
-// Note that if (1 + Diag(vec)) is a valid matrix then so is r(1 + Diag(vec)) for any constant scalar r. Hence we should operate
-// such that (1 + Diag(vec)) is the monty form of the matrix. This should allow for some delayed reduction tricks.
+pub type Poseidon2InternalLayerBabyBear<const WIDTH: usize> =
+    Poseidon2InternalLayerMonty31<BabyBearParameters, WIDTH, BabyBearInternalLayerParameters>;
 
-pub type DiffusionMatrixBabyBear = DiffusionMatrixMontyField31<BabyBearDiffusionMatrixParameters>;
+pub type Poseidon2ExternalLayerBabyBear<const WIDTH: usize> =
+    Poseidon2ExternalLayerMonty31<BabyBearParameters, WIDTH>;
 
+/// Degree of the chosen permutation polynomial for BabyBear, used as the Poseidon2 S-Box.
+///
+/// As p - 1 = 15 * 2^{27} the neither 3 nor 5 satisfy gcd(p - 1, D) = 1.
+/// Instead we use the next smallest available value, namely 7.
+const BABYBEAR_S_BOX_DEGREE: u64 = 7;
+
+/// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
+///
+/// It acts on arrays of the form either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]`. For speed purposes,
+/// wherever possible, input arrays should of the form `[BabyBear::Packing; WIDTH]`.
+pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
+    <BabyBear as Field>::Packing,
+    Poseidon2ExternalLayerBabyBear<WIDTH>,
+    Poseidon2InternalLayerBabyBear<WIDTH>,
+    WIDTH,
+    BABYBEAR_S_BOX_DEGREE,
+>;
+
+/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by BabyBear field elements.
+/// If you have either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]` it will be much faster
+/// to use `Poseidon2BabyBear<WIDTH>` instead of building a Poseidon2 permutation using this.
+pub type GenericPoseidon2LinearLayersBabyBear =
+    GenericPoseidon2LinearLayersMonty31<BabyBearParameters, BabyBearInternalLayerParameters>;
+
+// In order to use BabyBear::new_array we need to convert our vector to a vector of u32's.
+// To do this we make use of the fact that BabyBear::ORDER_U32 - 1 = 15 * 2^27 so for 0 <= n <= 27:
+// -1/2^n = (BabyBear::ORDER_U32 - 1) >> n
+// 1/2^n = -(-1/2^n) = BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> n)
+
+/// The vector `[-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]`
+/// saved as an array of BabyBear elements.
+const INTERNAL_DIAG_MONTY_16: [BabyBear; 16] = BabyBear::new_array([
+    BabyBear::ORDER_U32 - 2,
+    1,
+    2,
+    (BabyBear::ORDER_U32 + 1) >> 1,
+    3,
+    4,
+    (BabyBear::ORDER_U32 - 1) >> 1,
+    BabyBear::ORDER_U32 - 3,
+    BabyBear::ORDER_U32 - 4,
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 8),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 2),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 3),
+    BabyBear::ORDER_U32 - 15,
+    (BabyBear::ORDER_U32 - 1) >> 8,
+    (BabyBear::ORDER_U32 - 1) >> 4,
+    15,
+]);
+
+/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
+/// saved as an array of BabyBear elements.
+const INTERNAL_DIAG_MONTY_24: [BabyBear; 24] = BabyBear::new_array([
+    BabyBear::ORDER_U32 - 2,
+    1,
+    2,
+    (BabyBear::ORDER_U32 + 1) >> 1,
+    3,
+    4,
+    (BabyBear::ORDER_U32 - 1) >> 1,
+    BabyBear::ORDER_U32 - 3,
+    BabyBear::ORDER_U32 - 4,
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 8),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 2),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 3),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 4),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 7),
+    BabyBear::ORDER_U32 - ((BabyBear::ORDER_U32 - 1) >> 9),
+    BabyBear::ORDER_U32 - 15,
+    (BabyBear::ORDER_U32 - 1) >> 8,
+    (BabyBear::ORDER_U32 - 1) >> 2,
+    (BabyBear::ORDER_U32 - 1) >> 3,
+    (BabyBear::ORDER_U32 - 1) >> 4,
+    (BabyBear::ORDER_U32 - 1) >> 5,
+    (BabyBear::ORDER_U32 - 1) >> 6,
+    (BabyBear::ORDER_U32 - 1) >> 7,
+    15,
+]);
+
+/// Contains data needed to define the internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
-pub struct BabyBearDiffusionMatrixParameters;
+pub struct BabyBearInternalLayerParameters;
 
-impl DiffusionMatrixParameters<BabyBearParameters, 16> for BabyBearDiffusionMatrixParameters {
-    type ArrayLike = [u8; 15];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike =
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {
+    type ArrayLike = [MontyField31<BabyBearParameters>; 15];
 
-    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = BabyBear::new_array([
-        BabyBear::ORDER_U32 - 2,
-        1,
-        1 << 1,
-        1 << 2,
-        1 << 3,
-        1 << 4,
-        1 << 5,
-        1 << 6,
-        1 << 7,
-        1 << 8,
-        1 << 9,
-        1 << 10,
-        1 << 11,
-        1 << 12,
-        1 << 13,
-        1 << 15,
-    ]);
+    const INTERNAL_DIAG_MONTY: [BabyBear; 16] = INTERNAL_DIAG_MONTY_16;
+
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
+    fn internal_layer_mat_mul(
+        state: &mut [MontyField31<BabyBearParameters>; 16],
+        sum: MontyField31<BabyBearParameters>,
+    ) {
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]
+        state[1] += sum;
+        state[2] = state[2].double() + sum;
+        state[3] = state[3].halve() + sum;
+        state[4] = sum + state[4].double() + state[4];
+        state[5] = sum + state[5].double().double();
+        state[6] = sum - state[6].halve();
+        state[7] = sum - (state[7].double() + state[7]);
+        state[8] = sum - state[8].double().double();
+        state[9] = state[9].mul_2exp_neg_n(8);
+        state[9] += sum;
+        state[10] = state[10].mul_2exp_neg_n(2);
+        state[10] += sum;
+        state[11] = state[11].mul_2exp_neg_n(3);
+        state[11] += sum;
+        state[12] = state[12].mul_2exp_neg_n(27);
+        state[12] += sum;
+        state[13] = state[13].mul_2exp_neg_n(8);
+        state[13] = sum - state[13];
+        state[14] = state[14].mul_2exp_neg_n(4);
+        state[14] = sum - state[14];
+        state[15] = state[15].mul_2exp_neg_n(27);
+        state[15] = sum - state[15];
+    }
+
+    fn generic_internal_linear_layer<AF>(state: &mut [AF; 16])
+    where
+        AF: AbstractField + Mul<BabyBear, Output = AF>,
+    {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use multiplication.
+        // This could probably be improved slightly by making use of the
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        state
+            .iter_mut()
+            .zip(INTERNAL_DIAG_MONTY_16)
+            .skip(3)
+            .for_each(|(val, diag_elem)| {
+                *val = full_sum.clone() + val.clone() * diag_elem;
+            });
+    }
 }
 
-impl DiffusionMatrixParameters<BabyBearParameters, 24> for BabyBearDiffusionMatrixParameters {
-    type ArrayLike = [u8; 23];
-    const INTERNAL_DIAG_SHIFTS: Self::ArrayLike = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23,
-    ];
+impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {
+    type ArrayLike = [MontyField31<BabyBearParameters>; 23];
 
-    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = BabyBear::new_array([
-        BabyBear::ORDER_U32 - 2,
-        1,
-        1 << 1,
-        1 << 2,
-        1 << 3,
-        1 << 4,
-        1 << 5,
-        1 << 6,
-        1 << 7,
-        1 << 8,
-        1 << 9,
-        1 << 10,
-        1 << 11,
-        1 << 12,
-        1 << 13,
-        1 << 14,
-        1 << 15,
-        1 << 16,
-        1 << 18,
-        1 << 19,
-        1 << 20,
-        1 << 21,
-        1 << 22,
-        1 << 23,
-    ]);
+    const INTERNAL_DIAG_MONTY: [BabyBear; 24] = INTERNAL_DIAG_MONTY_24;
+
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
+    fn internal_layer_mat_mul(
+        state: &mut [MontyField31<BabyBearParameters>; 24],
+        sum: MontyField31<BabyBearParameters>,
+    ) {
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
+        state[1] += sum;
+        state[2] = state[2].double() + sum;
+        state[3] = state[3].halve() + sum;
+        state[4] = sum + state[4].double() + state[4];
+        state[5] = sum + state[5].double().double();
+        state[6] = sum - state[6].halve();
+        state[7] = sum - (state[7].double() + state[7]);
+        state[8] = sum - state[8].double().double();
+        state[9] = state[9].mul_2exp_neg_n(8);
+        state[9] += sum;
+        state[10] = state[10].mul_2exp_neg_n(2);
+        state[10] += sum;
+        state[11] = state[11].mul_2exp_neg_n(3);
+        state[11] += sum;
+        state[12] = state[12].mul_2exp_neg_n(4);
+        state[12] += sum;
+        state[13] = state[13].mul_2exp_neg_n(7);
+        state[13] += sum;
+        state[14] = state[14].mul_2exp_neg_n(9);
+        state[14] += sum;
+        state[15] = state[15].mul_2exp_neg_n(27);
+        state[15] += sum;
+        state[16] = state[16].mul_2exp_neg_n(8);
+        state[16] = sum - state[16];
+        state[17] = state[17].mul_2exp_neg_n(2);
+        state[17] = sum - state[17];
+        state[18] = state[18].mul_2exp_neg_n(3);
+        state[18] = sum - state[18];
+        state[19] = state[19].mul_2exp_neg_n(4);
+        state[19] = sum - state[19];
+        state[20] = state[20].mul_2exp_neg_n(5);
+        state[20] = sum - state[20];
+        state[21] = state[21].mul_2exp_neg_n(6);
+        state[21] = sum - state[21];
+        state[22] = state[22].mul_2exp_neg_n(7);
+        state[22] = sum - state[22];
+        state[23] = state[23].mul_2exp_neg_n(27);
+        state[23] = sum - state[23];
+    }
+
+    fn generic_internal_linear_layer<AF>(state: &mut [AF; 24])
+    where
+        AF: AbstractField + Mul<BabyBear, Output = AF>,
+    {
+        let part_sum: AF = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use multiplication.
+        // This could probably be improved slightly by making use of the
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        state
+            .iter_mut()
+            .zip(INTERNAL_DIAG_MONTY_24)
+            .skip(3)
+            .for_each(|(val, diag_elem)| {
+                *val = full_sum.clone() + val.clone() * diag_elem;
+            });
+    }
 }
 
-impl PackedFieldPoseidon2Helpers<BabyBearParameters> for BabyBearDiffusionMatrixParameters {}
+impl InternalLayerParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {}
+impl InternalLayerParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {}
 
 #[cfg(test)]
 mod tests {
     use p3_field::AbstractField;
-    use p3_poseidon2::{DiffusionPermutation, Poseidon2, Poseidon2ExternalMatrixGeneral};
     use p3_symmetric::Permutation;
-    use rand::SeedableRng;
+    use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
@@ -102,22 +271,6 @@ mod tests {
 
     // We need to make some round constants. We use Xoroshiro128Plus for this as we can easily match this PRNG in sage.
     // See: https://github.com/0xPolygonZero/hash-constants for the sage code used to create all these tests.
-
-    // Our Poseidon2 Implementation for BabyBear
-    fn poseidon2_babybear<const WIDTH: usize, const D: u64, DiffusionMatrix>(
-        input: &mut [F; WIDTH],
-        diffusion_matrix: DiffusionMatrix,
-    ) where
-        DiffusionMatrix: DiffusionPermutation<F, WIDTH>,
-    {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-
-        // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrix, WIDTH, D> =
-            Poseidon2::new_from_rng_128(Poseidon2ExternalMatrixGeneral, diffusion_matrix, &mut rng);
-
-        poseidon2.permute_mut(input);
-    }
 
     /// Test on a roughly random input.
     /// This random input is generated by the following sage code:
@@ -133,13 +286,16 @@ mod tests {
         .map(F::from_canonical_u32);
 
         let expected: [F; 16] = [
-            512585766, 975869435, 1921378527, 1238606951, 899635794, 132650430, 1426417547,
-            1734425242, 57415409, 67173027, 1535042492, 1318033394, 1070659233, 17258943,
-            856719028, 1500534995,
+            1255099308, 941729227, 93609187, 112406640, 492658670, 1824768948, 812517469,
+            1055381989, 670973674, 1407235524, 891397172, 1003245378, 1381303998, 1564172645,
+            1399931635, 1005462965,
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<16, 7, _>(&mut input, DiffusionMatrixBabyBear::default());
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2BabyBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
         assert_eq!(input, expected);
     }
 
@@ -158,14 +314,56 @@ mod tests {
         .map(F::from_canonical_u32);
 
         let expected: [F; 24] = [
-            162275163, 462059149, 1096991565, 924509284, 300323988, 608502870, 427093935,
-            733126108, 1676785000, 669115065, 441326760, 60861458, 124006210, 687842154, 270552480,
-            1279931581, 1030167257, 126690434, 1291783486, 669126431, 1320670824, 1121967237,
-            458234203, 142219603,
+            249424342, 562262148, 757431114, 354243402, 57767055, 976981973, 1393169022,
+            1774550827, 1527742125, 1019514605, 1776327602, 266236737, 1412355182, 1070239213,
+            426390978, 1775539440, 1527732214, 1101406020, 1417710778, 1699632661, 413672313,
+            820348291, 1067197851, 1669055675,
         ]
         .map(F::from_canonical_u32);
 
-        poseidon2_babybear::<24, 7, _>(&mut input, DiffusionMatrixBabyBear::default());
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2BabyBear::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
+
         assert_eq!(input, expected);
+    }
+
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 16.
+    #[test]
+    fn test_generic_internal_linear_layer_16() {
+        let mut rng = rand::thread_rng();
+        let mut input1: [F; 16] = rng.gen();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().cloned().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        BabyBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        BabyBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
+    }
+
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 24.
+    #[test]
+    fn test_generic_internal_linear_layer_24() {
+        let mut rng = rand::thread_rng();
+        let mut input1: [F; 24] = rng.gen();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().cloned().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        BabyBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        BabyBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
     }
 }
