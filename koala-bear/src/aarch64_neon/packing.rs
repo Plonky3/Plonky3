@@ -135,7 +135,7 @@ fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
         // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
         // what it does? The answer is that we still inhibit the transform we want to avoid, so
         // apparently not. Idk, LLVM works in mysterious ways.
-        if transmute::<_, [u32; 4]>(x) != transmute::<_, [u32; 4]>(y) {
+        if transmute::<core::arch::aarch64::uint32x4_t, [u32; 4]>(x) != transmute::<core::arch::aarch64::uint32x4_t, [u32; 4]>(y) {
             unreachable_unchecked();
         }
     }

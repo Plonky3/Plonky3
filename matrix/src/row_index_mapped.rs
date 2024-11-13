@@ -41,7 +41,8 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.index_map.height()
     }
 
-    type Row<'a> = Inner::Row<'a>
+    type Row<'a>
+        = Inner::Row<'a>
     where
         Self: 'a;
 

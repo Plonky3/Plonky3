@@ -31,7 +31,8 @@ where
         self.0.height()
     }
 
-    type Row<'a> = FlatIter<F, Inner::Row<'a>>
+    type Row<'a>
+        = FlatIter<F, Inner::Row<'a>>
     where
         Self: 'a;
 
