@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::batch_inverse::batch_multiplicative_inverse_general;
-use crate::{FieldAlgebra, Field, PackedValue};
+use crate::{Field, FieldAlgebra, PackedValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.

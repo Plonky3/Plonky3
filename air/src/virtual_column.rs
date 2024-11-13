@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
 
-use p3_field::{FieldAlgebra, Field};
+use p3_field::{Field, FieldAlgebra};
 
 /// An affine function over columns in a PAIR.
 #[derive(Clone, Debug)]

@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{FieldExtensionAlgebra, Field};
+use p3_field::{Field, FieldExtensionAlgebra};
 pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {

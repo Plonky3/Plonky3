@@ -10,7 +10,7 @@ use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{FieldAlgebra, Field};
+use p3_field::{Field, FieldAlgebra};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;

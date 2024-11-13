@@ -1,6 +1,6 @@
 use core::ops::{Add, Mul, Sub};
 
-use p3_field::{FieldExtensionAlgebra, FieldAlgebra, ExtensionField, Field};
+use p3_field::{ExtensionField, Field, FieldAlgebra, FieldExtensionAlgebra};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 

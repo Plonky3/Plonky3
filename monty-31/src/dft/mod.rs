@@ -6,7 +6,7 @@ use core::cell::RefCell;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{FieldAlgebra, Field};
+use p3_field::{Field, FieldAlgebra};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
