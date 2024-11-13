@@ -68,7 +68,10 @@ impl<T: Clone + Default + Send + Sync> Matrix<T> for CsrMatrix<T> {
         self.row_indices.len() - 1
     }
 
-    type Row<'a> = <Vec<T> as IntoIterator>::IntoIter where Self: 'a;
+    type Row<'a>
+        = <Vec<T> as IntoIterator>::IntoIter
+    where
+        Self: 'a;
 
     fn get(&self, r: usize, c: usize) -> T {
         self.sparse_row(r)

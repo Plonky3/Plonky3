@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use serde::{Deserialize, Serialize};
 
 use p3_field::{ExtensionField, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash};
 use p3_util::log2_ceil_u64;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{

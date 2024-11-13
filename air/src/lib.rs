@@ -1,6 +1,5 @@
 //! APIs for AIRs, and generalizations like PAIRs.
 
-
 extern crate alloc;
 
 mod air;
