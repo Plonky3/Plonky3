@@ -81,7 +81,7 @@ if [ "$major_bumps_suggested" -gt 0 ] && [ "$major_version" -gt 0 ]; then
     patch_bump_type="major"
 
 # We want to downgrade a `Major` bump into a `minor` bump if the current `Major` version is `0`.
-elif [ "$minor_bumps_suggested" -gt 0 ] || [ "$major_bump_suppressed" ]; then
+elif [ "$minor_bumps_suggested" -gt 0 ] || [ "$major_bump_suppressed" -eq 1 ]; then
     patch_bump_type="minor"
 elif [ "$patch_bumps_suggested" -gt 0 ]; then
     patch_bump_type="patch"
