@@ -19,13 +19,18 @@ use crate::Packable;
 
 /// A commutative algebra over a finite field.
 ///
-/// This is an algebraic structure with addition, multiplication
-/// and scalar multiplication. The addition and multiplication
+/// This permits elements like:
+/// - an actual field element
+/// - a symbolic expression which would evaluate to a field element
+/// - an array of field elements
+///
+/// Mathematically speaking, this is an algebraic structure with addition,
+/// multiplication and scalar multiplication. The addition and multiplication
 /// maps must be both commutative and associative, and there must
 /// exist identity elements for both (named `ZERO` and `ONE`
 /// respectively). Furthermore, multiplication must distribute over
 /// addition. Finally, the scalar multiplication must be realized by
-/// a ring homomorphism from `F` to `CA`.
+/// a ring homomorphism from the field to the algebra.
 pub trait FieldAlgebra:
     Sized
     + Default
