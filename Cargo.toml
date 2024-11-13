@@ -101,7 +101,7 @@ p3-uni-stark = { path = "uni-stark", version = "0.1.0" }
 p3-util = { path = "util", version = "0.1.0" }
 
 [workspace.package]
-version = "0.3.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/0xPolygonZero/Plonky3"
