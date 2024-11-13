@@ -149,7 +149,6 @@ fn test_public_value() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
     let perm = Perm::new_from_rng_128(
         Poseidon2ExternalMatrixGeneral,
@@ -176,5 +175,7 @@ fn test_incorrect_public_value() {
         BabyBear::from_canonical_u64(1),
         BabyBear::from_canonical_u64(123_123), // incorrect result
     ];
-    prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    let result = verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis);
+    assert!(result.is_err(), "verification should fail");
 }
