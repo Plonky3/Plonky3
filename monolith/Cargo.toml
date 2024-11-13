@@ -10,10 +10,10 @@ categories.workspace = true
 
 [dependencies]
 generic-array = "1.0"
-p3-field = { path = "../field", version = "0.3.0" }
-p3-mersenne-31 = { path = "../mersenne-31", version = "0.3.0" }
-p3-mds = { path = "../mds", version = "0.3.0" }
-p3-symmetric = { path = "../symmetric", version = "0.3.0" }
+p3-field = { path = "../field", version = "0.2.0" }
+p3-mersenne-31 = { path = "../mersenne-31", version = "0.2.0" }
+p3-mds = { path = "../mds", version = "0.2.0" }
+p3-symmetric = { path = "../symmetric", version = "0.2.0" }
 sha3 = "0.10"
 
 [dev-dependencies]

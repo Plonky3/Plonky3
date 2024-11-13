@@ -9,12 +9,12 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field", version = "0.3.0" }
-p3-matrix = { path = "../matrix", version = "0.3.0" }
-p3-maybe-rayon = { path = "../maybe-rayon", version = "0.3.0" }
-p3-symmetric = { path = "../symmetric", version = "0.3.0" }
-p3-commit = { path = "../commit", version = "0.3.0" }
-p3-util = { path = "../util", version = "0.3.0" }
+p3-field = { path = "../field", version = "0.2.0" }
+p3-matrix = { path = "../matrix", version = "0.2.0" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.2.0" }
+p3-symmetric = { path = "../symmetric", version = "0.2.0" }
+p3-commit = { path = "../commit", version = "0.2.0" }
+p3-util = { path = "../util", version = "0.2.0" }
 itertools = "0.13.0"
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["alloc"] }

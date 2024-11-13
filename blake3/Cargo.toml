@@ -9,8 +9,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-symmetric = { path = "../symmetric", version = "0.3.0" }
-p3-util = { path = "../util", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric", version = "0.2.0" }
+p3-util = { path = "../util", version = "0.2.0" }
 blake3 = "1.5"
 
 [features]

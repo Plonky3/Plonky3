@@ -9,10 +9,10 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field", version = "0.3.0" }
-p3-util = { path = "../util", version = "0.3.0" }
-p3-maybe-rayon = { path = "../maybe-rayon", version = "0.3.0" }
-p3-symmetric = { path = "../symmetric", version = "0.3.0" }
+p3-field = { path = "../field", version = "0.2.0" }
+p3-util = { path = "../util", version = "0.2.0" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.2.0" }
+p3-symmetric = { path = "../symmetric", version = "0.2.0" }
 tracing = "0.1.37"
 
 [dev-dependencies]
