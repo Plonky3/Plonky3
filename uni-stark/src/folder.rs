@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_air::{AirBuilder, AirBuilderWithPublicValues};
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 

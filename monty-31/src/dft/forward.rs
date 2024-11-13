@@ -8,7 +8,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{AbstractField, TwoAdicField};
+use p3_field::{FieldAlgebra, TwoAdicField};
 use p3_util::log2_strict_usize;
 
 use crate::utils::monty_reduce;

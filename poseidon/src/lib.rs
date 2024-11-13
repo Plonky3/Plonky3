@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, PrimeField};
+use p3_field::{FieldAlgebra, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
@@ -69,10 +69,10 @@ where
         }
     }
 
-    fn half_full_rounds<AF>(&self, state: &mut [AF; WIDTH], round_ctr: &mut usize)
+    fn half_full_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
     where
-        AF: AbstractField<F = F>,
-        Mds: MdsPermutation<AF, WIDTH>,
+        FA: FieldAlgebra<F = F>,
+        Mds: MdsPermutation<FA, WIDTH>,
     {
         for _ in 0..self.half_num_full_rounds {
             self.constant_layer(state, *round_ctr);
@@ -82,10 +82,10 @@ where
         }
     }
 
-    fn partial_rounds<AF>(&self, state: &mut [AF; WIDTH], round_ctr: &mut usize)
+    fn partial_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
     where
-        AF: AbstractField<F = F>,
-        Mds: MdsPermutation<AF, WIDTH>,
+        FA: FieldAlgebra<F = F>,
+        Mds: MdsPermutation<FA, WIDTH>,
     {
         for _ in 0..self.num_partial_rounds {
             self.constant_layer(state, *round_ctr);
@@ -95,40 +95,40 @@ where
         }
     }
 
-    fn full_sbox_layer<AF>(state: &mut [AF; WIDTH])
+    fn full_sbox_layer<FA>(state: &mut [FA; WIDTH])
     where
-        AF: AbstractField<F = F>,
+        FA: FieldAlgebra<F = F>,
     {
         for x in state.iter_mut() {
             *x = x.exp_const_u64::<ALPHA>();
         }
     }
 
-    fn partial_sbox_layer<AF>(state: &mut [AF; WIDTH])
+    fn partial_sbox_layer<FA>(state: &mut [FA; WIDTH])
     where
-        AF: AbstractField<F = F>,
+        FA: FieldAlgebra<F = F>,
     {
         state[0] = state[0].exp_const_u64::<ALPHA>();
     }
 
-    fn constant_layer<AF>(&self, state: &mut [AF; WIDTH], round: usize)
+    fn constant_layer<FA>(&self, state: &mut [FA; WIDTH], round: usize)
     where
-        AF: AbstractField<F = F>,
+        FA: FieldAlgebra<F = F>,
     {
         for (i, x) in state.iter_mut().enumerate() {
-            *x += AF::from_f(self.constants[round * WIDTH + i]);
+            *x += FA::from_f(self.constants[round * WIDTH + i]);
         }
     }
 }
 
-impl<AF, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[AF; WIDTH]>
-    for Poseidon<AF::F, Mds, WIDTH, ALPHA>
+impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
+    for Poseidon<FA::F, Mds, WIDTH, ALPHA>
 where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
+    FA: FieldAlgebra,
+    FA::F: PrimeField,
+    Mds: MdsPermutation<FA, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
+    fn permute_mut(&self, state: &mut [FA; WIDTH]) {
         let mut round_ctr = 0;
         self.half_full_rounds(state, &mut round_ctr);
         self.partial_rounds(state, &mut round_ctr);
@@ -136,11 +136,11 @@ where
     }
 }
 
-impl<AF, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[AF; WIDTH]>
-    for Poseidon<AF::F, Mds, WIDTH, ALPHA>
+impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[FA; WIDTH]>
+    for Poseidon<FA::F, Mds, WIDTH, ALPHA>
 where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
+    FA: FieldAlgebra,
+    FA::F: PrimeField,
+    Mds: MdsPermutation<FA, WIDTH>,
 {
 }

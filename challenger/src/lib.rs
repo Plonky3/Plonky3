@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{AbstractExtensionField, Field};
+use p3_field::{FieldExtensionAlgebra, Field};
 pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {
@@ -52,11 +52,11 @@ pub trait CanSampleBits<T> {
 pub trait FieldChallenger<F: Field>:
     CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
 {
-    fn observe_ext_element<EF: AbstractExtensionField<F>>(&mut self, ext: EF) {
+    fn observe_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self, ext: EF) {
         self.observe_slice(ext.as_base_slice());
     }
 
-    fn sample_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
+    fn sample_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self) -> EF {
         let vec = self.sample_vec(EF::D);
         EF::from_base_slice(&vec)
     }
@@ -115,12 +115,12 @@ where
     C: FieldChallenger<F>,
 {
     #[inline(always)]
-    fn observe_ext_element<EF: AbstractExtensionField<F>>(&mut self, ext: EF) {
+    fn observe_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self, ext: EF) {
         (**self).observe_ext_element(ext)
     }
 
     #[inline(always)]
-    fn sample_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
+    fn sample_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self) -> EF {
         (**self).sample_ext_element()
     }
 }

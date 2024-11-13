@@ -112,7 +112,7 @@ impl InternalLayerParametersAVX2<BabyBearParameters, 24> for BabyBearInternalLay
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_monolith::MonolithMersenne31;

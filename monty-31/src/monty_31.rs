@@ -11,7 +11,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    AbstractField, Field, Packable, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+    Field, FieldAlgebra, Packable, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -159,7 +159,7 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
 
 impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 
-impl<FP: FieldParameters> AbstractField for MontyField31<FP> {
+impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     type F = Self;
 
     const ZERO: Self = FP::MONTY_ZERO;
@@ -262,7 +262,7 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     const GENERATOR: Self = FP::MONTY_GEN;
 
     #[inline]
-    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
         FP::exp_u64_generic(val, power)
     }
 

@@ -6,7 +6,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{AbstractField, Field, PrimeField64};
+use p3_field::{FieldAlgebra, Field, PrimeField64};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;

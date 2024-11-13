@@ -6,7 +6,7 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{dot_product, first_row_to_first_col};
 use p3_mds::MdsPermutation;
@@ -261,7 +261,7 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
 
     use super::{MdsMatrixMersenne31, Mersenne31};

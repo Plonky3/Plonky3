@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::{AbstractField, Field};
+use p3_field::{Field, FieldAlgebra};
 
 use crate::MontyField31;
 
@@ -77,7 +77,7 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
-    fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF;
+    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA;
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
 }
 

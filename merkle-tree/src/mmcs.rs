@@ -201,7 +201,7 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
-    use p3_field::{AbstractField, Field};
+    use p3_field::{FieldAlgebra, Field};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::{

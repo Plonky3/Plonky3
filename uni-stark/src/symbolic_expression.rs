@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field};
+use p3_field::{FieldAlgebra, Field};
 
 use crate::symbolic_variable::SymbolicVariable;
 
@@ -74,7 +74,7 @@ impl<F: Field> From<F> for SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> AbstractField for SymbolicExpression<F> {
+impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     type F = F;
 
     const ZERO: Self = Self::Constant(F::ZERO);

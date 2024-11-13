@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{AbstractExtensionField, AbstractField, Field};
+use p3_field::{FieldExtensionAlgebra, FieldAlgebra, Field};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
@@ -49,7 +49,7 @@ where
         && opened_values
             .quotient_chunks
             .iter()
-            .all(|qc| qc.len() == <SC::Challenge as AbstractExtensionField<Val<SC>>>::D);
+            .all(|qc| qc.len() == <SC::Challenge as FieldExtensionAlgebra<Val<SC>>>::D);
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }

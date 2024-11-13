@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
