@@ -40,10 +40,15 @@ echo "$all_local_subcrates_name_and_versions"
 # Now that we know that all local subcrates are locksteped to the same version, we need to also ensure that all published (remote) crates are on the same version.
 for crate_name in $(cargo workspaces list)
 do
-    local_ver=$(echo "$all_local_subcrates_name_and_versions" | grep -E "$crate_name" | sed -E 's/.*([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
-    published_ver=$(cargo search "$crate_name" | sed -E 's/.* = "([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
-    
-    if [ ! "$local_ver" == "$published_ver" ]; then
+    echo "Checking published version for ${crate_name}..."
+
+    local_ver=$(echo "$all_local_subcrates_name_and_versions" | grep -E ".*$crate_name .*" | sed -E 's/.*([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+    published_ver=$(cargo search -q "$crate_name" | grep "$crate_name =" | sed -E 's/.* = "([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+
+    # Handle the case where this is a new crate that is not yet published.
+    if [ "$published_ver" == "" ]; then
+        echo "${crate_name} not yet published to crates.io. Will publish an initial version for it."
+    elif [ ! "$local_ver" == "$published_ver" ]; then
         echo "The crate \"${crate_name}\" has a different published version (${published_ver}) than the current local version (${local_ver})."
         echo "This script relies that all sub-crates are bumped in lockstep, and if one crate does not match its remote, the script's core assumptions break down."
         echo "You're going to have to manually sync all desynced sub-crates to get their local versions to match the published version."
@@ -54,17 +59,29 @@ do
 done
 
 # Now all local and published versions are currently synced. To get the most recent current version.
-latest_published_version=$(cargo search uni-stark | sed -E 's/.* = "([0-9]+.[0-9]+.[0-9]+)".*/\1/')
+latest_published_version=$(cargo search -q uni-stark | sed -E 's/.* = "([0-9]+.[0-9]+.[0-9]+)".*/\1/')
+major_version=$(echo "$latest_published_version" | sed -E "s/([0-9]+).*/\1/")
 
-semver_check_out=$(cargo workspaces exec --no-bail cargo semver-checks 2>&1 | grep "Summary")
+echo "Checking for the most significant semver change across all crates. This may take some time..."
+# semver_check_out=$(cargo workspaces exec --no-bail cargo semver-checks 2>&1 | grep "Summary")
+semver_check_out=$(cat semver_test_data.txt)
 
-major_bumps_suggested=$(echo "$semver_check_out" | grep -ce "[0-9] major")
-minor_bumps_suggested=$(echo "$semver_check_out" | grep -ce "[0-9] minor")
+major_bumps_suggested=$(echo "$semver_check_out" | grep -ce "new major version")
+minor_bumps_suggested=$(echo "$semver_check_out" | grep -ce "new minor version")
 patch_bumps_suggested=$(echo "$semver_check_out" | grep -c "Summary no semver update required")
 
-if [ "$major_bumps_suggested" -gt 0 ]; then
+# Check if we would normally perform a `Major` bump but won't because the current `Major` version `0`. (https://semver.org/#spec-item-4) 
+major_bump_suppressed=0
+
+# Man... We sure love Bash here... Looks at this beautiful line below.
+[ "$major_version" -eq 0 ] && [ "$major_bumps_suggested" -gt 0 ] && major_bump_suppressed=1
+
+# Note: Because the rules for Semver are a bit different when major is `0`, we're going to override suggesting a `Major` change if the major version is `0`.
+if [ "$major_bumps_suggested" -gt 0 ] && [ "$major_version" -gt 0 ]; then
     patch_bump_type="major"
-elif [ "$minor_bumps_suggested" -gt 0 ]; then
+
+# We want to downgrade a `Major` bump into a `minor` bump if the current `Major` version is `0`.
+elif [ "$minor_bumps_suggested" -gt 0 ] || [ "$major_bump_suppressed" ]; then
     patch_bump_type="minor"
 elif [ "$patch_bumps_suggested" -gt 0 ]; then
     patch_bump_type="patch"
@@ -76,9 +93,13 @@ if [ $patch_bump_type == "none" ]; then
     echo "No crates need to be bumped."
 else
     # We can perform a bump.
-    echo "{$patch_bump_type} suggested due to {$patch_bump_type} being the most significant bump encountered (Major: {$major_bumps_suggested}, Minor: {$minor_bumps_suggested}, Patch: {$patch_bumps_suggested})"
+    echo "${patch_bump_type} bump suggested. (Major: ${major_bumps_suggested}, Minor: ${minor_bumps_suggested}, Patch: ${patch_bumps_suggested})"
 
-    echo "Proceed with a {$patch_bump_type} lockstep bump? (y/n)"
+    if [ "$major_bump_suppressed" ]; then
+        echo "Note: Even though there are breaking changes since the last release, because the current major version is \"0\", we are going to suggest a minor bump instead. (See https://semver.org/#spec-item-4)"
+    fi
+
+    echo "Proceed with a ${patch_bump_type} lockstep bump? (y/n)"
     read -r input
 
     if [ ! "$input" == "y" ]; then
@@ -91,7 +112,7 @@ else
                 ;; 
 
             *)
-                echo "{$patch_bump_type} not valid input! Exiting!"
+                echo "${patch_bump_type} not valid input! Exiting!"
                 exit 1
                 ;;
         esac
@@ -99,7 +120,7 @@ else
 
     # Now we have a valid bump type. Apply it.
     echo "Performing a ${patch_bump_type} bump..."
-    cargo workspaces version -y "${patch_bump_type}"
+    cargo workspaces version -y --allow-branch main "${patch_bump_type}"
 fi
 
 # So at this point, we have either:
@@ -111,14 +132,14 @@ changed_res=$(cargo workspaces changed --error-on-empty)
 
 if ! $?; then
     num_changed=$(echo "$changed_res" | wc -l)
-    echo "{$num_changed} crates have changed since the last release."
+    echo "${num_changed} crates have changed since the last release."
 
-
+    
 
     echo "Do you want to publish a release now? (y/n)"
     read -r input
     if [ "$input" = "y" ]; then
-        echo "Publishing {} to crates.io..."
+        echo "Publishing to crates.io..."
     else
         exit 0
     fi
