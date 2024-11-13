@@ -63,8 +63,7 @@ latest_published_version=$(cargo search -q uni-stark | sed -E 's/.* = "([0-9]+.[
 major_version=$(echo "$latest_published_version" | sed -E "s/([0-9]+).*/\1/")
 
 echo "Checking for the most significant semver change across all crates. This may take some time..."
-# semver_check_out=$(cargo workspaces exec --no-bail cargo semver-checks 2>&1 | grep "Summary")
-semver_check_out=$(cat semver_test_data.txt)
+semver_check_out=$(cargo workspaces exec --no-bail cargo semver-checks 2>&1 | grep "Summary")
 
 major_bumps_suggested=$(echo "$semver_check_out" | grep -ce "new major version")
 minor_bumps_suggested=$(echo "$semver_check_out" | grep -ce "new minor version")
