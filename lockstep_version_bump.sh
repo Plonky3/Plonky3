@@ -120,36 +120,5 @@ else
 
     # Now we have a valid bump type. Apply it.
     echo "Performing a ${patch_bump_type} bump..."
-    cargo workspaces version -y --allow-branch main "${patch_bump_type}"
+    cargo workspaces version -y --allow-branch  main "${patch_bump_type}"
 fi
-
-# So at this point, we have either:
-#   - Performed a version bump and we have a new lockstep version bump ready for publishing.
-#   - No version bump was possible (which means that the workspace has no changes to publish).
-
-# If a version bump occurred, then this will report that nothing has changed since the last bump (because we just bumped on this commit).
-changed_res=$(cargo workspaces changed --error-on-empty)
-
-if ! $?; then
-    num_changed=$(echo "$changed_res" | wc -l)
-    echo "${num_changed} crates have changed since the last release."
-
-    
-
-    echo "Do you want to publish a release now? (y/n)"
-    read -r input
-    if [ "$input" = "y" ]; then
-        echo "Publishing to crates.io..."
-    else
-        exit 0
-    fi
-fi
-
-# User green-lighted publishing.
-# Because a failure during publishing could result in a desync between local and remote (and thus a big headache), we're going to do a dry run first in order to detect any errors during publishing.
-if ! cargo workspaces publish --dry-run --no-git-push --allow-branch main; then
-    echo "crates.io publishing dry run failed."
-    exit 1
-fi
-
-# Publishing dry run succeeded. Do a real publish now.
