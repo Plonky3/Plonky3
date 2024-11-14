@@ -137,7 +137,7 @@ pub trait FieldAlgebra:
 
     /// The elementary function `square(a) = a^2`.
     ///
-    /// This will implement whatever method is fastest for the given algebra.
+    /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some algebras.
     #[must_use]
     fn square(&self) -> Self {
         self.clone() * self.clone()
@@ -145,7 +145,7 @@ pub trait FieldAlgebra:
 
     /// The elementary function `cube(a) = a^3`.
     ///
-    /// This will implement whatever method is fastest for the given algebra.
+    /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some algebras.
     #[must_use]
     fn cube(&self) -> Self {
         self.square() * self.clone()
