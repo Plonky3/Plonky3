@@ -70,6 +70,8 @@ pub trait FieldAlgebra:
     /// the proving system. This also is slightly faster than computing
     /// it via addition. Note that multiplication by `TWO` is discouraged.
     /// Instead of `a * TWO` use `a.double()` which will be faster.
+    ///
+    /// If the field has characteristic 2 this is equal to ZERO.
     const TWO: Self;
 
     /// The element in the algebra given by `-ONE`.
@@ -78,12 +80,12 @@ pub trait FieldAlgebra:
     /// the proving system. This also is slightly faster than computing
     /// it via negation. Note that where possible `NEG_ONE` should be absorbed
     /// into mathematical operations. For example `a - b` will be faster
-    /// than `a + NEG_ONE * b`.
+    /// than `a + NEG_ONE * b` and similarly `(-b)` is faster than `NEG_ONE * b`.
     ///
     /// If the field has characteristic 2 this is equal to ONE.
     const NEG_ONE: Self;
 
-    /// Interpret a field element as commutative algebra element.
+    /// Interpret a field element as a commutative algebra element.
     ///
     /// Mathematically speaking, this map is a ring homomorphism from the base field
     /// to the commutative algebra. The existence of this map makes this structure
@@ -128,7 +130,7 @@ pub trait FieldAlgebra:
 
     /// The elementary function `double(a) = 2*a`.
     ///
-    /// This will implement whatever method is fastest for the given algebra.
+    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some algebras.
     /// If the field has characteristic 2 then this returns 0.
     #[must_use]
     fn double(&self) -> Self {
@@ -165,7 +167,7 @@ pub trait FieldAlgebra:
 
     /// Exponentiation by a constant power.
     ///
-    /// For a collection of small values we implement custom multiplication chain circuits which may be faster than the
+    /// For a collection of small values we implement custom multiplication chain circuits which can be faster than the
     /// simpler square and multiply approach.
     #[must_use]
     #[inline(always)]
