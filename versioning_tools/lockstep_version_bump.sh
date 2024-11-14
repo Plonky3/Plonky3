@@ -118,6 +118,12 @@ fi
 
 current_branch=$(git branch --show-current)
 
+# If the branch doesn't exist on remote, create it.
+if [ "$(git ls-remote --heads origin refs/heads/"$current_branch" | wc -l)" -eq 0 ]; then
+    echo "Current branch does not exist on remote. Pushing to remote..."
+    git push --set-upstream origin "$current_branch"
+fi
+
 # Now we have a valid bump type. Apply it.
 echo "Performing a ${patch_bump_type} bump..."
 cargo workspaces version -y --allow-branch "$current_branch" --no-individual-tags "${patch_bump_type}"
