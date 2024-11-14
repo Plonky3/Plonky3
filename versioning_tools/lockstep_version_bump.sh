@@ -87,36 +87,37 @@ fi
 
 if [ $patch_bump_type == "none" ]; then 
     echo "No crates need to be bumped."
-else
-    # We can perform a bump.
-    echo "${patch_bump_type} bump suggested. (Major: ${major_bumps_suggested}, Minor: ${minor_bumps_suggested}, Patch: ${patch_bumps_suggested})"
-
-    if [ "$major_bump_suppressed" ]; then
-        echo "Note: Even though there are breaking changes since the last release, because the current major version is \"0\", we are going to suggest a minor bump instead. (See https://semver.org/#spec-item-4)"
-    fi
-
-    echo "Proceed with a ${patch_bump_type} lockstep bump? (y/n)"
-    read -r input
-
-    if [ ! "$input" == "y" ]; then
-        echo "Overriding semver suggested patch type. What kind of bump should be done instead? (\"major\" | \"minor\" | \"patch\")"
-        read -r patch_bump_type
-
-        case $patch_bump_type in
-            major | minor | patch)
-                # Valid input. Do nothing.
-                ;; 
-
-            *)
-                echo "${patch_bump_type} not valid input! Exiting!"
-                exit 1
-                ;;
-        esac
-    fi
-
-    current_branch=$(git branch --show-current)
-
-    # Now we have a valid bump type. Apply it.
-    echo "Performing a ${patch_bump_type} bump..."
-    cargo workspaces version -y --allow-branch "$current_branch" --no-individual-tags "${patch_bump_type}"
+    exit 0
 fi
+
+# We can perform a bump.
+echo "${patch_bump_type} bump suggested. (Major: ${major_bumps_suggested}, Minor: ${minor_bumps_suggested}, Patch: ${patch_bumps_suggested})"
+
+if [ "$major_bump_suppressed" ]; then
+    echo "Note: Even though there are breaking changes since the last release, because the current major version is \"0\", we are going to suggest a minor bump instead. (See https://semver.org/#spec-item-4)"
+fi
+
+echo "Proceed with a ${patch_bump_type} lockstep bump? (y/n)"
+read -r input
+
+if [ ! "$input" == "y" ]; then
+    echo "Overriding semver suggested patch type. What kind of bump should be done instead? (\"major\" | \"minor\" | \"patch\")"
+    read -r patch_bump_type
+
+    case $patch_bump_type in
+        major | minor | patch)
+            # Valid input. Do nothing.
+            ;; 
+
+        *)
+            echo "${patch_bump_type} not valid input! Exiting!"
+            exit 1
+            ;;
+    esac
+fi
+
+current_branch=$(git branch --show-current)
+
+# Now we have a valid bump type. Apply it.
+echo "Performing a ${patch_bump_type} bump..."
+cargo workspaces version -y --allow-branch "$current_branch" --no-individual-tags "${patch_bump_type}"
