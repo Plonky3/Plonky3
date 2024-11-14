@@ -9,6 +9,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field", version = "0.2.0" }
+p3-field = { path = "../field", version = "0.3.0" }
 itertools = "0.13.0"
 serde = { version = "1.0", default-features = false, features = ["alloc"] }

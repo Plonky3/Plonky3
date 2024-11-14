@@ -9,11 +9,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-dft = { path = "../dft", version = "0.2.0" }
-p3-field = { path = "../field", version = "0.2.0" }
-p3-matrix = { path = "../matrix", version = "0.2.0" }
-p3-symmetric = { path = "../symmetric", version = "0.2.0" }
-p3-util = { path = "../util", version = "0.2.0" }
+p3-dft = { path = "../dft", version = "0.3.0" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-matrix = { path = "../matrix", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 itertools = "0.13.0"
 

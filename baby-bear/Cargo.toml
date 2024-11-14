@@ -12,11 +12,11 @@ categories.workspace = true
 nightly-features = ["p3-monty-31/nightly-features"]
 
 [dependencies]
-p3-field = { path = "../field", version = "0.2.0" }
-p3-mds = { path = "../mds", version = "0.2.0" }
-p3-monty-31 = { path = "../monty-31", version = "0.2.0" }
-p3-poseidon2 = { path = "../poseidon2", version = "0.2.0" }
-p3-symmetric = { path = "../symmetric", version = "0.2.0" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-mds = { path = "../mds", version = "0.3.0" }
+p3-monty-31 = { path = "../monty-31", version = "0.3.0" }
+p3-poseidon2 = { path = "../poseidon2", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric", version = "0.3.0" }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 

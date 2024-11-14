@@ -9,9 +9,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field", version = "0.2.0" }
-p3-poseidon2 = { path = "../poseidon2", version = "0.2.0" }
-p3-symmetric = { path = "../symmetric", version = "0.2.0" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-poseidon2 = { path = "../poseidon2", version = "0.3.0" }
+p3-symmetric = { path = "../symmetric", version = "0.3.0" }
 
 ff = { version = "0.13", features = ["derive", "derive_bits"] }
 num-bigint = { version = "0.4.3", default-features = false }
