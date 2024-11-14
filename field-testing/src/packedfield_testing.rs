@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
 use rand::distributions::{Distribution, Standard};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -438,7 +438,7 @@ where
 macro_rules! test_packed_field {
     ($packedfield:ty, $zeros:expr, $specials:expr) => {
         mod packed_field_tests {
-            use p3_field::AbstractField;
+            use p3_field::FieldAlgebra;
 
             #[test]
             fn test_interleaves() {

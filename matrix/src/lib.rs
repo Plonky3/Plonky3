@@ -10,7 +10,7 @@ use core::ops::Deref;
 
 use itertools::{izip, Itertools};
 use p3_field::{
-    dot_product, AbstractExtensionField, AbstractField, ExtensionField, Field, PackedValue,
+    dot_product, ExtensionField, Field, FieldAlgebra, FieldExtensionAlgebra, PackedValue,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -287,7 +287,7 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use rand::thread_rng;
 
     use super::*;

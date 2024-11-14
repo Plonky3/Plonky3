@@ -4,7 +4,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::field::Field;
-use crate::{AbstractField, FieldArray, PackedValue};
+use crate::{FieldAlgebra, FieldArray, PackedValue};
 
 /// Batch multiplicative inverses with Montgomery's trick
 /// This is Montgomery's trick. At a high level, we invert the product of the given field
@@ -58,7 +58,7 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
 /// support inversion, this takes a custom inversion function.
 pub(crate) fn batch_multiplicative_inverse_general<F, Inv>(x: &[F], result: &mut [F], inv: Inv)
 where
-    F: AbstractField + Copy,
+    F: FieldAlgebra + Copy,
     Inv: Fn(F) -> F,
 {
     let n = x.len();

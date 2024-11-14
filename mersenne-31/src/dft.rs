@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use itertools::{izip, Itertools};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::Complex;
-use p3_field::{AbstractField, Field, TwoAdicField};
+use p3_field::{Field, FieldAlgebra, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;

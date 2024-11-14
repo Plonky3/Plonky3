@@ -15,7 +15,7 @@
 
 use core::ops::Mul;
 
-use p3_field::{AbstractField, Field, PrimeField32};
+use p3_field::{Field, FieldAlgebra, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
@@ -50,7 +50,7 @@ pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by BabyBear field elements.
+/// This can act on [FA; WIDTH] for any AbstractField which implements multiplication by BabyBear field elements.
 /// If you have either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]` it will be much faster
 /// to use `Poseidon2BabyBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersBabyBear =
@@ -152,11 +152,11 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[15] = sum - state[15];
     }
 
-    fn generic_internal_linear_layer<AF>(state: &mut [AF; 16])
+    fn generic_internal_linear_layer<FA>(state: &mut [FA; 16])
     where
-        AF: AbstractField + Mul<BabyBear, Output = AF>,
+        FA: FieldAlgebra + Mul<BabyBear, Output = FA>,
     {
-        let part_sum: AF = state[1..].iter().cloned().sum();
+        let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -230,11 +230,11 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[23] = sum - state[23];
     }
 
-    fn generic_internal_linear_layer<AF>(state: &mut [AF; 24])
+    fn generic_internal_linear_layer<FA>(state: &mut [FA; 24])
     where
-        AF: AbstractField + Mul<BabyBear, Output = AF>,
+        FA: FieldAlgebra + Mul<BabyBear, Output = FA>,
     {
-        let part_sum: AF = state[1..].iter().cloned().sum();
+        let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -260,7 +260,7 @@ impl InternalLayerParameters<BabyBearParameters, 24> for BabyBearInternalLayerPa
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;

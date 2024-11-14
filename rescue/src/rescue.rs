@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
-use p3_field::{AbstractField, PrimeField, PrimeField64};
+use p3_field::{FieldAlgebra, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
@@ -100,14 +100,14 @@ where
     }
 }
 
-impl<AF, Mds, Sbox, const WIDTH: usize> Permutation<[AF; WIDTH]> for Rescue<AF::F, Mds, Sbox, WIDTH>
+impl<FA, Mds, Sbox, const WIDTH: usize> Permutation<[FA; WIDTH]> for Rescue<FA::F, Mds, Sbox, WIDTH>
 where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
+    FA: FieldAlgebra,
+    FA::F: PrimeField,
+    Mds: MdsPermutation<FA, WIDTH>,
+    Sbox: SboxLayers<FA, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [AF; WIDTH]) {
+    fn permute_mut(&self, state: &mut [FA; WIDTH]) {
         for round in 0..self.num_rounds {
             // S-box
             self.sbox.sbox_layer(state);
@@ -120,7 +120,7 @@ where
                 .iter_mut()
                 .zip(&self.round_constants[round * WIDTH * 2..])
             {
-                *state_item += AF::from_f(round_constant);
+                *state_item += FA::from_f(round_constant);
             }
 
             // Inverse S-box
@@ -134,25 +134,25 @@ where
                 .iter_mut()
                 .zip(&self.round_constants[round * WIDTH * 2 + WIDTH..])
             {
-                *state_item += AF::from_f(round_constant);
+                *state_item += FA::from_f(round_constant);
             }
         }
     }
 }
 
-impl<AF, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[AF; WIDTH]>
-    for Rescue<AF::F, Mds, Sbox, WIDTH>
+impl<FA, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[FA; WIDTH]>
+    for Rescue<FA::F, Mds, Sbox, WIDTH>
 where
-    AF: AbstractField,
-    AF::F: PrimeField,
-    Mds: MdsPermutation<AF, WIDTH>,
-    Sbox: SboxLayers<AF, WIDTH>,
+    FA: FieldAlgebra,
+    FA::F: PrimeField,
+    Mds: MdsPermutation<FA, WIDTH>,
+    Sbox: SboxLayers<FA, WIDTH>,
 {
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
     use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 

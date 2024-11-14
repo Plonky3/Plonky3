@@ -193,7 +193,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalL
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 

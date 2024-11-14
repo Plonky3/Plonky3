@@ -2,7 +2,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{AbstractField, Field};
+use p3_field::{Field, FieldAlgebra};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::coset_mds::CosetMds;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
@@ -37,16 +37,16 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 64>(c);
 }
 
-fn bench_mds<AF, Mds, const WIDTH: usize>(c: &mut Criterion)
+fn bench_mds<FA, Mds, const WIDTH: usize>(c: &mut Criterion)
 where
-    AF: AbstractField,
-    Standard: Distribution<AF>,
-    Mds: MdsPermutation<AF, WIDTH> + Default,
+    FA: FieldAlgebra,
+    Standard: Distribution<FA>,
+    Mds: MdsPermutation<FA, WIDTH> + Default,
 {
     let mds = Mds::default();
 
     let mut rng = thread_rng();
-    let input = rng.gen::<[AF; WIDTH]>();
+    let input = rng.gen::<[FA; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
     c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));
 }

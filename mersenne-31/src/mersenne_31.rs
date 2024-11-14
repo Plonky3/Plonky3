@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
     PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
@@ -90,7 +90,7 @@ impl Distribution<Mersenne31> for Standard {
     }
 }
 
-impl AbstractField for Mersenne31 {
+impl FieldAlgebra for Mersenne31 {
     type F = Self;
 
     const ZERO: Self = Self { value: 0 };
@@ -226,7 +226,7 @@ impl Field for Mersenne31 {
     }
 
     #[inline]
-    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
         match power {
             1717986917 => exp_1717986917(val), // used in x^{1/5}
             _ => exp_u64_by_squaring(val, power),
@@ -432,7 +432,7 @@ pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{AbstractField, Field, PrimeField32};
+    use p3_field::{Field, FieldAlgebra, PrimeField32};
     use p3_field_testing::test_field;
 
     use crate::Mersenne31;

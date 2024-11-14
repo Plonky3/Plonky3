@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, Field, FieldAlgebra, Packable,
     PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
@@ -89,7 +89,7 @@ impl Distribution<Goldilocks> for Standard {
     }
 }
 
-impl AbstractField for Goldilocks {
+impl FieldAlgebra for Goldilocks {
     type F = Self;
 
     const ZERO: Self = Self::new(0);
@@ -184,7 +184,7 @@ impl Field for Goldilocks {
     }
 
     #[inline]
-    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
         match power {
             10540996611094048183 => exp_10540996611094048183(val), // used to compute x^{1/7}
             _ => exp_u64_by_squaring(val, power),

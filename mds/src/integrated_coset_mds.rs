@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, Powers, TwoAdicField};
+use p3_field::{FieldAlgebra, Powers, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
@@ -48,13 +48,13 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
     }
 }
 
-impl<AF: AbstractField, const N: usize> Permutation<[AF; N]> for IntegratedCosetMds<AF::F, N> {
-    fn permute(&self, mut input: [AF; N]) -> [AF; N] {
+impl<FA: FieldAlgebra, const N: usize> Permutation<[FA; N]> for IntegratedCosetMds<FA::F, N> {
+    fn permute(&self, mut input: [FA; N]) -> [FA; N] {
         self.permute_mut(&mut input);
         input
     }
 
-    fn permute_mut(&self, values: &mut [AF; N]) {
+    fn permute_mut(&self, values: &mut [FA; N]) {
         let log_n = log2_strict_usize(N);
 
         // Bit-reversed DIF, aka Bowers G
@@ -69,13 +69,13 @@ impl<AF: AbstractField, const N: usize> Permutation<[AF; N]> for IntegratedCoset
     }
 }
 
-impl<AF: AbstractField, const N: usize> MdsPermutation<AF, N> for IntegratedCosetMds<AF::F, N> {}
+impl<FA: FieldAlgebra, const N: usize> MdsPermutation<FA, N> for IntegratedCosetMds<FA::F, N> {}
 
 #[inline]
-fn bowers_g_layer<AF: AbstractField, const N: usize>(
-    values: &mut [AF; N],
+fn bowers_g_layer<FA: FieldAlgebra, const N: usize>(
+    values: &mut [FA; N],
     log_half_block_size: usize,
-    twiddles: &[AF::F],
+    twiddles: &[FA::F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -97,10 +97,10 @@ fn bowers_g_layer<AF: AbstractField, const N: usize>(
 }
 
 #[inline]
-fn bowers_g_t_layer<AF: AbstractField, const N: usize>(
-    values: &mut [AF; N],
+fn bowers_g_t_layer<FA: FieldAlgebra, const N: usize>(
+    values: &mut [FA; N],
     log_half_block_size: usize,
-    twiddles: &[AF::F],
+    twiddles: &[FA::F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -119,7 +119,7 @@ fn bowers_g_t_layer<AF: AbstractField, const N: usize>(
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::{AbstractField, Field};
+    use p3_field::{Field, FieldAlgebra};
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
     use rand::{thread_rng, Rng};

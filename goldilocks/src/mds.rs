@@ -230,7 +230,7 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
 
     use super::{Goldilocks, MdsMatrixGoldilocks};

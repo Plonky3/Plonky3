@@ -15,7 +15,7 @@
 
 use core::ops::Mul;
 
-use p3_field::{AbstractField, Field};
+use p3_field::{Field, FieldAlgebra};
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
@@ -47,7 +47,7 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [AF; WIDTH] for any AbstractField which implements multiplication by Mersenne31 field elements.
+/// This can act on [FA; WIDTH] for any AbstractField which implements multiplication by Mersenne31 field elements.
 /// If you have either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]` it will be much faster
 /// to use `Poseidon2Mersenne31<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub struct GenericPoseidon2LinearLayersMersenne31 {}
@@ -120,12 +120,12 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
     }
 }
 
-impl<AF> GenericPoseidon2LinearLayers<AF, 16> for GenericPoseidon2LinearLayersMersenne31
+impl<FA> GenericPoseidon2LinearLayers<FA, 16> for GenericPoseidon2LinearLayersMersenne31
 where
-    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+    FA: FieldAlgebra + Mul<Mersenne31, Output = FA>,
 {
-    fn internal_linear_layer(state: &mut [AF; 16]) {
-        let part_sum: AF = state[1..].iter().cloned().sum();
+    fn internal_linear_layer(state: &mut [FA; 16]) {
+        let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -146,12 +146,12 @@ where
     }
 }
 
-impl<AF> GenericPoseidon2LinearLayers<AF, 24> for GenericPoseidon2LinearLayersMersenne31
+impl<FA> GenericPoseidon2LinearLayers<FA, 24> for GenericPoseidon2LinearLayersMersenne31
 where
-    AF: AbstractField + Mul<Mersenne31, Output = AF>,
+    FA: FieldAlgebra + Mul<Mersenne31, Output = FA>,
 {
-    fn internal_linear_layer(state: &mut [AF; 24]) {
-        let part_sum: AF = state[1..].iter().cloned().sum();
+    fn internal_linear_layer(state: &mut [FA; 24]) {
+        let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -174,7 +174,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;

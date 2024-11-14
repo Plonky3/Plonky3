@@ -67,7 +67,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{AbstractField, Field};
+    use p3_field::{Field, FieldAlgebra};
     use p3_matrix::dense::RowMajorMatrix;
 
     use crate::{interpolate_coset, interpolate_subgroup};

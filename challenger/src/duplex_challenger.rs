@@ -160,7 +160,7 @@ where
 mod tests {
     use core::iter;
 
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 

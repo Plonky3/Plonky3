@@ -5,7 +5,7 @@
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
 use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBionmialExtension};
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 
 use crate::Mersenne31;
 

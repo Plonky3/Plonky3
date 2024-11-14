@@ -3,7 +3,7 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{AbstractField, Field, PrimeField64};
+use p3_field::{Field, FieldAlgebra, PrimeField64};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
@@ -27,12 +27,12 @@ fn bench_rescue(c: &mut Criterion) {
     rescue::<Mersenne31, MdsMatrixMersenne31, 32, 5>(c);
 }
 
-fn rescue<AF, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
+fn rescue<FA, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
-    AF: AbstractField,
-    AF::F: PrimeField64,
-    Standard: Distribution<AF::F>,
-    Mds: MdsPermutation<AF, WIDTH> + Default,
+    FA: FieldAlgebra,
+    FA::F: PrimeField64,
+    Standard: Distribution<FA::F>,
+    Mds: MdsPermutation<FA, WIDTH> + Default,
 {
     // 8 rounds seems to work for the configs we use in practice. For benchmarking purposes we will
     // assume it suffices; for real usage the Sage calculation in the paper should be used.
@@ -43,9 +43,9 @@ where
     let round_constants = rng.sample_iter(Standard).take(num_constants).collect();
     let mds = Mds::default();
     let sbox = BasicSboxLayer::for_alpha(ALPHA);
-    let rescue = Rescue::<AF::F, Mds, _, WIDTH>::new(NUM_ROUNDS, round_constants, mds, sbox);
-    let input: [AF; WIDTH] = array::from_fn(|_| AF::ZERO);
-    let name = format!("rescue::<{}, {}>", type_name::<AF>(), ALPHA);
+    let rescue = Rescue::<FA::F, Mds, _, WIDTH>::new(NUM_ROUNDS, round_constants, mds, sbox);
+    let input: [FA; WIDTH] = array::from_fn(|_| FA::ZERO);
+    let name = format!("rescue::<{}, {}>", type_name::<FA>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| rescue.permute(input.clone()))

@@ -29,51 +29,51 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, Field};
+use p3_field::{Field, FieldAlgebra};
 
 use crate::add_rc_and_sbox_generic;
 
 /// Initialize an internal layer from a set of constants.
-pub trait InternalLayerConstructor<AF>
+pub trait InternalLayerConstructor<FA>
 where
-    AF: AbstractField,
+    FA: FieldAlgebra,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.
-    fn new_from_constants(internal_constants: Vec<AF::F>) -> Self;
+    fn new_from_constants(internal_constants: Vec<FA::F>) -> Self;
 }
 
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
-pub fn matmul_internal<F: Field, AF: AbstractField<F = F>, const WIDTH: usize>(
-    state: &mut [AF; WIDTH],
+pub fn matmul_internal<F: Field, FA: FieldAlgebra<F = F>, const WIDTH: usize>(
+    state: &mut [FA; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
 ) {
-    let sum: AF = state.iter().cloned().sum();
+    let sum: FA = state.iter().cloned().sum();
     for i in 0..WIDTH {
-        state[i] *= AF::from_f(mat_internal_diag_m_1[i]);
+        state[i] *= FA::from_f(mat_internal_diag_m_1[i]);
         state[i] += sum.clone();
     }
 }
 
 /// A trait containing all data needed to implement the internal layers of Poseidon2.
-pub trait InternalLayer<AF, const WIDTH: usize, const D: u64>: Sync + Clone
+pub trait InternalLayer<FA, const WIDTH: usize, const D: u64>: Sync + Clone
 where
-    AF: AbstractField,
+    FA: FieldAlgebra,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [AF; WIDTH]);
+    fn permute_state(&self, state: &mut [FA; WIDTH]);
 }
 
 /// A helper method which allows any field to easily implement Internal Layer.
 /// This should only be used in places where performance is not critical.
 #[inline]
-pub fn internal_permute_state<AF: AbstractField, const WIDTH: usize, const D: u64>(
-    state: &mut [AF; WIDTH],
-    diffusion_mat: fn(&mut [AF; WIDTH]),
-    internal_constants: &[AF::F],
+pub fn internal_permute_state<FA: FieldAlgebra, const WIDTH: usize, const D: u64>(
+    state: &mut [FA; WIDTH],
+    diffusion_mat: fn(&mut [FA; WIDTH]),
+    internal_constants: &[FA::F],
 ) {
     for elem in internal_constants.iter() {
-        add_rc_and_sbox_generic::<AF, D>(&mut state[0], *elem);
+        add_rc_and_sbox_generic::<FA, D>(&mut state[0], *elem);
         diffusion_mat(state);
     }
 }
@@ -81,7 +81,7 @@ pub fn internal_permute_state<AF: AbstractField, const WIDTH: usize, const D: u6
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-fn sum_7<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+fn sum_7<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 7);
 
     let s01 = state[0] + state[1];
@@ -96,7 +96,7 @@ fn sum_7<AF: AbstractField + Copy>(state: &[AF]) -> AF {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-fn sum_8<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+fn sum_8<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 8);
 
     let s01 = state[0] + state[1];
@@ -112,7 +112,7 @@ fn sum_8<AF: AbstractField + Copy>(state: &[AF]) -> AF {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-pub fn sum_15<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+pub fn sum_15<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 15);
 
     let bot_sum = sum_8(&state[..8]);
@@ -124,7 +124,7 @@ pub fn sum_15<AF: AbstractField + Copy>(state: &[AF]) -> AF {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-pub fn sum_23<AF: AbstractField + Copy>(state: &[AF]) -> AF {
+pub fn sum_23<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 23);
 
     let bot_sum = sum_8(&state[..8]);

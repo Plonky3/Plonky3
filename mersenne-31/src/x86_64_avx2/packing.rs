@@ -4,7 +4,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -392,7 +392,7 @@ impl Product for PackedMersenne31AVX2 {
     }
 }
 
-impl AbstractField for PackedMersenne31AVX2 {
+impl FieldAlgebra for PackedMersenne31AVX2 {
     type F = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);

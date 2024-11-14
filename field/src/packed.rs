@@ -3,7 +3,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
 use crate::field::Field;
-use crate::AbstractField;
+use crate::FieldAlgebra;
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -130,7 +130,7 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: AbstractField<F = Self::Scalar>
+pub unsafe trait PackedField: FieldAlgebra<F = Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     + From<Self::Scalar>
     + Add<Self::Scalar, Output = Self>

@@ -6,13 +6,13 @@
 //! - A power map x -> x^n.
 //! - Multiplication by an F valued matrix.
 //!
-//! This means that it is possible to define a Poseidon2 over any abstract field AF which has implementations of:
-//! - Add<F, Output = AF>
-//! - Mul<F, Output = AF>
+//! This means that it is possible to define a Poseidon2 over any abstract field FA which has implementations of:
+//! - Add<F, Output = FA>
+//! - Mul<F, Output = FA>
 //!
 //! This file implements the two matrix multiplications methods from which Poseidon2 can be built.
 
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 
 use crate::{mds_light_permutation, MDSMat4};
 
@@ -23,17 +23,17 @@ use crate::{mds_light_permutation, MDSMat4};
 /// This is a little slower than field specific implementations (particularly for packed fields) so should
 /// only be used in non performance critical places.
 #[inline(always)]
-pub fn add_rc_and_sbox_generic<AF: AbstractField, const D: u64>(val: &mut AF, rc: AF::F) {
-    *val += AF::from_f(rc);
+pub fn add_rc_and_sbox_generic<FA: FieldAlgebra, const D: u64>(val: &mut FA, rc: FA::F) {
+    *val += FA::from_f(rc);
     *val = val.exp_const_u64::<D>();
 }
 
-pub trait GenericPoseidon2LinearLayers<AF: AbstractField, const WIDTH: usize>: Sync {
+pub trait GenericPoseidon2LinearLayers<FA: FieldAlgebra, const WIDTH: usize>: Sync {
     /// A generic implementation of the internal linear layer.
-    fn internal_linear_layer(state: &mut [AF; WIDTH]);
+    fn internal_linear_layer(state: &mut [FA; WIDTH]);
 
     /// A generic implementation of the external linear layer.
-    fn external_linear_layer(state: &mut [AF; WIDTH]) {
+    fn external_linear_layer(state: &mut [FA; WIDTH]) {
         mds_light_permutation(state, &MDSMat4);
     }
 }

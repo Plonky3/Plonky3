@@ -83,7 +83,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_goldilocks::Goldilocks;
 
     use super::*;
