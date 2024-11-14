@@ -34,8 +34,6 @@ if  [ "$(echo "$all_local_subcrate_versions" | uniq | wc -l)" -gt 1 ]; then
     exit 1
 fi
 
-echo "$all_local_subcrates_name_and_versions"
-
 # Now that we know that all local subcrates are locksteped to the same version, we need to also ensure that all published (remote) crates are on the same version.
 for crate_name in $(cargo workspaces list)
 do
@@ -116,7 +114,9 @@ else
         esac
     fi
 
+    current_branch=$(git branch --show-current)
+
     # Now we have a valid bump type. Apply it.
     echo "Performing a ${patch_bump_type} bump..."
-    cargo workspaces version -y --allow-branch  main "${patch_bump_type}"
+    cargo workspaces version -y --allow-branch "$current_branch" "${patch_bump_type}"
 fi
