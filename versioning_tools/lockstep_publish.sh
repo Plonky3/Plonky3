@@ -6,9 +6,6 @@
 # - Have a PR of successful run of `lockstep_version_bump.sh` merged back into `main`.
 # - Run this script on the commit that got merged back into `main`.
 
-# If a version bump occurred on this commit (highest version tag is present on this commit), then this will report that nothing has changed since the last bump (because we just bumped on this commit).
-changed_res=$(cargo workspaces changed --error-on-empty)
-
 # 1 --> Prompt string
 # 2 --> Yes string
 get_yes_no_input_from_user_and_exit_on_no() {
@@ -22,11 +19,22 @@ get_yes_no_input_from_user_and_exit_on_no() {
     fi
 }
 
-if ! $?; then
-    num_changed=$(echo "$changed_res" | wc -l)
-    echo "${num_changed} crates have changed since the last release."
+# If a version bump occurred on this commit (highest version tag is present on this commit), then this will report that nothing has changed since the last bump (because we just bumped on this commit).
+changed_res=$(cargo workspaces changed --error-on-empty)
 
-    get_yes_no_input_from_user_and_exit_on_no Do you want to publish a release now? "Publishing to crates.io..."
+if [ ! $? ]; then
+    # The number of changes since the latest release tag should be zero if we are on the corresponding commit.
+    num_changed=$(echo "$changed_res" | wc -l)
+
+    if [ "$num_changed" -gt 0 ]; then
+        latest_local_release_tag=$(git tag -l | grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -r | head -n 1)
+        
+        echo "Changes detected since the latest version release tag (${latest_local_release_tag})!"
+        echo "Make sure to run \`lockstep_version_bump.sh\` before running this script."
+        exit 1
+    fi
+
+    get_yes_no_input_from_user_and_exit_on_no "Do you want to publish a release now?" "Publishing to crates.io..."
 else
     echo "The latest version tag is not on this commit. Run \`lockstep_version_bump.sh\` to create a commit for publishing."
     exit 1
