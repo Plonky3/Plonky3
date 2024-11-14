@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
 # Convenience script for prepending to the changelog after a version bump.
-# Also has a few additional checks to prevent double appending a changelog for a version to `CHANGELOG`.
+# Also has an additional check to prevent double appending a changelog for a version to `CHANGELOG`.
+# 
+# Intended to be used in the same PR that bumps the versions.
 
 curr_dir=$(realpath "$(dirname "$0")")
 changelog_path="${curr_dir}/../CHANGELOG"
