@@ -49,10 +49,10 @@ fi
 
 # Publishing dry run succeeded. Do a real publish now.
 
-get_yes_no_input_from_user_and_exit_on_no "Publishing dry run succeeded! Perform a real publish now?" "Publishing to crates.io..."
+get_yes_no_input_from_user_and_exit_on_no "Publishing dry run succeeded! Perform a real publish now? (Be careful!!! This is non-reversible!)" "Publishing to crates.io..."
 
 # Perform a real publish. Hopefully nothing with break at this point.
 if ! cargo workspaces publish --allow-branch main; then
-    echo "crates.io publishing dry run failed."
+    echo "crates.io publishing failed. This is probably not good..."
     exit 1
 fi
