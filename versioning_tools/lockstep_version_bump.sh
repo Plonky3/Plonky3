@@ -118,5 +118,5 @@ else
 
     # Now we have a valid bump type. Apply it.
     echo "Performing a ${patch_bump_type} bump..."
-    cargo workspaces version -y --allow-branch "$current_branch" "${patch_bump_type}"
+    cargo workspaces version -y --allow-branch "$current_branch" --no-individual-tags "${patch_bump_type}"
 fi
