@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # Convenience script for prepending to the changelog after a version bump.
-# Also has an additional check to prevent double appending a changelog for a version to `CHANGELOG`.
+# Also has an additional check to prevent double appending a changelog for a version to `CHANGELOG.md`.
 # 
 # Intended to be used in the same PR that bumps the versions.
 
 curr_dir=$(realpath "$(dirname "$0")")
-changelog_path="${curr_dir}/../CHANGELOG"
+changelog_path="${curr_dir}/../CHANGELOG.md"
 
 latest_local_release_tag=$(git tag -l | grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -r | head -n 1)
 latest_local_release_tag_no_v=$(echo "$latest_local_release_tag" | sed -E 's/v(.*)/\1/')

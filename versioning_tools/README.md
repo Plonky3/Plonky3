@@ -10,9 +10,9 @@ While the tooling available for automating Rust releases is fairly mature at thi
 
 When it's decided that it's time to do a release, the following should occur:
 
-- Create a PR that updates `CHANGELOG` and bumps all crate versions.
+- Create a PR that updates `CHANGELOG.md` and bumps all crate versions.
     - On a separate branch, run `lockstep_version_bump.sh` and follow the prompts. This will create a tagged commit and push the branch to remote. This script will create and publish a commit that bumps all crate versions based on how the latest changes affected Semver.
-    - Once this is complete, also run `changelog_gen.sh`. This will search for all PR commits and prepend them to `CHANGELOG`. Also don't forget to commit this and push (will automate later).
+    - Once this is complete, also run `changelog_gen.sh`. This will search for all PR commits and prepend them to `CHANGELOG.md`. Also don't forget to commit this and push (will automate later).
 - Once this PR is merged, we need to next publish this commit to `crates.io`.
     - From `main` on this version bump commit, run `lockstep_publish.sh`. This will do as much validation as possible before finally prompting you to publish all of the sub-crates.
 
