@@ -21,7 +21,6 @@ tool_installed_check "cargo-workspaces"
 tool_installed_check "cargo-semver-checks"
 
 # First we need to check if a version bump occurred that was never published. We don't want to accidentally bump a version and never publish it.
-latest_local_release_tag=$(git tag -l | grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -r | head -n 1)
 all_local_subcrates_name_and_versions=$(cargo workspaces list -l)
 
 all_local_subcrate_versions=$(echo "$all_local_subcrates_name_and_versions" | sed -E 's/.* v([0-9]+.[0-9]+.[0-9]+).*/\1/')
