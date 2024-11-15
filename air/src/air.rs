@@ -1,8 +1,8 @@
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
@@ -123,7 +123,8 @@ pub trait PairBuilder: AirBuilder {
 pub trait ExtensionBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
-    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>;
+    type ExprEF: AbstractExtensionField<Self::Expr, F = Self::EF>
+        + Mul<Self::VarEF, Output = Self::ExprEF>;
 
     type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
 
