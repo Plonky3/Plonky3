@@ -50,7 +50,7 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [FA; WIDTH] for any AbstractField which implements multiplication by KoalaBear field elements.
+/// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by KoalaBear field elements.
 /// If you have either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]` it will be much faster
 /// to use `Poseidon2KoalaBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersKoalaBear =
@@ -166,7 +166,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
 
         // For the remaining elements we use multiplication.
         // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to FieldAlgebra.
         state
             .iter_mut()
             .zip(INTERNAL_DIAG_MONTY_16)
@@ -244,7 +244,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
 
         // For the remaining elements we use multiplication.
         // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to AbstractField.
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to FieldAlgebra.
         state
             .iter_mut()
             .zip(INTERNAL_DIAG_MONTY_24)

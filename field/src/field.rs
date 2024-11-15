@@ -303,7 +303,7 @@ pub trait Field:
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `AbstractField`s, not just this concrete field.
+    /// can be used with `FieldAlgebra`s, not just this concrete field.
     ///
     /// The default implementation uses naive square and multiply. Implementations may want to
     /// override this and handle certain powers with more optimal addition chains.

@@ -284,7 +284,7 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX512, WIDTH, 5>
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
