@@ -178,9 +178,8 @@ mod tests {
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
 
-    use crate::to_mersenne31_array;
-
     use super::*;
+    use crate::to_mersenne31_array;
 
     type F = Mersenne31;
 

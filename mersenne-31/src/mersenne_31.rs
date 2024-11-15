@@ -6,8 +6,8 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use num::ToPrimitive;
 
+use num::ToPrimitive;
 use num_bigint::BigUint;
 use p3_field::{
     exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,

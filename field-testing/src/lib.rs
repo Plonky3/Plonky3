@@ -223,7 +223,7 @@ mod tests {
         // (x - 1)(x - 2) = x^2 - 3x + 2
         assert_eq!(
             binomial_expand(&[F::ONE, F::TWO]),
-            vec![F::TWO, -F::from_canonical_usize(3), F::ONE]
+            vec![F::TWO, (-3).into(), F::ONE]
         );
     }
 }

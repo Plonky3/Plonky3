@@ -8,8 +8,8 @@ use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use num::ToPrimitive;
 
+use num::ToPrimitive;
 use num_bigint::BigUint;
 use p3_field::{
     Field, FieldAlgebra, Packable, PrimeField, PrimeField32, PrimeField64, TwoAdicField,

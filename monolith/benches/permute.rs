@@ -1,4 +1,5 @@
 use core::array;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use p3_field::PrimeField;
 use p3_mds::MdsPermutation;

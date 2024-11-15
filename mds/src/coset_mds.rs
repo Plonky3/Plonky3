@@ -157,7 +157,7 @@ fn bowers_g_t_layer<FA: FieldAlgebra, const N: usize>(
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::Field;
     use p3_symmetric::Permutation;
     use rand::{thread_rng, Rng};
 
@@ -173,9 +173,7 @@ mod tests {
 
         let shift = F::GENERATOR;
         let mut coset_lde_naive = NaiveDft.coset_lde(arr.to_vec(), 0, shift);
-        coset_lde_naive
-            .iter_mut()
-            .for_each(|x| *x *= F::from_canonical_usize(N));
+        coset_lde_naive.iter_mut().for_each(|x| *x *= N.into());
         CosetMds::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
     }

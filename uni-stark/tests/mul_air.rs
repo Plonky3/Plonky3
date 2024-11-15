@@ -62,12 +62,12 @@ impl MulAir {
             let row = i / REPETITIONS;
 
             *a = if self.uses_transition_constraints {
-                F::from_canonical_usize(i)
+                F::from_char(i.into())
             } else {
                 rng.gen()
             };
             *b = if self.uses_boundary_constraints && row == 0 {
-                a.square() + F::ONE
+                F::ONE + a.square()
             } else {
                 rng.gen()
             };
@@ -107,7 +107,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
                 let next_a = main_next[start];
                 builder
                     .when_transition()
-                    .assert_eq(a + AB::Expr::from_canonical_usize(REPETITIONS), next_a);
+                    .assert_eq(a + AB::Expr::from_char(REPETITIONS.into()), next_a);
             }
         }
     }

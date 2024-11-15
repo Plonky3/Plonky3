@@ -435,12 +435,8 @@ mod tests {
         let mmcs = MyMmcs::new(hash, compress);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
-        let large_mat = RowMajorMatrix::new(
-            [1, 2, 3, 4, 5, 6, 7, 8].map(F::from_canonical_u8).to_vec(),
-            1,
-        );
-        let small_mat =
-            RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_canonical_u8).to_vec(), 1);
+        let large_mat = RowMajorMatrix::new(F::new_array([1, 2, 3, 4, 5, 6, 7, 8]).to_vec(), 1);
+        let small_mat = RowMajorMatrix::new(F::new_array([1, 2, 3, 4, 5, 6, 7]).to_vec(), 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
     }
 

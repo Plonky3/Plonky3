@@ -3,7 +3,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use p3_util::log2_strict_usize;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
@@ -12,6 +11,7 @@ use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 mod backward;

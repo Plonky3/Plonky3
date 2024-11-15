@@ -152,7 +152,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
     use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 
@@ -176,7 +175,7 @@ mod tests {
 
     const NUM_TESTS: usize = 3;
 
-    const PERMUTATION_INPUTS: [[u64; WIDTH]; NUM_TESTS] = [
+    const PERMUTATION_INPUTS: [[u32; WIDTH]; NUM_TESTS] = [
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
         [
             144096679, 1638468327, 1550998769, 1713522258, 730676443, 955614588, 1970746889,
@@ -190,7 +189,7 @@ mod tests {
 
     // Generated using the rescue_XLIX_permutation function of
     // https://github.com/KULeuven-COSIC/Marvellous/blob/master/rescue_prime.sage
-    const PERMUTATION_OUTPUTS: [[u64; WIDTH]; NUM_TESTS] = [
+    const PERMUTATION_OUTPUTS: [[u32; WIDTH]; NUM_TESTS] = [
         [
             1415867641, 1662872101, 1070605392, 450708029, 1752877321, 144003686, 623713963,
             13124252, 1719755748, 1164265443, 1031746503, 656034061,
@@ -210,11 +209,9 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
 
         for test_run in 0..NUM_TESTS {
-            let state: [Mersenne31; WIDTH] =
-                PERMUTATION_INPUTS[test_run].map(Mersenne31::from_canonical_u64);
+            let state: [Mersenne31; WIDTH] = PERMUTATION_INPUTS[test_run].map(|i| i.into());
 
-            let expected: [Mersenne31; WIDTH] =
-                PERMUTATION_OUTPUTS[test_run].map(Mersenne31::from_canonical_u64);
+            let expected: [Mersenne31; WIDTH] = PERMUTATION_OUTPUTS[test_run].map(|i| i.into());
 
             let actual = rescue_prime.permute(state);
             assert_eq!(actual, expected);
@@ -226,12 +223,12 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
         let rescue_sponge = PaddingFreeSponge::<_, WIDTH, 8, 6>::new(rescue_prime);
 
-        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(Mersenne31::from_canonical_u64);
+        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(|i| i.into());
 
         let expected: [Mersenne31; 6] = [
             2055426095, 968531194, 1592692524, 136824376, 175318858, 1160805485,
         ]
-        .map(Mersenne31::from_canonical_u64);
+        .map(|i| i.into());
 
         let actual = rescue_sponge.hash_iter(input);
         assert_eq!(actual, expected);

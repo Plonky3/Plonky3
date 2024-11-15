@@ -64,7 +64,7 @@ pub fn generate_trace_rows<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajo
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), n);
 
-    rows[0] = FibonacciRow::new(F::from_canonical_u64(a), F::from_canonical_u64(b));
+    rows[0] = FibonacciRow::new(a.into(), b.into());
 
     for i in 1..n {
         rows[i].left = rows[i - 1].right;
@@ -129,11 +129,7 @@ fn test_public_value_impl(n: usize, x: u64) {
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(x),
-    ];
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, x.into()];
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
@@ -170,9 +166,9 @@ fn test_incorrect_public_value() {
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(123_123), // incorrect result
+        BabyBear::ZERO,
+        BabyBear::ONE,
+        123_123.into(), // incorrect result
     ];
     prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
 }

@@ -11,6 +11,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
+use num::ToPrimitive;
 use num_bigint::BigUint;
 use p3_field::{Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::Poseidon2Bn254;
@@ -91,6 +92,7 @@ impl Debug for Bn254Fr {
 
 impl FieldAlgebra for Bn254Fr {
     type F = Self;
+    type Char = Self;
 
     const ZERO: Self = Self::new(FFBn254Fr::ZERO);
     const ONE: Self = Self::new(FFBn254Fr::ONE);
@@ -109,36 +111,9 @@ impl FieldAlgebra for Bn254Fr {
         f
     }
 
-    fn from_bool(b: bool) -> Self {
-        Self::new(FFBn254Fr::from(b as u64))
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
+    #[inline]
+    fn from_char(f: Self::Char) -> Self {
+        f
     }
 }
 
@@ -191,6 +166,18 @@ impl PrimeField for Bn254Fr {
         let repr = self.value.to_repr();
         let le_bytes = repr.as_ref();
         BigUint::from_bytes_le(le_bytes)
+    }
+
+    unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
+        n.to_u128().expect("This is not a canonical value").into()
+    }
+
+    fn inv_power_of_2(n: usize) -> Self {
+        todo!()
+    }
+
+    fn power_of_2(n: usize) -> Self {
+        todo!()
     }
 }
 
@@ -284,6 +271,112 @@ impl TwoAdicField for Bn254Fr {
     }
 }
 
+impl From<bool> for Bn254Fr {
+    fn from(b: bool) -> Self {
+        Self::new(FFBn254Fr::from(b))
+    }
+}
+
+impl From<u8> for Bn254Fr {
+    fn from(n: u8) -> Self {
+        Self::new(FFBn254Fr::from(n as u64))
+    }
+}
+
+impl From<u16> for Bn254Fr {
+    fn from(n: u16) -> Self {
+        Self::new(FFBn254Fr::from(n as u64))
+    }
+}
+
+impl From<u32> for Bn254Fr {
+    fn from(n: u32) -> Self {
+        Self::new(FFBn254Fr::from(n as u64))
+    }
+}
+
+impl From<u64> for Bn254Fr {
+    fn from(n: u64) -> Self {
+        Self::new(FFBn254Fr::from(n))
+    }
+}
+
+impl From<u128> for Bn254Fr {
+    fn from(n: u128) -> Self {
+        Self::new(FFBn254Fr::from_u128(n))
+    }
+}
+
+impl From<usize> for Bn254Fr {
+    fn from(n: usize) -> Self {
+        // If usize cannot be cast to a u128, break. This will likely not come up.
+        assert!(size_of::<usize>() <= 16);
+        (n as u128).into()
+    }
+}
+
+// We do the naive thing for signed integers as performance shouldn't really matter here.
+
+impl From<i8> for Bn254Fr {
+    fn from(n: i8) -> Self {
+        if n >= 0 {
+            (n as u8).into()
+        } else {
+            -<u8 as Into<Bn254Fr>>::into((-n) as u8)
+        }
+    }
+}
+
+impl From<i16> for Bn254Fr {
+    fn from(n: i16) -> Self {
+        if n >= 0 {
+            (n as u16).into()
+        } else {
+            -<u16 as Into<Bn254Fr>>::into((-n) as u16)
+        }
+    }
+}
+
+impl From<i32> for Bn254Fr {
+    fn from(n: i32) -> Self {
+        if n >= 0 {
+            (n as u32).into()
+        } else {
+            -<u32 as Into<Bn254Fr>>::into((-n) as u32)
+        }
+    }
+}
+
+impl From<i64> for Bn254Fr {
+    fn from(n: i64) -> Self {
+        if n >= 0 {
+            (n as u64).into()
+        } else {
+            -<u64 as Into<Bn254Fr>>::into((-n) as u64)
+        }
+    }
+}
+
+impl From<i128> for Bn254Fr {
+    fn from(n: i128) -> Self {
+        if n >= 0 {
+            (n as u128).into()
+        } else {
+            -<u128 as Into<Bn254Fr>>::into((-n) as u128)
+        }
+    }
+}
+
+impl From<isize> for Bn254Fr {
+    fn from(n: isize) -> Self {
+        if n >= 0 {
+            (n as usize).into()
+        } else {
+            -<usize as Into<Bn254Fr>>::into((-n) as usize)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use num_traits::One;
@@ -298,7 +391,7 @@ mod tests {
         let f = F::new(FFBn254Fr::from_u128(100));
         assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
 
-        let f = F::from_canonical_u64(0);
+        let f: F = 0_u64.into();
         assert!(f.is_zero());
 
         let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());

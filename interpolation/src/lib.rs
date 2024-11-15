@@ -68,7 +68,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::Field;
     use p3_matrix::dense::RowMajorMatrix;
 
     use crate::{interpolate_coset, interpolate_subgroup};
@@ -77,14 +77,13 @@ mod tests {
     fn test_interpolate_subgroup() {
         // x^2 + 2 x + 3
         type F = BabyBear;
-        let evals = [
+        let evals = BabyBear::new_array([
             6, 886605102, 1443543107, 708307799, 2, 556938009, 569722818, 1874680944,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
-        let point = F::from_canonical_u32(100);
+        let point: F = 100_u32.into();
         let result = interpolate_subgroup(&evals_mat, point);
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![10203_u32.into()]);
     }
 
     #[test]
@@ -92,13 +91,12 @@ mod tests {
         // x^2 + 2 x + 3
         type F = BabyBear;
         let shift = F::GENERATOR;
-        let evals = [
+        let evals = BabyBear::new_array([
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
-        let point = F::from_canonical_u32(100);
+        let point: F = 100_u32.into();
         let result = interpolate_coset(&evals_mat, shift, point);
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![10203_u32.into()]);
     }
 }

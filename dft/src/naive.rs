@@ -52,14 +52,7 @@ mod tests {
         // 2 + 3x
         // 0
         let mat = RowMajorMatrix::new(
-            vec![
-                F::from_canonical_u8(5),
-                F::from_canonical_u8(2),
-                F::ZERO,
-                F::from_canonical_u8(4),
-                F::from_canonical_u8(3),
-                F::ZERO,
-            ],
+            vec![5.into(), 2.into(), F::ZERO, 4.into(), 3.into(), F::ZERO],
             3,
         );
 
@@ -71,14 +64,7 @@ mod tests {
         assert_eq!(
             dft,
             RowMajorMatrix::new(
-                vec![
-                    F::from_canonical_u8(9),
-                    F::from_canonical_u8(5),
-                    F::ZERO,
-                    F::ONE,
-                    F::NEG_ONE,
-                    F::ZERO,
-                ],
+                vec![9.into(), 5.into(), F::ZERO, F::ONE, F::NEG_ONE, F::ZERO,],
                 3,
             )
         )

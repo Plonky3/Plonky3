@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_koala_bear_two_adicity_generators() {
-        let base = KoalaBear::from_canonical_u32(0x6ac49f88);
+        let base: F = 0x6ac49f88_u32.into();
         for bits in 0..=KoalaBear::TWO_ADICITY {
             assert_eq!(
                 KoalaBear::two_adic_generator(bits),
@@ -120,17 +120,17 @@ mod tests {
 
     #[test]
     fn test_koala_bear() {
-        let f = F::from_canonical_u32(100);
+        let f: F = 100_u32.into();
         assert_eq!(f.as_canonical_u64(), 100);
 
-        let f = F::from_canonical_u32(0);
+        let f: F = 0_u32.into();
         assert!(f.is_zero());
 
-        let f = F::from_wrapped_u32(F::ORDER_U32);
+        let f: F = F::ORDER_U32.into();
         assert!(f.is_zero());
 
         let f_1 = F::ONE;
-        let f_1_copy = F::from_canonical_u32(1);
+        let f_1_copy: F = 1_u32.into();
 
         let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
@@ -138,22 +138,22 @@ mod tests {
         let expected_result = F::TWO;
         assert_eq!(f_1 + f_1_copy, expected_result);
 
-        let f_2 = F::from_canonical_u32(2);
-        let expected_result = F::from_canonical_u32(3);
+        let f_2: F = 2_u32.into();
+        let expected_result: F = 3_u32.into();
         assert_eq!(f_1 + f_1_copy * f_2, expected_result);
 
-        let expected_result = F::from_canonical_u32(5);
+        let expected_result: F = 5_u32.into();
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
+        let f_p_minus_1: F = (F::ORDER_U32 - 1).into();
         let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
-        let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);
-        let expected_result = F::from_canonical_u32(F::ORDER_U32 - 3);
+        let f_p_minus_2: F = (F::ORDER_U32 - 2).into();
+        let expected_result: F = (F::ORDER_U32 - 3).into();
         assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
 
-        let expected_result = F::from_canonical_u32(1);
+        let expected_result: F = 1_u32.into();
         assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
 
         let expected_result = f_p_minus_1;
@@ -162,9 +162,9 @@ mod tests {
         let expected_result = f_p_minus_2;
         assert_eq!(f_p_minus_1 - f_1, expected_result);
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
-        let expected_prod = F::from_canonical_u32(0x54b46b81);
+        let m1: F = 0x34167c58_u32.into();
+        let m2: F = 0x61f3207b_u32.into();
+        let expected_prod: F = 0x54b46b81_u32.into();
         assert_eq!(m1 * m2, expected_prod);
 
         assert_eq!(m1.exp_u64(1420470955).exp_const_u64::<3>(), m1);
