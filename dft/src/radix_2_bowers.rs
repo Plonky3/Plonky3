@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{Field, Powers, TwoAdicField};
+use p3_field::{Field, Powers, PrimeField, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -50,7 +50,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         shift: F,
     ) -> RowMajorMatrix<F> {
         let h = mat.height();
-        let h_inv = F::from_canonical_usize(h).inverse();
+        let log_h = log2_strict_usize(h);
+        let h_inv = F::from_char(F::Char::inv_power_of_2(log_h));
 
         bowers_g_t(&mut mat.as_view_mut());
 

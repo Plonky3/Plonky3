@@ -31,7 +31,10 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // Safety: i < F::ORDER_U64 by construction.
+                F::from_canonical(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
@@ -52,7 +55,10 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(F::from_canonical_u64)
+            .map(|i| unsafe {
+                // Safety: i < F::ORDER_U64 by construction.
+                F::from_canonical(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));

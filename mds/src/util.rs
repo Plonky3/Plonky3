@@ -3,7 +3,7 @@ use core::array;
 use core::ops::{AddAssign, Mul};
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{FieldAlgebra, TwoAdicField};
+use p3_field::{FieldAlgebra, PrimeField, TwoAdicField};
 
 // NB: These are all MDS for M31, BabyBear and Goldilocks
 // const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
@@ -41,11 +41,17 @@ where
 /// NB: This function is a naive implementation of the n²
 /// evaluation. It is a placeholder until we have FFT implementations
 /// for all combinations of field and size.
+///
+/// Given circ_matrix should be a constants, we assume
+/// all elements in circ_matrix are canonical.
 pub fn apply_circulant<FA: FieldAlgebra, const N: usize>(
     circ_matrix: &[u64; N],
     input: [FA; N],
 ) -> [FA; N] {
-    let mut matrix: [FA; N] = circ_matrix.map(FA::from_canonical_u64);
+    let mut matrix: [FA; N] = circ_matrix.map(|i| unsafe {
+        // Safety: i is assumed to be canonical.
+        FA::from_char(FA::Char::from_canonical(i))
+    });
 
     let mut output = array::from_fn(|_| FA::ZERO);
     for out_i in output.iter_mut().take(N - 1) {
@@ -86,14 +92,20 @@ pub const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; 
 /// circulant matrix and the given vector.
 ///
 /// The circulant matrix must be specified by its first *column*, not its first row. If you have
-/// the row as an array, you can obtain the column with `first_row_to_first_col()`.
+/// the row as an array, you can obtain the column with `first_row_to_first_col()`. Furthermore
+/// given column should be a set of constants, we assume that all elements in column are canonical.
 #[inline]
 pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroupDft<F>>(
     fft: FFT,
     column: [u64; N],
     input: &[F; N],
 ) -> [F; N] {
-    let column = column.map(F::from_canonical_u64).to_vec();
+    let column = column
+        .map(|i| unsafe {
+            // Safety: i is assumed to be canonical.
+            F::from_char(F::Char::from_canonical(i))
+        })
+        .to_vec();
     let matrix = fft.dft(column);
     let input = fft.dft(input.to_vec());
 

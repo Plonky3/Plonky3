@@ -92,6 +92,7 @@ impl Distribution<Mersenne31> for Standard {
 
 impl FieldAlgebra for Mersenne31 {
     type F = Self;
+    type Char = Self;
 
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
@@ -106,58 +107,8 @@ impl FieldAlgebra for Mersenne31 {
     }
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        Self::new(b as u32)
-    }
-
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        debug_assert!(n < Self::ORDER_U32);
-        Self::new(n)
-    }
-
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
-        let msb = n & (1 << 31);
-        let msb_reduced = msb >> 31;
-        Self::new(n ^ msb) + Self::new(msb_reduced)
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        // NB: Experiments suggest that it's faster to just use the
-        // builtin remainder operator rather than split the input into
-        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
-        Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
+    fn from_char(f: Self::F) -> Self {
+        f
     }
 
     #[inline]
@@ -269,6 +220,61 @@ impl Field for Mersenne31 {
 impl PrimeField for Mersenne31 {
     fn as_canonical_biguint(&self) -> BigUint {
         <Self as PrimeField32>::as_canonical_u32(self).into()
+    }
+
+    #[inline]
+    fn from_bool(b: bool) -> Self {
+        Self::new(b as u32)
+    }
+
+    #[inline]
+    fn from_canonical_u8(n: u8) -> Self {
+        Self::new(n.into())
+    }
+
+    #[inline]
+    fn from_canonical_u16(n: u16) -> Self {
+        Self::new(n.into())
+    }
+
+    #[inline]
+    fn from_canonical_u32(n: u32) -> Self {
+        debug_assert!(n < Self::ORDER_U32);
+        Self::new(n)
+    }
+
+    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
+    fn from_canonical_u64(n: u64) -> Self {
+        Self::from_canonical_u32(
+            n.try_into()
+                .expect("Too large to be a canonical Mersenne31 encoding"),
+        )
+    }
+
+    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
+    #[inline]
+    fn from_canonical_usize(n: usize) -> Self {
+        Self::from_canonical_u32(
+            n.try_into()
+                .expect("Too large to be a canonical Mersenne31 encoding"),
+        )
+    }
+
+    #[inline]
+    fn from_wrapped_u32(n: u32) -> Self {
+        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
+        let msb = n & (1 << 31);
+        let msb_reduced = msb >> 31;
+        Self::new(n ^ msb) + Self::new(msb_reduced)
+    }
+
+    #[inline]
+    fn from_wrapped_u64(n: u64) -> Self {
+        // NB: Experiments suggest that it's faster to just use the
+        // builtin remainder operator rather than split the input into
+        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
+        Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 }
 

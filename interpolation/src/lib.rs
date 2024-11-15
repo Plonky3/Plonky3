@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, scale_vec,
-    two_adic_coset_zerofier, ExtensionField, TwoAdicField,
+    two_adic_coset_zerofier, ExtensionField, PrimeField, TwoAdicField,
 };
 use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
@@ -41,6 +41,7 @@ where
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
     let g = F::two_adic_generator(log_height);
+    let height_as_f_elem = F::from_char(F::Char::power_of_2(log_height));
 
     let diffs: Vec<EF> = cyclic_subgroup_coset_known_order(g, shift, height)
         .map(|subgroup_i| point - subgroup_i)
@@ -58,7 +59,7 @@ where
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
     let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
-    let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);
+    let denominator = height_as_f_elem * shift.exp_u64(height as u64 - 1);
     scale_vec(zerofier * denominator.inverse(), sum)
 }
 

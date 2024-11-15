@@ -377,7 +377,6 @@ pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
 mod tests {
     use core::array;
 
-    use p3_field::FieldAlgebra;
     use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
 
@@ -405,10 +404,10 @@ mod tests {
     /// Test on the constant 0 input.
     #[test]
     fn test_poseidon2_width_8_zeroes() {
-        let mut input: [F; 8] = [0_u64; 8].map(F::from_wrapped_u64);
+        let mut input: [F; 8] = [0_u64; 8].map(|i| i.into());
 
         let expected: [F; 8] = [
-            4214787979728720400,
+            4214787979728720400_u64,
             12324939279576102560,
             10353596058419792404,
             15456793487362310586,
@@ -417,7 +416,7 @@ mod tests {
             2959271128466640042,
             14285409611125725709,
         ]
-        .map(F::from_canonical_u64);
+        .map(|i| i.into());
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
     }
@@ -425,10 +424,10 @@ mod tests {
     /// Test on the input 0..16.
     #[test]
     fn test_poseidon2_width_8_range() {
-        let mut input: [F; 8] = array::from_fn(|i| F::from_wrapped_u64(i as u64));
+        let mut input: [F; 8] = array::from_fn(|i| i.into());
 
         let expected: [F; 8] = [
-            14266028122062624699,
+            14266028122062624699_u64,
             5353147180106052723,
             15203350112844181434,
             17630919042639565165,
@@ -437,7 +436,7 @@ mod tests {
             16774100645754596496,
             12047415603622314780,
         ]
-        .map(F::from_canonical_u64);
+        .map(|i| i.into());
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
     }
@@ -449,7 +448,7 @@ mod tests {
     #[test]
     fn test_poseidon2_width_8_random() {
         let mut input: [F; 8] = [
-            5116996373749832116,
+            5116996373749832116_u64,
             8931548647907683339,
             17132360229780760684,
             11280040044015983889,
@@ -458,10 +457,10 @@ mod tests {
             17604752143022812942,
             543194415197607509,
         ]
-        .map(F::from_wrapped_u64);
+        .map(|i| i.into());
 
         let expected: [F; 8] = [
-            1831346684315917658,
+            1831346684315917658_u64,
             13497752062035433374,
             12149460647271516589,
             15656333994315312197,
@@ -470,7 +469,7 @@ mod tests {
             4251208148861706881,
             6973971209430822232,
         ]
-        .map(F::from_canonical_u64);
+        .map(|i| i.into());
 
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);

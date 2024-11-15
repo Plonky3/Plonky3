@@ -5,7 +5,7 @@ use core::cell::RefCell;
 use core::mem::{transmute, MaybeUninit};
 
 use itertools::{izip, Itertools};
-use p3_field::{Field, Powers, TwoAdicField};
+use p3_field::{Field, Powers, PrimeField, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -149,7 +149,9 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         // For the second half, we flip the DIT, working in bit-reversed order.
         reverse_matrix_index_bits(&mut mat);
         // We'll also scale by 1/h, as per the usual inverse DFT algorithm.
-        let scale = Some(F::from_canonical_usize(h).inverse());
+        let log_h = log2_strict_usize(h);
+        let scale = Some(F::from_char(F::Char::inv_power_of_2(log_h)));
+
         second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
 

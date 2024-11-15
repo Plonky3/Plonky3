@@ -158,6 +158,7 @@ impl Product for PackedGoldilocksAVX2 {
 
 impl FieldAlgebra for PackedGoldilocksAVX2 {
     type F = Goldilocks;
+    type Char = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
     const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
@@ -170,37 +171,8 @@ impl FieldAlgebra for PackedGoldilocksAVX2 {
     }
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        Goldilocks::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Goldilocks::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Goldilocks::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        Goldilocks::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Goldilocks::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Goldilocks::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Goldilocks::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Goldilocks::from_wrapped_u64(n).into()
+    fn from_char(f: Self::Char) -> Self {
+        f.into()
     }
 
     #[inline]

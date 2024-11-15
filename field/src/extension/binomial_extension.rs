@@ -119,6 +119,7 @@ where
     FA::F: BinomiallyExtendable<D>,
 {
     type F = BinomialExtensionField<FA::F, D>;
+    type Char = FA::Char;
 
     const ZERO: Self = Self {
         value: [FA::ZERO; D],
@@ -143,44 +144,8 @@ where
         }
     }
 
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        FA::from_bool(b).into()
-    }
-
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        FA::from_canonical_u8(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        FA::from_canonical_u16(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        FA::from_canonical_u32(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        FA::from_canonical_u64(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        FA::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        FA::from_wrapped_u32(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        FA::from_wrapped_u64(n).into()
+    fn from_char(f: Self::Char) -> Self {
+        FA::from_char(f).into()
     }
 
     #[inline(always)]

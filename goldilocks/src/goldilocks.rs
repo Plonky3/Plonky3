@@ -6,6 +6,7 @@ use core::hash::{Hash, Hasher};
 use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use num::ToPrimitive;
 
 use num_bigint::BigUint;
 use p3_field::{
@@ -91,6 +92,7 @@ impl Distribution<Goldilocks> for Standard {
 
 impl FieldAlgebra for Goldilocks {
     type F = Self;
+    type Char = Self;
 
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
@@ -102,41 +104,9 @@ impl FieldAlgebra for Goldilocks {
         f
     }
 
-    fn from_bool(b: bool) -> Self {
-        Self::new(b.into())
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline(always)]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(n)
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(n as u64)
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
-        // need for a reduction.
-        Self::new(n.into())
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        // There's no need to reduce `n` to canonical form, as our internal encoding is
-        // non-canonical, so there's no need for a reduction.
-        Self::new(n)
+    #[inline]
+    fn from_char(f: Self::Char) -> Self {
+        f
     }
 
     #[inline]
@@ -250,6 +220,18 @@ impl Field for Goldilocks {
 impl PrimeField for Goldilocks {
     fn as_canonical_biguint(&self) -> BigUint {
         <Self as PrimeField64>::as_canonical_u64(self).into()
+    }
+
+    unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
+        todo!()
+    }
+
+    fn power_of_2(n: usize) -> Self {
+        todo!()
+    }
+
+    fn inv_power_of_2(n: usize) -> Self {
+        todo!()
     }
 }
 
@@ -387,6 +369,126 @@ impl Div for Goldilocks {
     }
 }
 
+impl From<bool> for Goldilocks {
+    fn from(b: bool) -> Self {
+        Self::new(b.into())
+    }
+}
+
+impl From<u8> for Goldilocks {
+    fn from(n: u8) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl From<u16> for Goldilocks {
+    fn from(n: u16) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl From<u32> for Goldilocks {
+    fn from(n: u32) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl From<u64> for Goldilocks {
+    // There's no need to reduce `n` to canonical form, as our internal encoding is
+    // non-canonical, so there's no need for a reduction.
+    fn from(n: u64) -> Self {
+        Self::new(n)
+    }
+}
+
+impl From<u128> for Goldilocks {
+    // As the input can be bigger then 2^64, we need to do a modulo reduction
+    fn from(n: u128) -> Self {
+        // As the input can be bigger then 2^64, we need to do a modulo reduction
+        Self::new((n % P as u128) as u64)
+    }
+}
+
+impl From<usize> for Goldilocks {
+    fn from(n: usize) -> Self {
+        match size_of::<usize>() <= 8 {
+            // If usize < 8 bits we can treat n as a 64 bit element and, similarly to the u64 case,
+            // there is no need for a reduction.
+            true => Self::new(n as u64),
+            // When usize > 8 bits we need to do a modulo reduction.
+            false => Self::new((n % P as usize) as u64),
+        }
+    }
+}
+
+// Observe that `p + 2^31 - 1 = 2^64 - 2^31 < 2^64`. Thus given an integer x: in for n = 8, 16, 32
+// we can compute p + x without fear of overflow. There is also no need for any reductions as
+// as our internal encoding is non-canonical.
+
+impl From<i8> for Goldilocks {
+    fn from(n: i8) -> Self {
+        Self::new(P.wrapping_add_signed(n.into()))
+    }
+}
+
+impl From<i16> for Goldilocks {
+    fn from(n: i16) -> Self {
+        Self::new(P.wrapping_add_signed(n.into()))
+    }
+}
+
+impl From<i32> for Goldilocks {
+    fn from(n: i32) -> Self {
+        Self::new(P.wrapping_add_signed(n.into()))
+    }
+}
+
+impl From<i64> for Goldilocks {
+    fn from(n: i64) -> Self {
+        const P_U128: u128 = P as u128;
+        let val_128 = P_U128.wrapping_add_signed(n.into());
+        // Note 0 < val_128 < P + 2^63 < 2P
+        if val_128 > P_U128 {
+            Self::new((val_128 - P_U128) as u64)
+        } else {
+            Self::new(val_128 as u64)
+        }
+    }
+}
+
+impl From<i128> for Goldilocks {
+    fn from(n: i128) -> Self {
+        const P_I128: i128 = P as i128;
+        let val_red = n % P_I128;
+        if val_red > 0 {
+            Self::new(val_red as u64)
+        } else {
+            Self::new((val_red + P_I128) as u64)
+        }
+    }
+}
+
+impl From<isize> for Goldilocks {
+    fn from(n: isize) -> Self {
+        match size_of::<isize>() {
+            // If isize <= 4 bits we can just add P
+            0..=4 => Self::new(P.wrapping_add_signed(n as i64)),
+            // When isize is between 4 and 8 bits we can to use the i64 from method.
+            5..=8 => (n as i64).into(),
+            // For larger options we need to do a modular reduction.
+            _ => {
+                const P_ISIZE: isize = P as isize;
+                let val_red = n % P_ISIZE;
+                if val_red > 0 {
+                    Self::new(val_red as u64)
+                } else {
+                    Self::new((val_red + P_ISIZE) as u64)
+                }
+            }
+        }
+    }
+}
+
 /// Squares the base N number of times and multiplies the result by the tail value.
 #[inline(always)]
 fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
@@ -493,13 +595,13 @@ mod tests {
         let f = F::new(u64::MAX);
         assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
 
-        let f = F::from_canonical_u64(u64::MAX);
+        let f: F = u64::MAX.into();
         assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
 
-        let f = F::from_canonical_u64(0);
+        let f: F = 0_u64.into();
         assert!(f.is_zero());
 
-        let f = F::from_canonical_u64(F::ORDER_U64);
+        let f: F = F::ORDER_U64.into();
         assert!(f.is_zero());
 
         assert_eq!(F::GENERATOR.as_canonical_u64(), 7_u64);
@@ -520,12 +622,12 @@ mod tests {
         let expected_result = F::new(5);
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
+        let f_p_minus_1: F = (F::ORDER_U64 - 1).into();
         let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
-        let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);
-        let expected_result = F::from_canonical_u64(F::ORDER_U64 - 3);
+        let f_p_minus_2: F = (F::ORDER_U64 - 2).into();
+        let expected_result: F = (F::ORDER_U64 - 3).into();
         assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
 
         let expected_result = F::new(1);

@@ -7,6 +7,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use itertools::Itertools;
+use num::ToPrimitive;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
@@ -47,6 +48,9 @@ pub trait FieldAlgebra:
     + Debug
 {
     type F: Field;
+
+    // The unique PrimeField of characteristic p.
+    type Char: PrimeField;
 
     /// The additive identity of the algebra.
     ///
@@ -92,41 +96,12 @@ pub trait FieldAlgebra:
     /// an algebra and not simply a commutative ring.
     fn from_f(f: Self::F) -> Self;
 
-    /// Convert from a `bool`.
-    fn from_bool(b: bool) -> Self;
-
-    /// Convert from a canonical `u8`.
+    /// Interpret a field element as a commutative algebra element.
     ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u8(n: u8) -> Self;
-
-    /// Convert from a canonical `u16`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u16(n: u16) -> Self;
-
-    /// Convert from a canonical `u32`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u32(n: u32) -> Self;
-
-    /// Convert from a canonical `u64`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u64(n: u64) -> Self;
-
-    /// Convert from a canonical `usize`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_usize(n: usize) -> Self;
-
-    fn from_wrapped_u32(n: u32) -> Self;
-    fn from_wrapped_u64(n: u64) -> Self;
+    /// Mathematically speaking, this map is a ring homomorphism from the base field
+    /// to the commutative algebra. The existence of this map makes this structure
+    /// an algebra and not simply a commutative ring.
+    fn from_char(f: Self::Char) -> Self;
 
     /// The elementary function `double(a) = 2*a`.
     ///
@@ -355,8 +330,45 @@ pub trait Field:
     }
 }
 
-pub trait PrimeField: Field + Ord {
+/// A field of prime order.
+///
+/// For each prime p, PrimeField denotes the unique field corresponding to the integers mod p
+pub trait PrimeField:
+    Field
+    + Ord
+    + From<bool>
+    + From<u8>
+    + From<u16>
+    + From<u32>
+    + From<u64>
+    + From<u128>
+    + From<usize>
+    + From<i8>
+    + From<i16>
+    + From<i32>
+    + From<i64>
+    + From<i128>
+    + From<isize>
+{
     fn as_canonical_biguint(&self) -> BigUint;
+
+    /// Interpret a given value directly as a field element.
+    ///
+    /// # Safety
+    ///
+    /// The user must ensure that the input is less than the field's characteristic.
+    /// If the input might be greater than the characteristic, convert using From instead.
+    unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self;
+
+    /// Return the field element equal to 2^{n}.
+    ///
+    /// Returns ZERO if the characteristic of the field is 2.
+    fn power_of_2(n: usize) -> Self;
+
+    /// Return the field element equal to 2^{-n}.
+    ///
+    /// Errors if the characteristic of the field is 2.
+    fn inv_power_of_2(n: usize) -> Self;
 }
 
 /// A prime field of order less than `2^64`.

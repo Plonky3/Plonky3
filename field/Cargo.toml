@@ -11,6 +11,7 @@ num-bigint = { version = "0.4.3", default-features = false }
 num-traits = { version = "0.2.18", default-features = false }
 num-integer = "0.1.46"
 nums = "0.1.0"
+num = "0.4.3"
 tracing = "0.1.37"
 
 itertools = "0.13.0"

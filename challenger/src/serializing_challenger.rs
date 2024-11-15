@@ -103,7 +103,10 @@ where
             let value = u32::from_le_bytes(inner.sample_array::<4>());
             let value = value & pow_of_two_bound;
             if value < modulus {
-                return F::from_canonical_u32(value);
+                return unsafe {
+                    // Safety: i < F::ORDER_U64 by construction.
+                    F::from_canonical(value)
+                };
             }
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
@@ -135,7 +138,10 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // Safety: i < F::ORDER_U64 by construction.
+                F::from_canonical(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
@@ -203,7 +209,10 @@ where
             let value = u64::from_le_bytes(inner.sample_array::<8>());
             let value = value & pow_of_two_bound;
             if value < modulus {
-                return F::from_canonical_u64(value);
+                return unsafe {
+                    // Safety: i < F::ORDER_U64 by construction.
+                    F::from_canonical(value)
+                };
             }
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
@@ -235,7 +244,10 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // Safety: i < F::ORDER_U64 by construction.
+                F::from_canonical(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
