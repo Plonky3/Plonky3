@@ -286,12 +286,15 @@ where
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
                     let ys = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
-                            let (low_coset, _) =
-                                mat.split_rows(mat.height() >> self.fri.log_blowup);
+                            let h = mat.height() >> self.fri.log_blowup;
+                            let (low_coset, _) = mat.split_rows(h);
+                            let mut inv_denoms = inv_denoms.get(&point).unwrap()[..h].to_vec();
+                            reverse_slice_index_bits(&mut inv_denoms);
                             interpolate_coset(
                                 &BitReversalPerm::new_view(low_coset),
                                 Val::GENERATOR,
                                 point,
+                                Some(&inv_denoms),
                             )
                         });
 
@@ -305,8 +308,8 @@ where
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap().par_iter())
                             .for_each(|((reduced_row, ro), &inv_denom)| {
-                                *ro += alpha_pow_offset * (reduced_row - reduced_ys) * inv_denom
-                            })
+                                *ro += alpha_pow_offset * (reduced_ys - reduced_row) * inv_denom
+                            });
                     });
 
                     num_reduced[log_height] += mat.width();
@@ -481,7 +484,7 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
                 batch_multiplicative_inverse(
                     &subgroup[..(1 << log_height)]
                         .iter()
-                        .map(|&x| EF::from_base(x) - z)
+                        .map(|&x| z - x)
                         .collect_vec(),
                 ),
             )
