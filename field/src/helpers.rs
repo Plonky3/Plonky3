@@ -78,7 +78,7 @@ where
 // to allow us to convert FA constants to BinomialExtensionField<FA, D> constants.
 //
 // The natural approach would be:
-// fn field_to_array<FA: AbstractField, const D: usize>(x: FA) -> [FA; D]
+// fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D]
 //      let mut arr: [FA; D] = [FA::ZERO; D];
 //      arr[0] = x
 //      arr

@@ -125,7 +125,7 @@ where
 
 /// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on `[FA; WIDTH]` for any AbstractField which implements multiplication by `Monty<31>` field elements.
+/// This can act on `[FA; WIDTH]` for any FieldAlgebra which implements multiplication by `Monty<31>` field elements.
 /// This will usually be slower than the Poseidon2 permutation built from `Poseidon2InternalLayerMonty31` and
 /// `Poseidon2ExternalLayerMonty31` but it does work in more cases.
 pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {

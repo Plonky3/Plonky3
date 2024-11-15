@@ -54,7 +54,7 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
     batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| x_packed.inverse());
 }
 
-/// A simple single-threaded implementation of Montgomery's trick. Since not all `AbstractField`s
+/// A simple single-threaded implementation of Montgomery's trick. Since not all `FieldAlgebra`s
 /// support inversion, this takes a custom inversion function.
 pub(crate) fn batch_multiplicative_inverse_general<F, Inv>(x: &[F], result: &mut [F], inv: Inv)
 where
