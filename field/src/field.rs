@@ -363,12 +363,16 @@ pub trait PrimeField:
     /// Return the field element equal to 2^{n}.
     ///
     /// Returns ZERO if the characteristic of the field is 2.
-    fn power_of_2(n: usize) -> Self;
+    fn power_of_2(n: usize) -> Self {
+        Self::TWO.exp_u64(n as u64)
+    }
 
     /// Return the field element equal to 2^{-n}.
     ///
     /// Errors if the characteristic of the field is 2.
-    fn inv_power_of_2(n: usize) -> Self;
+    fn inv_power_of_2(n: usize) -> Self {
+        Self::TWO.exp_u64(n as u64).inverse()
+    }
 }
 
 /// A prime field of order less than `2^64`.

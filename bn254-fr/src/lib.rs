@@ -171,14 +171,6 @@ impl PrimeField for Bn254Fr {
     unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
         n.to_u128().expect("This is not a canonical value").into()
     }
-
-    fn inv_power_of_2(n: usize) -> Self {
-        todo!()
-    }
-
-    fn power_of_2(n: usize) -> Self {
-        todo!()
-    }
 }
 
 impl Add for Bn254Fr {

@@ -263,14 +263,6 @@ impl<FP: FieldParameters> PrimeField for MontyField31<FP> {
     unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
         Self::new(n.to_u32().expect("Provided value was not canonical"))
     }
-
-    fn inv_power_of_2(n: usize) -> Self {
-        todo!()
-    }
-
-    fn power_of_2(n: usize) -> Self {
-        todo!()
-    }
 }
 
 impl<FP: FieldParameters> PrimeField64 for MontyField31<FP> {
