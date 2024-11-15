@@ -402,12 +402,12 @@ impl FieldAlgebra for PackedMersenne31AVX2 {
     const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_f(f: Mersenne31) -> Self {
         f.into()
     }
 
     #[inline]
-    fn from_char(f: Self::F) -> Self {
+    fn from_char(f: Mersenne31) -> Self {
         f.into()
     }
 
