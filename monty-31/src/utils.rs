@@ -8,6 +8,20 @@ pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
     (((x as u64) << MP::MONTY_BITS) % MP::PRIME as u64) as u32
 }
 
+/// Convert an i32 into MONTY form.
+/// There are no constraints on the input.
+/// The output will be a u32 in range [0, P).
+#[inline]
+pub(crate) const fn signed_to_monty<MP: MontyParameters>(x: i32) -> u32 {
+    let monty_x = (((x as i64) << MP::MONTY_BITS) % MP::PRIME as i64) as i32;
+    // -P < monty_x < P
+    if monty_x >= 0 {
+        monty_x as u32
+    } else {
+        MP::PRIME.wrapping_add_signed(monty_x)
+    }
+}
+
 /// Convert a u64 into MONTY form.
 /// There are no constraints on the input.
 /// The output will be a u32 in range [0, P).

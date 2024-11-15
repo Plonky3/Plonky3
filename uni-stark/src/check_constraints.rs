@@ -29,9 +29,9 @@ where
             row_index: i,
             main,
             public_values,
-            is_first_row: F::from_bool(i == 0),
-            is_last_row: F::from_bool(i == height - 1),
-            is_transition: F::from_bool(i != height - 1),
+            is_first_row: F::from_char((i == 0).into()),
+            is_last_row: F::from_char((i == height - 1).into()),
+            is_transition: F::from_char((i != height - 1).into()),
         };
 
         air.eval(&mut builder);

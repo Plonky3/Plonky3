@@ -8,6 +8,7 @@ use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use num::ToPrimitive;
 
 use num_bigint::BigUint;
 use p3_field::{
@@ -17,7 +18,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::utils::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64};
+use crate::utils::{from_monty, halve_u32, monty_reduce, signed_to_monty, to_monty, to_monty_64};
 use crate::{FieldParameters, MontyParameters, TwoAdicData};
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
@@ -30,8 +31,8 @@ pub struct MontyField31<MP: MontyParameters> {
 }
 
 impl<MP: MontyParameters> MontyField31<MP> {
-    // The standard way to crate a new element.
-    // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
+    /// The standard way to crate a new element.
+    /// Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
     #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
@@ -40,9 +41,19 @@ impl<MP: MontyParameters> MontyField31<MP> {
         }
     }
 
-    // Create a new field element from something already in MONTY form.
-    // This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
-    // likely doing something fishy.
+    /// Create a new element from an i32 input.
+    /// This is slower than new so should be generally avoided if possible.
+    #[inline(always)]
+    pub const fn new_signed(value: i32) -> Self {
+        Self {
+            value: signed_to_monty::<MP>(value),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Create a new field element from something already in MONTY form.
+    /// This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
+    /// likely doing something fishy.
     #[inline(always)]
     pub(crate) const fn new_monty(value: u32) -> Self {
         Self {
@@ -153,7 +164,7 @@ impl<FP: FieldParameters> Serialize for MontyField31<FP> {
 impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        Ok(MontyField31::from_canonical_u32(val))
+        Ok(val.into())
     }
 }
 
@@ -161,6 +172,7 @@ impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 
 impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     type F = Self;
+    type Char = Self;
 
     const ZERO: Self = FP::MONTY_ZERO;
     const ONE: Self = FP::MONTY_ONE;
@@ -173,46 +185,8 @@ impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     }
 
     #[inline(always)]
-    fn from_bool(b: bool) -> Self {
-        Self::from_canonical_u32(b as u32)
-    }
-
-    #[inline(always)]
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::from_canonical_u32(n as u32)
-    }
-
-    #[inline(always)]
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::from_canonical_u32(n as u32)
-    }
-
-    #[inline(always)]
-    fn from_canonical_u32(n: u32) -> Self {
-        debug_assert!(n < FP::PRIME);
-        Self::from_wrapped_u32(n)
-    }
-
-    #[inline(always)]
-    fn from_canonical_u64(n: u64) -> Self {
-        debug_assert!(n < FP::PRIME as u64);
-        Self::from_canonical_u32(n as u32)
-    }
-
-    #[inline(always)]
-    fn from_canonical_usize(n: usize) -> Self {
-        debug_assert!(n < FP::PRIME as usize);
-        Self::from_canonical_u32(n as u32)
-    }
-
-    #[inline(always)]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Self::new(n)
-    }
-
-    #[inline(always)]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Self::new_monty(to_monty_64::<FP>(n))
+    fn from_char(f: Self::Char) -> Self {
+        f
     }
 
     #[inline]
@@ -284,6 +258,18 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
 impl<FP: FieldParameters> PrimeField for MontyField31<FP> {
     fn as_canonical_biguint(&self) -> BigUint {
         <Self as PrimeField32>::as_canonical_u32(self).into()
+    }
+
+    unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
+        Self::new(n.to_u32().expect("Provided value was not canonical"))
+    }
+
+    fn inv_power_of_2(n: usize) -> Self {
+        todo!()
+    }
+
+    fn power_of_2(n: usize) -> Self {
+        todo!()
     }
 }
 
@@ -407,3 +393,151 @@ impl<FP: FieldParameters> Div for MontyField31<FP> {
         self * rhs.inverse()
     }
 }
+
+impl<FP: FieldParameters> From<bool> for MontyField31<FP> {
+    fn from(b: bool) -> Self {
+        // It's a little faster to just use branching here.
+        if b {
+            Self::ONE
+        } else {
+            Self::ZERO
+        }
+    }
+}
+
+impl<FP: FieldParameters> From<u8> for MontyField31<FP> {
+    fn from(n: u8) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl<FP: FieldParameters> From<u16> for MontyField31<FP> {
+    fn from(n: u16) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl<FP: FieldParameters> From<u32> for MontyField31<FP> {
+    fn from(n: u32) -> Self {
+        Self::new(n)
+    }
+}
+
+impl<FP: FieldParameters> From<u64> for MontyField31<FP> {
+    fn from(n: u64) -> Self {
+        Self::new_monty(to_monty_64::<FP>(n))
+    }
+}
+
+impl<FP: FieldParameters> From<u128> for MontyField31<FP> {
+    fn from(n: u128) -> Self {
+        Self::new((n % FP::PRIME as u128) as u32)
+    }
+}
+
+impl<FP: FieldParameters> From<usize> for MontyField31<FP> {
+    fn from(n: usize) -> Self {
+        match size_of::<usize>() {
+            // If usize <= 4 bits we can use the u32 method.
+            0..=4 => Self::new(n as u32),
+            // When usize > 4 bits we need to do a modulo reduction first.
+            _ => Self::new((n % FP::PRIME as usize) as u32),
+        }
+    }
+}
+
+impl<FP: FieldParameters> From<i8> for MontyField31<FP> {
+    fn from(n: i8) -> Self {
+        Self::new_signed(n.into())
+    }
+}
+
+impl<FP: FieldParameters> From<i16> for MontyField31<FP> {
+    fn from(n: i16) -> Self {
+        Self::new_signed(n.into())
+    }
+}
+
+impl<FP: FieldParameters> From<i32> for MontyField31<FP> {
+    fn from(n: i32) -> Self {
+        Self::new_signed(n)
+    }
+}
+
+// This could be faster but it's really not performance critical.
+impl<FP: FieldParameters> From<i64> for MontyField31<FP> {
+    fn from(n: i64) -> Self {
+        Self::new_signed((n % FP::PRIME as i64) as i32)
+    }
+}
+
+impl<FP: FieldParameters> From<i128> for MontyField31<FP> {
+    fn from(n: i128) -> Self {
+        Self::new_signed((n % FP::PRIME as i128) as i32)
+    }
+}
+
+impl<FP: FieldParameters> From<isize> for MontyField31<FP> {
+    fn from(n: isize) -> Self {
+        match size_of::<isize>() {
+            // If isize <= 4 bits we use new_signed immediately
+            0..=4 => Self::new_signed(n as i32),
+            // For larger options we do a modular reduction first.
+            _ => Self::new_signed((n % FP::PRIME as isize) as i32),
+        }
+    }
+}
+
+// /// Given an integer in the range [-P, P] build a valid Mersenne31 element.
+// ///
+// /// # Safety
+// ///
+// /// The input must not be equal to i32::MIN. All other inputs are valid.
+// unsafe fn from_i32_between_neg_p_and_p(n: i32) -> Mersenne31 {
+//     debug_assert_ne!(n, i32::MIN);
+
+//     if n >= 0 {
+//         Mersenne31::new(n as u32)
+//     } else {
+//         // By assumption P + n > 0 so this does not underflow.
+//         Mersenne31::new(P.wrapping_add_signed(n))
+//     }
+// }
+
+// #[inline(always)]
+// fn from_bool(b: bool) -> Self {
+//     Self::from_canonical_u32(b as u32)
+// }
+
+// #[inline(always)]
+// fn from_canonical_u8(n: u8) -> Self {
+//     Self::from_canonical_u32(n as u32)
+// }
+
+// #[inline(always)]
+// fn from_canonical_u16(n: u16) -> Self {
+//     Self::from_canonical_u32(n as u32)
+// }
+
+// #[inline(always)]
+// fn from_canonical_u32(n: u32) -> Self {
+//     debug_assert!(n < FP::PRIME);
+//     Self::from_wrapped_u32(n)
+// }
+
+// #[inline(always)]
+// fn from_canonical_u64(n: u64) -> Self {
+//     debug_assert!(n < FP::PRIME as u64);
+//     Self::from_canonical_u32(n as u32)
+// }
+
+// #[inline(always)]
+// fn from_canonical_usize(n: usize) -> Self {
+//     debug_assert!(n < FP::PRIME as usize);
+//     Self::from_canonical_u32(n as u32)
+// }
+
+// #[inline(always)]
+// fn from_wrapped_u64(n: u64) -> Self {
+//     Self::new_monty(to_monty_64::<FP>(n))
+// }

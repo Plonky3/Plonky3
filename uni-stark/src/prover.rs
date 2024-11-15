@@ -5,7 +5,7 @@ use itertools::{izip, Itertools};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PackedValue};
+use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PackedValue, PrimeField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -57,7 +57,17 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(log_degree));
+    unsafe {
+        // Safety:
+        // We assume the field characteristic P to be large enough (e.g. P > 100) such that a trace
+        // height of size 2^{P} is impossible for practical reasons so we know log_degree < P.
+        //
+        // This would have to be modified if we wanted to support fields of characteristic 2.
+        challenger.observe(Val::<SC>::from_char(
+            <Val<SC> as FieldAlgebra>::Char::from_canonical(log_degree),
+        ));
+    }
+
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());

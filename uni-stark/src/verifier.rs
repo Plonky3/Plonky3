@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra};
+use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra, PrimeField};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
@@ -55,7 +55,16 @@ where
     }
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(proof.degree_bits));
+    unsafe {
+        // Safety:
+        // We assume the field characteristic P to be large enough (e.g. P > 100) such that a trace
+        // height of size 2^{P} is impossible for practical reasons so we know degree_bits < P.
+        //
+        // This would have to be modified if we wanted to support fields of characteristic 2.
+        challenger.observe(Val::<SC>::from_char(
+            <Val<SC> as FieldAlgebra>::Char::from_canonical(proof.degree_bits),
+        ));
+    }
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
     // Practically speaking though, the only related known attack is from failing to include public

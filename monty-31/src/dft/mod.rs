@@ -3,10 +3,11 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use p3_util::log2_strict_usize;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, FieldAlgebra, PrimeField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -217,7 +218,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
             .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
 
-        let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
+        let log_len = log2_strict_usize(nrows);
+        let inv_len = MontyField31::inv_power_of_2(log_len);
         debug_span!("scale").in_scope(|| mat.scale(inv_len));
         mat
     }
@@ -271,7 +273,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // as a row in `coeffs`.
 
         // Normalise inverse DFT and coset shift in one go.
-        let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
+        let log_len = log2_strict_usize(nrows);
+        let inv_len = MontyField31::inv_power_of_2(log_len);
         coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
 
         // `padded` is implicitly zero padded since it was initialised

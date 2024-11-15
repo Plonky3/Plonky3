@@ -223,7 +223,7 @@ impl PrimeField for Goldilocks {
     }
 
     unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
-        todo!()
+        n.to_u64().expect("Provided value was not canonical").into()
     }
 
     fn power_of_2(n: usize) -> Self {

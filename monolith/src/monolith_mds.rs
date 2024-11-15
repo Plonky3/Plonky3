@@ -65,8 +65,15 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
     for (i, x_i) in x.iter().enumerate() {
-        for (j, yj) in y.iter().enumerate() {
-            output[i] += F::from_canonical_u32(x_i + yj).inverse() * to_multiply[j];
+        for (j, y_j) in y.iter().enumerate() {
+            let xi_plus_yj = unsafe {
+                // Safety:
+                // x_i < 2^{-9}F::ORDER_U32
+                // y_j < 2^{-2}F::ORDER_U32
+                // So x_i + y_j < F::ORDER_U32 as required.
+                F::from_canonical(x_i + y_j)
+            };
+            output[i] += xi_plus_yj.inverse() * to_multiply[j];
         }
     }
 

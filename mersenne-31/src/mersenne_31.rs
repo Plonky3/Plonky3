@@ -6,6 +6,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use num::ToPrimitive;
 
 use num_bigint::BigUint;
 use p3_field::{
@@ -222,59 +223,22 @@ impl PrimeField for Mersenne31 {
         <Self as PrimeField32>::as_canonical_u32(self).into()
     }
 
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        Self::new(b as u32)
+    unsafe fn from_canonical<Int: ToPrimitive>(n: Int) -> Self {
+        Mersenne31::new(n.to_u32().expect("Provided value was not canonical"))
     }
 
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
+    fn inv_power_of_2(n: usize) -> Self {
+        // 2^31 = 1 so we take n mod 31.
+        let n_mod_31 = n % 31;
+
+        // Then 2^{-x} = 2^{31 - x}
+        Mersenne31::new(1 << (31 - n_mod_31))
     }
 
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        debug_assert!(n < Self::ORDER_U32);
-        Self::new(n)
-    }
-
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
-        let msb = n & (1 << 31);
-        let msb_reduced = msb >> 31;
-        Self::new(n ^ msb) + Self::new(msb_reduced)
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        // NB: Experiments suggest that it's faster to just use the
-        // builtin remainder operator rather than split the input into
-        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
-        Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
+    fn power_of_2(n: usize) -> Self {
+        // 2^31 = 1 so we take n mod 31.
+        let n_mod_31 = n % 31;
+        Mersenne31::new(1 << n_mod_31)
     }
 }
 
@@ -411,6 +375,158 @@ impl Div for Mersenne31 {
     }
 }
 
+impl From<bool> for Mersenne31 {
+    fn from(b: bool) -> Self {
+        Self::new(b.into())
+    }
+}
+
+impl From<u8> for Mersenne31 {
+    fn from(n: u8) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl From<u16> for Mersenne31 {
+    fn from(n: u16) -> Self {
+        Self::new(n.into())
+    }
+}
+
+impl From<u32> for Mersenne31 {
+    fn from(n: u32) -> Self {
+        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
+        let msb = n & (1 << 31);
+        let msb_reduced = msb >> 31;
+        Self::new(n ^ msb) + Self::new(msb_reduced)
+    }
+}
+
+impl From<u64> for Mersenne31 {
+    fn from(n: u64) -> Self {
+        // NB: Experiments suggest that it's faster to just use the
+        // builtin remainder operator rather than split the input into
+        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
+        Self::new((n % Self::ORDER_U64) as u32)
+    }
+}
+
+impl From<u128> for Mersenne31 {
+    fn from(n: u128) -> Self {
+        // NB: Experiments suggest that it's faster to just use the
+        // builtin remainder operator rather than split the input into
+        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
+        Self::new((n % P as u128) as u32)
+    }
+}
+
+impl From<usize> for Mersenne31 {
+    fn from(n: usize) -> Self {
+        match size_of::<usize>() {
+            // If usize < 4 bits the value is always canonical.
+            0..4 => Self::new(n as u32),
+            // If usize is equal to 4 bits we use the u32 method.
+            4 => (n as u32).into(),
+            // When usize > 4 bits we need to do a modulo reduction.
+            _ => Self::new((n % P as usize) as u32),
+        }
+    }
+}
+
+impl From<i8> for Mersenne31 {
+    fn from(n: i8) -> Self {
+        unsafe {
+            // Safety: n >= i8::MIN > i32::MIN
+            from_i32_between_neg_p_and_p(n as i32)
+        }
+    }
+}
+
+impl From<i16> for Mersenne31 {
+    fn from(n: i16) -> Self {
+        unsafe {
+            // Safety: n >= i16::MIN > i32::MIN
+            from_i32_between_neg_p_and_p(n as i32)
+        }
+    }
+}
+
+// Note that i32::MAX = 2^31 - 1 = p is an allowed value.
+impl From<i32> for Mersenne31 {
+    fn from(n: i32) -> Self {
+        if n == i32::MIN {
+            // -2^31 = -1 mod P
+            Self::new(P - 1)
+        } else {
+            unsafe {
+                // We have just ruled out n == i32::MIN
+                from_i32_between_neg_p_and_p(n)
+            }
+        }
+    }
+}
+
+impl From<i64> for Mersenne31 {
+    fn from(n: i64) -> Self {
+        const P_I64: i64 = P as i64;
+        let val_i32 = (n % P_I64) as i32;
+        unsafe {
+            // By the definition of %, -P < val_i32 < P
+            from_i32_between_neg_p_and_p(val_i32)
+        }
+    }
+}
+
+impl From<i128> for Mersenne31 {
+    fn from(n: i128) -> Self {
+        const P_I128: i128 = P as i128;
+        let val_i32 = (n % P_I128) as i32;
+        unsafe {
+            // By the definition of %, -P < val_i32 < P
+            from_i32_between_neg_p_and_p(val_i32)
+        }
+    }
+}
+
+impl From<isize> for Mersenne31 {
+    fn from(n: isize) -> Self {
+        match size_of::<isize>() {
+            // If isize <= 4 bits we use the i16 method
+            0..4 => unsafe {
+                // Safety: n >= -2^{4*size_of::<isize>() - 1} > i32::MIN
+                from_i32_between_neg_p_and_p(n as i32)
+            },
+            // When isize = 4 bits we use the i32 from method.
+            4 => (n as i32).into(),
+            // For larger options we do a modular reduction.
+            _ => {
+                const P_ISIZE: isize = P as isize;
+                let val_i32 = (n % P_ISIZE) as i32;
+                unsafe {
+                    // By the definition of %, -P < val_i32 < P
+                    from_i32_between_neg_p_and_p(val_i32)
+                }
+            }
+        }
+    }
+}
+
+/// Given an integer in the range [-P, P] build a valid Mersenne31 element.
+///
+/// # Safety
+///
+/// The input must not be equal to i32::MIN. All other inputs are valid.
+unsafe fn from_i32_between_neg_p_and_p(n: i32) -> Mersenne31 {
+    debug_assert_ne!(n, i32::MIN);
+
+    if n >= 0 {
+        Mersenne31::new(n as u32)
+    } else {
+        // By assumption P + n > 0 so this does not underflow.
+        Mersenne31::new(P.wrapping_add_signed(n))
+    }
+}
+
 #[inline(always)]
 pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     debug_assert!(input < (1 << 62));
@@ -420,10 +536,12 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 }
 
 /// Convert a constant u32 array into a constant Mersenne31 array.
+///
+/// It assumes that the input array consists of element in canonical form.
 #[inline]
 #[must_use]
 pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
-    // This is currently used only in the test crates of the vectorized implementations.
+    // This is currently used only in tests in the Mersenne31 crate.
     let mut output = [Mersenne31 { value: 0 }; N];
     let mut i = 0;
     loop {
@@ -486,8 +604,8 @@ mod tests {
     fn exp_root() {
         // Confirm that (x^{1/5})^5 = x
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
+        let m1: Mersenne31 = 0x34167c58_u32.into();
+        let m2: Mersenne31 = 0x61f3207b_u32.into();
 
         assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
         assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
