@@ -10,7 +10,7 @@ use p3_field::{
     batch_multiplicative_inverse, scale_vec, two_adic_coset_zerofier, ExtensionField, TwoAdicField,
 };
 use p3_matrix::Matrix;
-use p3_maybe_rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+use p3_maybe_rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use p3_util::log2_strict_usize;
 
 /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup, evaluate
