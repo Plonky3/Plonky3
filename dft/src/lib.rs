@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod butterflies;
+mod four_step;
 mod naive;
 mod radix_2_bowers;
 mod radix_2_dit;
@@ -13,6 +14,7 @@ mod traits;
 mod util;
 
 pub use butterflies::*;
+pub use four_step::*;
 pub use naive::*;
 pub use radix_2_bowers::*;
 pub use radix_2_dit::*;

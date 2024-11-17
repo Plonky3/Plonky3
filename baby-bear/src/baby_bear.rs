@@ -227,6 +227,7 @@ mod tests {
     test_two_adic_field!(crate::BabyBear);
 
     test_field_dft!(radix2dit, crate::BabyBear, p3_dft::Radix2Dit<_>);
+    test_field_dft!(fourstep, crate::BabyBear, p3_dft::FourStep<_>);
     test_field_dft!(bowers, crate::BabyBear, p3_dft::Radix2Bowers);
     test_field_dft!(parallel, crate::BabyBear, p3_dft::Radix2DitParallel::<_>);
     test_field_dft!(
