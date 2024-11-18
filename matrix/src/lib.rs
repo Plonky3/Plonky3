@@ -21,6 +21,7 @@ use crate::dense::RowMajorMatrix;
 pub mod bitrev;
 pub mod dense;
 pub mod extension;
+pub mod horizontally_truncated;
 pub mod mul;
 pub mod row_index_mapped;
 pub mod sparse;
