@@ -1,8 +1,8 @@
-use crate::FieldAlgebra;
+use crate::{CommutativeRing, FieldAlgebra};
 
-pub fn exp_u64_by_squaring<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
+pub fn exp_u64_by_squaring<CR: CommutativeRing>(val: CR, power: u64) -> CR {
     let mut current = val;
-    let mut product = FA::ONE;
+    let mut product = CR::ONE;
 
     for j in 0..bits_u64(power) {
         if (power >> j & 1) != 0 {

@@ -17,21 +17,8 @@ use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
-/// A commutative algebra over a finite field.
-///
-/// This permits elements like:
-/// - an actual field element
-/// - a symbolic expression which would evaluate to a field element
-/// - an array of field elements
-///
-/// Mathematically speaking, this is an algebraic structure with addition,
-/// multiplication and scalar multiplication. The addition and multiplication
-/// maps must be both commutative and associative, and there must
-/// exist identity elements for both (named `ZERO` and `ONE`
-/// respectively). Furthermore, multiplication must distribute over
-/// addition. Finally, the scalar multiplication must be realized by
-/// a ring homomorphism from the field to the algebra.
-pub trait FieldAlgebra:
+/// A commutative ring.
+pub trait CommutativeRing:
     Sized
     + Default
     + Clone
@@ -46,87 +33,21 @@ pub trait FieldAlgebra:
     + Product
     + Debug
 {
-    type F: Field;
-
-    /// The additive identity of the algebra.
+    /// The additive identity of the ring.
     ///
-    /// For every element `a` in the algebra we require the following properties:
+    /// For every element `a` in the ring we require the following properties:
     ///
     /// `a + ZERO = ZERO + a = a,`
     ///
     /// `a + (-a) = (-a) + a = ZERO.`
     const ZERO: Self;
 
-    /// The multiplicative identity of the Algebra
+    /// The multiplicative identity of the ring
     ///
-    /// For every element `a` in the algebra we require the following property:
+    /// For every element `a` in the ring we require the following property:
     ///
     /// `a*ONE = ONE*a = a.`
     const ONE: Self;
-
-    /// The element in the algebra given by `ONE + ONE`.
-    ///
-    /// This is provided as a convenience as `TWO` occurs regularly in
-    /// the proving system. This also is slightly faster than computing
-    /// it via addition. Note that multiplication by `TWO` is discouraged.
-    /// Instead of `a * TWO` use `a.double()` which will be faster.
-    ///
-    /// If the field has characteristic 2 this is equal to ZERO.
-    const TWO: Self;
-
-    /// The element in the algebra given by `-ONE`.
-    ///
-    /// This is provided as a convenience as `NEG_ONE` occurs regularly in
-    /// the proving system. This also is slightly faster than computing
-    /// it via negation. Note that where possible `NEG_ONE` should be absorbed
-    /// into mathematical operations. For example `a - b` will be faster
-    /// than `a + NEG_ONE * b` and similarly `(-b)` is faster than `NEG_ONE * b`.
-    ///
-    /// If the field has characteristic 2 this is equal to ONE.
-    const NEG_ONE: Self;
-
-    /// Interpret a field element as a commutative algebra element.
-    ///
-    /// Mathematically speaking, this map is a ring homomorphism from the base field
-    /// to the commutative algebra. The existence of this map makes this structure
-    /// an algebra and not simply a commutative ring.
-    fn from_f(f: Self::F) -> Self;
-
-    /// Convert from a `bool`.
-    fn from_bool(b: bool) -> Self;
-
-    /// Convert from a canonical `u8`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u8(n: u8) -> Self;
-
-    /// Convert from a canonical `u16`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u16(n: u16) -> Self;
-
-    /// Convert from a canonical `u32`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u32(n: u32) -> Self;
-
-    /// Convert from a canonical `u64`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u64(n: u64) -> Self;
-
-    /// Convert from a canonical `usize`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_usize(n: usize) -> Self;
-
-    fn from_wrapped_u32(n: u32) -> Self;
-    fn from_wrapped_u64(n: u64) -> Self;
 
     /// The elementary function `double(a) = 2*a`.
     ///
@@ -153,6 +74,104 @@ pub trait FieldAlgebra:
         self.square() * self.clone()
     }
 
+    /// Compute self^{2^power_log} by repeated squaring.
+    #[must_use]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        let mut res = self.clone();
+        for _ in 0..power_log {
+            res = res.square();
+        }
+        res
+    }
+
+    /// Compute the dot product of two vectors.
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
+    }
+
+    /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
+    /// before assigning them to a userspace process. In that case, our process should not need to
+    /// write zeros, which would be redundant. However, the compiler may not always recognize this.
+    ///
+    /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
+    /// This is the default implementation, but implementors may wish to provide their own
+    /// implementation which transmutes something like `vec![0u32; len]`.
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        vec![Self::ZERO; len]
+    }
+}
+
+/// A commutative ring `(R)` with prime characteristic `(p)`.
+///
+/// The characteristic is the unique smallest integer `r > 0` such that `0 = r . 1 = 1 + 1 + ... + 1 (r times)`.
+/// When the characteristic is prime, the ring `R` becomes an algebra over the field `ℤ/p` (Integers mod p).
+pub trait PrimeCharacteristicRing: CommutativeRing {
+    /// The field `ℤ/p`.
+    type Char: PrimeField;
+
+    /// Embed an element of the prime field `ℤ/p` into the ring `R`.
+    ///
+    /// Given any integer `r ∈ ℤ`, `from_char(r mod p)` will be equal to:
+    ///
+    /// `Self::ONE + ... + Self::ONE (r mod p times)`
+    fn from_char(f: Self::Char) -> Self;
+
+    /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
+    fn from_bool(b: bool) -> Self {
+        // Some rings might reimplement this to avoid the branch.
+        if b {
+            Self::ONE
+        } else {
+            Self::ZERO
+        }
+    }
+
+    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+    ///
+    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+    ///
+    /// Note that the output only depends on `r mod p`.
+    fn from_u8(int: u8) -> Self {
+        Self::from_char(Self::Char::from_int(int))
+    }
+
+    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+    ///
+    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+    ///
+    /// Note that the output only depends on `r mod p`.
+    fn from_u16(int: u8) -> Self {
+        Self::from_char(Self::Char::from_int(int))
+    }
+
+    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+    ///
+    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+    ///
+    /// Note that the output only depends on `r mod p`.
+    fn from_u32(int: u8) -> Self {
+        Self::from_char(Self::Char::from_int(int))
+    }
+
+    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+    ///
+    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+    ///
+    /// Note that the output only depends on `r mod p`.
+    fn from_u64(int: u8) -> Self {
+        Self::from_char(Self::Char::from_int(int))
+    }
+
+    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+    ///
+    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+    ///
+    /// Note that the output only depends on `r mod p`.
+    fn from_usize(int: u8) -> Self {
+        Self::from_char(Self::Char::from_int(int))
+    }
+
     /// Exponentiation by a `u64` power.
     ///
     /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
@@ -162,7 +181,7 @@ pub trait FieldAlgebra:
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        Self::F::exp_u64_generic(self.clone(), power)
+        Self::Char::exp_u64_generic(self.clone(), power)
     }
 
     /// Exponentiation by a constant power.
@@ -190,22 +209,63 @@ pub trait FieldAlgebra:
         }
     }
 
-    /// Compute self^{2^power_log} by repeated squaring.
+    /// The elementary function `halve(a) = a/2`.
+    ///
+    /// Will error if the field characteristic is 2.
     #[must_use]
-    fn exp_power_of_2(&self, power_log: usize) -> Self {
-        let mut res = self.clone();
-        for _ in 0..power_log {
-            res = res.square();
-        }
-        res
+    fn halve(&self) -> Self {
+        // This should be overwritten by most field implementations.
+        self.clone() * Self::from_char(Self::Char::TWO.inverse())
     }
 
-    /// self * 2^exp
+    /// Multiply by a given power of two. `mul_2exp_u64(a, exp) = 2^exp * a`
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        self.clone() * Self::TWO.exp_u64(exp)
+        // This should be overwritten by most field implementations.
+        self.clone() * Self::from_char(Self::Char::TWO.exp_u64(exp))
     }
+
+    /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
+    #[must_use]
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // This should be overwritten by most field implementations.
+        self.clone() * Self::from_char(Self::Char::TWO.inverse().exp_u64(exp))
+    }
+}
+
+pub trait PermutationMonomial<const N: usize> {
+    // TODO!!
+}
+
+pub trait PermutaitonMonomialInverse {
+    // TODO!!
+}
+
+/// A commutative algebra over a finite field.
+///
+/// This permits elements like:
+/// - an actual field element
+/// - a symbolic expression which would evaluate to a field element
+/// - an array of field elements
+///
+/// Mathematically speaking, this is an algebraic structure with addition,
+/// multiplication and scalar multiplication. The addition and multiplication
+/// maps must be both commutative and associative, and there must
+/// exist identity elements for both (named `ZERO` and `ONE`
+/// respectively). Furthermore, multiplication must distribute over
+/// addition. Finally, the scalar multiplication must be realized by
+/// a ring homomorphism from the field to the algebra.
+pub trait FieldAlgebra: PrimeCharacteristicRing {
+    type F: Field;
+
+    /// Interpret a field element as a commutative algebra element.
+    ///
+    /// Mathematically speaking, this map is a ring homomorphism from the base field
+    /// to the commutative algebra. The existence of this map makes this structure
+    /// an algebra and not simply a commutative ring.
+    fn from_f(f: Self::F) -> Self;
 
     /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
     #[must_use]
@@ -240,31 +300,6 @@ pub trait FieldAlgebra:
             current,
         }
     }
-
-    /// Compute the dot product of two vectors.
-    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
-    }
-
-    fn try_div<Rhs>(self, rhs: Rhs) -> Option<<Self as Mul<Rhs>>::Output>
-    where
-        Rhs: Field,
-        Self: Mul<Rhs>,
-    {
-        rhs.try_inverse().map(|inv| self * inv)
-    }
-
-    /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
-    /// before assigning them to a userspace process. In that case, our process should not need to
-    /// write zeros, which would be redundant. However, the compiler may not always recognize this.
-    ///
-    /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
-    /// This is the default implementation, but implementors may wish to provide their own
-    /// implementation which transmutes something like `vec![0u32; len]`.
-    #[inline]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        vec![Self::ZERO; len]
-    }
 }
 
 /// An element of a finite field.
@@ -295,24 +330,6 @@ pub trait Field:
         *self == Self::ONE
     }
 
-    /// self / 2^exp
-    #[must_use]
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::TWO.exp_u64(exp)
-    }
-
-    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `FieldAlgebra`s, not just this concrete field.
-    ///
-    /// The default implementation uses naive square and multiply. Implementations may want to
-    /// override this and handle certain powers with more optimal addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        exp_u64_by_squaring(val, power)
-    }
-
     /// The multiplicative inverse of this field element, if it exists.
     ///
     /// NOTE: The inverse of `0` is undefined and will return `None`.
@@ -322,17 +339,6 @@ pub trait Field:
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
-    }
-
-    /// Computes input/2.
-    /// Should be overwritten by most field implementations to use bitshifts.
-    /// Will error if the field characteristic is 2.
-    #[must_use]
-    fn halve(&self) -> Self {
-        let half = Self::TWO
-            .try_inverse()
-            .expect("Cannot divide by 2 in fields with characteristic 2");
-        *self * half
     }
 
     fn order() -> BigUint;
@@ -355,23 +361,118 @@ pub trait Field:
     }
 }
 
-pub trait PrimeField: Field + Ord {
-    fn as_canonical_biguint(&self) -> BigUint;
+/// Implementation of the quotient map `r → r mod p`.
+pub trait QuotientMap<Int>: Sized {
+    /// Convert a given integer into an element of the field `ℤ/p`.
+    ///   
+    /// This is the most generic method which makes no assumptions on the size of the input.
+    /// Where possible, this method should be used with the smallest possible integer type.
+    /// For example, if a 32-bit integer `x` is known to be less than `2^16`, then
+    /// `from_int(x as u16)` will often be faster than `from_int(x)`. This is particularly true
+    /// for boolean data.
+    ///
+    /// This method is also strongly preferred over `from_canonical_checked/from_canonical_unchecked`.
+    /// It will usually be identical when `Int` is a small type, e.g. `bool/u8/u16` and is safer for
+    /// larger types.
+    fn from_int(int: Int) -> Self;
+
+    // Q: We could also make from_canonical_checked/from_canonical_unchecked assume that the input lies in
+    // 0 to p - 1. Would this be better? The downside of this is that this might lead to the methods
+    // being a little slower if that doesn't align with the underlying representation. On the other hand
+    // it would let us make a guarantee that the output won't suddenly become invalid.
+
+    // A:   When dealing with unsigned types, from_canonical assumes that the input lies in [0, P).
+    //      When dealing with signed types, from_canonical assumes that the input lies in [-(P - 1)/2, (P + 1)/2).
+    //      TODO: Add this into assumptions.
+
+    /// Convert a given integer into an element of the field `ℤ/p`. The input is guaranteed
+    /// to lie within some specific range.
+    ///
+    /// The exact range depends on the specific field and is checked by assert statements at run time. Where possible
+    /// it is safer to use `from_int` as, if the internal representation of the field changes, the allowed
+    /// range will also change.
+    fn from_canonical_checked(int: Int) -> Option<Self>;
+
+    /// Convert a given integer into an element of the field `ℤ/p`. The input is guaranteed
+    /// to lie within some specific range.
+    ///
+    /// # Safety
+    ///
+    /// The exact range depends on the specific field and is not checked. Using this function is not recommended.
+    /// If the internal representation of the field changes, the expected range may also change which might lead
+    /// to undefined behaviour. However this will be faster than `from_int/from_canonical_checked` in some
+    /// circumstances and so we provide it here for careful use in performance critical applications.
+    unsafe fn from_canonical_unchecked(int: Int) -> Self;
 }
 
-/// A prime field of order less than `2^64`.
+/// A field isomorphic to `ℤ/p` for some prime `p`.
+///
+/// There is a natural map from `ℤ` to `ℤ/p` given by `r → r mod p`.
+pub trait PrimeField:
+    Field
+    + Ord
+    + QuotientMap<bool>
+    + QuotientMap<u8>
+    + QuotientMap<u16>
+    + QuotientMap<u32>
+    + QuotientMap<u64>
+    + QuotientMap<u128>
+    + QuotientMap<usize>
+    + QuotientMap<i8>
+    + QuotientMap<i16>
+    + QuotientMap<i32>
+    + QuotientMap<i64>
+    + QuotientMap<i128>
+    + QuotientMap<isize>
+{
+    /// The field element 2 mod p.
+    ///
+    /// This is provided as a convenience as `TWO` occurs regularly in
+    /// the proving system. This also is slightly faster than computing
+    /// it via addition. Note that multiplication by `TWO` is discouraged.
+    /// Instead of `a * TWO` use `a.double()` which will be faster.
+    ///
+    /// When p = 2, this is equal to ZERO.
+    const TWO: Self;
+
+    /// The field element (-1) mod p.
+    ///
+    /// This is provided as a convenience as `NEG_ONE` occurs regularly in
+    /// the proving system. This also is slightly faster than computing
+    /// it via negation. Note that where possible `NEG_ONE` should be absorbed
+    /// into mathematical operations. For example `a - b` will be faster
+    /// than `a + NEG_ONE * b` and similarly `(-b)` is faster than `NEG_ONE * b`.
+    ///
+    /// When p = 2, this is equal to ONE.
+    const NEG_ONE: Self;
+
+    fn as_canonical_biguint(&self) -> BigUint;
+
+    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
+    /// can be used with `CommutativeRing` with prime characteristic, not just this concrete field.
+    ///
+    /// The default implementation uses naive square and multiply. Implementations may want to
+    /// override this and handle certain powers with more optimal addition chains.
+    #[must_use]
+    #[inline]
+    fn exp_u64_generic<PCR: PrimeCharacteristicRing<Char = Self>>(val: PCR, power: u64) -> PCR {
+        exp_u64_by_squaring(val, power)
+    }
+}
+
+/// A prime field `ℤ/p` with order `p < 2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
-    /// Return the representative of `value` that is less than `ORDER_U64`.
+    /// Return the representative of `value` which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
 }
 
-/// A prime field of order less than `2^32`.
+/// A prime field `ℤ/p` with order `p < 2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
 
-    /// Return the representative of `value` that is less than `ORDER_U32`.
+    /// Return the representative of `value` which lies in the range `0 <= x < ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
 }
 
