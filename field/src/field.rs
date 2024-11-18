@@ -267,6 +267,8 @@ pub trait FieldAlgebra: PrimeCharacteristicRing {
     /// an algebra and not simply a commutative ring.
     fn from_f(f: Self::F) -> Self;
 
+    // TODO: Move to either Field or Commutative Ring.
+
     /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
     #[must_use]
     fn powers(&self) -> Powers<Self> {
@@ -280,6 +282,8 @@ pub trait FieldAlgebra: PrimeCharacteristicRing {
             current: start,
         }
     }
+
+    // TODO: Mover these to Field.
 
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
         self.shifted_powers_packed(Self::ONE)
