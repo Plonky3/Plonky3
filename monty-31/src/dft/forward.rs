@@ -77,7 +77,7 @@ fn forward_iterative_layer_2<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Sc
 }
 
 #[inline]
-fn forward_iterative_radix_r<const HALF_RADIX: usize, T: PackedFieldPow2>(
+fn forward_iterative_packed_radix_r<const HALF_RADIX: usize, T: PackedFieldPow2>(
     input: &mut [T],
     roots: &[T::Scalar],
 ) {
@@ -93,7 +93,7 @@ fn forward_iterative_radix_r<const HALF_RADIX: usize, T: PackedFieldPow2>(
 }
 
 #[inline]
-fn forward_iterative_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
+fn forward_iterative_packed_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
     input.chunks_exact_mut(2).for_each(|pair| {
         let x = pair[0];
         let y = pair[1];
@@ -107,55 +107,114 @@ fn forward_iterative_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
 }
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
+    #[inline]
+    fn forward_iterative_layer(
+        packed_input: &mut [<Self as Field>::Packing],
+        roots: &[Self],
+        m: usize,
+    ) {
+        debug_assert_eq!(roots.len(), m);
+        let packed_roots = <Self as Field>::Packing::pack_slice(roots);
+
+        // lg_m >= 4, so m = 2^lg_m >= 2^4, hence packing_width divides m
+        let packed_m = m / <Self as Field>::Packing::WIDTH;
+        packed_input
+            .chunks_exact_mut(2 * packed_m)
+            .for_each(|layer_chunk| {
+                let (xs, ys) = unsafe { layer_chunk.split_at_mut_unchecked(packed_m) };
+
+                izip!(xs, ys, packed_roots)
+                    .for_each(|(x, y, &root)| (*x, *y) = forward_butterfly(*x, *y, root));
+            });
+    }
+
+    #[inline]
+    fn forward_iterative_radix_16(input: &mut [<Self as Field>::Packing]) {
+        // Rather surprisingly, the version below was not only not
+        // faster, but was actually a bit slower.
+        /*
+        let roots16 = T::from_fn(|i| root_table[0][i % 8]);
+        let roots8 = T::from_fn(|i| root_table[1][i % 4]);
+        let roots4 = T::from_fn(|i| root_table[2][i % 2]);
+
+        input.chunks_exact_mut(2).for_each(|pair| {
+            let x = pair[0];
+            let y = pair[1];
+
+            let (x, y) = forward_butterfly_interleaved::<8, _>(x, y, roots16);
+            let (x, y) = forward_butterfly_interleaved::<4, _>(x, y, roots8);
+            let (x, y) = forward_butterfly_interleaved::<2, _>(x, y, roots4);
+
+            let (mut x, y) = x.interleave(y, 1);
+            let t = x - y; // roots[0] == 1
+            x += y;
+            let (x, y) = x.interleave(t, 1);
+            pair[0] = x;
+            pair[1] = y;
+        });
+         */
+        // lg_m = 3; s = lg_n - 4
+        if <Self as Field>::Packing::WIDTH >= 16 {
+            forward_iterative_packed_radix_r::<8, _>(input, MP::ROOTS_16.as_ref());
+        } else {
+            Self::forward_iterative_layer(input, MP::ROOTS_16.as_ref(), 8);
+        }
+
+        // lg_m = 2; s = lg_n - 3
+        if <Self as Field>::Packing::WIDTH >= 8 {
+            forward_iterative_packed_radix_r::<4, _>(input, MP::ROOTS_8.as_ref());
+        } else {
+            Self::forward_iterative_layer(input, MP::ROOTS_8.as_ref(), 4);
+        }
+
+        let roots4 = [MP::ROOTS_8.as_ref()[0], MP::ROOTS_8.as_ref()[2]];
+        // lg_m = 1; s = lg_n - 2
+        if <Self as Field>::Packing::WIDTH >= 4 {
+            forward_iterative_packed_radix_r::<2, _>(input, &roots4);
+        } else {
+            Self::forward_iterative_layer(input, &roots4, 2);
+        }
+
+        // lg_m = 0; s = lg_n - 1
+        forward_iterative_packed_radix_2(input);
+    }
+
     /// Breadth-first DIF FFT for smallish vectors (must be >= 64)
     #[inline]
     fn forward_iterative(input: &mut [Self], root_table: &[Vec<Self>]) {
         let n = input.len();
         let lg_n = log2_strict_usize(n);
 
-        // Needed to avoid overlap with specialisation at the other end of the loop
-        assert!(lg_n >= 6);
-
         let packing_width = <Self as Field>::Packing::WIDTH;
         assert!(n >= 2 * packing_width);
 
         let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
 
+        // Stop loop early to do radix 16 separately. This value is determined by the largest
+        // packing width we will encounter, which is 16 at the moment for AVX512. Specifically
+        // it is log_2(max{possible packing widths}) = lg(16) = 4.
+        let last_loop_layer = 4;
+
+        // Needed to avoid overlap of the 2 specialisations at the start
+        // with the radix-16 specialisation at the end of the loop
+        assert!(lg_n >= last_loop_layer + 2);
+
         // Specialise the first few iterations; improves performance a little.
         forward_iterative_layer_1(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
         forward_iterative_layer_2(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
 
-        for lg_m in (4..(lg_n - 2)).rev() {
+        // loop from lg_n-2 down to 4.
+        for lg_m in (last_loop_layer..(lg_n - 2)).rev() {
             let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
             let roots = &root_table[s];
             debug_assert_eq!(roots.len(), m);
-            let packed_roots = <Self as Field>::Packing::pack_slice(roots);
 
-            debug_assert!(packing_width <= n / (2 << s));
-            for i in 0..(1 << s) {
-                let offset = i << (lg_m + 1);
-
-                // lg_m >= 4, so offset = 2^e * i with e >= 5, hence
-                // packing_width divides offset
-                let offset = offset / packing_width;
-
-                // lg_m >= 4, so m = 2^lg_m >= 2^4, hence packing_width
-                // divides m
-                let m = m / packing_width;
-
-                let block = &mut packed_input[offset..];
-                let (xs, ys) = unsafe { block.split_at_mut_unchecked(m) };
-
-                izip!(xs, ys, packed_roots)
-                    .for_each(|(x, y, &root)| (*x, *y) = forward_butterfly(*x, *y, root));
-            }
+            Self::forward_iterative_layer(packed_input, roots, m);
         }
-        forward_iterative_radix_r::<8, _>(packed_input, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
-        forward_iterative_radix_r::<4, _>(packed_input, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
-        forward_iterative_radix_r::<2, _>(packed_input, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
-        forward_iterative_radix_2(packed_input); // lg_m = 0; s = lg_n - 1
+
+        Self::forward_iterative_radix_16(packed_input);
     }
 
     #[inline(always)]
