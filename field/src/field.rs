@@ -213,7 +213,7 @@ pub trait FieldAlgebra:
         self.shifted_powers(Self::ONE)
     }
 
-    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
+    /// Construct an iterator which returns powers of `self` shifted by `start: start, start*self^1, start*self^2, ...`.
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
             base: self.clone(),
@@ -221,10 +221,19 @@ pub trait FieldAlgebra:
         }
     }
 
+    /// Construct an iterator which returns powers of `self` packed into `PackedField` elements.
+    ///
+    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
+    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
     fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
         self.shifted_powers_packed(Self::ONE)
     }
 
+    /// Construct an iterator which returns powers of `self` shifted by start
+    /// and packed into `PackedField` elements.
+    ///
+    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
+    /// `[start, start*self, start*self^2, start*self^3], [start*self^4, start*self^5, start*self^6, start*self^7], ...`.
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(&self, start: Self) -> Powers<P> {
         let mut current = P::from_f(start);
         let slice = current.as_slice_mut();
@@ -526,7 +535,7 @@ pub trait TwoAdicField: Field {
     fn two_adic_generator(bits: usize) -> Self;
 }
 
-/// An iterator over the powers of a base element `b`: `c, c * b, c * b^2, ...`.
+/// An iterator which returns the powers of a base element `b` shifted by current `c`: `c, c * b, c * b^2, ...`.
 #[derive(Clone, Debug)]
 pub struct Powers<F> {
     pub base: F,
