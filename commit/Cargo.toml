@@ -5,10 +5,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-test-utils = ["dep:p3-dft"]
+default = ["test-utils"]
+test-utils = ["p3-challenger", "p3-dft"]
 
 [dependencies]
-p3-challenger.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-util.workspace = true
@@ -17,8 +17,10 @@ itertools.workspace = true
 serde.workspace = true
 
 # for testing
+p3-challenger = { workspace = true, optional = true }
 p3-dft = { workspace = true, optional = true }
 
 [dev-dependencies]
+p3-challenger.workspace = true
 p3-dft.workspace = true
 rand.workspace = true

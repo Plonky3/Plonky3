@@ -20,7 +20,6 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
-p3-poseidon.workspace = true
 rand = { workspace = true, features = ["min_const_gen"] }
 criterion.workspace = true
 
