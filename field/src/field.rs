@@ -18,6 +18,38 @@ use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
 /// A commutative ring.
+///
+/// The is the a basic building block trait which implements addition and multiplication.
+/// Examples of structs which should implement this trait are structs containing
+///
+/// - A single finite field element.
+/// - A symbolic expression which may be evaluated to a finite field element.
+/// - an array of finite field elements.
+///
+/// In practice every struct which implements this is expected to also implement PrimeCharacteristicRing.
+///
+/// ### Mathematical Description
+///
+/// Mathematically a commutative ring is an algebraic structure with two operations Addition `+`
+/// and Multiplication `*` which satisfy a collection of properties. For ease of writing, in what follows
+/// let `x, y, z` denote arbitrary elements of the ring.
+///
+/// Both operations must be:
+///
+/// Commutative => `x + y = y + x` and `x*y = y*x`
+///
+/// Associative => `x + (y + z) = (x + y) + z` and `x*(y*z) = (x*y)*z`
+///
+/// Unital      => There exists identity elements `ZERO` and `ONE` respectively meaning
+///                `x + ZERO = x` and `x * ONE = x`.
+///
+/// In addition to the above, Addition must be invertible. Meaning for any `x` there exists
+/// a unique inverse `(-x)` satisfying `x + (-x) = ZERO`.
+///
+/// Finally, the operations must satisfy the distributive property:
+/// `x * (y + z) = (x*y) + (x*z)`.
+///
+/// The simplest examples of commutative rings are the integers (`ℤ`), and the integers mod `N` (`ℤ/N`).
 pub trait CommutativeRing:
     Sized
     + Default
@@ -35,18 +67,18 @@ pub trait CommutativeRing:
 {
     /// The additive identity of the ring.
     ///
-    /// For every element `a` in the ring we require the following properties:
+    /// For every element `x` in the ring we require the following properties:
     ///
-    /// `a + ZERO = ZERO + a = a,`
+    /// `x + ZERO = ZERO + x = x,`
     ///
-    /// `a + (-a) = (-a) + a = ZERO.`
+    /// `x + (-x) = (-x) + x = ZERO.`
     const ZERO: Self;
 
     /// The multiplicative identity of the ring
     ///
-    /// For every element `a` in the ring we require the following property:
+    /// For every element `x` in the ring we require the following property:
     ///
-    /// `a*ONE = ONE*a = a.`
+    /// `x*ONE = ONE*x = x.`
     const ONE: Self;
 
     /// The elementary function `double(a) = 2*a`.
@@ -89,6 +121,20 @@ pub trait CommutativeRing:
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
 
+    /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
+    #[must_use]
+    fn powers(&self) -> Powers<Self> {
+        self.shifted_powers(Self::ONE)
+    }
+
+    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
+    fn shifted_powers(&self, start: Self) -> Powers<Self> {
+        Powers {
+            base: self.clone(),
+            current: start,
+        }
+    }
+
     /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
     /// before assigning them to a userspace process. In that case, our process should not need to
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.
@@ -104,7 +150,20 @@ pub trait CommutativeRing:
 
 /// A commutative ring `(R)` with prime characteristic `(p)`.
 ///
+/// Whilst many rings with other characteristics exist, we expect every struct here
+/// which implements CommutativeRing to also implement PrimeCharacteristicRing.
+///
+/// This struct provides a collection of convenience methods allowing elements of
+/// simple integer classes `bool, u8, ...` to be converted into ring elements. These
+/// should generally be used in non performance critical locations. In particular,
+/// any computations which can be performed in the field `ℤ/p` should be as this
+/// will be faster than computing them in the ring.
+///
+/// ### Mathematical Description
+///
 /// The characteristic is the unique smallest integer `r > 0` such that `0 = r . 1 = 1 + 1 + ... + 1 (r times)`.
+/// For example, the characteristic of the modulo ring `ℤ/N` is `N`.
+///
 /// When the characteristic is prime, the ring `R` becomes an algebra over the field `ℤ/p` (Integers mod p).
 pub trait PrimeCharacteristicRing: CommutativeRing {
     /// The field `ℤ/p`.
@@ -112,9 +171,10 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
 
     /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
-    /// Given any integer `r ∈ ℤ`, `from_char(r mod p)` will be equal to:
+    /// Given any element `r ∈ ℤ/p`, represented as an integer between `0` and `p - 1`
+    /// `from_char(r)` will be equal to:
     ///
-    /// `Self::ONE + ... + Self::ONE (r mod p times)`
+    /// `Self::ONE + ... + Self::ONE (r times)`
     fn from_char(f: Self::Char) -> Self;
 
     /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
@@ -132,6 +192,8 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
     ///
     /// Note that the output only depends on `r mod p`.
+    ///
+    /// This should be avoided in performance critical locations.
     fn from_u8(int: u8) -> Self {
         Self::from_char(Self::Char::from_int(int))
     }
@@ -140,8 +202,9 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     ///
     /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
     ///
-    /// Note that the output only depends on `r mod p`.
-    fn from_u16(int: u8) -> Self {
+    ///
+    /// This should be avoided in performance critical locations.
+    fn from_u16(int: u16) -> Self {
         Self::from_char(Self::Char::from_int(int))
     }
 
@@ -150,7 +213,9 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
     ///
     /// Note that the output only depends on `r mod p`.
-    fn from_u32(int: u8) -> Self {
+    ///
+    /// This should be avoided in performance critical locations.
+    fn from_u32(int: u32) -> Self {
         Self::from_char(Self::Char::from_int(int))
     }
 
@@ -159,7 +224,9 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
     ///
     /// Note that the output only depends on `r mod p`.
-    fn from_u64(int: u8) -> Self {
+    ///
+    /// This should be avoided in performance critical locations.
+    fn from_u64(int: u64) -> Self {
         Self::from_char(Self::Char::from_int(int))
     }
 
@@ -168,7 +235,9 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
     ///
     /// Note that the output only depends on `r mod p`.
-    fn from_usize(int: u8) -> Self {
+    ///
+    /// This should be avoided in performance critical locations.
+    fn from_usize(int: usize) -> Self {
         Self::from_char(Self::Char::from_int(int))
     }
 
@@ -218,6 +287,13 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
         self.clone() * Self::from_char(Self::Char::TWO.inverse())
     }
 
+    // Q: Can these methods be changed to accept u8 or smaller?
+    // To what extent do we actually need to support multiplication
+    // by 2^exp for large exp?
+
+    // These are also basically unused though they are probably worth keeping around
+    // as they could be helpful in a couple of places.
+
     /// Multiply by a given power of two. `mul_2exp_u64(a, exp) = 2^exp * a`
     #[must_use]
     #[inline]
@@ -235,12 +311,24 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     }
 }
 
-pub trait PermutationMonomial<const N: usize> {
-    // TODO!!
+/// A ring should implement InjectiveMonomial<N> if the algebraic function
+/// `f(x) = x^N` is an injective map on elements of the ring.
+///
+/// We do not enforce that this map be invertible as there are useful
+/// cases such as polynomials or symbolic expressions where no inverse exists.
+///
+/// However if the ring is a field with order `q` or an array of such field elements,
+/// then `f(x) = x^N` will be injective if and only if it is invertible and so in
+/// such cases this monomial acts as a permutation. Moreover, this will occur
+/// exactly when `N` and `q - 1` are relatively prime i.e. `gcd(N, q - 1) = 1`.
+pub trait InjectiveMonomial<const N: u64> {
+    fn injective_monomial(&self) -> Self;
 }
 
-pub trait PermutaitonMonomialInverse {
-    // TODO!!
+/// A ring should implement PermutationMonomial<N> if the algebraic function
+/// `f(x) = x^N` is invertible and thus acts as a permutation on elements of the ring.
+pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
+    fn monomial_inverse(&self) -> Self;
 }
 
 /// A commutative algebra over a finite field.
@@ -257,58 +345,18 @@ pub trait PermutaitonMonomialInverse {
 /// respectively). Furthermore, multiplication must distribute over
 /// addition. Finally, the scalar multiplication must be realized by
 /// a ring homomorphism from the field to the algebra.
-pub trait FieldAlgebra: PrimeCharacteristicRing {
-    type F: Field;
-
+pub trait FieldAlgebra<F: Field>: PrimeCharacteristicRing {
     /// Interpret a field element as a commutative algebra element.
     ///
     /// Mathematically speaking, this map is a ring homomorphism from the base field
     /// to the commutative algebra. The existence of this map makes this structure
     /// an algebra and not simply a commutative ring.
-    fn from_f(f: Self::F) -> Self;
-
-    // TODO: Move to either Field or Commutative Ring.
-
-    /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
-    #[must_use]
-    fn powers(&self) -> Powers<Self> {
-        self.shifted_powers(Self::ONE)
-    }
-
-    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
-    fn shifted_powers(&self, start: Self) -> Powers<Self> {
-        Powers {
-            base: self.clone(),
-            current: start,
-        }
-    }
-
-    // TODO: Mover these to Field.
-
-    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
-        self.shifted_powers_packed(Self::ONE)
-    }
-
-    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
-        &self,
-        start: Self,
-    ) -> PackedPowers<Self, P> {
-        let mut current = P::from_f(start);
-        let slice = current.as_slice_mut();
-        for i in 1..P::WIDTH {
-            slice[i] = slice[i - 1].clone() * self.clone();
-        }
-
-        PackedPowers {
-            multiplier: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
-            current,
-        }
-    }
+    fn from_f(f: F) -> Self;
 }
 
 /// An element of a finite field.
 pub trait Field:
-    FieldAlgebra<F = Self>
+    PrimeCharacteristicRing
     + Packable
     + 'static
     + Copy
@@ -365,7 +413,14 @@ pub trait Field:
     }
 }
 
-/// Implementation of the quotient map `r → r mod p`.
+/// Every field is trivially a field algebra over itself.
+impl<F: Field> FieldAlgebra<F> for F {
+    fn from_f(f: F) -> Self {
+        f
+    }
+}
+
+/// Implementation of the quotient map `ℤ -> ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
 pub trait QuotientMap<Int>: Sized {
     /// Convert a given integer into an element of the field `ℤ/p`.
     ///   
@@ -487,19 +542,24 @@ pub trait PrimeField32: PrimeField64 {
 /// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
 /// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
 /// product is over `F`.
-pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
-    FieldAlgebra
-    + From<Base>
-    + Add<Base, Output = Self>
-    + AddAssign<Base>
-    + Sub<Base, Output = Self>
-    + SubAssign<Base>
-    + Mul<Base, Output = Self>
-    + MulAssign<Base>
+pub trait FieldExtensionAlgebra<
+    BaseField: Field,
+    BaseRing: FieldAlgebra<BaseField>,
+    ExtField: ExtensionField<BaseField>,
+>:
+    FieldAlgebra<BaseField>
+    + FieldAlgebra<ExtField>
+    + From<BaseRing>
+    + Add<BaseRing, Output = Self>
+    + AddAssign<BaseRing>
+    + Sub<BaseRing, Output = Self>
+    + SubAssign<BaseRing>
+    + Mul<BaseRing, Output = Self>
+    + MulAssign<BaseRing>
 {
     const D: usize;
 
-    fn from_base(b: Base) -> Self;
+    fn from_base(b: BaseRing) -> Self;
 
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
@@ -512,12 +572,12 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different f might have been used.
-    fn from_base_slice(bs: &[Base]) -> Self;
+    fn from_base_slice(bs: &[BaseRing]) -> Self;
 
     /// Similar to `core:array::from_fn`, with the same caveats as
     /// `from_base_slice`.
-    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
-    fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
+    fn from_base_fn<F: FnMut(usize) -> BaseRing>(f: F) -> Self;
+    fn from_base_iter<I: Iterator<Item = BaseRing>>(iter: I) -> Self;
 
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
@@ -531,7 +591,7 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different f might have been used.
-    fn as_base_slice(&self) -> &[Base];
+    fn as_base_slice(&self) -> &[BaseRing];
 
     /// Suppose this field extension is represented by the quotient
     /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
@@ -548,14 +608,14 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     /// different f might have been used.
     fn monomial(exponent: usize) -> Self {
         assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::ZERO; Self::D];
-        vec[exponent] = Base::ONE;
+        let mut vec = vec![BaseRing::ZERO; Self::D];
+        vec[exponent] = BaseRing::ONE;
         Self::from_base_slice(&vec)
     }
 }
 
-pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
-    type ExtensionPacking: FieldExtensionAlgebra<Base::Packing, F = Self>
+pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base, Base, Self> {
+    type ExtensionPacking: FieldExtensionAlgebra<Base, Base::Packing, Self>
         + 'static
         + Copy
         + Send
@@ -593,7 +653,7 @@ impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
 }
 
-impl<FA: FieldAlgebra> FieldExtensionAlgebra<FA> for FA {
+impl<F: Field, FA: FieldAlgebra<F>> FieldExtensionAlgebra<F, FA, F> for FA {
     const D: usize = 1;
 
     fn from_base(b: FA) -> Self {
@@ -609,7 +669,7 @@ impl<FA: FieldAlgebra> FieldExtensionAlgebra<FA> for FA {
         iter.next().unwrap()
     }
 
-    fn from_base_fn<F: FnMut(usize) -> FA>(mut f: F) -> Self {
+    fn from_base_fn<Fn: FnMut(usize) -> FA>(mut f: Fn) -> Self {
         f(0)
     }
 
@@ -638,30 +698,12 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<FA: FieldAlgebra> Iterator for Powers<FA> {
-    type Item = FA;
+impl<CR: CommutativeRing> Iterator for Powers<CR> {
+    type Item = CR;
 
-    fn next(&mut self) -> Option<FA> {
+    fn next(&mut self) -> Option<CR> {
         let result = self.current.clone();
         self.current *= self.base.clone();
-        Some(result)
-    }
-}
-
-/// like `Powers`, but packed into `PackedField` elements
-#[derive(Clone, Debug)]
-pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
-    // base ** P::WIDTH
-    pub multiplier: P,
-    pub current: P,
-}
-
-impl<FA: FieldAlgebra, P: PackedField<Scalar = FA>> Iterator for PackedPowers<FA, P> {
-    type Item = P;
-
-    fn next(&mut self) -> Option<P> {
-        let result = self.current;
-        self.current *= self.multiplier;
         Some(result)
     }
 }

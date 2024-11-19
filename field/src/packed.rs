@@ -130,7 +130,7 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: FieldAlgebra<F = Self::Scalar>
+pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     + From<Self::Scalar>
     + Add<Self::Scalar, Output = Self>
