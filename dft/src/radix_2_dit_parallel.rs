@@ -70,7 +70,7 @@ fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<
         .map(|layer| {
             let shift_power = shift.exp_power_of_2(layer);
             let powers = Powers {
-                base: root.exp_power_of_2(layer),
+                multiplier: root.exp_power_of_2(layer),
                 current: shift_power,
             };
             let mut twiddles: Vec<_> = powers.take(h >> (layer + 1)).collect();

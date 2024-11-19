@@ -216,26 +216,23 @@ pub trait FieldAlgebra:
     /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
-            base: self.clone(),
+            multiplier: self.clone(),
             current: start,
         }
     }
 
-    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
+    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
         self.shifted_powers_packed(Self::ONE)
     }
 
-    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
-        &self,
-        start: Self,
-    ) -> PackedPowers<Self, P> {
+    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(&self, start: Self) -> Powers<P> {
         let mut current = P::from_f(start);
         let slice = current.as_slice_mut();
         for i in 1..P::WIDTH {
             slice[i] = slice[i - 1].clone() * self.clone();
         }
 
-        PackedPowers {
+        Powers {
             multiplier: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
             current,
         }
@@ -469,7 +466,7 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
         }
     }
 
-    fn ext_powers_packed(&self) -> impl Iterator<Item = Self::ExtensionPacking> {
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
         let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
         // Transpose first WIDTH powers
         let current = Self::ExtensionPacking::from_base_fn(|i| {
@@ -480,7 +477,10 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
             Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
         });
 
-        core::iter::successors(Some(current), move |&current| Some(current * multiplier))
+        Powers {
+            multiplier,
+            current,
+        }
     }
 }
 
@@ -526,10 +526,10 @@ pub trait TwoAdicField: Field {
     fn two_adic_generator(bits: usize) -> Self;
 }
 
-/// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
+/// An iterator over the powers of a base element `b`: `c, c * b, c * b^2, ...`.
 #[derive(Clone, Debug)]
 pub struct Powers<F> {
-    pub base: F,
+    pub multiplier: F,
     pub current: F,
 }
 
@@ -538,25 +538,7 @@ impl<FA: FieldAlgebra> Iterator for Powers<FA> {
 
     fn next(&mut self) -> Option<FA> {
         let result = self.current.clone();
-        self.current *= self.base.clone();
-        Some(result)
-    }
-}
-
-/// like `Powers`, but packed into `PackedField` elements
-#[derive(Clone, Debug)]
-pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
-    // base ** P::WIDTH
-    pub multiplier: P,
-    pub current: P,
-}
-
-impl<FA: FieldAlgebra, P: PackedField<Scalar = FA>> Iterator for PackedPowers<FA, P> {
-    type Item = P;
-
-    fn next(&mut self) -> Option<P> {
-        let result = self.current;
-        self.current *= self.multiplier;
+        self.current *= self.multiplier.clone();
         Some(result)
     }
 }

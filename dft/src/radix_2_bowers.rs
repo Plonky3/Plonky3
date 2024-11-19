@@ -58,7 +58,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         // - divide by height (since we're doing an inverse DFT)
         // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
         let weights = Powers {
-            base: shift,
+            multiplier: shift,
             current: h_inv,
         }
         .take(h);
