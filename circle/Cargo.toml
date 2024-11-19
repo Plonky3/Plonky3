@@ -14,9 +14,9 @@ p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
 
-tracing = "0.1.37"
-itertools = "0.13.0"
-serde = "1"
+tracing.workspace = true
+itertools.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
@@ -26,13 +26,13 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 
-hashbrown = "0.15.0"
-rand = "0.8.5"
-rand_chacha = "0.3.1"
-criterion = "0.5.1"
+hashbrown.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+criterion.workspace = true
 
-tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
-tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
 [[bench]]
 name = "cfft"

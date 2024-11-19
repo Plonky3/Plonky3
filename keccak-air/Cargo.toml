@@ -10,7 +10,7 @@ p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
-tracing = "0.1.37"
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
@@ -32,9 +32,9 @@ p3-poseidon2 = { path = "../poseidon2" }
 p3-sha256 = { path = "../sha256" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
-rand = "0.8.5"
-tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
-tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
+rand.workspace = true
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]

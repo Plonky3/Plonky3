@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 nightly-features = []
 
 [dependencies]
-itertools = "0.13.0"
+itertools.workspace = true
 p3-dft = { path = "../dft" }
 p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
@@ -17,8 +17,8 @@ p3-mds = { path = "../mds" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
-num-bigint = { version = "0.4.3", default-features = false }
-rand = "0.8.5"
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-tracing = "0.1.37"
-transpose = "0.2.3"
+num-bigint.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tracing.workspace = true
+transpose.workspace = true

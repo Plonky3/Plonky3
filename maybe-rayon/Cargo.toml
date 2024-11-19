@@ -9,4 +9,4 @@ edition = "2021"
 parallel = ["rayon"]
 
 [dependencies]
-rayon = { version = "1.7.0", optional = true }
+rayon = { workspace = true, optional = true }

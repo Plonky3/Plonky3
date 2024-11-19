@@ -13,11 +13,11 @@ nightly-features = [
 ]
 
 [dependencies]
-gcd = "2.3.0"
+gcd.workspace = true
 p3-field = { path = "../field" }
 p3-symmetric = { path = "../symmetric" }
 p3-mds = { path = "../mds" }
-rand = { version = "0.8.5", features = ["min_const_gen"] }
+rand = { workspace = true, features = ["min_const_gen"] }
 
 [dev-dependencies]
 p3-mersenne-31 = { path = "../mersenne-31" }
@@ -26,7 +26,7 @@ p3-koala-bear = { path = "../koala-bear" }
 p3-bn254-fr = { path = "../bn254-fr" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-util = { path = "../util" }
-criterion = "0.5.1"
+criterion.workspace = true
 
 [[bench]]
 name = "poseidon2"

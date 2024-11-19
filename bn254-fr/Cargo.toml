@@ -9,19 +9,19 @@ p3-field = { path = "../field" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 
-ff = { version = "0.13", features = ["derive", "derive_bits"] }
-num-bigint = { version = "0.4.3", default-features = false }
-rand = "0.8.5"
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-halo2curves = { version = "0.7.0", features = ["bits", "derive_serde"] }
+ff = { workspace = true, features = ["derive", "derive_bits"] }
+num-bigint.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+halo2curves = { workspace = true, features = ["bits", "derive_serde"] }
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
 
-criterion = "0.5.1"
-num-traits = "0.2.16"
-serde_json = "1.0.113"
-zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
+criterion.workspace = true
+num-traits.workspace = true
+serde_json.workspace = true
+zkhash.workspace = true
 
 [features]
 default = []

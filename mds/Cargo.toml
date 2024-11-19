@@ -10,11 +10,11 @@ p3-field = { path = "../field" }
 p3-matrix = { path = "../matrix" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
-rand = { version = "0.8.5", features = ["min_const_gen"] }
-itertools = "0.13.0"
+rand = { workspace = true, features = ["min_const_gen"] }
+itertools.workspace = true
 
 [dev-dependencies]
-criterion = "0.5.1"
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }

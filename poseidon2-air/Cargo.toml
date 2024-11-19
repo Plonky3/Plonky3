@@ -11,8 +11,8 @@ p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-util = { path = "../util" }
-rand = "0.8.5"
-tracing = "0.1.37"
+rand.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
@@ -29,8 +29,8 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-monty-31 = { path = "../monty-31" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
-tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
-tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

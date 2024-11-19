@@ -14,15 +14,15 @@ p3-mds = { path = "../mds" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
 p3-poseidon2 = { path = "../poseidon2" }
-num-bigint = { version = "0.4.3", default-features = false }
-rand = "0.8.5"
-serde = { version = "1.0", default-features = false, features = ["derive"] }
+num-bigint.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
 p3-poseidon = { path = "../poseidon" }
-rand = { version = "0.8.5", features = ["min_const_gen"] }
-criterion = "0.5.1"
+rand = { workspace = true, features = ["min_const_gen"] }
+criterion.workspace = true
 
 [[bench]]
 name = "bench_field"

@@ -5,23 +5,23 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-gcd = "2.3.0"
-itertools = "0.13.0"
-modinverse = "0.1.1"
-num = "0.4.0"
-num-integer = "0.1.45"
+gcd.workspace = true
+itertools.workspace = true
+modinverse.workspace = true
+num.workspace = true
+num-integer.workspace = true
 p3-field = { path = "../field" }
 p3-mds = { path = "../mds" }
 p3-symmetric = { path = "../symmetric" }
 p3-util = { path = "../util" }
-rand = "0.8.5"
-sha3 = "0.10.8"
+rand.workspace = true
+sha3.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
-criterion = "0.5.1"
+criterion.workspace = true
 
 [[bench]]
 name = "rescue"

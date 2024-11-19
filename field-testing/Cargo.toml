@@ -8,11 +8,11 @@ license = "MIT OR Apache-2.0"
 p3-dft = { path="../dft" }
 p3-field = { path = "../field" }
 p3-matrix = { path="../matrix" }
-rand = { version = "0.8.5", features = ["min_const_gen"] }
-rand_chacha = "0.3.1"
-criterion = "0.5.1"
-num-bigint = { version = "0.4.3", default-features = false }
-num-traits = "0.2.19"
+rand = { workspace = true, features = ["min_const_gen"] }
+rand_chacha.workspace = true
+criterion.workspace = true
+num-bigint.workspace = true
+num-traits.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

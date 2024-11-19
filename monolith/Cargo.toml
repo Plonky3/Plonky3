@@ -5,15 +5,15 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-generic-array = "1.0"
+generic-array.workspace = true
 p3-field = { path = "../field" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-mds = { path = "../mds" }
 p3-symmetric = { path = "../symmetric" }
-sha3 = "0.10"
+sha3.workspace = true
 
 [dev-dependencies]
-criterion = "0.5.1"
+criterion.workspace = true
 
 [[bench]]
 name = "permute"

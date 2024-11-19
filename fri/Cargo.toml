@@ -13,10 +13,10 @@ p3-interpolation = { path = "../interpolation" }
 p3-matrix = { path = "../matrix" }
 p3-maybe-rayon = { path = "../maybe-rayon" }
 p3-util = { path = "../util" }
-itertools = "0.13.0"
-rand = "0.8.5"
-tracing = "0.1.37"
-serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+itertools.workspace = true
+rand.workspace = true
+tracing.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
@@ -29,8 +29,8 @@ p3-mds = { path = "../mds" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
-criterion = "0.5.1"
-rand_chacha = "0.3.1"
+criterion.workspace = true
+rand_chacha.workspace = true
 
 [[bench]]
 name = "fold_even_odd"
