@@ -32,7 +32,7 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
             .map(|layer| {
                 let shift_power = coset_shift.exp_power_of_2(layer);
                 let powers = Powers {
-                    multiplier: root.exp_power_of_2(layer),
+                    base: root.exp_power_of_2(layer),
                     current: shift_power,
                 };
                 let mut twiddles: Vec<_> = powers.take(N >> (layer + 1)).collect();

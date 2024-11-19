@@ -216,7 +216,7 @@ pub trait FieldAlgebra:
     /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
-            multiplier: self.clone(),
+            base: self.clone(),
             current: start,
         }
     }
@@ -233,7 +233,7 @@ pub trait FieldAlgebra:
         }
 
         Powers {
-            multiplier: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
+            base: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
             current,
         }
     }
@@ -478,7 +478,7 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
         });
 
         Powers {
-            multiplier,
+            base: multiplier,
             current,
         }
     }
@@ -529,7 +529,7 @@ pub trait TwoAdicField: Field {
 /// An iterator over the powers of a base element `b`: `c, c * b, c * b^2, ...`.
 #[derive(Clone, Debug)]
 pub struct Powers<F> {
-    pub multiplier: F,
+    pub base: F,
     pub current: F,
 }
 
@@ -538,7 +538,7 @@ impl<FA: FieldAlgebra> Iterator for Powers<FA> {
 
     fn next(&mut self) -> Option<FA> {
         let result = self.current.clone();
-        self.current *= self.multiplier.clone();
+        self.current *= self.base.clone();
         Some(result)
     }
 }
