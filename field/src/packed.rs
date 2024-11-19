@@ -2,8 +2,7 @@ use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
-use crate::field::Field;
-use crate::FieldAlgebra;
+use crate::{FieldAlgebra, PrimeCharacteristicRing, PrimeField};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -130,6 +129,7 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
+/// [F; WIDTH]
 pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     + From<Self::Scalar>
@@ -142,7 +142,7 @@ pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {
-    type Scalar: Field;
+    type Scalar: PrimeField;
 }
 
 /// # Safety
@@ -185,6 +185,29 @@ pub unsafe trait PackedFieldPow2: PackedField {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 
+/// [[F; WIDTH]; Algebra WIDTH]
+pub unsafe trait PackedFieldAlgebra:
+    FieldAlgebra<<Self::BasePackedField as PackedField>::Scalar>
+    + From<Self::BaseAlgebra>
+    + Add<Self::BaseAlgebra, Output = Self>
+    + Add<Self::BasePackedField, Output = Self>
+    + AddAssign<Self::BaseAlgebra>
+    + AddAssign<Self::BasePackedField>
+    + Sub<Self::BaseAlgebra, Output = Self>
+    + Sub<Self::BasePackedField, Output = Self>
+    + SubAssign<Self::BaseAlgebra>
+    + SubAssign<Self::BasePackedField>
+    + Mul<Self::BaseAlgebra, Output = Self>
+    + Mul<Self::BasePackedField, Output = Self>
+    + MulAssign<Self::BaseAlgebra>
+    + MulAssign<Self::BasePackedField>
+{
+    type BasePackedField: PackedField;
+    type BaseAlgebra: PrimeCharacteristicRing<Char = <Self::BasePackedField as PackedField>::Scalar>;
+
+    // fn from_base_field()
+}
+
 unsafe impl<T: Packable> PackedValue for T {
     type Value = Self;
 
@@ -214,11 +237,11 @@ unsafe impl<T: Packable> PackedValue for T {
     }
 }
 
-unsafe impl<F: Field> PackedField for F {
+unsafe impl<F: PrimeField> PackedField for F {
     type Scalar = Self;
 }
 
-unsafe impl<F: Field> PackedFieldPow2 for F {
+unsafe impl<F: PrimeField> PackedFieldPow2 for F {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         match block_len {
             1 => (*self, other),

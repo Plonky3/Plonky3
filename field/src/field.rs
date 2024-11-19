@@ -470,7 +470,6 @@ pub trait QuotientMap<Int>: Sized {
 pub trait PrimeField:
     Field
     + Ord
-    + QuotientMap<bool>
     + QuotientMap<u8>
     + QuotientMap<u16>
     + QuotientMap<u32>
@@ -484,6 +483,8 @@ pub trait PrimeField:
     + QuotientMap<i128>
     + QuotientMap<isize>
 {
+    // TODO: Decide if these should be put into Commutative Ring.
+
     /// The field element 2 mod p.
     ///
     /// This is provided as a convenience as `TWO` occurs regularly in
