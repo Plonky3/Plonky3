@@ -475,6 +475,10 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
         }
     }
 
+    /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
+    ///
+    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
+    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
     fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
         let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
         // Transpose first WIDTH powers
