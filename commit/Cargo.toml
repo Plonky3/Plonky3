@@ -8,17 +8,17 @@ license = "MIT OR Apache-2.0"
 test-utils = ["dep:p3-dft"]
 
 [dependencies]
-p3-challenger = { path = "../challenger" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-util = { path = "../util" }
+p3-challenger.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-util.workspace = true
 
 itertools.workspace = true
 serde.workspace = true
 
 # for testing
-p3-dft = { path = "../dft", optional = true }
+p3-dft = { workspace = true, optional = true }
 
 [dev-dependencies]
-p3-dft = { path = "../dft" }
+p3-dft.workspace = true
 rand.workspace = true

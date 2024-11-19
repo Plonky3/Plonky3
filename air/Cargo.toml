@@ -5,8 +5,8 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
+p3-field.workspace = true
+p3-matrix.workspace = true
 
 [dev-dependencies]
-p3-matrix = { path = "../matrix" }
+p3-matrix.workspace = true

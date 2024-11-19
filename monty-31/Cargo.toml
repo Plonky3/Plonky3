@@ -9,14 +9,14 @@ nightly-features = []
 
 [dependencies]
 itertools.workspace = true
-p3-dft = { path = "../dft" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-mds = { path = "../mds" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
+p3-dft.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-mds.workspace = true
+p3-poseidon2.workspace = true
+p3-symmetric.workspace = true
+p3-util.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }

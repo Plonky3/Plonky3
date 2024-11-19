@@ -8,19 +8,19 @@ license = "MIT OR Apache-2.0"
 nightly-features = []
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-dft = { path = "../dft" }
-p3-mds = { path = "../mds" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
-p3-poseidon2 = { path = "../poseidon2" }
+p3-field.workspace = true
+p3-dft.workspace = true
+p3-mds.workspace = true
+p3-symmetric.workspace = true
+p3-util.workspace = true
+p3-poseidon2.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-p3-field-testing = { path = "../field-testing" }
-p3-poseidon = { path = "../poseidon" }
+p3-field-testing.workspace = true
+p3-poseidon.workspace = true
 rand = { workspace = true, features = ["min_const_gen"] }
 criterion.workspace = true
 
