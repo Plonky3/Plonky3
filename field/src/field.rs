@@ -571,11 +571,11 @@ unsafe impl<PF: PackedField> PackedFieldExtension for PF {
     type BaseField = PF::Scalar;
     type ExtField = PF::Scalar;
 
-    fn from_slice(ext_vec: &[Self::ExtField]) -> Vec<Self> {
+    fn from_ext_slice(ext_vec: &[Self::ExtField]) -> Vec<Self> {
         ext_vec.to_vec()
     }
 
-    fn to_slice(packed_vec: &[Self]) -> Vec<Self::ExtField> {
+    fn to_ext_slice(packed_vec: &[Self]) -> Vec<Self::ExtField> {
         packed_vec.to_vec()
     }
 }

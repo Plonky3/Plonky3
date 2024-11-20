@@ -221,11 +221,11 @@ pub unsafe trait PackedFieldExtension:
     type BaseField: Field;
     type ExtField: ExtensionField<Self::BaseField>;
 
-    fn from_slice(ext_vec: &[Self::ExtField]) -> Vec<Self>;
+    fn from_ext_slice(ext_vec: &[Self::ExtField]) -> Vec<Self>;
 
     // TODO: Do we need from iterator/from_fns as well?
 
-    fn to_slice(packed_vec: &[Self]) -> Vec<Self::ExtField>;
+    fn to_ext_slice(packed_vec: &[Self]) -> Vec<Self::ExtField>;
 }
 
 unsafe impl<T: Packable> PackedValue for T {
