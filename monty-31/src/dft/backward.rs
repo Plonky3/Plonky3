@@ -25,13 +25,13 @@ fn backward_butterfly_interleaved<const HALF_RADIX: usize, T: PackedFieldPow2>(
     y: T,
     roots: T,
 ) -> (T, T) {
-    let (a, b) = x.interleave(y, HALF_RADIX);
-    let (a, b) = backward_butterfly(a, b, roots);
-    a.interleave(b, HALF_RADIX)
+    let (x, y) = x.interleave(y, HALF_RADIX);
+    let (x, y) = backward_butterfly(x, y, roots);
+    x.interleave(y, HALF_RADIX)
 }
 
 #[inline]
-fn backward_iterative_layer_1<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Scalar]) {
+fn backward_iterative_layer_0<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Scalar]) {
     let packed_roots = T::pack_slice(roots);
     let n = input.len();
     let (xs, ys) = unsafe { input.split_at_mut_unchecked(n / 2) };
@@ -41,7 +41,7 @@ fn backward_iterative_layer_1<T: PackedFieldPow2>(input: &mut [T], roots: &[T::S
 }
 
 #[inline]
-fn backward_iterative_layer_2<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Scalar]) {
+fn backward_iterative_layer_1<T: PackedFieldPow2>(input: &mut [T], roots: &[T::Scalar]) {
     let packed_roots = T::pack_slice(roots);
     let n = input.len();
     let (top_half, bottom_half) = unsafe { input.split_at_mut_unchecked(n / 2) };
@@ -55,7 +55,7 @@ fn backward_iterative_layer_2<T: PackedFieldPow2>(input: &mut [T], roots: &[T::S
 }
 
 #[inline]
-fn backward_iterative_radix_r<const HALF_RADIX: usize, T: PackedFieldPow2>(
+fn backward_iterative_packed<const HALF_RADIX: usize, T: PackedFieldPow2>(
     input: &mut [T],
     roots: &[T::Scalar],
 ) {
@@ -71,7 +71,7 @@ fn backward_iterative_radix_r<const HALF_RADIX: usize, T: PackedFieldPow2>(
 }
 
 #[inline]
-fn backward_iterative_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
+fn backward_iterative_packed_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
     input.chunks_exact_mut(2).for_each(|pair| {
         let x = pair[0];
         let y = pair[1];
@@ -87,6 +87,59 @@ fn backward_iterative_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Breadth-first DIT FFT for smallish vectors (must be >= 64)
     #[inline]
+    fn backward_iterative_layer(
+        packed_input: &mut [<Self as Field>::Packing],
+        roots: &[Self],
+        m: usize,
+    ) {
+        debug_assert_eq!(roots.len(), m);
+        let packed_roots = <Self as Field>::Packing::pack_slice(roots);
+
+        // lg_m >= 4, so m = 2^lg_m >= 2^4, hence packing_width divides m
+        let packed_m = m / <Self as Field>::Packing::WIDTH;
+        packed_input
+            .chunks_exact_mut(2 * packed_m)
+            .for_each(|layer_chunk| {
+                let (xs, ys) = unsafe { layer_chunk.split_at_mut_unchecked(packed_m) };
+
+                izip!(xs, ys, packed_roots)
+                    .for_each(|(x, y, &root)| (*x, *y) = backward_butterfly(*x, *y, root));
+            });
+    }
+
+    #[inline]
+    fn backward_iterative_packed_radix_16(input: &mut [<Self as Field>::Packing]) {
+        // Rather surprisingly, a version similar where the separate
+        // loops in each call to forward_iterative_packed() are
+        // combined into one, was not only not faster, but was
+        // actually a bit slower.
+
+        // Radix 2
+        backward_iterative_packed_radix_2(input);
+
+        // Radix 4
+        let roots4 = [MP::INV_ROOTS_8.as_ref()[0], MP::INV_ROOTS_8.as_ref()[2]];
+        if <Self as Field>::Packing::WIDTH >= 4 {
+            backward_iterative_packed::<2, _>(input, &roots4);
+        } else {
+            Self::backward_iterative_layer(input, &roots4, 2);
+        }
+
+        // Radix 8
+        if <Self as Field>::Packing::WIDTH >= 8 {
+            backward_iterative_packed::<4, _>(input, MP::INV_ROOTS_8.as_ref());
+        } else {
+            Self::backward_iterative_layer(input, MP::INV_ROOTS_8.as_ref(), 4);
+        }
+
+        // Radix 16
+        if <Self as Field>::Packing::WIDTH >= 16 {
+            backward_iterative_packed::<8, _>(input, MP::INV_ROOTS_16.as_ref());
+        } else {
+            Self::backward_iterative_layer(input, MP::INV_ROOTS_16.as_ref(), 8);
+        }
+    }
+
     fn backward_iterative(input: &mut [Self], root_table: &[Vec<Self>]) {
         let n = input.len();
         let lg_n = log2_strict_usize(n);
@@ -99,41 +152,32 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
 
-        backward_iterative_radix_2(packed_input); // lg_m = 0; s = lg_n - 1
-        backward_iterative_radix_r::<2, _>(packed_input, &root_table[lg_n - 2]); // lg_m = 1; s = lg_n - 2
-        backward_iterative_radix_r::<4, _>(packed_input, &root_table[lg_n - 3]); // lg_m = 2; s = lg_n - 3
-        backward_iterative_radix_r::<8, _>(packed_input, &root_table[lg_n - 4]); // lg_m = 3; s = lg_n - 4
+        // Start loop after doing radix 16 separately. This value is determined by the largest
+        // packing width we will encounter, which is 16 at the moment for AVX512. Specifically
+        // it is log_2(max{possible packing widths}) = lg(16) = 4.
+        const FIRST_LOOP_LAYER: usize = 4;
 
-        for lg_m in 4..(lg_n - 2) {
+        // How many layers have we specialised after the main loop
+        const NUM_SPECIALISATIONS: usize = 2;
+
+        // Needed to avoid overlap of the 2 specialisations at the start
+        // with the radix-16 specialisation at the end of the loop
+        assert!(lg_n >= FIRST_LOOP_LAYER + NUM_SPECIALISATIONS);
+
+        Self::backward_iterative_packed_radix_16(packed_input);
+
+        for lg_m in FIRST_LOOP_LAYER..(lg_n - NUM_SPECIALISATIONS) {
             let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
             let roots = &root_table[s];
             debug_assert_eq!(roots.len(), m);
-            let packed_roots = <Self as Field>::Packing::pack_slice(roots);
 
-            debug_assert!(packing_width <= n / (2 << s));
-            for i in 0..(1 << s) {
-                let offset = i << (lg_m + 1);
-
-                // lg_m >= 4, so offset = 2^e * i with e >= 5, hence
-                // packing_width divides offset
-                let offset = offset / packing_width;
-
-                // lg_m >= 4, so m = 2^lg_m >= 2^4, hence packing_width
-                // divides m
-                let m = m / packing_width;
-
-                let block = &mut packed_input[offset..];
-                let (xs, ys) = unsafe { block.split_at_mut_unchecked(m) };
-
-                izip!(xs, ys, packed_roots)
-                    .for_each(|(x, y, &root)| (*x, *y) = backward_butterfly(*x, *y, root));
-            }
+            Self::backward_iterative_layer(packed_input, roots, m);
         }
         // Specialise the last few iterations; improves performance a little.
-        backward_iterative_layer_2(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
-        backward_iterative_layer_1(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        backward_iterative_layer_1(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
+        backward_iterative_layer_0(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
     }
 
     #[inline(always)]
@@ -149,7 +193,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         if half_n >= <Self as Field>::Packing::WIDTH {
             let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
-            backward_iterative_layer_1(packed_input, roots);
+            backward_iterative_layer_0(packed_input, roots);
         } else {
             // Safe because 0 <= half_n < a.len()
             let (xs, ys) = unsafe { input.split_at_mut_unchecked(half_n) };
@@ -239,7 +283,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Assumes `a.len() > 8`
     #[inline]
     fn backward_fft_recur(input: &mut [Self], root_table: &[Vec<Self>]) {
-        const ITERATIVE_FFT_THRESHOLD: usize = 2048;
+        const ITERATIVE_FFT_THRESHOLD: usize = 1024;
 
         let n = input.len();
         if n <= ITERATIVE_FFT_THRESHOLD {
