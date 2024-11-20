@@ -3,7 +3,7 @@ use core::array;
 use core::ops::{AddAssign, Mul};
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{AbstractField, TwoAdicField};
+use p3_field::{FieldAlgebra, TwoAdicField};
 
 // NB: These are all MDS for M31, BabyBear and Goldilocks
 // const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
@@ -41,18 +41,18 @@ where
 /// NB: This function is a naive implementation of the n²
 /// evaluation. It is a placeholder until we have FFT implementations
 /// for all combinations of field and size.
-pub fn apply_circulant<AF: AbstractField, const N: usize>(
+pub fn apply_circulant<FA: FieldAlgebra, const N: usize>(
     circ_matrix: &[u64; N],
-    input: [AF; N],
-) -> [AF; N] {
-    let mut matrix: [AF; N] = circ_matrix.map(AF::from_canonical_u64);
+    input: [FA; N],
+) -> [FA; N] {
+    let mut matrix: [FA; N] = circ_matrix.map(FA::from_canonical_u64);
 
-    let mut output = array::from_fn(|_| AF::ZERO);
+    let mut output = array::from_fn(|_| FA::ZERO);
     for out_i in output.iter_mut().take(N - 1) {
-        *out_i = AF::dot_product(&matrix, &input);
+        *out_i = FA::dot_product(&matrix, &input);
         matrix.rotate_right(1);
     }
-    output[N - 1] = AF::dot_product(&matrix, &input);
+    output[N - 1] = FA::dot_product(&matrix, &input);
     output
 }
 

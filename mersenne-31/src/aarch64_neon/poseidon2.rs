@@ -1,46 +1,98 @@
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
+//! Eventually this will hold a vectorized Neon implementation of Poseidon2 for PackedMersenne31Neon
+//! Currently this is essentially a placeholder to allow compilation on Neon devices.
+//!
+//! Converting the AVX2/AVX512 code across to Neon is on the TODO list.
 
-use crate::{
-    DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31Neon, POSEIDON2_INTERNAL_MATRIX_DIAG_16,
-    POSEIDON2_INTERNAL_MATRIX_DIAG_24,
+use alloc::vec::Vec;
+
+use p3_poseidon2::{
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
+    InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-impl Permutation<[PackedMersenne31Neon; 16]> for DiffusionMatrixMersenne31 {
-    fn permute_mut(&self, state: &mut [PackedMersenne31Neon; 16]) {
-        matmul_internal::<Mersenne31, PackedMersenne31Neon, 16>(
-            state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_16,
-        );
+use crate::{
+    GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon,
+    MERSENNE31_S_BOX_DEGREE,
+};
+
+/// The internal layers of the Poseidon2 permutation.
+#[derive(Debug, Clone)]
+pub struct Poseidon2InternalLayerMersenne31 {
+    pub(crate) internal_constants: Vec<Mersenne31>,
+}
+
+/// The external layers of the Poseidon2 permutation.
+#[derive(Clone)]
+pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
+    pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
+}
+
+impl InternalLayerConstructor<PackedMersenne31Neon> for Poseidon2InternalLayerMersenne31 {
+    fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
+        Self { internal_constants }
     }
 }
 
-impl DiffusionPermutation<PackedMersenne31Neon, 16> for DiffusionMatrixMersenne31 {}
-
-impl Permutation<[PackedMersenne31Neon; 24]> for DiffusionMatrixMersenne31 {
-    fn permute_mut(&self, state: &mut [PackedMersenne31Neon; 24]) {
-        matmul_internal::<Mersenne31, PackedMersenne31Neon, 24>(
-            state,
-            POSEIDON2_INTERNAL_MATRIX_DIAG_24,
-        );
+impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31Neon, WIDTH>
+    for Poseidon2ExternalLayerMersenne31<WIDTH>
+{
+    fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
+        Self { external_constants }
     }
 }
 
-impl DiffusionPermutation<PackedMersenne31Neon, 24> for DiffusionMatrixMersenne31 {}
+impl<const WIDTH: usize, const D: u64> InternalLayer<PackedMersenne31Neon, WIDTH, D>
+    for Poseidon2InternalLayerMersenne31
+where
+    GenericPoseidon2LinearLayersMersenne31:
+        GenericPoseidon2LinearLayers<PackedMersenne31Neon, WIDTH>,
+{
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
+        self.internal_constants.iter().for_each(|&rc| {
+            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>(&mut state[0], rc);
+            GenericPoseidon2LinearLayersMersenne31::internal_linear_layer(state);
+        })
+    }
+}
+
+impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH, D>
+    for Poseidon2ExternalLayerMersenne31<WIDTH>
+{
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
+        external_initial_permute_state(
+            state,
+            self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>,
+            &MDSMat4,
+        );
+    }
+
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
+        external_terminal_permute_state(
+            state,
+            self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>,
+            &MDSMat4,
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{DiffusionMatrixMersenne31, Mersenne31, PackedMersenne31Neon};
+    use super::*;
+    use crate::Poseidon2Mersenne31;
 
     type F = Mersenne31;
-    const D: u64 = 5;
-    type Perm16 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 16, D>;
-    type Perm24 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 24, D>;
+    type Perm16 = Poseidon2Mersenne31<16>;
+    type Perm24 = Poseidon2Mersenne31<24>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
@@ -48,11 +100,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixMersenne31,
-            &mut rng,
-        );
+        let poseidon2 = Perm16::new_from_rng_128(&mut rng);
 
         let input: [F; 16] = rng.gen();
 
@@ -73,11 +121,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixMersenne31,
-            &mut rng,
-        );
+        let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
         let input: [F; 24] = rng.gen();
 

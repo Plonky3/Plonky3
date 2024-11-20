@@ -1,16 +1,19 @@
+//! Eventually this will hold a vectorized Neon implementation of Poseidon2 for PackedBabyBearNeon
+//! Currently this is essentially a placeholder to allow compilation and testing on Neon devices.
+//!
+//! Converting the AVX2/AVX512 code across to Neon is on the TODO list.
+
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
-    use crate::{BabyBear, DiffusionMatrixBabyBear, PackedBabyBearNeon};
+    use crate::{BabyBear, PackedBabyBearNeon, Poseidon2BabyBear};
 
     type F = BabyBear;
-    const D: u64 = 7;
-    type Perm16 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, D>;
-    type Perm24 = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 24, D>;
+    type Perm16 = Poseidon2BabyBear<16>;
+    type Perm24 = Poseidon2BabyBear<24>;
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
@@ -18,11 +21,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm16::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let poseidon2 = Perm16::new_from_rng_128(&mut rng);
 
         let input: [F; 16] = rng.gen();
 
@@ -43,11 +42,7 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Our Poseidon2 implementation.
-        let poseidon2 = Perm24::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
         let input: [F; 24] = rng.gen();
 

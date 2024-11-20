@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::batch_inverse::batch_multiplicative_inverse_general;
-use crate::{AbstractField, Field, PackedValue};
+use crate::{Field, FieldAlgebra, PackedValue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
@@ -35,7 +35,7 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
     }
 }
 
-impl<F: Field, const N: usize> AbstractField for FieldArray<F, N> {
+impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     type F = F;
 
     const ZERO: Self = FieldArray([F::ZERO; N]);

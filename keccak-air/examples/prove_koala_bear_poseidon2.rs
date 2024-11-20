@@ -7,9 +7,8 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_koala_bear::{DiffusionMatrixKoalaBear, KoalaBear};
+use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
@@ -34,12 +33,8 @@ fn main() -> Result<(), impl Debug> {
     type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixKoalaBear, 16, 3>;
-    let perm = Perm::new_from_rng_128(
-        Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixKoalaBear::default(),
-        &mut thread_rng(),
-    );
+    type Perm = Poseidon2KoalaBear<16>;
+    let perm = Perm::new_from_rng_128(&mut thread_rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());

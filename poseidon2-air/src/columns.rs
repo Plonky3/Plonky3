@@ -12,7 +12,7 @@ use core::mem::size_of;
 pub struct Poseidon2Cols<
     T,
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -33,7 +33,7 @@ pub struct Poseidon2Cols<
 
 /// Full round columns.
 #[repr(C)]
-pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: usize, const SBOX_REGISTERS: usize> {
+pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize> {
     /// Possible intermediate results within each S-box.
     pub sbox: [SBox<T, SBOX_DEGREE, SBOX_REGISTERS>; WIDTH],
     /// The post-state, i.e. the entire layer after this full round.
@@ -42,12 +42,8 @@ pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: usize, const SBOX
 
 /// Partial round columns.
 #[repr(C)]
-pub struct PartialRound<
-    T,
-    const WIDTH: usize,
-    const SBOX_DEGREE: usize,
-    const SBOX_REGISTERS: usize,
-> {
+pub struct PartialRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize>
+{
     /// Possible intermediate results within the S-box.
     pub sbox: SBox<T, SBOX_DEGREE, SBOX_REGISTERS>,
     /// The output of the S-box.
@@ -61,11 +57,11 @@ pub struct PartialRound<
 /// number of registers for the given `DEGREE` for the degrees given in the Poseidon2 paper:
 /// `3`, `5`, `7`, and `11`. See `eval_sbox` for more information.
 #[repr(C)]
-pub struct SBox<T, const DEGREE: usize, const REGISTERS: usize>(pub [T; REGISTERS]);
+pub struct SBox<T, const DEGREE: u64, const REGISTERS: usize>(pub [T; REGISTERS]);
 
 pub const fn num_cols<
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -76,7 +72,7 @@ pub const fn num_cols<
 
 pub const fn make_col_map<
     const WIDTH: usize,
-    const SBOX_DEGREE: usize,
+    const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
@@ -104,7 +100,7 @@ pub const fn make_col_map<
 impl<
         T,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
@@ -136,7 +132,7 @@ impl<
 impl<
         T,
         const WIDTH: usize,
-        const SBOX_DEGREE: usize,
+        const SBOX_DEGREE: u64,
         const SBOX_REGISTERS: usize,
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,

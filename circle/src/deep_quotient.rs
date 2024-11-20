@@ -124,7 +124,7 @@ mod tests {
     use alloc::vec;
 
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, thread_rng};

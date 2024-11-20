@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::Complex;
-use p3_field::{AbstractField, PrimeField64, TwoAdicField};
+use p3_field::{FieldAlgebra, PrimeField64, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;

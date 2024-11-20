@@ -160,7 +160,7 @@ where
 mod tests {
     use core::iter;
 
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
@@ -192,11 +192,11 @@ mod tests {
         // Observe 12 elements.
         (0..12).for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
 
-        let state_after_duplexing: Vec<_> = (0..12)
-            .map(F::from_canonical_u8)
-            .chain(iter::repeat(F::ZERO).take(12))
-            .rev()
+        let state_after_duplexing: Vec<_> = iter::repeat(F::ZERO)
+            .take(12)
+            .chain((0..12).map(F::from_canonical_u8).rev())
             .collect();
+
         let expected_samples: Vec<F> = state_after_duplexing[..16].iter().copied().rev().collect();
         let samples = <Chal as CanSample<F>>::sample_vec(&mut duplex_challenger, 16);
         assert_eq!(samples, expected_samples);

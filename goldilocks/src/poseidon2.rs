@@ -7,14 +7,51 @@
 //! to build the 4t x 4t matrix used for the external (full) rounds).
 
 //! Long term we will use more optimised internal and external linear layers.
+use alloc::vec::Vec;
 
-use p3_field::AbstractField;
-use p3_poseidon2::{matmul_internal, DiffusionPermutation};
-use p3_symmetric::Permutation;
+use p3_field::{Field, FieldAlgebra};
+use p3_poseidon2::{
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
+    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, MDSMat4,
+    Poseidon2,
+};
 
 use crate::{to_goldilocks_array, Goldilocks};
 
-pub const MATRIX_DIAG_8_GOLDILOCKS_U64: [u64; 8] = [
+/// Degree of the chosen permutation polynomial for Goldilocks, used as the Poseidon2 S-Box.
+///
+/// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
+const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
+
+/// An implementation of the Poseidon2 hash function for the Goldilocks field.
+///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]`.
+/// Currently the internal layers are unoptimized. These could be sped up in a similar way to
+/// how it was done for Monty31 fields.
+pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
+    <Goldilocks as Field>::Packing,
+    Poseidon2ExternalLayerGoldilocks<WIDTH>,
+    Poseidon2InternalLayerGoldilocks,
+    WIDTH,
+    GOLDILOCKS_S_BOX_DEGREE,
+>;
+
+/// A recreating of the Poseidon2 implementation by Horizen Labs for the Goldilocks field.
+///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]`
+/// The original implementation can be found here: https://github.com/HorizenLabs/poseidon2.
+/// This implementation is slightly slower than `Poseidon2Goldilocks` as is uses a slower matrix
+/// for the external rounds.
+pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
+    <Goldilocks as Field>::Packing,
+    Poseidon2ExternalLayerGoldilocksHL<WIDTH>,
+    Poseidon2InternalLayerGoldilocks,
+    WIDTH,
+    GOLDILOCKS_S_BOX_DEGREE,
+>;
+
+pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array([
     0xa98811a1fed4e3a5,
     0x1cc48b54f377e2a0,
     0xe40cd4f6c5609a26,
@@ -23,9 +60,9 @@ pub const MATRIX_DIAG_8_GOLDILOCKS_U64: [u64; 8] = [
     0x2a6fe8085797e791,
     0x3de6e93329f8d5ad,
     0x3f7af9125da962fe,
-];
+]);
 
-pub const MATRIX_DIAG_12_GOLDILOCKS_U64: [u64; 12] = [
+pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = to_goldilocks_array([
     0xc3b6c08e23ba9300,
     0xd84b5de94a324fb6,
     0x0d0c371c5b35b84f,
@@ -38,9 +75,9 @@ pub const MATRIX_DIAG_12_GOLDILOCKS_U64: [u64; 12] = [
     0xf3faac6faee378ae,
     0x0c6388b51545e883,
     0xd27dbb6944917b60,
-];
+]);
 
-pub const MATRIX_DIAG_16_GOLDILOCKS_U64: [u64; 16] = [
+pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = to_goldilocks_array([
     0xde9b91a467d6afc0,
     0xc5f16b9c76a9be17,
     0x0ab0fef2d540ac55,
@@ -57,9 +94,9 @@ pub const MATRIX_DIAG_16_GOLDILOCKS_U64: [u64; 16] = [
     0x328fcbd8f0ddc8eb,
     0xb5101e303fce9cb7,
     0x774487b8c40089bb,
-];
+]);
 
-pub const MATRIX_DIAG_20_GOLDILOCKS_U64: [u64; 20] = [
+pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = to_goldilocks_array([
     0x95c381fda3b1fa57,
     0xf36fe9eb1288f42c,
     0x89f5dcdfef277944,
@@ -80,132 +117,235 @@ pub const MATRIX_DIAG_20_GOLDILOCKS_U64: [u64; 20] = [
     0xa187e810b06ad903,
     0xb635b995936c4918,
     0x0b3694a940bd2394,
-];
+]);
 
-// Convert the above arrays of u64's into arrays of Goldilocks field elements.
-const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array(MATRIX_DIAG_8_GOLDILOCKS_U64);
-const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] =
-    to_goldilocks_array(MATRIX_DIAG_12_GOLDILOCKS_U64);
-const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] =
-    to_goldilocks_array(MATRIX_DIAG_16_GOLDILOCKS_U64);
-const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] =
-    to_goldilocks_array(MATRIX_DIAG_20_GOLDILOCKS_U64);
-
+/// The internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
-pub struct DiffusionMatrixGoldilocks;
+pub struct Poseidon2InternalLayerGoldilocks {
+    internal_constants: Vec<Goldilocks>,
+}
 
-impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 8]> for DiffusionMatrixGoldilocks {
-    fn permute_mut(&self, state: &mut [AF; 8]) {
-        matmul_internal::<Goldilocks, AF, 8>(state, MATRIX_DIAG_8_GOLDILOCKS);
+impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayerConstructor<FA>
+    for Poseidon2InternalLayerGoldilocks
+{
+    fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
+        Self { internal_constants }
     }
 }
 
-impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 8> for DiffusionMatrixGoldilocks {}
-
-impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 12]> for DiffusionMatrixGoldilocks {
-    fn permute_mut(&self, state: &mut [AF; 12]) {
-        matmul_internal::<Goldilocks, AF, 12>(state, MATRIX_DIAG_12_GOLDILOCKS);
+impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 8, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocks
+{
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [FA; 8]) {
+        internal_permute_state::<FA, 8, GOLDILOCKS_S_BOX_DEGREE>(
+            state,
+            |x| matmul_internal(x, MATRIX_DIAG_8_GOLDILOCKS),
+            &self.internal_constants,
+        )
     }
 }
 
-impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 12> for DiffusionMatrixGoldilocks {}
-
-impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 16]> for DiffusionMatrixGoldilocks {
-    fn permute_mut(&self, state: &mut [AF; 16]) {
-        matmul_internal::<Goldilocks, AF, 16>(state, MATRIX_DIAG_16_GOLDILOCKS);
+impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 12, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocks
+{
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [FA; 12]) {
+        internal_permute_state::<FA, 12, GOLDILOCKS_S_BOX_DEGREE>(
+            state,
+            |x| matmul_internal(x, MATRIX_DIAG_12_GOLDILOCKS),
+            &self.internal_constants,
+        )
     }
 }
 
-impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 16> for DiffusionMatrixGoldilocks {}
-
-impl<AF: AbstractField<F = Goldilocks>> Permutation<[AF; 20]> for DiffusionMatrixGoldilocks {
-    fn permute_mut(&self, state: &mut [AF; 20]) {
-        matmul_internal::<Goldilocks, AF, 20>(state, MATRIX_DIAG_20_GOLDILOCKS);
+impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 16, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocks
+{
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [FA; 16]) {
+        internal_permute_state::<FA, 16, GOLDILOCKS_S_BOX_DEGREE>(
+            state,
+            |x| matmul_internal(x, MATRIX_DIAG_16_GOLDILOCKS),
+            &self.internal_constants,
+        )
     }
 }
 
-impl<AF: AbstractField<F = Goldilocks>> DiffusionPermutation<AF, 20> for DiffusionMatrixGoldilocks {}
+impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 20, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocks
+{
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [FA; 20]) {
+        internal_permute_state::<FA, 20, GOLDILOCKS_S_BOX_DEGREE>(
+            state,
+            |x| matmul_internal(x, MATRIX_DIAG_20_GOLDILOCKS),
+            &self.internal_constants,
+        )
+    }
+}
 
-pub const HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS: [[u64; 8]; 8] = [
+/// The external layers of the Poseidon2 permutation.
+#[derive(Clone)]
+pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
+    pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
+}
+
+impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstructor<FA, WIDTH>
+    for Poseidon2ExternalLayerGoldilocks<WIDTH>
+{
+    fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
+        Self { external_constants }
+    }
+}
+
+impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize>
+    ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2ExternalLayerGoldilocks<WIDTH>
+{
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [FA; WIDTH]) {
+        external_initial_permute_state(
+            state,
+            self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            &MDSMat4,
+        );
+    }
+
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [FA; WIDTH]) {
+        external_terminal_permute_state(
+            state,
+            self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            &MDSMat4,
+        );
+    }
+}
+
+/// The external layers of the Poseidon2 permutation used by Horizen Labs.
+#[derive(Clone)]
+pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
+    pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
+}
+
+impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstructor<FA, WIDTH>
+    for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
+{
+    fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
+        Self { external_constants }
+    }
+}
+
+impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize>
+    ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
+{
+    /// Perform the initial external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_initial(&self, state: &mut [FA; WIDTH]) {
+        external_initial_permute_state(
+            state,
+            self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            &HLMDSMat4,
+        );
+    }
+
+    /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
+    fn permute_state_terminal(&self, state: &mut [FA; WIDTH]) {
+        external_terminal_permute_state(
+            state,
+            self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            &HLMDSMat4,
+        );
+    }
+}
+
+pub const HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS: [[[u64; 8]; 4]; 2] = [
     [
-        0xdd5743e7f2a5a5d9,
-        0xcb3a864e58ada44b,
-        0xffa2449ed32f8cdc,
-        0x42025f65d6bd13ee,
-        0x7889175e25506323,
-        0x34b98bb03d24b737,
-        0xbdcc535ecc4faa2a,
-        0x5b20ad869fc0d033,
+        [
+            0xdd5743e7f2a5a5d9,
+            0xcb3a864e58ada44b,
+            0xffa2449ed32f8cdc,
+            0x42025f65d6bd13ee,
+            0x7889175e25506323,
+            0x34b98bb03d24b737,
+            0xbdcc535ecc4faa2a,
+            0x5b20ad869fc0d033,
+        ],
+        [
+            0xf1dda5b9259dfcb4,
+            0x27515210be112d59,
+            0x4227d1718c766c3f,
+            0x26d333161a5bd794,
+            0x49b938957bf4b026,
+            0x4a56b5938b213669,
+            0x1120426b48c8353d,
+            0x6b323c3f10a56cad,
+        ],
+        [
+            0xce57d6245ddca6b2,
+            0xb1fc8d402bba1eb1,
+            0xb5c5096ca959bd04,
+            0x6db55cd306d31f7f,
+            0xc49d293a81cb9641,
+            0x1ce55a4fe979719f,
+            0xa92e60a9d178a4d1,
+            0x002cc64973bcfd8c,
+        ],
+        [
+            0xcea721cce82fb11b,
+            0xe5b55eb8098ece81,
+            0x4e30525c6f1ddd66,
+            0x43c6702827070987,
+            0xaca68430a7b5762a,
+            0x3674238634df9c93,
+            0x88cee1c825e33433,
+            0xde99ae8d74b57176,
+        ],
     ],
     [
-        0xf1dda5b9259dfcb4,
-        0x27515210be112d59,
-        0x4227d1718c766c3f,
-        0x26d333161a5bd794,
-        0x49b938957bf4b026,
-        0x4a56b5938b213669,
-        0x1120426b48c8353d,
-        0x6b323c3f10a56cad,
-    ],
-    [
-        0xce57d6245ddca6b2,
-        0xb1fc8d402bba1eb1,
-        0xb5c5096ca959bd04,
-        0x6db55cd306d31f7f,
-        0xc49d293a81cb9641,
-        0x1ce55a4fe979719f,
-        0xa92e60a9d178a4d1,
-        0x002cc64973bcfd8c,
-    ],
-    [
-        0xcea721cce82fb11b,
-        0xe5b55eb8098ece81,
-        0x4e30525c6f1ddd66,
-        0x43c6702827070987,
-        0xaca68430a7b5762a,
-        0x3674238634df9c93,
-        0x88cee1c825e33433,
-        0xde99ae8d74b57176,
-    ],
-    [
-        0x014ef1197d341346,
-        0x9725e20825d07394,
-        0xfdb25aef2c5bae3b,
-        0xbe5402dc598c971e,
-        0x93a5711f04cdca3d,
-        0xc45a9a5b2f8fb97b,
-        0xfe8946a924933545,
-        0x2af997a27369091c,
-    ],
-    [
-        0xaa62c88e0b294011,
-        0x058eb9d810ce9f74,
-        0xb3cb23eced349ae4,
-        0xa3648177a77b4a84,
-        0x43153d905992d95d,
-        0xf4e2a97cda44aa4b,
-        0x5baa2702b908682f,
-        0x082923bdf4f750d1,
-    ],
-    [
-        0x98ae09a325893803,
-        0xf8a6475077968838,
-        0xceb0735bf00b2c5f,
-        0x0a1a5d953888e072,
-        0x2fcb190489f94475,
-        0xb5be06270dec69fc,
-        0x739cb934b09acf8b,
-        0x537750b75ec7f25b,
-    ],
-    [
-        0xe9dd318bae1f3961,
-        0xf7462137299efe1a,
-        0xb1f6b8eee9adb940,
-        0xbdebcc8a809dfe6b,
-        0x40fc1f791b178113,
-        0x3ac1c3362d014864,
-        0x9a016184bdb8aeba,
-        0x95f2394459fbc25e,
+        [
+            0x014ef1197d341346,
+            0x9725e20825d07394,
+            0xfdb25aef2c5bae3b,
+            0xbe5402dc598c971e,
+            0x93a5711f04cdca3d,
+            0xc45a9a5b2f8fb97b,
+            0xfe8946a924933545,
+            0x2af997a27369091c,
+        ],
+        [
+            0xaa62c88e0b294011,
+            0x058eb9d810ce9f74,
+            0xb3cb23eced349ae4,
+            0xa3648177a77b4a84,
+            0x43153d905992d95d,
+            0xf4e2a97cda44aa4b,
+            0x5baa2702b908682f,
+            0x082923bdf4f750d1,
+        ],
+        [
+            0x98ae09a325893803,
+            0xf8a6475077968838,
+            0xceb0735bf00b2c5f,
+            0x0a1a5d953888e072,
+            0x2fcb190489f94475,
+            0xb5be06270dec69fc,
+            0x739cb934b09acf8b,
+            0x537750b75ec7f25b,
+        ],
+        [
+            0xe9dd318bae1f3961,
+            0xf7462137299efe1a,
+            0xb1f6b8eee9adb940,
+            0xbdebcc8a809dfe6b,
+            0x40fc1f791b178113,
+            0x3ac1c3362d014864,
+            0x9a016184bdb8aeba,
+            0x95f2394459fbc25e,
+        ],
     ],
 ];
 pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
@@ -237,51 +377,26 @@ pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
 mod tests {
     use core::array;
 
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixHL};
+    use p3_field::FieldAlgebra;
+    use p3_poseidon2::Poseidon2;
+    use p3_symmetric::Permutation;
 
     use super::*;
 
     type F = Goldilocks;
 
-    #[test]
-    fn test_poseidon2_constants() {
-        let monty_constant = MATRIX_DIAG_8_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
-        assert_eq!(monty_constant, MATRIX_DIAG_8_GOLDILOCKS);
-
-        let monty_constant = MATRIX_DIAG_12_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
-        assert_eq!(monty_constant, MATRIX_DIAG_12_GOLDILOCKS);
-
-        let monty_constant = MATRIX_DIAG_16_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
-        assert_eq!(monty_constant, MATRIX_DIAG_16_GOLDILOCKS);
-
-        let monty_constant = MATRIX_DIAG_20_GOLDILOCKS_U64.map(Goldilocks::from_canonical_u64);
-        assert_eq!(monty_constant, MATRIX_DIAG_20_GOLDILOCKS);
-    }
-
     // A function which recreates the poseidon2 implementation in
     // https://github.com/HorizenLabs/poseidon2
     fn hl_poseidon2_goldilocks_width_8(input: &mut [F; 8]) {
         const WIDTH: usize = 8;
-        const D: u64 = 7;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 22;
 
         // Our Poseidon2 implementation.
-        let poseidon2: Poseidon2<
-            Goldilocks,
-            Poseidon2ExternalMatrixHL,
-            DiffusionMatrixGoldilocks,
-            WIDTH,
-            D,
-        > = Poseidon2::new(
-            ROUNDS_F,
-            HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS
-                .map(to_goldilocks_array)
-                .to_vec(),
-            Poseidon2ExternalMatrixHL,
-            ROUNDS_P,
+        let poseidon2: Poseidon2GoldilocksHL<WIDTH> = Poseidon2::new(
+            ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_saved_array(
+                HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS,
+                to_goldilocks_array,
+            ),
             to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
-            DiffusionMatrixGoldilocks,
         );
 
         poseidon2.permute_mut(input);

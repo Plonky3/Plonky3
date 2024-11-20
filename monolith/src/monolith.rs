@@ -6,7 +6,7 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use p3_field::{AbstractField, PrimeField32};
+use p3_field::{FieldAlgebra, PrimeField32};
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use sha3::digest::{ExtendableOutput, Update};
@@ -180,7 +180,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_mersenne_31::Mersenne31;
 
     use crate::monolith::MonolithMersenne31;

@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, AbstractField, Field, Packable,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, Field, FieldAlgebra, Packable,
     PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
@@ -89,7 +89,7 @@ impl Distribution<Goldilocks> for Standard {
     }
 }
 
-impl AbstractField for Goldilocks {
+impl FieldAlgebra for Goldilocks {
     type F = Self;
 
     const ZERO: Self = Self::new(0);
@@ -103,19 +103,19 @@ impl AbstractField for Goldilocks {
     }
 
     fn from_bool(b: bool) -> Self {
-        Self::new(u64::from(b))
+        Self::new(b.into())
     }
 
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_canonical_u16(n: u16) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_canonical_u32(n: u32) -> Self {
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     #[inline(always)]
@@ -130,7 +130,7 @@ impl AbstractField for Goldilocks {
     fn from_wrapped_u32(n: u32) -> Self {
         // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
         // need for a reduction.
-        Self::new(u64::from(n))
+        Self::new(n.into())
     }
 
     fn from_wrapped_u64(n: u64) -> Self {
@@ -184,7 +184,7 @@ impl Field for Goldilocks {
     }
 
     #[inline]
-    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
         match power {
             10540996611094048183 => exp_10540996611094048183(val), // used to compute x^{1/7}
             _ => exp_u64_by_squaring(val, power),

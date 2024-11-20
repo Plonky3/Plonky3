@@ -1,8 +1,8 @@
-use crate::AbstractField;
+use crate::FieldAlgebra;
 
-pub fn exp_u64_by_squaring<AF: AbstractField>(val: AF, power: u64) -> AF {
+pub fn exp_u64_by_squaring<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
     let mut current = val;
-    let mut product = AF::ONE;
+    let mut product = FA::ONE;
 
     for j in 0..bits_u64(power) {
         if (power >> j & 1) != 0 {
@@ -17,7 +17,7 @@ const fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize
 }
 
-pub fn exp_1717986917<AF: AbstractField>(val: AF) -> AF {
+pub fn exp_1717986917<FA: FieldAlgebra>(val: FA) -> FA {
     // Note that 5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1.
     // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1717986917})^5 = a.
     // Note the binary expansion: 1717986917 = 1100110011001100110011001100101_2
@@ -39,7 +39,7 @@ pub fn exp_1717986917<AF: AbstractField>(val: AF) -> AF {
     p1100110011001100110011001100000 * p101
 }
 
-pub fn exp_1420470955<AF: AbstractField>(val: AF) -> AF {
+pub fn exp_1420470955<FA: FieldAlgebra>(val: FA) -> FA {
     // Note that 3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1).
     // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1420470955})^3 = a.
     // Note the binary expansion: 1420470955 = 1010100101010101010101010101011_2
@@ -61,7 +61,7 @@ pub fn exp_1420470955<AF: AbstractField>(val: AF) -> AF {
     p1010100101010101010101010101010 * p1.clone()
 }
 
-pub fn exp_1725656503<AF: AbstractField>(val: AF) -> AF {
+pub fn exp_1725656503<FA: FieldAlgebra>(val: FA) -> FA {
     // Note that 7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1).
     // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1725656503})^7 = a.
     // Note the binary expansion: 1725656503 = 1100110110110110110110110110111_2
@@ -85,7 +85,7 @@ pub fn exp_1725656503<AF: AbstractField>(val: AF) -> AF {
     p1100110110110110110110110110000 * p111
 }
 
-pub fn exp_10540996611094048183<AF: AbstractField>(val: AF) -> AF {
+pub fn exp_10540996611094048183<FA: FieldAlgebra>(val: FA) -> FA {
     // Note that 7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1).
     // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{10540996611094048183})^7 = a.
     // Also: 10540996611094048183 = 1001001001001001001001001001000110110110110110110110110110110111_2.

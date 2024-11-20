@@ -5,7 +5,7 @@
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
 use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBionmialExtension};
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 
 use crate::Mersenne31;
 
@@ -59,7 +59,7 @@ impl HasTwoAdicBionmialExtension<2> for Mersenne31 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, PrimeField32};
+    use p3_field::PrimeField32;
     use p3_field_testing::{test_field, test_two_adic_field};
 
     use super::*;

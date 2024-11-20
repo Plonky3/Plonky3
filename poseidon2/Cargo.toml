@@ -5,7 +5,12 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-nightly-features = ["p3-koala-bear/nightly-features", "p3-baby-bear/nightly-features", "p3-mersenne-31/nightly-features", "p3-goldilocks/nightly-features"]
+nightly-features = [
+    "p3-koala-bear/nightly-features",
+    "p3-baby-bear/nightly-features",
+    "p3-mersenne-31/nightly-features",
+    "p3-goldilocks/nightly-features",
+]
 
 [dependencies]
 gcd = "2.3.0"
@@ -20,6 +25,7 @@ p3-baby-bear = { path = "../baby-bear" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-bn254-fr = { path = "../bn254-fr" }
 p3-goldilocks = { path = "../goldilocks" }
+p3-util = { path = "../util" }
 criterion = "0.5.1"
 
 [[bench]]

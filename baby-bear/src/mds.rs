@@ -49,7 +49,7 @@ pub type MdsMatrixBabyBear = MdsMatrixMontyField31<MDSBabyBearData>;
 
 #[cfg(test)]
 mod tests {
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
 
     use super::MdsMatrixBabyBear;
