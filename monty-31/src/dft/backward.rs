@@ -111,7 +111,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     #[inline]
     fn backward_iterative_packed_radix_16(input: &mut [<Self as Field>::Packing]) {
         // Rather surprisingly, a version similar where the separate
-        // loops in each call to forward_iterative_packed() are
+        // loops in each call to backward_iterative_packed() are
         // combined into one, was not only not faster, but was
         // actually a bit slower.
 
