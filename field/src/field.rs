@@ -4,9 +4,7 @@ use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::slice;
 
-use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
@@ -14,8 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
-use crate::packed::{PackedField, PackedValue};
-use crate::Packable;
+use crate::packed::PackedField;
+use crate::{Packable, PackedFieldExtension};
 
 /// A commutative ring.
 ///
@@ -114,6 +112,43 @@ pub trait CommutativeRing:
             res = res.square();
         }
         res
+    }
+
+    /// Exponentiation by a `u64` power.
+    ///
+    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
+    /// by squaring. Rather than override this method, it is generally recommended to have the
+    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
+    /// abstract fields.
+    #[must_use]
+    #[inline]
+    fn exp_u64(&self, power: u64) -> Self {
+        exp_u64_by_squaring(&self, power)
+    }
+
+    /// Exponentiation by a constant power.
+    ///
+    /// For a collection of small values we implement custom multiplication chain circuits which can be faster than the
+    /// simpler square and multiply approach.
+    #[must_use]
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        match POWER {
+            0 => Self::ONE,
+            1 => self.clone(),
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => self.square().square() * self.clone(),
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2.clone() * self.clone();
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
     }
 
     /// Compute the dot product of two vectors.
@@ -239,43 +274,6 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     /// This should be avoided in performance critical locations.
     fn from_usize(int: usize) -> Self {
         Self::from_char(Self::Char::from_int(int))
-    }
-
-    /// Exponentiation by a `u64` power.
-    ///
-    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
-    /// by squaring. Rather than override this method, it is generally recommended to have the
-    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
-    /// abstract fields.
-    #[must_use]
-    #[inline]
-    fn exp_u64(&self, power: u64) -> Self {
-        Self::Char::exp_u64_generic(self.clone(), power)
-    }
-
-    /// Exponentiation by a constant power.
-    ///
-    /// For a collection of small values we implement custom multiplication chain circuits which can be faster than the
-    /// simpler square and multiply approach.
-    #[must_use]
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        match POWER {
-            0 => Self::ONE,
-            1 => self.clone(),
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => self.square().square() * self.clone(),
-            6 => self.square().cube(),
-            7 => {
-                let x2 = self.square();
-                let x3 = x2.clone() * self.clone();
-                let x4 = x2.square();
-                x3 * x4
-            }
-            _ => self.exp_u64(POWER),
-        }
     }
 
     /// The elementary function `halve(a) = a/2`.
@@ -507,17 +505,6 @@ pub trait PrimeField:
     const NEG_ONE: Self;
 
     fn as_canonical_biguint(&self) -> BigUint;
-
-    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `CommutativeRing` with prime characteristic, not just this concrete field.
-    ///
-    /// The default implementation uses naive square and multiply. Implementations may want to
-    /// override this and handle certain powers with more optimal addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64_generic<PCR: PrimeCharacteristicRing<Char = Self>>(val: PCR, power: u64) -> PCR {
-        exp_u64_by_squaring(val, power)
-    }
 }
 
 /// A prime field `ℤ/p` with order `p < 2^64`.
@@ -536,91 +523,24 @@ pub trait PrimeField32: PrimeField64 {
     fn as_canonical_u32(&self) -> u32;
 }
 
-/// A commutative algebra over an extension field.
-///
-/// Mathematically, this trait captures a slightly more interesting structure than the above one liner.
-/// As implemented here, A FieldExtensionAlgebra `FEA` over and extension field `EF` is
-/// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
-/// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
-/// product is over `F`.
-pub trait FieldExtensionAlgebra<
-    BaseField: Field,
-    BaseRing: FieldAlgebra<BaseField>,
-    ExtField: ExtensionField<BaseField>,
->:
-    FieldAlgebra<BaseField>
-    + FieldAlgebra<ExtField>
-    + From<BaseRing>
-    + Add<BaseRing, Output = Self>
-    + AddAssign<BaseRing>
-    + Sub<BaseRing, Output = Self>
-    + SubAssign<BaseRing>
-    + Mul<BaseRing, Output = Self>
-    + MulAssign<BaseRing>
+pub trait ExtensionField<Base: Field>:
+    Field
+    + From<Base>
+    + FieldAlgebra<Base>
+    + Add<Base, Output = Self>
+    + AddAssign<Base>
+    + Sub<Base, Output = Self>
+    + SubAssign<Base>
+    + Mul<Base, Output = Self>
+    + MulAssign<Base>
 {
-    const D: usize;
-
-    fn from_base(b: BaseRing) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a slice `bs` of
-    /// length at exactly D, and constructs the field element
-    /// \sum_i bs[i] * X^i.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn from_base_slice(bs: &[BaseRing]) -> Self;
-
-    /// Similar to `core:array::from_fn`, with the same caveats as
-    /// `from_base_slice`.
-    fn from_base_fn<F: FnMut(usize) -> BaseRing>(f: F) -> Self;
-    fn from_base_iter<I: Iterator<Item = BaseRing>>(iter: I) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a field element
-    /// \sum_i bs[i] * X^i and returns the coefficients as a slice
-    /// `bs` of length at most D containing, from lowest degree to
-    /// highest.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn as_base_slice(&self) -> &[BaseRing];
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function returns the field
-    /// element `X^exponent` if `exponent < D` and panics otherwise.
-    /// (The fact that f is not known at the point that this function
-    /// is defined prevents implementing exponentiation of higher
-    /// powers since the reduction cannot be performed.)
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn monomial(exponent: usize) -> Self {
-        assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![BaseRing::ZERO; Self::D];
-        vec[exponent] = BaseRing::ONE;
-        Self::from_base_slice(&vec)
-    }
-}
-
-pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base, Base, Self> {
-    type ExtensionPacking: FieldExtensionAlgebra<Base, Base::Packing, Self>
+    type ExtensionPacking: PackedFieldExtension<BaseField = Base, ExtField = Self>
         + 'static
         + Copy
         + Send
         + Sync;
+
+    const D: usize;
 
     #[inline(always)]
     fn is_in_basefield(&self) -> bool {
@@ -635,48 +555,28 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base, Base,
         }
     }
 
-    fn ext_powers_packed(&self) -> impl Iterator<Item = Self::ExtensionPacking> {
-        let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
-        // Transpose first WIDTH powers
-        let current = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from_fn(|j| powers[j].as_base_slice()[i])
-        });
-        // Broadcast self^WIDTH
-        let multiplier = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
-        });
-
-        core::iter::successors(Some(current), move |&current| Some(current * multiplier))
-    }
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking>;
 }
 
 impl<F: Field> ExtensionField<F> for F {
+    const D: usize = 1;
     type ExtensionPacking = F::Packing;
+
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
+        Self::Packing::powers(self)
+    }
 }
 
-impl<F: Field, FA: FieldAlgebra<F>> FieldExtensionAlgebra<F, FA, F> for FA {
-    const D: usize = 1;
+unsafe impl<PF: PackedField> PackedFieldExtension for PF {
+    type BaseField = PF::Scalar;
+    type ExtField = PF::Scalar;
 
-    fn from_base(b: FA) -> Self {
-        b
+    fn from_slice(ext_vec: &[Self::ExtField]) -> Vec<Self> {
+        ext_vec.to_vec()
     }
 
-    fn from_base_slice(bs: &[FA]) -> Self {
-        assert_eq!(bs.len(), 1);
-        bs[0].clone()
-    }
-
-    fn from_base_iter<I: Iterator<Item = FA>>(mut iter: I) -> Self {
-        iter.next().unwrap()
-    }
-
-    fn from_base_fn<Fn: FnMut(usize) -> FA>(mut f: Fn) -> Self {
-        f(0)
-    }
-
-    #[inline(always)]
-    fn as_base_slice(&self) -> &[FA] {
-        slice::from_ref(self)
+    fn to_slice(packed_vec: &[Self]) -> Vec<Self::ExtField> {
+        packed_vec.to_vec()
     }
 }
 

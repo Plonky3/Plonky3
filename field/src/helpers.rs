@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
-use crate::{FieldAlgebra, PackedValue, PrimeField, PrimeField32, TwoAdicField};
+use crate::{CommutativeRing, FieldAlgebra, PackedValue, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -122,8 +122,8 @@ impl<T, const D: usize> HackyWorkAround<T, D> {
 /// Extend a field `FA` element `x` to an array of length `D`
 /// by filling zeros.
 #[inline]
-pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] {
-    let mut arr: [MaybeUninit<FA>; D] = unsafe { MaybeUninit::uninit().assume_init() };
+pub const fn field_to_array<CR: CommutativeRing, const D: usize>(x: CR) -> [CR; D] {
+    let mut arr: [MaybeUninit<CR>; D] = unsafe { MaybeUninit::uninit().assume_init() };
 
     arr[0] = MaybeUninit::new(x);
     let mut acc = 1;
@@ -131,7 +131,7 @@ pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] 
         if acc == D {
             break;
         }
-        arr[acc] = MaybeUninit::new(FA::ZERO);
+        arr[acc] = MaybeUninit::new(CR::ZERO);
         acc += 1;
     }
     // If the code has reached this point every element of arr is correctly initialized.
@@ -141,9 +141,9 @@ pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] 
 }
 
 /// Naive polynomial multiplication.
-pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
+pub fn naive_poly_mul<CR: CommutativeRing>(a: &[CR], b: &[CR]) -> Vec<CR> {
     // Grade school algorithm
-    let mut product = vec![FA::ZERO; a.len() + b.len() - 1];
+    let mut product = vec![CR::ZERO; a.len() + b.len() - 1];
     for (i, c1) in a.iter().enumerate() {
         for (j, c2) in b.iter().enumerate() {
             product[i + j] += c1.clone() * c2.clone();
@@ -153,9 +153,9 @@ pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
 }
 
 /// Expand a product of binomials (x - roots[0])(x - roots[1]).. into polynomial coefficients.
-pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
-    let mut coeffs = vec![FA::ZERO; roots.len() + 1];
-    coeffs[0] = FA::ONE;
+pub fn binomial_expand<CR: CommutativeRing>(roots: &[CR]) -> Vec<CR> {
+    let mut coeffs = vec![CR::ZERO; roots.len() + 1];
+    coeffs[0] = CR::ONE;
     for (i, x) in roots.iter().enumerate() {
         for j in (1..i + 2).rev() {
             coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();
@@ -165,8 +165,8 @@ pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
     coeffs
 }
 
-pub fn eval_poly<FA: FieldAlgebra>(poly: &[FA], x: FA) -> FA {
-    let mut acc = FA::ZERO;
+pub fn eval_poly<CR: CommutativeRing>(poly: &[CR], x: CR) -> CR {
+    let mut acc = CR::ZERO;
     for coeff in poly.iter().rev() {
         acc *= x.clone();
         acc += coeff.clone();

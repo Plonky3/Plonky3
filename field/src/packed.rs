@@ -2,7 +2,9 @@ use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
-use crate::{FieldAlgebra, PrimeCharacteristicRing, PrimeField};
+use alloc::vec::Vec;
+
+use crate::{ExtensionField, Field, FieldAlgebra, Powers, PrimeField};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -142,7 +144,27 @@ pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {
-    type Scalar: PrimeField;
+    type Scalar: PrimeField<Packing = Self>;
+
+    /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
+    #[must_use]
+    fn powers(base: Self::Scalar) -> Powers<Self> {
+        Self::shifted_powers(base, Self::Scalar::ONE)
+    }
+
+    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
+    fn shifted_powers(base: Self::Scalar, start: Self::Scalar) -> Powers<Self> {
+        let mut current = start.into();
+        let slice = current.as_slice_mut();
+        for i in 1..Self::WIDTH {
+            slice[i] = slice[i - 1].clone() * base.clone();
+        }
+
+        Powers {
+            base: base.exp_u64(Self::WIDTH as u64).into(),
+            current,
+        }
+    }
 }
 
 /// # Safety
@@ -186,26 +208,24 @@ pub unsafe trait PackedFieldPow2: PackedField {
 }
 
 /// [[F; WIDTH]; Algebra WIDTH]
-pub unsafe trait PackedFieldAlgebra:
-    FieldAlgebra<<Self::BasePackedField as PackedField>::Scalar>
-    + From<Self::BaseAlgebra>
-    + Add<Self::BaseAlgebra, Output = Self>
-    + Add<Self::BasePackedField, Output = Self>
-    + AddAssign<Self::BaseAlgebra>
-    + AddAssign<Self::BasePackedField>
-    + Sub<Self::BaseAlgebra, Output = Self>
-    + Sub<Self::BasePackedField, Output = Self>
-    + SubAssign<Self::BaseAlgebra>
-    + SubAssign<Self::BasePackedField>
-    + Mul<Self::BaseAlgebra, Output = Self>
-    + Mul<Self::BasePackedField, Output = Self>
-    + MulAssign<Self::BaseAlgebra>
-    + MulAssign<Self::BasePackedField>
+pub unsafe trait PackedFieldExtension:
+    FieldAlgebra<Self::BaseField>
+    + From<Self::ExtField>
+    + Add<<Self::BaseField as Field>::Packing, Output = Self>
+    + AddAssign<<Self::BaseField as Field>::Packing>
+    + Sub<<Self::BaseField as Field>::Packing, Output = Self>
+    + SubAssign<<Self::BaseField as Field>::Packing>
+    + Mul<<Self::BaseField as Field>::Packing, Output = Self>
+    + MulAssign<<Self::BaseField as Field>::Packing>
 {
-    type BasePackedField: PackedField;
-    type BaseAlgebra: PrimeCharacteristicRing<Char = <Self::BasePackedField as PackedField>::Scalar>;
+    type BaseField: Field;
+    type ExtField: ExtensionField<Self::BaseField>;
 
-    // fn from_base_field()
+    fn from_slice(ext_vec: &[Self::ExtField]) -> Vec<Self>;
+
+    // TODO: Do we need from iterator/from_fns as well?
+
+    fn to_slice(packed_vec: &[Self]) -> Vec<Self::ExtField>;
 }
 
 unsafe impl<T: Packable> PackedValue for T {
@@ -237,11 +257,11 @@ unsafe impl<T: Packable> PackedValue for T {
     }
 }
 
-unsafe impl<F: PrimeField> PackedField for F {
+unsafe impl<F: PrimeField<Packing = F>> PackedField for F {
     type Scalar = Self;
 }
 
-unsafe impl<F: PrimeField> PackedFieldPow2 for F {
+unsafe impl<F: PrimeField<Packing = F>> PackedFieldPow2 for F {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         match block_len {
             1 => (*self, other),
