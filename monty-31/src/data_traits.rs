@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::{AbstractField, Field};
+use p3_field::{Field, FieldAlgebra};
 
 use crate::MontyField31;
 
@@ -64,7 +64,7 @@ pub trait BarrettParameters: MontyParameters {
     const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 }
 
-/// FieldParameters contains constants and methods needed to imply AbstractField, Field and PrimeField32 for MontyField31.
+/// FieldParameters contains constants and methods needed to imply FieldAlgebra, Field and PrimeField32 for MontyField31.
 pub trait FieldParameters: PackedMontyParameters + Sized {
     // Simple field constants.
     const MONTY_ZERO: MontyField31<Self> = MontyField31::new(0);
@@ -77,7 +77,7 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
-    fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF;
+    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA;
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
 }
 
@@ -86,7 +86,10 @@ pub trait TwoAdicData: MontyParameters {
     /// Largest n such that 2^n divides p - 1.
     const TWO_ADICITY: usize;
 
-    /// ArrayLike should usually be &'static [MontyField31].
+    /// The odd constant r such that p = r * 2^n + 1
+    const ODD_FACTOR: i32 = (Self::PRIME >> Self::TWO_ADICITY) as i32;
+
+    /// ArrayLike should usually be `&'static [MontyField31]`.
     type ArrayLike: AsRef<[MontyField31<Self>]> + Sized;
 
     /// A list of generators of 2-adic subgroups.

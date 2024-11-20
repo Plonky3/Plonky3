@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
     PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
@@ -90,7 +90,7 @@ impl Distribution<Mersenne31> for Standard {
     }
 }
 
-impl AbstractField for Mersenne31 {
+impl FieldAlgebra for Mersenne31 {
     type F = Self;
 
     const ZERO: Self = Self { value: 0 };
@@ -112,12 +112,12 @@ impl AbstractField for Mersenne31 {
 
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
-        Self::new(u32::from(n))
+        Self::new(n.into())
     }
 
     #[inline]
     fn from_canonical_u16(n: u16) -> Self {
-        Self::new(u32::from(n))
+        Self::new(n.into())
     }
 
     #[inline]
@@ -158,6 +158,16 @@ impl AbstractField for Mersenne31 {
         // builtin remainder operator rather than split the input into
         // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
         Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
+        let exp = exp % 31;
+        let left = (self.value << exp) & ((1 << 31) - 1);
+        let right = self.value >> (31 - exp);
+        let rotated = left | right;
+        Self::new(rotated)
     }
 
     #[inline]
@@ -206,16 +216,6 @@ impl Field for Mersenne31 {
     }
 
     #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
-        let exp = exp % 31;
-        let left = (self.value << exp) & ((1 << 31) - 1);
-        let right = self.value >> (31 - exp);
-        let rotated = left | right;
-        Self::new(rotated)
-    }
-
-    #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         // In a Mersenne field, division by 2^k is just a right rotation by k bits.
         let exp = (exp % 31) as u8;
@@ -226,7 +226,7 @@ impl Field for Mersenne31 {
     }
 
     #[inline]
-    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
         match power {
             1717986917 => exp_1717986917(val), // used in x^{1/5}
             _ => exp_u64_by_squaring(val, power),
@@ -292,7 +292,7 @@ impl PrimeField64 for Mersenne31 {
 
     #[inline]
     fn as_canonical_u64(&self) -> u64 {
-        u64::from(self.as_canonical_u32())
+        self.as_canonical_u32().into()
     }
 }
 
@@ -416,7 +416,8 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 /// Convert a constant u32 array into a constant Mersenne31 array.
 #[inline]
 #[must_use]
-pub(crate) const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
+pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
+    // This is currently used only in the test crates of the vectorized implementations.
     let mut output = [Mersenne31 { value: 0 }; N];
     let mut i = 0;
     loop {
@@ -431,7 +432,7 @@ pub(crate) const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mer
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{AbstractField, Field, PrimeField32};
+    use p3_field::{Field, FieldAlgebra, PrimeField32};
     use p3_field_testing::test_field;
 
     use crate::Mersenne31;

@@ -11,7 +11,8 @@ use itertools::izip;
 use p3_field::{Field, PackedFieldPow2, PackedValue};
 use p3_util::log2_strict_usize;
 
-use crate::{monty_reduce, FieldParameters, MontyField31, TwoAdicData};
+use crate::utils::monty_reduce;
+use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 #[inline(always)]
 fn backward_butterfly<T: PackedFieldPow2>(x: T, y: T, roots: T) -> (T, T) {

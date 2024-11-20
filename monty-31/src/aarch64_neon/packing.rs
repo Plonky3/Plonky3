@@ -6,7 +6,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -442,7 +442,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> AbstractField for PackedMontyField31Neon<FP> {
+impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31Neon<FP> {
     type F = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);

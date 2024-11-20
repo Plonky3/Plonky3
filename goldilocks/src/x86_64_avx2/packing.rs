@@ -6,7 +6,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue, PrimeField64};
+use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue, PrimeField64};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -156,7 +156,7 @@ impl Product for PackedGoldilocksAVX2 {
     }
 }
 
-impl AbstractField for PackedGoldilocksAVX2 {
+impl FieldAlgebra for PackedGoldilocksAVX2 {
     type F = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);

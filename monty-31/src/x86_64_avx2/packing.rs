@@ -4,7 +4,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{AbstractField, Field, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -27,7 +27,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> __m256i {
+    pub(crate) fn to_vector(self) -> __m256i {
         unsafe {
             // Safety: `MontyField31<FP>` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[MontyField31<FP>; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -44,7 +44,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
-    unsafe fn from_vector(vector: __m256i) -> Self {
+    pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
         // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
@@ -122,7 +122,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -304,7 +304,7 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     monty_mul_signed::<MPAVX2>(square, input)
 }
@@ -314,7 +314,7 @@ fn packed_exp_3<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let quad = shifted_square::<MPAVX2>(square);
     monty_mul_signed::<MPAVX2>(quad, input)
@@ -325,7 +325,7 @@ fn packed_exp_5<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// Outputs will also lie in (-P, ..., P) stored in the odd indices.
 #[inline]
 #[must_use]
-fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+pub(crate) fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     let square = shifted_square::<MPAVX2>(input);
     let cube = monty_mul_signed::<MPAVX2>(square, input);
     let cube_shifted = movehdup_epi32(cube);
@@ -341,7 +341,7 @@ fn packed_exp_7<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 /// The input should conform to the requirements of `func`.
 #[inline]
 #[must_use]
-unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
+pub(crate) unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {
@@ -391,7 +391,7 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpsubd   t, lhs, rhs
     //      vpaddd   u, t, P
@@ -469,7 +469,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> AbstractField for PackedMontyField31AVX2<FP> {
+impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     type F = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);

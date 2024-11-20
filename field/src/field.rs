@@ -17,11 +17,21 @@ use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
-/// A generalization of `Field` which permits things like
+/// A commutative algebra over a finite field.
+///
+/// This permits elements like:
 /// - an actual field element
 /// - a symbolic expression which would evaluate to a field element
 /// - an array of field elements
-pub trait AbstractField:
+///
+/// Mathematically speaking, this is an algebraic structure with addition,
+/// multiplication and scalar multiplication. The addition and multiplication
+/// maps must be both commutative and associative, and there must
+/// exist identity elements for both (named `ZERO` and `ONE`
+/// respectively). Furthermore, multiplication must distribute over
+/// addition. Finally, the scalar multiplication must be realized by
+/// a ring homomorphism from the field to the algebra.
+pub trait FieldAlgebra:
     Sized
     + Default
     + Clone
@@ -38,11 +48,48 @@ pub trait AbstractField:
 {
     type F: Field;
 
+    /// The additive identity of the algebra.
+    ///
+    /// For every element `a` in the algebra we require the following properties:
+    ///
+    /// `a + ZERO = ZERO + a = a,`
+    ///
+    /// `a + (-a) = (-a) + a = ZERO.`
     const ZERO: Self;
+
+    /// The multiplicative identity of the Algebra
+    ///
+    /// For every element `a` in the algebra we require the following property:
+    ///
+    /// `a*ONE = ONE*a = a.`
     const ONE: Self;
+
+    /// The element in the algebra given by `ONE + ONE`.
+    ///
+    /// This is provided as a convenience as `TWO` occurs regularly in
+    /// the proving system. This also is slightly faster than computing
+    /// it via addition. Note that multiplication by `TWO` is discouraged.
+    /// Instead of `a * TWO` use `a.double()` which will be faster.
+    ///
+    /// If the field has characteristic 2 this is equal to ZERO.
     const TWO: Self;
+
+    /// The element in the algebra given by `-ONE`.
+    ///
+    /// This is provided as a convenience as `NEG_ONE` occurs regularly in
+    /// the proving system. This also is slightly faster than computing
+    /// it via negation. Note that where possible `NEG_ONE` should be absorbed
+    /// into mathematical operations. For example `a - b` will be faster
+    /// than `a + NEG_ONE * b` and similarly `(-b)` is faster than `NEG_ONE * b`.
+    ///
+    /// If the field has characteristic 2 this is equal to ONE.
     const NEG_ONE: Self;
 
+    /// Interpret a field element as a commutative algebra element.
+    ///
+    /// Mathematically speaking, this map is a ring homomorphism from the base field
+    /// to the commutative algebra. The existence of this map makes this structure
+    /// an algebra and not simply a commutative ring.
     fn from_f(f: Self::F) -> Self;
 
     /// Convert from a `bool`.
@@ -81,16 +128,26 @@ pub trait AbstractField:
     fn from_wrapped_u32(n: u32) -> Self;
     fn from_wrapped_u64(n: u64) -> Self;
 
+    /// The elementary function `double(a) = 2*a`.
+    ///
+    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some algebras.
+    /// If the field has characteristic 2 then this returns 0.
     #[must_use]
     fn double(&self) -> Self {
         self.clone() + self.clone()
     }
 
+    /// The elementary function `square(a) = a^2`.
+    ///
+    /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some algebras.
     #[must_use]
     fn square(&self) -> Self {
         self.clone() * self.clone()
     }
 
+    /// The elementary function `cube(a) = a^3`.
+    ///
+    /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some algebras.
     #[must_use]
     fn cube(&self) -> Self {
         self.square() * self.clone()
@@ -108,6 +165,10 @@ pub trait AbstractField:
         Self::F::exp_u64_generic(self.clone(), power)
     }
 
+    /// Exponentiation by a constant power.
+    ///
+    /// For a collection of small values we implement custom multiplication chain circuits which can be faster than the
+    /// simpler square and multiply approach.
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
@@ -129,6 +190,7 @@ pub trait AbstractField:
         }
     }
 
+    /// Compute self^{2^power_log} by repeated squaring.
     #[must_use]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
         let mut res = self.clone();
@@ -138,11 +200,20 @@ pub trait AbstractField:
         res
     }
 
+    /// self * 2^exp
+    #[must_use]
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        self.clone() * Self::TWO.exp_u64(exp)
+    }
+
+    /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
     #[must_use]
     fn powers(&self) -> Powers<Self> {
         self.shifted_powers(Self::ONE)
     }
 
+    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
             base: self.clone(),
@@ -170,6 +241,7 @@ pub trait AbstractField:
         }
     }
 
+    /// Compute the dot product of two vectors.
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
@@ -197,7 +269,7 @@ pub trait AbstractField:
 
 /// An element of a finite field.
 pub trait Field:
-    AbstractField<F = Self>
+    FieldAlgebra<F = Self>
     + Packable
     + 'static
     + Copy
@@ -223,13 +295,6 @@ pub trait Field:
         *self == Self::ONE
     }
 
-    /// self * 2^exp
-    #[must_use]
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        *self * Self::TWO.exp_u64(exp)
-    }
-
     /// self / 2^exp
     #[must_use]
     #[inline]
@@ -238,13 +303,13 @@ pub trait Field:
     }
 
     /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `AbstractField`s, not just this concrete field.
+    /// can be used with `FieldAlgebra`s, not just this concrete field.
     ///
     /// The default implementation uses naive square and multiply. Implementations may want to
     /// override this and handle certain powers with more optimal addition chains.
     #[must_use]
     #[inline]
-    fn exp_u64_generic<AF: AbstractField<F = Self>>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
         exp_u64_by_squaring(val, power)
     }
 
@@ -310,8 +375,15 @@ pub trait PrimeField32: PrimeField64 {
     fn as_canonical_u32(&self) -> u32;
 }
 
-pub trait AbstractExtensionField<Base: AbstractField>:
-    AbstractField
+/// A commutative algebra over an extension field.
+///
+/// Mathematically, this trait captures a slightly more interesting structure than the above one liner.
+/// As implemented here, A FieldExtensionAlgebra `FEA` over and extension field `EF` is
+/// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
+/// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
+/// product is over `F`.
+pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
+    FieldAlgebra
     + From<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>
@@ -377,16 +449,18 @@ pub trait AbstractExtensionField<Base: AbstractField>:
     }
 }
 
-pub trait ExtensionField<Base: Field>: Field + AbstractExtensionField<Base> {
-    type ExtensionPacking: AbstractExtensionField<Base::Packing, F = Self>
+pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
+    type ExtensionPacking: FieldExtensionAlgebra<Base::Packing, F = Self>
         + 'static
         + Copy
         + Send
         + Sync;
 
+    #[inline(always)]
     fn is_in_basefield(&self) -> bool {
         self.as_base_slice()[1..].iter().all(Field::is_zero)
     }
+
     fn as_base(&self) -> Option<Base> {
         if self.is_in_basefield() {
             Some(self.as_base_slice()[0])
@@ -414,27 +488,28 @@ impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
 }
 
-impl<AF: AbstractField> AbstractExtensionField<AF> for AF {
+impl<FA: FieldAlgebra> FieldExtensionAlgebra<FA> for FA {
     const D: usize = 1;
 
-    fn from_base(b: AF) -> Self {
+    fn from_base(b: FA) -> Self {
         b
     }
 
-    fn from_base_slice(bs: &[AF]) -> Self {
+    fn from_base_slice(bs: &[FA]) -> Self {
         assert_eq!(bs.len(), 1);
         bs[0].clone()
     }
 
-    fn from_base_iter<I: Iterator<Item = AF>>(mut iter: I) -> Self {
+    fn from_base_iter<I: Iterator<Item = FA>>(mut iter: I) -> Self {
         iter.next().unwrap()
     }
 
-    fn from_base_fn<F: FnMut(usize) -> AF>(mut f: F) -> Self {
+    fn from_base_fn<F: FnMut(usize) -> FA>(mut f: F) -> Self {
         f(0)
     }
 
-    fn as_base_slice(&self) -> &[AF] {
+    #[inline(always)]
+    fn as_base_slice(&self) -> &[FA] {
         slice::from_ref(self)
     }
 }
@@ -458,10 +533,10 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<AF: AbstractField> Iterator for Powers<AF> {
-    type Item = AF;
+impl<FA: FieldAlgebra> Iterator for Powers<FA> {
+    type Item = FA;
 
-    fn next(&mut self) -> Option<AF> {
+    fn next(&mut self) -> Option<FA> {
         let result = self.current.clone();
         self.current *= self.base.clone();
         Some(result)
@@ -476,7 +551,7 @@ pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
     pub current: P,
 }
 
-impl<AF: AbstractField, P: PackedField<Scalar = AF>> Iterator for PackedPowers<AF, P> {
+impl<FA: FieldAlgebra, P: PackedField<Scalar = FA>> Iterator for PackedPowers<FA, P> {
     type Item = P;
 
     fn next(&mut self) -> Option<P> {

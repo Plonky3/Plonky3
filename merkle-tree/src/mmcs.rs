@@ -199,12 +199,11 @@ mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
-    use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
-    use p3_field::{AbstractField, Field};
+    use p3_field::{Field, FieldAlgebra};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
-    use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
@@ -214,7 +213,7 @@ mod tests {
 
     type F = BabyBear;
 
-    type Perm = Poseidon2<F, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
+    type Perm = Poseidon2BabyBear<16>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
     type MyMmcs =
@@ -222,11 +221,7 @@ mod tests {
 
     #[test]
     fn commit_single_1x8() {
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut thread_rng(),
-        );
+        let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -259,11 +254,7 @@ mod tests {
 
     #[test]
     fn commit_single_8x1() {
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut thread_rng(),
-        );
+        let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -277,11 +268,7 @@ mod tests {
 
     #[test]
     fn commit_single_2x2() {
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut thread_rng(),
-        );
+        let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -303,11 +290,7 @@ mod tests {
 
     #[test]
     fn commit_single_2x3() {
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut thread_rng(),
-        );
+        let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -334,11 +317,7 @@ mod tests {
 
     #[test]
     fn commit_mixed() {
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut thread_rng(),
-        );
+        let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -433,11 +412,7 @@ mod tests {
     #[test]
     fn commit_either_order() {
         let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -454,11 +429,7 @@ mod tests {
     #[should_panic]
     fn mismatched_heights() {
         let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -476,11 +447,7 @@ mod tests {
     #[test]
     fn verify_tampered_proof_fails() {
         let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -515,11 +482,7 @@ mod tests {
     #[test]
     fn size_gaps() {
         let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
@@ -579,11 +542,7 @@ mod tests {
     #[test]
     fn different_widths() {
         let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(
-            Poseidon2ExternalMatrixGeneral,
-            DiffusionMatrixBabyBear::default(),
-            &mut rng,
-        );
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);

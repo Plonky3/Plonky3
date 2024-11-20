@@ -56,3 +56,14 @@ mod x86_64_avx512;
     target_feature = "avx512f"
 ))]
 pub use x86_64_avx512::*;
+
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(target_arch = "x86_64", target_feature = "avx2",),
+)))]
+mod no_packing;
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(target_arch = "x86_64", target_feature = "avx2",),
+)))]
+pub use no_packing::*;

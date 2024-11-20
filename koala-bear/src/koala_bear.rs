@@ -1,4 +1,4 @@
-use p3_field::{exp_1420470955, exp_u64_by_squaring, AbstractField, Field};
+use p3_field::{exp_1420470955, exp_u64_by_squaring, Field, FieldAlgebra};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, TwoAdicData,
@@ -29,7 +29,7 @@ impl BarrettParameters for KoalaBearParameters {}
 impl FieldParameters for KoalaBearParameters {
     const MONTY_GEN: KoalaBear = KoalaBear::new(3);
 
-    fn exp_u64_generic<AF: AbstractField>(val: AF, power: u64) -> AF {
+    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
         match power {
             1420470955 => exp_1420470955(val), // used to compute x^{1/7}
             _ => exp_u64_by_squaring(val, power),
