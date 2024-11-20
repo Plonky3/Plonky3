@@ -1,7 +1,7 @@
 use core::borrow::Borrow;
 
 use itertools::izip;
-use p3_air::utils::{double_add, pack_bits_le, triple_add, xor, xor_32_shift};
+use p3_air::utils::{add2, add3, pack_bits_le, xor, xor_32_shift};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::AbstractField;
 use p3_matrix::Matrix;
@@ -30,7 +30,7 @@ impl Blake3Air {
         let b_0_16 = pack_bits_le(trace.b[..BITS_PER_LIMB].iter().copied());
         let b_16_32 = pack_bits_le(trace.b[BITS_PER_LIMB..].iter().copied());
 
-        triple_add(
+        add3(
             builder,
             trace.a_prime,
             trace.a,
@@ -45,7 +45,7 @@ impl Blake3Air {
         // Next we verify c' = c + d' mod 2^32
         let d_prime_0_16 = pack_bits_le(trace.d_prime[..BITS_PER_LIMB].iter().copied());
         let d_prime_16_32 = pack_bits_le(trace.d_prime[BITS_PER_LIMB..].iter().copied());
-        double_add(
+        add2(
             builder,
             trace.c_prime,
             trace.c,
@@ -60,7 +60,7 @@ impl Blake3Air {
         let b_prime_0_16 = pack_bits_le(trace.b_prime[..BITS_PER_LIMB].iter().copied());
         let b_prime_16_32 = pack_bits_le(trace.b_prime[BITS_PER_LIMB..].iter().copied());
 
-        triple_add(
+        add3(
             builder,
             trace.a_output,
             trace.a_prime,
@@ -76,7 +76,7 @@ impl Blake3Air {
         // Next we verify c'' = c' + d'' mod 2^32
         let d_output_0_16 = pack_bits_le(trace.d_output[..BITS_PER_LIMB].iter().copied());
         let d_output_16_32 = pack_bits_le(trace.d_output[BITS_PER_LIMB..].iter().copied());
-        double_add(
+        add2(
             builder,
             trace.c_output,
             trace.c_prime,

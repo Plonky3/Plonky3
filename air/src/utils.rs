@@ -50,9 +50,9 @@ pub fn andn<AF: AbstractField>(x: AF, y: AF) -> AF {
     (AF::ONE - x) * y
 }
 
-/// Compute `xor` on a list of field elements using the arithmetic generalization.
+/// Compute `xor` on a list of boolean field elements.
 ///
-/// Additionally verifies at debug time that all inputs are boolean.
+/// Verifies at debug time that all inputs are boolean.
 #[inline(always)]
 pub fn checked_xor<F: Field, const N: usize>(xs: [F; N]) -> F {
     xs.into_iter().fold(F::ZERO, |acc, x| {
@@ -61,9 +61,9 @@ pub fn checked_xor<F: Field, const N: usize>(xs: [F; N]) -> F {
     })
 }
 
-/// Compute the `andnot` on a pair of field elements using the arithmetic generalization.
+/// Compute `andnot` on a pair of boolean field elements.
 ///
-/// Additionally verifies at debug time that both inputs are boolean.
+/// Verifies at debug time that both inputs are boolean.
 #[inline(always)]
 pub fn checked_andn<F: Field>(x: F, y: F) -> F {
     debug_assert!(x.is_zero() || x.is_one());
@@ -91,8 +91,10 @@ pub fn u32_to_bits_le<AF: AbstractField>(val: u32) -> [AF; 32] {
 ///
 /// We assume that a, b, c, d are all given as `2, 16` bit limbs (e.g. `a = a[0] + 2^16 a[1]`) and
 /// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
+///
+/// This function assumes we are working over a field with characteristic `P > 3*2^16`.
 #[inline]
-pub fn triple_add<AB: AirBuilder>(
+pub fn add3<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
     b: &[<AB as AirBuilder>::Var; 2],
@@ -115,19 +117,19 @@ pub fn triple_add<AB: AirBuilder>(
     //
     // Equation (1) verifies that a - b - c - d mod P = 0, -2^32 or -2*2^32.
     //
-    // Similarly, as overflow cannot occur when computing acc_16, equation (2) verifies that
-    // over the integers, a[0] - b[0] - c[0] - d[0] = 0, -2^16 or -2*2^16. Either way
-    // we can immediately conclude that a - b - c - d = 0 mod 2^16.
+    // Field overflow cannot occur when computing acc_16 as our characteristic is larger than 3*2^16.
+    // Hence, equation (2) verifies that, over the integers, a[0] - b[0] - c[0] - d[0] = 0, -2^16 or -2*2^16.
+    // Either way we can immediately conclude that a - b - c - d = 0 mod 2^16.
     //
     // Now we can use the chinese remainder theorem to combine these results to conclude that
     // a - b - c - d mod 2^16P = 0, -2^32 or -2*2^32.
-    // No overflow can occur mod 2^16 P as 2^16 P ~ 2^47 and a, b, c, d < 2^32. Hence we conclude that
+    //
+    // No overflow can occur mod 2^16 P as 2^16 P > 3*2^32 and a, b, c, d < 2^32. Hence we conclude that
     // over the integers a - b - c - d = 0, -2^32 or -2*2^32 which implies a = b + c + d mod 2^32.
 
-    // TODO: Ideally two_16, two_32 should be saved as constants. Or at the very least
-    // there should be a quicker method of generating them than exp_u64.
-    let two_16 = <AB as AirBuilder>::Expr::TWO.exp_u64(16);
-    let two_32 = two_16.exp_u64(2);
+    // By assumption P > 3*2^16 so we can safely use from_canonical here.
+    let two_16 = <AB as AirBuilder>::Expr::from_canonical_u32(1 << 16);
+    let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
@@ -143,8 +145,10 @@ pub fn triple_add<AB: AirBuilder>(
 ///
 /// We assume that a, b, c are all given as `2, 16` bit limbs (e.g. `a = a[0] + 2^16 a[1]`) and
 /// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
+///
+/// This function assumes we are working over a field with characteristic `P > 2^17`.
 #[inline]
-pub fn double_add<AB: AirBuilder>(
+pub fn add2<AB: AirBuilder>(
     builder: &mut AB,
     a: &[<AB as AirBuilder>::Var; 2],
     b: &[<AB as AirBuilder>::Var; 2],
@@ -166,19 +170,19 @@ pub fn double_add<AB: AirBuilder>(
     //
     // Equation (1) verifies that either a - b - c = 0 mod P or a - b - c = -2^32 mod P.
     //
-    // Similarly, as overflow cannot occur when computing acc_16, equation (2) verifies that
-    // over the integers, a[0] - b[0] - c[0] = 0  or  a[0] - b[0] - c[0] = -2^16. Either way
-    // we can conclude that a - b - c = 0 mod 2^16.
+    // Field overflow cannot occur when computing acc_16 as our characteristic is larger than 2^17.
+    // Hence, equation (2) verifies that, over the integers, a[0] - b[0] - c[0] = 0 or -2^16.
+    // Either way we can immediately conclude that a - b - c = 0 mod 2^16.
     //
     // Now we can use the chinese remainder theorem to combine these results to conclude that
     // either a - b - c = 0 mod 2^16 P or a - b - c = -2^32 mod 2^16 P.
-    // No overflow can occur mod 2^16 P as 2^16 P ~ 2^47 and a, b, c < 2^32. Hence we conclude that
+    //
+    // No overflow can occur mod 2^16 P as 2^16 P > 2^33 and a, b, c < 2^32. Hence we conclude that
     // over the integers a - b - c = 0 or a - b - c = -2^32 which is equivalent to a = b + c mod 2^32.
 
-    // TODO: Ideally two_16, two_32 should be saved as constants. Or at the very least
-    // there should be a quicker method of generating them than exp_u64.
-    let two_16 = <AB as AirBuilder>::Expr::TWO.exp_u64(16);
-    let two_32 = two_16.exp_u64(2);
+    // By assumption P > 2^17 so we can safely use from_canonical here.
+    let two_16 = <AB as AirBuilder>::Expr::from_canonical_u32(1 << 16);
+    let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone();
