@@ -152,6 +152,6 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     // -2*P^2 <= x2 - z2 <= P
     let b2 = F::from_wrapped_u64((TWO_P_SQR + x2 - z2) as u64);
 
-    *x = C::new(a1, a2);
-    *y = C::new(b1, b2);
+    *x = C::new_complex(a1, a2);
+    *y = C::new_complex(b1, b2);
 }

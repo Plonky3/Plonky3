@@ -4,7 +4,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::field::Field;
-use crate::{CommutativeRing, FieldAlgebra, FieldArray, PackedValue};
+use crate::{CommutativeRing, FieldArray, PackedValue};
 
 /// Batch multiplicative inverses with Montgomery's trick
 /// This is Montgomery's trick. At a high level, we invert the product of the given field

@@ -1,7 +1,9 @@
-use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use crate::{Field, FieldAlgebra, FieldExtensionAlgebra};
+use core::ops::{Add, Mul, Sub};
 
-pub type Complex<FA> = BinomialExtensionField<FA, 2>;
+use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
+use crate::{Field, FieldAlgebra};
+
+pub type Complex<F, FA = F> = BinomialExtensionField<F, 2, FA>;
 
 /// A field for which `p = 3 (mod 4)`. Equivalently, `-1` is not a square,
 /// so the complex extension can be defined `F[i] = F[X]/(X^2+1)`.
@@ -24,23 +26,10 @@ impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
     const EXT_GENERATOR: [Self; 2] = F::COMPLEX_GENERATOR.value;
 }
 
-/// Convenience methods for complex extensions
-impl<FA: FieldAlgebra> Complex<FA> {
+impl<F, FA: Clone> Complex<F, FA> {
     #[inline(always)]
-    pub const fn new(real: FA, imag: FA) -> Self {
-        Self {
-            value: [real, imag],
-        }
-    }
-
-    #[inline(always)]
-    pub const fn new_real(real: FA) -> Self {
-        Self::new(real, FA::ZERO)
-    }
-
-    #[inline(always)]
-    pub const fn new_imag(imag: FA) -> Self {
-        Self::new(FA::ZERO, imag)
+    pub const fn new_complex(real: FA, imag: FA) -> Self {
+        Self::new([real, imag])
     }
 
     #[inline(always)]
@@ -52,10 +41,23 @@ impl<FA: FieldAlgebra> Complex<FA> {
     pub fn imag(&self) -> FA {
         self.value[1].clone()
     }
+}
+
+/// Convenience methods for complex extensions
+impl<F: Field, FA: FieldAlgebra<F>> Complex<F, FA> {
+    #[inline(always)]
+    pub const fn new_real(real: FA) -> Self {
+        Self::new_complex(real, FA::ZERO)
+    }
+
+    #[inline(always)]
+    pub const fn new_imag(imag: FA) -> Self {
+        Self::new_complex(FA::ZERO, imag)
+    }
 
     #[inline(always)]
     pub fn conjugate(&self) -> Self {
-        Self::new(self.real(), self.imag().neg())
+        Self::new_complex(self.real(), self.imag().neg())
     }
 
     #[inline]
@@ -70,8 +72,13 @@ impl<FA: FieldAlgebra> Complex<FA> {
 
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
     // but still on the circle.
-    pub fn rotate<Ext: FieldExtensionAlgebra<FA>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
-        Complex::<Ext>::new(
+    pub fn rotate<
+        Ext: Add<Ext, Output = Ext> + Sub<Ext, Output = Ext> + Mul<FA, Output = Ext> + Clone,
+    >(
+        &self,
+        rhs: Complex<Ext>,
+    ) -> Complex<Ext> {
+        Complex::<Ext>::new_complex(
             rhs.real() * self.real() - rhs.imag() * self.imag(),
             rhs.imag() * self.real() + rhs.real() * self.imag(),
         )

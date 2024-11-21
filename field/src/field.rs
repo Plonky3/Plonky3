@@ -79,6 +79,17 @@ pub trait CommutativeRing:
     /// `x*ONE = ONE*x = x.`
     const ONE: Self;
 
+    /// The field element (-1) mod p.
+    ///
+    /// This is provided as a convenience as `NEG_ONE` occurs regularly in
+    /// the proving system. This also is slightly faster than computing
+    /// it via negation. Note that where possible `NEG_ONE` should be absorbed
+    /// into mathematical operations. For example `a - b` will be faster
+    /// than `a + NEG_ONE * b` and similarly `(-b)` is faster than `NEG_ONE * b`.
+    ///
+    /// When p = 2, this is equal to ONE.
+    const NEG_ONE: Self;
+
     /// The elementary function `double(a) = 2*a`.
     ///
     /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some algebras.
@@ -123,7 +134,7 @@ pub trait CommutativeRing:
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        exp_u64_by_squaring(&self, power)
+        exp_u64_by_squaring(self.clone(), power)
     }
 
     /// Exponentiation by a constant power.
@@ -355,12 +366,12 @@ pub trait FieldAlgebra<F: Field>: PrimeCharacteristicRing {
 /// A field algebra which can be serialized into and out of a
 /// collection of field elements.
 ///
-/// We make no guarantees about consistency of Serialization/Deserialization
+/// We make no guarantees about consistency of this Serialization/Deserialization
 /// across different versions of Plonky3.
 ///
 /// ### Mathematical Description
 ///
-/// Mathematically a more accurate name for this trait would be BasedVectorSpace.
+/// Mathematically a more accurate name for this trait would be BasedFreeVectorSpace.
 ///
 /// As `F` is a field, every field algebra `A`, over `F` is an `F`-vector space.
 /// This means we can pick a basis of elements `B = {b_0, ..., b_{n-1}}` in `A`
@@ -370,7 +381,7 @@ pub trait FieldAlgebra<F: Field>: PrimeCharacteristicRing {
 /// Thus choosing this basis `B` allows us to map between elements of `A` and
 /// arrays of `n` elements of `F`. Clearly this map depends entirely on the
 /// choice of basis `B` which may change across versions of Plonky3.
-pub trait SerializableAlgebra<F: Field> {
+pub trait Serializable<F> {
     // We could alternatively call this BasedAlgebra?
     // The name is currently trying to indicate what this is meant to be
     // used for as opposed to being mathematically accurate.
@@ -428,7 +439,7 @@ pub trait SerializableAlgebra<F: Field> {
 
 /// An element of a finite field.
 pub trait Field:
-    PrimeCharacteristicRing
+    FieldAlgebra<Self>
     + Packable
     + 'static
     + Copy
@@ -486,14 +497,7 @@ pub trait Field:
 }
 
 /// Every field is trivially a field algebra over itself.
-impl<F: Field> FieldAlgebra<F> for F {
-    fn from_f(f: F) -> Self {
-        f
-    }
-}
-
-/// Every field is trivially a field algebra over itself.
-impl<F: Field> SerializableAlgebra<F> for F {
+impl<F: Field> Serializable<F> for F {
     fn serialize(&self) -> Vec<F> {
         vec![*self]
     }
@@ -586,17 +590,6 @@ pub trait PrimeField:
     /// When p = 2, this is equal to ZERO.
     const TWO: Self;
 
-    /// The field element (-1) mod p.
-    ///
-    /// This is provided as a convenience as `NEG_ONE` occurs regularly in
-    /// the proving system. This also is slightly faster than computing
-    /// it via negation. Note that where possible `NEG_ONE` should be absorbed
-    /// into mathematical operations. For example `a - b` will be faster
-    /// than `a + NEG_ONE * b` and similarly `(-b)` is faster than `NEG_ONE * b`.
-    ///
-    /// When p = 2, this is equal to ONE.
-    const NEG_ONE: Self;
-
     fn as_canonical_biguint(&self) -> BigUint;
 }
 
@@ -620,7 +613,7 @@ pub trait ExtensionField<Base: Field>:
     Field
     + From<Base>
     + FieldAlgebra<Base>
-    + SerializableAlgebra<Base>
+    // + SerializableAlgebra<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>
@@ -636,42 +629,12 @@ pub trait ExtensionField<Base: Field>:
 
     const D: usize;
 
-    #[inline(always)]
-    fn is_in_basefield(&self) -> bool {
-        self.as_base_slice()[1..].iter().all(Field::is_zero)
-    }
+    /// Determine if the given element lies in the base field.
+    fn is_in_basefield(&self) -> bool;
 
-    fn as_base(&self) -> Option<Base> {
-        if self.is_in_basefield() {
-            Some(self.as_base_slice()[0])
-        } else {
-            None
-        }
-    }
-
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking>;
-}
-
-impl<F: Field> ExtensionField<F> for F {
-    const D: usize = 1;
-    type ExtensionPacking = F::Packing;
-
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
-        Self::Packing::powers(self)
-    }
-}
-
-unsafe impl<PF: PackedField> PackedFieldExtension for PF {
-    type BaseField = PF::Scalar;
-    type ExtField = PF::Scalar;
-
-    fn from_ext_slice(ext_vec: &[Self::ExtField]) -> Vec<Self> {
-        ext_vec.to_vec()
-    }
-
-    fn to_ext_slice(packed_vec: &[Self]) -> Vec<Self::ExtField> {
-        packed_vec.to_vec()
-    }
+    /// If the element lies in the base field project it down.
+    /// Otherwise return None.
+    fn as_base(&self) -> Option<Base>;
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods

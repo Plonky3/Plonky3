@@ -47,7 +47,7 @@ fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
                 // two-element column into a Mersenne31Complex
                 // treating the first row as the real part and the
                 // second row as the imaginary part.
-                row_0.zip(row_1).map(|(x, y)| C::new(x, y))
+                row_0.zip(row_1).map(|(x, y)| C::new_complex(x, y))
             })
             .collect(),
         input.width(),
@@ -76,7 +76,7 @@ fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
         let row = izip!(input.row(j), input.row(h - j)).map(|(x, y)| {
             let even = x + y.conjugate();
             // odd = (x - y.conjugate()) * -i
-            let odd = C::new(x.imag() + y.imag(), y.real() - x.real());
+            let odd = C::new_complex(x.imag() + y.imag(), y.real() - x.real());
             (even + odd * omega_j).halve()
         });
         output.extend(row);
@@ -109,7 +109,7 @@ fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
         let row = izip!(input.row(j), input.row(h - j)).map(|(x, y)| {
             let even = x + y.conjugate();
             // odd = (x - y.conjugate()) * -i
-            let odd = C::new(x.imag() + y.imag(), y.real() - x.real());
+            let odd = C::new_complex(x.imag() + y.imag(), y.real() - x.real());
             (even - odd * omega_j).halve()
         });
         output.extend(row);

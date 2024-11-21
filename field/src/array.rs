@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::batch_inverse::batch_multiplicative_inverse_general;
-use crate::{Field, FieldAlgebra, PackedValue};
+use crate::{CommutativeRing, Field, FieldAlgebra, PackedValue, PrimeCharacteristicRing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
@@ -35,49 +35,24 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
     }
 }
 
-impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
-    type F = F;
-
+impl<F: Field, const N: usize> CommutativeRing for FieldArray<F, N> {
     const ZERO: Self = FieldArray([F::ZERO; N]);
     const ONE: Self = FieldArray([F::ONE; N]);
-    const TWO: Self = FieldArray([F::TWO; N]);
     const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
+}
 
+impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
+    type Char = F::Char;
+
+    fn from_char(f: Self::Char) -> Self {
+        F::from_char(f).into()
+    }
+}
+
+impl<F: Field, const N: usize> FieldAlgebra<F> for FieldArray<F, N> {
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_f(f: F) -> Self {
         f.into()
-    }
-
-    fn from_bool(b: bool) -> Self {
-        [F::from_bool(b); N].into()
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        [F::from_canonical_u8(n); N].into()
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        [F::from_canonical_u16(n); N].into()
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        [F::from_canonical_u32(n); N].into()
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        [F::from_canonical_u64(n); N].into()
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        [F::from_canonical_usize(n); N].into()
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        [F::from_wrapped_u32(n); N].into()
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        [F::from_wrapped_u64(n); N].into()
     }
 }
 

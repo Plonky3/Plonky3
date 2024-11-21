@@ -4,7 +4,7 @@ use core::slice;
 
 use alloc::vec::Vec;
 
-use crate::{ExtensionField, Field, FieldAlgebra, Powers, PrimeField};
+use crate::{CommutativeRing, ExtensionField, Field, FieldAlgebra, Powers};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -131,7 +131,6 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
-/// [F; WIDTH]
 pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     + From<Self::Scalar>
@@ -144,20 +143,24 @@ pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {
-    type Scalar: PrimeField<Packing = Self>;
+    type Scalar: Field;
 
-    /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
+    /// Construct an iterator which returns powers of `base` packed into packed field elements.
+    /// 
+    /// E.g. if `Self::WIDTH = 4` returns: `[base^0, base^1, base^2, base^3], [base^4, base^5, base^6, base^7], ...`
     #[must_use]
-    fn powers(base: Self::Scalar) -> Powers<Self> {
-        Self::shifted_powers(base, Self::Scalar::ONE)
+    fn packed_powers(base: Self::Scalar) -> Powers<Self> {
+        Self::packed_shifted_powers(base, Self::Scalar::ONE)
     }
 
-    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
-    fn shifted_powers(base: Self::Scalar, start: Self::Scalar) -> Powers<Self> {
-        let mut current = start.into();
+    /// Construct an iterator which returns powers of `base` multiplied by `start` and packed into packed field elements.
+    /// 
+    /// E.g. if `Self::WIDTH = 4` returns: `[start, start*base, start*base^2, start*base^3], [start*base^4, start*base^5, start*base^6, start*base^7], ...`
+    fn packed_shifted_powers(base: Self::Scalar, start: Self::Scalar) -> Powers<Self> {
+        let mut current: Self = start.into();
         let slice = current.as_slice_mut();
         for i in 1..Self::WIDTH {
-            slice[i] = slice[i - 1].clone() * base.clone();
+            slice[i] = slice[i - 1] * base;
         }
 
         Powers {
@@ -207,10 +210,16 @@ pub unsafe trait PackedFieldPow2: PackedField {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 
-/// [[F; WIDTH]; Algebra WIDTH]
-pub unsafe trait PackedFieldExtension:
+/// Fix a field `F` a packing width `W` and an extension field `EF` of `F`.
+///
+/// By choosing a basis `B`, `EF` can be transformed into an array `[F; D]`.
+///
+/// A type should implement PackedFieldExtension if it can be transformed into `[F::Packing; D] ~ [[F; W]; D]`
+///
+/// This is interpreted by taking a transpose to get `[[F; D]; W]` which can then be reinterpreted
+/// as `[EF; W]` by making use of the chosen basis `B` again.
+pub trait PackedFieldExtension:
     FieldAlgebra<Self::BaseField>
-    + From<Self::ExtField>
     + Add<<Self::BaseField as Field>::Packing, Output = Self>
     + AddAssign<<Self::BaseField as Field>::Packing>
     + Sub<<Self::BaseField as Field>::Packing, Output = Self>
@@ -219,13 +228,30 @@ pub unsafe trait PackedFieldExtension:
     + MulAssign<<Self::BaseField as Field>::Packing>
 {
     type BaseField: Field;
-    type ExtField: ExtensionField<Self::BaseField>;
+    type ExtField: ExtensionField<Self::BaseField, ExtensionPacking = Self>;
 
-    fn from_ext_slice(ext_vec: &[Self::ExtField]) -> Vec<Self>;
+    /// Given an extension field `EF` element, decompose it into
+    /// a collection of field `F` elements, cast each field element
+    /// to the corresponding packed element and then pack the result into an array.
+    fn from_ext_element(ext_elem: Self::ExtField) -> Self;
+
+    /// Given a slice of extension field `EF` elements of length `W`,
+    /// convert into the array `[[F; D]; W]` transpose to
+    /// decompose it into `[[F; W]; D]` and then pack to get `[PF; W]`
+    fn from_ext_slice(ext_slice: &[Self::ExtField]) -> Self;
 
     // TODO: Do we need from iterator/from_fns as well?
 
-    fn to_ext_slice(packed_vec: &[Self]) -> Vec<Self::ExtField>;
+    /// Convert self to an array of form `[[F; W]; D]`. Then
+    /// transpose this array to get something of form `[[F; D]; W]`
+    /// Interpret each row as an extension field element so this is
+    /// `[EF; W]`. We return a Vec and not an array due to Const Generics
+    /// restrictions.
+    fn to_ext_vec(packed_ext_elem: &Self) -> Vec<Self::ExtField>;
+
+    /// Similar to packed_powers, construct an iterator which returns
+    /// powers of `base` packed into `PackedFieldExtension` elements.
+    fn ext_powers_packed(base: Self::ExtField) -> Powers<Self>;
 }
 
 unsafe impl<T: Packable> PackedValue for T {
@@ -257,11 +283,11 @@ unsafe impl<T: Packable> PackedValue for T {
     }
 }
 
-unsafe impl<F: PrimeField<Packing = F>> PackedField for F {
+unsafe impl<F: Field> PackedField for F {
     type Scalar = Self;
 }
 
-unsafe impl<F: PrimeField<Packing = F>> PackedFieldPow2 for F {
+unsafe impl<F: Field> PackedFieldPow2 for F {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         match block_len {
             1 => (*self, other),

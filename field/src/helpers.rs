@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
-use crate::{CommutativeRing, FieldAlgebra, PackedValue, PrimeField, PrimeField32, TwoAdicField};
+use crate::{CommutativeRing, PackedValue, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -203,11 +203,13 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
+///
+/// This is optimised assuming that the characteristic of TF is greater than 2^64.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let po2 = TF::from_canonical_u64(1u64 << 32);
+    let po2 = TF::from_int(1u64 << 32);
     let mut result = TF::ZERO;
     for val in vals.iter().rev() {
-        result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());
+        result = result * po2 + TF::from_int(val.as_canonical_u32());
     }
     result
 }
@@ -225,7 +227,7 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         let digit: BigUint = val.clone() & mask;
         let digit_u64s = digit.to_u64_digits();
         if !digit_u64s.is_empty() {
-            result.push(TF::from_wrapped_u64(digit_u64s[0]));
+            result.push(TF::from_int(digit_u64s[0]));
         } else {
             result.push(TF::ZERO)
         }
