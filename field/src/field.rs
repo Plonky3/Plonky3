@@ -352,6 +352,80 @@ pub trait FieldAlgebra<F: Field>: PrimeCharacteristicRing {
     fn from_f(f: F) -> Self;
 }
 
+/// A field algebra which can be serialized into and out of a
+/// collection of field elements.
+///
+/// We make no guarantees about consistency of Serialization/Deserialization
+/// across different versions of Plonky3.
+///
+/// ### Mathematical Description
+///
+/// Mathematically a more accurate name for this trait would be BasedVectorSpace.
+///
+/// As `F` is a field, every field algebra `A`, over `F` is an `F`-vector space.
+/// This means we can pick a basis of elements `B = {b_0, ..., b_{n-1}}` in `A`
+/// such that, given any element `a`, we can find a unique set of `n` elements of `F`,
+/// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`.
+///
+/// Thus choosing this basis `B` allows us to map between elements of `A` and
+/// arrays of `n` elements of `F`. Clearly this map depends entirely on the
+/// choice of basis `B` which may change across versions of Plonky3.
+pub trait SerializableAlgebra<F: Field> {
+    // We could alternatively call this BasedAlgebra?
+    // The name is currently trying to indicate what this is meant to be
+    // used for as opposed to being mathematically accurate.
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map an element of `A` to a vector of `n` `F` elements.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn serialize(&self) -> Vec<F>;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn deserialize_slice(slice: &[F]) -> Self;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`. Similar
+    /// to `core:array::from_fn`, the `n` `F` elements are
+    /// given by `Fn(0), ..., Fn(n - 1)`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+}
+
 /// An element of a finite field.
 pub trait Field:
     PrimeCharacteristicRing
@@ -415,6 +489,25 @@ pub trait Field:
 impl<F: Field> FieldAlgebra<F> for F {
     fn from_f(f: F) -> Self {
         f
+    }
+}
+
+/// Every field is trivially a field algebra over itself.
+impl<F: Field> SerializableAlgebra<F> for F {
+    fn serialize(&self) -> Vec<F> {
+        vec![*self]
+    }
+
+    fn deserialize_slice(slice: &[F]) -> Self {
+        slice[0]
+    }
+
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
+        f(0)
+    }
+
+    fn deserialize_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
+        iter.next().unwrap()
     }
 }
 
@@ -527,6 +620,7 @@ pub trait ExtensionField<Base: Field>:
     Field
     + From<Base>
     + FieldAlgebra<Base>
+    + SerializableAlgebra<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>
     + Sub<Base, Output = Self>

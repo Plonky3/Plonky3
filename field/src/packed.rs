@@ -12,7 +12,7 @@ use crate::{ExtensionField, Field, FieldAlgebra, Powers, PrimeField};
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
 /// # Safety
-/// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
+/// - If `P` implements `PackedValue` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     type Value: Packable;
