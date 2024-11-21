@@ -5,9 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-util = { path = "../util" }
+p3-field = { path = "../field", version = "0.3.0" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.3.0" }
+p3-util = { path = "../util", version = "0.3.0" }
 itertools = "0.13.0"
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
