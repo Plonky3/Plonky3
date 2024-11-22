@@ -15,6 +15,50 @@ use serde::Serialize;
 use crate::packed::PackedField;
 use crate::{bits_u64, Packable, PackedFieldExtension};
 
+pub trait AbelianGroup:
+    Sized
+    + Default
+    + Clone
+    + Add<Output = Self>
+    + AddAssign
+    + Sub<Output = Self>
+    + SubAssign
+    + Neg<Output = Self>
+    + Sum
+{
+    /// The additive identity element.
+    ///
+    /// For every other element `x` we require the following properties:
+    ///
+    /// `x + ZERO = ZERO + x = x,`
+    ///
+    /// `x + (-x) = (-x) + x = ZERO.`
+    const ZERO: Self;
+
+    /// The elementary function `double(a) = a + a`.
+    ///
+    /// This function should be preferred over calling `a + a` or `TWO * a`
+    /// as a faster implementation may be available.
+    #[must_use]
+    fn double(&self) -> Self {
+        self.clone() + self.clone()
+    }
+
+    #[must_use]
+    fn mul_usize(&self, r: usize) -> Self {
+        let mut current = self.clone();
+        let mut res = Self::ZERO;
+
+        for j in 0..bits_u64(r) {
+            if (r >> j & 1) != 0 {
+                res += current.clone();
+            }
+            current = current.double();
+        }
+        res
+    }
+}
+
 /// A commutative ring.
 ///
 /// The is the a basic building block trait which implements addition and multiplication.
@@ -48,30 +92,7 @@ use crate::{bits_u64, Packable, PackedFieldExtension};
 /// `x * (y + z) = (x*y) + (x*z)`.
 ///
 /// The simplest examples of commutative rings are the integers (`ℤ`), and the integers mod `N` (`ℤ/N`).
-pub trait CommutativeRing:
-    Sized
-    + Default
-    + Clone
-    + Add<Output = Self>
-    + AddAssign
-    + Sub<Output = Self>
-    + SubAssign
-    + Neg<Output = Self>
-    + Mul<Output = Self>
-    + MulAssign
-    + Sum
-    + Product
-    + Debug
-{
-    /// The additive identity of the ring.
-    ///
-    /// For every element `x` in the ring we require the following properties:
-    ///
-    /// `x + ZERO = ZERO + x = x,`
-    ///
-    /// `x + (-x) = (-x) + x = ZERO.`
-    const ZERO: Self;
-
+pub trait CommutativeRing: AbelianGroup + Mul<Output = Self> + MulAssign + Product + Debug {
     /// The multiplicative identity of the ring
     ///
     /// For every element `x` in the ring we require the following property:
@@ -89,15 +110,6 @@ pub trait CommutativeRing:
     ///
     /// When p = 2, this is equal to ONE.
     const NEG_ONE: Self;
-
-    /// The elementary function `double(a) = 2*a`.
-    ///
-    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some algebras.
-    /// If the field has characteristic 2 then this returns 0.
-    #[must_use]
-    fn double(&self) -> Self {
-        self.clone() + self.clone()
-    }
 
     /// The elementary function `square(a) = a^2`.
     ///
