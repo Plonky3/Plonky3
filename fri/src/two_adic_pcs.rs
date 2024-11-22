@@ -262,7 +262,7 @@ where
         let log_global_max_height = log2_strict_usize(global_max_height);
 
         // For each unique opening point z, we will find the largest degree bound
-        // for that point, and precompute 1/(X - z) for the largest subgroup (in bitrev order).
+        // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
         let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR);
 
         let mut all_opened_values: OpenedValues<Challenge> = vec![];
