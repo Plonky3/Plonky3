@@ -4,6 +4,7 @@ members = [
     "air",
     "baby-bear",
     "blake3",
+    "blake3-air",
     "bn254-fr",
     "challenger",
     "circle",
