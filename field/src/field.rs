@@ -724,9 +724,9 @@ pub trait TwoAdicField: Field {
 
 /// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
 #[derive(Clone, Debug)]
-pub struct Powers<F> {
-    pub base: F,
-    pub current: F,
+pub struct Powers<CR> {
+    pub base: CR,
+    pub current: CR,
 }
 
 impl<CR: CommutativeRing> Iterator for Powers<CR> {
