@@ -4,6 +4,7 @@ use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use paste::paste;
 
 use num_bigint::BigUint;
 use num_traits::One;
@@ -194,6 +195,43 @@ pub trait CommutativeRing:
     }
 }
 
+/// This is a simple macro which lets us cleanly define the function `from_Int`
+/// with `Int` can be replaced by any integer type.
+///
+/// Running, `from_integer_types(Int)` adds the following code to the trait:
+///
+/// ```rust,ignore
+/// /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+/// ///
+/// /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+/// ///
+/// /// Note that the output only depends on `r mod p`.
+/// ///
+/// /// This should be avoided in performance critical locations.
+/// fn from_Int(int: Int) -> Self {
+///     Self::from_char(Self::Char::from_int(int))
+/// }
+/// ```
+///
+/// This macro can be run for any `Int` where `Self::Char` implements `QuotientMap<Int>`
+macro_rules! from_integer_types {
+    ($($type:ty),* $(,)? ) => {
+        $( paste!{
+        /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+        ///
+        /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+        ///
+        /// Note that the output only depends on `r mod p`.
+        ///
+        /// This should be avoided in performance critical locations.
+        fn [<from_ $type>](int: $type) -> Self {
+            Self::from_char(Self::Char::from_int(int))
+        }
+    }
+        )*
+    };
+}
+
 /// A commutative ring `(R)` with prime characteristic `(p)`.
 ///
 /// Whilst many rings with other characteristics exist, we expect every struct here
@@ -233,59 +271,7 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
         }
     }
 
-    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
-    ///
-    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
-    ///
-    /// Note that the output only depends on `r mod p`.
-    ///
-    /// This should be avoided in performance critical locations.
-    fn from_u8(int: u8) -> Self {
-        Self::from_char(Self::Char::from_int(int))
-    }
-
-    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
-    ///
-    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
-    ///
-    ///
-    /// This should be avoided in performance critical locations.
-    fn from_u16(int: u16) -> Self {
-        Self::from_char(Self::Char::from_int(int))
-    }
-
-    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
-    ///
-    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
-    ///
-    /// Note that the output only depends on `r mod p`.
-    ///
-    /// This should be avoided in performance critical locations.
-    fn from_u32(int: u32) -> Self {
-        Self::from_char(Self::Char::from_int(int))
-    }
-
-    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
-    ///
-    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
-    ///
-    /// Note that the output only depends on `r mod p`.
-    ///
-    /// This should be avoided in performance critical locations.
-    fn from_u64(int: u64) -> Self {
-        Self::from_char(Self::Char::from_int(int))
-    }
-
-    /// Given an integer `r`, return the sum of `r` copies of `ONE`:
-    ///
-    /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
-    ///
-    /// Note that the output only depends on `r mod p`.
-    ///
-    /// This should be avoided in performance critical locations.
-    fn from_usize(int: usize) -> Self {
-        Self::from_char(Self::Char::from_int(int))
-    }
+    from_integer_types!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
 
     /// The elementary function `halve(a) = a/2`.
     ///
