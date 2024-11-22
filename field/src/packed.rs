@@ -4,7 +4,10 @@ use core::slice;
 
 use alloc::vec::Vec;
 
-use crate::{CommutativeRing, ExtensionField, Field, FieldAlgebra, Powers};
+use crate::{
+    CommutativeRing, ExtensionField, Field, FieldAlgebra, InjectiveRingHomomorphism, Powers,
+    PrimeCharacteristicRing,
+};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -219,7 +222,8 @@ pub unsafe trait PackedFieldPow2: PackedField {
 /// This is interpreted by taking a transpose to get `[[F; D]; W]` which can then be reinterpreted
 /// as `[EF; W]` by making use of the chosen basis `B` again.
 pub trait PackedFieldExtension:
-    FieldAlgebra<Self::BaseField>
+    PrimeCharacteristicRing
+    + InjectiveRingHomomorphism<Self::BaseField>
     + Add<<Self::BaseField as Field>::Packing, Output = Self>
     + AddAssign<<Self::BaseField as Field>::Packing>
     + Sub<<Self::BaseField as Field>::Packing, Output = Self>

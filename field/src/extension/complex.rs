@@ -1,7 +1,7 @@
 use core::ops::{Add, Mul, Sub};
 
 use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use crate::{Field, FieldAlgebra};
+use crate::{Field, PrimeCharacteristicRing};
 
 pub type Complex<F, FA = F> = BinomialExtensionField<F, 2, FA>;
 
@@ -44,7 +44,7 @@ impl<F, FA: Clone> Complex<F, FA> {
 }
 
 /// Convenience methods for complex extensions
-impl<F: Field, FA: FieldAlgebra<F>> Complex<F, FA> {
+impl<F: Field, FA: PrimeCharacteristicRing> Complex<F, FA> {
     #[inline(always)]
     pub const fn new_real(real: FA) -> Self {
         Self::new_complex(real, FA::ZERO)

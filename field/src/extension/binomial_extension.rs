@@ -18,8 +18,9 @@ use super::{HasFrobenius, HasTwoAdicBionmialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, CommutativeRing, ExtensionField, FieldAlgebra, Packable, PackedFieldExtension,
-    PackedValue, Powers, PrimeCharacteristicRing, PrimeField, TwoAdicField,
+    field_to_array, AbelianGroup, CommutativeRing, ExtensionField, FieldAlgebra,
+    InjectiveRingHomomorphism, Packable, PackedFieldExtension, PackedValue, Powers,
+    PrimeCharacteristicRing, PrimeField, TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -190,13 +191,28 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     }
 }
 
-impl<F, FA, const D: usize> CommutativeRing for BinomialExtensionField<F, D, FA>
+impl<F, FA, const D: usize> AbelianGroup for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
     FA: FieldAlgebra<F>,
 {
     const ZERO: Self = Self::new([FA::ZERO; D]);
 
+    fn mul_u64(&self, r: u64) -> Self {
+        self.clone() * Self::from_u64(r)
+    }
+
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        let pow = FA::Char::TWO.exp_u64(exp);
+        self.clone() * FA::from_char(pow)
+    }
+}
+
+impl<F, FA, const D: usize> CommutativeRing for BinomialExtensionField<F, D, FA>
+where
+    F: BinomiallyExtendable<D>,
+    FA: FieldAlgebra<F>,
+{
     const ONE: Self = Self::new(field_to_array::<FA, D>(FA::ONE));
 
     const NEG_ONE: Self = Self::new(field_to_array::<FA, D>(FA::NEG_ONE));
@@ -242,16 +258,12 @@ where
         Self::new(self.value.clone().map(|x| x.halve()))
     }
 
-    fn mul_2exp_u64(&self, _exp: u64) -> Self {
-        todo!()
-    }
-
     fn div_2exp_u64(&self, _exp: u64) -> Self {
         todo!()
     }
 }
 
-impl<F, FA, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D, FA>
+impl<F, FA, const D: usize> InjectiveRingHomomorphism<F> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
     FA: FieldAlgebra<F>,
@@ -262,12 +274,27 @@ where
     }
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> FieldAlgebra<BinomialExtensionField<F, D>>
-    for BinomialExtensionField<F, D>
+impl<F, FA, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D, FA>
+where
+    F: BinomiallyExtendable<D>,
+    FA: FieldAlgebra<F>,
 {
+}
+
+impl<F, const D: usize> InjectiveRingHomomorphism<BinomialExtensionField<F, D>>
+    for BinomialExtensionField<F, D>
+where
+    F: BinomiallyExtendable<D>,
+{
+    #[inline]
     fn from_f(f: BinomialExtensionField<F, D>) -> Self {
         f
     }
+}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> FieldAlgebra<BinomialExtensionField<F, D>>
+    for BinomialExtensionField<F, D>
+{
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {

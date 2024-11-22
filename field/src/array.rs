@@ -3,7 +3,10 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::batch_inverse::batch_multiplicative_inverse_general;
-use crate::{CommutativeRing, Field, FieldAlgebra, PackedValue, PrimeCharacteristicRing};
+use crate::{
+    AbelianGroup, CommutativeRing, Field, FieldAlgebra, InjectiveRingHomomorphism, PackedValue,
+    PrimeCharacteristicRing, PrimeField,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
@@ -35,8 +38,20 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
     }
 }
 
-impl<F: Field, const N: usize> CommutativeRing for FieldArray<F, N> {
+impl<F: Field, const N: usize> AbelianGroup for FieldArray<F, N> {
     const ZERO: Self = FieldArray([F::ZERO; N]);
+
+    fn mul_u64(&self, r: u64) -> Self {
+        *self * F::from_u64(r)
+    }
+
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        let pow = F::Char::TWO.exp_u64(exp);
+        *self * F::from_char(pow)
+    }
+}
+
+impl<F: Field, const N: usize> CommutativeRing for FieldArray<F, N> {
     const ONE: Self = FieldArray([F::ONE; N]);
     const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
 }
@@ -49,12 +64,14 @@ impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
     }
 }
 
-impl<F: Field, const N: usize> FieldAlgebra<F> for FieldArray<F, N> {
+impl<F: Field, const N: usize> InjectiveRingHomomorphism<F> for FieldArray<F, N> {
     #[inline]
     fn from_f(f: F) -> Self {
         f.into()
     }
 }
+
+impl<F: Field, const N: usize> FieldAlgebra<F> for FieldArray<F, N> {}
 
 unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
     type Value = F;

@@ -15,6 +15,20 @@ use serde::Serialize;
 use crate::packed::PackedField;
 use crate::{bits_u64, Packable, PackedFieldExtension};
 
+/// This trait encompasses a very wide collection of disparate things including but not limited to
+/// - A Field
+/// - The Unit Circle in a complex extension
+/// - An Elliptic Curve
+///
+/// ### Mathematical Description
+///
+/// Mathematically an abelian group is an algebraic structure which supports an addition-like
+/// like operation `+`. Let `x, y, z` denote arbitrary elements of the struct. Then, an
+/// operation is addition-like if it satisfies the following properties:
+/// - Commutativity => `x + y = y + x`
+/// - Associativity => `x + (y + z) = (x + y) + z`
+/// - Unit => There exists an identity element `ZERO` satisfying `x + ZERO = x`.
+/// - Inverses => For every `x` there exists a unique inverse `(-x)` satisfying `x + (-x) = ZERO`
 pub trait AbelianGroup:
     Sized
     + Default
@@ -44,8 +58,14 @@ pub trait AbelianGroup:
         self.clone() + self.clone()
     }
 
+    /// The function which adds `x` to itself `r` times.
+    ///
+    /// E.g. `r * x = x + x + ... + x (r times)`
+    ///
+    /// The slight abuse of notation `*` is justified by this being
+    /// precisely the `ℤ`-module structure that exists for all Abelian groups.
     #[must_use]
-    fn mul_usize(&self, r: usize) -> Self {
+    fn mul_u64(&self, r: u64) -> Self {
         let mut current = self.clone();
         let mut res = Self::ZERO;
 
@@ -57,13 +77,33 @@ pub trait AbelianGroup:
         }
         res
     }
+
+    /// Double `x` an `exp` number of times to compute `2^{exp} * x`.
+    ///
+    /// For exp < 64, this will be the same as `x.mul_u64(1 << exp)`
+    /// but may be a little faster to compute.
+    ///
+    /// This will be slow for large inputs and should be avoided for
+    /// exp bigger than 32 or so.
+    #[must_use]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // TODO: Should there be a default implementation here?
+        // This is all we can do here, by assumption, we don't have multiplication.
+        // So fields will need to reimplement this. But tbh this should never be
+        // called with exp large anyway so it might not be an issue?
+
+        // This should be reimplemented by most rings as faster methods are available.
+        let mut current = self.clone();
+
+        for _ in 0..exp {
+            current = current.double();
+        }
+        current
+    }
 }
 
-/// A commutative ring.
-///
-/// The is the a basic building block trait which implements addition and multiplication.
-/// Examples of structs which should implement this trait are structs containing
-///
+/// An abelian group which additionally supports multiplication. Examples of
+/// structs which should implement this trait are structs containing
 /// - A single finite field element.
 /// - A symbolic expression which may be evaluated to a finite field element.
 /// - an array of finite field elements.
@@ -72,24 +112,15 @@ pub trait AbelianGroup:
 ///
 /// ### Mathematical Description
 ///
-/// Mathematically a commutative ring is an algebraic structure with two operations Addition `+`
-/// and Multiplication `*` which satisfy a collection of properties. For ease of writing, in what follows
-/// let `x, y, z` denote arbitrary elements of the ring.
+/// Mathematically a commutative ring is an Abelian group with a multiplication-like operation `*`.
+/// Let `x, y, z` denote arbitrary elements of the struct. Then, an operation is multiplication-like
+/// if it satisfies the following properties:
+/// - Commutativity => `x * y = y * x`
+/// - Associativity => `x * (y * z) = (x * y) * z`
+/// - Unit => There exists an identity element `ONE` satisfying `x * ONE = x`.
+/// - Distributivity => The two operations `+` and `*` must together satisfy `x * (y + z) = (x * y) + (x * z)`
 ///
-/// Both operations must be:
-///
-/// Commutative => `x + y = y + x` and `x*y = y*x`
-///
-/// Associative => `x + (y + z) = (x + y) + z` and `x*(y*z) = (x*y)*z`
-///
-/// Unital      => There exist identity elements `ZERO` and `ONE` respectively meaning
-///                `x + ZERO = x` and `x * ONE = x`.
-///
-/// In addition to the above, Addition must be invertible. Meaning for any `x` there exists
-/// a unique inverse `(-x)` satisfying `x + (-x) = ZERO`.
-///
-/// Finally, the operations must satisfy the distributive property:
-/// `x * (y + z) = (x*y) + (x*z)`.
+/// Unlike in the Abelian group case, we do not require inverses to exist with respect to `*`.
 ///
 /// The simplest examples of commutative rings are the integers (`ℤ`), and the integers mod `N` (`ℤ/N`).
 pub trait CommutativeRing: AbelianGroup + Mul<Output = Self> + MulAssign + Product + Debug {
@@ -311,14 +342,6 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     // These are also basically unused though they are probably worth keeping around
     // as they could be helpful in a couple of places.
 
-    /// Multiply by a given power of two. `mul_2exp_u64(a, exp) = 2^exp * a`
-    #[must_use]
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        // This should be overwritten by most field implementations.
-        self.clone() * Self::from_char(Self::Char::TWO.exp_u64(exp))
-    }
-
     /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
     #[must_use]
     #[inline]
@@ -328,13 +351,13 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
     }
 }
 
-/// A ring should implement InjectiveMonomial<N> if the algebraic function
+/// A ring implements `InjectiveMonomial<N>` if the algebraic function
 /// `f(x) = x^N` is an injective map on elements of the ring.
 ///
 /// We do not enforce that this map be invertible as there are useful
 /// cases such as polynomials or symbolic expressions where no inverse exists.
 ///
-/// However if the ring is a field with order `q` or an array of such field elements,
+/// However, if the ring is a field with order `q` or an array of such field elements,
 /// then `f(x) = x^N` will be injective if and only if it is invertible and so in
 /// such cases this monomial acts as a permutation. Moreover, this will occur
 /// exactly when `N` and `q - 1` are relatively prime i.e. `gcd(N, q - 1) = 1`.
@@ -342,34 +365,47 @@ pub trait InjectiveMonomial<const N: u64> {
     fn injective_monomial(&self) -> Self;
 }
 
-/// A ring should implement PermutationMonomial<N> if the algebraic function
+/// A ring implements PermutationMonomial<N> if the algebraic function
 /// `f(x) = x^N` is invertible and thus acts as a permutation on elements of the ring.
 pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
     fn monomial_inverse(&self) -> Self;
 }
 
-/// A commutative algebra over a finite field.
+/// A ring `R` implements `InjectiveRingHomomorphism<F>` if there is a natural
+/// map from `F` into `R` such that the only element which maps
+/// to `R::ZERO` is `F::ZERO`.
 ///
-/// This permits elements like:
-/// - an actual field element
-/// - a symbolic expression which would evaluate to a field element
-/// - an array of field elements
+/// For the most part, we will usually expect `F` to be a field but there
+/// are a few cases where it is handy to allow it to just be a ring.
 ///
-/// Mathematically speaking, this is an algebraic structure with addition,
-/// multiplication and scalar multiplication. The addition and multiplication
-/// maps must be both commutative and associative, and there must
-/// exist identity elements for both (named `ZERO` and `ONE`
-/// respectively). Furthermore, multiplication must distribute over
-/// addition. Finally, the scalar multiplication must be realized by
-/// a ring homomorphism from the field to the algebra.
-pub trait FieldAlgebra<F: Field>: PrimeCharacteristicRing {
-    /// Interpret a field element as a commutative algebra element.
+/// ### Mathematical Description
+///
+/// Let `x` and `y` denote arbitrary elements of the `S`. Then
+/// by "natural" map we require that our map `from_f`
+/// has the following properties:
+/// - Preserves Identity: `from_f(F::ONE) = R::ONE`
+/// - Commutes with Addition: `from_f(x + y) = from_f(x) + from_f(y)`
+/// - Commutes with Multiplication: `from_f(x * y) = from_f(x) * from_f(y)`
+///
+/// Such maps are known as ring homomorphisms and are injective if the
+/// only element which maps to `R::ZERO` is `F::ZERO`.
+///
+/// The existence of this map makes `R` into an `F`-module. If `F` is a field
+/// then this makes `R` into an `F`-Algebra and if `R` is also a field then
+/// this means that `R` is a field extension of `F`.
+pub trait InjectiveRingHomomorphism<F> {
+    /// A injective ring homomorphism from F to Self.
     ///
-    /// Mathematically speaking, this map is a ring homomorphism from the base field
-    /// to the commutative algebra. The existence of this map makes this structure
-    /// an algebra and not simply a commutative ring.
+    /// This must satisfy:
+    /// - `from_f(F::ONE) = Self::ONE`
+    /// - `from_f(x + y) = from_f(x) + from_f(y)`
+    /// - `from_f(x * y) = from_f(x) * from_f(y)`
+    ///
+    /// Additionally, if `from_f(x) = Self::ZERO` then `x = F::ZERO`.
     fn from_f(f: F) -> Self;
 }
+
+pub trait FieldAlgebra<F: Field>: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing {}
 
 /// A field algebra which can be serialized into and out of a
 /// collection of field elements.
@@ -446,6 +482,9 @@ pub trait Serializable<F> {
 }
 
 /// An element of a finite field.
+///
+/// A ring is a field if every element `x` has a unique multiplicative inverse `x^{-1}`
+/// which satisfies `x * x^{-1} = F::ONE`.
 pub trait Field:
     FieldAlgebra<Self>
     + Packable
@@ -547,7 +586,14 @@ pub trait QuotientMap<Int>: Sized {
     /// The exact range depends on the specific field and is checked by assert statements at run time. Where possible
     /// it is safer to use `from_int` as, if the internal representation of the field changes, the allowed
     /// range will also change.
-    fn from_canonical_checked(int: Int) -> Option<Self>;
+    fn from_canonical_checked(int: Int) -> Option<Self> {
+        // Q: Should from_canonical_checked error if it is outside the canonical range or just if
+        // the safety bounds for from_canonical_unchecked are not satisfied?
+
+        // For some fields, there is no benefit to the knowledge that the integer is in the canonical range so
+        // we can always use from_int.
+        Some(Self::from_int(int))
+    }
 
     /// Convert a given integer into an element of the field `ℤ/p`. The input is guaranteed
     /// to lie within some specific range.
@@ -558,7 +604,11 @@ pub trait QuotientMap<Int>: Sized {
     /// If the internal representation of the field changes, the expected range may also change which might lead
     /// to undefined behaviour. However this will be faster than `from_int/from_canonical_checked` in some
     /// circumstances and so we provide it here for careful use in performance critical applications.
-    unsafe fn from_canonical_unchecked(int: Int) -> Self;
+    unsafe fn from_canonical_unchecked(int: Int) -> Self {
+        // For some fields, there is no benefit to the knowledge that the integer is in the canonical range so
+        // we default to from_int which is always safe and correct.
+        Self::from_int(int)
+    }
 }
 
 /// A field isomorphic to `ℤ/p` for some prime `p`.
@@ -634,7 +684,7 @@ pub trait PrimeField32: PrimeField64 {
 pub trait ExtensionField<Base: Field>:
     Field
     + From<Base>
-    + FieldAlgebra<Base>
+    + InjectiveRingHomomorphism<Base>
     // TODO: Does ExtensionField need to implement SerializableAlgebra? Will determine this as we update the rest of the code.
     // + SerializableAlgebra<Base>
     + Add<Base, Output = Self>
