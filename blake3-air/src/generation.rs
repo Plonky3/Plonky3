@@ -118,7 +118,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
 ) {
     // We populate the round_data as we iterate through and compute the permutation following the reference implementation.
 
-    // We start by performing the first half of the four column mixing functions.
+    // We start by performing the first half of the four column quarter round functions.
     (0..4).for_each(|i| {
         (state[0][i], state[1][i], state[2][i], state[3][i]) = verifiable_half_round(
             state[0][i],
@@ -133,7 +133,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     // After the first four operations we need to save a copy of the state into the trace.
     save_state_to_trace(&mut round_data.state_prime, state);
 
-    // Next we do the second half of the four column mixing functions.
+    // Next we do the second half of the four column quarter round functions.
     (0..4).for_each(|i| {
         (state[0][i], state[1][i], state[2][i], state[3][i]) = verifiable_half_round(
             state[0][i],
@@ -148,9 +148,9 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     // Again we save another copy of the state.
     save_state_to_trace(&mut round_data.state_middle, state);
 
-    // We repeat with the diagonals mixing function.
+    // We repeat with the diagonals quarter round function.
 
-    // Do the first 4 operations.
+    // Do the first half of the four diagonal quarter round functions.
     (0..4).for_each(|i| {
         (
             state[0][i],
@@ -170,7 +170,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     // Save a copy of the state to the trace.
     save_state_to_trace(&mut round_data.state_middle_prime, state);
 
-    // Do the final 4 operations.
+    // Do the second half of the four diagonal quarter round functions.
     (0..4).for_each(|i| {
         (
             state[0][i],
@@ -191,7 +191,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     save_state_to_trace(&mut round_data.state_output, state);
 }
 
-/// Perform half of a mixing round on the given elements.
+/// Perform half of a quarter round round on the given elements.
 ///
 /// The boolean flag, indicates if this is the first (false) or second (true) half round.
 fn verifiable_half_round(
@@ -204,19 +204,17 @@ fn verifiable_half_round(
 ) -> (u32, u32, u32, u32) {
     let (rot_1, rot_2) = if flag { (8, 7) } else { (16, 12) };
 
+    // The first summation:
     a += b;
     a += m;
 
     // The first xor:
-
     d = (d ^ a).rotate_right(rot_1);
 
     // The second summation:
-
     c += d;
 
     // The second xor:
-
     b = (b ^ c).rotate_right(rot_2);
 
     (a, b, c, d)
@@ -225,16 +223,16 @@ fn verifiable_half_round(
 fn save_state_to_trace<FA: FieldAlgebra>(trace: &mut Blake3State<FA>, state: &[[u32; 4]; 4]) {
     trace.row0 = array::from_fn(|i| {
         [
-            FA::from_canonical_u16(state[0][i] as u16),
-            FA::from_canonical_u32(state[0][i] >> 16),
+            FA::from_canonical_u16(state[0][i] as u16), // Store the bottom 16 bits packed.
+            FA::from_canonical_u32(state[0][i] >> 16),  // Store the top 16 bits packed.
         ]
     });
-    trace.row1 = array::from_fn(|i| u32_to_bits_le(state[1][i]));
+    trace.row1 = array::from_fn(|i| u32_to_bits_le(state[1][i])); // Store all 32 bits unpacked.
     trace.row2 = array::from_fn(|i| {
         [
-            FA::from_canonical_u16(state[2][i] as u16),
-            FA::from_canonical_u32(state[2][i] >> 16),
+            FA::from_canonical_u16(state[2][i] as u16), // Store the bottom 16 bits packed.
+            FA::from_canonical_u32(state[2][i] >> 16),  // Store the top 16 bits packed.
         ]
     });
-    trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i]));
+    trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i])); // Store all 32 bits unpacked.
 }

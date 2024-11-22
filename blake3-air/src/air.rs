@@ -15,13 +15,13 @@ use crate::{Blake3State, FullRound, QuarterRound};
 pub struct Blake3Air {}
 
 impl Blake3Air {
-    /// Verify that the mixing round function has been correctly computed.
+    /// Verify that the quarter round function has been correctly computed.
     ///
     /// We assume that the values in a, b, c, d have all been range checked to be
     /// either boolean (for b, d) or < 2^16 (for a, c). This both range checks all x', x''
     /// and auxiliary variables as well as checking the relevant constraints between
     /// them to conclude that the outputs are correct given the inputs.
-    fn mixing_function<AB: AirBuilder>(
+    fn quarter_round_function<AB: AirBuilder>(
         builder: &mut AB,
         trace: &QuarterRound<<AB as AirBuilder>::Var, <AB as AirBuilder>::Expr>,
     ) {
@@ -91,7 +91,7 @@ impl Blake3Air {
     }
 
     /// Given data for a full round, produce the data corresponding to a
-    /// single application of the mixing function on a column.
+    /// single application of the quarter round function on a column.
     fn full_round_to_column_quarter_round<'a, T: Copy, U>(
         input: &'a Blake3State<T>,
         round_data: &'a FullRound<T>,
@@ -121,7 +121,7 @@ impl Blake3Air {
     }
 
     /// Given data for a full round, produce the data corresponding to a
-    /// single application of the mixing function on a diagonal.
+    /// single application of the quarter round function on a diagonal.
     fn full_round_to_diagonal_quarter_round<'a, T: Copy, U>(
         round_data: &'a FullRound<T>,
         m_vector: &'a [[U; 2]; 16],
@@ -158,51 +158,51 @@ impl Blake3Air {
     ) {
         // First we mix the columns.
 
-        // The first column mixing function involves the states in position: 0, 4, 8, 12
+        // The first column quarter round function involves the states in position: 0, 4, 8, 12
         // Along with the two m_vector elements in the 0 and 1 positions.
         let trace_column_0 =
             Self::full_round_to_column_quarter_round(input, round_data, m_vector, 0);
-        Self::mixing_function(builder, &trace_column_0);
+        Self::quarter_round_function(builder, &trace_column_0);
 
-        // The next column mixing function involves the states in position: 1, 5, 9, 13
+        // The next column quarter round function involves the states in position: 1, 5, 9, 13
         // Along with the two m_vector elements in the 2 and 3 positions.
         let trace_column_1 =
             Self::full_round_to_column_quarter_round(input, round_data, m_vector, 1);
-        Self::mixing_function(builder, &trace_column_1);
+        Self::quarter_round_function(builder, &trace_column_1);
 
-        // The next column mixing function involves the states in position: 2, 6, 10, 14
+        // The next column quarter round function involves the states in position: 2, 6, 10, 14
         // Along with the two m_vector elements in the 4 and 5 positions.
         let trace_column_2 =
             Self::full_round_to_column_quarter_round(input, round_data, m_vector, 2);
-        Self::mixing_function(builder, &trace_column_2);
+        Self::quarter_round_function(builder, &trace_column_2);
 
-        // The final column mixing function involves the states in position: 3, 7, 11, 15
+        // The final column quarter round function involves the states in position: 3, 7, 11, 15
         // Along with the two m_vector elements in the 6 and 7 positions.
         let trace_column_3 =
             Self::full_round_to_column_quarter_round(input, round_data, m_vector, 3);
-        Self::mixing_function(builder, &trace_column_3);
+        Self::quarter_round_function(builder, &trace_column_3);
 
         // Second we mix the diagonals.
 
-        // The first diagonal mixing function involves the states in position: 0, 5, 10, 15
+        // The first diagonal quarter round function involves the states in position: 0, 5, 10, 15
         // Along with the two m_vector elements in the 8 and 9 positions.
         let trace_diagonal_0 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 0);
-        Self::mixing_function(builder, &trace_diagonal_0);
+        Self::quarter_round_function(builder, &trace_diagonal_0);
 
-        // The next diagonal mixing function involves the states in position: 1, 6, 11, 12
+        // The next diagonal quarter round function involves the states in position: 1, 6, 11, 12
         // Along with the two m_vector elements in the 10 and 11 positions.
         let trace_diagonal_1 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 1);
-        Self::mixing_function(builder, &trace_diagonal_1);
+        Self::quarter_round_function(builder, &trace_diagonal_1);
 
-        // The next diagonal mixing function involves the states in position: 2, 7, 8, 13
+        // The next diagonal quarter round function involves the states in position: 2, 7, 8, 13
         // Along with the two m_vector elements in the 12 and 13 positions.
         let trace_diagonal_2 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 2);
-        Self::mixing_function(builder, &trace_diagonal_2);
+        Self::quarter_round_function(builder, &trace_diagonal_2);
 
-        // The final diagonal mixing function involves the states in position: 3, 4, 9, 14
+        // The final diagonal quarter round function involves the states in position: 3, 4, 9, 14
         // Along with the two m_vector elements in the 14 and 15 positions.
         let trace_diagonal_3 = Self::full_round_to_diagonal_quarter_round(round_data, m_vector, 3);
-        Self::mixing_function(builder, &trace_diagonal_3);
+        Self::quarter_round_function(builder, &trace_diagonal_3);
     }
 }
 

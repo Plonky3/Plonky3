@@ -14,6 +14,15 @@ pub(crate) const IV: [[u32; 2]; 8] = [
     [0xCD19, 0x5BE0],
 ];
 
+// The index map for the permutation used to permute the block words is:
+// `[2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]`
+//
+// This permutation decomposes into 2 cycles of length 8:
+// `0 -> 2 -> 3 -> 10 -> 12 -> 9 -> 11 -> 5 -> 0`
+// `1 -> 6 -> 4 -> 7 -> 13 -> 14 -> 15 -> 8 -> 1`
+//
+// There might be a way to use this decomposition to slightly speed permute up.
+
 /// The index map for the permutation used to permute the block words.
 const MSG_PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
 
