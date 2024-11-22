@@ -213,7 +213,7 @@ pub trait FieldAlgebra:
         self.shifted_powers(Self::ONE)
     }
 
-    /// Construct an iterator which returns powers of `self` multiplied by `start: start, start*self^1, start*self^2, ...`.
+    /// Construct an iterator which returns powers of `self` shifted by `start: start, start*self^1, start*self^2, ...`.
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
             base: self.clone(),
@@ -221,22 +221,28 @@ pub trait FieldAlgebra:
         }
     }
 
-    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> PackedPowers<Self, P> {
+    /// Construct an iterator which returns powers of `self` packed into `PackedField` elements.
+    ///
+    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
+    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
+    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
         self.shifted_powers_packed(Self::ONE)
     }
 
-    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(
-        &self,
-        start: Self,
-    ) -> PackedPowers<Self, P> {
+    /// Construct an iterator which returns powers of `self` shifted by start
+    /// and packed into `PackedField` elements.
+    ///
+    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
+    /// `[start, start*self, start*self^2, start*self^3], [start*self^4, start*self^5, start*self^6, start*self^7], ...`.
+    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(&self, start: Self) -> Powers<P> {
         let mut current = P::from_f(start);
         let slice = current.as_slice_mut();
         for i in 1..P::WIDTH {
             slice[i] = slice[i - 1].clone() * self.clone();
         }
 
-        PackedPowers {
-            multiplier: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
+        Powers {
+            base: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
             current,
         }
     }
@@ -244,14 +250,6 @@ pub trait FieldAlgebra:
     /// Compute the dot product of two vectors.
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
-    }
-
-    fn try_div<Rhs>(self, rhs: Rhs) -> Option<<Self as Mul<Rhs>>::Output>
-    where
-        Rhs: Field,
-        Self: Mul<Rhs>,
-    {
-        rhs.try_inverse().map(|inv| self * inv)
     }
 
     /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
@@ -469,7 +467,11 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
         }
     }
 
-    fn ext_powers_packed(&self) -> impl Iterator<Item = Self::ExtensionPacking> {
+    /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
+    ///
+    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
+    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
         let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
         // Transpose first WIDTH powers
         let current = Self::ExtensionPacking::from_base_fn(|i| {
@@ -480,7 +482,10 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
             Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
         });
 
-        core::iter::successors(Some(current), move |&current| Some(current * multiplier))
+        Powers {
+            base: multiplier,
+            current,
+        }
     }
 }
 
@@ -526,7 +531,7 @@ pub trait TwoAdicField: Field {
     fn two_adic_generator(bits: usize) -> Self;
 }
 
-/// An iterator over the powers of a certain base element `b`: `b^0, b^1, b^2, ...`.
+/// An iterator which returns the powers of a base element `b` shifted by current `c`: `c, c * b, c * b^2, ...`.
 #[derive(Clone, Debug)]
 pub struct Powers<F> {
     pub base: F,
@@ -539,24 +544,6 @@ impl<FA: FieldAlgebra> Iterator for Powers<FA> {
     fn next(&mut self) -> Option<FA> {
         let result = self.current.clone();
         self.current *= self.base.clone();
-        Some(result)
-    }
-}
-
-/// like `Powers`, but packed into `PackedField` elements
-#[derive(Clone, Debug)]
-pub struct PackedPowers<F, P: PackedField<Scalar = F>> {
-    // base ** P::WIDTH
-    pub multiplier: P,
-    pub current: P,
-}
-
-impl<FA: FieldAlgebra, P: PackedField<Scalar = FA>> Iterator for PackedPowers<FA, P> {
-    type Item = P;
-
-    fn next(&mut self) -> Option<P> {
-        let result = self.current;
-        self.current *= self.multiplier;
         Some(result)
     }
 }

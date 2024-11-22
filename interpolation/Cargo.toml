@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-field.workspace = true
 p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
 [dev-dependencies]

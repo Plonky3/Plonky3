@@ -35,7 +35,7 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     shift: F,
     order: usize,
 ) -> impl Iterator<Item = F> + Clone {
-    cyclic_subgroup_known_order(generator, order).map(move |x| x * shift)
+    generator.shifted_powers(shift).take(order)
 }
 
 #[must_use]
