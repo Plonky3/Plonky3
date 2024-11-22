@@ -1,22 +1,5 @@
 use crate::CommutativeRing;
 
-pub fn exp_u64_by_squaring<CR: CommutativeRing>(val: CR, power: u64) -> CR {
-    let mut current = val;
-    let mut product = CR::ONE;
-
-    for j in 0..bits_u64(power) {
-        if (power >> j & 1) != 0 {
-            product *= current.clone();
-        }
-        current = current.square();
-    }
-    product
-}
-
-const fn bits_u64(n: u64) -> usize {
-    (64 - n.leading_zeros()) as usize
-}
-
 pub fn exp_1717986917<CR: CommutativeRing>(val: CR) -> CR {
     // Note that 5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1.
     // Thus as a^{p - 1} = 1 for all a \in F_p, (a^{1717986917})^5 = a.

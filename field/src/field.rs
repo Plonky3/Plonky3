@@ -12,9 +12,8 @@ use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::PackedField;
-use crate::{Packable, PackedFieldExtension};
+use crate::{bits_u64, Packable, PackedFieldExtension};
 
 /// A commutative ring.
 ///
@@ -39,7 +38,7 @@ use crate::{Packable, PackedFieldExtension};
 ///
 /// Associative => `x + (y + z) = (x + y) + z` and `x*(y*z) = (x*y)*z`
 ///
-/// Unital      => There exists identity elements `ZERO` and `ONE` respectively meaning
+/// Unital      => There exist identity elements `ZERO` and `ONE` respectively meaning
 ///                `x + ZERO = x` and `x * ONE = x`.
 ///
 /// In addition to the above, Addition must be invertible. Meaning for any `x` there exists
@@ -126,16 +125,26 @@ pub trait CommutativeRing:
         res
     }
 
-    /// Exponentiation by a `u64` power.
+    /// Exponentiation by a `u64` power using the square and multiply algorithm.
     ///
-    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
-    /// by squaring. Rather than override this method, it is generally recommended to have the
-    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
-    /// abstract fields.
+    /// This uses log(power) squares and log(power) multiplications.
+    ///
+    /// For a specific power, this can usually be improved upon by using
+    /// an optimized addition chain but these need to be computed on a
+    /// case by case basis.
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        exp_u64_by_squaring(self.clone(), power)
+        let mut current = self.clone();
+        let mut product = Self::ONE;
+
+        for j in 0..bits_u64(power) {
+            if (power >> j & 1) != 0 {
+                product *= current.clone();
+            }
+            current = current.square();
+        }
+        product
     }
 
     /// Exponentiation by a constant power.
@@ -198,7 +207,7 @@ pub trait CommutativeRing:
 /// This is a simple macro which lets us cleanly define the function `from_Int`
 /// with `Int` can be replaced by any integer type.
 ///
-/// Running, `from_integer_types(Int)` adds the following code to the trait:
+/// Running, `from_integer_types(Int)` adds the following code to a trait:
 ///
 /// ```rust,ignore
 /// /// Given an integer `r`, return the sum of `r` copies of `ONE`:
@@ -213,7 +222,8 @@ pub trait CommutativeRing:
 /// }
 /// ```
 ///
-/// This macro can be run for any `Int` where `Self::Char` implements `QuotientMap<Int>`
+/// This macro can be run for any `Int` where `Self::Char` implements `QuotientMap<Int>`.
+/// It considerably cuts down on the amount of copy/pasted code.
 macro_rules! from_integer_types {
     ($($type:ty),* $(,)? ) => {
         $( paste!{
@@ -443,10 +453,12 @@ pub trait Field:
     /// A generator of this field's entire multiplicative group.
     const GENERATOR: Self;
 
+    /// Check if the given field element is equal to the unique additive identity (ZERO).
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
     }
 
+    /// Check if the given field element is equal to the unique multiplicative identity (ONE).
     fn is_one(&self) -> bool {
         *self == Self::ONE
     }
@@ -457,11 +469,18 @@ pub trait Field:
     #[must_use]
     fn try_inverse(&self) -> Option<Self>;
 
+    /// The multiplicative inverse of this field element, if it exists.
+    ///
+    /// NOTE: The inverse of `0` is undefined and will error.
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    /// The number of elements in the field.
+    ///
+    /// This will either be prime if the field is a PrimeField or a power of a
+    /// prime if the field is an extension field.
     fn order() -> BigUint;
 
     /// A list of (factor, exponent) pairs.
@@ -476,28 +495,13 @@ pub trait Field:
         factorizer.factor_counts(&n)
     }
 
+    /// The number of bits required to define an element of this field.
+    ///
+    /// Usually due to storage and practical reasons the memory size of
+    /// a field element will be a little larger than bits().
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
-    }
-}
-
-/// Every field is trivially a field algebra over itself.
-impl<F: Field> Serializable<F> for F {
-    fn serialize(&self) -> Vec<F> {
-        vec![*self]
-    }
-
-    fn deserialize_slice(slice: &[F]) -> Self {
-        slice[0]
-    }
-
-    fn deserialize_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
-        f(0)
-    }
-
-    fn deserialize_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
-        iter.next().unwrap()
     }
 }
 
@@ -583,22 +587,43 @@ pub trait PrimeField:
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
-    /// Return the representative of `value` which lies in the range `0 <= x < ORDER_U64`.
+    /// Return the representative of `value` in standard form
+    /// which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
+
+    /// Convert the field element to 8 bytes such that any two field elements
+    /// representing the same value are converted to the same set of 8 bytes.
+    ///
+    /// This will be the fastest way to get a unique 8 byte representative
+    /// from the field element and is intended for use in Hashing. In general,
+    /// `val.as_unique_bytes()` and `transmute(val.as_canonical_u64())` will
+    /// be different.
+    fn as_unique_bytes(&self) -> [u8; 8];
 }
 
 /// A prime field `ℤ/p` with order `p < 2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
 
-    /// Return the representative of `value` which lies in the range `0 <= x < ORDER_U32`.
+    /// Return the representative of `value` in standard form
+    /// which lies in the range `0 <= x < ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
+
+    /// Convert the field element to 4 bytes such that any two field elements
+    /// representing the same value are converted to the same set of 4 bytes.
+    ///
+    /// This will be the fastest way to get a unique 4 byte representative
+    /// from the field element and is intended for use in Hashing. In general,
+    /// `val.as_unique_bytes()` and `transmute(val.as_canonical_u32())` will
+    /// be different.
+    fn as_unique_bytes(&self) -> [u8; 4];
 }
 
 pub trait ExtensionField<Base: Field>:
     Field
     + From<Base>
     + FieldAlgebra<Base>
+    // TODO: Does ExtensionField need to implement SerializableAlgebra? Will determine this as we update the rest of the code.
     // + SerializableAlgebra<Base>
     + Add<Base, Output = Self>
     + AddAssign<Base>

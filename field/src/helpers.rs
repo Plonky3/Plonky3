@@ -10,6 +10,11 @@ use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 use crate::field::Field;
 use crate::{CommutativeRing, PackedValue, PrimeField, PrimeField32, TwoAdicField};
 
+/// Return the location of the leading 1 in the binary decomposition of n.
+pub(crate) const fn bits_u64(n: u64) -> usize {
+    (64 - n.leading_zeros()) as usize
+}
+
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
     x.exp_power_of_2(log_n) - F::ONE
