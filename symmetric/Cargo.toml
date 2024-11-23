@@ -5,6 +5,6 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
-itertools = "0.13.0"
-serde = { version = "1.0", default-features = false, features = ["alloc"] }
+p3-field.workspace = true
+itertools.workspace = true
+serde = { workspace = true, features = ["alloc"] }
