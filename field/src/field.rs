@@ -403,6 +403,8 @@ pub trait InjectiveRingHomomorphism<F> {
     ///
     /// Additionally, if `from_f(x) = Self::ZERO` then `x = F::ZERO`.
     fn from_f(f: F) -> Self;
+
+    // Q: We could just make this a From statement. Should we?
 }
 
 pub trait FieldAlgebra<F: Field>: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing {}
@@ -596,12 +598,18 @@ pub trait QuotientMap<Int>: Sized {
     }
 
     /// Convert a given integer into an element of the field `ℤ/p`. The input is guaranteed
-    /// to lie within some specific range.
+    /// to lie within a specific range depending on `p`. If the input lies outside of this
+    /// range, the output is undefined.
+    ///
+    /// In general `from_canonical_unchecked` will be faster for either `signed` or `unsigned`
+    /// types but the specifics will depend on the field.
     ///
     /// # Safety
+    /// - If `Int` is an unsigned integer type then the allowed range will include `[0, p - 1]`.
+    /// - If `Int` is a signed integer type then the allowed range will include `[-(p - 1)/2, (p - 1)/2]`.
     ///
-    /// The exact range depends on the specific field and is not checked. Using this function is not recommended.
-    /// If the internal representation of the field changes, the expected range may also change which might lead
+    /// In general
+    ///
     /// to undefined behaviour. However this will be faster than `from_int/from_canonical_checked` in some
     /// circumstances and so we provide it here for careful use in performance critical applications.
     unsafe fn from_canonical_unchecked(int: Int) -> Self {
@@ -613,7 +621,10 @@ pub trait QuotientMap<Int>: Sized {
 
 /// A field isomorphic to `ℤ/p` for some prime `p`.
 ///
-/// There is a natural map from `ℤ` to `ℤ/p` given by `r → r mod p`.
+/// There is a natural map from `ℤ` to `ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
+/// Canonically, each conjugacy class `[r]` can be represented by the unique integer `s` in `[0, p - 1)`
+/// satisfying `s = r mod p`. This however is often not the most convenient computational representation
+/// and so internal representations of field elements might differ from this and may change over time.
 pub trait PrimeField:
     Field
     + Ord
@@ -630,7 +641,7 @@ pub trait PrimeField:
     + QuotientMap<i128>
     + QuotientMap<isize>
 {
-    // TODO: Decide if these should be put into Commutative Ring.
+    // TODO: Decide if this should be put into Commutative Ring.
 
     /// The field element 2 mod p.
     ///
@@ -649,36 +660,34 @@ pub trait PrimeField:
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
-    /// Return the representative of `value` in standard form
+    /// Return the representative of `value` in canonical form
     /// which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
 
-    /// Convert the field element to 8 bytes such that any two field elements
-    /// representing the same value are converted to the same set of 8 bytes.
+    /// Convert the field element to a u64 such that any two field elements
+    /// representing the same value are converted to the same u64.
     ///
-    /// This will be the fastest way to get a unique 8 byte representative
+    /// This will be the fastest way to get a unique u64 representative
     /// from the field element and is intended for use in Hashing. In general,
-    /// `val.as_unique_bytes()` and `transmute(val.as_canonical_u64())` will
-    /// be different.
-    fn as_unique_bytes(&self) -> [u8; 8];
+    /// `val.as_unique_u64()` and `val.as_canonical_u64()` may be different.
+    fn as_unique_u64(&self) -> u64;
 }
 
 /// A prime field `ℤ/p` with order `p < 2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
 
-    /// Return the representative of `value` in standard form
+    /// Return the representative of `value` in the canonical form
     /// which lies in the range `0 <= x < ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
 
-    /// Convert the field element to 4 bytes such that any two field elements
-    /// representing the same value are converted to the same set of 4 bytes.
+    /// Convert the field element to a u32 such that any two field elements
+    /// representing the same value are converted to the same u32.
     ///
-    /// This will be the fastest way to get a unique 4 byte representative
+    /// This will be the fastest way to get a unique u32 representative
     /// from the field element and is intended for use in Hashing. In general,
-    /// `val.as_unique_bytes()` and `transmute(val.as_canonical_u32())` will
-    /// be different.
-    fn as_unique_bytes(&self) -> [u8; 4];
+    /// `val.as_unique_u32()` and `val.as_canonical_u32()` may be different.
+    fn as_unique_u32(&self) -> u32;
 }
 
 pub trait ExtensionField<Base: Field>:
