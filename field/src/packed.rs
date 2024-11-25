@@ -5,7 +5,7 @@ use core::slice;
 use alloc::vec::Vec;
 
 use crate::{
-    CommutativeRing, ExtensionField, Field, FieldAlgebra, InjectiveRingHomomorphism, Powers,
+    CommutativeRing, ExtensionField, Field, InjectiveRingHomomorphism, Powers,
     PrimeCharacteristicRing,
 };
 
@@ -134,9 +134,10 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: FieldAlgebra<Self::Scalar>
+pub unsafe trait PackedField: 
+    PrimeCharacteristicRing
+    + InjectiveRingHomomorphism<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
-    + From<Self::Scalar>
     + Add<Self::Scalar, Output = Self>
     + AddAssign<Self::Scalar>
     + Sub<Self::Scalar, Output = Self>
@@ -235,17 +236,10 @@ pub trait PackedFieldExtension:
     type BaseField: Field;
     type ExtField: ExtensionField<Self::BaseField, ExtensionPacking = Self>;
 
-    /// Given an extension field `EF` element, decompose it into
-    /// a collection of field `F` elements, cast each field element
-    /// to the corresponding packed element and then pack the result into an array.
-    fn from_ext_element(ext_elem: Self::ExtField) -> Self;
-
     /// Given a slice of extension field `EF` elements of length `W`,
     /// convert into the array `[[F; D]; W]` transpose to
     /// decompose it into `[[F; W]; D]` and then pack to get `[PF; W]`
     fn from_ext_slice(ext_slice: &[Self::ExtField]) -> Self;
-
-    // TODO: Do we need from iterator/from_fns as well?
 
     /// Convert self to an array of form `[[F; W]; D]`. Then
     /// transpose this array to get something of form `[[F; D]; W]`

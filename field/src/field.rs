@@ -15,7 +15,8 @@ use serde::Serialize;
 use crate::packed::PackedField;
 use crate::{bits_u64, Packable, PackedFieldExtension};
 
-/// This trait encompasses a very wide collection of disparate things including but not limited to
+/// This trait encompasses a very wide collection of disparate things which support some
+/// operation with similar properties to addition. Some examples are
 /// - A Field
 /// - The Unit Circle in a complex extension
 /// - An Elliptic Curve
@@ -290,11 +291,10 @@ macro_rules! from_integer_types {
 /// Whilst many rings with other characteristics exist, we expect every struct here
 /// which implements CommutativeRing to also implement PrimeCharacteristicRing.
 ///
-/// This struct provides a collection of convenience methods allowing elements of
+/// This trait provides a collection of convenience methods allowing elements of
 /// simple integer classes `bool, u8, ...` to be converted into ring elements. These
-/// should generally be used in non performance critical locations. In particular,
-/// any computations which can be performed in the field `ℤ/p` should be as this
-/// will be faster than computing them in the ring.
+/// should generally be used in non performance critical locations as converting elements
+/// into the internal representation for the ring is often slow.
 ///
 /// ### Mathematical Description
 ///
@@ -335,14 +335,9 @@ pub trait PrimeCharacteristicRing: CommutativeRing {
         self.clone() * Self::from_char(Self::Char::TWO.inverse())
     }
 
-    // Q: Can these methods be changed to accept u8 or smaller?
-    // To what extent do we actually need to support multiplication
-    // by 2^exp for large exp?
-
-    // These are also basically unused though they are probably worth keeping around
-    // as they could be helpful in a couple of places.
-
     /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
+    ///
+    /// Will error if the field characteristic is 2.
     #[must_use]
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
@@ -394,8 +389,6 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// then this makes `R` into an `F`-Algebra and if `R` is also a field then
 /// this means that `R` is a field extension of `F`.
 pub trait InjectiveRingHomomorphism<F>: From<F> {}
-
-pub trait FieldAlgebra<F: Field>: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing {}
 
 /// A field algebra which can be serialized into and out of a
 /// collection of field elements.
@@ -476,7 +469,8 @@ pub trait Serializable<F> {
 /// A ring is a field if every element `x` has a unique multiplicative inverse `x^{-1}`
 /// which satisfies `x * x^{-1} = F::ONE`.
 pub trait Field:
-    FieldAlgebra<Self>
+    PrimeCharacteristicRing
+    + InjectiveRingHomomorphism<Self>
     + Packable
     + 'static
     + Copy

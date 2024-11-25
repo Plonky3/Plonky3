@@ -4,7 +4,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::batch_inverse::batch_multiplicative_inverse_general;
 use crate::{
-    AbelianGroup, CommutativeRing, Field, FieldAlgebra, InjectiveRingHomomorphism, PackedValue,
+    AbelianGroup, CommutativeRing, Field, InjectiveRingHomomorphism, PackedValue,
     PrimeCharacteristicRing, PrimeField,
 };
 
@@ -65,8 +65,6 @@ impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
 }
 
 impl<F: Field, const N: usize> InjectiveRingHomomorphism<F> for FieldArray<F, N> {}
-
-impl<F: Field, const N: usize> FieldAlgebra<F> for FieldArray<F, N> {}
 
 unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
     type Value = F;

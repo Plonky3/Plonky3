@@ -12,8 +12,8 @@ use super::BinomialExtensionField;
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, AbelianGroup, CommutativeRing, FieldAlgebra, InjectiveRingHomomorphism,
-    PackedField, PackedFieldExtension, Powers, PrimeCharacteristicRing, PrimeField,
+    field_to_array, AbelianGroup, CommutativeRing, InjectiveRingHomomorphism, PackedField,
+    PackedFieldExtension, Powers, PrimeCharacteristicRing, PrimeField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -64,10 +64,6 @@ where
     type BaseField = F;
     type ExtField = BinomialExtensionField<F, D>;
 
-    fn from_ext_element(ext_elem: Self::ExtField) -> Self {
-        Self::new(ext_elem.value.map(|x| x.into()))
-    }
-
     fn from_ext_slice(ext_slice: &[Self::ExtField]) -> Self {
         let width = F::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
@@ -105,7 +101,7 @@ where
         let current = Self::from_ext_slice(&powers[..width]);
 
         // Broadcast self^WIDTH
-        let multiplier = Self::from_ext_element(powers[width]);
+        let multiplier = powers[width].into();
 
         Powers {
             base: multiplier,
@@ -427,40 +423,33 @@ where
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-fn cubic_mul<F: BinomiallyExtendable<D>, PF: FieldAlgebra<F>, const D: usize>(
+fn cubic_mul<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>(
     a: &[PF; D],
     b: &[PF; D],
     res: &mut [PF; D],
 ) {
     assert_eq!(D, 3);
 
-    let a0_b0 = a[0].clone() * b[0].clone();
-    let a1_b1 = a[1].clone() * b[1].clone();
-    let a2_b2 = a[2].clone() * b[2].clone();
+    let a0_b0 = a[0] * b[0];
+    let a1_b1 = a[1] * b[1];
+    let a2_b2 = a[2] * b[2];
 
-    res[0] = a0_b0.clone()
-        + ((a[1].clone() + a[2].clone()) * (b[1].clone() + b[2].clone())
-            - a1_b1.clone()
-            - a2_b2.clone())
-            * Into::<PF>::into(F::W);
-    res[1] = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
-        - a0_b0.clone()
-        - a1_b1.clone()
-        + a2_b2.clone() * Into::<PF>::into(F::W);
-    res[2] = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
+    res[0] = a0_b0 + ((a[1] + a[2]) * (b[1] + b[2]) - a1_b1 - a2_b2) * Into::<PF>::into(F::W);
+    res[1] = (a[0] + a[1]) * (b[0] + b[1]) - a0_b0 - a1_b1 + a2_b2 * Into::<PF>::into(F::W);
+    res[2] = (a[0] + a[2]) * (b[0] + b[2]) - a0_b0 - a2_b2 + a1_b1;
 }
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_square<F: BinomiallyExtendable<D>, PF: FieldAlgebra<F>, const D: usize>(
+fn cubic_square<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>(
     a: &[PF; D],
     res: &mut [PF; D],
 ) {
     assert_eq!(D, 3);
 
-    let w_a2 = a[2].clone() * Into::<PF>::into(F::W);
+    let w_a2 = a[2] * Into::<PF>::into(F::W);
 
-    res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
-    res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
-    res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
+    res[0] = a[0].square() + (a[1] * w_a2).double();
+    res[1] = w_a2 * a[2] + (a[0] * a[1]).double();
+    res[2] = a[1].square() + (a[0] * a[2]).double();
 }

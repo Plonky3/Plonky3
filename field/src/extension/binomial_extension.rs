@@ -18,8 +18,8 @@ use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, AbelianGroup, CommutativeRing, ExtensionField, FieldAlgebra,
-    InjectiveRingHomomorphism, Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
+    field_to_array, AbelianGroup, CommutativeRing, ExtensionField, InjectiveRingHomomorphism,
+    Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -42,13 +42,17 @@ impl<F, FA, const D: usize> BinomialExtensionField<F, D, FA> {
     }
 }
 
-impl<F: Field, FA: FieldAlgebra<F>, const D: usize> Default for BinomialExtensionField<F, D, FA> {
+impl<F: Field, FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing, const D: usize> Default
+    for BinomialExtensionField<F, D, FA>
+{
     fn default() -> Self {
         Self::new(array::from_fn(|_| FA::ZERO))
     }
 }
 
-impl<F: Field, FA: FieldAlgebra<F>, const D: usize> From<FA> for BinomialExtensionField<F, D, FA> {
+impl<F: Field, FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing, const D: usize> From<FA>
+    for BinomialExtensionField<F, D, FA>
+{
     fn from(x: FA) -> Self {
         Self::new(field_to_array::<FA, D>(x))
     }
@@ -137,7 +141,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
 impl<F, FA, const D: usize> AbelianGroup for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     const ZERO: Self = Self::new([FA::ZERO; D]);
 
@@ -154,7 +158,7 @@ where
 impl<F, FA, const D: usize> CommutativeRing for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     const ONE: Self = Self::new(field_to_array::<FA, D>(FA::ONE));
 
@@ -189,7 +193,7 @@ where
 impl<F, FA, const D: usize> PrimeCharacteristicRing for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Char = FA::Char;
 
@@ -211,20 +215,10 @@ impl<F, const D: usize> InjectiveRingHomomorphism<F> for BinomialExtensionField<
 {
 }
 
-impl<F, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D> where
-    F: BinomiallyExtendable<D>
-{
-}
-
 impl<F, const D: usize> InjectiveRingHomomorphism<BinomialExtensionField<F, D>>
     for BinomialExtensionField<F, D>
 where
     F: BinomiallyExtendable<D>,
-{
-}
-
-impl<F: BinomiallyExtendable<D>, const D: usize> FieldAlgebra<BinomialExtensionField<F, D>>
-    for BinomialExtensionField<F, D>
 {
 }
 
@@ -283,7 +277,7 @@ where
 impl<F, FA, const D: usize> Neg for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -296,7 +290,7 @@ where
 impl<F, FA, const D: usize> Add for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -313,7 +307,7 @@ where
 impl<F, FA, const D: usize> Add<FA> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -327,7 +321,7 @@ where
 impl<F, FA, const D: usize> AddAssign for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
@@ -340,7 +334,7 @@ where
 impl<F, FA, const D: usize> AddAssign<FA> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     #[inline]
     fn add_assign(&mut self, rhs: FA) {
@@ -351,7 +345,7 @@ where
 impl<F, FA, const D: usize> Sum for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |acc, x| acc + x)
@@ -361,7 +355,7 @@ where
 impl<F, FA, const D: usize> Sub for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -378,7 +372,7 @@ where
 impl<F, FA, const D: usize> Sub<FA> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -393,7 +387,7 @@ where
 impl<F, FA, const D: usize> SubAssign for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
@@ -404,7 +398,7 @@ where
 impl<F, FA, const D: usize> SubAssign<FA> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: FA) {
@@ -415,7 +409,7 @@ where
 impl<F, FA, const D: usize> Mul for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -454,7 +448,7 @@ where
 impl<F, FA, const D: usize> Mul<FA> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     type Output = Self;
 
@@ -467,7 +461,7 @@ where
 impl<F, FA, const D: usize> Product for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self::ONE, |acc, x| acc * x)
@@ -500,7 +494,7 @@ where
 impl<F, FA, const D: usize> MulAssign for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -511,7 +505,7 @@ where
 impl<F, FA, const D: usize> MulAssign<FA> for BinomialExtensionField<F, D, FA>
 where
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: FA) {
@@ -577,7 +571,11 @@ fn cubic_inv<F: BinomiallyExtendable<D>, const D: usize>(a: &[F; D], res: &mut [
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-fn cubic_mul<F: BinomiallyExtendable<D>, FA: FieldAlgebra<F>, const D: usize>(
+fn cubic_mul<
+    F: BinomiallyExtendable<D>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
+    const D: usize,
+>(
     a: &[FA; D],
     b: &[FA; D],
     res: &mut [FA; D],
@@ -602,7 +600,11 @@ fn cubic_mul<F: BinomiallyExtendable<D>, FA: FieldAlgebra<F>, const D: usize>(
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_square<F: BinomiallyExtendable<D>, FA: FieldAlgebra<F>, const D: usize>(
+fn cubic_square<
+    F: BinomiallyExtendable<D>,
+    FA: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing,
+    const D: usize,
+>(
     a: &[FA; D],
     res: &mut [FA; D],
 ) {
