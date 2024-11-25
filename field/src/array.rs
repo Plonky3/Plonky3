@@ -64,12 +64,7 @@ impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
     }
 }
 
-impl<F: Field, const N: usize> InjectiveRingHomomorphism<F> for FieldArray<F, N> {
-    #[inline]
-    fn from_f(f: F) -> Self {
-        f.into()
-    }
-}
+impl<F: Field, const N: usize> InjectiveRingHomomorphism<F> for FieldArray<F, N> {}
 
 impl<F: Field, const N: usize> FieldAlgebra<F> for FieldArray<F, N> {}
 

@@ -393,19 +393,7 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// The existence of this map makes `R` into an `F`-module. If `F` is a field
 /// then this makes `R` into an `F`-Algebra and if `R` is also a field then
 /// this means that `R` is a field extension of `F`.
-pub trait InjectiveRingHomomorphism<F> {
-    /// A injective ring homomorphism from F to Self.
-    ///
-    /// This must satisfy:
-    /// - `from_f(F::ONE) = Self::ONE`
-    /// - `from_f(x + y) = from_f(x) + from_f(y)`
-    /// - `from_f(x * y) = from_f(x) * from_f(y)`
-    ///
-    /// Additionally, if `from_f(x) = Self::ZERO` then `x = F::ZERO`.
-    fn from_f(f: F) -> Self;
-
-    // Q: We could just make this a From statement. Should we?
-}
+pub trait InjectiveRingHomomorphism<F>: From<F> {}
 
 pub trait FieldAlgebra<F: Field>: InjectiveRingHomomorphism<F> + PrimeCharacteristicRing {}
 

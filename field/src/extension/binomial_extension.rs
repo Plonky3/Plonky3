@@ -14,13 +14,12 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenius, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
     field_to_array, AbelianGroup, CommutativeRing, ExtensionField, FieldAlgebra,
-    InjectiveRingHomomorphism, Packable, PackedFieldExtension, PackedValue, Powers,
-    PrimeCharacteristicRing, PrimeField, TwoAdicField,
+    InjectiveRingHomomorphism, Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -60,7 +59,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionF
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
-    type ExtensionPacking = BinomialExtensionField<F, D, F::Packing>;
+    type ExtensionPacking = PackedBinomialExtensionField<F, F::Packing, D>;
 
     const D: usize = D;
 
@@ -73,62 +72,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
             Some(self.value[0])
         } else {
             None
-        }
-    }
-}
-
-impl<F: BinomiallyExtendable<D>, const D: usize> PackedFieldExtension
-    for BinomialExtensionField<F, D, F::Packing>
-{
-    type BaseField = F;
-    type ExtField = BinomialExtensionField<F, D>;
-
-    fn from_ext_element(ext_elem: Self::ExtField) -> Self {
-        Self::new(ext_elem.value.map(|x| x.into()))
-    }
-
-    fn from_ext_slice(ext_slice: &[Self::ExtField]) -> Self {
-        let width = F::Packing::WIDTH;
-        assert_eq!(ext_slice.len(), width);
-
-        let mut res = [F::Packing::ZERO; D];
-
-        res.iter_mut().enumerate().for_each(|(i, row_i)| {
-            let row_i = row_i.as_slice_mut();
-            ext_slice
-                .iter()
-                .enumerate()
-                .for_each(|(j, vec_j)| row_i[j] = vec_j.value[i])
-        });
-
-        Self::new(res)
-    }
-
-    fn to_ext_vec(packed_ext_elem: &Self) -> Vec<Self::ExtField> {
-        let width = F::Packing::WIDTH;
-        let mut out_vec = Vec::new();
-
-        for i in 0..width {
-            let arr = array::from_fn(|j| packed_ext_elem.value[j].as_slice()[i]);
-            let ext_elem = Self::ExtField::new(arr);
-            out_vec.push(ext_elem);
-        }
-
-        out_vec
-    }
-
-    fn ext_powers_packed(base: Self::ExtField) -> crate::Powers<Self> {
-        let width = F::Packing::WIDTH;
-        let powers = base.powers().take(width + 1).collect_vec();
-        // Transpose first WIDTH powers
-        let current = Self::from_ext_slice(&powers[..width]);
-
-        // Broadcast self^WIDTH
-        let multiplier = Self::from_ext_element(powers[width]);
-
-        Powers {
-            base: multiplier,
-            current,
         }
     }
 }
@@ -223,7 +166,7 @@ where
             2 => {
                 let a = self.value.clone();
                 let mut res = Self::default();
-                res.value[0] = a[0].square() + a[1].square() * FA::from_f(F::W);
+                res.value[0] = a[0].square() + a[1].square() * Into::<FA>::into(F::W);
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
@@ -263,21 +206,13 @@ where
     }
 }
 
-impl<F, FA, const D: usize> InjectiveRingHomomorphism<F> for BinomialExtensionField<F, D, FA>
-where
-    F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+impl<F, const D: usize> InjectiveRingHomomorphism<F> for BinomialExtensionField<F, D> where
+    F: BinomiallyExtendable<D>
 {
-    #[inline]
-    fn from_f(f: F) -> Self {
-        FA::from_f(f).into()
-    }
 }
 
-impl<F, FA, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D, FA>
-where
-    F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F>,
+impl<F, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D> where
+    F: BinomiallyExtendable<D>
 {
 }
 
@@ -286,10 +221,6 @@ impl<F, const D: usize> InjectiveRingHomomorphism<BinomialExtensionField<F, D>>
 where
     F: BinomiallyExtendable<D>,
 {
-    #[inline]
-    fn from_f(f: BinomialExtensionField<F, D>) -> Self {
-        f
-    }
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> FieldAlgebra<BinomialExtensionField<F, D>>
@@ -494,7 +425,7 @@ where
         let b = rhs.value;
         let mut res = Self::default();
         let w = F::W;
-        let w_af = FA::from_f(w);
+        let w_af = Into::<FA>::into(w);
 
         match D {
             2 => {
@@ -661,11 +592,11 @@ fn cubic_mul<F: BinomiallyExtendable<D>, FA: FieldAlgebra<F>, const D: usize>(
         + ((a[1].clone() + a[2].clone()) * (b[1].clone() + b[2].clone())
             - a1_b1.clone()
             - a2_b2.clone())
-            * FA::from_f(F::W);
+            * Into::<FA>::into(F::W);
     res[1] = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
         - a0_b0.clone()
         - a1_b1.clone()
-        + a2_b2.clone() * FA::from_f(F::W);
+        + a2_b2.clone() * Into::<FA>::into(F::W);
     res[2] = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
 }
 
@@ -677,7 +608,7 @@ fn cubic_square<F: BinomiallyExtendable<D>, FA: FieldAlgebra<F>, const D: usize>
 ) {
     assert_eq!(D, 3);
 
-    let w_a2 = a[2].clone() * FA::from_f(F::W);
+    let w_a2 = a[2].clone() * Into::<FA>::into(F::W);
 
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();

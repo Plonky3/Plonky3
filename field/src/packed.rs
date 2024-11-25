@@ -223,7 +223,8 @@ pub unsafe trait PackedFieldPow2: PackedField {
 /// as `[EF; W]` by making use of the chosen basis `B` again.
 pub trait PackedFieldExtension:
     PrimeCharacteristicRing
-    + InjectiveRingHomomorphism<Self::BaseField>
+    + InjectiveRingHomomorphism<<Self::BaseField as Field>::Packing>
+    + InjectiveRingHomomorphism<Self::ExtField>
     + Add<<Self::BaseField as Field>::Packing, Output = Self>
     + AddAssign<<Self::BaseField as Field>::Packing>
     + Sub<<Self::BaseField as Field>::Packing, Output = Self>
