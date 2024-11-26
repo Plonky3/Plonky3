@@ -411,11 +411,7 @@ pub trait QuotientMap<Int>: Sized {
     /// # Safety
     /// - If `Int` is an unsigned integer type then the allowed range will include `[0, p - 1]`.
     /// - If `Int` is a signed integer type then the allowed range will include `[-(p - 1)/2, (p - 1)/2]`.
-    unsafe fn from_canonical_unchecked(int: Int) -> Self {
-        // For some fields, there is no benefit to the knowledge that the integer is in the canonical range so
-        // we default to from_int which is safe and correct for all inputs.
-        Self::from_int(int)
-    }
+    unsafe fn from_canonical_unchecked(int: Int) -> Self;
 }
 
 pub trait PrimeField:

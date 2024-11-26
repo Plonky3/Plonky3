@@ -68,7 +68,11 @@ where
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
     let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
-    let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);
+
+    // In principle, height could be bigger than the characteristic of F.
+    let denominator = shift
+        .exp_u64(height as u64 - 1)
+        .mul_2exp_u64(log_height as u64);
     scale_vec(zerofier * denominator.inverse(), sum)
 }
 

@@ -2,7 +2,7 @@
 
 use core::array;
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, FieldAlgebra, QuotientMap};
 
 use crate::AirBuilder;
 
@@ -127,17 +127,25 @@ pub fn add3<AB: AirBuilder>(
     // No overflow can occur mod 2^16 P as 2^16 P > 3*2^32 and a, b, c, d < 2^32. Hence we conclude that
     // over the integers a - b - c - d = 0, -2^32 or -2*2^32 which implies a = b + c + d mod 2^32.
 
-    // By assumption P > 3*2^16 so we can safely use from_canonical here.
-    let two_16 = <AB as AirBuilder>::Expr::from_canonical_u32(1 << 16);
+    // By assumption P > 3*2^16 so 1 << 16 will be less than P. We use the checked version just to be safe.
+    // The compiler should optimize it away.
+    let two_16 =
+        <<AB as AirBuilder>::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
-    let acc = acc_16.clone() + two_16.clone() * acc_32;
+    let acc = acc_16.clone() + <AB as AirBuilder>::Expr::from_char(two_16) * acc_32;
 
-    builder.assert_zero(acc.clone() * (acc.clone() + two_32.clone()) * (acc + two_32.double()));
     builder.assert_zero(
-        acc_16.clone() * (acc_16.clone() + two_16.clone()) * (acc_16 + two_16.double()),
+        acc.clone()
+            * (acc.clone() + <AB as AirBuilder>::Expr::from_char(two_32))
+            * (acc + <AB as AirBuilder>::Expr::from_char(two_32.double())),
+    );
+    builder.assert_zero(
+        acc_16.clone()
+            * (acc_16.clone() + <AB as AirBuilder>::Expr::from_char(two_16))
+            * (acc_16 + <AB as AirBuilder>::Expr::from_char(two_16.double())),
     );
 }
 
@@ -180,16 +188,18 @@ pub fn add2<AB: AirBuilder>(
     // No overflow can occur mod 2^16 P as 2^16 P > 2^33 and a, b, c < 2^32. Hence we conclude that
     // over the integers a - b - c = 0 or a - b - c = -2^32 which is equivalent to a = b + c mod 2^32.
 
-    // By assumption P > 2^17 so we can safely use from_canonical here.
-    let two_16 = <AB as AirBuilder>::Expr::from_canonical_u32(1 << 16);
+    // By assumption P > 2^17 so 1 << 16 will be less than P. We use the checked version just to be safe.
+    // The compiler should optimize it away.
+    let two_16 =
+        <<AB as AirBuilder>::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone();
-    let acc = acc_16.clone() + two_16.clone() * acc_32;
+    let acc = acc_16.clone() + <AB as AirBuilder>::Expr::from_char(two_16) * acc_32;
 
-    builder.assert_zero(acc.clone() * (acc + two_32));
-    builder.assert_zero(acc_16.clone() * (acc_16 + two_16));
+    builder.assert_zero(acc.clone() * (acc + <AB as AirBuilder>::Expr::from_char(two_32)));
+    builder.assert_zero(acc_16.clone() * (acc_16 + <AB as AirBuilder>::Expr::from_char(two_16)));
 }
 
 /// Verify that `a = (b ^ (c << shift))`

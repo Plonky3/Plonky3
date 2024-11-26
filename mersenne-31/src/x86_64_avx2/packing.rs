@@ -394,6 +394,7 @@ impl Product for PackedMersenne31AVX2 {
 
 impl FieldAlgebra for PackedMersenne31AVX2 {
     type F = Mersenne31;
+    type Char = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
     const ONE: Self = Self::broadcast(Mersenne31::ONE);
@@ -406,37 +407,8 @@ impl FieldAlgebra for PackedMersenne31AVX2 {
     }
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        Mersenne31::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Mersenne31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Mersenne31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        Mersenne31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Mersenne31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Mersenne31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Mersenne31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Mersenne31::from_wrapped_u64(n).into()
+    fn from_char(f: Self::Char) -> Self {
+        f.into()
     }
 
     #[must_use]
