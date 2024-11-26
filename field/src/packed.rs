@@ -224,7 +224,6 @@ pub trait PackedFieldExtension:
     PrimeCharacteristicRing
     + FieldAlgebra<Self::ExtField>
     + FieldAlgebra<<Self::BaseField as Field>::Packing>
-    + From<<Self::BaseField as Field>::Packing>
 {
     type BaseField: Field;
     type ExtField: ExtensionField<Self::BaseField, ExtensionPacking = Self>;

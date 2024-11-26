@@ -662,7 +662,7 @@ pub trait PrimeField64: PrimeField {
     /// This will be the fastest way to get a unique u64 representative
     /// from the field element and is intended for use in Hashing. In general,
     /// `val.as_unique_u64()` and `val.as_canonical_u64()` may be different.
-    fn as_unique_u64(&self) -> u64;
+    fn hash_to_u64(&self) -> u64;
 }
 
 /// A prime field `ℤ/p` with order `p < 2^32`.
@@ -679,7 +679,7 @@ pub trait PrimeField32: PrimeField64 {
     /// This will be the fastest way to get a unique u32 representative
     /// from the field element and is intended for use in Hashing. In general,
     /// `val.as_unique_u32()` and `val.as_canonical_u32()` may be different.
-    fn as_unique_u32(&self) -> u32;
+    fn hash_to_u32(&self) -> u32;
 }
 
 pub trait ExtensionField<Base: Field>: Field + FieldAlgebra<Base> {
