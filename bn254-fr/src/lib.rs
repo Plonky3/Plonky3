@@ -235,26 +235,26 @@ macro_rules! small_i_int_bn254 {
 ///
 /// Due to the size of the `BN254` prime, all inputs are canonical.
 macro_rules! large_u_int_bn254 {
-    ($($type:ty),* $(,)? ) => {
+    ($field:ty, $($prim_int:ty),* ) => {
         $(
-        impl QuotientMap<$type> for Bn254Fr {
+        impl QuotientMap<$prim_int> for $field {
             /// Due to the size of the `BN254` prime, the input value is always canonical.
             #[inline]
-            fn from_int(int: $type) -> Bn254Fr {
-                assert!(size_of::<$type>() <= 16);
+            fn from_int(int: $prim_int) -> $field {
+                assert!(size_of::<$prim_int>() <= 16);
                 let int_u128 = int as u128;
                 Self::new(FFBn254Fr::from_raw([int_u128 as u64, (int_u128 >> 64) as u64, 0, 0]))
             }
 
             /// Due to the size of the `BN254` prime, the input value is always canonical.
             #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Bn254Fr> {
+            fn from_canonical_checked(int: $prim_int) -> Option<$field> {
                 Some(Self::from_int(int))
             }
 
             /// Due to the size of the `BN254` prime, the input value is always canonical.
             #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Bn254Fr {
+            unsafe fn from_canonical_unchecked(int: $prim_int) -> $field {
                 Self::from_int(int)
             }
         }
@@ -300,7 +300,7 @@ macro_rules! large_i_int_bn254 {
 
 small_u_int_bn254!(u8, u16, u32, u64);
 small_i_int_bn254!(i8, i16, i32, i64);
-large_u_int_bn254!(u128, usize);
+large_u_int_bn254!(Bn254Fr, u128, usize);
 large_i_int_bn254!(i128, isize);
 
 impl PrimeField for Bn254Fr {
