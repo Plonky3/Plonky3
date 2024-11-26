@@ -4,11 +4,11 @@ use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use paste::paste;
 
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
+use paste::paste;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -366,7 +366,7 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
     fn monomial_inverse(&self) -> Self;
 }
 
-/// A ring `R` implements `InjectiveRingHomomorphism<F>` if there is a natural
+/// A ring `R` implements `FieldAlgebra<F>` if there is a natural
 /// map from `F` into `R` such that the only element which maps
 /// to `R::ZERO` is `F::ZERO`.
 ///
@@ -376,11 +376,11 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// ### Mathematical Description
 ///
 /// Let `x` and `y` denote arbitrary elements of the `S`. Then
-/// by "natural" map we require that our map `from_f`
+/// by "natural" map we require that our map `from`
 /// has the following properties:
-/// - Preserves Identity: `from_f(F::ONE) = R::ONE`
-/// - Commutes with Addition: `from_f(x + y) = from_f(x) + from_f(y)`
-/// - Commutes with Multiplication: `from_f(x * y) = from_f(x) * from_f(y)`
+/// - Preserves Identity: `from(F::ONE) = R::ONE`
+/// - Commutes with Addition: `from(x + y) = from(x) + from(y)`
+/// - Commutes with Multiplication: `from(x * y) = from(x) * from(y)`
 ///
 /// Such maps are known as ring homomorphisms and are injective if the
 /// only element which maps to `R::ZERO` is `F::ZERO`.
@@ -388,7 +388,17 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// The existence of this map makes `R` into an `F`-module. If `F` is a field
 /// then this makes `R` into an `F`-Algebra and if `R` is also a field then
 /// this means that `R` is a field extension of `F`.
-pub trait InjectiveRingHomomorphism<F>: From<F> {}
+pub trait FieldAlgebra<F>:
+    From<F>
+    + Add<F, Output = Self>
+    + AddAssign<F>
+    + Sub<F, Output = Self>
+    + SubAssign<F>
+    + Mul<F, Output = Self>
+    + MulAssign<F>
+    + PrimeCharacteristicRing
+{
+}
 
 /// A field algebra which can be serialized into and out of a
 /// collection of field elements.
@@ -470,7 +480,7 @@ pub trait Serializable<F> {
 /// which satisfies `x * x^{-1} = F::ONE`.
 pub trait Field:
     PrimeCharacteristicRing
-    + InjectiveRingHomomorphism<Self>
+    + FieldAlgebra<Self>
     + Packable
     + 'static
     + Copy
@@ -672,19 +682,7 @@ pub trait PrimeField32: PrimeField64 {
     fn as_unique_u32(&self) -> u32;
 }
 
-pub trait ExtensionField<Base: Field>:
-    Field
-    + From<Base>
-    + InjectiveRingHomomorphism<Base>
-    // TODO: Does ExtensionField need to implement SerializableAlgebra? Will determine this as we update the rest of the code.
-    // + SerializableAlgebra<Base>
-    + Add<Base, Output = Self>
-    + AddAssign<Base>
-    + Sub<Base, Output = Self>
-    + SubAssign<Base>
-    + Mul<Base, Output = Self>
-    + MulAssign<Base>
-{
+pub trait ExtensionField<Base: Field>: Field + FieldAlgebra<Base> {
     type ExtensionPacking: PackedFieldExtension<BaseField = Base, ExtField = Self>
         + 'static
         + Copy

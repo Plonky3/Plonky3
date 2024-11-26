@@ -12,8 +12,8 @@ use super::BinomialExtensionField;
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, AbelianGroup, CommutativeRing, InjectiveRingHomomorphism, PackedField,
-    PackedFieldExtension, Powers, PrimeCharacteristicRing, PrimeField,
+    field_to_array, AbelianGroup, CommutativeRing, FieldAlgebra, PackedField, PackedFieldExtension,
+    Powers, PrimeCharacteristicRing, PrimeField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -182,14 +182,7 @@ where
     }
 }
 
-impl<F, PF, const D: usize> InjectiveRingHomomorphism<PF> for PackedBinomialExtensionField<F, PF, D>
-where
-    F: BinomiallyExtendable<D>,
-    PF: PackedField<Scalar = F>,
-{
-}
-
-impl<F, PF, const D: usize> InjectiveRingHomomorphism<BinomialExtensionField<F, D>>
+impl<F, PF, const D: usize> FieldAlgebra<BinomialExtensionField<F, D>>
     for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -197,8 +190,7 @@ where
 {
 }
 
-impl<F, PF, const D: usize> InjectiveRingHomomorphism<PackedBinomialExtensionField<F, PF, D>>
-    for PackedBinomialExtensionField<F, PF, D>
+impl<F, PF, const D: usize> FieldAlgebra<PF> for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
     PF: PackedField<Scalar = F>,
@@ -249,6 +241,24 @@ where
     }
 }
 
+impl<F, PF, const D: usize> Add<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        let mut res = self.value;
+        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
+            *r += rhs_val;
+        }
+        Self::new(res)
+    }
+}
+
 impl<F, PF, const D: usize> AddAssign for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -270,6 +280,20 @@ where
     #[inline]
     fn add_assign(&mut self, rhs: PF) {
         self.value[0] += rhs;
+    }
+}
+
+impl<F, PF, const D: usize> AddAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn add_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
+        for i in 0..D {
+            self.value[i] += rhs.value[i];
+        }
     }
 }
 
@@ -315,6 +339,24 @@ where
     }
 }
 
+impl<F, PF, const D: usize> Sub<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        let mut res = self.value;
+        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
+            *r -= rhs_val;
+        }
+        Self::new(res)
+    }
+}
+
 impl<F, PF, const D: usize> SubAssign for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -333,6 +375,18 @@ where
 {
     #[inline]
     fn sub_assign(&mut self, rhs: PF) {
+        *self = *self - rhs;
+    }
+}
+
+impl<F, PF, const D: usize> SubAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn sub_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
         *self = *self - rhs;
     }
 }
@@ -389,6 +443,20 @@ where
     }
 }
 
+impl<F, PF, const D: usize> Mul<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        self * Into::<PackedBinomialExtensionField<F, PF, D>>::into(rhs)
+    }
+}
+
 impl<F, PF, const D: usize> Product for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -417,6 +485,18 @@ where
 {
     #[inline]
     fn mul_assign(&mut self, rhs: PF) {
+        *self = *self * rhs;
+    }
+}
+
+impl<F, PF, const D: usize> MulAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn mul_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
         *self = *self * rhs;
     }
 }

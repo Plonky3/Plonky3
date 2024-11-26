@@ -1,12 +1,10 @@
+use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 use core::slice;
 
-use alloc::vec::Vec;
-
 use crate::{
-    CommutativeRing, ExtensionField, Field, InjectiveRingHomomorphism, Powers,
-    PrimeCharacteristicRing,
+    CommutativeRing, ExtensionField, Field, FieldAlgebra, Powers, PrimeCharacteristicRing,
 };
 
 /// A trait to constrain types that can be packed into a packed value.
@@ -134,9 +132,9 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: 
+pub unsafe trait PackedField:
     PrimeCharacteristicRing
-    + InjectiveRingHomomorphism<Self::Scalar>
+    + FieldAlgebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     + Add<Self::Scalar, Output = Self>
     + AddAssign<Self::Scalar>
@@ -224,14 +222,9 @@ pub unsafe trait PackedFieldPow2: PackedField {
 /// as `[EF; W]` by making use of the chosen basis `B` again.
 pub trait PackedFieldExtension:
     PrimeCharacteristicRing
-    + InjectiveRingHomomorphism<<Self::BaseField as Field>::Packing>
-    + InjectiveRingHomomorphism<Self::ExtField>
-    + Add<<Self::BaseField as Field>::Packing, Output = Self>
-    + AddAssign<<Self::BaseField as Field>::Packing>
-    + Sub<<Self::BaseField as Field>::Packing, Output = Self>
-    + SubAssign<<Self::BaseField as Field>::Packing>
-    + Mul<<Self::BaseField as Field>::Packing, Output = Self>
-    + MulAssign<<Self::BaseField as Field>::Packing>
+    + FieldAlgebra<Self::ExtField>
+    + FieldAlgebra<<Self::BaseField as Field>::Packing>
+    + From<<Self::BaseField as Field>::Packing>
 {
     type BaseField: Field;
     type ExtField: ExtensionField<Self::BaseField, ExtensionPacking = Self>;
