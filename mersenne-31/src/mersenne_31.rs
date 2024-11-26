@@ -239,7 +239,7 @@ impl Field for Mersenne31 {
         }
 
         // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2147483646 = 1111111111111111111111111111101_2.
+        // Here p-2 = 2147483645 = 1111111111111111111111111111101_2.
         // Uses 30 Squares + 7 Multiplications => 37 Operations total.
 
         let p1 = *self;
