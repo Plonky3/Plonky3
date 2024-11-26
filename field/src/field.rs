@@ -10,12 +10,51 @@ use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
+use paste::paste;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::exponentiation::exp_u64_by_squaring;
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
+
+/// This is a simple macro which lets us cleanly define the function `from_Int`
+/// with `Int` can be replaced by any integer type.
+///
+/// Running, `from_integer_types(Int)` adds the following code to a trait:
+///
+/// ```rust,ignore
+/// /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+/// ///
+/// /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+/// ///
+/// /// Note that the output only depends on `r mod p`.
+/// ///
+/// /// This should be avoided in performance critical locations.
+/// fn from_Int(int: Int) -> Self {
+///     Self::from_char(Self::Char::from_int(int))
+/// }
+/// ```
+///
+/// This macro can be run for any `Int` where `Self::Char` implements `QuotientMap<Int>`.
+/// It considerably cuts down on the amount of copy/pasted code.
+macro_rules! from_integer_types {
+    ($($type:ty),* $(,)? ) => {
+        $( paste!{
+        /// Given an integer `r`, return the sum of `r` copies of `ONE`:
+        ///
+        /// `r.Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
+        ///
+        /// Note that the output only depends on `r mod p`.
+        ///
+        /// This should be avoided in performance critical locations.
+        fn [<from_ $type>](int: $type) -> Self {
+            Self::from_char(Self::Char::from_int(int))
+        }
+    }
+        )*
+    };
+}
 
 /// A commutative algebra over a finite field.
 ///
@@ -47,6 +86,9 @@ pub trait FieldAlgebra:
     + Debug
 {
     type F: Field;
+
+    /// The field `ℤ/p` where the characteristic of this given ring is p.
+    type Char: PrimeField;
 
     /// The additive identity of the algebra.
     ///
@@ -92,41 +134,25 @@ pub trait FieldAlgebra:
     /// an algebra and not simply a commutative ring.
     fn from_f(f: Self::F) -> Self;
 
-    /// Convert from a `bool`.
-    fn from_bool(b: bool) -> Self;
-
-    /// Convert from a canonical `u8`.
+    /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u8(n: u8) -> Self;
-
-    /// Convert from a canonical `u16`.
+    /// Given any element `r ∈ ℤ/p`, represented as an integer between `0` and `p - 1`
+    /// `from_char(r)` will be equal to:
     ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u16(n: u16) -> Self;
+    /// `Self::ONE + ... + Self::ONE (r times)`
+    fn from_char(f: Self::Char) -> Self;
 
-    /// Convert from a canonical `u32`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u32(n: u32) -> Self;
+    /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
+    fn from_bool(b: bool) -> Self {
+        // Some rings might reimplement this to avoid the branch.
+        if b {
+            Self::ONE
+        } else {
+            Self::ZERO
+        }
+    }
 
-    /// Convert from a canonical `u64`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u64(n: u64) -> Self;
-
-    /// Convert from a canonical `usize`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_usize(n: usize) -> Self;
-
-    fn from_wrapped_u32(n: u32) -> Self;
-    fn from_wrapped_u64(n: u64) -> Self;
+    from_integer_types!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
 
     /// The elementary function `double(a) = 2*a`.
     ///
@@ -353,7 +379,61 @@ pub trait Field:
     }
 }
 
-pub trait PrimeField: Field + Ord {
+/// Implementation of the quotient map `ℤ -> ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
+pub trait QuotientMap<Int>: Sized {
+    /// Convert a given integer into an element of the field `ℤ/p`.
+    ///   
+    /// This is the most generic method which makes no assumptions on the size of the input.
+    /// Where possible, this method should be used with the smallest possible integer type.
+    /// For example, if a 32-bit integer `x` is known to be less than `2^16`, then
+    /// `from_int(x as u16)` will often be faster than `from_int(x)`.
+    ///
+    /// This method is also strongly preferred over `from_canonical_checked/from_canonical_unchecked`.
+    /// It will usually be identical when `Int` is a small type, e.g. `u8/u16` and is safer for
+    /// larger types.
+    fn from_int(int: Int) -> Self;
+
+    /// Convert a given integer into an element of the field `ℤ/p`. The input is checked to
+    /// ensure it lies within a given range.
+    /// - If `Int` is an unsigned integer type the input must lie in `[0, p - 1]`.
+    /// - If `Int` is a signed integer type the input must lie in `[-(p - 1)/2, (p - 1)/2]`.
+    ///
+    /// Return `None` if the input lies outside this range and `Some(val)` otherwise.
+    fn from_canonical_checked(int: Int) -> Option<Self>;
+
+    /// Convert a given integer into an element of the field `ℤ/p`. The input is guaranteed
+    /// to lie within a specific range depending on `p`. If the input lies outside of this
+    /// range, the output is undefined.
+    ///
+    /// In general `from_canonical_unchecked` will be faster for either `signed` or `unsigned`
+    /// types but the specifics will depend on the field.
+    ///
+    /// # Safety
+    /// - If `Int` is an unsigned integer type then the allowed range will include `[0, p - 1]`.
+    /// - If `Int` is a signed integer type then the allowed range will include `[-(p - 1)/2, (p - 1)/2]`.
+    unsafe fn from_canonical_unchecked(int: Int) -> Self {
+        // For some fields, there is no benefit to the knowledge that the integer is in the canonical range so
+        // we default to from_int which is safe and correct for all inputs.
+        Self::from_int(int)
+    }
+}
+
+pub trait PrimeField:
+    Field
+    + Ord
+    + QuotientMap<u8>
+    + QuotientMap<u16>
+    + QuotientMap<u32>
+    + QuotientMap<u64>
+    + QuotientMap<u128>
+    + QuotientMap<usize>
+    + QuotientMap<i8>
+    + QuotientMap<i16>
+    + QuotientMap<i32>
+    + QuotientMap<i64>
+    + QuotientMap<i128>
+    + QuotientMap<isize>
+{
     fn as_canonical_biguint(&self) -> BigUint;
 }
 

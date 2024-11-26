@@ -37,6 +37,7 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 
 impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     type F = F;
+    type Char = F::Char;
 
     const ZERO: Self = FieldArray([F::ZERO; N]);
     const ONE: Self = FieldArray([F::ONE; N]);
@@ -48,36 +49,9 @@ impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
         f.into()
     }
 
-    fn from_bool(b: bool) -> Self {
-        [F::from_bool(b); N].into()
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        [F::from_canonical_u8(n); N].into()
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        [F::from_canonical_u16(n); N].into()
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        [F::from_canonical_u32(n); N].into()
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        [F::from_canonical_u64(n); N].into()
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        [F::from_canonical_usize(n); N].into()
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        [F::from_wrapped_u32(n); N].into()
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        [F::from_wrapped_u64(n); N].into()
+    #[inline]
+    fn from_char(f: Self::Char) -> Self {
+        F::from_char(f).into()
     }
 }
 

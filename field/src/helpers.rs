@@ -203,11 +203,15 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
+///
+/// This is optimised assuming that the characteristic of TF is greater than 2^64.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let po2 = TF::from_canonical_u64(1u64 << 32);
+    // If the characteristic of TF is > 2^64, from_int and from_canonical_unchecked act identically
+    // on u64 and u32 inputs so we use the safer option.
+    let po2 = TF::from_int(1u64 << 32);
     let mut result = TF::ZERO;
     for val in vals.iter().rev() {
-        result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());
+        result = result * po2 + TF::from_int(val.as_canonical_u32());
     }
     result
 }
@@ -225,7 +229,7 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         let digit: BigUint = val.clone() & mask;
         let digit_u64s = digit.to_u64_digits();
         if !digit_u64s.is_empty() {
-            result.push(TF::from_wrapped_u64(digit_u64s[0]));
+            result.push(TF::from_int(digit_u64s[0]));
         } else {
             result.push(TF::ZERO)
         }
