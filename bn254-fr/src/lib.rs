@@ -6,14 +6,14 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::mem::size_of;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{Field, FieldAlgebra, Packable, PrimeField, QuotientMap, TwoAdicField};
+use p3_field::integers::QuotientMap;
+use p3_field::{quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::Poseidon2Bn254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -161,147 +161,53 @@ impl Field for Bn254Fr {
     }
 }
 
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = u8, u16, u32, u64`.
-///
-/// Due to the size of the `BN254` prime, all inputs are canonical.
-macro_rules! small_u_int_bn254 {
-    ($($type:ty),* $(,)? ) => {
-        $(
-        impl QuotientMap<$type> for Bn254Fr {
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            fn from_int(int: $type) -> Bn254Fr {
-                Self::new(FFBn254Fr::from(int as u64))
-            }
+quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64, usize]);
+quotient_map_small_int!(Bn254Fr, i128, [i8, i16, i32, i64, isize]);
 
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Bn254Fr> {
-                Some(Self::new(FFBn254Fr::from(int as u64)))
-            }
+impl QuotientMap<u128> for Bn254Fr {
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_int(int: u128) -> Bn254Fr {
+        Self::new(FFBn254Fr::from_raw([int as u64, (int >> 64) as u64, 0, 0]))
+    }
 
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Bn254Fr {
-                Self::new(FFBn254Fr::from(int as u64))
-            }
-        }
-        )*
-    };
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_canonical_checked(int: u128) -> Option<Bn254Fr> {
+        Some(Self::from_int(int))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: u128) -> Bn254Fr {
+        Self::from_int(int)
+    }
 }
 
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = i8, i16, i32, i64`.
-///
-/// Due to the size of the `BN254` prime, all inputs are canonical. We just need to handle the sign.
-macro_rules! small_i_int_bn254 {
-    ($($type:ty),* $(,)? ) => {
-        $(
-        impl QuotientMap<$type> for Bn254Fr {
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            /// We just need to handle the sign.
-            #[inline]
-            fn from_int(int: $type) -> Bn254Fr {
-                if int >= 0 {
-                    Self::new(FFBn254Fr::from(int as u64))
-                } else {
-                    -Self::new(FFBn254Fr::from(-int as u64))
-                }
-
-            }
-
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            /// We just need to handle the sign.
-            #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Bn254Fr> {
-                Some(Self::from_int(int))
-            }
-
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            /// We just need to handle the sign.
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Bn254Fr {
-                Self::from_int(int)
-            }
+impl QuotientMap<i128> for Bn254Fr {
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_int(int: i128) -> Bn254Fr {
+        // Nothing better than just branching based on the sign of int.
+        if int >= 0 {
+            Self::from_int(int as u128)
+        } else {
+            -Self::from_int((-int) as u128)
         }
-        )*
-    };
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_canonical_checked(int: i128) -> Option<Bn254Fr> {
+        Some(Self::from_int(int))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: i128) -> Bn254Fr {
+        Self::from_int(int)
+    }
 }
-
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = u128, usize`. We assume that the maximal size of a
-/// `usize` is `u128`.
-///
-/// Due to the size of the `BN254` prime, all inputs are canonical.
-macro_rules! large_u_int_bn254 {
-    ($field:ty, $($prim_int:ty),* ) => {
-        $(
-        impl QuotientMap<$prim_int> for $field {
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            fn from_int(int: $prim_int) -> $field {
-                assert!(size_of::<$prim_int>() <= 16);
-                let int_u128 = int as u128;
-                Self::new(FFBn254Fr::from_raw([int_u128 as u64, (int_u128 >> 64) as u64, 0, 0]))
-            }
-
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            fn from_canonical_checked(int: $prim_int) -> Option<$field> {
-                Some(Self::from_int(int))
-            }
-
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $prim_int) -> $field {
-                Self::from_int(int)
-            }
-        }
-        )*
-    };
-}
-
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = i128, isize`. We assume that the maximal size of a
-/// `isize` is `i128`.
-///
-/// Due to the size of the `BN254` prime, all inputs are canonical.
-macro_rules! large_i_int_bn254 {
-    ($($type:ty),* $(,)? ) => {
-        $(
-        impl QuotientMap<$type> for Bn254Fr {
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            fn from_int(int: $type) -> Bn254Fr {
-                assert!(size_of::<$type>() <= 16);
-                if int >= 0 {
-                    Self::from_int(int as u128)
-                } else {
-                    -Self::from_int((-int) as u128)
-                }
-            }
-
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Bn254Fr> {
-                Some(Self::from_int(int))
-            }
-
-            /// Due to the size of the `BN254` prime, the input value is always canonical.
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Bn254Fr {
-                Self::from_int(int)
-            }
-        }
-        )*
-    };
-}
-
-small_u_int_bn254!(u8, u16, u32, u64);
-small_i_int_bn254!(i8, i16, i32, i64);
-large_u_int_bn254!(Bn254Fr, u128, usize);
-large_i_int_bn254!(i128, isize);
 
 impl PrimeField for Bn254Fr {
     fn as_canonical_biguint(&self) -> BigUint {

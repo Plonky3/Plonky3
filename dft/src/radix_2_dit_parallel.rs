@@ -5,7 +5,8 @@ use core::cell::RefCell;
 use core::mem::{transmute, MaybeUninit};
 
 use itertools::{izip, Itertools};
-use p3_field::{Field, Powers, QuotientMap, TwoAdicField};
+use p3_field::integers::QuotientMap;
+use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;

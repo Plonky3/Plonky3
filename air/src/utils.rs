@@ -2,7 +2,8 @@
 
 use core::array;
 
-use p3_field::{Field, FieldAlgebra, QuotientMap};
+use p3_field::integers::QuotientMap;
+use p3_field::{Field, FieldAlgebra};
 
 use crate::AirBuilder;
 

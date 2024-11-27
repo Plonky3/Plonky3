@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 
-use p3_field::{Field, Powers, QuotientMap, TwoAdicField};
+use p3_field::integers::QuotientMap;
+use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;

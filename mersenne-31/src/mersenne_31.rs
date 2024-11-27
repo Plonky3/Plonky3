@@ -8,9 +8,10 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
-    PrimeField32, PrimeField64, QuotientMap,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_small_int, Field, FieldAlgebra,
+    Packable, PrimeField, PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -223,41 +224,6 @@ impl Field for Mersenne31 {
 }
 
 /// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = u8, u16`.
-///
-/// In both these cases the input is always `< p` so all methods
-/// can immediately place the input directly into the internal
-/// representation. This means we don't need to overwrite
-/// `from_canonical_unchecked`.
-macro_rules! small_u_int_m31 {
-    ($($type:ty),* $(,)? ) => {
-        $(
-        impl QuotientMap<$type> for Mersenne31 {
-            /// For small integer types, the input value is always canonical.
-            #[inline]
-            fn from_int(int: $type) -> Mersenne31 {
-                Self::new(int as u32)
-            }
-
-            /// For small integer types, the input value is always canonical.
-            #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Mersenne31> {
-                Some(Self::new(int as u32))
-            }
-
-            /// For small integer types, the input value is always canonical.
-            ///
-            /// In these cases `from_canonical_unchecked` is not unsafe.
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Mersenne31 {
-                Self::new(int as u32)
-            }
-        }
-        )*
-    };
-}
-
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
 /// for `Int = u64, u128, usize`.
 ///
 /// In these cases the fastest approach is just to use `%p` to compute
@@ -298,48 +264,6 @@ macro_rules! large_u_int_m31 {
             unsafe fn from_canonical_unchecked(int: $type) -> Self {
                 debug_assert!(int <= Mersenne31::ORDER_U32 as $type);
                 Self::new(int as u32)
-            }
-        }
-        )*
-    };
-}
-
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = i8, i16`.
-///
-/// In both these cases, once we correct for the sign, the input is less than `31` bits so
-/// we can immediately place the input directly into the internal representation.
-/// This also means we don't need to overwrite `from_canonical_checked`.
-macro_rules! small_i_int_m31 {
-    ($($type:ty),* $(,)? ) => {
-        $(
-        impl QuotientMap<$type> for Mersenne31 {
-            /// For small integer types, the input value is always canonical
-            /// once we correct for the sign.
-            #[inline]
-            fn from_int(int: $type) -> Mersenne31 {
-                if int >= 0 {
-                    Self::new(int as u32)
-                } else {
-                    Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int as i32))
-                }
-
-            }
-
-            /// For small integer types, the input value is always canonical
-            /// once we correct for the sign.
-            #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Mersenne31> {
-                Some(Self::from_int(int))
-            }
-
-            /// For small integer types, the input value is always canonical.
-            /// once we correct for the sign.
-            ///
-            /// In these cases `from_canonical_unchecked` is not unsafe.
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Mersenne31 {
-                Self::from_int(int)
             }
         }
         )*
@@ -392,8 +316,8 @@ macro_rules! large_i_int_m31 {
     };
 }
 
-small_u_int_m31!(u8, u16);
-small_i_int_m31!(i8, i16);
+quotient_map_small_int!(Mersenne31, u32, [u8, u16]);
+quotient_map_small_int!(Mersenne31, i32, [i8, i16]);
 
 impl QuotientMap<u32> for Mersenne31 {
     #[inline]
