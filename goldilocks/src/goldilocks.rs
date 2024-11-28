@@ -8,11 +8,13 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, Field, FieldAlgebra, Packable,
-    PrimeField, PrimeField64, TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_small_int, Field,
+    FieldAlgebra, Packable, PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
+use paste::paste;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -91,6 +93,7 @@ impl Distribution<Goldilocks> for Standard {
 
 impl FieldAlgebra for Goldilocks {
     type F = Self;
+    type Char = Self;
 
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
@@ -102,41 +105,13 @@ impl FieldAlgebra for Goldilocks {
         f
     }
 
+    #[inline]
+    fn from_char(f: Self::Char) -> Self {
+        f
+    }
+
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline(always)]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(n)
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(n as u64)
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
-        // need for a reduction.
-        Self::new(n.into())
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        // There's no need to reduce `n` to canonical form, as our internal encoding is
-        // non-canonical, so there's no need for a reduction.
-        Self::new(n)
     }
 
     #[inline]
@@ -244,6 +219,75 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+}
+
+quotient_map_small_int!(Goldilocks, u64, [u8, u16, u32]);
+quotient_map_small_int!(Goldilocks, i64, [i8, i16, i32]);
+
+impl QuotientMap<u64> for Goldilocks {
+    /// Convert a given integer into an element of the Goldilocks field.
+    ///
+    /// No reduction is needed as the internal value is allowed
+    /// to be any u64.
+    fn from_int(int: u64) -> Self {
+        Self::new(int)
+    }
+
+    /// Convert a given integer into an element of the Goldilocks field.
+    ///
+    /// Return none if the given integer is greater than `p = 2^64 - 2^32 + 1`
+    fn from_canonical_checked(int: u64) -> Option<Self> {
+        if int < Self::ORDER_U64 {
+            Some(Self::new(int))
+        } else {
+            None
+        }
+    }
+
+    /// Convert a given integer into an element of the Goldilocks field.
+    ///
+    /// # Safety
+    /// In this case this function is actually always safe as the internal
+    /// value is allowed to be any u64.
+    unsafe fn from_canonical_unchecked(int: u64) -> Self {
+        Self::new(int)
+    }
+}
+
+impl QuotientMap<i64> for Goldilocks {
+    /// Convert a given integer into an element of the Goldilocks field.
+    ///
+    /// We simply need to deal with the sign.
+    fn from_int(int: i64) -> Self {
+        if int >= 0 {
+            Self::new(int as u64)
+        } else {
+            Self::new(Self::ORDER_U64.wrapping_add_signed(int))
+        }
+    }
+
+    /// Convert a given integer into an element of the Goldilocks field.
+    ///
+    /// Returns none if the input does not lie in the range `[-(2^63 - 2^31), 2^63 - 2^31]`.
+    #[inline]
+    fn from_canonical_checked(int: i64) -> Option<Goldilocks> {
+        const POS_BOUND: i64 = ((1 << 32) - 1) << 31;
+        const NEG_BOUND: i64 = -((1 << 32) - 1) << 31;
+        match int {
+            0..=POS_BOUND => Some(Self::new(int as u64)),
+            NEG_BOUND..0 => Some(Self::new(Self::ORDER_U64.wrapping_add_signed(int))),
+            _ => None,
+        }
+    }
+
+    /// Convert a given integer into an element of the Goldilocks field.
+    ///
+    /// # Safety
+    /// In this case this function is actually always safe as the internal
+    /// value is allowed to be any u64.
+    unsafe fn from_canonical_unchecked(int: i64) -> Self {
+        Self::from_int(int)
     }
 }
 

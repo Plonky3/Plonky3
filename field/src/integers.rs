@@ -136,7 +136,106 @@ pub trait QuotientMap<Int>: Sized {
 macro_rules! quotient_map_small_int {
     ($field:ty, $max_size:ty, [$($prim_int:ty),*] ) => {
         $(
+        paste!{
+            impl QuotientMap<$prim_int> for $field {
+                #[doc = "Convert a given "]
+                #[doc = stringify!(type_name::<$prim_int>())]
+                #[doc = " integer into an element of the "]
+                #[doc = stringify!(type_name::<$field>())]
+                #[doc = " field.
+                \n Due to the integer type, the input value is always canonical."]
+                #[inline]
+                fn from_int(int: $prim_int) -> $field {
+                    // Should be removed by the compiler.
+                    assert!(size_of::<$prim_int>() <= size_of::<$max_size>());
+                    unsafe {
+                        Self::from_canonical_unchecked(int as $max_size)
+                    }
+                }
+
+                /// Due to the integer type, the input value is always canonical.
+                #[inline]
+                fn from_canonical_checked(int: $prim_int) -> Option<$field> {
+                    // Should be removed by the compiler.
+                    assert!(size_of::<$prim_int>() <= size_of::<$max_size>());
+                    Some(unsafe {
+                        Self::from_canonical_unchecked(int as $max_size)
+                    })
+                }
+
+                /// Due to the integer type, the input value is always canonical.
+                #[inline]
+                unsafe fn from_canonical_unchecked(int: $prim_int) -> $field {
+                    // We use debug_assert to ensure this is removed by the compiler in release mode.
+                    debug_assert!(size_of::<$prim_int>() <= size_of::<$max_size>());
+                    Self::from_canonical_unchecked(int as $max_size)
+                }
+            }
+        }
+        )*
+    };
+}
+
+/// If the integer type is large enough, there is often no method better for `from_int` than
+/// just doing a modular reduction to reduce to a smaller type.
+///
+/// This provides a simple macro for this this implementation.
+///
+/// This macro accepts 4 inputs.
+/// - The name of the prime field `P`
+/// - The natural integer type `Int` in which the field characteristic lives.
+/// - The characteristic of the field.
+/// - A list of smaller integer types to auto implement `QuotientMap<SmallInt>`.
+///
+/// Then `from_int`, `from_canonical_checked`, `from_canonical_unchecked` are all
+/// implemented by casting the input to an `Int` and using the `from_canonical_unchecked`
+/// method from `QuotientMap<Int>`.
+///
+/// For a concrete example, `quotient_small_u_int!(Mersenne31, u32, [u8])` would produce the following code:
+///
+/// ```rust,ignore
+/// impl QuotientMap<u8> for Mersenne31 {
+///     /// Due to the integer type, the input value is always canonical.
+///     #[inline]
+///     fn from_int(int: u8) -> Mersenne31 {
+///         // Should be removed by the compiler.
+///         assert!(size_of::<u8>() <= size_of::<u32>());
+///         unsafe {
+///             Self::from_canonical_unchecked(int as u32)
+///         }
+///     }
+///
+///     /// Due to the integer type, the input value is always canonical.
+///     #[inline]
+///     fn from_canonical_checked(int: u8) -> Option<Mersenne31> {
+///         // Should be removed by the compiler.
+///         assert!(size_of::<u8>() <= size_of::<u32>());
+///         Some(unsafe {
+///             Self::from_canonical_unchecked(int as u32)
+///         })
+///     }
+///
+///     /// Due to the integer type, the input value is always canonical.
+///     #[inline]
+///     unsafe fn from_canonical_unchecked(int: u8) -> Mersenne31 {
+///         // We use debug_assert to ensure this is removed by the compiler in release mode.
+///         debug_assert!(size_of::<$prim_int>() <= size_of::<$max_size>());
+///         Self::from_canonical_unchecked(int as u32)
+///     }
+/// }
+///```
+///
+/// Similarly, `quotient_small_u_int!(Mersenne31, u32, [u8, u16])` produces the above code along with
+/// an identical version with `u8` replaced by `u16`.
+///
+/// All fields will need to use this method twice. Once for unsigned ints and once for signed ints.
+#[macro_export]
+macro_rules! quotient_map_large_int {
+    ($field:ty, $max_size:ty, $order:expr, [$($prim_int:ty),*] ) => {
+        $(
         impl QuotientMap<$prim_int> for $field {
+            /// Convert a given `$prim_int` integer into an element of the `$field` field.
+            ///
             /// Due to the integer type, the input value is always canonical.
             #[inline]
             fn from_int(int: $prim_int) -> $field {

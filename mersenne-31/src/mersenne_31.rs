@@ -13,6 +13,7 @@ use p3_field::{
     exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_small_int, Field, FieldAlgebra,
     Packable, PrimeField, PrimeField32, PrimeField64,
 };
+use paste::paste;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
