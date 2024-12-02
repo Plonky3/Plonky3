@@ -678,7 +678,7 @@ pub trait PrimeField32: PrimeField64 {
     ///
     /// This will be the fastest way to get a unique u32 representative
     /// from the field element and is intended for use in Hashing. In general,
-    /// `val.as_unique_u32()` and `val.as_canonical_u32()` may be different.
+    /// `val.hash_to_u32()` and `val.as_canonical_u32()` may be different.
     fn hash_to_u32(&self) -> u32;
 }
 
