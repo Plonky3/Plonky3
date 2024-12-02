@@ -122,7 +122,7 @@ fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
         // Clear the sign bit and combine the lo and high bits.
         // The simplest description of the operation we want is lo OR (hi_dirty AND P) which has bit pattern:
         // 111 => 1, 110 => 1, 101 => 1, 100 => 1, 011 => 1, 010 => 0, 001 => 0, 000 => 0
-        // Note that the input patters: 111, 110, 100 cannot occur so any constant of the form **1*1000 should work.
+        // Note that the input patterns: 111, 110, 100 cannot occur so any constant of the form **1*1000 should work.
         let output = x86_64::_mm512_ternarylogic_epi32::<0b11111000>(lo_bits, hi_bits_dirty, P);
         PackedMersenne31AVX512::from_vector(output)
     }
