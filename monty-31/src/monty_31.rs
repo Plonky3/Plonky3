@@ -15,6 +15,7 @@ use p3_field::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{from_monty, halve_u32, monty_reduce, to_monty, to_monty_64};
@@ -146,14 +147,21 @@ impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
 
 impl<FP: FieldParameters> Serialize for MontyField31<FP> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u32(self.as_canonical_u32())
+        // It's faster to Serialize and Deserialize in monty form.
+        serializer.serialize_u32(self.value)
     }
 }
 
 impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        Ok(MontyField31::from_canonical_u32(val))
+        // We need to ensure that val is a valid u32 which could have can come from a field element.
+        if val < FP::PRIME {
+            // It's faster to Serialize and Deserialize in monty form.
+            Ok(MontyField31::new_monty(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
+        }
     }
 }
 
@@ -294,6 +302,13 @@ impl<FP: FieldParameters> PrimeField64 for MontyField31<FP> {
     fn as_canonical_u64(&self) -> u64 {
         self.as_canonical_u32().into()
     }
+
+    #[inline]
+    fn to_unique_u64(&self) -> u64 {
+        // The internal representation is already a unique u32 for each field element.
+        // It's fine to hash things in monty form.
+        self.value as u64
+    }
 }
 
 impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
@@ -302,6 +317,13 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
     #[inline]
     fn as_canonical_u32(&self) -> u32 {
         MontyField31::to_u32(self)
+    }
+
+    #[inline]
+    fn to_unique_u32(&self) -> u32 {
+        // The internal representation is already a unique u32 for each field element.
+        // It's fine to hash things in monty form.
+        self.value
     }
 }
 

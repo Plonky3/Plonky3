@@ -363,6 +363,16 @@ pub trait PrimeField64: PrimeField {
 
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
+
+    /// Convert the field element to a `u64` such that any two field elements
+    /// representing the same value are converted to the same `u64`.
+    ///
+    /// This will be the fastest way to convert a field element to a `u64` and
+    /// is intended for use in hashing.
+    fn to_unique_u64(&self) -> u64 {
+        // A simple default which is optimal for some fields.
+        self.as_canonical_u64()
+    }
 }
 
 /// A prime field of order less than `2^32`.
@@ -371,6 +381,16 @@ pub trait PrimeField32: PrimeField64 {
 
     /// Return the representative of `value` that is less than `ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
+
+    /// Convert the field element to a `u32` such that any two field elements
+    /// representing the same value are converted to the same `u32`.
+    ///
+    /// This will be the fastest way to convert a field element to a `u32` and
+    /// is intended for use in hashing.
+    fn to_unique_u32(&self) -> u32 {
+        // A simple default which is optimal for some fields.
+        self.as_canonical_u32()
+    }
 }
 
 /// A commutative algebra over an extension field.

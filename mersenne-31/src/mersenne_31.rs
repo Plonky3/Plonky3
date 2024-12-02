@@ -14,13 +14,14 @@ use p3_field::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Mersenne31 prime
 const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
@@ -48,7 +49,7 @@ impl Packable for Mersenne31 {}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.as_canonical_u32());
+        state.write_u32(self.to_unique_u32());
     }
 }
 
@@ -86,6 +87,25 @@ impl Distribution<Mersenne31> for Standard {
             if is_canonical {
                 return Mersenne31::new(next_u31);
             }
+        }
+    }
+}
+
+impl Serialize for Mersenne31 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // No need to convert to canonical.
+        serializer.serialize_u32(self.value)
+    }
+}
+
+impl<'de> Deserialize<'de> for Mersenne31 {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let val = u32::deserialize(d)?;
+        // We need to ensure that val is a valid u32 which could have can come from a field element.
+        if val <= P {
+            Ok(Mersenne31::new(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
         }
     }
 }
