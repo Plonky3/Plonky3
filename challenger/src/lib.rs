@@ -62,7 +62,7 @@ pub trait FieldChallenger<F: Field>:
     }
 }
 
-impl<'a, C, T> CanObserve<T> for &'a mut C
+impl<C, T> CanObserve<T> for &mut C
 where
     C: CanObserve<T>,
 {
@@ -80,7 +80,7 @@ where
     }
 }
 
-impl<'a, C, T> CanSample<T> for &'a mut C
+impl<C, T> CanSample<T> for &mut C
 where
     C: CanSample<T>,
 {
@@ -100,7 +100,7 @@ where
     }
 }
 
-impl<'a, C, T> CanSampleBits<T> for &'a mut C
+impl<C, T> CanSampleBits<T> for &mut C
 where
     C: CanSampleBits<T>,
 {
@@ -110,7 +110,7 @@ where
     }
 }
 
-impl<'a, C, F: Field> FieldChallenger<F> for &'a mut C
+impl<C, F: Field> FieldChallenger<F> for &mut C
 where
     C: FieldChallenger<F>,
 {
