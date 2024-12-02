@@ -3,7 +3,7 @@ pub const U32_LIMBS: usize = 32 / BITS_PER_LIMB;
 
 // The constants from the reference implementation.
 // Saved as pairs of 16 bit integers in [lo, hi] format.
-pub(crate) const IV: [[u32; 2]; 8] = [
+pub(crate) const IV: [[u16; 2]; 8] = [
     [0xE667, 0x6A09],
     [0xAE85, 0xBB67],
     [0xF372, 0x3C6E],

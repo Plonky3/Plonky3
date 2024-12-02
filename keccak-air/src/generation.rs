@@ -43,8 +43,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
             for x in 0..5 {
                 let input_xy = input[y * 5 + x];
                 for limb in 0..U64_LIMBS {
-                    row.preimage[y][x][limb] =
-                        F::from_canonical_u64((input_xy >> (16 * limb)) & 0xFFFF);
+                    row.preimage[y][x][limb] = F::from_u16((input_xy >> (16 * limb)) as u16);
                 }
             }
         }
@@ -55,7 +54,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
         for x in 0..5 {
             let input_xy = input[y * 5 + x];
             for limb in 0..U64_LIMBS {
-                rows[0].a[y][x][limb] = F::from_canonical_u64((input_xy >> (16 * limb)) & 0xFFFF);
+                rows[0].a[y][x][limb] = F::from_u16((input_xy >> (16 * limb)) as u16);
             }
         }
     }
@@ -158,6 +157,6 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
     for limb in 0..U64_LIMBS {
         let rc_lo = rc_value_limb(round, limb);
         row.a_prime_prime_prime_0_0_limbs[limb] =
-            F::from_canonical_u16(row.a_prime_prime[0][0][limb].as_canonical_u64() as u16 ^ rc_lo);
+            F::from_u16(row.a_prime_prime[0][0][limb].as_canonical_u64() as u16 ^ rc_lo);
     }
 }

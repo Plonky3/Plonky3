@@ -114,7 +114,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for z in 0..64 {
                 let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
-                let four = AB::Expr::from_canonical_u8(4);
+                let four = AB::Expr::from_u8(4);
                 builder.assert_zero(diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four));
             }
         }
@@ -156,7 +156,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             let mut rc_bit_i = AB::Expr::ZERO;
             for r in 0..NUM_ROUNDS {
                 let this_round = local.step_flags[r];
-                let this_round_constant = AB::Expr::from_canonical_u8(rc_value_bit(r, i));
+                let this_round_constant = AB::Expr::from_u8(rc_value_bit(r, i));
                 rc_bit_i += this_round * this_round_constant;
             }
 

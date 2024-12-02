@@ -190,11 +190,11 @@ mod tests {
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
         // Observe 12 elements.
-        (0..12).for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
+        (0..12).for_each(|element| duplex_challenger.observe(F::from_u8(element as u8)));
 
         let state_after_duplexing: Vec<_> = iter::repeat(F::ZERO)
             .take(12)
-            .chain((0..12).map(F::from_canonical_u8).rev())
+            .chain((0..12).map(F::from_u8).rev())
             .collect();
 
         let expected_samples: Vec<F> = state_after_duplexing[..16].iter().copied().rev().collect();

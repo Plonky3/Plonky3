@@ -223,7 +223,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
             .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
 
-        let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
+        let inv_len = MontyField31::from_usize(nrows).inverse();
         debug_span!("scale").in_scope(|| mat.scale(inv_len));
         mat
     }
@@ -277,7 +277,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // as a row in `coeffs`.
 
         // Normalise inverse DFT and coset shift in one go.
-        let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
+        let inv_len = MontyField31::from_usize(nrows).inverse();
         coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
 
         // `padded` is implicitly zero padded since it was initialised

@@ -55,7 +55,7 @@ where
     }
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(proof.degree_bits));
+    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
     // Practically speaking though, the only related known attack is from failing to include public

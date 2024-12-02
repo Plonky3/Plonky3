@@ -49,7 +49,6 @@ pub type MdsMatrixBabyBear = MdsMatrixMontyField31<MDSBabyBearData>;
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
 
     use super::MdsMatrixBabyBear;
@@ -57,124 +56,114 @@ mod tests {
 
     #[test]
     fn babybear8() {
-        let input: [BabyBear; 8] = [
+        let input: [BabyBear; 8] = BabyBear::new_array([
             391474477, 1174409341, 666967492, 1852498830, 1801235316, 820595865, 585587525,
             1348326858,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
-        let expected: [BabyBear; 8] = [
+        let expected: [BabyBear; 8] = BabyBear::new_array([
             1752937716, 1801468855, 1102954394, 284747746, 1636355768, 205443234, 1235359747,
             1159982032,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn babybear12() {
-        let input: [BabyBear; 12] = [
+        let input: [BabyBear; 12] = BabyBear::new_array([
             918423259, 673549090, 364157140, 9832898, 493922569, 1171855651, 246075034, 1542167926,
             1787615541, 1696819900, 1884530130, 422386768,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
-        let expected: [BabyBear; 12] = [
+        let expected: [BabyBear; 12] = BabyBear::new_array([
             1631062293, 890348490, 1304705406, 1888740923, 845648570, 717048224, 1082440815,
             914769887, 1872991191, 1366539339, 1805116914, 1998032485,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn babybear16() {
-        let input: [BabyBear; 16] = [
+        let input: [BabyBear; 16] = BabyBear::new_array([
             1983708094, 1477844074, 1638775686, 98517138, 70746308, 968700066, 275567720,
             1359144511, 960499489, 1215199187, 474302783, 79320256, 1923147803, 1197733438,
             1638511323, 303948902,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
-        let expected: [BabyBear; 16] = [
+        let expected: [BabyBear; 16] = BabyBear::new_array([
             1497569692, 1038070871, 669165859, 456905446, 1116763366, 1267622262, 1985953057,
             1060497461, 704264985, 306103349, 1271339089, 1551541970, 1796459417, 889229849,
             1731972538, 439594789,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn babybear24() {
-        let input: [BabyBear; 24] = [
+        let input: [BabyBear; 24] = BabyBear::new_array([
             1307148929, 1603957607, 1515498600, 1412393512, 785287979, 988718522, 1750345556,
             853137995, 534387281, 930390055, 1600030977, 903985158, 1141020507, 636889442,
             966037834, 1778991639, 1440427266, 1379431959, 853403277, 959593575, 733455867,
             908584009, 817124993, 418826476,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
-        let expected: [BabyBear; 24] = [
+        let expected: [BabyBear; 24] = BabyBear::new_array([
             1537871777, 1626055274, 1705000179, 1426678258, 1688760658, 1347225494, 1291221794,
             1224656589, 1791446853, 1978133881, 1820380039, 1366829700, 27479566, 409595531,
             1223347944, 1752750033, 594548873, 1447473111, 1385412872, 1111945102, 1366585917,
             138866947, 1326436332, 656898133,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn babybear32() {
-        let input: [BabyBear; 32] = [
+        let input: [BabyBear; 32] = BabyBear::new_array([
             1346087634, 1511946000, 1883470964, 54906057, 233060279, 5304922, 1881494193,
             743728289, 404047361, 1148556479, 144976634, 1726343008, 29659471, 1350407160,
             1636652429, 385978955, 327649601, 1248138459, 1255358242, 84164877, 1005571393,
             1713215328, 72913800, 1683904606, 904763213, 316800515, 656395998, 788184609,
             1824512025, 1177399063, 1358745087, 444151496,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
-        let expected: [BabyBear; 32] = [
+        let expected: [BabyBear; 32] = BabyBear::new_array([
             1359576919, 1657405784, 1031581836, 212090105, 699048671, 877916349, 205627787,
             1211567750, 210807569, 1696391051, 558468987, 161148427, 304343518, 76611896,
             532792005, 1963649139, 1283500358, 250848292, 1109842541, 2007388683, 433801252,
             1189712914, 626158024, 1436409738, 456315160, 1836818120, 1645024941, 925447491,
             1599571860, 1055439714, 353537136, 379644130,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn babybear64() {
-        let input: [BabyBear; 64] = [
+        let input: [BabyBear; 64] = BabyBear::new_array([
             1931358930, 1322576114, 1658000717, 134388215, 1517892791, 1486447670, 93570662,
             898466034, 1576905917, 283824713, 1433559150, 1730678909, 155340881, 1978472263,
             1980644590, 1814040165, 654743892, 849954227, 323176597, 146970735, 252703735,
@@ -185,14 +174,13 @@ mod tests {
             458327015, 1736664598, 430977734, 599887171, 1100074154, 1197653896, 427838651,
             466509871, 1236918100, 940670246, 1421951147, 255557957, 1374188100, 315300068,
             623354170,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
-        let expected: [BabyBear; 64] = [
+        let expected: [BabyBear; 64] = BabyBear::new_array([
             442300274, 756862170, 167612495, 1103336044, 546496433, 1211822920, 329094196,
             1334376959, 944085937, 977350947, 1445060130, 918469957, 800346119, 1957918170,
             739098112, 1862817833, 1831589884, 1673860978, 698081523, 1128978338, 387929536,
@@ -203,8 +191,7 @@ mod tests {
             119733624, 1314663255, 893295811, 1444902994, 914930267, 1675139862, 1148717487,
             1601328192, 534383401, 296215929, 1924587380, 1336639141, 34897994, 2005302060,
             1780337352,
-        ]
-        .map(BabyBear::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }

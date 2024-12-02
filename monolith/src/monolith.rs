@@ -6,6 +6,7 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
+use p3_field::integers::QuotientMap;
 use p3_field::{FieldAlgebra, PrimeField32};
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
@@ -93,7 +94,10 @@ where
             val = get_random_u32(shake);
         }
 
-        Mersenne31::from_canonical_u32(val)
+        unsafe {
+            // Safety: By construction, val is now < 2^31 - 1.
+            Mersenne31::from_canonical_unchecked(val)
+        }
     }
 
     fn init_shake() -> Shake128Reader {
@@ -153,7 +157,10 @@ where
             *val = (high as u32) << 16 | low as u32
         }
 
-        Mersenne31::from_canonical_u32(*val)
+        unsafe {
+            // Safety: low + high < 2^31 as low < 2^16 and high < 2^15.
+            Mersenne31::from_canonical_unchecked(*val)
+        }
     }
 
     #[inline]
@@ -193,25 +200,25 @@ mod tests {
 
         let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
         for (i, inp) in input.iter_mut().enumerate() {
-            *inp = Mersenne31::from_canonical_usize(i);
+            *inp = Mersenne31::from_usize(i);
         }
         monolith.permutation(&mut input);
 
-        assert_eq!(input[0], Mersenne31::from_canonical_u64(609156607));
-        assert_eq!(input[1], Mersenne31::from_canonical_u64(290107110));
-        assert_eq!(input[2], Mersenne31::from_canonical_u64(1900746598));
-        assert_eq!(input[3], Mersenne31::from_canonical_u64(1734707571));
-        assert_eq!(input[4], Mersenne31::from_canonical_u64(2050994835));
-        assert_eq!(input[5], Mersenne31::from_canonical_u64(1648553244));
-        assert_eq!(input[6], Mersenne31::from_canonical_u64(1307647296));
-        assert_eq!(input[7], Mersenne31::from_canonical_u64(1941164548));
-        assert_eq!(input[8], Mersenne31::from_canonical_u64(1707113065));
-        assert_eq!(input[9], Mersenne31::from_canonical_u64(1477714255));
-        assert_eq!(input[10], Mersenne31::from_canonical_u64(1170160793));
-        assert_eq!(input[11], Mersenne31::from_canonical_u64(93800695));
-        assert_eq!(input[12], Mersenne31::from_canonical_u64(769879348));
-        assert_eq!(input[13], Mersenne31::from_canonical_u64(375548503));
-        assert_eq!(input[14], Mersenne31::from_canonical_u64(1989726444));
-        assert_eq!(input[15], Mersenne31::from_canonical_u64(1349325635));
+        assert_eq!(input[0], Mersenne31::from_u64(609156607));
+        assert_eq!(input[1], Mersenne31::from_u64(290107110));
+        assert_eq!(input[2], Mersenne31::from_u64(1900746598));
+        assert_eq!(input[3], Mersenne31::from_u64(1734707571));
+        assert_eq!(input[4], Mersenne31::from_u64(2050994835));
+        assert_eq!(input[5], Mersenne31::from_u64(1648553244));
+        assert_eq!(input[6], Mersenne31::from_u64(1307647296));
+        assert_eq!(input[7], Mersenne31::from_u64(1941164548));
+        assert_eq!(input[8], Mersenne31::from_u64(1707113065));
+        assert_eq!(input[9], Mersenne31::from_u64(1477714255));
+        assert_eq!(input[10], Mersenne31::from_u64(1170160793));
+        assert_eq!(input[11], Mersenne31::from_u64(93800695));
+        assert_eq!(input[12], Mersenne31::from_u64(769879348));
+        assert_eq!(input[13], Mersenne31::from_u64(375548503));
+        assert_eq!(input[14], Mersenne31::from_u64(1989726444));
+        assert_eq!(input[15], Mersenne31::from_u64(1349325635));
     }
 }

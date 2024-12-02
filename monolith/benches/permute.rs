@@ -17,7 +17,7 @@ where
 
     let mut input: [Mersenne31; WIDTH] = [Mersenne31::ZERO; WIDTH];
     for (i, inp) in input.iter_mut().enumerate() {
-        *inp = Mersenne31::from_canonical_usize(i);
+        *inp = Mersenne31::from_usize(i);
     }
 
     let name = format!("monolith::<Mersenne31, {}>", WIDTH);

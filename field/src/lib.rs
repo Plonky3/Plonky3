@@ -10,6 +10,7 @@ mod exponentiation;
 pub mod extension;
 mod field;
 mod helpers;
+pub mod integers;
 mod packed;
 
 pub use array::*;

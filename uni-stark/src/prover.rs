@@ -57,7 +57,8 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(log_degree));
+    // degree < 2^255 so we can safely cast log_degree to a u8.
+    challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());

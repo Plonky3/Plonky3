@@ -106,7 +106,7 @@ mod tests {
                 .fold((F::ZERO, 0_usize), |(acc_sum, acc_len), f| {
                     (acc_sum + f, acc_len + 1)
                 });
-            [sum, F::from_canonical_usize(len)]
+            [sum, F::from_usize(len)]
         }
 
         /// A very simple slice hash iterator. From an input of type `IntoIterator<Item = &'a [Goldilocks]>`,
@@ -124,13 +124,13 @@ mod tests {
                         acc_len + n.len(),
                     )
                 });
-            [sum, F::from_canonical_usize(len)]
+            [sum, F::from_usize(len)]
         }
     }
 
     #[test]
     fn test_hash_challenger() {
-        let initial_state = (1..11_u8).map(F::from_canonical_u8).collect::<Vec<_>>();
+        let initial_state = (1..11_u8).map(F::from_u8).collect::<Vec<_>>();
         let test_hasher = TestHasher {};
         let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
 
@@ -139,8 +139,8 @@ mod tests {
 
         hash_challenger.flush();
 
-        let expected_sum = F::from_canonical_u8(55);
-        let expected_len = F::from_canonical_u8(10);
+        let expected_sum = F::from_u8(55);
+        let expected_len = F::from_u8(10);
         assert_eq!(
             hash_challenger.input_buffer,
             vec![expected_sum, expected_len]
@@ -150,7 +150,7 @@ mod tests {
             vec![expected_sum, expected_len]
         );
 
-        let new_element = F::from_canonical_u8(11);
+        let new_element = F::from_u8(11);
         hash_challenger.observe(new_element);
         assert_eq!(
             hash_challenger.input_buffer,
@@ -162,10 +162,10 @@ mod tests {
         let new_expected_sum = 76;
 
         let new_element = hash_challenger.sample();
-        assert_eq!(new_element, F::from_canonical_u8(new_expected_len));
+        assert_eq!(new_element, F::from_u8(new_expected_len));
         assert_eq!(
             hash_challenger.output_buffer,
-            [F::from_canonical_u8(new_expected_sum)]
+            [F::from_u8(new_expected_sum)]
         )
     }
 }

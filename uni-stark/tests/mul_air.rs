@@ -25,7 +25,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
-const REPETITIONS: usize = 20;
+const REPETITIONS: usize = 20; // This should be < 255 so it can fit into a u8.
 const TRACE_WIDTH: usize = REPETITIONS * 3;
 
 /*
@@ -60,9 +60,8 @@ impl MulAir {
         let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
-
             *a = if self.uses_transition_constraints {
-                F::from_canonical_usize(i)
+                F::from_usize(i)
             } else {
                 rng.gen()
             };
@@ -107,7 +106,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
                 let next_a = main_next[start];
                 builder
                     .when_transition()
-                    .assert_eq(a + AB::Expr::from_canonical_usize(REPETITIONS), next_a);
+                    .assert_eq(a + AB::Expr::from_u8(REPETITIONS as u8), next_a);
             }
         }
     }

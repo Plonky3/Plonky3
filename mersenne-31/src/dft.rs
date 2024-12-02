@@ -1,6 +1,6 @@
 //! Implementation of DFT for `Mersenne31`.
 //!
-//! Strategy follows: https://www.robinscheibler.org/2013/02/13/real-fft.html
+//! Strategy follows: `<https://www.robinscheibler.org/2013/02/13/real-fft.html>`
 //! In short, fold a Mersenne31 DFT of length n into a Mersenne31Complex DFT
 //! of length n/2. Some pre/post-processing is necessary so that the result
 //! of the transform behaves as expected wrt the convolution theorem etc.

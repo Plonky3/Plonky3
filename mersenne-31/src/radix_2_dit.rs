@@ -139,18 +139,18 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     // NB: 2*P^2 + P < 2^63
 
     // -P^2 <= x1 + z1 <= P^2 + P
-    let a1 = F::from_wrapped_u64((P_SQR + x1 + z1) as u64);
+    let a1 = F::from_u64((P_SQR + x1 + z1) as u64);
     // -P^2 <= x1 - z1 <= P^2 + P
-    let b1 = F::from_wrapped_u64((P_SQR + x1 - z1) as u64);
+    let b1 = F::from_u64((P_SQR + x1 - z1) as u64);
 
     // SAFE: multiplying `u64` values within the range of `Mersennes31` doesn't overflow:
     // 2 * (2^31 - 1) * (2^31 - 1) = 2 * (2^62 - 2^32 + 1) < 2^64 - 1
     let z2 = y2 * w1 + y1 * w2; // 0 <= z2 <= 2*P^2
 
     // 0 <= x2 + z2 <= 2*P^2 + P
-    let a2 = F::from_wrapped_u64((x2 + z2) as u64);
+    let a2 = F::from_u64((x2 + z2) as u64);
     // -2*P^2 <= x2 - z2 <= P
-    let b2 = F::from_wrapped_u64((TWO_P_SQR + x2 - z2) as u64);
+    let b2 = F::from_u64((TWO_P_SQR + x2 - z2) as u64);
 
     *x = C::new(a1, a2);
     *y = C::new(b1, b2);

@@ -8,10 +8,13 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_isize, quotient_map_large_uint,
+    quotient_map_small_int, quotient_map_usize, Field, FieldAlgebra, Packable, PrimeField,
     PrimeField32, PrimeField64,
 };
+use paste::paste;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -92,6 +95,7 @@ impl Distribution<Mersenne31> for Standard {
 
 impl FieldAlgebra for Mersenne31 {
     type F = Self;
+    type Char = Self;
 
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
@@ -106,58 +110,13 @@ impl FieldAlgebra for Mersenne31 {
     }
 
     #[inline]
+    fn from_char(f: Self::Char) -> Self {
+        f
+    }
+
+    #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b as u32)
-    }
-
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        debug_assert!(n < Self::ORDER_U32);
-        Self::new(n)
-    }
-
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
-        let msb = n & (1 << 31);
-        let msb_reduced = msb >> 31;
-        Self::new(n ^ msb) + Self::new(msb_reduced)
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        // NB: Experiments suggest that it's faster to just use the
-        // builtin remainder operator rather than split the input into
-        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
-        Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
     #[inline]
@@ -263,6 +222,145 @@ impl Field for Mersenne31 {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+}
+
+/// This is a simple macro which lets us imply `QuotientMap<Int>`
+/// for `Int = i64, i128`.
+///
+/// In these two cases the fastest approach is just to use `%p` to compute
+/// an input in the range `[-p, p]` and then correct for the sign.
+macro_rules! large_i_int_m31 {
+    ($($type:ty),* $(,)? ) => {
+        $(
+        impl QuotientMap<$type> for Mersenne31 {
+            #[doc = concat!("Convert a given `", stringify!($type), "` integer into an element of the `Mersenne31` field.")]
+            ///
+            /// In this case, the fastest approach is to do a modular reduction
+            /// which puts us into the range accepted by `from_canonical_unchecked`.
+            #[inline]
+            fn from_int(int: $type) -> Mersenne31 {
+                let int_i32 = (int % (Mersenne31::ORDER_U32 as $type)) as i32;
+                // Now as `int_i32` must lie in `[-p, p]` we can safely use `from_canonical_unchecked`.
+                unsafe { Self::from_canonical_unchecked(int_i32 as i32) }
+
+            }
+
+            #[doc = concat!("Convert a given `", stringify!($type), "` integer into an element of the `Mersenne31` field.")]
+            ///
+            /// Returns none if the input does not lie in the range `[-2^30, 2^30]`.
+            #[inline]
+            fn from_canonical_checked(int: $type) -> Option<Mersenne31> {
+                const TWO_EXP_30: $type = 1 << 30;
+                const NEG_TWO_EXP_30: $type = -1 << 30;
+                match int {
+                    0..=TWO_EXP_30 => Some(Self::new(int as u32)),
+                    NEG_TWO_EXP_30..0 => Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int as i32))),
+                    _ => None,
+                }
+            }
+
+            #[doc = concat!("Convert a given `", stringify!($type), "` integer into an element of the `Mersenne31` field.")]
+            ///
+            /// # Safety
+            /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
+            #[inline]
+            unsafe fn from_canonical_unchecked(int: $type) -> Mersenne31 {
+                Self::from_canonical_unchecked(int as i32)
+            }
+        }
+        )*
+    };
+}
+
+// We can use some macros to implement QuotientMap<Int> for all integer types except for u32 and i32's.
+quotient_map_small_int!(Mersenne31, u32, [u8, u16]);
+quotient_map_small_int!(Mersenne31, i32, [i8, i16]);
+quotient_map_large_uint!(
+    Mersenne31,
+    u32,
+    Mersenne31::ORDER_U32,
+    "`[0, 2^31 - 2]`",
+    "`[0, 2^31 - 1]`",
+    [u64, u128]
+);
+large_i_int_m31!(i64, i128);
+quotient_map_usize!(Mersenne31, "`[0, 2^31 - 2]`", "`[0, 2^31 - 1]`");
+quotient_map_isize!(Mersenne31, "`[-2^30, 2^30]`", "`[1 - 2^31, 2^31 - 1]`");
+
+// We simple need to prove custom Mersenne31 impls for QuotientMap<u32> and QuotientMap<i32>
+impl QuotientMap<u32> for Mersenne31 {
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
+    #[inline]
+    fn from_int(int: u32) -> Self {
+        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
+        let msb = int & (1 << 31);
+        let msb_reduced = msb >> 31;
+        Self::new(int ^ msb) + Self::new(msb_reduced)
+    }
+
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
+    ///
+    /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
+    #[inline]
+    fn from_canonical_checked(int: u32) -> Option<Mersenne31> {
+        if int < Self::ORDER_U32 {
+            Some(Self::new(int))
+        } else {
+            None
+        }
+    }
+
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
+    ///
+    /// # Safety
+    /// The input must lie in the range: `[0, 2^31 - 1]`.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: u32) -> Mersenne31 {
+        debug_assert!(int < Self::ORDER_U32);
+        Self::new(int)
+    }
+}
+
+impl QuotientMap<i32> for Mersenne31 {
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
+    #[inline]
+    fn from_int(int: i32) -> Self {
+        if int >= 0 {
+            Self::new(int as u32)
+        } else if int > (-1 << 31) {
+            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+        } else {
+            // The only other option is int = -(2^31) = -1 mod p.
+            Self::NEG_ONE
+        }
+    }
+
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
+    ///
+    /// Returns none if the input does not lie in the range `[-2^30, 2^30]`.
+    #[inline]
+    fn from_canonical_checked(int: i32) -> Option<Mersenne31> {
+        const TWO_EXP_30: i32 = 1 << 30;
+        const NEG_TWO_EXP_30: i32 = -1 << 30;
+        match int {
+            0..=TWO_EXP_30 => Some(Self::new(int as u32)),
+            NEG_TWO_EXP_30..0 => Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))),
+            _ => None,
+        }
+    }
+
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
+    ///
+    /// # Safety
+    /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: i32) -> Mersenne31 {
+        if int >= 0 {
+            Self::new(int as u32)
+        } else {
+            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+        }
     }
 }
 
@@ -480,8 +578,8 @@ mod tests {
     fn exp_root() {
         // Confirm that (x^{1/5})^5 = x
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
+        let m1 = F::from_u32(0x34167c58);
+        let m2 = F::from_u32(0x61f3207b);
 
         assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
         assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);

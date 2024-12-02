@@ -56,6 +56,8 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
 ) -> [F; WIDTH] {
     let mut output: [F; WIDTH] = [F::ZERO; WIDTH];
 
+    // As F is a PrimeField, it's order is equal to its characteristic.
+    // Thus 2|F| > 2^bits > |F|.
     let bits = F::bits();
     let x_mask = (1 << (bits - 9)) - 1;
     let y_mask = ((1 << bits) - 1) >> 2;
@@ -65,8 +67,15 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
     for (i, x_i) in x.iter().enumerate() {
-        for (j, yj) in y.iter().enumerate() {
-            output[i] += F::from_canonical_u32(x_i + yj).inverse() * to_multiply[j];
+        for (j, y_j) in y.iter().enumerate() {
+            let val = unsafe {
+                // Safety:
+                // x_i < x_mask < 2^{-8}|F|
+                // y_j < y_mask < 2^{-1}|F|
+                // Hence x_i + y_j < |F|.
+                F::from_canonical_unchecked(x_i + y_j).inverse()
+            };
+            output[i] += val * to_multiply[j];
         }
     }
 
