@@ -2,12 +2,11 @@
 
 mod poseidon2;
 
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::stringify;
+use core::{fmt, stringify};
 
 use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
@@ -213,7 +212,6 @@ impl QuotientMap<i128> for Bn254Fr {
 
 impl PrimeField for Bn254Fr {
     fn as_canonical_biguint(&self) -> BigUint {
-        let _ = <Bn254Fr as QuotientMap<u8>>::from_int(10_u8);
         let repr = self.value.to_repr();
         let le_bytes = repr.as_ref();
         BigUint::from_bytes_le(le_bytes)

@@ -270,9 +270,8 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 mod tests {
     use p3_symmetric::Permutation;
 
-    use crate::to_mersenne31_array;
-
     use super::{MdsMatrixMersenne31, Mersenne31};
+    use crate::to_mersenne31_array;
 
     #[test]
     fn mersenne8() {

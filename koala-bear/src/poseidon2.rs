@@ -260,7 +260,6 @@ impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayer
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
@@ -278,19 +277,17 @@ mod tests {
     /// vector([KB.random_element() for t in range(16)]).
     #[test]
     fn test_poseidon2_width_16_random() {
-        let mut input: [F; 16] = [
+        let mut input: [F; 16] = KoalaBear::new_array([
             894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
             120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
             1783754913,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 16] = [
+        let expected: [F; 16] = KoalaBear::new_array([
             652590279, 1200629963, 1013089423, 1840372851, 19101828, 561050015, 1714865585,
             994637181, 498949829, 729884572, 1957973925, 263012103, 535029297, 2121808603,
             964663675, 1473622080,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);
@@ -305,21 +302,19 @@ mod tests {
     /// vector([KB.random_element() for t in range(24)]).
     #[test]
     fn test_poseidon2_width_24_random() {
-        let mut input: [F; 24] = [
+        let mut input: [F; 24] = KoalaBear::new_array([
             886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
             355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
             1042221543, 474748436, 135686258, 263665994, 1962340735, 1741539604, 2026927696,
             449439011, 1131357108, 50869465,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 24] = [
+        let expected: [F; 24] = KoalaBear::new_array([
             3825456, 486989921, 613714063, 282152282, 1027154688, 1171655681, 879344953,
             1090688809, 1960721991, 1604199242, 1329947150, 1535171244, 781646521, 1156559780,
             1875690339, 368140677, 457503063, 304208551, 1919757655, 835116474, 1293372648,
             1254825008, 810923913, 1773631109,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);

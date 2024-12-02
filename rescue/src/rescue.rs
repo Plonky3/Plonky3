@@ -210,11 +210,10 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
 
         for test_run in 0..NUM_TESTS {
-            let state: [Mersenne31; WIDTH] =
-                PERMUTATION_INPUTS[test_run].map(Mersenne31::from_canonical_u64);
+            let state: [Mersenne31; WIDTH] = PERMUTATION_INPUTS[test_run].map(Mersenne31::from_u64);
 
             let expected: [Mersenne31; WIDTH] =
-                PERMUTATION_OUTPUTS[test_run].map(Mersenne31::from_canonical_u64);
+                PERMUTATION_OUTPUTS[test_run].map(Mersenne31::from_u64);
 
             let actual = rescue_prime.permute(state);
             assert_eq!(actual, expected);
@@ -226,12 +225,12 @@ mod tests {
         let rescue_prime = new_rescue_prime_m31_default();
         let rescue_sponge = PaddingFreeSponge::<_, WIDTH, 8, 6>::new(rescue_prime);
 
-        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(Mersenne31::from_canonical_u64);
+        let input: [Mersenne31; 6] = [1, 2, 3, 4, 5, 6].map(Mersenne31::from_u8);
 
         let expected: [Mersenne31; 6] = [
             2055426095, 968531194, 1592692524, 136824376, 175318858, 1160805485,
         ]
-        .map(Mersenne31::from_canonical_u64);
+        .map(Mersenne31::from_u64);
 
         let actual = rescue_sponge.hash_iter(input);
         assert_eq!(actual, expected);

@@ -1,4 +1,4 @@
-//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//! Implementation of Poseidon2, see: `<https://eprint.iacr.org/2023/323>`
 //!
 //! For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
 //! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.

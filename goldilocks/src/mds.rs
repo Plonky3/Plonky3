@@ -232,9 +232,8 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 mod tests {
     use p3_symmetric::Permutation;
 
-    use crate::to_goldilocks_array;
-
     use super::{Goldilocks, MdsMatrixGoldilocks};
+    use crate::to_goldilocks_array;
 
     #[test]
     fn goldilocks8() {

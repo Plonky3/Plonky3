@@ -10,8 +10,9 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_small_int, Field, FieldAlgebra,
-    Packable, PrimeField, PrimeField32, PrimeField64,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_isize, quotient_map_large_uint,
+    quotient_map_small_int, quotient_map_usize, Field, FieldAlgebra, Packable, PrimeField,
+    PrimeField32, PrimeField64,
 };
 use paste::paste;
 use rand::distributions::{Distribution, Standard};
@@ -225,63 +226,18 @@ impl Field for Mersenne31 {
 }
 
 /// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = u64, u128, usize`.
+/// for `Int = i64, i128`.
 ///
-/// In these cases the fastest approach is just to use `%p` to compute
-/// a canonical input in the range `[0, p]`
-macro_rules! large_u_int_m31 {
-    ($($type:ty),* $(,)? ) => {
-        $(
-        impl QuotientMap<$type> for Mersenne31 {
-            /// Convert a given integer into an element of the Mersenne31 field.
-            ///
-            /// For large integer types, we do a modular reduction.
-            #[inline]
-            fn from_int(int: $type) -> Mersenne31 {
-                // NB: Experiments suggest that it's faster to just use the
-                // builtin remainder operator rather than split the input into
-                // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
-                let int_canonical = int % (Mersenne31::ORDER_U32 as $type);
-                Self::new(int_canonical as u32)
-            }
-
-            /// Convert a given integer into an element of the Mersenne31 field.
-            ///
-            /// Returns None if the input is greater than `p - 1 = 2^31 - 2`.
-            #[inline]
-            fn from_canonical_checked(int: $type) -> Option<Mersenne31> {
-                if int < Mersenne31::ORDER_U32 as $type {
-                    Some(Self::new(int as u32))
-                } else {
-                    None
-                }
-            }
-
-            /// Convert a given integer into an element of the Mersenne31 field.
-            ///
-            /// # Safety
-            /// The input `int` must be `31` bits i.e. lie between `0` and `2^31 - 1`
-            #[inline]
-            unsafe fn from_canonical_unchecked(int: $type) -> Self {
-                debug_assert!(int <= Mersenne31::ORDER_U32 as $type);
-                Self::new(int as u32)
-            }
-        }
-        )*
-    };
-}
-
-/// This is a simple macro which lets us imply `QuotientMap<Int>`
-/// for `Int = i64, i128, isize`.
-///
-/// In these cases the fastest approach is just to use `%p` to compute
+/// In these two cases the fastest approach is just to use `%p` to compute
 /// an input in the range `[-p, p]` and then correct for the sign.
 macro_rules! large_i_int_m31 {
     ($($type:ty),* $(,)? ) => {
         $(
         impl QuotientMap<$type> for Mersenne31 {
-            /// For small integer types, the input value is always canonical
-            /// once we correct for the sign.
+            #[doc = concat!("Convert a given `", stringify!($type), "` integer into an element of the `Mersenne31` field.")]
+            ///
+            /// In this case, the fastest approach is to do a modular reduction
+            /// which puts us into the range accepted by `from_canonical_unchecked`.
             #[inline]
             fn from_int(int: $type) -> Mersenne31 {
                 let int_i32 = (int % (Mersenne31::ORDER_U32 as $type)) as i32;
@@ -290,7 +246,7 @@ macro_rules! large_i_int_m31 {
 
             }
 
-            /// Convert a given integer into an element of the Mersenne31 field.
+            #[doc = concat!("Convert a given `", stringify!($type), "` integer into an element of the `Mersenne31` field.")]
             ///
             /// Returns none if the input does not lie in the range `[-2^30, 2^30]`.
             #[inline]
@@ -304,10 +260,10 @@ macro_rules! large_i_int_m31 {
                 }
             }
 
-            /// Convert a given integer into an element of the Mersenne31 field.
+            #[doc = concat!("Convert a given `", stringify!($type), "` integer into an element of the `Mersenne31` field.")]
             ///
             /// # Safety
-            /// The input `int` must be between `-(2^31 - 1)` and `2^31 - 1`.
+            /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
             #[inline]
             unsafe fn from_canonical_unchecked(int: $type) -> Mersenne31 {
                 Self::from_canonical_unchecked(int as i32)
@@ -317,10 +273,24 @@ macro_rules! large_i_int_m31 {
     };
 }
 
+// We can use some macros to implement QuotientMap<Int> for all integer types except for u32 and i32's.
 quotient_map_small_int!(Mersenne31, u32, [u8, u16]);
 quotient_map_small_int!(Mersenne31, i32, [i8, i16]);
+quotient_map_large_uint!(
+    Mersenne31,
+    u32,
+    Mersenne31::ORDER_U32,
+    "`[0, 2^31 - 2]`",
+    "`[0, 2^31 - 1]`",
+    [u64, u128]
+);
+large_i_int_m31!(i64, i128);
+quotient_map_usize!(Mersenne31, "`[0, 2^31 - 2]`", "`[0, 2^31 - 1]`");
+quotient_map_isize!(Mersenne31, "`[-2^30, 2^30]`", "`[1 - 2^31, 2^31 - 1]`");
 
+// We simple need to prove custom Mersenne31 impls for QuotientMap<u32> and QuotientMap<i32>
 impl QuotientMap<u32> for Mersenne31 {
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
     #[inline]
     fn from_int(int: u32) -> Self {
         // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
@@ -329,9 +299,9 @@ impl QuotientMap<u32> for Mersenne31 {
         Self::new(int ^ msb) + Self::new(msb_reduced)
     }
 
-    /// Convert a given integer into an element of the Mersenne31 field.
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
     ///
-    /// Returns none if the input is greater than `2^31 - 1`.
+    /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
     #[inline]
     fn from_canonical_checked(int: u32) -> Option<Mersenne31> {
         if int < Self::ORDER_U32 {
@@ -341,10 +311,10 @@ impl QuotientMap<u32> for Mersenne31 {
         }
     }
 
-    /// Convert a given integer into an element of the Mersenne31 field.
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
     ///
     /// # Safety
-    /// The input `int` must be `31` bits i.e. lie between `0` and `2^31 - 1`
+    /// The input must lie in the range: `[0, 2^31 - 1]`.
     #[inline]
     unsafe fn from_canonical_unchecked(int: u32) -> Mersenne31 {
         debug_assert!(int < Self::ORDER_U32);
@@ -353,7 +323,7 @@ impl QuotientMap<u32> for Mersenne31 {
 }
 
 impl QuotientMap<i32> for Mersenne31 {
-    /// Convert a given integer into an element of the Mersenne31 field.
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
     #[inline]
     fn from_int(int: i32) -> Self {
         if int >= 0 {
@@ -366,7 +336,7 @@ impl QuotientMap<i32> for Mersenne31 {
         }
     }
 
-    /// Convert a given integer into an element of the Mersenne31 field.
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
     ///
     /// Returns none if the input does not lie in the range `[-2^30, 2^30]`.
     #[inline]
@@ -380,10 +350,10 @@ impl QuotientMap<i32> for Mersenne31 {
         }
     }
 
-    /// Convert a given integer into an element of the Mersenne31 field.
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
     ///
     /// # Safety
-    /// The input `int` must be between `-(2^31 - 1)` and `2^31 - 1`.
+    /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
     #[inline]
     unsafe fn from_canonical_unchecked(int: i32) -> Mersenne31 {
         if int >= 0 {
@@ -393,9 +363,6 @@ impl QuotientMap<i32> for Mersenne31 {
         }
     }
 }
-
-large_u_int_m31!(u64, u128, usize);
-large_i_int_m31!(i64, i128, isize);
 
 impl PrimeField for Mersenne31 {
     fn as_canonical_biguint(&self) -> BigUint {

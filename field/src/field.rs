@@ -399,10 +399,10 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     fn from_base(b: Base) -> Self;
 
     /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a slice `bs` of
     /// length at exactly D, and constructs the field element
-    /// \sum_i bs[i] * X^i.
+    /// `\sum_i bs[i] * X^i`.
     ///
     /// NB: The value produced by this function fundamentally depends
     /// on the choice of irreducible polynomial f. Care must be taken
@@ -417,9 +417,9 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
 
     /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a field element
-    /// \sum_i bs[i] * X^i and returns the coefficients as a slice
+    /// `\sum_i bs[i] * X^i` and returns the coefficients as a slice
     /// `bs` of length at most D containing, from lowest degree to
     /// highest.
     ///
@@ -431,7 +431,7 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     fn as_base_slice(&self) -> &[Base];
 
     /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function returns the field
     /// element `X^exponent` if `exponent < D` and panics otherwise.
     /// (The fact that f is not known at the point that this function

@@ -53,11 +53,11 @@ mod tests {
         // 0
         let mat = RowMajorMatrix::new(
             vec![
-                F::from_canonical_u8(5),
-                F::from_canonical_u8(2),
+                F::from_u8(5),
+                F::from_u8(2),
                 F::ZERO,
-                F::from_canonical_u8(4),
-                F::from_canonical_u8(3),
+                F::from_u8(4),
+                F::from_u8(3),
                 F::ZERO,
             ],
             3,
@@ -72,8 +72,8 @@ mod tests {
             dft,
             RowMajorMatrix::new(
                 vec![
-                    F::from_canonical_u8(9),
-                    F::from_canonical_u8(5),
+                    F::from_u8(9),
+                    F::from_u8(5),
                     F::ZERO,
                     F::ONE,
                     F::NEG_ONE,

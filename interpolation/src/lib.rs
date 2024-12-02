@@ -95,11 +95,11 @@ mod tests {
         let evals = [
             6, 886605102, 1443543107, 708307799, 2, 556938009, 569722818, 1874680944,
         ]
-        .map(F::from_canonical_u32);
+        .map(F::from_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
-        let point = F::from_canonical_u32(100);
+        let point = F::from_u16(100);
         let result = interpolate_subgroup(&evals_mat, point);
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![F::from_u16(10203)]);
     }
 
     #[test]
@@ -110,11 +110,11 @@ mod tests {
         let evals = [
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
         ]
-        .map(F::from_canonical_u32);
+        .map(F::from_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
-        let point = F::from_canonical_u32(100);
+        let point = F::from_u16(100);
         let result = interpolate_coset(&evals_mat, shift, point, None);
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![F::from_u16(10203)]);
 
         use p3_field::TwoAdicField;
         let n = evals.len();
@@ -128,6 +128,6 @@ mod tests {
 
         let denom = batch_multiplicative_inverse(&denom);
         let result = interpolate_coset(&evals_mat, shift, point, Some(&denom));
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![F::from_u16(10203)]);
     }
 }

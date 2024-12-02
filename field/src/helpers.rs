@@ -152,7 +152,7 @@ pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
     product
 }
 
-/// Expand a product of binomials (x - roots[0])(x - roots[1]).. into polynomial coefficients.
+/// Expand a product of binomials `(x - roots[0])(x - roots[1])..` into polynomial coefficients.
 pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
     let mut coeffs = vec![FA::ZERO; roots.len() + 1];
     coeffs[0] = FA::ONE;
