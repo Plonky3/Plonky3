@@ -661,7 +661,7 @@ pub trait PrimeField64: PrimeField {
     ///
     /// This will be the fastest way to get a unique u64 representative
     /// from the field element and is intended for use in Hashing. In general,
-    /// `val.as_unique_u64()` and `val.as_canonical_u64()` may be different.
+    /// `val.hash_to_u64()` and `val.as_canonical_u64()` may be different.
     fn hash_to_u64(&self) -> u64;
 }
 
