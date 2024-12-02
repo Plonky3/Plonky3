@@ -14,7 +14,7 @@ pub struct Blake3Cols<T> {
     // The chaining values are the first eight outputs of the previous compression.
     pub chaining_values: [[[T; 32]; 4]; 2],
 
-    // A few auxillary values use to flesh out the first state.
+    // A few auxiliary values use to flesh out the first state.
     pub counter_low: [T; 32],
     pub counter_hi: [T; 32],
     pub block_len: [T; 32],
