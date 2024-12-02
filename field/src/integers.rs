@@ -312,6 +312,7 @@ macro_rules! quotient_map_large_uint {
 }
 
 /// When converting from usize, the method used depends on the size of usize.
+/// 
 /// This macro implements `QuotientMap<usize>` by checking the size of usize, converting to
 /// the unsigned integer type `Int` of the same size and using `QuotientMap<Int>`.
 ///
@@ -431,6 +432,7 @@ macro_rules! quotient_map_usize {
 }
 
 /// When converting from isize, the method used depends on the size of isize.
+/// 
 /// This macro implements `QuotientMap<isize>` by checking the size of isize, converting to
 /// the signed integer type `Int` of the same size and using `QuotientMap<Int>`.
 ///
