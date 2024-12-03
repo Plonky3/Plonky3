@@ -54,6 +54,8 @@ where
     });
 
     FriProof {
+        log_max_height,
+        folded_evals: commit_phase_result.folded_evals,
         commit_phase_commits: commit_phase_result.commits,
         query_proofs,
         final_poly: commit_phase_result.final_poly,
@@ -64,6 +66,8 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
+    // TODO[osama]: think if this can be done more efficiently
+    folded_evals: Vec<Vec<F>>,
     final_poly: F,
 }
 
@@ -85,27 +89,42 @@ where
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
+    let mut folded_evals = vec![];
+
+    // TODO: add better comments
+    // We only commit every arity_bits layers
+
+    let mut next_commit_layer = folded.len();
 
     while folded.len() > config.blowup() {
-        let leaves = RowMajorMatrix::new(folded, 2);
-        let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
-        challenger.observe(commit.clone());
+        folded_evals.push(folded.clone());
 
-        let beta: Challenge = challenger.sample_ext_element();
-        // We passed ownership of `current` to the MMCS, so get a reference to it
-        let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
-        folded = g.fold_matrix(beta, leaves.as_view());
+        let pairs = RowMajorMatrix::new(folded.clone(), 2);
+        let mut folding_beta = Challenge::ONE;
 
-        commits.push(commit);
-        data.push(prover_data);
+        if folded.len() == next_commit_layer {
+            // Commit layer
+            next_commit_layer = folded.len() / (1 << config.arity_bits);
+
+            let folded_matrix = RowMajorMatrix::new(folded, 1 << config.arity_bits);
+            let (commit, prover_data) = config.mmcs.commit_matrix(folded_matrix);
+            challenger.observe(commit.clone());
+
+            folding_beta = challenger.sample_ext_element();
+
+            commits.push(commit);
+            data.push(prover_data);
+        }
+
+        // Fold the current layer by a factor of 2
+        folded = g.fold_matrix(folding_beta, pairs);
 
         if let Some(v) = inputs_iter.next_if(|v| v.len() == folded.len()) {
             izip!(&mut folded, v).for_each(|(c, x)| *c += x);
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(folded.len(), config.blowup());
+    // We should be left with at most `blowup` evaluations of a constant polynomial.
     let final_poly = folded[0];
     for x in folded {
         assert_eq!(x, final_poly);
@@ -115,6 +134,7 @@ where
     CommitPhaseResult {
         commits,
         data,
+        folded_evals,
         final_poly,
     }
 }
@@ -132,18 +152,21 @@ where
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            let index_i = index >> i;
-            let index_i_sibling = index_i ^ 1;
-            let index_pair = index_i >> 1;
+            let index_i = index >> (i * config.arity_bits);
+            // let index_i_sibling = index_i ^ 1;
+            let index_row = index_i >> config.arity_bits;
 
-            let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index_pair, commit);
+            let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index_row, commit);
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
-            assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
-            let sibling_value = opened_row[index_i_sibling % 2];
+            assert_eq!(
+                opened_row.len(),
+                1 << config.arity_bits,
+                "Committed data should be of the correct arity"
+            );
 
             CommitPhaseProofStep {
-                sibling_value,
+                opened_row,
                 opening_proof,
             }
         })

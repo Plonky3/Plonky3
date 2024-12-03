@@ -180,6 +180,7 @@ mod babybear_fri_pcs {
             log_blowup,
             num_queries: 10,
             proof_of_work_bits: 8,
+            arity_bits: 1,
             mmcs: challenge_mmcs,
         };
 
@@ -232,6 +233,7 @@ mod m31_fri_pcs {
             log_blowup,
             num_queries: 10,
             proof_of_work_bits: 8,
+            arity_bits: 1,
             mmcs: challenge_mmcs,
         };
         let pcs = Pcs {

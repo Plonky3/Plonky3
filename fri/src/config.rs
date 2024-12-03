@@ -9,6 +9,7 @@ pub struct FriConfig<M> {
     pub log_blowup: usize,
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
+    pub arity_bits: usize,
     pub mmcs: M,
 }
 

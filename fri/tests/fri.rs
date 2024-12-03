@@ -38,6 +38,7 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
         log_blowup: 1,
         num_queries: 10,
         proof_of_work_bits: 8,
+        arity_bits: 1,
         mmcs,
     };
     (perm, fri_config)

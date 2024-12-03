@@ -51,7 +51,7 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    let log_max_height = proof.log_max_height;
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
@@ -102,8 +102,12 @@ where
     M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
-    let mut folded_eval = F::ZERO;
+    let mut folded_evals = vec![F::ZERO; 1 << config.arity_bits];
     let mut ro_iter = reduced_openings.into_iter().peekable();
+
+    for layer_idx in (0..log_max_height).rev() {
+        let layer_evals
+    }
 
     for (log_folded_height, (&beta, comm, opening)) in izip!((0..log_max_height).rev(), steps) {
         if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
