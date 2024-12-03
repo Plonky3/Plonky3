@@ -27,7 +27,7 @@ const WIDTH: usize = 16;
 const SBOX_DEGREE: u64 = 7;
 const SBOX_REGISTERS: usize = 1;
 const HALF_FULL_ROUNDS: usize = 4;
-const PARTIAL_ROUNDS: usize = 20;
+const PARTIAL_ROUNDS: usize = 13;
 
 const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;
