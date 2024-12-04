@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use p3_baby_bear::BabyBear;
 use p3_blake3_air::{generate_trace_rows, Blake3Air};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
@@ -7,7 +8,6 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_koala_bear::KoalaBear;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
@@ -30,7 +30,7 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
-    type Val = KoalaBear;
+    type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type ByteHash = Keccak256Hash;
@@ -58,6 +58,7 @@ fn main() -> Result<(), impl Debug> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
+
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
 
