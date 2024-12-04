@@ -2,7 +2,6 @@ use std::fmt::Debug;
 
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
-use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
@@ -17,6 +16,11 @@ use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+
+#[cfg(feature = "parallel")]
+type Dft = p3_dft::Radix2DitParallel<KoalaBear>;
+#[cfg(not(feature = "parallel"))]
+type Dft = p3_dft::Radix2Bowers;
 
 const NUM_HASHES: usize = 1365;
 
@@ -33,14 +37,17 @@ fn main() -> Result<(), impl Debug> {
     type Val = KoalaBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type Perm = Poseidon2KoalaBear<16>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    type Perm16 = Poseidon2KoalaBear<16>;
+    let perm16 = Perm16::new_from_rng_128(&mut thread_rng());
 
-    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-    let hash = MyHash::new(perm.clone());
+    type Perm24 = Poseidon2KoalaBear<24>;
+    let perm24 = Perm24::new_from_rng_128(&mut thread_rng());
 
-    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-    let compress = MyCompress::new(perm.clone());
+    type MyHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
+    let hash = MyHash::new(perm24.clone());
+
+    type MyCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
+    let compress = MyCompress::new(perm16.clone());
 
     type ValMmcs =
         MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
@@ -49,10 +56,9 @@ fn main() -> Result<(), impl Debug> {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
 
-    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
@@ -69,9 +75,9 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    let mut challenger = Challenger::new(perm.clone());
+    let mut challenger = Challenger::new(perm24.clone());
     let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
 
-    let mut challenger = Challenger::new(perm);
+    let mut challenger = Challenger::new(perm24);
     verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
 }
