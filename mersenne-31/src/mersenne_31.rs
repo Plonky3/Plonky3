@@ -98,8 +98,8 @@ impl Serialize for Mersenne31 {
     }
 }
 
-impl<'de> Deserialize<'de> for Mersenne31 {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+impl<'a> Deserialize<'a> for Mersenne31 {
+    fn deserialize<D: Deserializer<'a>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
         // We need to ensure that val is a valid u32 which could have can come from a field element.
         if val <= P {
