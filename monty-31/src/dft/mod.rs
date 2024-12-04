@@ -6,7 +6,7 @@ use core::cell::RefCell;
 use core::iter;
 
 use itertools::izip;
-use p3_dft::TwoAdicSubgroupDft;
+use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::{Field, FieldAlgebra};
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
 use p3_matrix::dense::RowMajorMatrix;
@@ -294,5 +294,52 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .in_scope(|| transpose::transpose(&padded, &mut output, result_nrows, ncols));
 
         RowMajorMatrix::new(output, ncols).bit_reverse_rows()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum FastDFTs<F> {
+    Recursive(RecursiveDft<F>),
+    Parallel(Radix2DitParallel<F>),
+}
+
+impl<F: Default> Default for FastDFTs<F> {
+    fn default() -> Self {
+        FastDFTs::<F>::Parallel(Radix2DitParallel::<F>::default())
+    }
+}
+
+impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<MontyField31<MP>>
+    for FastDFTs<MontyField31<MP>>
+{
+    type Evaluations = BitReversedMatrixView<RowMajorMatrix<MontyField31<MP>>>;
+
+    fn dft_batch(&self, mat: RowMajorMatrix<MontyField31<MP>>) -> Self::Evaluations {
+        match self {
+            FastDFTs::Recursive(dft) => dft.dft_batch(mat),
+            FastDFTs::Parallel(dft) => dft.dft_batch(mat),
+        }
+    }
+
+    fn idft_batch(
+        &self,
+        mat: RowMajorMatrix<MontyField31<MP>>,
+    ) -> RowMajorMatrix<MontyField31<MP>> {
+        match self {
+            FastDFTs::Recursive(dft) => dft.idft_batch(mat),
+            FastDFTs::Parallel(dft) => dft.idft_batch(mat),
+        }
+    }
+
+    fn coset_lde_batch(
+        &self,
+        mat: RowMajorMatrix<MontyField31<MP>>,
+        added_bits: usize,
+        shift: MontyField31<MP>,
+    ) -> Self::Evaluations {
+        match self {
+            FastDFTs::Recursive(dft) => dft.coset_lde_batch(mat, added_bits, shift),
+            FastDFTs::Parallel(dft) => dft.coset_lde_batch(mat, added_bits, shift),
+        }
     }
 }
