@@ -7,9 +7,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
-use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_monty_31::dft::RecursiveDft;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
@@ -18,6 +16,11 @@ use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+
+#[cfg(feature = "parallel")]
+type Dft = p3_dft::Radix2DitParallel<BabyBear>;
+#[cfg(not(feature = "parallel"))]
+type Dft = p3_dft::Radix2Bowers;
 
 const NUM_HASHES: usize = 1365;
 
@@ -59,8 +62,8 @@ fn main() -> Result<(), impl Debug> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
-    type Dft = RecursiveDft<Val>;
-    let dft = Dft::new(trace.height() << fri_config.log_blowup);
+
+    let dft = Dft::default();
 
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
