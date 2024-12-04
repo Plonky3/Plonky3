@@ -24,8 +24,10 @@ use crate::{FieldParameters, MontyParameters, TwoAdicData};
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct MontyField31<MP: MontyParameters> {
-    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
-    // likely doing something fishy.
+    /// The MONTY form of the field element, saved as a positive integer less than `P`.
+    ///
+    /// This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
+    /// likely doing something fishy.
     pub(crate) value: u32,
     _phantom: PhantomData<MP>,
 }
@@ -155,7 +157,7 @@ impl<FP: FieldParameters> Serialize for MontyField31<FP> {
 impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        // Ensure that `val` came from a valid field element
+        // Ensure that `val` satisfies our invariant, namely is `< P`.
         if val < FP::PRIME {
             // It's faster to Serialize and Deserialize in monty form.
             Ok(MontyField31::new_monty(val))

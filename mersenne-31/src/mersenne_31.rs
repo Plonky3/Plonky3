@@ -101,7 +101,7 @@ impl Serialize for Mersenne31 {
 impl<'a> Deserialize<'a> for Mersenne31 {
     fn deserialize<D: Deserializer<'a>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        // Ensure that `val` came from a valid field element
+        // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
         if val <= P {
             Ok(Mersenne31::new(val))
         } else {

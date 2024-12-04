@@ -368,7 +368,7 @@ pub trait PrimeField64: PrimeField {
     /// are converted to the same `u64` if and only if they represent the same value.
     ///
     /// This will be the fastest way to convert a field element to a `u64` and
-    /// is intended for use in hashing.
+    /// is intended for use in hashing. It will also be consistent across different targets.
     fn to_unique_u64(&self) -> u64 {
         // A simple default which is optimal for some fields.
         self.as_canonical_u64()
@@ -386,7 +386,7 @@ pub trait PrimeField32: PrimeField64 {
     /// are converted to the same `u32` if and only if they represent the same value.
     ///
     /// This will be the fastest way to convert a field element to a `u32` and
-    /// is intended for use in hashing.
+    /// is intended for use in hashing. It will also be consistent across different targets.
     fn to_unique_u32(&self) -> u32 {
         // A simple default which is optimal for some fields.
         self.as_canonical_u32()
