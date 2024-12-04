@@ -155,7 +155,7 @@ impl<FP: FieldParameters> Serialize for MontyField31<FP> {
 impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        // We need to ensure that val is a valid u32 which could have can come from a field element.
+        // Ensure that `val` came from a valid field element
         if val < FP::PRIME {
             // It's faster to Serialize and Deserialize in monty form.
             Ok(MontyField31::new_monty(val))
