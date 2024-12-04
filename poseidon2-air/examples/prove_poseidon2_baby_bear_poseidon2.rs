@@ -1,14 +1,14 @@
 use std::fmt::Debug;
 
-use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
-use p3_challenger::{HashChallenger, SerializingChallenger32};
+use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
+use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
-use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
 #[cfg(not(target_env = "msvc"))]
@@ -51,31 +51,28 @@ fn main() -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type ByteHash = Keccak256Hash;
-    let byte_hash = ByteHash {};
+    type Perm16 = Poseidon2BabyBear<16>;
+    let perm16 = Perm16::new_from_rng_128(&mut thread_rng());
 
-    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    let u64_hash = U64Hash::new(KeccakF {});
+    type Perm24 = Poseidon2BabyBear<24>;
+    let perm24 = Perm24::new_from_rng_128(&mut thread_rng());
 
-    type FieldHash = SerializingHasher32To64<U64Hash>;
-    let field_hash = FieldHash::new(u64_hash);
+    type MyHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
+    let hash = MyHash::new(perm24.clone());
 
-    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
-    let compress = MyCompress::new(u64_hash);
+    type MyCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
+    let compress = MyCompress::new(perm16.clone());
 
-    type ValMmcs = MerkleTreeMmcs<
-        [Val; p3_keccak::VECTOR_LEN],
-        [u64; p3_keccak::VECTOR_LEN],
-        FieldHash,
-        MyCompress,
-        4,
-    >;
-    let val_mmcs = ValMmcs::new(field_hash, compress);
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+    let val_mmcs = ValMmcs::new(hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let dft = Dft::default();
+
+    type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
@@ -101,10 +98,8 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let dft = Dft::default();
-
     let fri_config = FriConfig {
-        log_blowup: 1, // TODO: Should this be 3? Why is it working?
+        log_blowup: 1,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
@@ -115,9 +110,9 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let mut challenger = Challenger::new(perm24.clone());
     let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let mut challenger = Challenger::new(perm24);
     verify(&config, &air, &mut challenger, &proof, &vec![])
 }
