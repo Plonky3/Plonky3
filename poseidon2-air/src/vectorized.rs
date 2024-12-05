@@ -138,7 +138,7 @@ pub struct VectorizedPoseidon2Air<
     const PARTIAL_ROUNDS: usize,
     const VECTOR_LEN: usize,
 > {
-    air: Poseidon2Air<
+    pub(crate) air: Poseidon2Air<
         F,
         LinearLayers,
         WIDTH,
