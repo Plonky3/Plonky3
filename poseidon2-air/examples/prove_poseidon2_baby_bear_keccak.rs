@@ -7,7 +7,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
+use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
@@ -79,16 +79,6 @@ fn main() -> Result<(), impl Debug> {
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_vectorized_trace_rows::<
-        Val,
-        GenericPoseidon2LinearLayersBabyBear,
-        WIDTH,
-        SBOX_DEGREE,
-        SBOX_REGISTERS,
-        HALF_FULL_ROUNDS,
-        PARTIAL_ROUNDS,
-        VECTOR_LEN,
-    >(inputs, &constants);
 
     let air: VectorizedPoseidon2Air<
         Val,
@@ -100,6 +90,8 @@ fn main() -> Result<(), impl Debug> {
         PARTIAL_ROUNDS,
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
+
+    let trace = air.generate_vectorized_trace_rows(inputs);
 
     let dft = Dft::default();
 
