@@ -249,6 +249,18 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
     Vec::from_raw_parts(ptr, new_len, new_cap)
 }
 
+#[derive(Clone, Copy)]
+pub struct MutPtr<F>(pub *mut F);
+impl<F> MutPtr<F> {
+    /// # Safety
+    /// See `<*mut T>::add`.
+    pub unsafe fn add(self, count: usize) -> Self {
+        Self(unsafe { self.0.add(count) })
+    }
+}
+unsafe impl<F> Send for MutPtr<F> {}
+unsafe impl<F> Sync for MutPtr<F> {}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
