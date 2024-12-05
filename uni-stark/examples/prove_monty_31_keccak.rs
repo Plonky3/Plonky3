@@ -69,29 +69,18 @@ where
         .with(ForestLayer::default())
         .init();
 
-    // type Val = KoalaBear;
-    // type Challenge = BinomialExtensionField<KoalaBear, 4>;
-
-    // type ByteHash = Keccak256Hash;
-    // type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    // type FieldHash = SerializingHasher32To64<u64_hash>;
     let byte_hash = Keccak256Hash {};
     let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
     let field_hash = SerializingHasher32To64::new(u64_hash);
 
-    // type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
     let compress = CompressionFunctionFromHasher::<_, 2, 4>::new(u64_hash);
 
-    // type ValMmcs = MerkleTreeMmcs<KoalaBear, u8, FieldHash, MyCompress, 32>;
     let val_mmcs =
         MerkleTreeMmcs::<[F; p3_keccak::VECTOR_LEN], [u64; p3_keccak::VECTOR_LEN], _, _, 4>::new(
             field_hash, compress,
         );
 
-    // type ChallengeMmcs = ExtensionMmcs<KoalaBear, BinomialExtensionField<KoalaBear, 4>, ValMmcs>;
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-
-    // type Challenger = SerializingChallenger32<KoalaBear, HashChallenger<u8, ByteHash, 32>>;
 
     let trace = match proof_goal {
         "B" | "Blake3" | "BLAKE3" => {
@@ -124,10 +113,8 @@ where
         mmcs: challenge_mmcs,
     };
 
-    // type Pcs = TwoAdicFriPcs<KoalaBear, FastDft, ValMmcs, ChallengeMmcs>;
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
-    // type MyConfig = StarkConfig<Pcs, BinomialExtensionField<KoalaBear, 4>, Challenger>;
     let config = StarkConfig::new(pcs);
 
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], byte_hash);
