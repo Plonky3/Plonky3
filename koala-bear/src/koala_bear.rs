@@ -1,4 +1,4 @@
-use p3_field::{exp_1420470955, exp_u64_by_squaring, Field, FieldAlgebra};
+use p3_field::Field;
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, TwoAdicData,
@@ -28,13 +28,6 @@ impl BarrettParameters for KoalaBearParameters {}
 
 impl FieldParameters for KoalaBearParameters {
     const MONTY_GEN: KoalaBear = KoalaBear::new(3);
-
-    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
-        match power {
-            1420470955 => exp_1420470955(val), // used to compute x^{1/7}
-            _ => exp_u64_by_squaring(val, power),
-        }
-    }
 
     fn try_inverse<F: Field>(p1: F) -> Option<F> {
         if p1.is_zero() {
@@ -102,7 +95,7 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
+    use p3_field::{FieldAlgebra, PrimeField32, PrimeField64, TwoAdicField};
     use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
 
     use super::*;

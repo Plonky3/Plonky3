@@ -8,10 +8,7 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
-use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
-    PrimeField32, PrimeField64,
-};
+use p3_field::{halve_u32, Field, FieldAlgebra, Packable, PrimeField, PrimeField32, PrimeField64};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::de::Error;
@@ -243,14 +240,6 @@ impl Field for Mersenne31 {
         let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
         let rotated = left | right;
         Self::new(rotated)
-    }
-
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        match power {
-            1717986917 => exp_1717986917(val), // used in x^{1/5}
-            _ => exp_u64_by_squaring(val, power),
-        }
     }
 
     fn try_inverse(&self) -> Option<Self> {
