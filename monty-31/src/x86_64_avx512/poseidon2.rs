@@ -15,6 +15,7 @@ use super::{add, halve_avx512, sub};
 use crate::{
     apply_func_to_even_odd, packed_exp_3, packed_exp_5, packed_exp_7, FieldParameters,
     MontyField31, MontyParameters, PackedMontyField31AVX512, PackedMontyParameters,
+    RelativelyPrimePower,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently
@@ -342,7 +343,7 @@ fn convert_to_vec_neg_form<MP: MontyParameters>(input: i32) -> __m512i {
 impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX512<FP>, 16, D>
     for Poseidon2InternalLayerMonty31<FP, 16, ILP>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
     ILP: InternalLayerParametersAVX512<FP, 16, ArrayLike = [__m512i; 15]>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -441,7 +442,7 @@ where
 impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31AVX512<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {

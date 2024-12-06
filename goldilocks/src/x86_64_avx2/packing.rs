@@ -6,7 +6,10 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue, PrimeField64};
+use p3_field::{
+    exp_10540996611094048183, Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2,
+    PackedValue, PermutationMonomial, PrimeField64,
+};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -212,6 +215,21 @@ impl FieldAlgebra for PackedGoldilocksAVX2 {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Goldilocks.
+//
+// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
+impl InjectiveMonomial<7> for PackedGoldilocksAVX2 {}
+
+impl PermutationMonomial<7> for PackedGoldilocksAVX2 {
+    /// In the field `Goldilocks`, `a^{1/7}` is equal to a^{10540996611094048183}.
+    ///
+    /// This follows from the calculation `7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
+    fn injective_exp_root_n(&self) -> Self {
+        // This could likely by further optimised.
+        exp_10540996611094048183(*self)
     }
 }
 

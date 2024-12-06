@@ -265,6 +265,35 @@ pub trait FieldAlgebra:
     }
 }
 
+/// A ring implements `InjectiveMonomial<N>` if the algebraic function
+/// `f(x) = x^N` is an injective map on elements of the ring.
+///
+/// We do not enforce that this map be invertible as there are useful
+/// cases such as polynomials or symbolic expressions where no inverse exists.
+///
+/// However, if the ring is a field with order `q` or an array of such field elements,
+/// then `f(x) = x^N` will be injective if and only if it is invertible and so in
+/// such cases this monomial acts as a permutation. Moreover, this will occur
+/// exactly when `N` and `q - 1` are relatively prime i.e. `gcd(N, q - 1) = 1`.
+pub trait InjectiveMonomial<const N: u64>: FieldAlgebra {
+    /// Compute `x -> x^n` for a given `n > 1` such that this
+    /// map is injective.
+    fn injective_exp_n(&self) -> Self {
+        self.exp_const_u64::<N>()
+    }
+}
+
+/// A ring implements PermutationMonomial<N> if the algebraic function
+/// `f(x) = x^N` is invertible and thus acts as a permutation on elements of the ring.
+///
+/// In all cases we care about, this means that we can find another integer `K` such
+/// that `x = x^{NK}` for all elements of our ring.
+pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
+    /// Compute `x -> x^K` for a given `K > 1` such that
+    /// `x^{NK} = x` for all elements `x`.
+    fn injective_exp_root_n(&self) -> Self;
+}
+
 /// An element of a finite field.
 pub trait Field:
     FieldAlgebra<F = Self>

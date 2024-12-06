@@ -9,8 +9,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, Field, FieldAlgebra, Packable,
-    PrimeField, PrimeField64, TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, Field, FieldAlgebra,
+    InjectiveMonomial, Packable, PermutationMonomial, PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
@@ -145,6 +145,21 @@ impl FieldAlgebra for Goldilocks {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u64; len]) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Goldilocks.
+//
+// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
+impl InjectiveMonomial<7> for Goldilocks {}
+
+impl PermutationMonomial<7> for Goldilocks {
+    /// In the field `Goldilocks`, `a^{1/7}` is equal to a^{10540996611094048183}.
+    ///
+    /// This follows from the calculation `7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
+    fn injective_exp_root_n(&self) -> Self {
+        // This could likely by further optimised.
+        exp_10540996611094048183(*self)
     }
 }
 
@@ -560,9 +575,9 @@ mod tests {
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
 
-        assert_eq!(f.exp_u64(10540996611094048183).exp_const_u64::<7>(), f);
-        assert_eq!(y.exp_u64(10540996611094048183).exp_const_u64::<7>(), y);
-        assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
+        assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
+        assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
+        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
     }
 
     test_field!(crate::Goldilocks);

@@ -4,8 +4,6 @@
 extern crate alloc;
 
 mod rescue;
-mod sbox;
 mod util;
 
 pub use rescue::*;
-pub use sbox::*;

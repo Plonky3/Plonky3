@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial};
 
 use crate::symbolic_variable::SymbolicVariable;
 
@@ -119,6 +119,8 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
         Self::Constant(F::from_wrapped_u64(n))
     }
 }
+
+impl<F: Field + InjectiveMonomial<N>, const N: u64> InjectiveMonomial<N> for SymbolicExpression<F> {}
 
 impl<F: Field, T> Add<T> for SymbolicExpression<F>
 where

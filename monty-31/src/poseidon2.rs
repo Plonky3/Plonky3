@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 use core::ops::Mul;
 
-use p3_field::FieldAlgebra;
+use p3_field::{FieldAlgebra, InjectiveMonomial};
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
@@ -9,7 +9,7 @@ use p3_poseidon2::{
 
 use crate::{
     FieldParameters, MontyField31, MontyParameters, Poseidon2ExternalLayerMonty31,
-    Poseidon2InternalLayerMonty31,
+    Poseidon2InternalLayerMonty31, RelativelyPrimePower,
 };
 
 /// Trait which handles the Poseidon2 internal layers.
@@ -81,14 +81,14 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
 impl<FP, const WIDTH: usize, P2P, const D: u64> InternalLayer<MontyField31<FP>, WIDTH, D>
     for Poseidon2InternalLayerMonty31<FP, WIDTH, P2P>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
     P2P: InternalLayerParameters<FP, WIDTH>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [MontyField31<FP>; WIDTH]) {
         self.internal_constants.iter().for_each(|rc| {
             state[0] += *rc;
-            state[0] = state[0].exp_const_u64::<D>();
+            state[0] = state[0].injective_exp_n();
             let part_sum: MontyField31<FP> = state[1..].iter().cloned().sum();
             let full_sum = part_sum + state[0];
             state[0] = part_sum - state[0];
@@ -100,7 +100,7 @@ where
 impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [MontyField31<FP>; WIDTH]) {
