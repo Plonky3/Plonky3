@@ -142,7 +142,13 @@ impl FieldAlgebra for Bn254Fr {
     }
 }
 
+/// Degree of the smallest permutation polynomial for BN254.
+///
+/// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 impl InjectiveMonomial<5> for Bn254Fr {}
+
+// TODO: Implement PermutationMonomial<5> for Bn254Fr.
+// Not a priority given how slow (and unused) this will be.
 
 impl Field for Bn254Fr {
     type Packing = Self;

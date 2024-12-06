@@ -468,7 +468,7 @@ pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, FieldAlgebra, PrimeField32};
+    use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PermutationMonomial, PrimeField32};
     use p3_field_testing::test_field;
 
     use crate::Mersenne31;
@@ -519,9 +519,9 @@ mod tests {
         let m1 = F::from_canonical_u32(0x34167c58);
         let m2 = F::from_canonical_u32(0x61f3207b);
 
-        assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
-        assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
     test_field!(crate::Mersenne31);

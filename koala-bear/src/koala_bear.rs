@@ -113,7 +113,9 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
+    use p3_field::{
+        InjectiveMonomial, PermutationMonomial, PrimeField32, PrimeField64, TwoAdicField,
+    };
     use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
 
     use super::*;
@@ -180,9 +182,9 @@ mod tests {
         let expected_prod = F::from_canonical_u32(0x54b46b81);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(m1.exp_u64(1420470955).exp_const_u64::<3>(), m1);
-        assert_eq!(m2.exp_u64(1420470955).exp_const_u64::<3>(), m2);
-        assert_eq!(f_2.exp_u64(1420470955).exp_const_u64::<3>(), f_2);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();

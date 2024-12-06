@@ -133,7 +133,7 @@ impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayerConstructor<FA>
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
+impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     InternalLayer<FA, 8, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -146,7 +146,7 @@ impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
+impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     InternalLayer<FA, 12, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -159,7 +159,7 @@ impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
+impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     InternalLayer<FA, 16, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -172,7 +172,7 @@ impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>>
+impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     InternalLayer<FA, 20, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -199,8 +199,11 @@ impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstruc
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>, const WIDTH: usize>
-    ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2ExternalLayerGoldilocks<WIDTH>
+impl<
+        FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
+        const WIDTH: usize,
+    > ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2ExternalLayerGoldilocks<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [FA; WIDTH]) {
@@ -237,8 +240,10 @@ impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstruc
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<7>, const WIDTH: usize>
-    ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
+impl<
+        FA: FieldAlgebra<F = Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
+        const WIDTH: usize,
+    > ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
     for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.

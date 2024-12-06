@@ -575,9 +575,9 @@ mod tests {
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
 
-        assert_eq!(f.exp_u64(10540996611094048183).exp_const_u64::<7>(), f);
-        assert_eq!(y.exp_u64(10540996611094048183).exp_const_u64::<7>(), y);
-        assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
+        assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
+        assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
+        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
     }
 
     test_field!(crate::Goldilocks);

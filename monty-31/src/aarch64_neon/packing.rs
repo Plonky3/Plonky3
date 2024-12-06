@@ -14,7 +14,7 @@ use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters};
+use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
 
 const WIDTH: usize = 4;
 
