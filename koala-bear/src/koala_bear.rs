@@ -1,7 +1,7 @@
 use p3_field::{exp_1420470955, exp_u64_by_squaring, Field, FieldAlgebra};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, TwoAdicData,
+    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -60,6 +60,17 @@ impl FieldParameters for KoalaBearParameters {
         let p1111110111111111111111111111111 = p1111110111111111111110000000000 * p1111111111;
 
         Some(p1111110111111111111111111111111)
+    }
+}
+
+impl RelativelyPrimePower<3> for KoalaBearParameters {
+    /// In the field `KoalaBear`, `a^{1/3}` is equal to a^{1420470955}.
+    ///
+    /// This follows from the calculation `3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1)`.
+    fn exp_root_d<FA: FieldAlgebra>(val: FA) -> FA {
+        // We use a custom addition chain.
+        // This could possibly by further optimised.
+        exp_1420470955(val)
     }
 }
 

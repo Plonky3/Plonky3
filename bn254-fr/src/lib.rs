@@ -12,7 +12,7 @@ use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::Poseidon2Bn254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -141,6 +141,8 @@ impl FieldAlgebra for Bn254Fr {
         Self::new(FFBn254Fr::from(n))
     }
 }
+
+impl InjectiveMonomial<5> for Bn254Fr {}
 
 impl Field for Bn254Fr {
     type Packing = Self;

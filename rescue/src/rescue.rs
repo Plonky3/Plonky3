@@ -4,34 +4,31 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
-use p3_field::{FieldAlgebra, PrimeField, PrimeField64};
+use p3_field::{FieldAlgebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
 
-use crate::sbox::SboxLayers;
 use crate::util::shake256_hash;
 
 /// The Rescue-XLIX permutation.
 #[derive(Clone, Debug)]
-pub struct Rescue<F, Mds, Sbox, const WIDTH: usize> {
+pub struct Rescue<F, Mds, const WIDTH: usize, const ALPHA: u64> {
     num_rounds: usize,
     mds: Mds,
-    sbox: Sbox,
     round_constants: Vec<F>,
 }
 
-impl<F, Mds, Sbox, const WIDTH: usize> Rescue<F, Mds, Sbox, WIDTH>
+impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, WIDTH, ALPHA>
 where
-    F: PrimeField,
+    F: PrimeField + PermutationMonomial<ALPHA>,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds, sbox: Sbox) -> Self {
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
         Self {
             num_rounds,
             mds,
-            sbox,
             round_constants,
         }
     }
@@ -100,17 +97,17 @@ where
     }
 }
 
-impl<FA, Mds, Sbox, const WIDTH: usize> Permutation<[FA; WIDTH]> for Rescue<FA::F, Mds, Sbox, WIDTH>
+impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
+    for Rescue<FA::F, Mds, WIDTH, ALPHA>
 where
-    FA: FieldAlgebra,
-    FA::F: PrimeField,
+    FA: FieldAlgebra + PermutationMonomial<ALPHA>,
+    FA::F: PrimeField + PermutationMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
-    Sbox: SboxLayers<FA, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [FA; WIDTH]) {
         for round in 0..self.num_rounds {
             // S-box
-            self.sbox.sbox_layer(state);
+            state.iter_mut().for_each(|x| *x = x.injective_exp_n());
 
             // MDS
             self.mds.permute_mut(state);
@@ -124,7 +121,7 @@ where
             }
 
             // Inverse S-box
-            self.sbox.inverse_sbox_layer(state);
+            state.iter_mut().for_each(|x| *x = x.injective_exp_root_n());
 
             // MDS
             self.mds.permute_mut(state);
@@ -140,13 +137,12 @@ where
     }
 }
 
-impl<FA, Mds, Sbox, const WIDTH: usize> CryptographicPermutation<[FA; WIDTH]>
-    for Rescue<FA::F, Mds, Sbox, WIDTH>
+impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[FA; WIDTH]>
+    for Rescue<FA::F, Mds, WIDTH, ALPHA>
 where
-    FA: FieldAlgebra,
-    FA::F: PrimeField,
+    FA: FieldAlgebra + PermutationMonomial<ALPHA>,
+    FA::F: PrimeField + PermutationMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
-    Sbox: SboxLayers<FA, WIDTH>,
 {
 }
 
@@ -157,21 +153,18 @@ mod tests {
     use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 
     use crate::rescue::Rescue;
-    use crate::sbox::BasicSboxLayer;
 
     const WIDTH: usize = 12;
     const ALPHA: u64 = 5;
-    type RescuePrimeM31Default =
-        Rescue<Mersenne31, MdsMatrixMersenne31, BasicSboxLayer<Mersenne31>, WIDTH>;
+    type RescuePrimeM31Default = Rescue<Mersenne31, MdsMatrixMersenne31, WIDTH, ALPHA>;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
         let num_rounds = RescuePrimeM31Default::num_rounds(6, 128, ALPHA);
         let round_constants =
             RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
         let mds = MdsMatrixMersenne31 {};
-        let sbox = BasicSboxLayer::for_alpha(ALPHA);
 
-        RescuePrimeM31Default::new(num_rounds, round_constants, mds, sbox)
+        RescuePrimeM31Default::new(num_rounds, round_constants, mds)
     }
 
     const NUM_TESTS: usize = 3;

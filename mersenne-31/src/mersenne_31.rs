@@ -9,8 +9,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
-    PrimeField32, PrimeField64,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, InjectiveMonomial,
+    Packable, PermutationMonomial, PrimeField, PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -194,6 +194,22 @@ impl FieldAlgebra for Mersenne31 {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u32; len]) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for Mersenne31 {}
+
+impl PermutationMonomial<5> for Mersenne31 {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        // We use a custom addition chain.
+        // This could possibly by further optimised.
+        exp_1717986917(*self)
     }
 }
 

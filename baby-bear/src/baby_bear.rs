@@ -1,7 +1,7 @@
 use p3_field::{exp_1725656503, exp_u64_by_squaring, Field, FieldAlgebra};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, TwoAdicData,
+    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
@@ -60,6 +60,17 @@ impl FieldParameters for BabyBearParameters {
             p1110000111100001111000011110000 * p111000011110000111100001111;
 
         Some(p1110111111111111111111111111111)
+    }
+}
+
+impl RelativelyPrimePower<7> for BabyBearParameters {
+    /// In the field `BabyBear`, `a^{1/7}` is equal to a^{1725656503}.
+    ///
+    /// This follows from the calculation `7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1)`.
+    fn exp_root_d<FA: FieldAlgebra>(val: FA) -> FA {
+        // We use a custom addition chain.
+        // This could possibly by further optimised.
+        exp_1725656503(val)
     }
 }
 

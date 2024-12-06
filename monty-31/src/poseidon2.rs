@@ -9,7 +9,7 @@ use p3_poseidon2::{
 
 use crate::{
     FieldParameters, MontyField31, MontyParameters, Poseidon2ExternalLayerMonty31,
-    Poseidon2InternalLayerMonty31,
+    Poseidon2InternalLayerMonty31, RelativelyPrimePower,
 };
 
 /// Trait which handles the Poseidon2 internal layers.
@@ -100,7 +100,7 @@ where
 impl<FP, const WIDTH: usize, const D: u64> ExternalLayer<MontyField31<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [MontyField31<FP>; WIDTH]) {
