@@ -271,11 +271,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
 
     const GENERATOR: Self = FP::MONTY_GEN;
 
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        FP::exp_u64_generic(val, power)
-    }
-
     fn try_inverse(&self) -> Option<Self> {
         FP::try_inverse(*self)
     }
