@@ -5,12 +5,14 @@ use crate::{naive_poly_mul, ExtensionField};
 
 mod binomial_extension;
 mod complex;
+mod packed_binomial_extension;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
+pub use packed_binomial_extension::*;
 
 /// Binomial extension field trait.
 ///
