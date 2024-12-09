@@ -17,6 +17,7 @@ use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+use p3_field::AbstractField;
 
 const NUM_HASHES: usize = 680;
 
@@ -83,6 +84,6 @@ fn main() -> Result<(), VerificationError> {
         &KeccakAir {},
         &mut challenger,
         &proof,
-        &RowMajorMatrix::new(vec![], 0),
+        &RowMajorMatrix::new(vec![Val::zero()], 1),
     )
 }

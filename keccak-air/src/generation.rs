@@ -38,7 +38,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
                 let input_xy = input[y * 5 + x];
                 for limb in 0..U64_LIMBS {
                     row.preimage[y][x][limb] =
-                        F::from_canonical_u64((input_xy >> (16 * limb)) & 0xFFFF);
+                        F::from_canonical_u64((input_xy >> (8 * limb)) & 0xFF);
                 }
             }
         }
@@ -49,7 +49,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
         for x in 0..5 {
             let input_xy = input[y * 5 + x];
             for limb in 0..U64_LIMBS {
-                rows[0].a[y][x][limb] = F::from_canonical_u64((input_xy >> (16 * limb)) & 0xFFFF);
+                rows[0].a[y][x][limb] = F::from_canonical_u64((input_xy >> (8 * limb)) & 0xFF);
             }
         }
     }
@@ -79,7 +79,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
             let limb = z / BITS_PER_LIMB;
             let bit_in_limb = z % BITS_PER_LIMB;
             let a = (0..5).map(|y| {
-                let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
+                let a_limb = row.a[y][x][limb].as_canonical_u64();
                 ((a_limb >> bit_in_limb) & 1) != 0
             });
             row.c[x][z] = F::from_bool(a.fold(false, |acc, x| acc ^ x));
@@ -106,7 +106,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
             for z in 0..64 {
                 let limb = z / BITS_PER_LIMB;
                 let bit_in_limb = z % BITS_PER_LIMB;
-                let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
+                let a_limb = row.a[y][x][limb].as_canonical_u64() as u8;
                 let a_bit = F::from_bool(((a_limb >> bit_in_limb) & 1) != 0);
                 row.a_prime[y][x][z] = xor([a_bit, row.c[x][z], row.c_prime[x][z]]);
             }
@@ -152,6 +152,6 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
     for limb in 0..U64_LIMBS {
         let rc_lo = rc_value_limb(round, limb);
         row.a_prime_prime_prime_0_0_limbs[limb] =
-            F::from_canonical_u16(row.a_prime_prime[0][0][limb].as_canonical_u64() as u16 ^ rc_lo);
+            F::from_canonical_u8(row.a_prime_prime[0][0][limb].as_canonical_u64() as u8 ^ rc_lo);
     }
 }
