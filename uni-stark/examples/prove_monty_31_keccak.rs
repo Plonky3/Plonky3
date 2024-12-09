@@ -174,7 +174,7 @@ fn report_result(result: Result<(), impl Debug>) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    assert_eq!(args.len(), 5, "There should be three arguments passed this functions.
+    assert_eq!(args.len() - 1, 4, "There should be four arguments passed to this function.
     \n The first chooses the field we are using for the proof. Use \"B\" to use the BabyBear field and \"K\" to use the KoalaBear field.
     \n The second chooses which statement we are proving. Use \"B\", \"P\" or \"K\" to prove Blake3, Poseidon2 or Keccak hashes.
     \n The third gives the desired trace height. It should fit in a u8 and will be interpreted as the log base 2 of the trace height. For Blake3 this
