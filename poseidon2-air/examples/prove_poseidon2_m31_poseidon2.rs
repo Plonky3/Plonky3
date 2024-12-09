@@ -9,7 +9,7 @@ use p3_field::Field;
 use p3_fri::FriConfig;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
-use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
+use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::{random, thread_rng};
@@ -71,17 +71,6 @@ fn main() -> Result<(), impl Debug> {
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
     let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_vectorized_trace_rows::<
-        Val,
-        GenericPoseidon2LinearLayersMersenne31,
-        WIDTH,
-        SBOX_DEGREE,
-        SBOX_REGISTERS,
-        HALF_FULL_ROUNDS,
-        PARTIAL_ROUNDS,
-        VECTOR_LEN,
-    >(inputs, &constants);
-
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersMersenne31,
@@ -92,6 +81,8 @@ fn main() -> Result<(), impl Debug> {
         PARTIAL_ROUNDS,
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
+
+    let trace = air.generate_vectorized_trace_rows(inputs);
 
     let fri_config = FriConfig {
         log_blowup: 1,
