@@ -73,10 +73,10 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31_keccak --rele
 ```
 
 The 4 commandline arguments allow control of
-- The Field: `K/B` for `KoalaBear/BabyBear`,
-- The proof statement: `B/P/K` for `Blake3` vs `Keccak` vs `Poseidon2` hashes.
-- The trace height: Given as the logarithm base `2`. Using `14/15/16` for `Blake3/Keccak/Poseidon2` respectively should have roughly one second proving times.
-- The choice of FFT: `P/R` for `Radix2DitParallel/RecursiveDft`. Currently, `Radix2DitParallel` is usually the faster option but this may change over time. 
+- Field: `K/B` for `KoalaBear/BabyBear`,
+- Proof statement: `B/P/K` for `Blake3` vs `Keccak` vs `Poseidon2` hashes.
+- Trace height: Given as the logarithm base `2`. Use `14/15/16` for `Blake3/Keccak/Poseidon2` respectively for proving times around one second.
+- DFFT: `P/R` for `Radix2DitParallel/RecursiveDft`. Currently, `Radix2DitParallel` is usually the faster option but this may change over time. 
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
