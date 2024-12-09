@@ -1,5 +1,6 @@
 use std::env;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
 use p3_blake3_air::Blake3Air;
@@ -7,7 +8,7 @@ use p3_challenger::SerializingChallenger32;
 use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{ExtensionField, PrimeField32, TwoAdicField};
+use p3_field::{ExtensionField, Field, PrimeField32, TwoAdicField};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_keccak_air::KeccakAir;
@@ -27,9 +28,36 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
+// General constants for constructing the Poseidon2 AIR.
 const P2_WIDTH: usize = 16;
 const P2_HALF_FULL_ROUNDS: usize = 4;
 const P2_VECTOR_LEN: usize = 1 << 3;
+
+enum ProofGoal<
+    F: Field,
+    LinearLayers,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+    const VECTOR_LEN: usize,
+> {
+    Blake3(Blake3Air),
+    Keccak(KeccakAir),
+    Poseidon2(
+        VectorizedPoseidon2Air<
+            F,
+            LinearLayers,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+            VECTOR_LEN,
+        >,
+    ),
+}
 
 fn prove_hashes<
     F: PrimeField32 + TwoAdicField,
@@ -43,10 +71,7 @@ fn prove_hashes<
     const P2_SBOX_REGISTERS: usize,
     const P2_PARTIAL_ROUNDS: usize,
 >(
-    proof_goal: &str,
-    dft: DFT,
-    num_hashes: usize,
-    p2_air: VectorizedPoseidon2Air<
+    proof_goal: ProofGoal<
         F,
         LinearLayers,
         P2_WIDTH,
@@ -56,6 +81,9 @@ fn prove_hashes<
         P2_PARTIAL_ROUNDS,
         P2_VECTOR_LEN,
     >,
+    dft: DFT,
+    num_hashes: usize,
+    _phantom: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
     Standard: Distribution<F>,
@@ -83,26 +111,23 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
 
     let trace = match proof_goal {
-        "B" | "Blake3" | "BLAKE3" => {
+        ProofGoal::Blake3(_) => {
             let inputs = (0..num_hashes)
                 .map(|_| random::<[u32; 24]>())
                 .collect::<Vec<_>>();
             p3_blake3_air::generate_trace_rows(inputs)
         }
-        "P" | "Poseidon2" | "POSEIDON2" => {
+        ProofGoal::Poseidon2(ref p2_air) => {
             let inputs = (0..num_hashes)
                 .map(|_| random::<[F; P2_WIDTH]>())
                 .collect::<Vec<_>>();
             p2_air.generate_vectorized_trace_rows(inputs)
         }
-        "K" | "Keccak" | "KECCAK" => {
+        ProofGoal::Keccak(_) => {
             let inputs = (0..num_hashes)
                 .map(|_| random::<[u64; 25]>())
                 .collect::<Vec<_>>();
             p3_keccak_air::generate_trace_rows(inputs)
-        }
-        _ => {
-            panic!("Could not understand the proof goal. Use \"B\" to prove Blake3 Hashes or \"K\" for Keccak hashes.")
         }
     };
 
@@ -121,47 +146,20 @@ where
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], byte_hash);
 
     match proof_goal {
-        "B" | "Blake3" | "BLAKE3" => {
-            let proof = prove(
-                &config,
-                &Blake3Air {},
-                &mut proof_challenger,
-                trace,
-                &vec![],
-            );
+        ProofGoal::Blake3(b3_air) => {
+            let proof = prove(&config, &b3_air, &mut proof_challenger, trace, &vec![]);
 
-            verify(
-                &config,
-                &Blake3Air {},
-                &mut verif_challenger,
-                &proof,
-                &vec![],
-            )
+            verify(&config, &b3_air, &mut verif_challenger, &proof, &vec![])
         }
-        "P" | "Poseidon2" | "POSEIDON2" => {
+        ProofGoal::Poseidon2(p2_air) => {
             let proof = prove(&config, &p2_air, &mut proof_challenger, trace, &vec![]);
 
             verify(&config, &p2_air, &mut verif_challenger, &proof, &vec![])
         }
-        "K" | "Keccak" | "KECCAK" => {
-            let proof = prove(
-                &config,
-                &KeccakAir {},
-                &mut proof_challenger,
-                trace,
-                &vec![],
-            );
+        ProofGoal::Keccak(k_air) => {
+            let proof = prove(&config, &k_air, &mut proof_challenger, trace, &vec![]);
 
-            verify(
-                &config,
-                &KeccakAir {},
-                &mut verif_challenger,
-                &proof,
-                &vec![],
-            )
-        }
-        _ => {
-            panic!("Could not understand the proof goal. Use \"B\" to prove Blake3 Hashes or \"K\" for Keccak hashes.")
+            verify(&config, &k_air, &mut verif_challenger, &proof, &vec![])
         }
     }
 }
@@ -170,7 +168,7 @@ fn report_result(result: Result<(), impl Debug>) {
     if result.is_ok() {
         println!("Proof Verified Successfully")
     } else {
-        println!("{:?}", result.unwrap_err())
+        panic!("{:?}", result.unwrap_err())
     }
 }
 
@@ -188,76 +186,63 @@ fn main() {
         .expect("The third command line input should be a u8");
     let trace_height = 1 << log_2_trace_height;
 
-    let num_hashes = match args[2].as_ref() {
-        "B" | "Blake3" | "BLAKE3" => {
-            println!("Proving 2^{log_2_trace_height} Blake3 Hashes");
-            trace_height
-        }
-        "P" | "Poseidon2" | "POSEIDON2" => {
-            println!(
-                "Proving 2^{} native Poseidon2 Hashes",
-                log_2_trace_height + 3
-            );
-            trace_height << 3
-        }
-        "K" | "Keccak" | "KECCAK" => {
-            let num_hashes = trace_height / 24;
-            println!("Proving {num_hashes} KECCAK Hashes");
-            num_hashes
-        }
-        _ => {
-            panic!("Could not understand the proof goal. Use \"B\", \"P\" or \"K\" to prove Blake3, Poseidon2 or Keccak hashes.")
-        }
-    };
-
     match args[1].as_ref() {
         "K" | "KoalaBear" | "KOALABEAR" => {
             println!("Choice of Field: KoalaBear");
 
-            let constants = RoundConstants::from_rng(&mut thread_rng());
+            type EF = BinomialExtensionField<KoalaBear, 4>;
 
-            const SBOX_DEGREE: u64 = 3;
-            const SBOX_REGISTERS: usize = 0;
-            const PARTIAL_ROUNDS: usize = 20;
+            let (num_hashes, proof_goal) = match args[2].as_ref() {
+                "B" | "Blake3" | "BLAKE3" => {
+                    println!("Proving 2^{log_2_trace_height} Blake3 Hashes");
+                    (trace_height, ProofGoal::Blake3(Blake3Air {}))
+                }
+                "P" | "Poseidon2" | "POSEIDON2" => {
+                    println!(
+                        "Proving 2^{} native Poseidon2 Hashes",
+                        log_2_trace_height + 3
+                    );
 
-            let p2_air: VectorizedPoseidon2Air<
-                KoalaBear,
-                GenericPoseidon2LinearLayersKoalaBear,
-                P2_WIDTH,
-                SBOX_DEGREE,
-                SBOX_REGISTERS,
-                P2_HALF_FULL_ROUNDS,
-                PARTIAL_ROUNDS,
-                P2_VECTOR_LEN,
-            > = VectorizedPoseidon2Air::new(constants);
+                    let constants = RoundConstants::from_rng(&mut thread_rng());
+
+                    // Field specific constants for constructing the Poseidon2 AIR.
+                    const SBOX_DEGREE: u64 = 3;
+                    const SBOX_REGISTERS: usize = 0;
+                    const PARTIAL_ROUNDS: usize = 20;
+
+                    let p2_air: VectorizedPoseidon2Air<
+                        KoalaBear,
+                        GenericPoseidon2LinearLayersKoalaBear,
+                        P2_WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        P2_HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                        P2_VECTOR_LEN,
+                    > = VectorizedPoseidon2Air::new(constants);
+                    (trace_height << 3, ProofGoal::Poseidon2(p2_air))
+                }
+                "K" | "Keccak" | "KECCAK" => {
+                    let num_hashes = trace_height / 24;
+                    println!("Proving {num_hashes} KECCAK Hashes");
+                    (num_hashes, ProofGoal::Keccak(KeccakAir {}))
+                }
+                _ => {
+                    panic!("Could not understand the proof goal. Use \"B\", \"P\" or \"K\" to prove Blake3, Poseidon2 or Keccak hashes.")
+                }
+            };
 
             match args[4].as_ref() {
                 "R" | "Recursive" => {
                     println!("Choice of DFT: RecursiveDft");
                     let dft = RecursiveDft::new(trace_height << 2);
-                    let result = prove_hashes::<
-                        KoalaBear,
-                        BinomialExtensionField<KoalaBear, 4>,
-                        _,
-                        _,
-                        SBOX_DEGREE,
-                        SBOX_REGISTERS,
-                        PARTIAL_ROUNDS,
-                    >(args[2].as_ref(), dft, num_hashes, p2_air);
+                    let result = prove_hashes(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
                 "P" | "Parallel" => {
                     println!("Choice of DFT: Radix2DitParallel");
                     let dft = Radix2DitParallel::default();
-                    let result = prove_hashes::<
-                        KoalaBear,
-                        BinomialExtensionField<KoalaBear, 4>,
-                        _,
-                        _,
-                        SBOX_DEGREE,
-                        SBOX_REGISTERS,
-                        PARTIAL_ROUNDS,
-                    >(args[2].as_ref(), dft, num_hashes, p2_air);
+                    let result = prove_hashes(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
                 _ => {
@@ -268,50 +253,59 @@ fn main() {
         "B" | "BabyBear" | "BABYBEAR" => {
             println!("Choice of Field: BabyBear");
 
-            let constants = RoundConstants::from_rng(&mut thread_rng());
+            type EF = BinomialExtensionField<BabyBear, 4>;
 
-            const SBOX_DEGREE: u64 = 7;
-            const SBOX_REGISTERS: usize = 1;
-            const PARTIAL_ROUNDS: usize = 13;
+            let (num_hashes, proof_goal) = match args[2].as_ref() {
+                "B" | "Blake3" | "BLAKE3" => {
+                    println!("Proving 2^{log_2_trace_height} Blake3 Hashes");
+                    (trace_height, ProofGoal::Blake3(Blake3Air {}))
+                }
+                "P" | "Poseidon2" | "POSEIDON2" => {
+                    println!(
+                        "Proving 2^{} native Poseidon2 Hashes",
+                        log_2_trace_height + 3
+                    );
 
-            let p2_air: VectorizedPoseidon2Air<
-                BabyBear,
-                GenericPoseidon2LinearLayersBabyBear,
-                P2_WIDTH,
-                SBOX_DEGREE,
-                SBOX_REGISTERS,
-                P2_HALF_FULL_ROUNDS,
-                PARTIAL_ROUNDS,
-                P2_VECTOR_LEN,
-            > = VectorizedPoseidon2Air::new(constants);
+                    let constants = RoundConstants::from_rng(&mut thread_rng());
+
+                    // Field specific constants for constructing the Poseidon2 AIR.
+                    const SBOX_DEGREE: u64 = 7;
+                    const SBOX_REGISTERS: usize = 1;
+                    const PARTIAL_ROUNDS: usize = 13;
+
+                    let p2_air: VectorizedPoseidon2Air<
+                        BabyBear,
+                        GenericPoseidon2LinearLayersBabyBear,
+                        P2_WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        P2_HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                        P2_VECTOR_LEN,
+                    > = VectorizedPoseidon2Air::new(constants);
+                    (trace_height << 3, ProofGoal::Poseidon2(p2_air))
+                }
+                "K" | "Keccak" | "KECCAK" => {
+                    let num_hashes = trace_height / 24;
+                    println!("Proving {num_hashes} KECCAK Hashes");
+                    (num_hashes, ProofGoal::Keccak(KeccakAir {}))
+                }
+                _ => {
+                    panic!("Could not understand the proof goal. Use \"B\", \"P\" or \"K\" to prove Blake3, Poseidon2 or Keccak hashes.")
+                }
+            };
 
             match args[4].as_ref() {
                 "R" | "Recursive" => {
                     println!("Choice of DFT: RecursiveDft");
                     let dft = RecursiveDft::new(trace_height << 2);
-                    let result = prove_hashes::<
-                        BabyBear,
-                        BinomialExtensionField<BabyBear, 4>,
-                        _,
-                        _,
-                        SBOX_DEGREE,
-                        SBOX_REGISTERS,
-                        PARTIAL_ROUNDS,
-                    >(args[2].as_ref(), dft, num_hashes, p2_air);
+                    let result = prove_hashes(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
                 "P" | "Parallel" => {
                     println!("Choice of DFT: Radix2DitParallel");
                     let dft = Radix2DitParallel::default();
-                    let result = prove_hashes::<
-                        BabyBear,
-                        BinomialExtensionField<BabyBear, 4>,
-                        _,
-                        _,
-                        SBOX_DEGREE,
-                        SBOX_REGISTERS,
-                        PARTIAL_ROUNDS,
-                    >(args[2].as_ref(), dft, num_hashes, p2_air);
+                    let result = prove_hashes(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
                 _ => {
