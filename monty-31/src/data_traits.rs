@@ -77,7 +77,6 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
-    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA;
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
 }
 

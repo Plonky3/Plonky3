@@ -13,7 +13,7 @@ use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::exponentiation::exp_u64_by_squaring;
+use crate::exponentiation::bits_u64;
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
@@ -154,15 +154,19 @@ pub trait FieldAlgebra:
     }
 
     /// Exponentiation by a `u64` power.
-    ///
-    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
-    /// by squaring. Rather than override this method, it is generally recommended to have the
-    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
-    /// abstract fields.
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        Self::F::exp_u64_generic(self.clone(), power)
+        let mut current = self.clone();
+        let mut product = Self::ONE;
+
+        for j in 0..bits_u64(power) {
+            if (power >> j & 1) != 0 {
+                product *= current.clone();
+            }
+            current = current.square();
+        }
+        product
     }
 
     /// Exponentiation by a constant power.
@@ -327,17 +331,6 @@ pub trait Field:
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         *self / Self::TWO.exp_u64(exp)
-    }
-
-    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `FieldAlgebra`s, not just this concrete field.
-    ///
-    /// The default implementation uses naive square and multiply. Implementations may want to
-    /// override this and handle certain powers with more optimal addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        exp_u64_by_squaring(val, power)
     }
 
     /// The multiplicative inverse of this field element, if it exists.
