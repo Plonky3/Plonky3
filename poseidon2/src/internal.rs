@@ -29,7 +29,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial};
 
 use crate::add_rc_and_sbox_generic;
 
@@ -67,7 +67,11 @@ where
 /// A helper method which allows any field to easily implement Internal Layer.
 /// This should only be used in places where performance is not critical.
 #[inline]
-pub fn internal_permute_state<FA: FieldAlgebra, const WIDTH: usize, const D: u64>(
+pub fn internal_permute_state<
+    FA: FieldAlgebra + InjectiveMonomial<D>,
+    const WIDTH: usize,
+    const D: u64,
+>(
     state: &mut [FA; WIDTH],
     diffusion_mat: fn(&mut [FA; WIDTH]),
     internal_constants: &[FA::F],

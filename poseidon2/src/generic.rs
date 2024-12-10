@@ -12,7 +12,7 @@
 //!
 //! This file implements the two matrix multiplications methods from which Poseidon2 can be built.
 
-use p3_field::FieldAlgebra;
+use p3_field::{FieldAlgebra, InjectiveMonomial};
 
 use crate::{mds_light_permutation, MDSMat4};
 
@@ -23,9 +23,12 @@ use crate::{mds_light_permutation, MDSMat4};
 /// This is a little slower than field specific implementations (particularly for packed fields) so should
 /// only be used in non performance critical places.
 #[inline(always)]
-pub fn add_rc_and_sbox_generic<FA: FieldAlgebra, const D: u64>(val: &mut FA, rc: FA::F) {
+pub fn add_rc_and_sbox_generic<FA: FieldAlgebra + InjectiveMonomial<D>, const D: u64>(
+    val: &mut FA,
+    rc: FA::F,
+) {
     *val += FA::from_f(rc);
-    *val = val.exp_const_u64::<D>();
+    *val = val.injective_exp_n();
 }
 
 pub trait GenericPoseidon2LinearLayers<FA: FieldAlgebra, const WIDTH: usize>: Sync {
