@@ -8,9 +8,10 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::exponentiation::exp_1717986917;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, InjectiveMonomial,
-    Packable, PermutationMonomial, PrimeField, PrimeField32, PrimeField64,
+    halve_u32, Field, FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField,
+    PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;

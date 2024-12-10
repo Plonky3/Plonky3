@@ -1,4 +1,4 @@
-use p3_field::Field;
+use p3_field::{exponentiation::exp_1420470955, Field, FieldAlgebra};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,

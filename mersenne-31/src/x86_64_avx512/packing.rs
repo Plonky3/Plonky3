@@ -3,10 +3,10 @@ use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-
+use p3_field::exponentiation::exp_1717986917;
 use p3_field::{
-    exp_1717986917, Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2,
-    PackedValue, PermutationMonomial,
+    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial,
 };
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};

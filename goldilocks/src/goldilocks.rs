@@ -6,11 +6,12 @@ use core::hash::{Hash, Hasher};
 use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use p3_field::exponentiation::exp_10540996611094048183;
 
 use num_bigint::BigUint;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, Field, FieldAlgebra,
-    InjectiveMonomial, Packable, PermutationMonomial, PrimeField, PrimeField64, TwoAdicField,
+    halve_u64, Field, FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField,
+    PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};

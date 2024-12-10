@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::Field;
+use p3_field::{Field, FieldAlgebra};
 
 use crate::MontyField31;
 
