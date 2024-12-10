@@ -168,11 +168,6 @@ impl FieldAlgebra for PackedGoldilocksAVX512 {
     const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_bool(b: bool) -> Self {
         Goldilocks::from_bool(b).into()
     }

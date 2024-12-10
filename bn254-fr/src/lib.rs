@@ -104,11 +104,6 @@ impl FieldAlgebra for Bn254Fr {
         0x30644e72e131a029,
     ]));
 
-    #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
     fn from_bool(b: bool) -> Self {
         Self::new(FFBn254Fr::from(b as u64))
     }

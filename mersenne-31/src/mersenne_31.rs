@@ -122,11 +122,6 @@ impl FieldAlgebra for Mersenne31 {
     };
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
-    #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b as u32)
     }

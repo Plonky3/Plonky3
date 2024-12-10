@@ -50,7 +50,7 @@ pub fn matmul_internal<F: Field, FA: FieldAlgebra<F = F>, const WIDTH: usize>(
 ) {
     let sum: FA = state.iter().cloned().sum();
     for i in 0..WIDTH {
-        state[i] *= FA::from_f(mat_internal_diag_m_1[i]);
+        state[i] *= mat_internal_diag_m_1[i];
         state[i] += sum.clone();
     }
 }

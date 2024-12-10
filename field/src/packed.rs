@@ -1,5 +1,5 @@
 use core::mem::MaybeUninit;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
+use core::ops::Div;
 use core::slice;
 
 use crate::field::Field;
@@ -132,13 +132,6 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 /// - See `PackedValue` above.
 pub unsafe trait PackedField: FieldAlgebra<F = Self::Scalar>
     + PackedValue<Value = Self::Scalar>
-    + From<Self::Scalar>
-    + Add<Self::Scalar, Output = Self>
-    + AddAssign<Self::Scalar>
-    + Sub<Self::Scalar, Output = Self>
-    + SubAssign<Self::Scalar>
-    + Mul<Self::Scalar, Output = Self>
-    + MulAssign<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {

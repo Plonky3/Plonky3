@@ -32,6 +32,16 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> Default
     }
 }
 
+impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+{
+    fn from(x: BinomialExtensionField<F, D>) -> Self {
+        Self {
+            value: x.value.map(Into::<PF>::into),
+        }
+    }
+}
+
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<PF>
     for PackedBinomialExtensionField<F, PF, D>
 {
@@ -64,13 +74,6 @@ where
     const NEG_ONE: Self = Self {
         value: field_to_array::<PF, D>(PF::NEG_ONE),
     };
-
-    #[inline]
-    fn from_f(f: Self::F) -> Self {
-        Self {
-            value: f.value.map(PF::from_f),
-        }
-    }
 
     #[inline]
     fn from_bool(b: bool) -> Self {
@@ -118,7 +121,7 @@ where
             2 => {
                 let a = self.value;
                 let mut res = Self::default();
-                res.value[0] = a[0].square() + a[1].square() * PF::from_f(F::W);
+                res.value[0] = a[0].square() + a[1].square() * F::W;
                 res.value[1] = a[0] * a[1].double();
                 res
             }
@@ -211,6 +214,24 @@ where
     }
 }
 
+impl<F, PF, const D: usize> Add<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        let mut res = self.value;
+        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
+            *r += rhs_val;
+        }
+        Self { value: res }
+    }
+}
+
 impl<F, PF, const D: usize> Add<PF> for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -232,6 +253,20 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
+        for i in 0..D {
+            self.value[i] += rhs.value[i];
+        }
+    }
+}
+
+impl<F, PF, const D: usize> AddAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn add_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
         for i in 0..D {
             self.value[i] += rhs.value[i];
         }
@@ -276,6 +311,24 @@ where
     }
 }
 
+impl<F, PF, const D: usize> Sub<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        let mut res = self.value;
+        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
+            *r -= rhs_val;
+        }
+        Self { value: res }
+    }
+}
+
 impl<F, PF, const D: usize> Sub<PF> for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -302,6 +355,18 @@ where
     }
 }
 
+impl<F, PF, const D: usize> SubAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn sub_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
+        *self = *self - rhs;
+    }
+}
+
 impl<F, PF, const D: usize> SubAssign<PF> for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
@@ -322,6 +387,45 @@ where
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
+        let a = self.value;
+        let b = rhs.value;
+        let mut res = Self::default();
+        let w: PF = F::W.into();
+
+        match D {
+            2 => {
+                res.value[0] = a[0] * b[0] + a[1] * w * b[1];
+                res.value[1] = a[0] * b[1] + a[1] * b[0];
+            }
+            3 => cubic_mul(&a, &b, &mut res.value, w),
+            _ =>
+            {
+                #[allow(clippy::needless_range_loop)]
+                for i in 0..D {
+                    for j in 0..D {
+                        if i + j >= D {
+                            res.value[i + j - D] += a[i] * w * b[j];
+                        } else {
+                            res.value[i + j] += a[i] * b[j];
+                        }
+                    }
+                }
+            }
+        }
+        res
+    }
+}
+
+impl<F, PF, const D: usize> Mul<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: BinomialExtensionField<F, D>) -> Self {
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
@@ -383,6 +487,18 @@ where
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl<F, PF, const D: usize> MulAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn mul_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
         *self = *self * rhs;
     }
 }

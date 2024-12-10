@@ -43,11 +43,6 @@ impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     const TWO: Self = FieldArray([F::TWO; N]);
     const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
 
-    #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
     fn from_bool(b: bool) -> Self {
         [F::from_bool(b); N].into()
     }

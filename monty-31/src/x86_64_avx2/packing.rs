@@ -481,11 +481,6 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_bool(b: bool) -> Self {
         MontyField31::from_bool(b).into()
     }

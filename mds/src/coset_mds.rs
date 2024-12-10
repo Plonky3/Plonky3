@@ -66,7 +66,7 @@ where
 
         // Multiply by powers of the coset shift (see default coset LDE impl for an explanation)
         for (value, weight) in values.iter_mut().zip(self.weights) {
-            *value = value.clone() * FA::from_f(weight);
+            *value = value.clone() * weight;
         }
 
         // DFT, assuming bit-reversed input.

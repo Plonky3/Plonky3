@@ -321,11 +321,6 @@ impl FieldAlgebra for PackedMersenne31Neon {
     const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_bool(b: bool) -> Self {
         Mersenne31::from_bool(b).into()
     }
