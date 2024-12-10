@@ -8,42 +8,7 @@ use p3_poseidon2::GenericPoseidon2LinearLayers;
 use tracing::instrument;
 
 use crate::columns::{num_cols, Poseidon2Cols};
-use crate::{FullRound, PartialRound, RoundConstants, SBox, VectorizedPoseidon2Air};
-
-impl<
-        F: PrimeField,
-        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-        const VECTOR_LEN: usize,
-    >
-    VectorizedPoseidon2Air<
-        F,
-        LinearLayers,
-        WIDTH,
-        SBOX_DEGREE,
-        SBOX_REGISTERS,
-        HALF_FULL_ROUNDS,
-        PARTIAL_ROUNDS,
-        VECTOR_LEN,
-    >
-{
-    pub fn generate_vectorized_trace_rows(&self, inputs: Vec<[F; WIDTH]>) -> RowMajorMatrix<F> {
-        generate_vectorized_trace_rows::<
-            F,
-            LinearLayers,
-            WIDTH,
-            SBOX_DEGREE,
-            SBOX_REGISTERS,
-            HALF_FULL_ROUNDS,
-            PARTIAL_ROUNDS,
-            VECTOR_LEN,
-        >(inputs, &self.air.constants)
-    }
-}
+use crate::{FullRound, PartialRound, RoundConstants, SBox};
 
 #[instrument(name = "generate vectorized Poseidon2 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<

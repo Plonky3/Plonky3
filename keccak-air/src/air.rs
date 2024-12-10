@@ -1,18 +1,28 @@
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_air::utils::{andn, xor, xor3};
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::FieldAlgebra;
+use p3_field::{FieldAlgebra, PrimeField64};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use rand::random;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::round_flags::eval_round_flags;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
+use crate::{generate_trace_rows, BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
 pub struct KeccakAir {}
+
+impl KeccakAir {
+    pub fn generate_trace_rows<F: PrimeField64>(&self, num_hashes: usize) -> RowMajorMatrix<F> {
+        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+        generate_trace_rows(inputs)
+    }
+}
 
 impl<F> BaseAir<F> for KeccakAir {
     fn width(&self) -> usize {

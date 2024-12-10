@@ -10,6 +10,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+rand.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -30,11 +31,16 @@ p3-poseidon2.workspace = true
 p3-sha256.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
-rand.workspace = true
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 asm = ["p3-sha256/asm"]
-nightly-features = ["p3-goldilocks/nightly-features", "p3-monty-31/nightly-features", "p3-baby-bear/nightly-features", "p3-koala-bear/nightly-features", "p3-mersenne-31/nightly-features"]
+nightly-features = [
+    "p3-goldilocks/nightly-features",
+    "p3-monty-31/nightly-features",
+    "p3-baby-bear/nightly-features",
+    "p3-koala-bear/nightly-features",
+    "p3-mersenne-31/nightly-features",
+]
