@@ -6,11 +6,11 @@ use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_keccak_air::KeccakAir;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::{random, thread_rng};
+use rand::thread_rng;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -58,8 +58,8 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
+    let keccak_air = KeccakAir {};
+    let trace = keccak_air.generate_trace_rows::<Val>(NUM_HASHES);
 
     let dft = Dft::default();
 
@@ -76,8 +76,8 @@ fn main() -> Result<(), impl Debug> {
     let config = MyConfig::new(pcs);
 
     let mut challenger = Challenger::new(perm24.clone());
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &keccak_air, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::new(perm24);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &keccak_air, &mut challenger, &proof, &vec![])
 }

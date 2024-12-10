@@ -8,11 +8,12 @@ use p3_challenger::SerializingChallenger32;
 use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{ExtensionField, Field, PrimeField32, TwoAdicField};
+use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
@@ -21,7 +22,7 @@ use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, Serializing
 use p3_uni_stark::{prove, verify, StarkConfig, SymbolicExpression};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
-use rand::{random, thread_rng};
+use rand::thread_rng;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -57,6 +58,39 @@ enum ProofGoal<
             VECTOR_LEN,
         >,
     ),
+}
+
+impl<
+        F: PrimeField64,
+        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+        const WIDTH: usize,
+        const SBOX_DEGREE: u64,
+        const SBOX_REGISTERS: usize,
+        const HALF_FULL_ROUNDS: usize,
+        const PARTIAL_ROUNDS: usize,
+        const VECTOR_LEN: usize,
+    >
+    ProofGoal<
+        F,
+        LinearLayers,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+        VECTOR_LEN,
+    >
+{
+    fn generate_trace_rows(&self, num_hashes: usize) -> RowMajorMatrix<F>
+    where
+        Standard: Distribution<F>,
+    {
+        match self {
+            ProofGoal::Blake3(ref b3_air) => b3_air.generate_trace_rows(num_hashes),
+            ProofGoal::Poseidon2(ref p2_air) => p2_air.generate_vectorized_trace_rows(num_hashes),
+            ProofGoal::Keccak(ref k_air) => k_air.generate_trace_rows(num_hashes),
+        }
+    }
 }
 
 fn prove_hashes<
@@ -110,26 +144,7 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
 
-    let trace = match proof_goal {
-        ProofGoal::Blake3(_) => {
-            let inputs = (0..num_hashes)
-                .map(|_| random::<[u32; 24]>())
-                .collect::<Vec<_>>();
-            p3_blake3_air::generate_trace_rows(inputs)
-        }
-        ProofGoal::Poseidon2(ref p2_air) => {
-            let inputs = (0..num_hashes)
-                .map(|_| random::<[F; P2_WIDTH]>())
-                .collect::<Vec<_>>();
-            p2_air.generate_vectorized_trace_rows(inputs)
-        }
-        ProofGoal::Keccak(_) => {
-            let inputs = (0..num_hashes)
-                .map(|_| random::<[u64; 25]>())
-                .collect::<Vec<_>>();
-            p3_keccak_air::generate_trace_rows(inputs)
-        }
-    };
+    let trace = proof_goal.generate_trace_rows(num_hashes);
 
     let fri_config = FriConfig {
         log_blowup: 1,

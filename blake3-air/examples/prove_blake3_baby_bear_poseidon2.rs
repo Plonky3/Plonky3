@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_blake3_air::{generate_trace_rows, Blake3Air};
+use p3_blake3_air::Blake3Air;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
@@ -11,7 +11,7 @@ use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::{random, thread_rng};
+use rand::thread_rng;
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -54,8 +54,8 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
+    let blake3_air = Blake3Air {};
+    let trace = blake3_air.generate_trace_rows::<Val>(NUM_HASHES);
 
     let fri_config = FriConfig {
         log_blowup: 1,

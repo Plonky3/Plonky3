@@ -11,7 +11,7 @@ use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::rngs::{StdRng, ThreadRng};
-use rand::{random, thread_rng, SeedableRng};
+use rand::{thread_rng, SeedableRng};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
@@ -78,7 +78,6 @@ fn main() -> Result<(), impl Debug> {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
-    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersBabyBear,
@@ -90,7 +89,7 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let trace = air.generate_vectorized_trace_rows(inputs);
+    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS);
 
     let dft = Dft::default();
 
