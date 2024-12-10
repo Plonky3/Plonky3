@@ -18,7 +18,7 @@ use core::marker::PhantomData;
 pub use external::*;
 pub use generic::*;
 pub use internal::*;
-use p3_field::{Field, FieldAlgebra, PrimeField, PrimeField64};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -96,8 +96,8 @@ where
 impl<FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[FA; WIDTH]>
     for Poseidon2<<FA::F as Field>::Packing, ExternalPerm, InternalPerm, WIDTH, D>
 where
-    FA: FieldAlgebra + Sync,
-    FA::F: PrimeField,
+    FA: FieldAlgebra + Sync + InjectiveMonomial<D>,
+    FA::F: PrimeField + InjectiveMonomial<D>,
     ExternalPerm: ExternalLayer<FA, WIDTH, D>,
     InternalPerm: InternalLayer<FA, WIDTH, D>,
 {
@@ -112,8 +112,8 @@ impl<FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
     CryptographicPermutation<[FA; WIDTH]>
     for Poseidon2<<FA::F as Field>::Packing, ExternalPerm, InternalPerm, WIDTH, D>
 where
-    FA: FieldAlgebra + Sync,
-    FA::F: PrimeField,
+    FA: FieldAlgebra + Sync + InjectiveMonomial<D>,
+    FA::F: PrimeField + InjectiveMonomial<D>,
     ExternalPerm: ExternalLayer<FA, WIDTH, D>,
     InternalPerm: InternalLayer<FA, WIDTH, D>,
 {

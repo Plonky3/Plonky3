@@ -80,6 +80,13 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
 }
 
+/// An integer `D` such that `gcd(D, p - 1) = 1`.
+pub trait RelativelyPrimePower<const D: u64> {
+    /// Compute `x -> x^{1/D}` using the modular inverse
+    /// of `D mod p - 1`.
+    fn exp_root_d<FA: FieldAlgebra>(val: FA) -> FA;
+}
+
 /// TwoAdicData contains constants needed to imply TwoAdicField for Monty31 fields.
 pub trait TwoAdicData: MontyParameters {
     /// Largest n such that 2^n divides p - 1.

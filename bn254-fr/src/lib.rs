@@ -12,7 +12,7 @@ use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::Poseidon2Bn254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -141,6 +141,14 @@ impl FieldAlgebra for Bn254Fr {
         Self::new(FFBn254Fr::from(n))
     }
 }
+
+/// Degree of the smallest permutation polynomial for BN254.
+///
+/// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for Bn254Fr {}
+
+// TODO: Implement PermutationMonomial<5> for Bn254Fr.
+// Not a priority given how slow (and unused) this will be.
 
 impl Field for Bn254Fr {
     type Packing = Self;
