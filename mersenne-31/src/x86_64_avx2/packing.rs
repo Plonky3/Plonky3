@@ -3,6 +3,7 @@ use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::{
     Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,

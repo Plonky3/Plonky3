@@ -6,9 +6,9 @@ use core::hash::{Hash, Hasher};
 use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::exponentiation::exp_10540996611094048183;
 
 use num_bigint::BigUint;
+use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::{
     halve_u64, Field, FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField,
     PrimeField64, TwoAdicField,
