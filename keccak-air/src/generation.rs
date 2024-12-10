@@ -13,7 +13,7 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 #[instrument(name = "generate Keccak trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
-    let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
+    let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two() + 1;
     let mut trace =
         RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
@@ -21,9 +21,25 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
+    let (main_rows, export_row) = rows.split_at_mut(rows.len() - 1);
+
     let padded_inputs = inputs.into_iter().chain(iter::repeat([0; 25]));
-    for (row, input) in rows.chunks_mut(NUM_ROUNDS).zip(padded_inputs) {
+    for (row, input) in main_rows.chunks_mut(NUM_ROUNDS).zip(padded_inputs) {
         generate_trace_rows_for_perm(row, input);
+    }
+
+    // Generate export row
+    let exp_row = &mut export_row[0];
+    let last_main_row = &main_rows[main_rows.len() - 1];
+    exp_row.export = F::one();
+    exp_row.step_flags[NUM_ROUNDS - 1] = F::one();
+    for y in 0..5 {
+        for x in 0..5 {
+            for limb in 0..U64_LIMBS {
+                exp_row.preimage[y][x][limb] = last_main_row.preimage[y][x][limb];
+                exp_row.postimage[y][x][limb] = last_main_row.a_prime_prime_prime(x, y, limb);
+            }
+        }
     }
 
     trace
@@ -154,4 +170,5 @@ fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round:
         row.a_prime_prime_prime_0_0_limbs[limb] =
             F::from_canonical_u8(row.a_prime_prime[0][0][limb].as_canonical_u64() as u8 ^ rc_lo);
     }
+
 }
