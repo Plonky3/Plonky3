@@ -279,11 +279,8 @@ where
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let mut res = self.value;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
-            *r += rhs_val;
-        }
-        Self { value: res }
+        let value = vector_add(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -339,11 +336,8 @@ where
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let mut res = self.value;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
-            *r -= rhs_val;
-        }
-        Self { value: res }
+        let value = vector_sub(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -394,26 +388,8 @@ where
         let mut res = Self::default();
         let w = F::W;
 
-        match D {
-            2 => {
-                res.value[0] = a[0] * b[0] + a[1] * w * b[1];
-                res.value[1] = a[0] * b[1] + a[1] * b[0];
-            }
-            3 => cubic_mul(&a, &b, &mut res.value, w),
-            _ =>
-            {
-                #[allow(clippy::needless_range_loop)]
-                for i in 0..D {
-                    for j in 0..D {
-                        if i + j >= D {
-                            res.value[i + j - D] += a[i] * w * b[j];
-                        } else {
-                            res.value[i + j] += a[i] * b[j];
-                        }
-                    }
-                }
-            }
-        }
+        binomial_mul(&a, &b, &mut res.value, w);
+
         res
     }
 }
@@ -547,6 +523,58 @@ impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
     fn two_adic_generator(bits: usize) -> Self {
         Self {
             value: F::ext_two_adic_generator(bits),
+        }
+    }
+}
+
+/// Add two vectors element wise.
+#[inline]
+pub(crate) fn vector_add<FA: FieldAlgebra + Add<FA2, Output = FA>, FA2: Clone, const D: usize>(
+    a: &[FA; D],
+    b: &[FA2; D],
+) -> [FA; D] {
+    array::from_fn(|i| a[i].clone() + b[i].clone())
+}
+
+/// Subtract two vectors element wise.
+#[inline]
+pub(crate) fn vector_sub<FA: FieldAlgebra + Sub<FA2, Output = FA>, FA2: Clone, const D: usize>(
+    a: &[FA; D],
+    b: &[FA2; D],
+) -> [FA; D] {
+    array::from_fn(|i| a[i].clone() - b[i].clone())
+}
+
+/// Multiply two vectors representing elements in a binomial extension.
+#[inline]
+pub(super) fn binomial_mul<
+    FA: FieldAlgebra + Mul<FA2, Output = FA>,
+    FA2: Add<Output = FA2> + Clone,
+    const D: usize,
+>(
+    a: &[FA; D],
+    b: &[FA2; D],
+    res: &mut [FA; D],
+    w: FA,
+) {
+    match D {
+        2 => {
+            res[0] = a[0].clone() * b[0].clone() + a[1].clone() * w * b[1].clone();
+            res[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
+        }
+        3 => cubic_mul(a, b, res, w),
+        _ =>
+        {
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..D {
+                for j in 0..D {
+                    if i + j >= D {
+                        res[i + j - D] += a[i].clone() * w.clone() * b[j].clone();
+                    } else {
+                        res[i + j] += a[i].clone() * b[j].clone();
+                    }
+                }
+            }
         }
     }
 }

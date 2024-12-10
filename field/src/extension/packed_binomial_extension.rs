@@ -7,7 +7,7 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_util::convert_vec;
 use serde::{Deserialize, Serialize};
 
-use super::{cubic_mul, cubic_square, BinomialExtensionField};
+use super::{binomial_mul, cubic_square, vector_add, vector_sub, BinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{field_to_array, FieldAlgebra, FieldExtensionAlgebra, PackedField};
@@ -206,11 +206,8 @@ where
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let mut res = self.value;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
-            *r += rhs_val;
-        }
-        Self { value: res }
+        let value = vector_add(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -224,11 +221,8 @@ where
 
     #[inline]
     fn add(self, rhs: BinomialExtensionField<F, D>) -> Self {
-        let mut res = self.value;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
-            *r += rhs_val;
-        }
-        Self { value: res }
+        let value = vector_add(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -303,11 +297,8 @@ where
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let mut res = self.value;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
-            *r -= rhs_val;
-        }
-        Self { value: res }
+        let value = vector_sub(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -321,11 +312,8 @@ where
 
     #[inline]
     fn sub(self, rhs: BinomialExtensionField<F, D>) -> Self {
-        let mut res = self.value;
-        for (r, rhs_val) in res.iter_mut().zip(rhs.value) {
-            *r -= rhs_val;
-        }
-        Self { value: res }
+        let value = vector_sub(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -392,26 +380,8 @@ where
         let mut res = Self::default();
         let w: PF = F::W.into();
 
-        match D {
-            2 => {
-                res.value[0] = a[0] * b[0] + a[1] * w * b[1];
-                res.value[1] = a[0] * b[1] + a[1] * b[0];
-            }
-            3 => cubic_mul(&a, &b, &mut res.value, w),
-            _ =>
-            {
-                #[allow(clippy::needless_range_loop)]
-                for i in 0..D {
-                    for j in 0..D {
-                        if i + j >= D {
-                            res.value[i + j - D] += a[i] * w * b[j];
-                        } else {
-                            res.value[i + j] += a[i] * b[j];
-                        }
-                    }
-                }
-            }
-        }
+        binomial_mul(&a, &b, &mut res.value, w);
+
         res
     }
 }
@@ -431,26 +401,8 @@ where
         let mut res = Self::default();
         let w: PF = F::W.into();
 
-        match D {
-            2 => {
-                res.value[0] = a[0] * b[0] + a[1] * w * b[1];
-                res.value[1] = a[0] * b[1] + a[1] * b[0];
-            }
-            3 => cubic_mul(&a, &b, &mut res.value, w),
-            _ =>
-            {
-                #[allow(clippy::needless_range_loop)]
-                for i in 0..D {
-                    for j in 0..D {
-                        if i + j >= D {
-                            res.value[i + j - D] += a[i] * w * b[j];
-                        } else {
-                            res.value[i + j] += a[i] * b[j];
-                        }
-                    }
-                }
-            }
-        }
+        binomial_mul(&a, &b, &mut res.value, w);
+
         res
     }
 }
