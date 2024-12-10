@@ -116,7 +116,7 @@ where
         FA: FieldAlgebra<F = F>,
     {
         for (i, x) in state.iter_mut().enumerate() {
-            *x += FA::from_f(self.constants[round * WIDTH + i]);
+            *x += self.constants[round * WIDTH + i];
         }
     }
 }

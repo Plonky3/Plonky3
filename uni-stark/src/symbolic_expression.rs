@@ -82,11 +82,6 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     const TWO: Self = Self::Constant(F::TWO);
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
-    #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
     fn from_bool(b: bool) -> Self {
         Self::Constant(F::from_bool(b))
     }

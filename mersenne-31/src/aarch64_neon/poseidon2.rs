@@ -107,7 +107,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut neon_input = input.map(PackedMersenne31Neon::from_f);
+        let mut neon_input = input.map(Into::<PackedMersenne31Neon>::into);
         poseidon2.permute_mut(&mut neon_input);
 
         let neon_output = neon_input.map(|x| x.0[0]);
@@ -128,7 +128,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut neon_input = input.map(PackedMersenne31Neon::from_f);
+        let mut neon_input = input.map(Into::<PackedMersenne31Neon>::into);
         poseidon2.permute_mut(&mut neon_input);
 
         let neon_output = neon_input.map(|x| x.0[0]);

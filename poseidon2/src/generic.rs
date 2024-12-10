@@ -27,7 +27,7 @@ pub fn add_rc_and_sbox_generic<FA: FieldAlgebra + InjectiveMonomial<D>, const D:
     val: &mut FA,
     rc: FA::F,
 ) {
-    *val += FA::from_f(rc);
+    *val += rc;
     *val = val.injective_exp_n();
 }
 

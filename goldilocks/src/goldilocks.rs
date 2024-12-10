@@ -100,11 +100,6 @@ impl FieldAlgebra for Goldilocks {
     const TWO: Self = Self::new(2);
     const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
-    #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
     }

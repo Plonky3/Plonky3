@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 
 use p3_air::{AirBuilder, AirBuilderWithPublicValues};
-use p3_field::FieldAlgebra;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 
@@ -66,7 +65,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: PackedVal<SC> = x.into();
         let alpha_power = self.alpha_powers[self.constraint_index];
-        self.accumulator += PackedChallenge::<SC>::from_f(alpha_power) * x;
+        self.accumulator += Into::<PackedChallenge<SC>>::into(alpha_power) * x;
         self.constraint_index += 1;
     }
 }

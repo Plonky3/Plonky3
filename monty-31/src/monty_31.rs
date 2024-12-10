@@ -179,11 +179,6 @@ impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     const NEG_ONE: Self = FP::MONTY_NEG_ONE;
 
     #[inline(always)]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
-    #[inline(always)]
     fn from_bool(b: bool) -> Self {
         Self::from_canonical_u32(b as u32)
     }

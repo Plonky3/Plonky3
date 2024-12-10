@@ -308,7 +308,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx512_input = input.map(PackedMersenne31AVX512::from_f);
+        let mut avx512_input = input.map(Into::<PackedMersenne31AVX512>::into);
         poseidon2.permute_mut(&mut avx512_input);
 
         let avx512_output = avx512_input.map(|x| x.0[0]);
@@ -329,7 +329,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx512_input = input.map(PackedMersenne31AVX512::from_f);
+        let mut avx512_input = input.map(Into::<PackedMersenne31AVX512>::into);
         poseidon2.permute_mut(&mut avx512_input);
 
         let avx512_output = avx512_input.map(|x| x.0[0]);

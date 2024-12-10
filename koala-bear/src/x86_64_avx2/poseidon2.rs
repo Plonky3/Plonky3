@@ -193,7 +193,6 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalL
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
@@ -216,7 +215,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedKoalaBearAVX2::from_f);
+        let mut avx2_input = input.map(Into::<PackedKoalaBearAVX2>::into);
         poseidon2.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -237,7 +236,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedKoalaBearAVX2::from_f);
+        let mut avx2_input = input.map(Into::<PackedKoalaBearAVX2>::into);
         poseidon2.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);

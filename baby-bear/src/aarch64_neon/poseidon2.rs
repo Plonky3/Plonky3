@@ -28,7 +28,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut neon_input = input.map(PackedBabyBearNeon::from_f);
+        let mut neon_input = input.map(Into::<PackedBabyBearNeon>::into);
         poseidon2.permute_mut(&mut neon_input);
 
         let neon_output = neon_input.map(|x| x.0[0]);
@@ -49,7 +49,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut neon_input = input.map(PackedBabyBearNeon::from_f);
+        let mut neon_input = input.map(Into::<PackedBabyBearNeon>::into);
         poseidon2.permute_mut(&mut neon_input);
 
         let neon_output = neon_input.map(|x| x.0[0]);
