@@ -10,6 +10,7 @@ members = [
     "circle",
     "commit",
     "dft",
+    "examples",
     "field",
     "field-testing",
     "fri",
@@ -76,6 +77,7 @@ p3-challenger = { path = "challenger", version = "0.1.0" }
 p3-circle = { path = "circle", version = "0.1.0" }
 p3-commit = { path = "commit", version = "0.1.0" }
 p3-dft = { path = "dft", version = "0.1.0" }
+p3-examples = { path = "examples", version = "0.1.0" }
 p3-field = { path = "field", version = "0.1.0" }
 p3-field-testing = { path = "field-testing", version = "0.1.0" }
 p3-fri = { path = "fri", version = "0.1.0" }
