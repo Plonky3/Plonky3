@@ -45,10 +45,10 @@ fn main() {
 
     match args[1].as_ref() {
         "K" | "KoalaBear" | "KOALABEAR" => {
-            println!("Choice of Field: KoalaBear");
+            println!("Field: KoalaBear");
         }
         "B" | "BabyBear" | "BABYBEAR" => {
-            println!("Choice of Field: BabyBear");
+            println!("Field: BabyBear");
         }
         _ => panic!("Could not understand the choice of field. Use \"B\" to prove using the BabyBear Field or \"K\" to use the Keccak Field.")
     };
@@ -82,10 +82,10 @@ fn main() {
 
     match args[4].as_ref() {
         "R" | "Recursive" => {
-            println!("Choice of DFT: RecursiveDft");
+            println!("DFT: RecursiveDft");
         }
         "P" | "Parallel" => {
-            println!("Choice of DFT: Radix2DitParallel");
+            println!("DFT: Radix2DitParallel");
         }
         _ => {
             panic!("Could not understand the Fourier transform method. Use \"R\" for the Recursive DFT or \"P\" for the Parallel DFT.")
@@ -94,10 +94,10 @@ fn main() {
 
     match args[5].as_ref() {
         "K" | "Keccak" | "KECCAK" => {
-            println!("Choice of Hash for Merkle Tree: Keccak");
+            println!("Merkle Tree Hash: Keccak");
         }
         "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
-            println!("Choice of Hash for Merkle Tree: Poseidon2");
+            println!("Merkle Tree Hash: Poseidon2");
         }
         _ => {
             panic!("Could not understand the desired merkle hash function. Use \"K\" or \"P\" to hash using Keccak or Poseidon2")

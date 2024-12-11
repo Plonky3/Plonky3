@@ -67,9 +67,9 @@ Poseidon2
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_poseidon2_koala_bear_keccak --release --features parallel
 ```
 
-Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the Merkle tree.
+Prove 1365 Keccak-f permutations, using the `BabyBear` field, `Radix2DitParallel` DFT and `Keccak` hash for the Merkle tree.
 ```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31_keccak --release --features parallel -- B K 15 P K
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31 --release --features parallel -- B K 15 P K
 ```
 
 The 5 commandline arguments allow control of
