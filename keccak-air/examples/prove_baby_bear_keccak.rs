@@ -55,7 +55,7 @@ fn main() -> Result<(), VerificationError> {
     type Challenger = DuplexChallenger<Val, Perm, 16>;
 
     let fri_config = FriConfig {
-        log_blowup: 1,
+        log_blowup: 2,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,

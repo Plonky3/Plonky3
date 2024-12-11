@@ -32,7 +32,6 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
 
         // If this is not the final step, the export flag must be off.
         let final_step = local.step_flags[NUM_ROUNDS - 1];
-        let not_export = AB::Expr::one() - local.export.clone();
         let not_final_step = AB::Expr::one() - final_step;
         builder
             .when(not_final_step.clone())
@@ -60,7 +59,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 );
                 let c_prime = local.c_prime[x][z];
                 builder
-                    .when(not_export.clone())
+                    .when(not_final_step.clone())
                     .assert_eq(c_prime, xor);
             }
         }
@@ -86,7 +85,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                         .rev()
                         .fold(AB::Expr::zero(), |acc, z| acc.double() + get_bit(z));
                     builder
-                        .when(not_export.clone())
+                        .when(not_final_step.clone())
                         .assert_eq(computed_limb, a_limb);
                 }
             }
@@ -101,7 +100,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 let diff = sum - local.c_prime[x][z];
                 let four = AB::Expr::from_canonical_u8(4);
                 builder
-                    .when(not_export.clone())
+                    .when(not_final_step.clone())
                     .assert_zero(diff.clone() * (diff.clone() - AB::Expr::two()) * (diff - four));
             }
         }
@@ -122,7 +121,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                         .rev()
                         .fold(AB::Expr::zero(), |acc, z| acc.double() + get_bit(z));
                     builder
-                        .when(not_export.clone())
+                        .when(not_final_step.clone())
                         .assert_eq(computed_limb, local.a_prime_prime[y][x][limb]);
                 }
             }
@@ -138,7 +137,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 });
             let a_prime_prime_0_0_limb = local.a_prime_prime[0][0][limb];
             builder
-                .when(not_export.clone())
+                .when(not_final_step.clone())
                 .assert_eq(computed_a_prime_prime_0_0_limb, a_prime_prime_0_0_limb);
         }
 
@@ -160,7 +159,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 .rev()
                 .fold(AB::Expr::zero(), |acc, z| acc.double() + get_xored_bit(z));
             builder
-                .when(not_export.clone())
+                .when(not_final_step.clone())
                 .assert_eq(
                 computed_a_prime_prime_prime_0_0_limb,
                 a_prime_prime_prime_0_0_limb,
@@ -176,7 +175,6 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     builder
                         .when_transition()
                         .when(not_final_step.clone())
-                        .when(not_export.clone())
                         .assert_eq(output, input);
                 }
             }

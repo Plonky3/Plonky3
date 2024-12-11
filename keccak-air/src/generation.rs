@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
-
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
@@ -13,7 +12,8 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 #[instrument(name = "generate Keccak trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
-    let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two() + 1;
+    let used_rows = inputs.len() * NUM_ROUNDS + 1;
+    let num_rows = used_rows.next_power_of_two();
     let mut trace =
         RowMajorMatrix::new(vec![F::zero(); num_rows * NUM_KECCAK_COLS], NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
@@ -21,7 +21,7 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
-    let (main_rows, export_row) = rows.split_at_mut(rows.len() - 1);
+    let (main_rows, remaining) = rows.split_at_mut(used_rows - 1);
 
     let padded_inputs = inputs.into_iter().chain(iter::repeat([0; 25]));
     for (row, input) in main_rows.chunks_mut(NUM_ROUNDS).zip(padded_inputs) {
@@ -29,10 +29,10 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
     }
 
     // Generate export row
-    let exp_row = &mut export_row[0];
+    let exp_row = &mut remaining[0];
     let last_main_row = &main_rows[main_rows.len() - 1];
     exp_row.export = F::one();
-    exp_row.step_flags[NUM_ROUNDS - 1] = F::one();
+    exp_row.step_flags[NUM_ROUNDS-1] = F::one();
     for y in 0..5 {
         for x in 0..5 {
             for limb in 0..U64_LIMBS {
