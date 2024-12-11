@@ -1,3 +1,4 @@
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_blake3_air::Blake3Air;
 use p3_field::{Field, PrimeField64};
 use p3_keccak_air::KeccakAir;
@@ -7,6 +8,7 @@ use p3_poseidon2_air::VectorizedPoseidon2Air;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
+/// An enum containing the three different AIR's.
 pub enum ProofGoal<
     F: Field,
     LinearLayers,
@@ -62,6 +64,66 @@ impl<
             ProofGoal::Blake3(ref b3_air) => b3_air.generate_trace_rows(num_hashes),
             ProofGoal::Poseidon2(ref p2_air) => p2_air.generate_vectorized_trace_rows(num_hashes),
             ProofGoal::Keccak(ref k_air) => k_air.generate_trace_rows(num_hashes),
+        }
+    }
+}
+
+impl<
+        F: Field,
+        LinearLayers: Sync,
+        const WIDTH: usize,
+        const SBOX_DEGREE: u64,
+        const SBOX_REGISTERS: usize,
+        const HALF_FULL_ROUNDS: usize,
+        const PARTIAL_ROUNDS: usize,
+        const VECTOR_LEN: usize,
+    > BaseAir<F>
+    for ProofGoal<
+        F,
+        LinearLayers,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+        VECTOR_LEN,
+    >
+{
+    fn width(&self) -> usize {
+        match self {
+            ProofGoal::Blake3(ref b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
+            ProofGoal::Poseidon2(ref p2_air) => p2_air.width(),
+            ProofGoal::Keccak(ref k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
+        }
+    }
+}
+
+impl<
+        AB: AirBuilder,
+        LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+        const WIDTH: usize,
+        const SBOX_DEGREE: u64,
+        const SBOX_REGISTERS: usize,
+        const HALF_FULL_ROUNDS: usize,
+        const PARTIAL_ROUNDS: usize,
+        const VECTOR_LEN: usize,
+    > Air<AB>
+    for ProofGoal<
+        AB::F,
+        LinearLayers,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+        VECTOR_LEN,
+    >
+{
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            ProofGoal::Blake3(ref b3_air) => b3_air.eval(builder),
+            ProofGoal::Poseidon2(ref p2_air) => p2_air.eval(builder),
+            ProofGoal::Keccak(ref k_air) => k_air.eval(builder),
         }
     }
 }

@@ -3,6 +3,9 @@ use p3_field::TwoAdicField;
 use p3_matrix::{bitrev::BitReversedMatrixView, dense::RowMajorMatrix};
 use p3_monty_31::dft::RecursiveDft;
 
+/// An enum containing several different options for discrete Fourier Transform.
+///
+/// This implements `TwoAdicSubgroupDft` by passing to whatever the contained struct is.
 #[derive(Clone, Debug)]
 pub enum DFTOptions<F> {
     Recursive(RecursiveDft<F>),

@@ -80,23 +80,8 @@ where
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], byte_hash);
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], byte_hash);
 
-    match proof_goal {
-        ProofGoal::Blake3(b3_air) => {
-            let proof = prove(&config, &b3_air, &mut proof_challenger, trace, &vec![]);
-
-            verify(&config, &b3_air, &mut verif_challenger, &proof, &vec![])
-        }
-        ProofGoal::Poseidon2(p2_air) => {
-            let proof = prove(&config, &p2_air, &mut proof_challenger, trace, &vec![]);
-
-            verify(&config, &p2_air, &mut verif_challenger, &proof, &vec![])
-        }
-        ProofGoal::Keccak(k_air) => {
-            let proof = prove(&config, &k_air, &mut proof_challenger, trace, &vec![]);
-
-            verify(&config, &k_air, &mut verif_challenger, &proof, &vec![])
-        }
-    }
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 pub fn prove_hashes_poseidon2<
@@ -159,23 +144,8 @@ where
     let mut proof_challenger = DuplexChallenger::<_, _, 24, 16>::new(perm24.clone());
     let mut verif_challenger = DuplexChallenger::new(perm24.clone());
 
-    match proof_goal {
-        ProofGoal::Blake3(b3_air) => {
-            let proof = prove(&config, &b3_air, &mut proof_challenger, trace, &vec![]);
-
-            verify(&config, &b3_air, &mut verif_challenger, &proof, &vec![])
-        }
-        ProofGoal::Poseidon2(p2_air) => {
-            let proof = prove(&config, &p2_air, &mut proof_challenger, trace, &vec![]);
-
-            verify(&config, &p2_air, &mut verif_challenger, &proof, &vec![])
-        }
-        ProofGoal::Keccak(k_air) => {
-            let proof = prove(&config, &k_air, &mut proof_challenger, trace, &vec![]);
-
-            verify(&config, &k_air, &mut verif_challenger, &proof, &vec![])
-        }
-    }
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 pub fn report_result(result: Result<(), impl Debug>) {
