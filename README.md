@@ -69,14 +69,15 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_poseidon2_koala_bear_k
 
 Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the Merkle tree.
 ```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31_keccak --release --features parallel -- B K 15 P
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31_keccak --release --features parallel -- B K 15 P K
 ```
 
-The 4 commandline arguments allow control of
+The 5 commandline arguments allow control of
 - Field: `K/B` for `KoalaBear/BabyBear`,
 - Proof statement: `B/P/K` for `Blake3` vs `Keccak` vs `Poseidon2` hashes.
 - Trace height: Given as the logarithm base `2`. Use `14/15/16` for `Blake3/Keccak/Poseidon2` respectively for proving times around one second.
-- DFFT: `P/R` for `Radix2DitParallel/RecursiveDft`. Currently, `Radix2DitParallel` is usually the faster option but this may change over time. 
+- DFFT: `P/R` for `Radix2DitParallel/RecursiveDft`. Currently, `Radix2DitParallel` is usually the faster option but this may change over time.
+- Merkle Hash: `P/K` to use `Poseidon2` vs `Keccak` to build the merkle tree.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.

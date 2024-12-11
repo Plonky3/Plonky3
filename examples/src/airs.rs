@@ -9,6 +9,8 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
 /// An enum containing the three different AIR's.
+///
+/// This implements `AIR` by passing to whatever the contained struct is.
 pub enum ProofGoal<
     F: Field,
     LinearLayers,
@@ -56,6 +58,7 @@ impl<
         VECTOR_LEN,
     >
 {
+    #[inline]
     pub fn generate_trace_rows(&self, num_hashes: usize) -> RowMajorMatrix<F>
     where
         Standard: Distribution<F>,
@@ -89,6 +92,7 @@ impl<
         VECTOR_LEN,
     >
 {
+    #[inline]
     fn width(&self) -> usize {
         match self {
             ProofGoal::Blake3(ref b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
@@ -119,6 +123,7 @@ impl<
         VECTOR_LEN,
     >
 {
+    #[inline]
     fn eval(&self, builder: &mut AB) {
         match self {
             ProofGoal::Blake3(ref b3_air) => b3_air.eval(builder),

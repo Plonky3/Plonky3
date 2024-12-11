@@ -1,6 +1,7 @@
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
-use p3_matrix::{bitrev::BitReversedMatrixView, dense::RowMajorMatrix};
+use p3_matrix::bitrev::BitReversedMatrixView;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_monty_31::dft::RecursiveDft;
 
 /// An enum containing several different options for discrete Fourier Transform.
@@ -26,6 +27,7 @@ where
 {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
 
+    #[inline]
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> Self::Evaluations {
         match self {
             DFTOptions::<F>::Recursive(inner_dft) => inner_dft.dft_batch(mat),
@@ -33,6 +35,7 @@ where
         }
     }
 
+    #[inline]
     fn coset_dft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
         match self {
             DFTOptions::<F>::Recursive(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
@@ -40,6 +43,7 @@ where
         }
     }
 
+    #[inline]
     fn coset_lde_batch(
         &self,
         mat: RowMajorMatrix<F>,

@@ -19,6 +19,13 @@ use rand::prelude::Distribution;
 
 use crate::airs::ProofGoal;
 
+/// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
+///
+/// This allows the user to choose:
+/// - The Field
+/// - The Proof Goal (Choice of Hash function and number of hashes to prove)
+/// - The DFT
+#[inline]
 pub fn prove_hashes_keccak<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -84,6 +91,13 @@ where
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
+/// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
+///
+/// This allows the user to choose:
+/// - The Field
+/// - The Proof Goal (Choice of Hash function and number of hashes to prove)
+/// - The DFT
+#[inline]
 pub fn prove_hashes_poseidon2<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -148,6 +162,7 @@ where
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
+#[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
     if result.is_ok() {
         println!("Proof Verified Successfully")
