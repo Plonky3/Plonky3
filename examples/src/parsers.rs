@@ -43,9 +43,7 @@ pub enum MerkleHashOptions {
 /// `get_aliases("koala-bear", 1, vec![("koalabear", 6), ("kb", 2)])` produces the following set of
 /// allowed strings:
 ///
-/// ```
-/// koala-bear, k, ko, koa, koal, koala, koala-, koala-b, koala-be, koala-bea, koalab, koalabe, koalabea, koalabear, kb
-/// ```
+/// `koala-bear, k, ko, koa, koal, koala, koala-, koala-b, koala-be, koala-bea, koalab, koalabe, koalabea, koalabear, kb`
 fn get_aliases(
     base: &'static str,
     min_unique_base_prefix: usize,
