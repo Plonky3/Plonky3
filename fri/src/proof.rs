@@ -12,8 +12,6 @@ use serde::{Deserialize, Serialize};
 pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
-    // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
-    // final polynomials.
     pub final_poly: Vec<F>,
     pub pow_witness: Witness,
 }

@@ -5,11 +5,12 @@ use core::iter;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
-use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
@@ -22,25 +23,23 @@ pub fn prove<G, Val, Challenge, M, Challenger>(
 ) -> FriProof<Challenge, M, Challenger::Witness, G::InputProof>
 where
     Val: Field,
-    Challenge: ExtensionField<Val>,
+    Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Challenge>,
 {
-    // check sorted descending
-    assert!(inputs
-        .iter()
-        .tuple_windows()
-        .all(|(l, r)| l.len() >= r.len()));
+    assert!(!inputs.is_empty());
+    assert!(
+        inputs
+            .iter()
+            .tuple_windows()
+            .all(|(l, r)| l.len() >= r.len()),
+        "Inputs are not sorted in descending order of length."
+    );
 
     let log_max_height = log2_strict_usize(inputs[0].len());
-
-    // We do not allow the prover to send polynomials in the clear.
-    inputs.iter().for_each(|v| {
-        if let Some(v) = v {
-            assert!(v.len() > config.log_final_poly_len + config.log_blowup);
-        }
-    });
+    let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
+    assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
 
     let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
@@ -82,7 +81,7 @@ fn commit_phase<G, Val, Challenge, M, Challenger>(
 ) -> CommitPhaseResult<Challenge, M>
 where
     Val: Field,
-    Challenge: ExtensionField<Val>,
+    Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
     G: FriGenericConfig<Challenge>,
@@ -92,13 +91,13 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.blowup() {
+    while folded.len() > config.blowup() + config.final_poly_len() {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
 
         let beta: Challenge = challenger.sample_ext_element();
-        // We passed ownership of folded to the MMCS, so get a reference to it
+        // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
         folded = g.fold_matrix(beta, leaves.as_view());
 

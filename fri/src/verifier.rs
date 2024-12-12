@@ -4,8 +4,9 @@ use alloc::vec::Vec;
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
+use p3_util::reverse_bits_len;
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
@@ -27,7 +28,7 @@ pub fn verify<G, Val, Challenge, M, Challenger>(
 ) -> Result<(), FriError<M::Error, G::InputError>>
 where
     Val: Field,
-    Challenge: ExtensionField<Val>,
+    Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Challenge>,
@@ -83,14 +84,14 @@ where
 
         let final_poly_index = index >> (proof.commit_phase_commits.len());
 
-        let mut eval = F::zero();
+        let mut eval = Challenge::ZERO;
 
         // We open the final polynomial at index `final_poly_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
         // `reverse_bits_len(final_poly_index, log_max_height)`.
-        let x = F::two_adic_generator(log_max_height)
+        let x = Challenge::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(final_poly_index, log_max_height) as u64);
-        let mut x_pow = F::one();
+        let mut x_pow = Challenge::ONE;
 
         // Evaluate the final polynomial at x.
         for coeff in &proof.final_poly {
