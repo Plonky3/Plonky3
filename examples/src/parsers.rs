@@ -16,9 +16,9 @@ pub enum FieldOptions {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ProofObjectives {
-    Blake3Hashes,
-    KeccakHashes,
-    Poseidon2Hashes,
+    Blake3Permutations,
+    KeccakFPermutations,
+    Poseidon2Permutations,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub enum DFTOptions {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MerkleHashOptions {
-    Keccak,
+    KeccakF,
     Poseidon2,
 }
 
@@ -40,11 +40,11 @@ pub enum MerkleHashOptions {
 /// not prefixes. For each alias, we also allow any unique prefix of that alias.
 ///
 /// For example, for the `KoalaBear` variant of `FieldOptions`, running
-/// `get_aliases("koala-bear", 1, vec!["kb", 2])` produces the following set of
+/// `get_aliases("koala-bear", 1, vec![("koalabear", 6), ("kb", 2)])` produces the following set of
 /// allowed strings:
 ///
 /// ```
-/// k, ko, koa, koal, koala, koala-, koala-b, koala-be, koala-bea, koala-bear, kb
+/// koala-bear, k, ko, koa, koal, koala, koala-, koala-b, koala-be, koala-bea, koalab, koalabe, koalabea, koalabear, kb
 /// ```
 fn get_aliases(
     base: &'static str,
@@ -71,8 +71,12 @@ impl ValueEnum for FieldOptions {
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            FieldOptions::BabyBear => get_aliases("baby-bear", 1, Some(vec![("bb", 2)])),
-            FieldOptions::KoalaBear => get_aliases("koala-bear", 1, Some(vec![("kb", 2)])),
+            FieldOptions::BabyBear => {
+                get_aliases("baby-bear", 1, Some(vec![("babybear", 5), ("bb", 2)]))
+            }
+            FieldOptions::KoalaBear => {
+                get_aliases("koala-bear", 1, Some(vec![("koalabear", 6), ("kb", 2)]))
+            }
         })
     }
 }
@@ -80,21 +84,29 @@ impl ValueEnum for FieldOptions {
 impl ValueEnum for ProofObjectives {
     fn value_variants<'a>() -> &'a [Self] {
         &[
-            ProofObjectives::Blake3Hashes,
-            ProofObjectives::Poseidon2Hashes,
-            ProofObjectives::KeccakHashes,
+            ProofObjectives::Blake3Permutations,
+            ProofObjectives::Poseidon2Permutations,
+            ProofObjectives::KeccakFPermutations,
         ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            ProofObjectives::Blake3Hashes => {
-                get_aliases("blake-3-hashes", 1, Some(vec![("b3", 2)]))
-            }
-            ProofObjectives::Poseidon2Hashes => {
-                get_aliases("poseidon-2-hashes", 1, Some(vec![("p2", 2)]))
-            }
-            ProofObjectives::KeccakHashes => get_aliases("keccak-hashes", 1, None),
+            ProofObjectives::Blake3Permutations => get_aliases(
+                "blake-3-permutations",
+                1,
+                Some(vec![("blake3-permutations", 6), ("b3", 2)]),
+            ),
+            ProofObjectives::KeccakFPermutations => get_aliases(
+                "keccak-f-permutations",
+                1,
+                Some(vec![("keccakf-permutations", 7), ("kf", 2)]),
+            ),
+            ProofObjectives::Poseidon2Permutations => get_aliases(
+                "poseidon-2-permutations",
+                1,
+                Some(vec![("poseidon2-permutations", 9), ("p2", 2)]),
+            ),
         })
     }
 }
@@ -106,23 +118,31 @@ impl ValueEnum for DFTOptions {
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            DFTOptions::RecursiveDft => get_aliases("recursive-dft", 2, None),
-            DFTOptions::Radix2DitParallel => {
-                get_aliases("radix-2-dit-parallel", 2, Some(vec![("parallel", 1)]))
+            DFTOptions::RecursiveDft => {
+                get_aliases("recursive-dft", 2, Some(vec![("recursivedft", 10)]))
             }
+            DFTOptions::Radix2DitParallel => get_aliases(
+                "radix-2-dit-parallel",
+                2,
+                Some(vec![("radix2ditparallel", 6), ("parallel", 1)]),
+            ),
         })
     }
 }
 
 impl ValueEnum for MerkleHashOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[MerkleHashOptions::Poseidon2, MerkleHashOptions::Keccak]
+        &[MerkleHashOptions::Poseidon2, MerkleHashOptions::KeccakF]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            MerkleHashOptions::Poseidon2 => get_aliases("poseidon-2", 1, Some(vec![("p2", 2)])),
-            MerkleHashOptions::Keccak => get_aliases("keccak", 1, None),
+            MerkleHashOptions::KeccakF => {
+                get_aliases("keccak-f", 1, Some(vec![("keccakf", 7), ("kf", 2)]))
+            }
+            MerkleHashOptions::Poseidon2 => {
+                get_aliases("poseidon-2", 1, Some(vec![("poseidon2", 9), ("p2", 2)]))
+            }
         })
     }
 }

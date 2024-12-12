@@ -64,19 +64,21 @@ fn main() {
     let trace_height = 1 << args.log_trace_length;
 
     let num_hashes = match args.proof_objective {
-        ProofObjectives::Blake3Hashes => {
-            println!("Proving 2^{} Blake-3 hashes", { args.log_trace_length });
+        ProofObjectives::Blake3Permutations => {
+            println!("Proving 2^{} Blake-3 permutations", {
+                args.log_trace_length
+            });
             trace_height
         }
-        ProofObjectives::Poseidon2Hashes => {
-            println!("Proving 2^{} native Poseidon-2 hashes", {
+        ProofObjectives::Poseidon2Permutations => {
+            println!("Proving 2^{} native Poseidon-2 permutations", {
                 args.log_trace_length + 3
             });
             trace_height << 3
         }
-        ProofObjectives::KeccakHashes => {
+        ProofObjectives::KeccakFPermutations => {
             let num_hashes = trace_height / 24;
-            println!("Proving {num_hashes} Keccak hashes");
+            println!("Proving {num_hashes} Keccak-F permutations");
             num_hashes
         }
     };
@@ -86,9 +88,9 @@ fn main() {
             type EF = BinomialExtensionField<KoalaBear, 4>;
 
             let proof_goal = match args.proof_objective {
-                ProofObjectives::Blake3Hashes => ProofGoal::Blake3(Blake3Air {}),
-                ProofObjectives::KeccakHashes => ProofGoal::Keccak(KeccakAir {}),
-                ProofObjectives::Poseidon2Hashes => {
+                ProofObjectives::Blake3Permutations => ProofGoal::Blake3(Blake3Air {}),
+                ProofObjectives::KeccakFPermutations => ProofGoal::Keccak(KeccakAir {}),
+                ProofObjectives::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -116,7 +118,7 @@ fn main() {
             };
 
             match args.merkle_hash {
-                MerkleHashOptions::Keccak => {
+                MerkleHashOptions::KeccakF => {
                     let result =
                         prove_hashes_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
@@ -140,9 +142,9 @@ fn main() {
             type EF = BinomialExtensionField<BabyBear, 4>;
 
             let proof_goal = match args.proof_objective {
-                ProofObjectives::Blake3Hashes => ProofGoal::Blake3(Blake3Air {}),
-                ProofObjectives::KeccakHashes => ProofGoal::Keccak(KeccakAir {}),
-                ProofObjectives::Poseidon2Hashes => {
+                ProofObjectives::Blake3Permutations => ProofGoal::Blake3(Blake3Air {}),
+                ProofObjectives::KeccakFPermutations => ProofGoal::Keccak(KeccakAir {}),
+                ProofObjectives::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -170,7 +172,7 @@ fn main() {
             };
 
             match args.merkle_hash {
-                MerkleHashOptions::Keccak => {
+                MerkleHashOptions::KeccakF => {
                     let result =
                         prove_hashes_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
