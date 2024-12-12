@@ -66,12 +66,12 @@ For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaB
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31 --release --features parallel -- --field koala-bear --proof-objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
-Currently the options for the commandline arguments are:
+Currently the options for the command line arguments are:
 - `--field` (`-f`): `koala-bear` or `baby-bear`.
 - `--proof-objective` (`-p`): `blake-3-permutations, poseidon-2-permutations, keccak-f-permutations`.
 - `--log-trace-length` (`-l`): Accepts any integer between `0` and `255`. The number of permutations proven is `trace_length, 8*trace_length` and `trace_length/24` for `blake3, poseidon2` and `keccakf` respectively. 
 - `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft`.
-- `--merkle-hash` (`m`): `poseidon-2, keccak-f`.
+- `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
