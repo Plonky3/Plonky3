@@ -1,11 +1,12 @@
-use std::env;
 use std::marker::PhantomData;
 
+use clap::Parser;
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
 use p3_examples::airs::ProofGoal;
-use p3_examples::dfts::DFTOptions;
+use p3_examples::dfts::DFTs;
+use p3_examples::parsers::{DFTOptions, FieldOptions, MerkleHashOptions, ProofObjectives};
 use p3_examples::proofs::{prove_hashes_keccak, prove_hashes_poseidon2, report_result};
 use p3_field::extension::BinomialExtensionField;
 use p3_keccak_air::KeccakAir;
@@ -24,6 +25,30 @@ const P2_WIDTH: usize = 16;
 const P2_HALF_FULL_ROUNDS: usize = 4;
 const P2_VECTOR_LEN: usize = 1 << 3;
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// The field to use for our proof.
+    #[arg(short, long, ignore_case = true, value_enum)]
+    field: FieldOptions,
+
+    /// What we are trying to prove.
+    #[arg(short, long, ignore_case = true, value_enum)]
+    proof_objective: ProofObjectives,
+
+    /// The log base 2 of the desired trace length.
+    #[arg(short, long)]
+    log_trace_length: u8,
+
+    /// The discrete fourier transform to use in the proof.
+    #[arg(short, long, ignore_case = true, value_enum)]
+    discrete_fourier_transform: DFTOptions,
+
+    /// The hash function to use when assembling the Merkle tree.
+    #[arg(short, long, ignore_case = true, value_enum)]
+    merkle_hash: MerkleHashOptions,
+}
+
 fn main() {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
@@ -34,83 +59,36 @@ fn main() {
         .with(ForestLayer::default())
         .init();
 
-    let args: Vec<String> = env::args().collect();
-    assert_eq!(args.len() - 1, 5, "There should be five arguments passed to this function.
-    \n The first chooses the field we are using for the proof. Use \"B\" to use the BabyBear field and \"K\" to use the KoalaBear field.
-    \n The second chooses which statement we are proving. Use \"B\", \"P\" or \"K\" to prove Blake3, Poseidon2 or Keccak hashes.
-    \n The third gives the desired trace height. It should fit in a u8 and will be interpreted as the log base 2 of the trace height. For Blake3 this
-    is the number of hashes, for Poseidon2 it's the number of hashes divided by 8 and for Keccak this is roughly the number of hashes times 24.
-    \n The fourth gives the choice of fourier transform. Use \"R\" for RecursiveDft and \"P\" for Radix2DitParallel.
-    \n The fifth gives the choice of hashing function for the merkle tree. Use \"K\" for Keccak and \"P\" for Poseidon2.");
+    let args = Args::parse();
 
-    match args[1].as_ref() {
-        "K" | "KoalaBear" | "KOALABEAR" => {
-            println!("Field: KoalaBear");
-        }
-        "B" | "BabyBear" | "BABYBEAR" => {
-            println!("Field: BabyBear");
-        }
-        _ => panic!("Could not understand the choice of field. Use \"B\" to prove using the BabyBear Field or \"K\" to use the Keccak Field.")
-    };
+    let trace_height = 1 << args.log_trace_length;
 
-    let log_2_trace_height = args[3]
-        .parse::<u8>()
-        .expect("The third command line input should be a u8");
-    let trace_height = 1 << log_2_trace_height;
-
-    let num_hashes = match args[2].as_ref() {
-        "B" | "B3" | "Blake3" | "BLAKE3" => {
-            println!("Proving 2^{log_2_trace_height} Blake3 Hashes");
+    let num_hashes = match args.proof_objective {
+        ProofObjectives::Blake3Hashes => {
+            println!("Proving 2^{} Blake-3 hashes", { args.log_trace_length });
             trace_height
         }
-        "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
-            println!(
-                "Proving 2^{} native Poseidon2 Hashes",
-                log_2_trace_height + 3
-            );
+        ProofObjectives::Poseidon2Hashes => {
+            println!("Proving 2^{} native Poseidon-2 hashes", {
+                args.log_trace_length + 3
+            });
             trace_height << 3
         }
-        "K" | "Keccak" | "KECCAK" => {
+        ProofObjectives::KeccakHashes => {
             let num_hashes = trace_height / 24;
-            println!("Proving {num_hashes} KECCAK Hashes");
+            println!("Proving {num_hashes} Keccak hashes");
             num_hashes
         }
-        _ => {
-            panic!("Could not understand the proof goal. Use \"B\", \"P\" or \"K\" to prove Blake3, Poseidon2 or Keccak hashes.")
-        }
     };
 
-    match args[4].as_ref() {
-        "R" | "Recursive" => {
-            println!("DFT: RecursiveDft");
-        }
-        "P" | "Parallel" => {
-            println!("DFT: Radix2DitParallel");
-        }
-        _ => {
-            panic!("Could not understand the Fourier transform method. Use \"R\" for the Recursive DFT or \"P\" for the Parallel DFT.")
-        }
-    };
-
-    match args[5].as_ref() {
-        "K" | "Keccak" | "KECCAK" => {
-            println!("Merkle Tree Hash: Keccak");
-        }
-        "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
-            println!("Merkle Tree Hash: Poseidon2");
-        }
-        _ => {
-            panic!("Could not understand the desired merkle hash function. Use \"K\" or \"P\" to hash using Keccak or Poseidon2")
-        }
-    };
-
-    match args[1].as_ref() {
-        "K" | "KoalaBear" | "KOALABEAR" => {
+    match args.field {
+        FieldOptions::KoalaBear => {
             type EF = BinomialExtensionField<KoalaBear, 4>;
 
-            let proof_goal = match args[2].as_ref() {
-                "B" | "B3" | "Blake3" | "BLAKE3" => ProofGoal::Blake3(Blake3Air {}),
-                "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
+            let proof_goal = match args.proof_objective {
+                ProofObjectives::Blake3Hashes => ProofGoal::Blake3(Blake3Air {}),
+                ProofObjectives::KeccakHashes => ProofGoal::Keccak(KeccakAir {}),
+                ProofObjectives::Poseidon2Hashes => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -130,23 +108,20 @@ fn main() {
                     > = VectorizedPoseidon2Air::new(constants);
                     ProofGoal::Poseidon2(p2_air)
                 }
-                "K" | "Keccak" | "KECCAK" => ProofGoal::Keccak(KeccakAir {}),
-                _ => unreachable!(),
             };
 
-            let dft = match args[4].as_ref() {
-                "R" | "Recursive" => DFTOptions::Recursive(RecursiveDft::new(trace_height << 1)),
-                "P" | "Parallel" => DFTOptions::Parallel(Radix2DitParallel::default()),
-                _ => unreachable!(),
+            let dft = match args.discrete_fourier_transform {
+                DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 1)),
+                DFTOptions::Radix2DitParallel => DFTs::Parallel(Radix2DitParallel::default()),
             };
 
-            match args[5].as_ref() {
-                "K" | "Keccak" | "KECCAK" => {
+            match args.merkle_hash {
+                MerkleHashOptions::Keccak => {
                     let result =
                         prove_hashes_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
-                "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
+                MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut thread_rng());
                     let result = prove_hashes_poseidon2(
@@ -159,15 +134,15 @@ fn main() {
                     );
                     report_result(result);
                 }
-                _ => unreachable!(),
             };
         }
-        "B" | "BabyBear" | "BABYBEAR" => {
+        FieldOptions::BabyBear => {
             type EF = BinomialExtensionField<BabyBear, 4>;
 
-            let proof_goal = match args[2].as_ref() {
-                "B" | "B3" | "Blake3" | "BLAKE3" => ProofGoal::Blake3(Blake3Air {}),
-                "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
+            let proof_goal = match args.proof_objective {
+                ProofObjectives::Blake3Hashes => ProofGoal::Blake3(Blake3Air {}),
+                ProofObjectives::KeccakHashes => ProofGoal::Keccak(KeccakAir {}),
+                ProofObjectives::Poseidon2Hashes => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -187,23 +162,20 @@ fn main() {
                     > = VectorizedPoseidon2Air::new(constants);
                     ProofGoal::Poseidon2(p2_air)
                 }
-                "K" | "Keccak" | "KECCAK" => ProofGoal::Keccak(KeccakAir {}),
-                _ => unreachable!(),
             };
 
-            let dft = match args[4].as_ref() {
-                "R" | "Recursive" => DFTOptions::Recursive(RecursiveDft::new(trace_height << 2)),
-                "P" | "Parallel" => DFTOptions::Parallel(Radix2DitParallel::default()),
-                _ => unreachable!(),
+            let dft = match args.discrete_fourier_transform {
+                DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 2)),
+                DFTOptions::Radix2DitParallel => DFTs::Parallel(Radix2DitParallel::default()),
             };
 
-            match args[5].as_ref() {
-                "K" | "Keccak" | "KECCAK" => {
+            match args.merkle_hash {
+                MerkleHashOptions::Keccak => {
                     let result =
                         prove_hashes_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
-                "P" | "P2" | "Poseidon2" | "POSEIDON2" => {
+                MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut thread_rng());
                     let result = prove_hashes_poseidon2(
@@ -216,9 +188,7 @@ fn main() {
                     );
                     report_result(result);
                 }
-                _ => unreachable!(),
             };
         }
-        _ => unreachable!(),
     }
 }

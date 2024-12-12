@@ -23,6 +23,7 @@ p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 p3-util.workspace = true
+clap.workspace = true
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
@@ -39,6 +40,7 @@ p3-mds.workspace = true
 p3-matrix.workspace = true
 p3-mersenne-31.workspace = true
 p3-sha256.workspace = true
+clap_derive.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }

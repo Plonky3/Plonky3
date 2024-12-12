@@ -37,6 +37,8 @@ members = [
 
 [workspace.dependencies]
 blake3 = "1.5"
+clap = { version = "4.5.23", features = ["derive"] }
+clap_derive = "4.5.18"
 criterion = "0.5.1"
 ff = "0.13"
 gcd = "2.3.0"
