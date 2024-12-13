@@ -39,7 +39,7 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
+    assert!(log_min_height >= config.log_final_poly_len + config.log_blowup);
 
     let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
@@ -73,6 +73,7 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     final_poly: Vec<F>,
 }
 
+#[instrument(name = "commit phase", skip_all)]
 fn commit_phase<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
@@ -91,7 +92,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.blowup() + config.final_poly_len() {
+    while folded.len() > config.blowup() * config.final_poly_len() {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());

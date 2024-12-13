@@ -122,7 +122,7 @@ fn test_public_value_impl(n: usize, x: u64) {
     let trace = generate_trace_rows::<Val>(0, 1, n);
     let fri_config = FriConfig {
         log_blowup: 2,
-        log_final_poly_len: 2,
+        log_final_poly_len: 0,
         num_queries: 28,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
