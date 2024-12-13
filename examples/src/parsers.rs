@@ -12,6 +12,7 @@ use clap::ValueEnum;
 pub enum FieldOptions {
     BabyBear,
     KoalaBear,
+    Mersenne31,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub enum ProofObjectives {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DFTOptions {
+    None,
     Radix2DitParallel,
     RecursiveDft,
 }
@@ -64,7 +66,11 @@ fn get_aliases(
 
 impl ValueEnum for FieldOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[FieldOptions::BabyBear, FieldOptions::KoalaBear]
+        &[
+            FieldOptions::BabyBear,
+            FieldOptions::KoalaBear,
+            FieldOptions::Mersenne31,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -74,6 +80,9 @@ impl ValueEnum for FieldOptions {
             }
             FieldOptions::KoalaBear => {
                 get_aliases("koala-bear", 1, Some(vec![("koalabear", 6), ("kb", 2)]))
+            }
+            FieldOptions::Mersenne31 => {
+                get_aliases("mersenne-31", 1, Some(vec![("mersenne31", 9), ("m31", 2)]))
             }
         })
     }
@@ -111,7 +120,11 @@ impl ValueEnum for ProofObjectives {
 
 impl ValueEnum for DFTOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[DFTOptions::Radix2DitParallel, DFTOptions::RecursiveDft]
+        &[
+            DFTOptions::Radix2DitParallel,
+            DFTOptions::RecursiveDft,
+            DFTOptions::None,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -124,6 +137,7 @@ impl ValueEnum for DFTOptions {
                 2,
                 Some(vec![("radix2ditparallel", 6), ("parallel", 1)]),
             ),
+            DFTOptions::None => PossibleValue::new(""),
         })
     }
 }

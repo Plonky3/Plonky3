@@ -7,10 +7,14 @@ use p3_dft::Radix2DitParallel;
 use p3_examples::airs::ProofGoal;
 use p3_examples::dfts::DFTs;
 use p3_examples::parsers::{DFTOptions, FieldOptions, MerkleHashOptions, ProofObjectives};
-use p3_examples::proofs::{prove_hashes_keccak, prove_hashes_poseidon2, report_result};
+use p3_examples::proofs::{
+    prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_poseidon2,
+    report_result,
+};
 use p3_field::extension::BinomialExtensionField;
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
+use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use rand::thread_rng;
@@ -41,7 +45,7 @@ struct Args {
     log_trace_length: u8,
 
     /// The discrete fourier transform to use in the proof.
-    #[arg(short, long, ignore_case = true, value_enum)]
+    #[arg(short, long, ignore_case = true, value_enum, default_value_t = DFTOptions::None)]
     discrete_fourier_transform: DFTOptions,
 
     /// The hash function to use when assembling the Merkle tree.
@@ -115,18 +119,19 @@ fn main() {
             let dft = match args.discrete_fourier_transform {
                 DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 1)),
                 DFTOptions::Radix2DitParallel => DFTs::Parallel(Radix2DitParallel::default()),
+                DFTOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
             };
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
                     let result =
-                        prove_hashes_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
+                        prove_monty31_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut thread_rng());
-                    let result = prove_hashes_poseidon2(
+                    let result = prove_monty31_poseidon2(
                         proof_goal,
                         dft,
                         num_hashes,
@@ -167,20 +172,21 @@ fn main() {
             };
 
             let dft = match args.discrete_fourier_transform {
-                DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 2)),
+                DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 1)),
                 DFTOptions::Radix2DitParallel => DFTs::Parallel(Radix2DitParallel::default()),
+                DFTOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
             };
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
                     let result =
-                        prove_hashes_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
+                        prove_monty31_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut thread_rng());
-                    let result = prove_hashes_poseidon2(
+                    let result = prove_monty31_poseidon2(
                         proof_goal,
                         dft,
                         num_hashes,
@@ -188,6 +194,50 @@ fn main() {
                         perm24,
                         PhantomData::<EF>,
                     );
+                    report_result(result);
+                }
+            };
+        }
+        FieldOptions::Mersenne31 => {
+            let proof_goal = match args.proof_objective {
+                ProofObjectives::Blake3Permutations => ProofGoal::Blake3(Blake3Air {}),
+                ProofObjectives::KeccakFPermutations => ProofGoal::Keccak(KeccakAir {}),
+                ProofObjectives::Poseidon2Permutations => {
+                    let constants = RoundConstants::from_rng(&mut thread_rng());
+
+                    // Field specific constants for constructing the Poseidon2 AIR.
+                    const SBOX_DEGREE: u64 = 5;
+                    const SBOX_REGISTERS: usize = 1;
+                    const PARTIAL_ROUNDS: usize = 14;
+
+                    let p2_air: VectorizedPoseidon2Air<
+                        Mersenne31,
+                        GenericPoseidon2LinearLayersMersenne31,
+                        P2_WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        P2_HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                        P2_VECTOR_LEN,
+                    > = VectorizedPoseidon2Air::new(constants);
+                    ProofGoal::Poseidon2(p2_air)
+                }
+            };
+
+            match args.discrete_fourier_transform {
+                DFTOptions::None => {}
+                _ => panic!("Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."),
+            };
+
+            match args.merkle_hash {
+                MerkleHashOptions::KeccakF => {
+                    let result = prove_m31_keccak(proof_goal, num_hashes);
+                    report_result(result);
+                }
+                MerkleHashOptions::Poseidon2 => {
+                    let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut thread_rng());
+                    let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut thread_rng());
+                    let result = prove_m31_poseidon2(proof_goal, num_hashes, perm16, perm24);
                     report_result(result);
                 }
             };
