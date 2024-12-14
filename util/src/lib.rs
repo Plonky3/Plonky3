@@ -202,7 +202,7 @@ where
     (buf, i)
 }
 
-/// Split an interator into small arrays and apply `func` to each.
+/// Split an iterator into small arrays and apply `func` to each.
 ///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
 /// pass the array to `func` as a slice. If less than `BUFLEN`
@@ -252,6 +252,9 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
+    use rand::rngs::OsRng;
+    use rand::Rng;
 
     use super::*;
 
@@ -292,5 +295,87 @@ mod tests {
         ];
         reverse_slice_index_bits(&mut input256[..]);
         assert_eq!(input256, output256);
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_random() {
+        let lengths = [32, 128, 1 << 16];
+        let mut rng = OsRng;
+        for _ in 0..32 {
+            for &length in &lengths {
+                let mut rand_list: Vec<u32> = Vec::with_capacity(length);
+                rand_list.resize_with(length, || rng.gen());
+                let expect = reverse_index_bits_naive(&rand_list);
+                
+                let mut actual = rand_list.clone();
+                reverse_slice_index_bits(&mut actual);
+
+                assert_eq!(actual, expect);
+            }
+        }
+    }
+
+    #[test]
+    fn test_log2_strict_usize_edge_cases() {
+        assert_eq!(log2_strict_usize(1), 0);
+        assert_eq!(log2_strict_usize(2), 1);
+        assert_eq!(log2_strict_usize(1 << 18), 18);
+        assert_eq!(log2_strict_usize(1 << 31), 31);
+        assert_eq!(
+            log2_strict_usize(1 << (usize::BITS - 1)),
+            usize::BITS as usize - 1
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_log2_strict_usize_zero() {
+        let _ = log2_strict_usize(0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_log2_strict_usize_nonpower_2() {
+        let _ = log2_strict_usize(0x78c341c65ae6d262);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_log2_strict_usize_max() {
+        let _ = log2_strict_usize(usize::MAX);
+    }
+
+    #[test]
+    fn test_log2_ceil_usize_comprehensive() {
+        // Powers of 2
+        assert_eq!(log2_ceil_usize(0), 0);
+        assert_eq!(log2_ceil_usize(1), 0);
+        assert_eq!(log2_ceil_usize(2), 1);
+        assert_eq!(log2_ceil_usize(1 << 18), 18);
+        assert_eq!(log2_ceil_usize(1 << 31), 31);
+        assert_eq!(log2_ceil_usize(1 << (usize::BITS - 1)), usize::BITS as usize - 1);
+
+        // Nonpowers; want to round up
+        assert_eq!(log2_ceil_usize(3), 2);
+        assert_eq!(log2_ceil_usize(0x14fe901b), 29);
+        assert_eq!(
+            log2_ceil_usize((1 << (usize::BITS - 1)) + 1),
+            usize::BITS as usize
+        );
+        assert_eq!(log2_ceil_usize(usize::MAX - 1), usize::BITS as usize);
+        assert_eq!(log2_ceil_usize(usize::MAX), usize::BITS as usize);
+    }
+
+    fn reverse_index_bits_naive<T: Copy>(arr: &[T]) -> Vec<T> {
+        let n = arr.len();
+        let n_power = log2_strict_usize(n);
+
+        let mut out = vec![None; n];
+        for (i, v) in arr.iter().enumerate() {
+            let dst = i.reverse_bits() >> (usize::BITS - n_power as u32);
+            out[dst] = Some(*v);
+        }
+
+        out.into_iter().map(|x| x.unwrap()).collect()
     }
 }
