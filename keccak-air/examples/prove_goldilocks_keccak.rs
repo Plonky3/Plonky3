@@ -6,10 +6,10 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_goldilocks::Goldilocks;
-use p3_keccak::Keccak256Hash;
+use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher64};
+use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
 use tracing_forest::util::LevelFilter;
@@ -34,14 +34,22 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 2>;
 
     type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher64<ByteHash>;
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    type FieldHash = SerializingHasher64<U64Hash>;
     let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(byte_hash);
+    let u64_hash = U64Hash::new(KeccakF {});
+    let field_hash = FieldHash::new(u64_hash);
 
-    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
-    let compress = MyCompress::new(byte_hash);
+    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    let compress = MyCompress::new(u64_hash);
 
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type ValMmcs = MerkleTreeMmcs<
+        [Val; p3_keccak::VECTOR_LEN],
+        [u64; p3_keccak::VECTOR_LEN],
+        FieldHash,
+        MyCompress,
+        4,
+    >;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
