@@ -41,7 +41,7 @@ impl<F: PrimeField> BasicSboxLayer<F> {
 impl<FA, const WIDTH: usize> SboxLayers<FA, WIDTH> for BasicSboxLayer<FA::F>
 where
     FA: FieldAlgebra,
-    FA::F: PrimeField,
+    FA::F: PrimeField + PrimeField64, 
 {
     fn sbox_layer(&self, state: &mut [FA; WIDTH]) {
         for x in state.iter_mut() {
