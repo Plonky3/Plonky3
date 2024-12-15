@@ -123,7 +123,7 @@ where
     }
 }
 
-/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+/// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
 /// This can act on `[FA; WIDTH]` for any FieldAlgebra which implements multiplication by `Monty<31>` field elements.
 /// This will usually be slower than the Poseidon2 permutation built from `Poseidon2InternalLayerMonty31` and
