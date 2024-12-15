@@ -1,4 +1,4 @@
-use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
+use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
 use p3_field::{field_to_array, TwoAdicField};
 
 use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
@@ -19,7 +19,7 @@ where
     const EXT_GENERATOR: [Self; WIDTH] = FP::EXT_GENERATOR;
 }
 
-impl<const WIDTH: usize, FP> HasTwoAdicBionmialExtension<WIDTH> for MontyField31<FP>
+impl<const WIDTH: usize, FP> HasTwoAdicBinomialExtension<WIDTH> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + TwoAdicData + FieldParameters,
 {
