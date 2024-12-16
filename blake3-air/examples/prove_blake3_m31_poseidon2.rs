@@ -7,7 +7,7 @@ use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::FriConfig;
+use p3_fri::create_benchmark_fri_config;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -55,12 +55,7 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm24, 24, 16>;
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {

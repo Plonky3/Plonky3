@@ -4,7 +4,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger64};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
@@ -55,12 +55,7 @@ fn main() -> Result<(), impl Debug> {
     let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs);
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
