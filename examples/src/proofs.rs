@@ -5,7 +5,7 @@ use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PrimeField32, TwoAdicField};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
@@ -73,12 +73,7 @@ where
 
     let trace = proof_goal.generate_trace_rows(num_hashes);
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
@@ -144,12 +139,7 @@ where
 
     let trace = proof_goal.generate_trace_rows(num_hashes);
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
