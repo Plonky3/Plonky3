@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, FieldAlgebra};
-use p3_fri::{create_test_fri_config, prover, verifier, FriConfig, TwoAdicFriGenericConfig};
+use p3_fri::{prover, verifier, FriConfig, TwoAdicFriGenericConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -34,7 +34,13 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm,
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
-    let fri_config = create_test_fri_config(mmcs);
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        log_final_poly_len,
+        num_queries: 10,
+        proof_of_work_bits: 8,
+        mmcs,
+    };
     (perm, fri_config)
 }
 
