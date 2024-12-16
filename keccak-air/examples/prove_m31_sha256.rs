@@ -5,7 +5,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::FriConfig;
+use p3_fri::create_benchmark_fri_config;
 use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
@@ -50,13 +50,7 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {

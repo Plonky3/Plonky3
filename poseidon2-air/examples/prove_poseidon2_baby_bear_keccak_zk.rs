@@ -4,7 +4,7 @@ use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{FriConfig, HidingFriPcs};
+use p3_fri::{create_benchmark_fri_config, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
@@ -93,13 +93,7 @@ fn main() -> Result<(), impl Debug> {
 
     let dft = Dft::default();
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
 

@@ -5,7 +5,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
@@ -85,13 +85,7 @@ fn main() -> Result<(), impl Debug> {
 
     let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS);
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

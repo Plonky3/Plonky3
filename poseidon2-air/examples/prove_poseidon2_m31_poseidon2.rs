@@ -6,7 +6,7 @@ use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::FriConfig;
+use p3_fri::create_benchmark_fri_config;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
@@ -83,13 +83,7 @@ fn main() -> Result<(), impl Debug> {
 
     let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS);
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
         mmcs: val_mmcs,

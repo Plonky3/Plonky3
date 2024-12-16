@@ -9,7 +9,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear};
@@ -146,13 +146,7 @@ where
 
     let trace = proof_goal.generate_trace_rows(num_hashes);
 
-    let fri_config = FriConfig {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 

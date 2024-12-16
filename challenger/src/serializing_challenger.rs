@@ -33,7 +33,7 @@ pub struct SerializingChallenger32<F, Inner> {
 /// -  Takes a field element will serialize it into a byte array and observe each byte.
 ///
 /// **Sampling**:
-/// -  Samples a field element in a prime field of size `p` by sampling unofrmly an element in the
+/// -  Samples a field element in a prime field of size `p` by sampling uniformly an element in the
 ///    range (0..1 << log_2(p)). This avoids modulo bias.
 #[derive(Clone, Debug)]
 pub struct SerializingChallenger64<F, Inner> {
@@ -182,6 +182,16 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
     fn observe(&mut self, values: Hash<F, u8, N>) {
         for value in values {
             self.inner.observe(value);
+        }
+    }
+}
+
+impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u64, N>>
+    for SerializingChallenger64<F, Inner>
+{
+    fn observe(&mut self, values: Hash<F, u64, N>) {
+        for value in values {
+            self.inner.observe_slice(&value.to_le_bytes());
         }
     }
 }
