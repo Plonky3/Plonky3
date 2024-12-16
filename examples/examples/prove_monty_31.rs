@@ -170,7 +170,7 @@ fn main() {
 
             let dft = match args.discrete_fourier_transform {
                 DftOptions::RecursiveDft => {
-                    DftChoice::Recursive(RecursiveDft::new(trace_height << 2))
+                    DftChoice::Recursive(RecursiveDft::new(trace_height << 1))
                 }
                 DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
             };

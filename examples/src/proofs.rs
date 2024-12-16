@@ -53,7 +53,7 @@ pub fn prove_hashes_keccak<
     >,
     dft: DFT,
     num_hashes: usize,
-    _phantom: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
+    _ef: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
     Standard: Distribution<F>,
@@ -129,7 +129,7 @@ pub fn prove_hashes_poseidon2<
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
-    _phantom: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
+    _ef: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
     Standard: Distribution<F>,

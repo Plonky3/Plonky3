@@ -64,11 +64,9 @@ impl<
         Standard: Distribution<F>,
     {
         match self {
-            ProofObjective::Blake3(ref b3_air) => b3_air.generate_trace_rows(num_hashes),
-            ProofObjective::Poseidon2(ref p2_air) => {
-                p2_air.generate_vectorized_trace_rows(num_hashes)
-            }
-            ProofObjective::Keccak(ref k_air) => k_air.generate_trace_rows(num_hashes),
+            ProofObjective::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes),
+            ProofObjective::Poseidon2(p2_air) => p2_air.generate_vectorized_trace_rows(num_hashes),
+            ProofObjective::Keccak(k_air) => k_air.generate_trace_rows(num_hashes),
         }
     }
 }
@@ -97,9 +95,9 @@ impl<
     #[inline]
     fn width(&self) -> usize {
         match self {
-            ProofObjective::Blake3(ref b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
-            ProofObjective::Poseidon2(ref p2_air) => p2_air.width(),
-            ProofObjective::Keccak(ref k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
+            ProofObjective::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
+            ProofObjective::Poseidon2(p2_air) => p2_air.width(),
+            ProofObjective::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
         }
     }
 }
@@ -128,9 +126,9 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         match self {
-            ProofObjective::Blake3(ref b3_air) => b3_air.eval(builder),
-            ProofObjective::Poseidon2(ref p2_air) => p2_air.eval(builder),
-            ProofObjective::Keccak(ref k_air) => k_air.eval(builder),
+            ProofObjective::Blake3(b3_air) => b3_air.eval(builder),
+            ProofObjective::Poseidon2(p2_air) => p2_air.eval(builder),
+            ProofObjective::Keccak(k_air) => k_air.eval(builder),
         }
     }
 }
