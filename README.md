@@ -63,12 +63,12 @@ Many variations are possible, with different fields, hashes and so forth, which 
 
 For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT and `KeccakF` as the Merkle tree hash:
 ```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31 --release --features parallel -- --field koala-bear --proof-objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
 Currently the options for the command line arguments are:
 - `--field` (`-f`): `koala-bear` or `baby-bear`.
-- `--proof-objective` (`-p`): `blake-3-permutations, poseidon-2-permutations, keccak-f-permutations`.
+- `--objective` (`-o`): `blake-3-permutations, poseidon-2-permutations, keccak-f-permutations`.
 - `--log-trace-length` (`-l`): Accepts any integer between `0` and `255`. The number of permutations proven is `trace_length, 8*trace_length` and `trace_length/24` for `blake3, poseidon2` and `keccakf` respectively. 
 - `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft`.
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.

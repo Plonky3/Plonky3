@@ -17,7 +17,7 @@ use p3_uni_stark::{prove, verify, StarkConfig, SymbolicExpression};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::airs::ProofGoal;
+use crate::airs::ProofObjective;
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
 ///
@@ -41,7 +41,7 @@ pub fn prove_hashes_keccak<
     const P2_HALF_FULL_ROUNDS: usize,
     const P2_VECTOR_LEN: usize,
 >(
-    proof_goal: ProofGoal<
+    proof_goal: ProofObjective<
         F,
         LinearLayers,
         P2_WIDTH,
@@ -115,7 +115,7 @@ pub fn prove_hashes_poseidon2<
     const P2_HALF_FULL_ROUNDS: usize,
     const P2_VECTOR_LEN: usize,
 >(
-    proof_goal: ProofGoal<
+    proof_goal: ProofObjective<
         F,
         LinearLayers,
         P2_WIDTH,
