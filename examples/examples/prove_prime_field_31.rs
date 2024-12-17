@@ -4,9 +4,9 @@ use clap::Parser;
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
-use p3_examples::airs::ProofGoal;
-use p3_examples::dfts::DFTs;
-use p3_examples::parsers::{DFTOptions, FieldOptions, MerkleHashOptions, ProofObjectives};
+use p3_examples::airs::ProofObjective;
+use p3_examples::dfts::DftChoice;
+use p3_examples::parsers::{DftOptions, FieldOptions, MerkleHashOptions, ProofOptions};
 use p3_examples::proofs::{
     prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_poseidon2,
     report_result,
@@ -38,15 +38,15 @@ struct Args {
 
     /// What we are trying to prove.
     #[arg(short, long, ignore_case = true, value_enum)]
-    proof_objective: ProofObjectives,
+    proof_objective: ProofOptions,
 
     /// The log base 2 of the desired trace length.
     #[arg(short, long)]
     log_trace_length: u8,
 
     /// The discrete fourier transform to use in the proof.
-    #[arg(short, long, ignore_case = true, value_enum, default_value_t = DFTOptions::None)]
-    discrete_fourier_transform: DFTOptions,
+    #[arg(short, long, ignore_case = true, value_enum, default_value_t = DftOptions::None)]
+    discrete_fourier_transform: DftOptions,
 
     /// The hash function to use when assembling the Merkle tree.
     #[arg(short, long, ignore_case = true, value_enum)]
@@ -68,19 +68,19 @@ fn main() {
     let trace_height = 1 << args.log_trace_length;
 
     let num_hashes = match args.proof_objective {
-        ProofObjectives::Blake3Permutations => {
+        ProofOptions::Blake3Permutations => {
             println!("Proving 2^{} Blake-3 permutations", {
                 args.log_trace_length
             });
             trace_height
         }
-        ProofObjectives::Poseidon2Permutations => {
+        ProofOptions::Poseidon2Permutations => {
             println!("Proving 2^{} native Poseidon-2 permutations", {
                 args.log_trace_length + 3
             });
             trace_height << 3
         }
-        ProofObjectives::KeccakFPermutations => {
+        ProofOptions::KeccakFPermutations => {
             let num_hashes = trace_height / 24;
             println!("Proving {num_hashes} Keccak-F permutations");
             num_hashes
@@ -92,9 +92,9 @@ fn main() {
             type EF = BinomialExtensionField<KoalaBear, 4>;
 
             let proof_goal = match args.proof_objective {
-                ProofObjectives::Blake3Permutations => ProofGoal::Blake3(Blake3Air {}),
-                ProofObjectives::KeccakFPermutations => ProofGoal::Keccak(KeccakAir {}),
-                ProofObjectives::Poseidon2Permutations => {
+                ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
+                ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
+                ProofOptions::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -112,14 +112,14 @@ fn main() {
                         PARTIAL_ROUNDS,
                         P2_VECTOR_LEN,
                     > = VectorizedPoseidon2Air::new(constants);
-                    ProofGoal::Poseidon2(p2_air)
+                    ProofObjective::Poseidon2(p2_air)
                 }
             };
 
             let dft = match args.discrete_fourier_transform {
-                DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 1)),
-                DFTOptions::Radix2DitParallel => DFTs::Parallel(Radix2DitParallel::default()),
-                DFTOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
+                DftOptions::RecursiveDft => DftChoice::Recursive(RecursiveDft::new(trace_height << 1)),
+                DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
+                DftOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
             };
 
             match args.merkle_hash {
@@ -147,9 +147,9 @@ fn main() {
             type EF = BinomialExtensionField<BabyBear, 4>;
 
             let proof_goal = match args.proof_objective {
-                ProofObjectives::Blake3Permutations => ProofGoal::Blake3(Blake3Air {}),
-                ProofObjectives::KeccakFPermutations => ProofGoal::Keccak(KeccakAir {}),
-                ProofObjectives::Poseidon2Permutations => {
+                ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
+                ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
+                ProofOptions::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -167,14 +167,14 @@ fn main() {
                         PARTIAL_ROUNDS,
                         P2_VECTOR_LEN,
                     > = VectorizedPoseidon2Air::new(constants);
-                    ProofGoal::Poseidon2(p2_air)
+                    ProofObjective::Poseidon2(p2_air)
                 }
             };
 
             let dft = match args.discrete_fourier_transform {
-                DFTOptions::RecursiveDft => DFTs::Recursive(RecursiveDft::new(trace_height << 1)),
-                DFTOptions::Radix2DitParallel => DFTs::Parallel(Radix2DitParallel::default()),
-                DFTOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
+                DftOptions::RecursiveDft => DftChoice::Recursive(RecursiveDft::new(trace_height << 1)),
+                DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
+                DftOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
             };
 
             match args.merkle_hash {
@@ -200,9 +200,9 @@ fn main() {
         }
         FieldOptions::Mersenne31 => {
             let proof_goal = match args.proof_objective {
-                ProofObjectives::Blake3Permutations => ProofGoal::Blake3(Blake3Air {}),
-                ProofObjectives::KeccakFPermutations => ProofGoal::Keccak(KeccakAir {}),
-                ProofObjectives::Poseidon2Permutations => {
+                ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
+                ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
+                ProofOptions::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut thread_rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
@@ -220,12 +220,12 @@ fn main() {
                         PARTIAL_ROUNDS,
                         P2_VECTOR_LEN,
                     > = VectorizedPoseidon2Air::new(constants);
-                    ProofGoal::Poseidon2(p2_air)
+                    ProofObjective::Poseidon2(p2_air)
                 }
             };
 
             match args.discrete_fourier_transform {
-                DFTOptions::None => {}
+                DftOptions::None => {}
                 _ => panic!("Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."),
             };
 
