@@ -63,7 +63,7 @@ Many variations are possible, with different fields, hashes and so forth, which 
 
 For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT and `KeccakF` as the Merkle tree hash:
 ```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_prime_field_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
 Currently the options for the command line arguments are:

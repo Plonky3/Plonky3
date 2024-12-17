@@ -38,7 +38,7 @@ struct Args {
 
     /// What we are trying to prove.
     #[arg(short, long, ignore_case = true, value_enum)]
-    proof_objective: ProofOptions,
+    objective: ProofOptions,
 
     /// The log base 2 of the desired trace length.
     #[arg(short, long)]
@@ -67,7 +67,7 @@ fn main() {
 
     let trace_height = 1 << args.log_trace_length;
 
-    let num_hashes = match args.proof_objective {
+    let num_hashes = match args.objective {
         ProofOptions::Blake3Permutations => {
             println!("Proving 2^{} Blake-3 permutations", {
                 args.log_trace_length
@@ -91,7 +91,7 @@ fn main() {
         FieldOptions::KoalaBear => {
             type EF = BinomialExtensionField<KoalaBear, 4>;
 
-            let proof_goal = match args.proof_objective {
+            let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
@@ -146,7 +146,7 @@ fn main() {
         FieldOptions::BabyBear => {
             type EF = BinomialExtensionField<BabyBear, 4>;
 
-            let proof_goal = match args.proof_objective {
+            let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
@@ -199,7 +199,7 @@ fn main() {
             };
         }
         FieldOptions::Mersenne31 => {
-            let proof_goal = match args.proof_objective {
+            let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {

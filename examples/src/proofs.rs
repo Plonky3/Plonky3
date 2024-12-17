@@ -10,32 +10,18 @@ use p3_field::{ExtensionField, Field, PrimeField32, TwoAdicField};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{Mersenne31, PackedMersenne31AVX2};
 use p3_poseidon2::GenericPoseidon2LinearLayers;
-use p3_symmetric::{
-    CompressionFunctionFromHasher, CryptographicPermutation, PaddingFreeSponge,
-    SerializingHasher32To64, TruncatedPermutation,
-};
+use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig, SymbolicExpression};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::airs::ProofObjective;
-
-// Defining a bunch of types to keep clippy happy and avoid overly complex types.
-const KECCAK_VECTOR_LEN: usize = p3_keccak::VECTOR_LEN;
-type KeccakSerializingHasher32 = SerializingHasher32To64<PaddingFreeSponge<KeccakF, 25, 17, 4>>;
-type KeccakCompressionFunction =
-    CompressionFunctionFromHasher<PaddingFreeSponge<KeccakF, 25, 17, 4>, 2, 4>;
-type KeccakSerializingChallenger32<F> =
-    SerializingChallenger32<F, p3_challenger::HashChallenger<u8, Keccak256Hash, 32>>;
-type KeccakMerkleMmcs<F> = MerkleTreeMmcs<
-    [F; KECCAK_VECTOR_LEN],
-    [u64; KECCAK_VECTOR_LEN],
-    KeccakSerializingHasher32,
-    KeccakCompressionFunction,
-    4,
->;
+use crate::airs::{GenerableTrace, ProofObjective};
+use crate::types::{
+    ExampleAirBasedCircleMerklePoseidon2, KeccakCompressionFunction, KeccakMerkleMmcs,
+    KeccakSerializingChallenger32, Poseidon2Compression, Poseidon2MerkleMmcs, Poseidon2Sponge,
+};
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
 fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
@@ -47,17 +33,6 @@ fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
 
     KeccakMerkleMmcs::new(field_hash, compress)
 }
-
-// Defining a bunch of types to keep clippy happy and avoid overly complex types.
-type Poseidon2Sponge<Perm24> = PaddingFreeSponge<Perm24, 24, 16, 8>;
-type Poseidon2Compression<Perm16> = TruncatedPermutation<Perm16, 2, 8, 16>;
-type Poseidon2MerkleMmcs<F, Perm16, Perm24> = MerkleTreeMmcs<
-    <F as Field>::Packing,
-    <F as Field>::Packing,
-    Poseidon2Sponge<Perm24>,
-    Poseidon2Compression<Perm16>,
-    8,
->;
 
 /// Produce a MerkleTreeMmcs from a pair of cryptographic field permutations.
 ///
@@ -293,31 +268,18 @@ pub fn prove_m31_keccak<
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
 pub fn prove_m31_poseidon2<
-    LinearLayers: GenericPoseidon2LinearLayers<Mersenne31, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<SymbolicExpression<Mersenne31>, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<<Mersenne31 as Field>::Packing, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<BinomialExtensionField<Mersenne31, 3>, P2_WIDTH>,
     Perm16: CryptographicPermutation<[Mersenne31; 16]>
-        + CryptographicPermutation<[<Mersenne31 as Field>::Packing; 16]>,
+        + CryptographicPermutation<[PackedMersenne31AVX2; 16]>,
     Perm24: CryptographicPermutation<[Mersenne31; 24]>
-        + CryptographicPermutation<[<Mersenne31 as Field>::Packing; 24]>,
-    const P2_WIDTH: usize,
-    const P2_SBOX_DEGREE: u64,
-    const P2_SBOX_REGISTERS: usize,
-    const P2_PARTIAL_ROUNDS: usize,
-    const P2_HALF_FULL_ROUNDS: usize,
-    const P2_VECTOR_LEN: usize,
->(
-    proof_goal: ProofObjective<
+        + CryptographicPermutation<[PackedMersenne31AVX2; 24]>,
+    PO: ExampleAirBasedCircleMerklePoseidon2<
         Mersenne31,
-        LinearLayers,
-        P2_WIDTH,
-        P2_SBOX_DEGREE,
-        P2_SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
-        P2_PARTIAL_ROUNDS,
-        P2_VECTOR_LEN,
+        BinomialExtensionField<Mersenne31, 3>,
+        Perm16,
+        Perm24,
     >,
+>(
+    proof_goal: PO,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
