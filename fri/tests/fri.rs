@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, FieldAlgebra};
-use p3_fri::{create_test_fri_config, prover, verifier, FriConfig, TwoAdicFriGenericConfig};
+use p3_fri::{prover, verifier, FriConfig, TwoAdicFriGenericConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -29,22 +29,28 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type MyFriConfig = FriConfig<ChallengeMmcs>;
 
-fn get_ldt_for_testing<R: Rng>(rng: &mut R) -> (Perm, MyFriConfig) {
+fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm, MyFriConfig) {
     let perm = Perm::new_from_rng_128(rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
-    let fri_config = create_test_fri_config(mmcs);
+    let fri_config = FriConfig {
+        log_blowup: 1,
+        log_final_poly_len,
+        num_queries: 10,
+        proof_of_work_bits: 8,
+        mmcs,
+    };
     (perm, fri_config)
 }
 
-fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
-    let (perm, fc) = get_ldt_for_testing(rng);
+fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
+    let (perm, fc) = get_ldt_for_testing(rng, log_final_poly_len);
     let dft = Radix2Dit::default();
 
     let shift = Val::GENERATOR;
 
-    let ldes: Vec<RowMajorMatrix<Val>> = (3..10)
+    let ldes: Vec<RowMajorMatrix<Val>> = (5..10)
         .map(|deg_bits| {
             let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
             let mut lde = dft.coset_lde_batch(evals, 1, shift);
@@ -125,7 +131,18 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
 fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
+        let mut rng = ChaCha20Rng::seed_from_u64(i as u64);
+        do_test_fri_ldt(&mut rng, i + 1);
+    }
+}
+
+// This test is expected to panic because the polynomial degree is less than the final_poly_degree in the config.
+#[test]
+#[should_panic]
+fn test_fri_ldt_should_panic() {
+    // FRI is kind of flaky depending on indexing luck
+    for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng);
+        do_test_fri_ldt(&mut rng, 5);
     }
 }
