@@ -4,7 +4,7 @@
 //! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
-use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBionmialExtension};
+use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBinomialExtension};
 use p3_field::FieldAlgebra;
 
 use crate::Mersenne31;
@@ -35,7 +35,7 @@ impl ComplexExtendable for Mersenne31 {
     }
 }
 
-impl HasTwoAdicBionmialExtension<2> for Mersenne31 {
+impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
     const EXT_TWO_ADICITY: usize = 32;
 
     fn ext_two_adic_generator(bits: usize) -> [Self; 2] {

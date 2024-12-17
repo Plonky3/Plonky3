@@ -16,14 +16,14 @@ pub enum FieldOptions {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ProofObjectives {
+pub enum ProofOptions {
     Blake3Permutations,
     KeccakFPermutations,
     Poseidon2Permutations,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DFTOptions {
+pub enum DftOptions {
     None,
     Radix2DitParallel,
     RecursiveDft,
@@ -88,28 +88,28 @@ impl ValueEnum for FieldOptions {
     }
 }
 
-impl ValueEnum for ProofObjectives {
+impl ValueEnum for ProofOptions {
     fn value_variants<'a>() -> &'a [Self] {
         &[
-            ProofObjectives::Blake3Permutations,
-            ProofObjectives::Poseidon2Permutations,
-            ProofObjectives::KeccakFPermutations,
+            ProofOptions::Blake3Permutations,
+            ProofOptions::Poseidon2Permutations,
+            ProofOptions::KeccakFPermutations,
         ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            ProofObjectives::Blake3Permutations => get_aliases(
+            ProofOptions::Blake3Permutations => get_aliases(
                 "blake-3-permutations",
                 1,
                 Some(vec![("blake3-permutations", 6), ("b3", 2)]),
             ),
-            ProofObjectives::KeccakFPermutations => get_aliases(
+            ProofOptions::KeccakFPermutations => get_aliases(
                 "keccak-f-permutations",
                 1,
                 Some(vec![("keccakf-permutations", 7), ("kf", 2)]),
             ),
-            ProofObjectives::Poseidon2Permutations => get_aliases(
+            ProofOptions::Poseidon2Permutations => get_aliases(
                 "poseidon-2-permutations",
                 1,
                 Some(vec![("poseidon2-permutations", 9), ("p2", 2)]),
@@ -118,26 +118,26 @@ impl ValueEnum for ProofObjectives {
     }
 }
 
-impl ValueEnum for DFTOptions {
+impl ValueEnum for DftOptions {
     fn value_variants<'a>() -> &'a [Self] {
         &[
-            DFTOptions::Radix2DitParallel,
-            DFTOptions::RecursiveDft,
-            DFTOptions::None,
+            DftOptions::Radix2DitParallel,
+            DftOptions::RecursiveDft,
+            DftOptions::None,
         ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
-            DFTOptions::RecursiveDft => {
+            DftOptions::RecursiveDft => {
                 get_aliases("recursive-dft", 2, Some(vec![("recursivedft", 10)]))
             }
-            DFTOptions::Radix2DitParallel => get_aliases(
+            DftOptions::Radix2DitParallel => get_aliases(
                 "radix-2-dit-parallel",
                 2,
                 Some(vec![("radix2ditparallel", 6), ("parallel", 1)]),
             ),
-            DFTOptions::None => PossibleValue::new(""),
+            DftOptions::None => PossibleValue::new(""),
         })
     }
 }

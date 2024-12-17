@@ -51,3 +51,25 @@ pub trait FriGenericConfig<F: Field> {
     /// Same as applying fold_row to every row, possibly faster.
     fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
 }
+
+/// Creates a minimal `FriConfig` for testing purposes.
+/// This configuration is designed to reduce computational cost during tests.
+pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
+        log_blowup: 1,
+        num_queries: 2,
+        proof_of_work_bits: 1,
+        mmcs,
+    }
+}
+
+/// Creates a `FriConfig` suitable for benchmarking.
+/// This configuration represents typical settings used in production-like scenarios.
+pub fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
+        log_blowup: 1,
+        num_queries: 100,
+        proof_of_work_bits: 16,
+        mmcs,
+    }
+}

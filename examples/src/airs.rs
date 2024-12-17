@@ -11,7 +11,7 @@ use rand::prelude::Distribution;
 /// An enum containing the three different AIR's.
 ///
 /// This implements `AIR` by passing to whatever the contained struct is.
-pub enum ProofGoal<
+pub enum ProofObjective<
     F: Field,
     LinearLayers,
     const WIDTH: usize,
@@ -47,7 +47,7 @@ impl<
         const PARTIAL_ROUNDS: usize,
         const VECTOR_LEN: usize,
     >
-    ProofGoal<
+    ProofObjective<
         F,
         LinearLayers,
         WIDTH,
@@ -64,9 +64,9 @@ impl<
         Standard: Distribution<F>,
     {
         match self {
-            ProofGoal::Blake3(ref b3_air) => b3_air.generate_trace_rows(num_hashes),
-            ProofGoal::Poseidon2(ref p2_air) => p2_air.generate_vectorized_trace_rows(num_hashes),
-            ProofGoal::Keccak(ref k_air) => k_air.generate_trace_rows(num_hashes),
+            ProofObjective::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes),
+            ProofObjective::Poseidon2(p2_air) => p2_air.generate_vectorized_trace_rows(num_hashes),
+            ProofObjective::Keccak(k_air) => k_air.generate_trace_rows(num_hashes),
         }
     }
 }
@@ -81,7 +81,7 @@ impl<
         const PARTIAL_ROUNDS: usize,
         const VECTOR_LEN: usize,
     > BaseAir<F>
-    for ProofGoal<
+    for ProofObjective<
         F,
         LinearLayers,
         WIDTH,
@@ -95,9 +95,9 @@ impl<
     #[inline]
     fn width(&self) -> usize {
         match self {
-            ProofGoal::Blake3(ref b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
-            ProofGoal::Poseidon2(ref p2_air) => p2_air.width(),
-            ProofGoal::Keccak(ref k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
+            ProofObjective::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
+            ProofObjective::Poseidon2(p2_air) => p2_air.width(),
+            ProofObjective::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
         }
     }
 }
@@ -112,7 +112,7 @@ impl<
         const PARTIAL_ROUNDS: usize,
         const VECTOR_LEN: usize,
     > Air<AB>
-    for ProofGoal<
+    for ProofObjective<
         AB::F,
         LinearLayers,
         WIDTH,
@@ -126,9 +126,9 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         match self {
-            ProofGoal::Blake3(ref b3_air) => b3_air.eval(builder),
-            ProofGoal::Poseidon2(ref p2_air) => p2_air.eval(builder),
-            ProofGoal::Keccak(ref k_air) => k_air.eval(builder),
+            ProofObjective::Blake3(b3_air) => b3_air.eval(builder),
+            ProofObjective::Poseidon2(p2_air) => p2_air.eval(builder),
+            ProofObjective::Keccak(k_air) => k_air.eval(builder),
         }
     }
 }

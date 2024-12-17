@@ -8,18 +8,18 @@ use p3_monty_31::dft::RecursiveDft;
 ///
 /// This implements `TwoAdicSubgroupDft` by passing to whatever the contained struct is.
 #[derive(Clone, Debug)]
-pub enum DFTs<F> {
+pub enum DftChoice<F> {
     Recursive(RecursiveDft<F>),
     Parallel(Radix2DitParallel<F>),
 }
 
-impl<F: Default> Default for DFTs<F> {
+impl<F: Default> Default for DftChoice<F> {
     fn default() -> Self {
-        DFTs::<F>::Parallel(Radix2DitParallel::<F>::default())
+        DftChoice::<F>::Parallel(Radix2DitParallel::<F>::default())
     }
 }
 
-impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for DFTs<F>
+impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for DftChoice<F>
 where
     RecursiveDft<F>: TwoAdicSubgroupDft<F, Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>>,
     Radix2DitParallel<F>:
@@ -30,16 +30,16 @@ where
     #[inline]
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> Self::Evaluations {
         match self {
-            DFTs::<F>::Recursive(inner_dft) => inner_dft.dft_batch(mat),
-            DFTs::<F>::Parallel(inner_dft) => inner_dft.dft_batch(mat),
+            DftChoice::<F>::Recursive(inner_dft) => inner_dft.dft_batch(mat),
+            DftChoice::<F>::Parallel(inner_dft) => inner_dft.dft_batch(mat),
         }
     }
 
     #[inline]
     fn coset_dft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
         match self {
-            DFTs::<F>::Recursive(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
-            DFTs::<F>::Parallel(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
+            DftChoice::<F>::Recursive(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
+            DftChoice::<F>::Parallel(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
         }
     }
 
@@ -51,8 +51,12 @@ where
         shift: F,
     ) -> Self::Evaluations {
         match self {
-            DFTs::<F>::Recursive(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
-            DFTs::<F>::Parallel(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
+            DftChoice::<F>::Recursive(inner_dft) => {
+                inner_dft.coset_lde_batch(mat, added_bits, shift)
+            }
+            DftChoice::<F>::Parallel(inner_dft) => {
+                inner_dft.coset_lde_batch(mat, added_bits, shift)
+            }
         }
     }
 }

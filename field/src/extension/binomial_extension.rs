@@ -13,7 +13,7 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenius, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBinomialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
@@ -563,7 +563,7 @@ where
     }
 }
 
-impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
+impl<F: Field + HasTwoAdicBinomialExtension<D>, const D: usize> TwoAdicField
     for BinomialExtensionField<F, D>
 {
     const TWO_ADICITY: usize = F::EXT_TWO_ADICITY;

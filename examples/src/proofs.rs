@@ -20,7 +20,7 @@ use p3_uni_stark::{prove, verify, StarkConfig, SymbolicExpression};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::airs::ProofGoal;
+use crate::airs::ProofObjective;
 
 // Defining a bunch of types to keep clippy happy and avoid overly complex types.
 const KECCAK_VECTOR_LEN: usize = p3_keccak::VECTOR_LEN;
@@ -148,7 +148,7 @@ pub fn prove_monty31_keccak<
     const P2_HALF_FULL_ROUNDS: usize,
     const P2_VECTOR_LEN: usize,
 >(
-    proof_goal: ProofGoal<
+    proof_goal: ProofObjective<
         F,
         LinearLayers,
         P2_WIDTH,
@@ -160,7 +160,7 @@ pub fn prove_monty31_keccak<
     >,
     dft: DFT,
     num_hashes: usize,
-    _phantom: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
+    _ef: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
     Standard: Distribution<F>,
@@ -205,7 +205,7 @@ pub fn prove_monty31_poseidon2<
     const P2_HALF_FULL_ROUNDS: usize,
     const P2_VECTOR_LEN: usize,
 >(
-    proof_goal: ProofGoal<
+    proof_goal: ProofObjective<
         F,
         LinearLayers,
         P2_WIDTH,
@@ -219,7 +219,7 @@ pub fn prove_monty31_poseidon2<
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
-    _phantom: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
+    _ef: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
     Standard: Distribution<F>,
@@ -256,7 +256,7 @@ pub fn prove_m31_keccak<
     const P2_HALF_FULL_ROUNDS: usize,
     const P2_VECTOR_LEN: usize,
 >(
-    proof_goal: ProofGoal<
+    proof_goal: ProofObjective<
         Mersenne31,
         LinearLayers,
         P2_WIDTH,
@@ -308,7 +308,7 @@ pub fn prove_m31_poseidon2<
     const P2_HALF_FULL_ROUNDS: usize,
     const P2_VECTOR_LEN: usize,
 >(
-    proof_goal: ProofGoal<
+    proof_goal: ProofObjective<
         Mersenne31,
         LinearLayers,
         P2_WIDTH,
