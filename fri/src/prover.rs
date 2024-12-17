@@ -112,8 +112,13 @@ where
         }
     }
 
-    // Previously, we checked that folded was constant at this point. Now, we transform folded
-    // from the evaluation domain to the coefficient domain and verify the trailing coefficients.
+    // After repeated folding steps, we end up working over a coset hJ instead of the original
+    // domain. The IDFT we apply operates over a subgroup J, not hJ. This means the polynomial we
+    // recover is G(x), where G(x) = F(hx), and F is the polynomial whose evaluations we actually
+    // observed. For our current construction, this does not cause issues since degree properties
+    // and zero-checks remain valid. If we changed our domain construction (e.g., using multiple
+    // cosets), we would need to carefully reconsider these assumptions.
+
     reverse_slice_index_bits(&mut folded);
     // TODO: For better performance, we could run the IDFT on only the first half
     //       (or less, depending on `log_blowup`) of `final_poly`.
