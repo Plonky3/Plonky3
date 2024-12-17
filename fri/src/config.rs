@@ -7,6 +7,7 @@ use p3_matrix::Matrix;
 #[derive(Debug)]
 pub struct FriConfig<M> {
     pub log_blowup: usize,
+    // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
     pub num_queries: usize,
     pub proof_of_work_bits: usize,

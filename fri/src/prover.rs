@@ -9,7 +9,7 @@ use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-use tracing::{info_span, instrument};
+use tracing::{debug_span, info_span, instrument};
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
@@ -112,11 +112,10 @@ where
 
     // Previously, we checked that folded was constant at this point. Now, we transform folded
     // from the evaluation domain to the coefficient domain and verify the trailing coefficients.
-    let mut final_poly = folded.clone();
-
-    // Switch from the evaluation basis to the coefficient basis.
-    reverse_slice_index_bits(&mut final_poly);
-    final_poly = Radix2Dit::default().idft(final_poly);
+    reverse_slice_index_bits(&mut folded);
+    // TODO: For better performance, we could run the IDFT on only the first half
+    //       (or less, depending on `log_blowup`) of `final_poly`.
+    let final_poly = debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft(folded));
 
     // The evaluation domain is "blown-up" relative to the polynomial degree of `final_poly`,
     // so all coefficients after the first final_poly_len should be zero.
