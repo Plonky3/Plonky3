@@ -131,8 +131,8 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
-        let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng, 4);
+        let mut rng = ChaCha20Rng::seed_from_u64(i as u64);
+        do_test_fri_ldt(&mut rng, i + 1);
     }
 }
 
