@@ -39,7 +39,9 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
+    if config.log_final_poly_len > 0 {
+        assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
+    }
 
     let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
