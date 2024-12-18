@@ -6,8 +6,23 @@ use p3_matrix::Matrix;
 
 #[derive(Debug)]
 pub struct FriConfig<M> {
+    // Note: The reduction of the FRI polynomial begins with standard 2-to-1 folding until the
+    // degree specified by `log_arity_start_degree` is reached. Below this degree, higher arity
+    // folding (determined by `log_arity`) is applied.
+    //
+    // Example:
+    // log_arity = 4, log_arity_start_degree = 14
+    // Input matrix heights: 17, 16, 15
+    // The folding process transitions as follows:
+    // - Initial 2-to-1 folding at heights: 17 -> 16 -> 15 -> 14
+    // - Higher arity folding (log_arity = 4) begins at degree 14.
+    // The final polynomial log length can be set to:
+    // 17 (initial height) - 1 (2-to-1 fold) - 1 (2-to-1 fold) - 1 (2-to-1 fold) - 4 - 4 = 6.
+    //
+    // TODO: higher arity folding and early stopping are not yet implemented in `CirclePcs`.
+    pub log_arity: usize,
+    pub log_arity_start_degree: usize,
     pub log_blowup: usize,
-    // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
