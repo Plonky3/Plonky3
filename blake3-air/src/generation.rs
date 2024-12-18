@@ -191,7 +191,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     save_state_to_trace(&mut round_data.state_output, state);
 }
 
-/// Perform half of a quarter round round on the given elements.
+/// Perform half of a quarter round on the given elements.
 ///
 /// The boolean flag, indicates if this is the first (false) or second (true) half round.
 fn verifiable_half_round(
