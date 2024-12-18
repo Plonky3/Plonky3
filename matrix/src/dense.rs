@@ -150,6 +150,23 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow_mut().chunks_exact_mut(self.width)
     }
 
+    /// Assumes `start < stride`.
+    pub fn rows_mut_strided(
+        &mut self,
+        start: usize,
+        stride: usize,
+    ) -> impl Iterator<Item = &mut [T]>
+    where
+        S: BorrowMut<[T]>,
+    {
+        let start = start * self.width;
+        let width = self.width;
+        self.values
+            .borrow_mut()
+            .chunks_exact_mut(self.width * stride)
+            .map(move |chunk| &mut chunk[start..][..width])
+    }
+
     pub fn par_rows_mut<'a>(&'a mut self) -> impl IndexedParallelIterator<Item = &'a mut [T]>
     where
         T: 'a + Send,
