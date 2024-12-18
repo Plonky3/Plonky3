@@ -38,6 +38,10 @@ impl<M> FriConfig<M> {
         1 << self.log_final_poly_len
     }
 
+    pub const fn arity(&self) -> usize {
+        1 << self.log_arity
+    }
+
     /// Returns the soundness bits of this FRI instance based on the
     /// [ethSTARK](https://eprint.iacr.org/2021/582) conjecture.
     ///
@@ -77,6 +81,8 @@ pub trait FriGenericConfig<F: Field> {
 /// This configuration is designed to reduce computational cost during tests.
 pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
+        log_arity: 1,
+        log_arity_start_degree: 0,
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 2,
@@ -89,6 +95,8 @@ pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
 /// This configuration represents typical settings used in production-like scenarios.
 pub fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
+        log_arity: 1,
+        log_arity_start_degree: 0,
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 100,

@@ -215,6 +215,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let fri_config = FriConfig {
+        log_arity: 1,
+        log_arity_start_degree: 0,
         log_blowup,
         log_final_poly_len: 5,
         num_queries: 40,
@@ -276,6 +278,8 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let fri_config = FriConfig {
+        log_arity: 1,
+        log_arity_start_degree: 0,
         log_blowup,
         log_final_poly_len: 0,
         num_queries: 40,

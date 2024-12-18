@@ -177,6 +177,8 @@ mod babybear_fri_pcs {
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
         let fri_config = FriConfig {
+            log_arity: 1,
+            log_arity_start_degree: 0,
             log_blowup,
             log_final_poly_len: 0,
             num_queries: 10,
@@ -230,6 +232,8 @@ mod m31_fri_pcs {
         let val_mmcs = ValMmcs::new(field_hash, compress);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let fri_config = FriConfig {
+            log_arity: 1,
+            log_arity_start_degree: 0,
             log_blowup,
             log_final_poly_len: 0,
             num_queries: 10,

@@ -35,6 +35,8 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm,
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_config = FriConfig {
+        log_arity: 1,
+        log_arity_start_degree: 0,
         log_blowup: 1,
         log_final_poly_len,
         num_queries: 10,
