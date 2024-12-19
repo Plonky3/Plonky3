@@ -95,7 +95,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
     }
 
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M, _arity: usize) -> Vec<F> {
         // We use the fact that
         //     p_e(x^2) = (p(x) + p(-x)) / 2
         //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
