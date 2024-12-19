@@ -5,7 +5,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 /// Round constants for Poseidon2, in a format that's convenient for the AIR.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RoundConstants<
     F: Field,
     const WIDTH: usize,
@@ -20,6 +20,18 @@ pub struct RoundConstants<
 impl<F: Field, const WIDTH: usize, const HALF_FULL_ROUNDS: usize, const PARTIAL_ROUNDS: usize>
     RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
+    pub fn new(
+        beginning_full_round_constants: [[F; WIDTH]; HALF_FULL_ROUNDS],
+        partial_round_constants: [F; PARTIAL_ROUNDS],
+        ending_full_round_constants: [[F; WIDTH]; HALF_FULL_ROUNDS],
+    ) -> Self {
+        Self {
+            beginning_full_round_constants,
+            partial_round_constants,
+            ending_full_round_constants,
+        }
+    }
+
     pub fn from_rng<R: Rng>(rng: &mut R) -> Self
     where
         Standard: Distribution<F> + Distribution<[F; WIDTH]>,
