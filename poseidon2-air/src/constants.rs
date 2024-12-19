@@ -5,7 +5,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
 /// Round constants for Poseidon2, in a format that's convenient for the AIR.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RoundConstants<
     F: Field,
     const WIDTH: usize,
