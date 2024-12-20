@@ -194,20 +194,7 @@ where
             log_folded_height -= 1;
             index_folded_row >>= 1;
 
-            // TODO[osama]: factor this out
-            let folded_matrix = RowMajorMatrix::new(folded_row, 2);
-            folded_row = folded_matrix
-                .par_rows()
-                .enumerate()
-                .map(|(i, row)| {
-                    g.fold_row(
-                        index_folded_row + i,
-                        log_folded_height,
-                        beta,
-                        row.into_iter(),
-                    )
-                })
-                .collect();
+            folded_row = fold_partial_row(g, index_folded_row, log_folded_height, beta, folded_row);
 
             if let Some(poly_eval) = opened_rows_iter.next_if(|v| v.len() == folded_row.len()) {
                 izip!(&mut folded_row, poly_eval).for_each(|(f, v)| *f += *v);
@@ -229,4 +216,17 @@ where
     );
 
     Ok(folded_eval)
+}
+
+fn fold_partial_row<G, F>(g: &G, index: usize, log_height: usize, beta: F, evals: Vec<F>) -> Vec<F>
+where
+    G: FriGenericConfig<F>,
+    F: Field,
+{
+    let folded_matrix = RowMajorMatrix::new(evals, 2);
+    folded_matrix
+        .par_rows()
+        .enumerate()
+        .map(|(i, row)| g.fold_row(index + i, log_height, beta, row.into_iter()))
+        .collect()
 }
