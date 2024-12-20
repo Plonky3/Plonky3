@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use clap::Parser;
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
 use p3_blake3_air::Blake3Air;
@@ -124,20 +122,14 @@ fn main() {
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
-                    let result =
-                        prove_monty31_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
+                    let result = prove_monty31_keccak::<_, EF, _, _>(proof_goal, dft, num_hashes);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut thread_rng());
-                    let result = prove_monty31_poseidon2(
-                        proof_goal,
-                        dft,
-                        num_hashes,
-                        perm16,
-                        perm24,
-                        PhantomData::<EF>,
+                    let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
+                        proof_goal, dft, num_hashes, perm16, perm24,
                     );
                     report_result(result);
                 }
@@ -179,20 +171,14 @@ fn main() {
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
-                    let result =
-                        prove_monty31_keccak(proof_goal, dft, num_hashes, PhantomData::<EF>);
+                    let result = prove_monty31_keccak::<_, EF, _, _>(proof_goal, dft, num_hashes);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut thread_rng());
-                    let result = prove_monty31_poseidon2(
-                        proof_goal,
-                        dft,
-                        num_hashes,
-                        perm16,
-                        perm24,
-                        PhantomData::<EF>,
+                    let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
+                        proof_goal, dft, num_hashes, perm16, perm24,
                     );
                     report_result(result);
                 }
