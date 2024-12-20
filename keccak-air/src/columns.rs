@@ -62,6 +62,24 @@ pub struct KeccakCols<T> {
     pub a_prime_prime_prime_0_0_limbs: [T; U64_LIMBS],
 }
 
+impl<T: Default + Copy> Default for KeccakCols<T> {
+    fn default() -> Self {
+        Self {
+            step_flags: [T::default(); NUM_ROUNDS],
+            export: T::default(),
+            preimage: [[[T::default(); U64_LIMBS]; 5]; 5],
+            postimage: [[[T::default(); U64_LIMBS]; 5]; 5],
+            a: [[[T::default(); U64_LIMBS]; 5]; 5],
+            c: [[T::default(); 64]; 5],
+            c_prime: [[T::default(); 64]; 5],
+            a_prime: [[[T::default(); 64]; 5]; 5],
+            a_prime_prime: [[[T::default(); U64_LIMBS]; 5]; 5],
+            a_prime_prime_0_0_bits: [T::default(); 64],
+            a_prime_prime_prime_0_0_limbs: [T::default(); U64_LIMBS],
+        }
+    }
+}
+
 impl<T: Copy> KeccakCols<T> {
     pub fn b(&self, x: usize, y: usize, z: usize) -> T {
         debug_assert!(x < 5);
