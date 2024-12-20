@@ -1,11 +1,5 @@
 use std::fmt::Debug;
 
-use crate::airs::ExampleGenericAir;
-use crate::types::{
-    KeccakCircleStarkConfig, KeccakCompressionFunction, KeccakMerkleMmcs, KeccakStarkConfig,
-    Poseidon2CircleStarkConfig, Poseidon2Compression, Poseidon2MerkleMmcs, Poseidon2Sponge,
-    Poseidon2StarkConfig,
-};
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
@@ -19,6 +13,13 @@ use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHashe
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
+
+use crate::airs::ExampleGenericAir;
+use crate::types::{
+    KeccakCircleStarkConfig, KeccakCompressionFunction, KeccakMerkleMmcs, KeccakStarkConfig,
+    Poseidon2CircleStarkConfig, Poseidon2Compression, Poseidon2MerkleMmcs, Poseidon2Sponge,
+    Poseidon2StarkConfig,
+};
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
 fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {

@@ -7,7 +7,6 @@ use p3_keccak_air::KeccakAir;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::VectorizedPoseidon2Air;
-
 use p3_uni_stark::{
     DebugConstraintBuilder, ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder,
     SymbolicExpression, VerifierConstraintFolder,
