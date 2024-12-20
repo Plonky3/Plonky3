@@ -4,11 +4,11 @@ use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::extension::BinomialExtensionField;
-use p3_field::{ExtensionField, Field, PrimeField32, TwoAdicField};
+use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
+use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_mersenne_31::{Mersenne31, PackedMersenne31AVX2};
+use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::distributions::Standard;
@@ -176,28 +176,20 @@ pub fn prove_m31_keccak<
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
 pub fn prove_m31_poseidon2<
-    Perm16: CryptographicPermutation<[Mersenne31; 16]>
-        + CryptographicPermutation<[PackedMersenne31AVX2; 16]>,
-    Perm24: CryptographicPermutation<[Mersenne31; 24]>
-        + CryptographicPermutation<[PackedMersenne31AVX2; 24]>,
-    PG: ExampleHashAir<
-        Mersenne31,
-        Poseidon2CircleStarkConfig<
-            Mersenne31,
-            BinomialExtensionField<Mersenne31, 3>,
-            Perm16,
-            Perm24,
-        >,
-    >,
+    F: PrimeField64 + ComplexExtendable,
+    EF: ExtensionField<F>,
+    Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
+    Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
+    PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>,
 >(
     proof_goal: PG,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
-) -> Result<(), impl Debug> {
-    type F = Mersenne31;
-    type EF = BinomialExtensionField<Mersenne31, 3>;
-
+) -> Result<(), impl Debug>
+where
+    Standard: Distribution<F>,
+{
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());

@@ -185,6 +185,8 @@ fn main() {
             };
         }
         FieldOptions::Mersenne31 => {
+            type EF = BinomialExtensionField<Mersenne31, 3>;
+
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
@@ -223,7 +225,9 @@ fn main() {
                 MerkleHashOptions::Poseidon2 => {
                     let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut thread_rng());
                     let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut thread_rng());
-                    let result = prove_m31_poseidon2(proof_goal, num_hashes, perm16, perm24);
+                    let result = prove_m31_poseidon2::<_, EF, _, _, _>(
+                        proof_goal, num_hashes, perm16, perm24,
+                    );
                     report_result(result);
                 }
             };
