@@ -8,9 +8,8 @@ use p3_commit::Mmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
-use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-use tracing::{debug, debug_span, info_span, instrument};
+use tracing::{debug_span, info_span, instrument};
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
@@ -98,10 +97,6 @@ where
 
     while folded.len() > config.blowup() * config.final_poly_len() {
         let arity = config.arity();
-        debug!("arity: {}", arity);
-
-        debug!("proving commit layer: folded.len(): {}, config.blowup(): {}, config.final_poly_len(): {}", folded.len(), config.blowup(), config.final_poly_len());
-
         let next_folded_len = folded.len() / arity;
 
         // First, we collect the polynomial evaluations that will be committed this round.
@@ -124,11 +119,6 @@ where
         let matrices_to_commit: Vec<DenseMatrix<Challenge>> = iter::once(folded_matrix)
             .chain(polys_before_next_round)
             .collect();
-
-        debug!("committing matrices with the following dimensions:");
-        for matrix in &matrices_to_commit {
-            debug!("width: {}, height: {}", matrix.width, matrix.height());
-        }
 
         let (commit, prover_data) = config.mmcs.commit(matrices_to_commit);
         challenger.observe(commit.clone());
@@ -203,17 +193,11 @@ where
     F: Field,
     M: Mmcs<F>,
 {
-    debug!("answer query with index: {}", index);
     commit_phase_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
             let index_row = index >> ((i + 1) * config.arity_bits);
-
-            debug!(
-                "query commit iteration: commit_i: {}, index_row: {}",
-                i, index_row
-            );
 
             let (opened_rows, opening_proof) = config.mmcs.open_batch(index_row, commit);
             assert_eq!(

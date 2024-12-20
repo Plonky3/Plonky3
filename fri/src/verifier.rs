@@ -7,7 +7,6 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_util::reverse_bits_len;
-use tracing::debug;
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 
@@ -126,24 +125,13 @@ where
     M: Mmcs<F> + 'a,
     G: FriGenericConfig<F>,
 {
-    debug!(
-        "verifying query proof, index: {:?}, reduced_openings: {:#?}",
-        index, reduced_openings
-    );
-
     let mut folded_eval = F::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
 
     let mut log_folded_height = log_max_height;
 
     while log_folded_height > config.log_blowup + config.log_final_poly_len {
-        debug!(
-            "query iteration, log_folded_height: {:?}",
-            log_folded_height
-        );
-
-        if let Some((lh, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
-            debug!("adding directly from reduced openings at lh: {:?}", lh);
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
             folded_eval += ro;
         }
 
