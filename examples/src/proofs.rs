@@ -14,7 +14,7 @@ use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 
-use crate::airs::ExampleGenericAir;
+use crate::airs::ExampleHashAir;
 use crate::types::{
     KeccakCircleStarkConfig, KeccakCompressionFunction, KeccakMerkleMmcs, KeccakStarkConfig,
     Poseidon2CircleStarkConfig, Poseidon2Compression, Poseidon2MerkleMmcs, Poseidon2Sponge,
@@ -56,16 +56,16 @@ fn get_poseidon2_mmcs<
 ///
 /// This allows the user to choose:
 /// - The Field
-/// - The Proof Goal (Choice of Hash function and number of hashes to prove)
+/// - The Proof Goal (Choice of both hash function and desired number of hashes to prove)
 /// - The DFT
 #[inline]
 pub fn prove_monty31_keccak<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     DFT: TwoAdicSubgroupDft<F>,
-    PO: ExampleGenericAir<F, KeccakStarkConfig<F, EF, DFT>>,
+    PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
 >(
-    proof_goal: PO,
+    proof_goal: PG,
     dft: DFT,
     num_hashes: usize,
 ) -> Result<(), impl Debug>
@@ -81,7 +81,7 @@ where
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
-    let config = StarkConfig::new(pcs);
+    let config = KeccakStarkConfig::new(pcs);
 
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
@@ -103,9 +103,9 @@ pub fn prove_monty31_poseidon2<
     DFT: TwoAdicSubgroupDft<F>,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
-    PO: ExampleGenericAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
+    PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
 >(
-    proof_goal: PO,
+    proof_goal: PG,
     dft: DFT,
     num_hashes: usize,
     perm16: Perm16,
@@ -134,16 +134,18 @@ where
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
 ///
-/// This allows the user to choose:
+/// This fixes the field and Mersenne31 and makes use of the circle stark.
+///
+/// It currently allows the user to choose:
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
 pub fn prove_m31_keccak<
-    PO: ExampleGenericAir<
+    PG: ExampleHashAir<
         Mersenne31,
         KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
     >,
 >(
-    proof_goal: PO,
+    proof_goal: PG,
     num_hashes: usize,
 ) -> Result<(), impl Debug> {
     type F = Mersenne31;
@@ -157,7 +159,7 @@ pub fn prove_m31_keccak<
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
 
-    let config = StarkConfig::new(pcs);
+    let config = KeccakCircleStarkConfig::new(pcs);
 
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
@@ -168,7 +170,9 @@ pub fn prove_m31_keccak<
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
 ///
-/// This allows the user to choose:
+/// This fixes the field and Mersenne31 and makes use of the circle stark.
+///
+/// It currently allows the user to choose:
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
 pub fn prove_m31_poseidon2<
@@ -176,7 +180,7 @@ pub fn prove_m31_poseidon2<
         + CryptographicPermutation<[PackedMersenne31AVX2; 16]>,
     Perm24: CryptographicPermutation<[Mersenne31; 24]>
         + CryptographicPermutation<[PackedMersenne31AVX2; 24]>,
-    PO: ExampleGenericAir<
+    PG: ExampleHashAir<
         Mersenne31,
         Poseidon2CircleStarkConfig<
             Mersenne31,
@@ -186,7 +190,7 @@ pub fn prove_m31_poseidon2<
         >,
     >,
 >(
-    proof_goal: PO,
+    proof_goal: PG,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
@@ -203,7 +207,7 @@ pub fn prove_m31_poseidon2<
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
 
-    let config = StarkConfig::new(pcs);
+    let config = Poseidon2CircleStarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
     let mut verif_challenger = DuplexChallenger::new(perm24.clone());
@@ -212,6 +216,9 @@ pub fn prove_m31_poseidon2<
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
+/// Report the result of the proof.
+///
+/// Either print that the proof was successful or panic and return the error.
 #[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
     if result.is_ok() {

@@ -43,7 +43,11 @@ pub enum ProofObjective<
     ),
 }
 
-pub trait ExampleGenericAir<F: Field, SC: StarkGenericConfig>:
+/// An AIR for a hash function used for example proofs and benchmarking.
+///
+/// A key feature is the ability to randomly generate a trace which proves
+/// the output of some number of hashes using a given hash function.
+pub trait ExampleHashAir<F: Field, SC: StarkGenericConfig>:
     BaseAir<F>
     + for<'a> Air<DebugConstraintBuilder<'a, F>>
     + Air<SymbolicAirBuilder<F>>
@@ -134,7 +138,7 @@ impl<
         const HALF_FULL_ROUNDS: usize,
         const PARTIAL_ROUNDS: usize,
         const VECTOR_LEN: usize,
-    > ExampleGenericAir<F, SC>
+    > ExampleHashAir<F, SC>
     for ProofObjective<
         F,
         LinearLayers,

@@ -1,4 +1,4 @@
-//! This file contains a collection of simple Enums which allow a nice command line interface.
+//! This file contains a collection of Enums which allow a nice command line interface.
 //!
 //! For each enum, we allow the user to specify the enum either using the whole string or any substring
 //! which fully determines the choice. We additionally add a few extra aliases if other natural ones exist.
