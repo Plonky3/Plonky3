@@ -8,9 +8,11 @@ use p3_matrix::Matrix;
 pub struct FriConfig<M> {
     pub log_blowup: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
+    /// log of the number of coefficients in the final polynomial
     pub log_final_poly_len: usize,
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
+    pub arity_bits: usize,
     pub mmcs: M,
 }
 
@@ -21,6 +23,10 @@ impl<M> FriConfig<M> {
 
     pub const fn final_poly_len(&self) -> usize {
         1 << self.log_final_poly_len
+    }
+
+    pub const fn arity(&self) -> usize {
+        1 << self.arity_bits
     }
 
     /// Returns the soundness bits of this FRI instance based on the
@@ -66,6 +72,7 @@ pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
         log_final_poly_len: 0,
         num_queries: 2,
         proof_of_work_bits: 1,
+        arity_bits: 1,
         mmcs,
     }
 }
@@ -78,6 +85,8 @@ pub fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
         log_final_poly_len: 0,
         num_queries: 100,
         proof_of_work_bits: 16,
+        // TODO[osama]: consider increasing this
+        arity_bits: 1,
         mmcs,
     }
 }

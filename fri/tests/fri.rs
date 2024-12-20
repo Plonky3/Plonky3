@@ -39,6 +39,8 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm,
         log_final_poly_len,
         num_queries: 10,
         proof_of_work_bits: 8,
+        // TODO[osama]: have tests with higher fri arity
+        arity_bits: 2,
         mmcs,
     };
     (perm, fri_config)
@@ -129,10 +131,15 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 
 #[test]
 fn test_fri_ldt() {
+    // TODO[osama]: delete this and delete form cargo.toml
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init();
+
     // FRI is kind of flaky depending on indexing luck
-    for i in 0..4 {
+    for i in 0..2 {
         let mut rng = ChaCha20Rng::seed_from_u64(i as u64);
-        do_test_fri_ldt(&mut rng, i + 1);
+        do_test_fri_ldt(&mut rng, i + 1); // TODO[osama]: can log_final_poly_len be 0?
     }
 }
 

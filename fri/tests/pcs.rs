@@ -181,6 +181,8 @@ mod babybear_fri_pcs {
             log_final_poly_len: 0,
             num_queries: 10,
             proof_of_work_bits: 8,
+            // TODO[osama]: have tests with higher fri arity
+            arity_bits: 1,
             mmcs: challenge_mmcs,
         };
 
@@ -234,6 +236,8 @@ mod m31_fri_pcs {
             log_final_poly_len: 0,
             num_queries: 10,
             proof_of_work_bits: 8,
+            // TODO[osama]: add tests with higher fri arity
+            arity_bits: 1,
             mmcs: challenge_mmcs,
         };
         let pcs = Pcs {

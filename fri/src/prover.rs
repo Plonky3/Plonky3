@@ -7,9 +7,12 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{
+    dense::{DenseMatrix, RowMajorMatrix},
+    Matrix,
+};
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-use tracing::{debug_span, info_span, instrument};
+use tracing::{debug, debug_span, info_span, instrument};
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
@@ -95,20 +98,66 @@ where
     let mut data = vec![];
 
     while folded.len() > config.blowup() * config.final_poly_len() {
-        let leaves = RowMajorMatrix::new(folded, 2);
-        let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
+        let arity = config.arity();
+        debug!("arity: {}", arity);
+
+        debug!("proving commit layer: folded.len(): {}, config.blowup(): {}, config.final_poly_len(): {}", folded.len(), config.blowup(), config.final_poly_len());
+
+        let next_folded_len = folded.len() / arity;
+
+        // First, we collect the polynomial evaluations that will be committed this round.
+        // Those are `folded` and polynomials in `inputs` not consumed yet with number of
+        // evaluations more than `next_folded_len`
+        let mut polys_before_next_round = vec![];
+
+        let mut cur_folded_len = folded.len();
+        while cur_folded_len > next_folded_len {
+            if let Some(poly_eval) = inputs_iter.next_if(|v| v.len() == cur_folded_len) {
+                let width = poly_eval.len() / next_folded_len;
+                let poly_eval_matrix = RowMajorMatrix::new(poly_eval, width);
+                polys_before_next_round.push(poly_eval_matrix);
+            }
+
+            cur_folded_len /= 2;
+        }
+
+        let folded_matrix = RowMajorMatrix::new(folded.clone(), arity);
+        let matrices_to_commit: Vec<DenseMatrix<Challenge>> = iter::once(folded_matrix)
+            .chain(polys_before_next_round)
+            .collect();
+
+        debug!("committing matrices with the following dimensions:");
+        for matrix in &matrices_to_commit {
+            debug!("width: {}, height: {}", matrix.width, matrix.height());
+        }
+
+        let (commit, prover_data) = config.mmcs.commit(matrices_to_commit);
         challenger.observe(commit.clone());
 
+        // Next, we fold `folded` and `polys_before_next_round` to prepare for the next round
         let beta: Challenge = challenger.sample_ext_element();
-        // We passed ownership of `current` to the MMCS, so get a reference to it
-        let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
-        folded = g.fold_matrix(beta, leaves.as_view());
+
+        // Get a reference to the committed matrices
+        let leaves = config.mmcs.get_matrices(&prover_data);
+        let mut leaves_iter = leaves.into_iter().peekable();
+        // Skip `folded`
+        leaves_iter.next();
+
+        while folded.len() > next_folded_len {
+            let matrix_to_fold = RowMajorMatrix::new(folded, 2);
+            folded = g.fold_matrix(beta, matrix_to_fold);
+
+            if let Some(poly_eval) = leaves_iter.next_if(|v| v.values.len() == folded.len()) {
+                izip!(&mut folded, &poly_eval.values).for_each(|(f, v)| *f += *v);
+            }
+        }
 
         commits.push(commit);
         data.push(prover_data);
 
-        if let Some(v) = inputs_iter.next_if(|v| v.len() == folded.len()) {
-            izip!(&mut folded, v).for_each(|(c, x)| *c += x);
+        // We directly add the next polynomial's evaluations into `folded` in case their lengths match
+        if let Some(poly_eval) = inputs_iter.next_if(|v| v.len() == folded.len()) {
+            izip!(&mut folded, poly_eval).for_each(|(c, x)| *c += x);
         }
     }
 
@@ -129,7 +178,7 @@ where
     debug_assert!(
         final_poly
             .iter()
-            .skip(1 << config.log_final_poly_len)
+            .skip(config.final_poly_len())
             .all(|x| x.is_zero()),
         "All coefficients beyond final_poly_len must be zero"
     );
@@ -155,22 +204,27 @@ where
     F: Field,
     M: Mmcs<F>,
 {
+    debug!("answer query with index: {}", index);
     commit_phase_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            let index_i = index >> i;
-            let index_i_sibling = index_i ^ 1;
-            let index_pair = index_i >> 1;
+            let index_row = index >> ((i + 1) * config.arity_bits);
 
-            let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index_pair, commit);
-            assert_eq!(opened_rows.len(), 1);
-            let opened_row = opened_rows.pop().unwrap();
-            assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
-            let sibling_value = opened_row[index_i_sibling % 2];
+            debug!(
+                "query commit iteration: commit_i: {}, index_row: {}",
+                i, index_row
+            );
+
+            let (opened_rows, opening_proof) = config.mmcs.open_batch(index_row, commit);
+            assert_eq!(
+                opened_rows[0].len(),
+                config.arity(),
+                "The folded array should be of size arity"
+            );
 
             CommitPhaseProofStep {
-                sibling_value,
+                opened_rows,
                 opening_proof,
             }
         })

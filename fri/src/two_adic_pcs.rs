@@ -20,7 +20,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
 use serde::{Deserialize, Serialize};
-use tracing::{info_span, instrument};
+use tracing::{debug, info_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriGenericConfig, FriProof};
@@ -79,7 +79,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         let log_arity = 1;
         let (e0, e1) = evals
             .collect_tuple()
-            .expect("TwoAdicFriFolder only supports arity=2");
+            .expect("TwoAdicFriGenericConfig only supports folding rows of size 2");
         // If performance critical, make this API stateful to avoid this
         // This is a bit more math than is necessary, but leaving it here
         // in case we want higher arity in the future
@@ -96,6 +96,13 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
     }
 
     fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
+        // TODO[osama]: remove extra info
+        debug!(
+            "folding matrix with dimensions: width: {}, height: {}",
+            m.width(),
+            m.height()
+        );
+
         // We use the fact that
         //     p_e(x^2) = (p(x) + p(-x)) / 2
         //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
@@ -122,7 +129,9 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         m.par_rows()
             .zip(powers)
             .map(|(mut row, power)| {
-                let (lo, hi) = row.next_tuple().unwrap();
+                let (lo, hi) = row
+                    .next_tuple()
+                    .expect("TwoAdicFriGenericConfig only supports folding rows of size 2");
                 (one_half + power) * lo + (one_half - power) * hi
             })
             .collect()
