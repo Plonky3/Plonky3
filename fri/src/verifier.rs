@@ -226,7 +226,7 @@ where
 {
     let folded_matrix = RowMajorMatrix::new(evals, 2);
     folded_matrix
-        .par_rows()
+        .rows()
         .enumerate()
         .map(|(i, row)| g.fold_row(index + i, log_height, beta, row.into_iter()))
         .collect()
