@@ -1,4 +1,4 @@
-//! This file contains a collection of simple Enums which allow a nice command line interface.
+//! This file contains a collection of Enums which allow a nice command line interface.
 //!
 //! For each enum, we allow the user to specify the enum either using the whole string or any substring
 //! which fully determines the choice. We additionally add a few extra aliases if other natural ones exist.
@@ -12,6 +12,7 @@ use clap::ValueEnum;
 pub enum FieldOptions {
     BabyBear,
     KoalaBear,
+    Mersenne31,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub enum ProofOptions {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DftOptions {
+    None,
     Radix2DitParallel,
     RecursiveDft,
 }
@@ -64,7 +66,11 @@ fn get_aliases(
 
 impl ValueEnum for FieldOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[FieldOptions::BabyBear, FieldOptions::KoalaBear]
+        &[
+            FieldOptions::BabyBear,
+            FieldOptions::KoalaBear,
+            FieldOptions::Mersenne31,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -74,6 +80,9 @@ impl ValueEnum for FieldOptions {
             }
             FieldOptions::KoalaBear => {
                 get_aliases("koala-bear", 1, Some(vec![("koalabear", 6), ("kb", 2)]))
+            }
+            FieldOptions::Mersenne31 => {
+                get_aliases("mersenne-31", 1, Some(vec![("mersenne31", 9), ("m31", 2)]))
             }
         })
     }
@@ -111,7 +120,11 @@ impl ValueEnum for ProofOptions {
 
 impl ValueEnum for DftOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[DftOptions::Radix2DitParallel, DftOptions::RecursiveDft]
+        &[
+            DftOptions::Radix2DitParallel,
+            DftOptions::RecursiveDft,
+            DftOptions::None,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -124,6 +137,7 @@ impl ValueEnum for DftOptions {
                 2,
                 Some(vec![("radix2ditparallel", 6), ("parallel", 1)]),
             ),
+            DftOptions::None => PossibleValue::new(""),
         })
     }
 }

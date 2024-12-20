@@ -14,10 +14,8 @@ mod symbolic_variable;
 mod verifier;
 mod zerofier_coset;
 
-#[cfg(debug_assertions)]
 mod check_constraints;
 
-#[cfg(debug_assertions)]
 pub use check_constraints::*;
 pub use config::*;
 pub use folder::*;
