@@ -29,7 +29,11 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type MyFriConfig = FriConfig<ChallengeMmcs>;
 
-fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm, MyFriConfig) {
+fn get_ldt_for_testing<R: Rng>(
+    rng: &mut R,
+    arity_bits: usize,
+    log_final_poly_len: usize,
+) -> (Perm, MyFriConfig) {
     let perm = Perm::new_from_rng_128(rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
@@ -39,15 +43,14 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm,
         log_final_poly_len,
         num_queries: 10,
         proof_of_work_bits: 8,
-        // TODO[osama]: have tests with higher fri arity
-        arity_bits: 2,
+        arity_bits,
         mmcs,
     };
     (perm, fri_config)
 }
 
-fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
-    let (perm, fc) = get_ldt_for_testing(rng, log_final_poly_len);
+fn do_test_fri_ldt<R: Rng>(rng: &mut R, arity_bits: usize, log_final_poly_len: usize) {
+    let (perm, fc) = get_ldt_for_testing(rng, arity_bits, log_final_poly_len);
     let dft = Radix2Dit::default();
 
     let shift = Val::GENERATOR;
@@ -131,15 +134,12 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 
 #[test]
 fn test_fri_ldt() {
-    // TODO[osama]: delete this and delete form cargo.toml
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .try_init();
-
     // FRI is kind of flaky depending on indexing luck
-    for i in 0..2 {
-        let mut rng = ChaCha20Rng::seed_from_u64(i as u64);
-        do_test_fri_ldt(&mut rng, i + 1); // TODO[osama]: can log_final_poly_len be 0?
+    for arity_bits in 1..3 {
+        for log_final_poly_len in 0..5 {
+            let mut rng = ChaCha20Rng::seed_from_u64(log_final_poly_len as u64);
+            do_test_fri_ldt(&mut rng, arity_bits, log_final_poly_len);
+        }
     }
 }
 
@@ -150,6 +150,6 @@ fn test_fri_ldt_should_panic() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng, 5);
+        do_test_fri_ldt(&mut rng, 1, 5);
     }
 }

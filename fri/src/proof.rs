@@ -13,6 +13,7 @@ pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
     pub final_poly: Vec<F>,
+    pub log_max_height: usize,
     pub pow_witness: Witness,
 }
 

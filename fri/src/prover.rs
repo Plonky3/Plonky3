@@ -68,6 +68,7 @@ where
         commit_phase_commits: commit_phase_result.commits,
         query_proofs,
         final_poly: commit_phase_result.final_poly,
+        log_max_height,
         pow_witness,
     }
 }

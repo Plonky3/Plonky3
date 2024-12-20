@@ -82,9 +82,6 @@ where
         index: usize,
         prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
     ) -> (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
-        // TODO[osama]: delete this
-        debug!("opening batch with index: {}", index);
-
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 

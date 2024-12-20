@@ -20,7 +20,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits, VecExt};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info_span, instrument};
+use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{prover, FriConfig, FriGenericConfig, FriProof};
@@ -96,13 +96,6 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
     }
 
     fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
-        // TODO[osama]: remove extra info
-        debug!(
-            "folding matrix with dimensions: width: {}, height: {}",
-            m.width(),
-            m.height()
-        );
-
         // We use the fact that
         //     p_e(x^2) = (p(x) + p(-x)) / 2
         //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
