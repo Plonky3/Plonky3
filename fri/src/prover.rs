@@ -7,10 +7,8 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::{
-    dense::{DenseMatrix, RowMajorMatrix},
-    Matrix,
-};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
+use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug, debug_span, info_span, instrument};
 

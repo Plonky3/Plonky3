@@ -4,7 +4,8 @@ use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::{Dimensions, Matrix};
 use p3_util::reverse_bits_len;
 use tracing::debug;
 
