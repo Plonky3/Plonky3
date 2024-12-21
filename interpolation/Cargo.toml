@@ -1,14 +1,14 @@
 [package]
 name = "p3-interpolation"
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field", version = "0.1.5-succinct" }
-p3-matrix = { path = "../matrix", version = "0.1.5-succinct" }
-p3-util = { path = "../util", version = "0.1.5-succinct" }
+p3-field = { path = "../field", version = "0.1.6-succinct" }
+p3-matrix = { path = "../matrix", version = "0.1.6-succinct" }
+p3-util = { path = "../util", version = "0.1.6-succinct" }
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

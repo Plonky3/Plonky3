@@ -2,7 +2,7 @@
 name = "p3-maybe-rayon"
 description = "Feature-gated wrapper around rayon"
 license = "MIT OR Apache-2.0"
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 
 [features]

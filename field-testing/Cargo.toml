@@ -1,12 +1,12 @@
 [package]
 name = "p3-field-testing"
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field", version = "0.1.5-succinct" }
+p3-field = { path = "../field", version = "0.1.6-succinct" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 criterion = "0.5.1"
 

@@ -1,24 +1,24 @@
 [package]
 name = "p3-mds"
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-dft = { path = "../dft", version = "0.1.5-succinct" }
-p3-field = { path = "../field", version = "0.1.5-succinct" }
-p3-matrix = { path = "../matrix", version = "0.1.5-succinct" }
-p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
-p3-util = { path = "../util", version = "0.1.5-succinct" }
+p3-dft = { path = "../dft", version = "0.1.6-succinct" }
+p3-field = { path = "../field", version = "0.1.6-succinct" }
+p3-matrix = { path = "../matrix", version = "0.1.6-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.6-succinct" }
+p3-util = { path = "../util", version = "0.1.6-succinct" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 itertools = "0.12.0"
 
 [dev-dependencies]
 criterion = "0.5.1"
-p3-baby-bear = { path = "../baby-bear", version = "0.1.5-succinct" }
-p3-goldilocks = { path = "../goldilocks", version = "0.1.5-succinct" }
-p3-mersenne-31 = { path = "../mersenne-31", version = "0.1.5-succinct" }
+p3-baby-bear = { path = "../baby-bear", version = "0.1.6-succinct" }
+p3-goldilocks = { path = "../goldilocks", version = "0.1.6-succinct" }
+p3-mersenne-31 = { path = "../mersenne-31", version = "0.1.6-succinct" }
 
 [[bench]]
 name = "mds"

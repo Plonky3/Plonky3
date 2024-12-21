@@ -1,17 +1,17 @@
 [package]
 name = "p3-challenger"
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field", version = "0.1.5-succinct" }
-p3-util = { path = "../util", version = "0.1.5-succinct" }
-p3-maybe-rayon = { path = "../maybe-rayon", version = "0.1.5-succinct" }
-p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
+p3-field = { path = "../field", version = "0.1.6-succinct" }
+p3-util = { path = "../util", version = "0.1.6-succinct" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.1.6-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.6-succinct" }
 tracing = "0.1.37"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
-p3-goldilocks = { path = "../goldilocks", version = "0.1.5-succinct" }
+p3-goldilocks = { path = "../goldilocks", version = "0.1.6-succinct" }

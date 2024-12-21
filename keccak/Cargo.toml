@@ -1,10 +1,10 @@
 [package]
 name = "p3-keccak"
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.6-succinct" }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }

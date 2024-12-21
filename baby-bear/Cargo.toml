@@ -1,7 +1,7 @@
 [package]
 name = "p3-baby-bear"
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.1.5-succinct"
+version = "0.1.6-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -9,16 +9,16 @@ license = "MIT OR Apache-2.0"
 nightly-features = []
 
 [dependencies]
-p3-field = { path = "../field", version = "0.1.5-succinct" }
-p3-mds = { path = "../mds", version = "0.1.5-succinct" }
-p3-poseidon2 = { path = "../poseidon2", version = "0.1.5-succinct" }
-p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
+p3-field = { path = "../field", version = "0.1.6-succinct" }
+p3-mds = { path = "../mds", version = "0.1.6-succinct" }
+p3-poseidon2 = { path = "../poseidon2", version = "0.1.6-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.6-succinct" }
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
-p3-field-testing = { path = "../field-testing", version = "0.1.5-succinct" }
+p3-field-testing = { path = "../field-testing", version = "0.1.6-succinct" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 criterion = "0.5.1"
 rand_chacha = "0.3.1"
