@@ -7,14 +7,14 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, FieldAlgebra};
-use p3_fri::{prover, verifier, FriConfig, TwoAdicFriGenericConfig};
+use p3_fri::{prover, verifier, FriConfig, FriGenericConfig, TwoAdicFriGenericConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
-use rand::{Rng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 type Val = BabyBear;
@@ -147,4 +147,35 @@ fn test_fri_ldt_should_panic() {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
         do_test_fri_ldt(&mut rng, 5);
     }
+}
+
+#[test]
+fn test_higher_arity_fold() {
+    type F = BabyBear;
+
+    let log_arity = 4;
+    let arity = 1 << log_arity;
+    let log_n = 10;
+    let n = 1 << log_n;
+
+    let g = TwoAdicFriGenericConfig::<Vec<(usize, F)>, ()>(PhantomData);
+    let dft = Radix2Dit::default();
+    let mut rng = thread_rng();
+    let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
+    let evals = dft.dft(coeffs.clone());
+
+    let beta = rng.gen::<F>();
+    let mut result = evals.clone();
+    let mut new_beta = beta;
+    for _ in 0..log_arity {
+        let inputs = RowMajorMatrix::new(result, 2);
+        result = g.fold_matrix(new_beta, inputs, 1);
+        new_beta = new_beta.square();
+    }
+
+    let inputs = RowMajorMatrix::new(evals, arity);
+    let folded = g.fold_matrix(beta, inputs, log_arity);
+
+    assert_eq!(result.len(), folded.len());
+    assert_eq!(result, folded);
 }

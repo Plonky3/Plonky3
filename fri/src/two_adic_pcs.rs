@@ -130,7 +130,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         } else {
             // Let h = 2^log_arity. Write a polynomial p(x) as sum_{i=0}^{h-1} x^i p_i(x^h).
             // We seek a vector of evaluations of the polynomial
-            // p'(x) = sum_{i=1}^{h-1} beta^i p_i(x), given evaluations of p(x).
+            // p'(x) = sum_{i=0}^{h-1} beta^i p_i(x), given evaluations of p(x).
             //
             // Let z be an h-th root of unity. We use the formula:
             // p_j(x) = 1/(h x^j) sum_{k=0}^{h-1} z^{-i*j}p(z^i*x), which is basically an inverse
