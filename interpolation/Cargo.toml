@@ -1,5 +1,6 @@
 [package]
 name = "p3-interpolation"
+description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
 version = "0.1.5-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
