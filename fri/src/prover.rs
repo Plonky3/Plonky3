@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{AbstractField, ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::{info_span, instrument};
 
@@ -27,8 +27,7 @@ where
 
     let commit_phase_result = commit_phase(config, input, log_max_height, challenger);
 
-    // let pow_witness = challenger.grind(config.proof_of_work_bits);
-    let pow_witness = Challenger::Witness::one();
+    let pow_witness = challenger.grind(config.proof_of_work_bits);
 
     let query_indices: Vec<usize> = (0..config.num_queries)
         .map(|_| challenger.sample_bits(log_max_height))
