@@ -74,7 +74,7 @@ pub trait FriGenericConfig<F: Field> {
     ) -> F;
 
     /// Same as applying fold_row to every row, possibly faster.
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M, arity: usize) -> Vec<F>;
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M, log_arity: usize) -> Vec<F>;
 }
 
 /// Creates a minimal `FriConfig` for testing purposes.

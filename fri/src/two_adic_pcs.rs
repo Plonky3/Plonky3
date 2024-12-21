@@ -95,37 +95,84 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
     }
 
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M, _arity: usize) -> Vec<F> {
-        // We use the fact that
-        //     p_e(x^2) = (p(x) + p(-x)) / 2
-        //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
-        // that is,
-        //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
-        //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
-        // so
-        //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
-        //                    = (1/2 + beta/2 g_inv^i) p(g^i)
-        //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
-        let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-        let one_half = F::ONE.halve();
-        let half_beta = beta * one_half;
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M, log_arity: usize) -> Vec<F> {
+        if log_arity == 1 {
+            // We use the fact that
+            //     p_e(x^2) = (p(x) + p(-x)) / 2
+            //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
+            // that is,
+            //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
+            //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
+            // so
+            //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
+            //                    = (1/2 + beta/2 g_inv^i) p(g^i)
+            //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
+            let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
+            let one_half = F::ONE.halve();
+            let half_beta = beta * one_half;
 
-        // TODO: vectorize this (after we have packed extension fields)
+            // TODO: vectorize this (after we have packed extension fields)
 
-        // beta/2 times successive powers of g_inv
-        let mut powers = g_inv
-            .shifted_powers(half_beta)
-            .take(m.height())
-            .collect_vec();
-        reverse_slice_index_bits(&mut powers);
+            // beta/2 times successive powers of g_inv
+            let mut powers = g_inv
+                .shifted_powers(half_beta)
+                .take(m.height())
+                .collect_vec();
+            reverse_slice_index_bits(&mut powers);
 
-        m.par_rows()
-            .zip(powers)
-            .map(|(mut row, power)| {
-                let (lo, hi) = row.next_tuple().unwrap();
-                (one_half + power) * lo + (one_half - power) * hi
-            })
-            .collect()
+            m.par_rows()
+                .zip(powers)
+                .map(|(mut row, power)| {
+                    let (lo, hi) = row.next_tuple().unwrap();
+                    (one_half + power) * lo + (one_half - power) * hi
+                })
+                .collect()
+        } else {
+            // Let h = 2^log_arity. Write a polynomial p(x) as sum_{i=0}^{h-1} x^i p_i(x^h).
+            // We seek a vector of evaluations of the polynomial
+            // p'(x) = sum_{i=1}^{h-1} beta^i p_i(x), given evaluations of p(x).
+            //
+            // Let z be an h-th root of unity. We use the formula:
+            // p_j(x) = 1/(h x^j) sum_{k=0}^{h-1} z^{-i*j}p(z^i*x), which is basically an inverse
+            // Fourier transform.
+            // Plugging this in to the expression for p'(x) gives:
+            // p'(x) = sum_{i,j=1}^{h-1} beta^i p(z^i * x) * beta^j * z^{-i*j} / (h x^j).
+
+            let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + log_arity).inverse();
+            let normalizing_factor = F::from_canonical_u32(1 << log_arity).inverse();
+
+            // TODO: vectorize this (after we have packed extension fields)
+
+            // successive powers of g_inv
+            let mut g_powers = g_inv.powers().take(m.height()).collect_vec();
+            reverse_slice_index_bits(&mut g_powers);
+
+            let root_of_unity = F::two_adic_generator(log_arity);
+            let mut roots_of_unity = root_of_unity
+                .inverse()
+                .powers()
+                .take(1 << log_arity)
+                .collect_vec();
+            reverse_slice_index_bits(&mut roots_of_unity);
+
+            m.par_rows()
+                .zip(g_powers)
+                .map(|(row, power)| {
+                    row.zip(roots_of_unity.iter())
+                        .map(|(r, root)| {
+                            r * normalizing_factor
+                                * izip!(
+                                    beta.powers().take(1 << log_arity),
+                                    root.powers(),
+                                    power.powers()
+                                )
+                                .map(|(a, b, c)| a * b * c)
+                                .sum()
+                        })
+                        .sum()
+                })
+                .collect()
+        }
     }
 }
 
