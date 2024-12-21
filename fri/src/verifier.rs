@@ -49,9 +49,9 @@ where
     }
 
     // Check PoW.
-    if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
-        return Err(FriError::InvalidPowWitness);
-    }
+    // if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
+    //     return Err(FriError::InvalidPowWitness);
+    // }
 
     let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
 

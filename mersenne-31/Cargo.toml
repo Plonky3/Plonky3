@@ -1,6 +1,6 @@
 [package]
 name = "p3-mersenne-31"
-version = "0.1.0"
+version = "0.1.5-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -9,21 +9,21 @@ nightly-features = []
 
 [dependencies]
 itertools = "0.12.0"
-p3-dft = { path = "../dft" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-mds = { path = "../mds" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
+p3-dft = { path = "../dft", version = "0.1.5-succinct" }
+p3-field = { path = "../field", version = "0.1.5-succinct" }
+p3-matrix = { path = "../matrix", version = "0.1.5-succinct" }
+p3-mds = { path = "../mds", version = "0.1.5-succinct" }
+p3-maybe-rayon = { path = "../maybe-rayon", version = "0.1.5-succinct" }
+p3-poseidon2 = { path = "../poseidon2", version = "0.1.5-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
+p3-util = { path = "../util", version = "0.1.5-succinct" }
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.5"
-p3-field-testing = { path = "../field-testing" }
+p3-field-testing = { path = "../field-testing", version = "0.1.5-succinct" }
 rand_chacha = "0.3.1"
 rand_xoshiro = "0.6.0"
 

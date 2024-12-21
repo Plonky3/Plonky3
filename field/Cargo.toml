@@ -1,11 +1,11 @@
 [package]
 name = "p3-field"
-version = "0.1.0"
+version = "0.1.5-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-util = { path = "../util" }
+p3-util = { path = "../util", version = "0.1.5-succinct" }
 num-bigint = { version = "0.4.3", default-features = false }
 num-traits = { version = "0.2.18", default_features = false }
 

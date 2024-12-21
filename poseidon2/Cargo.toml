@@ -1,23 +1,23 @@
 [package]
 name = "p3-poseidon2"
-version = "0.1.0"
+version = "0.1.5-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 gcd = "2.3.0"
-p3-field = { path = "../field" }
-p3-symmetric = { path = "../symmetric" }
-p3-mds = { path = "../mds" }
+p3-field = { path = "../field", version = "0.1.5-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
+p3-mds = { path = "../mds", version = "0.1.5-succinct" }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
-p3-mersenne-31 = { path = "../mersenne-31" }
-p3-baby-bear = { path = "../baby-bear" }
-p3-koala-bear = { path = "../koala-bear" }
-p3-bn254-fr = { path = "../bn254-fr" }
-p3-goldilocks = { path = "../goldilocks" }
+p3-mersenne-31 = { path = "../mersenne-31", version = "0.1.5-succinct" }
+p3-baby-bear = { path = "../baby-bear", version = "0.1.5-succinct" }
+p3-koala-bear = { path = "../koala-bear", version = "0.1.5-succinct" }
+p3-bn254-fr = { path = "../bn254-fr", version = "0.1.5-succinct" }
+p3-goldilocks = { path = "../goldilocks", version = "0.1.5-succinct" }
 criterion = "0.5.1"
 
 [[bench]]

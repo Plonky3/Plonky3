@@ -1,16 +1,16 @@
 [package]
 name = "p3-monolith"
-version = "0.1.0"
+version = "0.1.5-succinct"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 generic-array = "1.0"
-p3-field = { path = "../field" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
-p3-mds = { path = "../mds" }
-p3-symmetric = { path = "../symmetric" }
+p3-field = { path = "../field", version = "0.1.5-succinct" }
+p3-goldilocks = { path = "../goldilocks", version = "0.1.5-succinct" }
+p3-mersenne-31 = { path = "../mersenne-31", version = "0.1.5-succinct" }
+p3-mds = { path = "../mds", version = "0.1.5-succinct" }
+p3-symmetric = { path = "../symmetric", version = "0.1.5-succinct" }
 sha3 = "0.10"
 
 [dev-dependencies]
