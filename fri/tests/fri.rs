@@ -16,6 +16,7 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use tracing::Level;
 
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
@@ -31,6 +32,7 @@ type MyFriConfig = FriConfig<ChallengeMmcs>;
 
 fn get_ldt_for_testing<R: Rng>(
     rng: &mut R,
+    log_blowup: usize,
     arity_bits: usize,
     log_final_poly_len: usize,
 ) -> (Perm, MyFriConfig) {
@@ -39,7 +41,7 @@ fn get_ldt_for_testing<R: Rng>(
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_config = FriConfig {
-        log_blowup: 1,
+        log_blowup,
         log_final_poly_len,
         num_queries: 10,
         proof_of_work_bits: 8,
@@ -49,16 +51,23 @@ fn get_ldt_for_testing<R: Rng>(
     (perm, fri_config)
 }
 
-fn do_test_fri_ldt<R: Rng>(rng: &mut R, arity_bits: usize, log_final_poly_len: usize) {
-    let (perm, fc) = get_ldt_for_testing(rng, arity_bits, log_final_poly_len);
+fn do_test_fri_ldt<R: Rng>(
+    rng: &mut R,
+    log_blowup: usize,
+    arity_bits: usize,
+    log_final_poly_len: usize,
+    deg_low: usize,
+    deg_high: usize,
+) {
+    let (perm, fc) = get_ldt_for_testing(rng, log_blowup, arity_bits, log_final_poly_len);
     let dft = Radix2Dit::default();
 
     let shift = Val::GENERATOR;
 
-    let ldes: Vec<RowMajorMatrix<Val>> = (5..10)
+    let ldes: Vec<RowMajorMatrix<Val>> = (deg_low..deg_high)
         .map(|deg_bits| {
             let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
-            let mut lde = dft.coset_lde_batch(evals, 1, shift);
+            let mut lde = dft.coset_lde_batch(evals, fc.log_blowup, shift);
             reverse_matrix_index_bits(&mut lde);
             lde
         })
@@ -138,7 +147,7 @@ fn test_fri_ldt() {
     for arity_bits in 1..3 {
         for log_final_poly_len in 0..5 {
             let mut rng = ChaCha20Rng::seed_from_u64(log_final_poly_len as u64);
-            do_test_fri_ldt(&mut rng, arity_bits, log_final_poly_len);
+            do_test_fri_ldt(&mut rng, 1, arity_bits, log_final_poly_len, 5, 10);
         }
     }
 }
@@ -150,6 +159,16 @@ fn test_fri_ldt_should_panic() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
         let mut rng = ChaCha20Rng::seed_from_u64(i);
-        do_test_fri_ldt(&mut rng, 1, 5);
+        do_test_fri_ldt(&mut rng, 1, 1, 5, 5, 10);
     }
+}
+
+#[test]
+fn test_fri_arity_4() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::DEBUG)
+        .init();
+
+    let mut rng = ChaCha20Rng::seed_from_u64(0);
+    do_test_fri_ldt(&mut rng, 0, 2, 0, 1, 4);
 }

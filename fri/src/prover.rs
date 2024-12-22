@@ -90,14 +90,35 @@ where
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
     G: FriGenericConfig<Challenge>,
 {
+    // To illustrate the folding logic with arity > 2, let's go through an example.
+    // Suppose `inputs` consists of three polynomials with degrees 8, 4, and 2.
+    // There will be two FRI commitment layers: one at height 8 and one at height 2.
+
+    // The first commitment layer will consist of two matrices:
+    // - one of dimensions 2x4 corresponding to the first polynomial's evaluations
+    // - one of dimensions 2x2 corresponding to the second polynomial's evaluations
+
+    // The polynomial folding happens incrementally as follows: the first polynomial is folded
+    // once so its number of evaluations is halved, the second polynomial's evaluations are added
+    // to that, and then the sum is folded further to reduce the number of evaluations to 2.
+
+    // At that point, the third polynomial's evaluations are added to the running sum, and that sum
+    // is committed to form the second FRI commitment layer. The only matrix in this layer is of
+    // dimensions 2x1
+
+    // TODO[osama]: update all heights above ^
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
 
+    let arity = config.arity();
+
     while folded.len() > config.blowup() * config.final_poly_len() {
-        let arity = config.arity();
-        let next_folded_len = folded.len() / arity;
+        let cur_arity = arity.min(folded.len());
+
+        let next_folded_len = folded.len() / cur_arity;
 
         // First, we collect the polynomial evaluations that will be committed this round.
         // Those are `folded` and polynomials in `inputs` not consumed yet with number of
@@ -115,7 +136,7 @@ where
             cur_folded_len /= 2;
         }
 
-        let folded_matrix = RowMajorMatrix::new(folded.clone(), arity);
+        let folded_matrix = RowMajorMatrix::new(folded.clone(), cur_arity);
         let matrices_to_commit: Vec<DenseMatrix<Challenge>> = iter::once(folded_matrix)
             .chain(polys_before_next_round)
             .collect();
@@ -200,11 +221,6 @@ where
             let index_row = index >> ((i + 1) * config.arity_bits);
 
             let (opened_rows, opening_proof) = config.mmcs.open_batch(index_row, commit);
-            assert_eq!(
-                opened_rows[0].len(),
-                config.arity(),
-                "The folded array should be of size arity"
-            );
 
             CommitPhaseProofStep {
                 opened_rows,

@@ -14,6 +14,7 @@ use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
 pub enum FriError<CommitMmcsErr, InputError> {
     InvalidProofShape,
     CommitPhaseMmcsError(CommitMmcsErr),
+    OpenedRowMismatch,
     InputError(InputError),
     FinalPolyMismatch,
     InvalidPowWitness,
@@ -131,26 +132,31 @@ where
     let mut log_folded_height = log_max_height;
 
     while log_folded_height > config.log_blowup + config.log_final_poly_len {
+        let cur_arity_bits = config.arity_bits.min(log_folded_height);
+
         if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
             folded_eval += ro;
         }
 
         let (&beta, comm, opening) = steps.next().unwrap();
 
-        let index_row = index >> config.arity_bits;
+        let index_row = index >> cur_arity_bits;
 
         // Verify that `folded_eval` and evals from reduced_openings match opened_rows
-        assert_eq!(folded_eval, opening.opened_rows[0][index % config.arity()]);
+        if folded_eval != opening.opened_rows[0][index % config.arity()] {
+            return Err(FriError::OpenedRowMismatch);
+        }
         for row in opening.opened_rows.iter().skip(1) {
-            // TODO[osama]: consider adding an assert for the length of row to make sure the right thing is being read
             let (lh, ro) = ro_iter.next().unwrap();
+            // Make sure the read row is of the correct length
+            if row.len() != 1 << (lh + cur_arity_bits - log_folded_height) {
+                return Err(FriError::OpenedRowMismatch);
+            }
+
             let current_index = index >> (log_folded_height - lh);
-            assert_eq!(
-                ro,
-                row[current_index % row.len()],
-                "reduced opening mismatch at level {:?}",
-                lh
-            );
+            if ro != row[current_index % row.len()] {
+                return Err(FriError::OpenedRowMismatch);
+            }
         }
 
         let dims: Vec<_> = opening
@@ -158,7 +164,7 @@ where
             .iter()
             .map(|opened_row| Dimensions {
                 width: opened_row.len(),
-                height: 1 << (log_folded_height - config.arity_bits),
+                height: 1 << (log_folded_height - cur_arity_bits),
             })
             .collect();
 
@@ -177,7 +183,7 @@ where
 
         let mut opened_rows_iter = opening.opened_rows.iter().peekable();
         let mut folded_row = opened_rows_iter.next().unwrap().clone();
-        let mut index_folded_row = index_row << config.arity_bits;
+        let mut index_folded_row = index_row << cur_arity_bits;
         while folded_row.len() > 1 {
             index >>= 1;
             log_folded_height -= 1;
@@ -190,7 +196,7 @@ where
             }
         }
 
-        folded_eval = folded_row.remove(0);
+        folded_eval = folded_row.pop().unwrap();
         assert!(folded_row.is_empty());
     }
 
