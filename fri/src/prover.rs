@@ -145,7 +145,7 @@ where
         challenger.observe(commit.clone());
 
         // Next, we fold `folded` and `polys_before_next_round` to prepare for the next round
-        let beta: Challenge = challenger.sample_ext_element();
+        let mut beta: Challenge = challenger.sample_ext_element();
 
         // Get a reference to the committed matrices
         let leaves = config.mmcs.get_matrices(&prover_data);
@@ -156,6 +156,7 @@ where
         while folded.len() > next_folded_len {
             let matrix_to_fold = RowMajorMatrix::new(folded, 2);
             folded = g.fold_matrix(beta, matrix_to_fold);
+            beta = beta.square();
 
             if let Some(poly_eval) = leaves_iter.next_if(|v| v.values.len() == folded.len()) {
                 izip!(&mut folded, &poly_eval.values).for_each(|(f, v)| *f += *v);

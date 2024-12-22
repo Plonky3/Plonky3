@@ -74,7 +74,7 @@ where
             config,
             index >> g.extra_query_index_bits(),
             izip!(
-                &betas,
+                betas.clone(),
                 &proof.commit_phase_commits,
                 &qp.commit_phase_openings
             ),
@@ -108,7 +108,7 @@ where
 }
 
 type CommitStep<'a, F, M> = (
-    &'a F,
+    F,
     &'a <M as Mmcs<F>>::Commitment,
     &'a CommitPhaseProofStep<F, M>,
 );
@@ -138,7 +138,7 @@ where
             folded_eval += ro;
         }
 
-        let (&beta, comm, opening) = steps.next().unwrap();
+        let (mut beta, comm, opening) = steps.next().unwrap();
 
         let index_row = index >> cur_arity_bits;
 
@@ -190,6 +190,7 @@ where
             index_folded_row >>= 1;
 
             folded_row = fold_partial_row(g, index_folded_row, log_folded_height, beta, folded_row);
+            beta = beta.square();
 
             if let Some(poly_eval) = opened_rows_iter.next_if(|v| v.len() == folded_row.len()) {
                 izip!(&mut folded_row, poly_eval).for_each(|(f, v)| *f += *v);
