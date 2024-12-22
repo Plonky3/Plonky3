@@ -95,14 +95,20 @@ where
     let mut data = vec![];
 
     while folded.len() > config.blowup() * config.final_poly_len() {
-        let leaves = RowMajorMatrix::new(folded, 2);
+        let log_arity = if folded.len() > 1 << config.log_arity_start_degree {
+            1
+        } else {
+            config.log_arity
+        };
+        let arity = 1 << log_arity;
+        let leaves = RowMajorMatrix::new(folded, arity);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
 
         let beta: Challenge = challenger.sample_ext_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
-        folded = g.fold_matrix(beta, leaves.as_view(), 1);
+        folded = g.fold_matrix(beta, leaves.as_view(), log_arity);
 
         commits.push(commit);
         data.push(prover_data);

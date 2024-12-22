@@ -38,10 +38,6 @@ impl<M> FriConfig<M> {
         1 << self.log_final_poly_len
     }
 
-    pub const fn arity(&self) -> usize {
-        1 << self.log_arity
-    }
-
     /// Returns the soundness bits of this FRI instance based on the
     /// [ethSTARK](https://eprint.iacr.org/2021/582) conjecture.
     ///
