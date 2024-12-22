@@ -91,22 +91,22 @@ where
     G: FriGenericConfig<Challenge>,
 {
     // To illustrate the folding logic with arity > 2, let's go through an example.
-    // Suppose `inputs` consists of three polynomials with degrees 8, 4, and 2.
-    // There will be two FRI commitment layers: one at height 8 and one at height 2.
+    // Suppose `inputs` consists of three polynomials with degrees 16, 8, and 4, and
+    // suppose that arity = 4 and final_poly_len = 1.
+    // There will be two FRI commitment layers: one at height 16 and one at height 4.
 
     // The first commitment layer will consist of two matrices:
-    // - one of dimensions 2x4 corresponding to the first polynomial's evaluations
-    // - one of dimensions 2x2 corresponding to the second polynomial's evaluations
+    // - one of dimensions 4x4 corresponding to the first polynomial's evaluations
+    // - one of dimensions 4x2 corresponding to the second polynomial's evaluations
 
     // The polynomial folding happens incrementally as follows: the first polynomial is folded
     // once so its number of evaluations is halved, the second polynomial's evaluations are added
-    // to that, and then the sum is folded further to reduce the number of evaluations to 2.
+    // to that, and then the sum is folded by 2 further to reduce the number of evaluations to 4.
 
     // At that point, the third polynomial's evaluations are added to the running sum, and that sum
-    // is committed to form the second FRI commitment layer. The only matrix in this layer is of
-    // dimensions 2x1
-
-    // TODO[osama]: update all heights above ^
+    // is committed to form the second FRI commitment layer. The only matrix in that layer is of
+    // dimensions 4x1. The final polynomial's evaluation can then be computed through those 4
+    // evaluations.
 
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
