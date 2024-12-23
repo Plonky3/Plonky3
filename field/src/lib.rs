@@ -8,7 +8,7 @@ mod array;
 mod batch_inverse;
 mod exponentiation;
 pub mod extension;
-mod field;
+pub mod field;
 mod helpers;
 mod packed;
 
