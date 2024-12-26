@@ -1,9 +1,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use p3_field::Field;
+use p3_symmetric::{CryptographicHasher, CryptographicPermutation};
 
-use p3_symmetric::CryptographicHasher;
-
-use crate::{CanObserve, CanSample};
+use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
 #[derive(Clone, Debug)]
 pub struct HashChallenger<T, H, const OUT_LEN: usize>
@@ -54,7 +54,7 @@ where
 }
 
 impl<T, H, const N: usize, const OUT_LEN: usize> CanObserve<[T; N]>
-    for HashChallenger<T, H, OUT_LEN>
+for HashChallenger<T, H, OUT_LEN>
 where
     T: Clone,
     H: CryptographicHasher<T, [T; OUT_LEN]>,
@@ -79,6 +79,37 @@ where
             .pop()
             .expect("Output buffer should be non-empty")
     }
+}
+
+impl<T, H, const OUT_LEN: usize> CanObserve<Vec<T>> for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    fn observe(&mut self, values: Vec<T>) {
+        for v in values {
+            self.observe(v);
+        }
+    }
+}
+
+impl<T, H, const OUT_LEN: usize> CanObserve<Vec<Vec<T>>> for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    fn observe(&mut self, values: Vec<Vec<T>>) {
+        for v in values {
+            self.observe(v);
+        }
+    }
+}
+
+impl<T, H, const OUT_LEN: usize> FieldChallenger<T> for HashChallenger<T, H, OUT_LEN>
+where
+    T: Field,
+    H: CryptographicHasher<T, [T; OUT_LEN]> + Sync,
+{
 }
 
 #[cfg(test)]

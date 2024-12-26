@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="CPP_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/air/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/baby-bear/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/baby-bear/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/blake3-air/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/blake3-air/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/blake3/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bls12-377/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/bls12-377/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bn254-fr/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/bn254-fr/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/challenger/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/circle/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/circle/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/circle/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/commit/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/dft/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/dft/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/field-testing/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/field/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/fri/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/fri/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/fri/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/goldilocks/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/goldilocks/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/interpolation/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/keccak-air/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/keccak-air/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/keccak/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/keccak/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/koala-bear/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/koala-bear/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/matrix/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/matrix/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/maybe-rayon/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mds/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/mds/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/merkle-tree/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/merkle-tree/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mersenne-31/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/mersenne-31/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/monolith/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/monolith/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/monty-31/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/poseidon/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/poseidon/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/poseidon2-air/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/poseidon2-air/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/poseidon2/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/poseidon2/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/rescue/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/rescue/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/sha256/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/symmetric/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/uni-stark/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/uni-stark/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/util/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

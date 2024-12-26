@@ -50,7 +50,7 @@ pub trait CanSampleBits<T> {
 }
 
 pub trait FieldChallenger<F: Field>:
-    CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
+    CanObserve<F> + CanSample<F> + Sync
 {
     fn observe_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self, ext: EF) {
         self.observe_slice(ext.as_base_slice());

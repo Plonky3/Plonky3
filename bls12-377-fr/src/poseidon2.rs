@@ -11,48 +11,49 @@ use p3_poseidon2::{
     ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, Poseidon2,
 };
 
-use crate::Bn254Fr;
+use crate::Bls12377Fr;
 
 /// Degree of the chosen permutation polynomial for BN254, used as the Poseidon2 S-Box.
 ///
 /// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-const BN254_S_BOX_DEGREE: u64 = 5;
+/// TODO (nazarevsky): figure this out
+const BLS12337_S_BOX_DEGREE: u64 = 5;
 
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///
 /// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
-pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
-    Bn254Fr,
-    Poseidon2ExternalLayerBn254<WIDTH>,
-    Poseidon2InternalLayerBn254,
+pub type Poseidon2Bls12337<const WIDTH: usize> = Poseidon2<
+    Bls12377Fr,
+    Poseidon2ExternalLayerBls12337<WIDTH>,
+    Poseidon2InternalLayerBls12337,
     WIDTH,
-    BN254_S_BOX_DEGREE,
+    BLS12337_S_BOX_DEGREE,
 >;
 
 /// Currently we only support a single width for Poseidon2 BN254.
 const BN254_WIDTH: usize = 3;
 
 #[inline]
-fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
-    static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; 3]> = OnceLock::new();
-    MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::ONE, Bn254Fr::ONE, Bn254Fr::TWO])
+fn get_diffusion_matrix_3() -> &'static [Bls12377Fr; 3] {
+    static MAT_DIAG3_M_1: OnceLock<[Bls12377Fr; 3]> = OnceLock::new();
+    MAT_DIAG3_M_1.get_or_init(|| [Bls12377Fr::ONE, Bls12377Fr::ONE, Bls12377Fr::TWO])
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Poseidon2InternalLayerBn254 {
-    internal_constants: Vec<Bn254Fr>,
+pub struct Poseidon2InternalLayerBls12337 {
+    internal_constants: Vec<Bls12377Fr>,
 }
 
-impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
-    fn new_from_constants(internal_constants: Vec<Bn254Fr>) -> Self {
+impl InternalLayerConstructor<Bls12377Fr> for Poseidon2InternalLayerBls12337 {
+    fn new_from_constants(internal_constants: Vec<Bls12377Fr>) -> Self {
         Self { internal_constants }
     }
 }
 
-impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
+impl InternalLayer<Bls12377Fr, BN254_WIDTH, BLS12337_S_BOX_DEGREE> for Poseidon2InternalLayerBls12337 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [Bn254Fr; BN254_WIDTH]) {
-        internal_permute_state::<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE>(
+    fn permute_state(&self, state: &mut [Bls12377Fr; BN254_WIDTH]) {
+        internal_permute_state::<Bls12377Fr, BN254_WIDTH, BLS12337_S_BOX_DEGREE>(
             state,
             |x| matmul_internal(x, *get_diffusion_matrix_3()),
             &self.internal_constants,
@@ -60,91 +61,74 @@ impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2Intern
     }
 }
 
-pub type Poseidon2ExternalLayerBn254<const WIDTH: usize> = ExternalLayerConstants<Bn254Fr, WIDTH>;
+pub type Poseidon2ExternalLayerBls12337<const WIDTH: usize> = ExternalLayerConstants<Bls12377Fr, WIDTH>;
 
-impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
-    for Poseidon2ExternalLayerBn254<WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Bls12377Fr, WIDTH>
+    for Poseidon2ExternalLayerBls12337<WIDTH>
 {
-    fn new_from_constants(external_constants: ExternalLayerConstants<Bn254Fr, WIDTH>) -> Self {
+    fn new_from_constants(external_constants: ExternalLayerConstants<Bls12377Fr, WIDTH>) -> Self {
         external_constants
     }
 }
 
-impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
-    for Poseidon2ExternalLayerBn254<WIDTH>
+impl<const WIDTH: usize> ExternalLayer<Bls12377Fr, WIDTH, BLS12337_S_BOX_DEGREE>
+    for Poseidon2ExternalLayerBls12337<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [Bn254Fr; WIDTH]) {
+    fn permute_state_initial(&self, state: &mut [Bls12377Fr; WIDTH]) {
         external_initial_permute_state(
             state,
             self.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, BN254_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic::<_, BLS12337_S_BOX_DEGREE>,
             &HLMDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_terminal(&self, state: &mut [Bn254Fr; WIDTH]) {
+    fn permute_state_terminal(&self, state: &mut [Bls12377Fr; WIDTH]) {
         external_terminal_permute_state(
             state,
             self.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, BN254_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic::<_, BLS12337_S_BOX_DEGREE>,
             &HLMDSMat4,
         );
     }
 }
 
+// TODO (nazarevsky): the test is not working
 #[cfg(test)]
 mod tests {
     use ff::PrimeField;
-    use halo2curves::serde::SerdeObject;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
     use rand::Rng;
     use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
-    use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
+    use zkhash::fields::bls12::FpBLS12 as ark_Bls12;
+    // use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-    use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
+    use zkhash::poseidon2::poseidon2_instance_bls12::{POSEIDON2_BLS_2_PARAMS, POSEIDON2_BLS_3_PARAMS, POSEIDON2_BLS_4_PARAMS, POSEIDON2_BLS_8_PARAMS, RC3};
 
     use super::*;
-    use crate::FFBn254Fr;
+    use crate::FFBls12377Fr;
 
-    fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254Fr {
+    fn bls12337_from_ark_ff(input: ark_Bls12) -> Bls12377Fr {
         let bytes = input.into_bigint().to_bytes_le();
 
-        let mut res = <FFBn254Fr as PrimeField>::Repr::default();
+        let value = FFBls12377Fr::from_le_bytes_mod_order(input.0.to_bytes_le().as_slice());
+        // if value.is_some().into() {
+        //     Bn254Fr {
+        //         value: value.unwrap(),
+        //     }
+        // } else {
+        //     panic!("Invalid field element")
+        // }
+        let a = Bls12377Fr {
+            value: value,
+        };
 
-        for (i, digit) in res.as_mut().iter_mut().enumerate() {
-            *digit = bytes[i];
-        }
+        println!("{}", a.to_string());
 
-        let value = FFBn254Fr::from_repr(res);
-
-        if value.is_some().into() {
-            let a = Bn254Fr {
-                value: value.unwrap(),
-            };
-
-            // println!("{}", a.to_string());
-
-            a
-        } else {
-            panic!("Invalid field element")
-        }
-    }
-
-    fn bn254_from_ark_ff2(input: ark_FpBN256) -> Bn254Fr {
-        let bytes = input.into_bigint().to_bytes_le();
-
-        let value = FFBn254Fr::from_raw_bytes(input.0.to_bytes_le().as_slice());
-
-        if value.is_some().into() {
-            Bn254Fr {
-                value: value.unwrap(),
-            }
-        } else {
-            panic!("Invalid field element")
-        }
+        a
     }
 
     #[test]
@@ -153,12 +137,12 @@ mod tests {
         const ROUNDS_F: usize = 8;
         const ROUNDS_P: usize = 56;
 
-        type F = Bn254Fr;
+        type F = Bls12377Fr;
 
         let mut rng = rand::thread_rng();
 
         // Poiseidon2 reference implementation from zkhash repo.
-        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
+        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BLS_3_PARAMS);
 
         // Copy over round constants from zkhash.
         let mut round_constants: Vec<[F; WIDTH]> = RC3
@@ -166,7 +150,7 @@ mod tests {
             .map(|vec| {
                 vec.iter()
                     .cloned()
-                    .map(bn254_from_ark_ff2)
+                    .map(bls12337_from_ark_ff)
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap()
@@ -184,14 +168,14 @@ mod tests {
             round_constants[(ROUNDS_F / 2)..].to_vec(),
         );
         // Our Poseidon2 implementation.
-        let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
-        //
+        let poseidon2 = Poseidon2Bls12337::new(external_round_constants, internal_round_constants);
+
         // Generate random input and convert to both Goldilocks field formats.
-        let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();
-        let input: [Bn254Fr; 3] = input_ark_ff
+        let input_ark_ff = rng.gen::<[ark_Bls12; WIDTH]>();
+        let input: [Bls12377Fr; 3] = input_ark_ff
             .iter()
             .cloned()
-            .map(bn254_from_ark_ff)
+            .map(bls12337_from_ark_ff)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -202,7 +186,7 @@ mod tests {
         let expected: [F; WIDTH] = output_ref
             .iter()
             .cloned()
-            .map(bn254_from_ark_ff)
+            .map(bls12337_from_ark_ff)
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
