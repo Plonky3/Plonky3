@@ -1,0 +1,38 @@
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use p3_util::{reverse_bits, reverse_slice_index_bits};
+use rand::{thread_rng, Rng};
+
+fn bench_reverse_bits(c: &mut Criterion) {
+    let mut group = c.benchmark_group("reverse_bits");
+    for log_size in [1, 3, 5, 8, 16, 24] {
+        let bits = 1 << log_size;
+        group.bench_with_input(BenchmarkId::from_parameter(bits), &bits, |b, &bits| {
+            let n = 1 << bits;
+            let x = thread_rng().gen_range(0..n);
+            b.iter(|| {
+                black_box(reverse_bits(black_box(x), black_box(n)));
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_reverse_slice_index_bits(c: &mut Criterion) {
+    let mut group = c.benchmark_group("reverse_slice_index_bits");
+    for log_size in [1, 3, 5, 8, 16, 24] {
+        let size = 1 << log_size;
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            let mut rng = thread_rng();
+            let data: Vec<u64> = (0..size).map(|_| rng.gen()).collect();
+            b.iter(|| {
+                let mut test_data = data.clone();
+                reverse_slice_index_bits(black_box(&mut test_data));
+                black_box(test_data)
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_reverse_bits, bench_reverse_slice_index_bits);
+criterion_main!(benches); 
