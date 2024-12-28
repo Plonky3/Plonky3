@@ -69,6 +69,7 @@ pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
 
 // Lookup table of 6-bit reverses.
 // NB: 2^6=64 bytes is a cacheline. A smaller table wastes cache space.
+#[cfg(not(target_arch = "aarch64"))]
 #[rustfmt::skip]
 const BIT_REVERSE_6BIT: &[u8] = &[
     0o00, 0o40, 0o20, 0o60, 0o10, 0o50, 0o30, 0o70,
@@ -81,6 +82,9 @@ const BIT_REVERSE_6BIT: &[u8] = &[
     0o07, 0o47, 0o27, 0o67, 0o17, 0o57, 0o37, 0o77,
 ];
 
+// Ensure that SMALL_ARR_SIZE >= 4 * BIG_T_SIZE.
+const BIG_T_SIZE: usize = 1 << 14;
+const SMALL_ARR_SIZE: usize = 1 << 16;
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
 pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let n = vals.len();
@@ -89,41 +93,98 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     }
     let log_n = log2_strict_usize(n);
 
-    // If the array is small enough, use the lookup table directly
-    if log_n <= 6 {
-        reverse_slice_index_bits_small(vals, log_n);
+    // If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
+    // `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the
+    // array.
+    if core::mem::size_of::<F>() << log_n <= SMALL_ARR_SIZE || core::mem::size_of::<F>() >= BIG_T_SIZE {
+            reverse_slice_index_bits_small(vals, log_n);
     } else {
-        // For larger arrays, use the chunked approach
-        reverse_slice_index_bits_large(vals, log_n);
-    }
-}
+        debug_assert!(n >= 4); // By our choice of `BIG_T_SIZE` and `SMALL_ARR_SIZE`.
 
-#[inline]
-fn reverse_slice_index_bits_small<F>(vals: &mut [F], log_n: usize) {
-    let dst_shr_amt = 6 - log_n;
-    for i in 0..vals.len() {
-        let j = (BIT_REVERSE_6BIT[i] as usize) >> dst_shr_amt;
-        if i < j {
-            vals.swap(i, j);
+        let lb_num_chunks = log_n >> 1;
+        let lb_chunk_size = log_n - lb_num_chunks;
+        unsafe {
+            reverse_slice_index_bits_chunks(vals, lb_num_chunks, lb_chunk_size);
+            transpose_in_place_square(vals, lb_chunk_size, lb_num_chunks, 0);
+            if lb_num_chunks != lb_chunk_size {
+                let vals_with_offset = &mut vals[1 << lb_num_chunks..];
+                transpose_in_place_square(vals_with_offset, lb_chunk_size, lb_num_chunks, 0);
+            }
+            reverse_slice_index_bits_chunks(vals, lb_num_chunks, lb_chunk_size);
         }
     }
 }
 
-#[inline]
-fn reverse_slice_index_bits_large<F>(vals: &mut [F], log_n: usize) {
-    // For large arrays, split the index into high and low parts
-    // This reduces the number of expensive bit reversal operations
-    let src_lo_shr_amt = 64 - (log_n - 6);
-    let src_hi_shl_amt = log_n - 6;
-
-    for i_chunk in 0..(vals.len() >> 6) {
-        let src_lo = i_chunk.reverse_bits() >> src_lo_shr_amt;
-        for i_lo in 0..(1 << 6) {
-            let src = (BIT_REVERSE_6BIT[i_lo] as usize) << src_hi_shl_amt | src_lo;
-            let i = i_chunk << 6 | i_lo;
-            if i < src {
-                vals.swap(i, src);
+#[cfg(not(target_arch = "aarch64"))]
+fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
+    if lb_n <= 6 {
+        let dst_shr_amt = 6 - lb_n as u32;
+        for src in 0..vals.len() {
+            let dst = (BIT_REVERSE_6BIT[src] as usize).wrapping_shr(dst_shr_amt);
+            if src < dst {
+                vals.swap(src, dst);
             }
+        }
+    } else {
+        let dst_lo_shr_amt = usize::BITS - (lb_n - 6) as u32;
+        let dst_hi_shl_amt = lb_n - 6;
+        for src_chunk in 0..(vals.len() >> 6) {
+            let src_hi = src_chunk << 6;
+            let dst_lo = src_chunk.reverse_bits().wrapping_shr(dst_lo_shr_amt);
+            for src_lo in 0..(1 << 6) {
+                let dst_hi = (BIT_REVERSE_6BIT[src_lo] as usize) << dst_hi_shl_amt;
+                let src = src_hi + src_lo;
+                let dst = dst_hi + dst_lo;
+                if src < dst {
+                    vals.swap(src, dst);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
+    for src in 0..vals.len() {
+        let dst = src.reverse_bits().wrapping_shr(usize::BITS - lb_n as u32);
+        if src < dst {
+            vals.swap(src, dst);
+        }
+    }
+}
+
+unsafe fn reverse_slice_index_bits_chunks<F>(
+    vals: &mut [F],
+    lb_num_chunks: usize,
+    lb_chunk_size: usize,
+) {
+    for i in 0..1usize << lb_num_chunks {
+        let j = i.reverse_bits().wrapping_shr(usize::BITS - lb_num_chunks as u32);
+        if i < j {
+            core::ptr::swap_nonoverlapping(
+                vals.get_unchecked_mut(i << lb_chunk_size),
+                vals.get_unchecked_mut(j << lb_chunk_size),
+                1 << lb_chunk_size,
+            );
+        }
+    }
+}
+
+unsafe fn transpose_in_place_square<T>(
+    arr: &mut [T],
+    lb_chunk_size: usize,
+    lb_num_chunks: usize,
+    offset: usize,
+) {
+    let n = 1 << lb_num_chunks;
+    for i in 0..n {
+        for j in 0..i {
+            let a = offset + (i << lb_chunk_size) + j;
+            let b = offset + (j << lb_chunk_size) + i;
+            core::ptr::swap(
+                arr.get_unchecked_mut(a),
+                arr.get_unchecked_mut(b),
+            );
         }
     }
 }
