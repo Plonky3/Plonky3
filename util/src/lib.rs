@@ -51,6 +51,8 @@ pub const fn indices_arr<const N: usize>() -> [usize; N] {
 
 #[inline]
 pub const fn reverse_bits(x: usize, n: usize) -> usize {
+    // Assert that n is a power of 2
+    debug_assert!(n.is_power_of_two());
     reverse_bits_len(x, n.trailing_zeros() as usize)
 }
 
@@ -65,6 +67,20 @@ pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
         .0
 }
 
+// Lookup table of 6-bit reverses.
+// NB: 2^6=64 bytes is a cacheline. A smaller table wastes cache space.
+#[rustfmt::skip]
+const BIT_REVERSE_6BIT: &[u8] = &[
+    0o00, 0o40, 0o20, 0o60, 0o10, 0o50, 0o30, 0o70,
+    0o04, 0o44, 0o24, 0o64, 0o14, 0o54, 0o34, 0o74,
+    0o02, 0o42, 0o22, 0o62, 0o12, 0o52, 0o32, 0o72,
+    0o06, 0o46, 0o26, 0o66, 0o16, 0o56, 0o36, 0o76,
+    0o01, 0o41, 0o21, 0o61, 0o11, 0o51, 0o31, 0o71,
+    0o05, 0o45, 0o25, 0o65, 0o15, 0o55, 0o35, 0o75,
+    0o03, 0o43, 0o23, 0o63, 0o13, 0o53, 0o33, 0o73,
+    0o07, 0o47, 0o27, 0o67, 0o17, 0o57, 0o37, 0o77,
+];
+
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
 pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let n = vals.len();
@@ -73,10 +89,41 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     }
     let log_n = log2_strict_usize(n);
 
-    for i in 0..n {
-        let j = reverse_bits_len(i, log_n);
+    // If the array is small enough, use the lookup table directly
+    if log_n <= 6 {
+        reverse_slice_index_bits_small(vals, log_n);
+    } else {
+        // For larger arrays, use the chunked approach
+        reverse_slice_index_bits_large(vals, log_n);
+    }
+}
+
+#[inline]
+fn reverse_slice_index_bits_small<F>(vals: &mut [F], log_n: usize) {
+    let dst_shr_amt = 6 - log_n;
+    for i in 0..vals.len() {
+        let j = (BIT_REVERSE_6BIT[i] as usize) >> dst_shr_amt;
         if i < j {
             vals.swap(i, j);
+        }
+    }
+}
+
+#[inline]
+fn reverse_slice_index_bits_large<F>(vals: &mut [F], log_n: usize) {
+    // For large arrays, split the index into high and low parts
+    // This reduces the number of expensive bit reversal operations
+    let src_lo_shr_amt = 64 - (log_n - 6);
+    let src_hi_shl_amt = log_n - 6;
+
+    for i_chunk in 0..(vals.len() >> 6) {
+        let src_lo = i_chunk.reverse_bits() >> src_lo_shr_amt;
+        for i_lo in 0..(1 << 6) {
+            let src = (BIT_REVERSE_6BIT[i_lo] as usize) << src_hi_shl_amt | src_lo;
+            let i = i_chunk << 6 | i_lo;
+            if i < src {
+                vals.swap(i, src);
+            }
         }
     }
 }
