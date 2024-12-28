@@ -35,4 +35,4 @@ fn bench_reverse_slice_index_bits(c: &mut Criterion) {
 }
 
 criterion_group!(benches, bench_reverse_bits, bench_reverse_slice_index_bits);
-criterion_main!(benches); 
+criterion_main!(benches);

@@ -96,8 +96,10 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     // If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
     // `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the
     // array.
-    if core::mem::size_of::<F>() << log_n <= SMALL_ARR_SIZE || core::mem::size_of::<F>() >= BIG_T_SIZE {
-            reverse_slice_index_bits_small(vals, log_n);
+    if core::mem::size_of::<F>() << log_n <= SMALL_ARR_SIZE
+        || core::mem::size_of::<F>() >= BIG_T_SIZE
+    {
+        reverse_slice_index_bits_small(vals, log_n);
     } else {
         debug_assert!(n >= 4); // By our choice of `BIG_T_SIZE` and `SMALL_ARR_SIZE`.
 
@@ -119,6 +121,7 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
 fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     if lb_n <= 6 {
         let dst_shr_amt = 6 - lb_n as u32;
+        #[allow(clippy::needless_range_loop)]
         for src in 0..vals.len() {
             let dst = (BIT_REVERSE_6BIT[src] as usize).wrapping_shr(dst_shr_amt);
             if src < dst {
@@ -131,6 +134,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
         for src_chunk in 0..(vals.len() >> 6) {
             let src_hi = src_chunk << 6;
             let dst_lo = src_chunk.reverse_bits().wrapping_shr(dst_lo_shr_amt);
+            #[allow(clippy::needless_range_loop)]
             for src_lo in 0..(1 << 6) {
                 let dst_hi = (BIT_REVERSE_6BIT[src_lo] as usize) << dst_hi_shl_amt;
                 let src = src_hi + src_lo;
@@ -159,7 +163,9 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     lb_chunk_size: usize,
 ) {
     for i in 0..1usize << lb_num_chunks {
-        let j = i.reverse_bits().wrapping_shr(usize::BITS - lb_num_chunks as u32);
+        let j = i
+            .reverse_bits()
+            .wrapping_shr(usize::BITS - lb_num_chunks as u32);
         if i < j {
             core::ptr::swap_nonoverlapping(
                 vals.get_unchecked_mut(i << lb_chunk_size),
@@ -181,10 +187,7 @@ unsafe fn transpose_in_place_square<T>(
         for j in 0..i {
             let a = offset + (i << lb_chunk_size) + j;
             let b = offset + (j << lb_chunk_size) + i;
-            core::ptr::swap(
-                arr.get_unchecked_mut(a),
-                arr.get_unchecked_mut(b),
-            );
+            core::ptr::swap(arr.get_unchecked_mut(a), arr.get_unchecked_mut(b));
         }
     }
 }
@@ -361,6 +364,7 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+
     use rand::rngs::OsRng;
     use rand::Rng;
 
@@ -414,7 +418,7 @@ mod tests {
                 let mut rand_list: Vec<u32> = Vec::with_capacity(length);
                 rand_list.resize_with(length, || rng.gen());
                 let expect = reverse_index_bits_naive(&rand_list);
-                
+
                 let mut actual = rand_list.clone();
                 reverse_slice_index_bits(&mut actual);
 
@@ -461,7 +465,10 @@ mod tests {
         assert_eq!(log2_ceil_usize(2), 1);
         assert_eq!(log2_ceil_usize(1 << 18), 18);
         assert_eq!(log2_ceil_usize(1 << 31), 31);
-        assert_eq!(log2_ceil_usize(1 << (usize::BITS - 1)), usize::BITS as usize - 1);
+        assert_eq!(
+            log2_ceil_usize(1 << (usize::BITS - 1)),
+            usize::BITS as usize - 1
+        );
 
         // Nonpowers; want to round up
         assert_eq!(log2_ceil_usize(3), 2);
