@@ -202,7 +202,7 @@ where
     (buf, i)
 }
 
-/// Split an interator into small arrays and apply `func` to each.
+/// Split an iterator into small arrays and apply `func` to each.
 ///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
 /// pass the array to `func` as a slice. If less than `BUFLEN`
