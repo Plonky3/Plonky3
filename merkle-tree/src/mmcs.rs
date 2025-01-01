@@ -130,7 +130,10 @@ where
         // }
 
         // TODO: Disabled for now, CirclePcs sometimes passes a height that's off by 1 bit.
-        let max_height = dimensions.iter().map(|dim| dim.height).max().unwrap();
+        let Some(max_height) = dimensions.iter().map(|dim| dim.height).max() else {
+            // dimensions is empty
+            return Err(MerkleTreeError::WrongWidth);
+        };
         let log_max_height = log2_ceil_usize(max_height);
         if proof.len() != log_max_height {
             return Err(WrongHeight {
@@ -145,12 +148,13 @@ where
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        let mut curr_height_padded = heights_tallest_first
+        let Some(mut curr_height_padded) = heights_tallest_first
             .peek()
-            .unwrap()
-            .1
-            .height
-            .next_power_of_two();
+            .map(|x| x.1.height.next_power_of_two())
+        else {
+            // dimensions is empty
+            return Err(MerkleTreeError::WrongWidth);
+        };
 
         let mut root = self.hash.hash_iter_slices(
             heights_tallest_first
