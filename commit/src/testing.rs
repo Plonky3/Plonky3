@@ -137,6 +137,8 @@ where
         )
     }
 
+    // This is a testing function, so we allow panics for convenience.
+    #[allow(clippy::panic_in_result_fn)]
     fn verify(
         &self,
         // For each round:
