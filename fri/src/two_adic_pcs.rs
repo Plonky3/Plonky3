@@ -320,21 +320,25 @@ where
                     .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                let mat_compressed =
+                    info_span!("compress mat").in_scope(|| mat.dot_ext_powers(alpha).collect_vec());
+
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let reduced_openings: Challenge =
                         dot_product(alpha.powers(), openings.iter().copied());
 
                     info_span!("reduce rows").in_scope(|| {
-                        mat.dot_ext_powers(alpha)
+                        mat_compressed
+                            .par_iter()
                             .zip(reduced_opening_for_log_height.par_iter_mut())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap().par_iter())
-                            .for_each(|((reduced_row, ro), &inv_denom)| {
+                            .for_each(|((&reduced_row, ro), &inv_denom)| {
                                 *ro +=
                                     alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
-                            })
+                            });
                     });
 
                     num_reduced[log_height] += mat.width();
