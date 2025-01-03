@@ -74,7 +74,7 @@ impl Poseidon2InternalLayerMersenne31 {
 }
 
 impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from an array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
