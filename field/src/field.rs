@@ -253,7 +253,7 @@ pub trait FieldAlgebra:
     }
 
     /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
-    /// before assigning them to a userspace process. In that case, our process should not need to
+    /// before assigning them to an userspace process. In that case, our process should not need to
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.
     ///
     /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
