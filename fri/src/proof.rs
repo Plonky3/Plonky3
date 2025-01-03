@@ -13,6 +13,7 @@ pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
     pub final_poly: Vec<F>,
+    pub log_max_height: usize,
     pub pow_witness: Witness,
 }
 
@@ -31,10 +32,10 @@ pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
-    /// The opening of the commit phase codeword at the sibling location.
-    // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI
-    // folding arities besides 2, meaning that there can be multiple siblings.
-    pub sibling_value: F,
+    /// The opened rows of the commit phase. The first element is the evaluation of the folded
+    /// polynomials so far, and the other elements are evaluations of polynomials of smaller size
+    /// that enter before the next commitment round. See prover::commit_phase for more details
+    pub opened_rows: Vec<Vec<F>>,
 
     pub opening_proof: M::Proof,
 }
