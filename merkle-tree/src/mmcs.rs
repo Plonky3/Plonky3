@@ -11,7 +11,7 @@ use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
-use crate::MerkleTreeError::{RootMismatch, WrongBatchSize, WrongHeight};
+use crate::MerkleTreeError::{EmptyBatch, RootMismatch, WrongBatchSize, WrongHeight};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
 ///
@@ -36,6 +36,7 @@ pub enum MerkleTreeError {
         num_siblings: usize,
     },
     RootMismatch,
+    EmptyBatch,
 }
 
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
@@ -132,7 +133,7 @@ where
         // TODO: Disabled for now, CirclePcs sometimes passes a height that's off by 1 bit.
         let Some(max_height) = dimensions.iter().map(|dim| dim.height).max() else {
             // dimensions is empty
-            return Err(MerkleTreeError::WrongWidth);
+            return Err(EmptyBatch);
         };
         let log_max_height = log2_ceil_usize(max_height);
         if proof.len() != log_max_height {
