@@ -107,11 +107,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext> {
         // Only in standard position do we have an algebraic expression to access the next point.
         if self.is_standard() {
-            Some(
-                (Point::from_projective_line(x) + Point::generator(self.log_n))
-                    .to_projective_line()
-                    .unwrap(),
-            )
+            (Point::from_projective_line(x) + Point::generator(self.log_n)).to_projective_line()
         } else {
             None
         }
