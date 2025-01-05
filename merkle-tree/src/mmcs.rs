@@ -154,7 +154,7 @@ where
             .map(|x| x.1.height.next_power_of_two())
         else {
             // dimensions is empty
-            return Err(MerkleTreeError::WrongWidth);
+            return Err(EmptyBatch);
         };
 
         let mut root = self.hash.hash_iter_slices(
