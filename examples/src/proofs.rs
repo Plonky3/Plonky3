@@ -154,9 +154,9 @@ where
 
 #[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
-    if result.is_ok() {
-        println!("Proof Verified Successfully")
+    if let Err(e) = result {
+        panic!("{:?}", e);
     } else {
-        panic!("{:?}", result.unwrap_err())
+        println!("Proof Verified Successfully")
     }
 }
