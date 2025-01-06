@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
-use p3_field::PrimeField64;
+use p3_field::PrimeField32;
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
 
@@ -11,7 +11,7 @@ use crate::logic::{andn, xor};
 use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 #[instrument(name = "generate Keccak trace", skip_all)]
-pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
+pub fn generate_trace_rows<F: PrimeField32>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
     let used_rows = inputs.len() * NUM_ROUNDS + 1;
     let num_rows = used_rows.next_power_of_two();
     let mut trace =
@@ -46,7 +46,7 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
 }
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
-fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], input: [u64; 25]) {
+fn generate_trace_rows_for_perm<F: PrimeField32>(rows: &mut [KeccakCols<F>], input: [u64; 25]) {
     // Populate the preimage for each row.
     for row in rows.iter_mut() {
         for y in 0..5 {
@@ -86,7 +86,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
     }
 }
 
-fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round: usize) {
+fn generate_trace_row_for_round<F: PrimeField32>(row: &mut KeccakCols<F>, round: usize) {
     row.step_flags[round] = F::one();
 
     // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).

@@ -1,4 +1,6 @@
 use core::borrow::{Borrow, BorrowMut};
+use core::array;
+use core::fmt::{Debug, Formatter, Result};
 use core::mem::{size_of, transmute};
 
 use p3_util::indices_arr;
@@ -62,23 +64,42 @@ pub struct KeccakCols<T> {
     pub a_prime_prime_prime_0_0_limbs: [T; U64_LIMBS],
 }
 
-impl<T: Default + Copy> Default for KeccakCols<T> {
+impl<T: Default> Default for KeccakCols<T> {
     fn default() -> Self {
         Self {
-            step_flags: [T::default(); NUM_ROUNDS],
+            step_flags: array::from_fn(|_| T::default()),
             export: T::default(),
-            preimage: [[[T::default(); U64_LIMBS]; 5]; 5],
-            postimage: [[[T::default(); U64_LIMBS]; 5]; 5],
-            a: [[[T::default(); U64_LIMBS]; 5]; 5],
-            c: [[T::default(); 64]; 5],
-            c_prime: [[T::default(); 64]; 5],
-            a_prime: [[[T::default(); 64]; 5]; 5],
-            a_prime_prime: [[[T::default(); U64_LIMBS]; 5]; 5],
-            a_prime_prime_0_0_bits: [T::default(); 64],
-            a_prime_prime_prime_0_0_limbs: [T::default(); U64_LIMBS],
+            preimage: array::from_fn(|_| array::from_fn(|_| array::from_fn(|_| T::default()))),
+            postimage: array::from_fn(|_| array::from_fn(|_| array::from_fn(|_| T::default()))),
+            a: array::from_fn(|_| array::from_fn(|_| array::from_fn(|_| T::default()))),
+            c: array::from_fn(|_| array::from_fn(|_| T::default())),
+            c_prime: array::from_fn(|_| array::from_fn(|_| T::default())),
+            a_prime: array::from_fn(|_| array::from_fn(|_| array::from_fn(|_| T::default()))),
+            a_prime_prime: array::from_fn(|_| array::from_fn(|_| array::from_fn(|_| T::default()))),
+            a_prime_prime_0_0_bits: array::from_fn(|_| T::default()),
+            a_prime_prime_prime_0_0_limbs: array::from_fn(|_| T::default()),
         }
     }
 }
+
+impl<T: Debug> Debug for KeccakCols<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_struct("KeccakCols")
+            .field("step_flags", &self.step_flags)
+            .field("export", &self.export)
+            .field("preimage", &self.preimage)
+            .field("postimage", &self.postimage)
+            .field("a", &self.a)
+            .field("c", &self.c)
+            .field("c_prime", &self.c_prime)
+            .field("a_prime", &self.a_prime)
+            .field("a_prime_prime", &self.a_prime_prime)
+            .field("a_prime_prime_0_0_bits", &self.a_prime_prime_0_0_bits)
+            .field("a_prime_prime_prime_0_0_limbs", &self.a_prime_prime_prime_0_0_limbs)
+            .finish()
+    }
+}
+
 
 impl<T: Copy> KeccakCols<T> {
     pub fn b(&self, x: usize, y: usize, z: usize) -> T {
