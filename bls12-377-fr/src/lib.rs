@@ -182,6 +182,19 @@ impl Field for Bls12_377Fr {
             0x12ab655e,
         ])
     }
+
+    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 47),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(13u16), 1),
+            (BigUint::from(499u16), 1),
+            (BigUint::from(958612291309063373u128), 1),
+            (BigUint::from(9586122913090633729u128), 2)
+        ]
+    }
 }
 
 impl PrimeField for Bls12_377Fr {
@@ -283,7 +296,7 @@ impl TwoAdicField for Bls12_377Fr {
 #[cfg(test)]
 mod tests {
     use num_traits::One;
-    use p3_field_testing::test_field;
+    use p3_field_testing::{test_field, test_two_adic_field};
     use std::str::FromStr;
 
     use super::*;
@@ -376,4 +389,5 @@ mod tests {
     }
 
     test_field!(crate::Bls12_377Fr);
+    test_two_adic_field!(crate::Bls12_377Fr);
 }
