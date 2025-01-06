@@ -30,6 +30,7 @@ members = [
     "poseidon2-air",
     "rescue",
     "sha256",
+    "stir",
     "symmetric",
     "util",
     "uni-stark",

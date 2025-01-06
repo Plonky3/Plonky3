@@ -11,8 +11,7 @@ pub enum SoundnessType {
 }
 
 #[derive(Debug)]
-pub struct StirConfig<M> where {
-    
+pub struct StirConfig<M> {
     // The targeted security level of the whole construction
     pub security_level: usize,
 
@@ -20,29 +19,28 @@ pub struct StirConfig<M> where {
     pub protocol_security_level: usize,
 
     pub soundness_type: SoundnessType,
-    
-    pub(crate) proof_of_work_bits: Vec<usize>,
-    
+
+    pub proof_of_work_bits: Vec<usize>,
+
     pub mmcs_config: M,
 
     // Folding and code-related parameters
     // Note: All degrees refer to degree bounds + 1
     pub starting_degree: usize,
-    pub(crate) degrees: Vec<usize>,
+    pub degrees: Vec<usize>,
 
     pub stopping_degree: usize,
     pub folding_factor: usize,
 
     pub starting_log_inv_rate: usize,
-    pub(crate) log_inv_rates: Vec<usize>,
+    pub log_inv_rates: Vec<usize>,
 
-    pub(crate) num_rounds: usize,
-    pub(crate) repetitions: Vec<usize>,
-    pub(crate) ood_samples: usize,
+    pub num_rounds: usize,
+    pub repetitions: Vec<usize>,
+    pub ood_samples: usize,
 }
 
 impl<M> StirConfig<M> {
-
     pub fn new(
         security_level: usize,
         protocol_security_level: usize,
@@ -53,7 +51,6 @@ impl<M> StirConfig<M> {
         folding_factor: usize,
         starting_log_inv_rate: usize,
     ) -> Self {
-        
         assert!(folding_factor.is_power_of_two());
         assert!(starting_degree.is_power_of_two());
         assert!(stopping_degree.is_power_of_two());
@@ -61,8 +58,9 @@ impl<M> StirConfig<M> {
         let mut d = starting_degree;
 
         let mut degrees = vec![d];
+        println!("d: {}", d);
         let mut num_rounds = 0;
-        
+
         while d > stopping_degree {
             assert!(d % folding_factor == 0);
             d /= folding_factor;
@@ -70,12 +68,13 @@ impl<M> StirConfig<M> {
             num_rounds += 1;
         }
 
-        let mut log_inv_rates = vec![starting_log_inv_rate];
-        let log_folding = folding_factor.ilog2() as usize;
-        log_inv_rates.extend((1..num_rounds + 1).map(|i| starting_log_inv_rate + i * (log_folding - 1)));
-
         num_rounds -= 1;
         degrees.pop();
+
+        let mut log_inv_rates = vec![starting_log_inv_rate];
+        let log_folding = folding_factor.ilog2() as usize;
+        log_inv_rates
+            .extend((1..num_rounds + 1).map(|i| starting_log_inv_rate + i * (log_folding - 1)));
 
         // Computing repetitions
         let constant = match soundness_type {
@@ -85,7 +84,14 @@ impl<M> StirConfig<M> {
 
         let proof_of_work_bits: Vec<usize> = log_inv_rates
             .iter()
-            .map(|&log_inv_rate| Self::proof_of_work_bits(constant, log_inv_rate, security_level, protocol_security_level))
+            .map(|&log_inv_rate| {
+                Self::proof_of_work_bits(
+                    constant,
+                    log_inv_rate,
+                    security_level,
+                    protocol_security_level,
+                )
+            })
             .collect();
 
         let mut repetitions: Vec<usize> = log_inv_rates
@@ -120,11 +126,11 @@ impl<M> StirConfig<M> {
 
     fn proof_of_work_bits(
         constant: usize,
-        log_inv_rate: usize, 
+        log_inv_rate: usize,
         security_level: usize,
         protocol_security_level: usize,
     ) -> usize {
-        let repetitions = Self::repetitions(constant, protocol_security_level, log_inv_rate);
+        let repetitions = Self::repetitions(constant, log_inv_rate, protocol_security_level);
 
         let achieved_security_bits = (log_inv_rate as f64 / constant as f64) * repetitions as f64;
         let remaining_security_bits = security_level as f64 - achieved_security_bits;
@@ -136,7 +142,7 @@ impl<M> StirConfig<M> {
         }
     }
 
-    fn repetitions(constant: usize,  log_inv_rate: usize, protocol_security_level: usize,) -> usize {
+    fn repetitions(constant: usize, log_inv_rate: usize, protocol_security_level: usize) -> usize {
         ((constant * protocol_security_level) as f64 / log_inv_rate as f64).ceil() as usize
     }
 }
