@@ -16,7 +16,8 @@ use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use ark_ff::{
-    BigInteger, FftField, Field as ArkField, PrimeField as ArkPrimeField, UniformRand, Zero,
+    AdditiveGroup, BigInteger, FftField, Field as ArkField, PrimeField as ArkPrimeField,
+    UniformRand, Zero,
 };
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
@@ -192,7 +193,7 @@ impl Field for Bls12_377Fr {
             (BigUint::from(13u16), 1),
             (BigUint::from(499u16), 1),
             (BigUint::from(958612291309063373u128), 1),
-            (BigUint::from(9586122913090633729u128), 2)
+            (BigUint::from(9586122913090633729u128), 2),
         ]
     }
 }
