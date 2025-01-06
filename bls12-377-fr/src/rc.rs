@@ -1,4 +1,6 @@
 /// Round constraints for Poseidon2 BLS12-377Fr.
+/// Generated using InitRC method from
+/// https://github.com/Consensys/gnark-crypto/blob/master/ecc/bls12-377/fr/poseidon2/poseidon2.go
 use lazy_static::lazy_static;
 
 lazy_static! {
