@@ -21,7 +21,7 @@ fn bench_quartic_extension(c: &mut Criterion) {
     benchmark_mul_latency::<EF4, L_REPS>(c, name);
 }
 
-fn bench_qunitic_extension(c: &mut Criterion) {
+fn bench_quintic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 5>";
     benchmark_square::<EF5>(c, name);
     benchmark_inv::<EF5>(c, name);
@@ -32,6 +32,6 @@ fn bench_qunitic_extension(c: &mut Criterion) {
 criterion_group!(
     bench_babybear_ef,
     bench_quartic_extension,
-    bench_qunitic_extension
+    bench_quintic_extension
 );
 criterion_main!(bench_babybear_ef);
