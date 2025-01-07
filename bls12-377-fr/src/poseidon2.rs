@@ -100,13 +100,14 @@ impl<const WIDTH: usize> ExternalLayer<Bls12_377Fr, WIDTH, BLS12_337_S_BOX_DEGRE
 
 #[cfg(test)]
 mod tests {
-    use crate::rc::RC1;
+    use std::str::FromStr;
+
     use lazy_static::lazy_static;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
-    use std::str::FromStr;
 
     use super::*;
+    use crate::rc::RC1;
     use crate::FF_Bls12_377Fr;
 
     fn bls12337_from_str(input: String) -> Bls12_377Fr {

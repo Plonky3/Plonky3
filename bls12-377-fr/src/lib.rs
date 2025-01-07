@@ -2,24 +2,24 @@
 mod poseidon2;
 pub mod rc;
 
-pub use ark_bls12_377::Fr as FF_Bls12_377Fr;
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+
+pub use ark_bls12_377::Fr as FF_Bls12_377Fr;
+use ark_ff::{
+    AdditiveGroup, BigInteger, FftField, Field as ArkField, PrimeField as ArkPrimeField,
+    UniformRand, Zero,
+};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use num_bigint::BigUint;
 use p3_field::{Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
 pub use poseidon2::Poseidon2Bls12337;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use ark_ff::{
-    AdditiveGroup, BigInteger, FftField, Field as ArkField, PrimeField as ArkPrimeField,
-    UniformRand, Zero,
-};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 /// The BLS12-377 curve scalar field prime, defined as `F_r` where `r = 8444461749428370424248824938781546531375899335154063827935233455917409239041`.
 #[derive(Copy, Clone, Eq)]
@@ -296,9 +296,10 @@ impl TwoAdicField for Bls12_377Fr {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use num_traits::One;
     use p3_field_testing::{test_field, test_two_adic_field};
-    use std::str::FromStr;
 
     use super::*;
 
