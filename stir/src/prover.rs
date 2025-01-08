@@ -10,30 +10,27 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
+use crate::{StirConfig, StirParameters, StirProof};
 
-#[instrument(name = "FRI prover", skip_all)]
-pub fn prove<G, Val, Challenge, M, Challenger>(
-    g: &G,
-    config: &FriConfig<M>,
-    inputs: Vec<Vec<Challenge>>,
+#[derive(Derivative)]
+pub struct StirWitness<F: Field, M: Mmcs<F>> {
+    pub(crate) domain: Domain<F>,
+    pub(crate) polynomial: DensePolynomial<F>,
+    pub(crate) merkle_tree: MerkleTree<MerkleConfig>,
+    pub(crate) folded_evals: Vec<Vec<F>>,
+}
+
+pub fn prove<F, M, Challenger>(
+    config: &StirConfig<M>,
+    input: Vec<F>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize) -> G::InputProof,
-) -> FriProof<Challenge, M, Challenger::Witness, G::InputProof>
+) -> StirProof<F, M, Challenger::Witness>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val>,
-    M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Challenge>,
+    F: Field,
+    M: Mmcs<F>,
+    Challenger: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
-    // check sorted descending
-    assert!(inputs
-        .iter()
-        .tuple_windows()
-        .all(|(l, r)| l.len() >= r.len()));
-
-    let log_max_height = log2_strict_usize(inputs[0].len());
+    assert!(input.len() <= 1 << (config.log_starting_degree() + config.log_starting_inv_rate()));
 
     let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
@@ -86,6 +83,18 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
+    // f_{folded, beta}(h^2) = 1/2 * [beta/h * f(h) - beta/h * f(-h)  ]
+
+    // log_domain =    0,  1,  2, 3, 4, 5, 6, 7
+    // f(domain) =     10, -1, 2, 5, 3, 7, 7, 2
+
+    //  10, -1, 2, 5,
+    //  3, 7, 7, 2
+
+    //                              0,  2,  4,  6
+    // f_{folded, beta}(domain) =
+
+    let mut i = 0;
     while folded.len() > config.blowup() {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);

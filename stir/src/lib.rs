@@ -13,15 +13,17 @@
 extern crate alloc;
 
 mod config;
-
 // mod fold_even_odd;
+mod coset;
 mod proof;
 mod proximity_gaps;
 mod utils;
-// NP pub mod prover;
+
+pub mod prover;
 // NP pub mod verifier;
 
-pub use config::*;
+pub use config::{StirConfig, StirParameters};
+pub use proof::StirProof;
 pub use proximity_gaps::*;
 
 // NP pub use fold_even_odd::*;

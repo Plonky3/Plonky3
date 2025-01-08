@@ -123,29 +123,29 @@ pub(crate) struct RoundConfig {
 #[derive(Debug, Clone)]
 pub struct StirConfig<M: Clone> {
     /// Input parameters for the STIR protocol.
-    pub parameters: StirParameters<M>,
+    parameters: StirParameters<M>,
 
     /// log of the size of the initial domain.
-    pub(crate) starting_domain_log_size: usize,
+    starting_domain_log_size: usize,
 
     /// Initial pow bits used in the first fold.
     // NP TODO can this be a usize?
-    pub(crate) starting_folding_pow_bits: f64,
+    starting_folding_pow_bits: f64,
 
     /// Round-specific parameters.
-    pub(crate) round_parameters: Vec<RoundConfig>,
+    round_parameters: Vec<RoundConfig>,
 
     /// log of the (degree + 1) of the final polynomial sent in plain.
-    pub(crate) log_stopping_degree: usize,
+    log_stopping_degree: usize,
 
     /// log of the inverse of therate of the final RS codeword.
-    pub(crate) log_final_inv_rate: usize,
+    log_final_inv_rate: usize,
 
     /// Number of queries in the last round.
-    pub(crate) final_num_queries: usize,
+    final_num_queries: usize,
 
     /// Final of PoW bits (for the queries).
-    pub(crate) final_pow_bits: f64,
+    final_pow_bits: f64,
 }
 
 impl<M: Clone> StirConfig<M> {
