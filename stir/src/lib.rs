@@ -7,6 +7,8 @@
 // NP TODOs
 // - Credit Giacomo and link to his code
 // - Think about MMCS
+// - Batching (fold multiple words)
+// - Protocol builder
 
 extern crate alloc;
 
@@ -14,10 +16,14 @@ mod config;
 
 // mod fold_even_odd;
 mod proof;
-// pub mod prover;
-// pub mod verifier;
+mod proximity_gaps;
+mod utils;
+// NP pub mod prover;
+// NP pub mod verifier;
 
 pub use config::*;
-// pub use fold_even_odd::*;
-// pub use proof::*;
-// pub use two_adic_pcs::*;
+pub use proximity_gaps::*;
+
+// NP pub use fold_even_odd::*;
+// NP pub use proof::*;
+// NP pub use two_adic_pcs::*;

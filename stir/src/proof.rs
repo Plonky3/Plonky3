@@ -23,7 +23,7 @@ pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "Vec<F>: Serialize",
-    deserialize = "Vec<F>: Deserialize<'de>", 
+    deserialize = "Vec<F>: Deserialize<'de>",
 ))]
 pub struct RoundProof<F: Field, M: Mmcs<F>> {
     pub(crate) g_root: M::Commitment,
@@ -33,8 +33,3 @@ pub struct RoundProof<F: Field, M: Mmcs<F>> {
     pub(crate) shake_polynomial: Vec<F>,
     pub(crate) pow_nonce: Option<usize>,
 }
-
-
-
-
-
