@@ -372,30 +372,27 @@ where
                         .map(|&height| Dimensions { width: 0, height })
                         .collect_vec();
 
-                    if let Some(log_batch_max_height) =
+                    let (dims, idx) = if let Some(log_batch_max_height) =
                         batch_heights.iter().max().map(|x| log2_strict_usize(*x))
                     {
-                        self.mmcs
-                            .verify_batch(
-                                batch_commit,
-                                &batch_dims,
-                                index >> (log_global_max_height - log_batch_max_height),
-                                &batch_opening.opened_values,
-                                &batch_opening.opening_proof,
-                            )
-                            .map_err(InputError::InputMmcsError)?;
+                        (
+                            &batch_dims[..],
+                            index >> (log_global_max_height - log_batch_max_height),
+                        )
                     } else {
                         // Empty batch?
-                        self.mmcs
-                            .verify_batch(
-                                batch_commit,
-                                &[],
-                                0,
-                                &batch_opening.opened_values,
-                                &batch_opening.opening_proof,
-                            )
-                            .map_err(InputError::InputMmcsError)?;
-                    }
+                        (&[][..], 0)
+                    };
+
+                    self.mmcs
+                        .verify_batch(
+                            batch_commit,
+                            dims,
+                            idx,
+                            &batch_opening.opened_values,
+                            &batch_opening.opening_proof,
+                        )
+                        .map_err(InputError::InputMmcsError)?;
 
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in
                         izip!(&batch_opening.opened_values, mats)
