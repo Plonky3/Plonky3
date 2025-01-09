@@ -102,22 +102,22 @@ impl<M: Clone> StirParameters<M> {
 #[derive(Debug, Clone)]
 pub(crate) struct RoundConfig {
     /// log of the folding factor for this round.
-    log_folding_factor: usize,
+    pub(crate) log_folding_factor: usize,
 
     /// log of the size of the evaluation domain of the oracle *sent this round*
-    log_evaluation_domain_size: usize,
+    pub(crate) log_evaluation_domain_size: usize,
 
     /// Number of PoW bits used to reduce query error.
-    pow_bits: f64,
+    pub(crate) pow_bits: f64,
 
     /// Number of queries in this round
-    num_queries: usize,
+    pub(crate) num_queries: usize,
 
     /// Number of out of domain samples in this round
-    ood_samples: usize,
+    pub(crate) ood_samples: usize,
 
     /// log of the inverse of the rate of the current RS codeword
-    log_inv_rate: usize,
+    pub(crate) log_inv_rate: usize,
 }
 
 #[derive(Debug, Clone)]
