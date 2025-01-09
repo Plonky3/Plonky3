@@ -34,6 +34,9 @@ pub fn log2_ceil_u64(n: u64) -> u64 {
 pub fn log2_strict_usize(n: usize) -> usize {
     let res = n.trailing_zeros();
     assert_eq!(n.wrapping_shr(res), 1, "Not a power of two: {n}");
+    // Tell the optimizer about the semantics of `log2_strict`. i.e. it can replace `n` with
+    // `1 << res` and vice versa.
+    assume(n == 1 << res);
     res as usize
 }
 
@@ -85,7 +88,10 @@ const BIT_REVERSE_6BIT: &[u8] = &[
 // Ensure that SMALL_ARR_SIZE >= 4 * BIG_T_SIZE.
 const BIG_T_SIZE: usize = 1 << 14;
 const SMALL_ARR_SIZE: usize = 1 << 16;
+
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
+/// If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
+/// `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the array.
 pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let n = vals.len();
     if n == 0 {
@@ -94,8 +100,7 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     let log_n = log2_strict_usize(n);
 
     // If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
-    // `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the
-    // array.
+    // `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the array.
     if core::mem::size_of::<F>() << log_n <= SMALL_ARR_SIZE
         || core::mem::size_of::<F>() >= BIG_T_SIZE
     {
@@ -103,12 +108,37 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     } else {
         debug_assert!(n >= 4); // By our choice of `BIG_T_SIZE` and `SMALL_ARR_SIZE`.
 
+        // Algorithm:
+        //
+        // Treat `arr` as a `sqrt(n)` by `sqrt(n)` row-major matrix. (Assume for now that `lb_n` is
+        // even, i.e., `n` is a square number.) To perform bit-order reversal we:
+        //  1. Bit-reverse the order of the rows. (They are contiguous in memory, so this is
+        //     basically a series of large `memcpy`s.)
+        //  2. Transpose the matrix.
+        //  3. Bit-reverse the order of the rows.
+        //
+        // This is equivalent to, for every index `0 <= i < n`:
+        //  1. bit-reversing `i[lb_n / 2..lb_n]`,
+        //  2. swapping `i[0..lb_n / 2]` and `i[lb_n / 2..lb_n]`,
+        //  3. bit-reversing `i[lb_n / 2..lb_n]`.
+        //
+        // If `lb_n` is odd, i.e., `n` is not a square number, then the above procedure requires
+        // slight modification. At steps 1 and 3 we bit-reverse bits `ceil(lb_n / 2)..lb_n`, of the
+        // index (shuffling `floor(lb_n / 2)` chunks of length `ceil(lb_n / 2)`). At step 2, we
+        // perform _two_ transposes. We treat `arr` as two matrices, one where the middle bit of the
+        // index is `0` and another, where the middle bit is `1`; we transpose each individually.
+
         let lb_num_chunks = log_n >> 1;
         let lb_chunk_size = log_n - lb_num_chunks;
         unsafe {
             reverse_slice_index_bits_chunks(vals, lb_num_chunks, lb_chunk_size);
             transpose_in_place_square(vals, lb_chunk_size, lb_num_chunks, 0);
             if lb_num_chunks != lb_chunk_size {
+                // `arr` cannot be interpreted as a square matrix. We instead interpret it as a
+                // `1 << lb_num_chunks` by `2` by `1 << lb_num_chunks` tensor, in row-major order.
+                // The above transpose acted on `tensor[..., 0, ...]` (all indices with middle bit
+                // `0`). We still need to transpose `tensor[..., 1, ...]`. To do so, we advance
+                // arr by `1 << lb_num_chunks` effectively, adding that to every index.
                 let vals_with_offset = &mut vals[1 << lb_num_chunks..];
                 transpose_in_place_square(vals_with_offset, lb_chunk_size, lb_num_chunks, 0);
             }
@@ -117,9 +147,17 @@ pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {
     }
 }
 
+// Both functions below are semantically equivalent to:
+//     for i in 0..n {
+//         result.push(arr[reverse_bits(i, n_power)]);
+//     }
+// where reverse_bits(i, n_power) computes the n_power-bit reverse. The complications are there
+// to guide the compiler to generate optimal assembly.
+
 #[cfg(not(target_arch = "aarch64"))]
 fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     if lb_n <= 6 {
+        // BIT_REVERSE_6BIT holds 6-bit reverses. This shift makes them lb_n-bit reverses.
         let dst_shr_amt = 6 - lb_n as u32;
         #[allow(clippy::needless_range_loop)]
         for src in 0..vals.len() {
@@ -129,6 +167,9 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
             }
         }
     } else {
+        // LLVM does not know that it does not need to reverse src at each iteration (which is
+        // expensive on x86). We take advantage of the fact that the low bits of dst change rarely and the high
+        // bits of dst are dependent only on the low bits of src.
         let dst_lo_shr_amt = usize::BITS - (lb_n - 6) as u32;
         let dst_hi_shl_amt = lb_n - 6;
         for src_chunk in 0..(vals.len() >> 6) {
@@ -149,6 +190,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
 
 #[cfg(target_arch = "aarch64")]
 fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
+    // Aarch64 can reverse bits in one instruction, so the trivial version works best.
     for src in 0..vals.len() {
         let dst = src.reverse_bits().wrapping_shr(usize::BITS - lb_n as u32);
         if src < dst {
@@ -157,12 +199,16 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     }
 }
 
+/// Split `arr` chunks and bit-reverse the order of the chunks. There are `1 << lb_num_chunks`
+/// chunks, each of length `1 << lb_chunk_size`.
+/// SAFETY: ensure that `arr.len() == 1 << lb_num_chunks + lb_chunk_size`.
 unsafe fn reverse_slice_index_bits_chunks<F>(
     vals: &mut [F],
     lb_num_chunks: usize,
     lb_chunk_size: usize,
 ) {
     for i in 0..1usize << lb_num_chunks {
+        // `wrapping_shr` handles the silly case when `lb_num_chunks == 0`.
         let j = i
             .reverse_bits()
             .wrapping_shr(usize::BITS - lb_num_chunks as u32);
@@ -176,6 +222,8 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     }
 }
 
+/// Transpose a square matrix in place.
+/// SAFETY: ensure that `arr.len() == 1 << lb_chunk_size + lb_num_chunks`.
 unsafe fn transpose_in_place_square<T>(
     arr: &mut [T],
     lb_chunk_size: usize,
