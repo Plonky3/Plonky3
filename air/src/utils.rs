@@ -97,10 +97,10 @@ pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
 #[inline]
 pub fn add3<AB: AirBuilder>(
     builder: &mut AB,
-    a: &[<AB as AirBuilder>::Var; 2],
-    b: &[<AB as AirBuilder>::Var; 2],
-    c: &[<AB as AirBuilder>::Expr; 2],
-    d: &[<AB as AirBuilder>::Expr; 2],
+    a: &[AB::Var; 2],
+    b: &[AB::Var; 2],
+    c: &[AB::Expr; 2],
+    d: &[AB::Expr; 2],
 ) {
     // Define:
     //  acc    = a - b - c - d (mod P)
@@ -130,23 +130,22 @@ pub fn add3<AB: AirBuilder>(
 
     // By assumption P > 3*2^16 so 1 << 16 will be less than P. We use the checked version just to be safe.
     // The compiler should optimize it away.
-    let two_16 =
-        <<AB as AirBuilder>::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
+    let two_16 = <AB::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
-    let acc = acc_16.clone() + <AB as AirBuilder>::Expr::from_char(two_16) * acc_32;
+    let acc = acc_16.clone() + AB::Expr::from_char(two_16) * acc_32;
 
     builder.assert_zero(
         acc.clone()
-            * (acc.clone() + <AB as AirBuilder>::Expr::from_char(two_32))
-            * (acc + <AB as AirBuilder>::Expr::from_char(two_32.double())),
+            * (acc.clone() + AB::Expr::from_char(two_32))
+            * (acc + AB::Expr::from_char(two_32.double())),
     );
     builder.assert_zero(
         acc_16.clone()
-            * (acc_16.clone() + <AB as AirBuilder>::Expr::from_char(two_16))
-            * (acc_16 + <AB as AirBuilder>::Expr::from_char(two_16.double())),
+            * (acc_16.clone() + AB::Expr::from_char(two_16))
+            * (acc_16 + AB::Expr::from_char(two_16.double())),
     );
 }
 
@@ -159,9 +158,9 @@ pub fn add3<AB: AirBuilder>(
 #[inline]
 pub fn add2<AB: AirBuilder>(
     builder: &mut AB,
-    a: &[<AB as AirBuilder>::Var; 2],
-    b: &[<AB as AirBuilder>::Var; 2],
-    c: &[<AB as AirBuilder>::Expr; 2],
+    a: &[AB::Var; 2],
+    b: &[AB::Var; 2],
+    c: &[AB::Expr; 2],
 ) {
     // Define:
     //  acc    = a - b - c (mod P)
@@ -191,16 +190,15 @@ pub fn add2<AB: AirBuilder>(
 
     // By assumption P > 2^17 so 1 << 16 will be less than P. We use the checked version just to be safe.
     // The compiler should optimize it away.
-    let two_16 =
-        <<AB as AirBuilder>::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
+    let two_16 = <AB::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone();
-    let acc = acc_16.clone() + <AB as AirBuilder>::Expr::from_char(two_16) * acc_32;
+    let acc = acc_16.clone() + AB::Expr::from_char(two_16) * acc_32;
 
-    builder.assert_zero(acc.clone() * (acc + <AB as AirBuilder>::Expr::from_char(two_32)));
-    builder.assert_zero(acc_16.clone() * (acc_16 + <AB as AirBuilder>::Expr::from_char(two_16)));
+    builder.assert_zero(acc.clone() * (acc + AB::Expr::from_char(two_32)));
+    builder.assert_zero(acc_16.clone() * (acc_16 + AB::Expr::from_char(two_16)));
 }
 
 /// Verify that `a = (b ^ (c << shift))`
@@ -211,9 +209,9 @@ pub fn add2<AB: AirBuilder>(
 #[inline]
 pub fn xor_32_shift<AB: AirBuilder>(
     builder: &mut AB,
-    a: &[<AB as AirBuilder>::Var; 2],
-    b: &[<AB as AirBuilder>::Var; 32],
-    c: &[<AB as AirBuilder>::Var; 32],
+    a: &[AB::Var; 2],
+    b: &[AB::Var; 32],
+    c: &[AB::Var; 32],
     shift: usize,
 ) {
     // First we range check all elements of c.
@@ -224,13 +222,13 @@ pub fn xor_32_shift<AB: AirBuilder>(
         .iter()
         .enumerate()
         .map(|(i, elem)| xor((*elem).into(), c[(32 + i - shift) % 32].into()));
-    let sum_0_16: <AB as AirBuilder>::Expr = pack_bits_le(xor_shift_c_0_16);
+    let sum_0_16: AB::Expr = pack_bits_le(xor_shift_c_0_16);
 
     let xor_shift_c_16_32 = b[16..]
         .iter()
         .enumerate()
         .map(|(i, elem)| xor((*elem).into(), c[(32 + (i + 16) - shift) % 32].into()));
-    let sum_16_32: <AB as AirBuilder>::Expr = pack_bits_le(xor_shift_c_16_32);
+    let sum_16_32: AB::Expr = pack_bits_le(xor_shift_c_16_32);
 
     // As both b and c have been range checked to be boolean, all the (b ^ (c << shift))
     // are also boolean and so this final check additionally has the effect of range checking a[0], a[1].

@@ -10,7 +10,6 @@ use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
-use paste::paste;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -50,7 +49,7 @@ pub trait FieldAlgebra:
 {
     type F: Field;
 
-    /// The field `ℤ/p` where the characteristic of this given ring is p.
+    /// The field `ℤ/p` where the characteristic of this ring is p.
     type Char: PrimeField;
 
     /// The additive identity of the algebra.

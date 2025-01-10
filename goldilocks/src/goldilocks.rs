@@ -10,12 +10,10 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_isize,
-    quotient_map_large_uint, quotient_map_small_int, quotient_map_usize, Field, FieldAlgebra,
-    Packable, PrimeField, PrimeField64, TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_large_uint,
+    quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
-use paste::paste;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -233,12 +231,6 @@ quotient_map_large_uint!(
     "`[0, 2^64 - 2^32]`",
     "`[0, 2^64 - 1]`",
     [u128]
-);
-quotient_map_usize!(Goldilocks, "`[0, 2^64 - 2^32]`", "`[0, 2^64 - 1]`");
-quotient_map_isize!(
-    Goldilocks,
-    "`[2^31 - 2^63, 2^63 - 2^31]`",
-    "`[1 + 2^32 - 2^64, 2^64 - 1]`"
 );
 
 // We are left with writing some custom impls for the final three types.

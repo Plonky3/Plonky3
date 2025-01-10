@@ -14,7 +14,6 @@ use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
-use paste::paste;
 pub use poseidon2::Poseidon2Bn254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -162,8 +161,8 @@ impl Field for Bn254Fr {
     }
 }
 
-quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64, usize]);
-quotient_map_small_int!(Bn254Fr, i128, [i8, i16, i32, i64, isize]);
+quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64]);
+quotient_map_small_int!(Bn254Fr, i128, [i8, i16, i32, i64]);
 
 impl QuotientMap<u128> for Bn254Fr {
     /// Due to the size of the `BN254` prime, the input value is always canonical.

@@ -10,11 +10,9 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_isize, quotient_map_large_uint,
-    quotient_map_small_int, quotient_map_usize, Field, FieldAlgebra, Packable, PrimeField,
-    PrimeField32, PrimeField64,
+    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_large_uint,
+    quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, PrimeField32, PrimeField64,
 };
-use paste::paste;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -285,8 +283,6 @@ quotient_map_large_uint!(
     [u64, u128]
 );
 large_i_int_m31!(i64, i128);
-quotient_map_usize!(Mersenne31, "`[0, 2^31 - 2]`", "`[0, 2^31 - 1]`");
-quotient_map_isize!(Mersenne31, "`[-2^30, 2^30]`", "`[1 - 2^31, 2^31 - 1]`");
 
 // We simple need to prove custom Mersenne31 impls for QuotientMap<u32> and QuotientMap<i32>
 impl QuotientMap<u32> for Mersenne31 {

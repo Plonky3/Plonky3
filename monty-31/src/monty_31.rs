@@ -12,10 +12,9 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_isize, quotient_map_small_int, quotient_map_usize, Field, FieldAlgebra, Packable,
-    PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+    quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, PrimeField32, PrimeField64,
+    TwoAdicField,
 };
-use paste::paste;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -251,8 +250,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
 
 quotient_map_small_int!(MontyField31, u32, FieldParameters, [u8, u16]);
 quotient_map_small_int!(MontyField31, i32, FieldParameters, [i8, i16]);
-quotient_map_usize!(MontyField31, "TODO", "TODO", FieldParameters);
-quotient_map_isize!(MontyField31, "TODO", "TODO", FieldParameters);
 
 impl<FP: FieldParameters> QuotientMap<u32> for MontyField31<FP> {
     /// Convert a given `u32` integer into an element of the `MontyField31` field.

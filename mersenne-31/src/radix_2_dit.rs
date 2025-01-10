@@ -112,7 +112,7 @@ fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<'_, C>, row_1: usize, row_2: us
 #[inline]
 fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     // Adding any multiple of P doesn't change the result modulo P;
-    // we use this to ensure that the inputs to `from_wrapped_u64`
+    // we use this to ensure that the inputs to `from_u64`
     // below are non-negative.
     const P_SQR: i64 = (F::ORDER_U64 * F::ORDER_U64) as i64;
     const TWO_P_SQR: i64 = 2 * P_SQR;
