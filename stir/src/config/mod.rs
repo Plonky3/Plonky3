@@ -346,6 +346,10 @@ impl<M: Clone> StirConfig<M> {
         self.starting_folding_pow_bits
     }
 
+    pub fn num_rounds(&self) -> usize {
+        self.round_parameters.len()
+    }
+
     pub(crate) fn round_configs(&self) -> &[RoundConfig] {
         &self.round_parameters
     }
