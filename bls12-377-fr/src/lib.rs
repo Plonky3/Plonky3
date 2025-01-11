@@ -28,7 +28,7 @@ pub struct Bls12_377Fr {
 }
 
 impl Bls12_377Fr {
-    pub(crate) const fn new(value: FF_Bls12_377Fr) -> Self {
+    pub const fn new(value: FF_Bls12_377Fr) -> Self {
         Self { value }
     }
 }
