@@ -143,7 +143,7 @@ where
         let index_row = index >> cur_arity_bits;
 
         // Verify that `folded_eval` and evals from reduced_openings match opened_rows
-        if folded_eval != opening.opened_rows[0][index % config.arity()] {
+        if folded_eval != opening.opened_rows[0][index % (1 << cur_arity_bits)] {
             return Err(FriError::OpenedRowMismatch);
         }
         for row in opening.opened_rows.iter().skip(1) {
