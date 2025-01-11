@@ -391,18 +391,29 @@ where
                     .map(|&height| Dimensions { width: 0, height })
                     .collect_vec();
 
-                let batch_max_height = batch_heights.iter().max().expect("Empty batch?");
-                let log_batch_max_height = log2_strict_usize(*batch_max_height);
-                let bits_reduced = log_global_max_height - log_batch_max_height;
-                let reduced_index = index >> bits_reduced;
+                if let Some(batch_max_height) = batch_heights.iter().max() {
+                    let log_batch_max_height = log2_strict_usize(*batch_max_height);
+                    let bits_reduced = log_global_max_height - log_batch_max_height;
+                    let reduced_index = index >> bits_reduced;
 
-                self.mmcs.verify_batch(
-                    batch_commit,
-                    &batch_dims,
-                    reduced_index,
-                    &batch_opening.opened_values,
-                    &batch_opening.opening_proof,
-                )?;
+                    self.mmcs.verify_batch(
+                        batch_commit,
+                        &batch_dims,
+                        reduced_index,
+                        &batch_opening.opened_values,
+                        &batch_opening.opening_proof,
+                    )?;
+                } else {
+                    // Empty batch?
+                    self.mmcs.verify_batch(
+                        batch_commit,
+                        &[],
+                        0,
+                        &batch_opening.opened_values,
+                        &batch_opening.opening_proof,
+                    )?;
+                }
+
                 for (mat_opening, (mat_domain, mat_points_and_values)) in
                     izip!(&batch_opening.opened_values, mats)
                 {
@@ -434,7 +445,7 @@ where
             // trace matrix of height 1. In this case the reduced opening can be skipped as it will
             // not be checked against any commit phase commit.
             if let Some((_alpha_pow, ro)) = reduced_openings.remove(&self.fri.log_blowup) {
-                debug_assert!(ro.is_zero());
+                assert!(ro.is_zero());
             }
 
             // Return reduced openings descending by log_height.
@@ -443,8 +454,7 @@ where
                 .rev()
                 .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
                 .collect())
-        })
-        .expect("fri err");
+        })?;
 
         Ok(())
     }

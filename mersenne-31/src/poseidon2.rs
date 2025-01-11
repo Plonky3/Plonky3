@@ -45,7 +45,7 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     MERSENNE31_S_BOX_DEGREE,
 >;
 
-/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+/// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
 /// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by Mersenne31 field elements.
 /// If you have either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]` it will be much faster
