@@ -105,7 +105,7 @@ where
 
     // At that point, the third polynomial's evaluations are added to the running sum, and that sum
     // is committed to form the second FRI commitment layer. The only matrix in that layer is of
-    // dimensions 4x1. The final polynomial's evaluation can then be computed through those 4
+    // dimensions 1x4. The final polynomial's evaluation can then be computed through those 4
     // evaluations.
 
     let mut inputs_iter = inputs.into_iter().peekable();
