@@ -82,6 +82,8 @@ where
             log_max_height,
         )?;
 
+        // Even though we might do a partial fold at the end, it's okay to shift by arity_bits since in that case
+        // final_poly_index is zero
         let final_poly_index = index >> (proof.commit_phase_commits.len() * config.arity_bits);
 
         let mut eval = Challenge::ZERO;
