@@ -84,3 +84,60 @@ fn test_mul() {
 
     assert_eq!(c.coeffs, result_coeffs);
 }
+
+#[test]
+fn test_divide() {
+    // a(x) = 3 - 2x - 5x^2 + 6x^3
+    let a_coeffs = vec![
+        F::from_canonical_u32(3),
+        -F::from_canonical_u32(2),
+        -F::from_canonical_u32(5),
+        F::from_canonical_u32(6),
+    ];
+
+    // b(x) = -3 + x
+    let b_coeffs = vec![-F::from_canonical_u32(3), F::from_canonical_u32(1)];
+
+    // q(x) = 37 + 13x + 6x^2
+    let q_coeffs = vec![
+        F::from_canonical_u32(37),
+        F::from_canonical_u32(13),
+        F::from_canonical_u32(6),
+    ];
+
+    // r(x) = 114
+    let r_coeffs = vec![F::from_canonical_u32(114)];
+
+    let a = Polynomial::from_coeffs(a_coeffs);
+    let b = Polynomial::from_coeffs(b_coeffs);
+
+    let (q, r) = &a.divide_with_q_and_r(&b);
+
+    assert_eq!(q.coeffs, q_coeffs);
+    assert_eq!(r.coeffs, r_coeffs);
+}
+
+#[test]
+fn test_naive_interpolate() {
+    // p(x) = 3 + 4x + 2x^2 + 7x^3 + 9x^4 + x^5
+    let polynomial = Polynomial::from_coeffs(
+        vec![3, 4, 2, 7, 9, 1]
+            .into_iter()
+            .map(F::from_canonical_u32)
+            .collect_vec(),
+    );
+
+    let points = vec![1, 2, 3, 4, 5, 6]
+        .into_iter()
+        .map(F::from_canonical_u32)
+        .collect_vec();
+
+    // p(1) = 26, p(2) = 251, p(3) = 1194, p(4) = 3827, p(5) = 9698, p(6) = 21051
+    let evals = vec![26, 251, 1194, 3827, 9698, 21051]
+        .into_iter()
+        .map(F::from_canonical_u32)
+        .collect_vec();
+
+    let poly = Polynomial::<F>::naive_interpolate(points.into_iter().zip(evals).collect_vec());
+    assert_eq!(poly.coeffs, polynomial.coeffs);
+}
