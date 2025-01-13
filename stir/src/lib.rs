@@ -15,11 +15,11 @@ extern crate alloc;
 mod config;
 // mod fold_even_odd;
 mod coset;
+mod polynomial;
 mod proof;
+pub mod prover;
 mod proximity_gaps;
 mod utils;
-
-pub mod prover;
 // NP pub mod verifier;
 
 pub use config::{StirConfig, StirParameters};
