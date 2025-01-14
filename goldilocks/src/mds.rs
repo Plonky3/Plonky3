@@ -230,14 +230,13 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
 
     use super::{Goldilocks, MdsMatrixGoldilocks};
 
     #[test]
     fn goldilocks8() {
-        let input: [Goldilocks; 8] = [
+        let input: [Goldilocks; 8] = Goldilocks::new_array([
             2434589605738284713,
             4817685620989478889,
             13397079175138649456,
@@ -246,12 +245,11 @@ mod tests {
             3092099742268329866,
             7160548811622790454,
             9959569614427134344,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 8] = [
+        let expected: [Goldilocks; 8] = Goldilocks::new_array([
             16726687146516531007,
             14721040752765534861,
             15566838577475948790,
@@ -260,15 +258,14 @@ mod tests {
             11056556168691087893,
             4199602889124860181,
             315643510993921470,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn goldilocks12() {
-        let input: [Goldilocks; 12] = [
+        let input: [Goldilocks; 12] = Goldilocks::new_array([
             14847187883725400244,
             969392934980971521,
             6996647758016470432,
@@ -281,12 +278,11 @@ mod tests {
             12739925508864285577,
             11648637570857932167,
             14090978315217600393,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 12] = [
+        let expected: [Goldilocks; 12] = Goldilocks::new_array([
             9322351889214742299,
             8700136572060418355,
             4881757876459003977,
@@ -299,15 +295,14 @@ mod tests {
             1613225933948270736,
             3549006224849989171,
             12169032187873197425,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn goldilocks16() {
-        let input: [Goldilocks; 16] = [
+        let input: [Goldilocks; 16] = Goldilocks::new_array([
             13216135600341032847,
             15626390207663319651,
             2052474569300149934,
@@ -324,12 +319,11 @@ mod tests {
             14134506582804571789,
             13283546413390931641,
             14711125975653831032,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 16] = [
+        let expected: [Goldilocks; 16] = Goldilocks::new_array([
             9484392671298797780,
             149770626972189150,
             12125722600598304117,
@@ -346,15 +340,14 @@ mod tests {
             7344117715971661026,
             4202436890275702092,
             681166793519210465,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn goldilocks24() {
-        let input: [Goldilocks; 24] = [
+        let input: [Goldilocks; 24] = Goldilocks::new_array([
             11426771245122339662,
             5975488243963332229,
             11441424994503305651,
@@ -379,12 +372,11 @@ mod tests {
             9904943018174649533,
             16178194376951442671,
             1545799842160818502,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 24] = [
+        let expected: [Goldilocks; 24] = Goldilocks::new_array([
             18431075688485197060,
             14823984346528185622,
             7262979358411339215,
@@ -409,15 +401,14 @@ mod tests {
             9734499541452484536,
             11778274360927642637,
             3217831681350496533,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn goldilocks32() {
-        let input: [Goldilocks; 32] = [
+        let input: [Goldilocks; 32] = Goldilocks::new_array([
             8401806579759049284,
             14709608922272986544,
             8130995604641968478,
@@ -450,12 +441,11 @@ mod tests {
             4801868480369948110,
             13202076339494141066,
             726396847460932316,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 32] = [
+        let expected: [Goldilocks; 32] = Goldilocks::new_array([
             1179701925859507209,
             5543239597787055637,
             5978278622530964070,
@@ -488,15 +478,14 @@ mod tests {
             6816598002359267850,
             12363049840026116993,
             13313901185845854868,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn goldilocks64() {
-        let input: [Goldilocks; 64] = [
+        let input: [Goldilocks; 64] = Goldilocks::new_array([
             3471075506106776899,
             4817046918282259009,
             3480368692354016145,
@@ -561,12 +550,11 @@ mod tests {
             10579720164460442970,
             9596917135039689219,
             13761818390665814258,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 64] = [
+        let expected: [Goldilocks; 64] = Goldilocks::new_array([
             9158798369861934356,
             9224859686427886689,
             16948559910286211274,
@@ -631,15 +619,14 @@ mod tests {
             10879211614969476303,
             7265889003783205111,
             7322738272300165489,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn goldilocks68() {
-        let input: [Goldilocks; 68] = [
+        let input: [Goldilocks; 68] = Goldilocks::new_array([
             16450563043143968653,
             3688080826640678185,
             133253417037384537,
@@ -708,12 +695,11 @@ mod tests {
             7231705445010258971,
             12976071926225281356,
             8829402645443096358,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 68] = [
+        let expected: [Goldilocks; 68] = Goldilocks::new_array([
             4984914285749049383,
             10397959071664799177,
             3331616814639908945,
@@ -782,8 +768,7 @@ mod tests {
             10891613749697412017,
             6867760775372053830,
             12474954319307005079,
-        ]
-        .map(Goldilocks::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
