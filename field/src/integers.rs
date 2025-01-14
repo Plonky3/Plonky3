@@ -76,6 +76,44 @@ pub trait QuotientMap<Int>: Sized {
     unsafe fn from_canonical_unchecked(int: Int) -> Self;
 }
 
+/// This allows us to avoid some duplication which arises when working with fields which contain a generic parameter.
+/// See `quotient_map_small_int` to see what this will expand to.
+#[macro_export]
+macro_rules! quotient_map_small_internals {
+    ($field:ty, $field_size:ty, $small_int:ty) => {
+        #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
+        \n Due to the integer type, the input value is always canonical.")]
+        #[inline]
+        fn from_int(int: $small_int) -> Self {
+            // Should be removed by the compiler.
+            assert!(size_of::<$small_int>() <= size_of::<$field_size>());
+            unsafe {
+                Self::from_canonical_unchecked(int as $field_size)
+            }
+        }
+
+        #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
+        \n Due to the integer type, the input value is always canonical.")]
+        #[inline]
+        fn from_canonical_checked(int: $small_int) -> Option<Self> {
+            // Should be removed by the compiler.
+            assert!(size_of::<$small_int>() <= size_of::<$field_size>());
+            Some(unsafe {
+                Self::from_canonical_unchecked(int as $field_size)
+            })
+        }
+
+        #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
+        \n Due to the integer type, the input value is always canonical.")]
+        #[inline]
+        unsafe fn from_canonical_unchecked(int: $small_int) -> Self {
+            // We use debug_assert to ensure this is removed by the compiler in release mode.
+            debug_assert!(size_of::<$small_int>() <= size_of::<$field_size>());
+            Self::from_canonical_unchecked(int as $field_size)
+        }
+    };
+}
+
 /// If the integer type is smaller than the field order all possible inputs are canonical.
 /// In such a case we can easily implement `QuotientMap<SmallInt>` as all three methods will coincide.
 ///
@@ -142,36 +180,7 @@ macro_rules! quotient_map_small_int {
         $(
         paste::paste!{
             impl QuotientMap<$small_int> for $field {
-                #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Due to the integer type, the input value is always canonical.")]
-                #[inline]
-                fn from_int(int: $small_int) -> $field {
-                    // Should be removed by the compiler.
-                    assert!(size_of::<$small_int>() <= size_of::<$field_size>());
-                    unsafe {
-                        Self::from_canonical_unchecked(int as $field_size)
-                    }
-                }
-
-                #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Due to the integer type, the input value is always canonical.")]
-                #[inline]
-                fn from_canonical_checked(int: $small_int) -> Option<$field> {
-                    // Should be removed by the compiler.
-                    assert!(size_of::<$small_int>() <= size_of::<$field_size>());
-                    Some(unsafe {
-                        Self::from_canonical_unchecked(int as $field_size)
-                    })
-                }
-
-                #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Due to the integer type, the input value is always canonical.")]
-                #[inline]
-                unsafe fn from_canonical_unchecked(int: $small_int) -> $field {
-                    // We use debug_assert to ensure this is removed by the compiler in release mode.
-                    debug_assert!(size_of::<$small_int>() <= size_of::<$field_size>());
-                    Self::from_canonical_unchecked(int as $field_size)
-                }
+                $crate::quotient_map_small_internals!($field, $field_size, $small_int);
             }
         }
         )*
@@ -181,36 +190,7 @@ macro_rules! quotient_map_small_int {
         $(
         paste::paste!{
             impl<FP: $field_param> QuotientMap<$small_int> for $field<FP> {
-                #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Due to the integer type, the input value is always canonical.")]
-                #[inline]
-                fn from_int(int: $small_int) -> Self {
-                    // Should be removed by the compiler.
-                    assert!(size_of::<$small_int>() <= size_of::<$field_size>());
-                    unsafe {
-                        Self::from_canonical_unchecked(int as $field_size)
-                    }
-                }
-
-                #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Due to the integer type, the input value is always canonical.")]
-                #[inline]
-                fn from_canonical_checked(int: $small_int) -> Option<Self> {
-                    // Should be removed by the compiler.
-                    assert!(size_of::<$small_int>() <= size_of::<Self>());
-                    Some(unsafe {
-                        Self::from_canonical_unchecked(int as $field_size)
-                    })
-                }
-
-                #[doc = concat!("Convert a given `", stringify!($small_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Due to the integer type, the input value is always canonical.")]
-                #[inline]
-                unsafe fn from_canonical_unchecked(int: $small_int) -> Self {
-                    // We use debug_assert to ensure this is removed by the compiler in release mode.
-                    debug_assert!(size_of::<$small_int>() <= size_of::<$field_size>());
-                    Self::from_canonical_unchecked(int as $field_size)
-                }
+                $crate::quotient_map_small_internals!($field, $field_size, $small_int);
             }
         }
         )*
@@ -311,95 +291,62 @@ macro_rules! quotient_map_large_uint {
     };
 }
 
-impl<
-        F: QuotientMap<u8>
-            + QuotientMap<u16>
-            + QuotientMap<u32>
-            + QuotientMap<u64>
-            + QuotientMap<u128>,
-    > QuotientMap<usize> for F
-{
-    /// We use the `from_int` method of the primitive integer type identical to `usize` on this machine.
-    fn from_int(int: usize) -> Self {
-        match size_of::<usize>() {
-            1 => Self::from_int(int as u8),
-            2 => Self::from_int(int as u16),
-            4 => Self::from_int(int as u32),
-            8 => Self::from_int(int as u64),
-            16 => Self::from_int(int as u128),
-            _ => panic!("usize is not equivalent to any primitive integer types."),
-        }
-    }
+/// We implement `QuotientMap<usize>` (`QuotientMap<isize>`) by matching against the size of `usize` (`isize`)
+/// and then converting `usize` (`isize`) into the equivalent matching integer type.
+///
+/// The code is identical for both `usize` and `isize` outside of replacing some u's by i's so we use a macro
+/// to avoid the copy and paste.
+macro_rules! impl_u_i_size {
+    ($intsize:ty, $int8:ty, $int16:ty, $int32:ty, $int64:ty, $int128:ty) => {
+        impl<
+                F: QuotientMap<$int8>
+                    + QuotientMap<$int16>
+                    + QuotientMap<$int32>
+                    + QuotientMap<$int64>
+                    + QuotientMap<$int128>,
+            > QuotientMap<$intsize> for F
+        {
+            #[doc = concat!("We use the `from_int` method of the primitive integer type identical to `", stringify!($intsize), "` on this machine")]
+            fn from_int(int: $intsize) -> Self {
+                match size_of::<$intsize>() {
+                    1 => Self::from_int(int as $int8),
+                    2 => Self::from_int(int as $int16),
+                    4 => Self::from_int(int as $int32),
+                    8 => Self::from_int(int as $int64),
+                    16 => Self::from_int(int as $int128),
+                    _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                }
+            }
 
-    /// We use the `from_canonical_checked` method of the primitive integer type identical to `usize` on this machine.
-    fn from_canonical_checked(int: usize) -> Option<Self> {
-        match size_of::<usize>() {
-            1 => Self::from_canonical_checked(int as u8),
-            2 => Self::from_canonical_checked(int as u16),
-            4 => Self::from_canonical_checked(int as u32),
-            8 => Self::from_canonical_checked(int as u64),
-            16 => Self::from_canonical_checked(int as u128),
-            _ => panic!("usize is not equivalent to any primitive integer types."),
-        }
-    }
+            #[doc = concat!("We use the `from_canonical_checked` method of the primitive integer type identical to `", stringify!($intsize), "` on this machine")]
+            fn from_canonical_checked(int: $intsize) -> Option<Self> {
+                match size_of::<$intsize>() {
+                    1 => Self::from_canonical_checked(int as $int8),
+                    2 => Self::from_canonical_checked(int as $int16),
+                    4 => Self::from_canonical_checked(int as $int32),
+                    8 => Self::from_canonical_checked(int as $int64),
+                    16 => Self::from_canonical_checked(int as $int128),
+                    _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                }
+            }
 
-    /// We use the `from_canonical_unchecked` method of the primitive integer type identical to `usize` on this machine.
-    unsafe fn from_canonical_unchecked(int: usize) -> Self {
-        match size_of::<usize>() {
-            1 => Self::from_canonical_unchecked(int as u8),
-            2 => Self::from_canonical_unchecked(int as u16),
-            4 => Self::from_canonical_unchecked(int as u32),
-            8 => Self::from_canonical_unchecked(int as u64),
-            16 => Self::from_canonical_unchecked(int as u128),
-            _ => panic!("usize is not equivalent to any primitive integer types."),
+            #[doc = concat!("We use the `from_canonical_unchecked` method of the primitive integer type identical to `", stringify!($intsize), "` on this machine")]
+            unsafe fn from_canonical_unchecked(int: $intsize) -> Self {
+                match size_of::<$intsize>() {
+                    1 => Self::from_canonical_unchecked(int as $int8),
+                    2 => Self::from_canonical_unchecked(int as $int16),
+                    4 => Self::from_canonical_unchecked(int as $int32),
+                    8 => Self::from_canonical_unchecked(int as $int64),
+                    16 => Self::from_canonical_unchecked(int as $int128),
+                    _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                }
+            }
         }
-    }
+    };
 }
 
-impl<
-        F: QuotientMap<i8>
-            + QuotientMap<i16>
-            + QuotientMap<i32>
-            + QuotientMap<i64>
-            + QuotientMap<i128>,
-    > QuotientMap<isize> for F
-{
-    /// We use the `from_int` method of the primitive integer type identical to `isize` on this machine.
-    fn from_int(int: isize) -> Self {
-        match size_of::<isize>() {
-            1 => Self::from_int(int as i8),
-            2 => Self::from_int(int as i16),
-            4 => Self::from_int(int as i32),
-            8 => Self::from_int(int as i64),
-            16 => Self::from_int(int as i128),
-            _ => panic!("isize is not equivalent to any primitive integer types."),
-        }
-    }
-
-    /// We use the `from_canonical_checked` method of the primitive integer type identical to `isize` on this machine.
-    fn from_canonical_checked(int: isize) -> Option<Self> {
-        match size_of::<isize>() {
-            1 => Self::from_canonical_checked(int as i8),
-            2 => Self::from_canonical_checked(int as i16),
-            4 => Self::from_canonical_checked(int as i32),
-            8 => Self::from_canonical_checked(int as i64),
-            16 => Self::from_canonical_checked(int as i128),
-            _ => panic!("isize is not equivalent to any primitive integer types."),
-        }
-    }
-
-    /// We use the `from_canonical_unchecked` method of the primitive integer type identical to `isize` on this machine.
-    unsafe fn from_canonical_unchecked(int: isize) -> Self {
-        match size_of::<isize>() {
-            1 => Self::from_canonical_unchecked(int as i8),
-            2 => Self::from_canonical_unchecked(int as i16),
-            4 => Self::from_canonical_unchecked(int as i32),
-            8 => Self::from_canonical_unchecked(int as i64),
-            16 => Self::from_canonical_unchecked(int as i128),
-            _ => panic!("isize is not equivalent to any primitive integer types."),
-        }
-    }
-}
+impl_u_i_size!(usize, u8, u16, u32, u64, u128);
+impl_u_i_size!(isize, i8, i16, i32, i64, i128);
 
 // The only general type for which we do not provide a macro is for large signed integers.
 // This is because different field will usually want to handle large signed integers in
