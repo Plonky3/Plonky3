@@ -165,7 +165,7 @@ impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 
 impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     type F = Self;
-    type Char = Self;
+    type PrimeSubfield = Self;
 
     const ZERO: Self = FP::MONTY_ZERO;
     const ONE: Self = FP::MONTY_ONE;
@@ -178,7 +178,7 @@ impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     }
 
     #[inline(always)]
-    fn from_char(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::F) -> Self {
         f
     }
 

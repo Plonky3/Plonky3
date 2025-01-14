@@ -52,9 +52,9 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     ) -> RowMajorMatrix<F> {
         let h = mat.height();
         // If F isn't a PrimeField, (and is thus an extension field) it's much cheaper to
-        // invert in F::Char.
-        let h_inv_char = F::Char::from_int(h).inverse();
-        let h_inv = F::from_char(h_inv_char);
+        // invert in F::PrimeSubfield.
+        let h_inv_subfield = F::PrimeSubfield::from_int(h).inverse();
+        let h_inv = F::from_prime_subfield(h_inv_subfield);
 
         bowers_g_t(&mut mat.as_view_mut());
 

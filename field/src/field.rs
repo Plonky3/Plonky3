@@ -50,7 +50,7 @@ pub trait FieldAlgebra:
     type F: Field;
 
     /// The field `ℤ/p` where the characteristic of this ring is p.
-    type Char: PrimeField;
+    type PrimeSubfield: PrimeField;
 
     /// The additive identity of the algebra.
     ///
@@ -99,10 +99,10 @@ pub trait FieldAlgebra:
     /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
     /// Given any element `r ∈ ℤ/p`, represented as an integer between `0` and `p - 1`
-    /// `from_char(r)` will be equal to:
+    /// `from_prime_subfield(r)` will be equal to:
     ///
     /// `Self::ONE + ... + Self::ONE (r times)`
-    fn from_char(f: Self::Char) -> Self;
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self;
 
     /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
     fn from_bool(b: bool) -> Self {

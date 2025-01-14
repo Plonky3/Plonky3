@@ -37,7 +37,7 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 
 impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     type F = F;
-    type Char = F::Char;
+    type PrimeSubfield = F::PrimeSubfield;
 
     const ZERO: Self = FieldArray([F::ZERO; N]);
     const ONE: Self = FieldArray([F::ONE; N]);
@@ -50,8 +50,8 @@ impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
-        F::from_char(f).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        F::from_prime_subfield(f).into()
     }
 }
 

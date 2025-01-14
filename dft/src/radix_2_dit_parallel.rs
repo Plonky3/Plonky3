@@ -151,9 +151,9 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         reverse_matrix_index_bits(&mut mat);
         // We'll also scale by 1/h, as per the usual inverse DFT algorithm.
         // If F isn't a PrimeField, (and is thus an extension field) it's much cheaper to
-        // invert in F::Char.
-        let h_inv_char = F::Char::from_int(h).try_inverse();
-        let scale = h_inv_char.map(F::from_char);
+        // invert in F::PrimeSubfield.
+        let h_inv_subfield = F::PrimeSubfield::from_int(h).try_inverse();
+        let scale = h_inv_subfield.map(F::from_prime_subfield);
         second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
 

@@ -414,7 +414,7 @@ impl Product for PackedMersenne31AVX512 {
 
 impl FieldAlgebra for PackedMersenne31AVX512 {
     type F = Mersenne31;
-    type Char = Mersenne31;
+    type PrimeSubfield = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
     const ONE: Self = Self::broadcast(Mersenne31::ONE);
@@ -427,7 +427,7 @@ impl FieldAlgebra for PackedMersenne31AVX512 {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
     }
 

@@ -119,7 +119,7 @@ where
     FA::F: BinomiallyExtendable<D>,
 {
     type F = BinomialExtensionField<FA::F, D>;
-    type Char = <FA::F as FieldAlgebra>::Char;
+    type PrimeSubfield = <FA::F as FieldAlgebra>::PrimeSubfield;
 
     const ZERO: Self = Self {
         value: [FA::ZERO; D],
@@ -145,8 +145,8 @@ where
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
-        FA::from_f(<FA::F as FieldAlgebra>::from_char(f)).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        FA::from_f(<FA::F as FieldAlgebra>::from_prime_subfield(f)).into()
     }
 
     #[inline(always)]

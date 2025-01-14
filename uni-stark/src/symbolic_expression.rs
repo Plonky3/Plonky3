@@ -76,7 +76,7 @@ impl<F: Field> From<F> for SymbolicExpression<F> {
 
 impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     type F = F;
-    type Char = F::Char;
+    type PrimeSubfield = F::PrimeSubfield;
 
     const ZERO: Self = Self::Constant(F::ZERO);
     const ONE: Self = Self::Constant(F::ONE);
@@ -89,8 +89,8 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
-        F::from_char(f).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        F::from_prime_subfield(f).into()
     }
 
     fn from_bool(b: bool) -> Self {

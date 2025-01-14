@@ -471,7 +471,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
 
 impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     type F = MontyField31<FP>;
-    type Char = MontyField31<FP>;
+    type PrimeSubfield = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
     const ONE: Self = Self::broadcast(MontyField31::ONE);
@@ -484,7 +484,7 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
     }
 

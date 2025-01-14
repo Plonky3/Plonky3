@@ -92,7 +92,7 @@ impl Distribution<Goldilocks> for Standard {
 
 impl FieldAlgebra for Goldilocks {
     type F = Self;
-    type Char = Self;
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
@@ -105,7 +105,7 @@ impl FieldAlgebra for Goldilocks {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
 

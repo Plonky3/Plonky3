@@ -12,9 +12,9 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
     mat: &mut DenseMatrix<F, S>,
 ) {
     // If F isn't a PrimeField, (and is thus an extension field) it's much cheaper to
-    // invert in F::Char.
-    let h_inv_char = F::Char::from_int(mat.height()).inverse();
-    mat.scale(F::from_char(h_inv_char))
+    // invert in F::PrimeSubfield.
+    let h_inv_subfield = F::PrimeSubfield::from_int(mat.height()).inverse();
+    mat.scale(F::from_prime_subfield(h_inv_subfield))
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.

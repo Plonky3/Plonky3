@@ -14,11 +14,11 @@
 /// ///
 /// /// This should be avoided in performance critical locations.
 /// fn from_Int(int: Int) -> Self {
-///     Self::from_char(Self::Char::from_int(int))
+///     Self::from_prime_subfield(Self::PrimeSubfield::from_int(int))
 /// }
 /// ```
 ///
-/// This macro can be run for any `Int` where `Self::Char` implements `QuotientMap<Int>`.
+/// This macro can be run for any `Int` where `Self::PrimeSubfield` implements `QuotientMap<Int>`.
 /// It considerably cuts down on the amount of copy/pasted code.
 macro_rules! from_integer_types {
     ($($type:ty),* $(,)? ) => {
@@ -31,7 +31,7 @@ macro_rules! from_integer_types {
             ///
             /// This should be avoided in performance critical locations.
             fn [<from_ $type>](int: $type) -> Self {
-                Self::from_char(Self::Char::from_int(int))
+                Self::from_prime_subfield(Self::PrimeSubfield::from_int(int))
             }
         }
         )*
@@ -86,7 +86,7 @@ macro_rules! quotient_map_small_internals {
         #[inline]
         fn from_int(int: $small_int) -> Self {
             // Should be removed by the compiler.
-            assert!(size_of::<$small_int>() <= size_of::<$field_size>());
+            assert!(size_of::<$small_int>() < size_of::<$field_size>());
             unsafe {
                 Self::from_canonical_unchecked(int as $field_size)
             }
@@ -97,7 +97,7 @@ macro_rules! quotient_map_small_internals {
         #[inline]
         fn from_canonical_checked(int: $small_int) -> Option<Self> {
             // Should be removed by the compiler.
-            assert!(size_of::<$small_int>() <= size_of::<$field_size>());
+            assert!(size_of::<$small_int>() < size_of::<$field_size>());
             Some(unsafe {
                 Self::from_canonical_unchecked(int as $field_size)
             })
@@ -108,7 +108,7 @@ macro_rules! quotient_map_small_internals {
         #[inline]
         unsafe fn from_canonical_unchecked(int: $small_int) -> Self {
             // We use debug_assert to ensure this is removed by the compiler in release mode.
-            debug_assert!(size_of::<$small_int>() <= size_of::<$field_size>());
+            debug_assert!(size_of::<$small_int>() < size_of::<$field_size>());
             Self::from_canonical_unchecked(int as $field_size)
         }
     };
@@ -141,7 +141,7 @@ macro_rules! quotient_map_small_internals {
 ///     #[inline]
 ///     fn from_int(int: u8) -> Mersenne31 {
 ///         // Should be removed by the compiler.
-///         assert!(size_of::<u8>() <= size_of::<u32>());
+///         assert!(size_of::<u8>() < size_of::<u32>());
 ///         unsafe {
 ///             Self::from_canonical_unchecked(int as u32)
 ///         }
@@ -153,7 +153,7 @@ macro_rules! quotient_map_small_internals {
 ///     #[inline]
 ///     fn from_canonical_checked(int: u8) -> Option<Mersenne31> {
 ///         // Should be removed by the compiler.
-///         assert!(size_of::<u8>() <= size_of::<u32>());
+///         assert!(size_of::<u8>() < size_of::<u32>());
 ///         Some(unsafe {
 ///             Self::from_canonical_unchecked(int as u32)
 ///         })
@@ -165,7 +165,7 @@ macro_rules! quotient_map_small_internals {
 ///     #[inline]
 ///     unsafe fn from_canonical_unchecked(int: u8) -> Mersenne31 {
 ///         // We use debug_assert to ensure this is removed by the compiler in release mode.
-///         debug_assert!(size_of::<u8>() <= size_of::<u32>());
+///         debug_assert!(size_of::<u8>() < size_of::<u32>());
 ///         Self::from_canonical_unchecked(int as u32)
 ///     }
 /// }

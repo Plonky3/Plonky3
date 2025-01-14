@@ -92,7 +92,7 @@ impl Debug for Bn254Fr {
 
 impl FieldAlgebra for Bn254Fr {
     type F = Self;
-    type Char = Self;
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new(FFBn254Fr::ZERO);
     const ONE: Self = Self::new(FFBn254Fr::ONE);
@@ -112,7 +112,7 @@ impl FieldAlgebra for Bn254Fr {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
 }

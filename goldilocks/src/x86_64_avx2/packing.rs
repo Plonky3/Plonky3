@@ -158,7 +158,7 @@ impl Product for PackedGoldilocksAVX2 {
 
 impl FieldAlgebra for PackedGoldilocksAVX2 {
     type F = Goldilocks;
-    type Char = Goldilocks;
+    type PrimeSubfield = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
     const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
@@ -171,7 +171,7 @@ impl FieldAlgebra for PackedGoldilocksAVX2 {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
     }
 

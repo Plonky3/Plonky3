@@ -93,7 +93,7 @@ impl Distribution<Mersenne31> for Standard {
 
 impl FieldAlgebra for Mersenne31 {
     type F = Self;
-    type Char = Self;
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
@@ -108,7 +108,7 @@ impl FieldAlgebra for Mersenne31 {
     }
 
     #[inline]
-    fn from_char(f: Self::Char) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
 

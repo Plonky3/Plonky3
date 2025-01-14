@@ -77,7 +77,7 @@ pub fn checked_andn<F: Field>(x: F, y: F) -> F {
 /// The output array is in little-endian order.
 #[inline]
 pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
-    // We do this over F::from_canonical_u32 as from_canonical_u32 can be slow
+    // We do this over F::from_u32 as from_u32 can be slow
     // like in the case of monty field.
     array::from_fn(|i| {
         if val & (1 << i) != 0 {
@@ -130,22 +130,23 @@ pub fn add3<AB: AirBuilder>(
 
     // By assumption P > 3*2^16 so 1 << 16 will be less than P. We use the checked version just to be safe.
     // The compiler should optimize it away.
-    let two_16 = <AB::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
+    let two_16 =
+        <AB::Expr as FieldAlgebra>::PrimeSubfield::from_canonical_checked(1 << 16).unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
-    let acc = acc_16.clone() + AB::Expr::from_char(two_16) * acc_32;
+    let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
 
     builder.assert_zero(
         acc.clone()
-            * (acc.clone() + AB::Expr::from_char(two_32))
-            * (acc + AB::Expr::from_char(two_32.double())),
+            * (acc.clone() + AB::Expr::from_prime_subfield(two_32))
+            * (acc + AB::Expr::from_prime_subfield(two_32.double())),
     );
     builder.assert_zero(
         acc_16.clone()
-            * (acc_16.clone() + AB::Expr::from_char(two_16))
-            * (acc_16 + AB::Expr::from_char(two_16.double())),
+            * (acc_16.clone() + AB::Expr::from_prime_subfield(two_16))
+            * (acc_16 + AB::Expr::from_prime_subfield(two_16.double())),
     );
 }
 
@@ -190,15 +191,16 @@ pub fn add2<AB: AirBuilder>(
 
     // By assumption P > 2^17 so 1 << 16 will be less than P. We use the checked version just to be safe.
     // The compiler should optimize it away.
-    let two_16 = <AB::Expr as FieldAlgebra>::Char::from_canonical_checked(1 << 16).unwrap();
+    let two_16 =
+        <AB::Expr as FieldAlgebra>::PrimeSubfield::from_canonical_checked(1 << 16).unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone();
-    let acc = acc_16.clone() + AB::Expr::from_char(two_16) * acc_32;
+    let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
 
-    builder.assert_zero(acc.clone() * (acc + AB::Expr::from_char(two_32)));
-    builder.assert_zero(acc_16.clone() * (acc_16 + AB::Expr::from_char(two_16)));
+    builder.assert_zero(acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)));
+    builder.assert_zero(acc_16.clone() * (acc_16 + AB::Expr::from_prime_subfield(two_16)));
 }
 
 /// Verify that `a = (b ^ (c << shift))`
