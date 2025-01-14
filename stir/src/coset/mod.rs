@@ -12,6 +12,7 @@ mod tests;
 
 /// Coset of a smooth subgroup of the group of units of a finite field (smooth
 /// meaning: having power-of-2 order).
+#[derive(Clone, Debug)]
 pub struct Radix2Coset<F: TwoAdicField> {
     root_of_unity: F,
     generator: F,
@@ -63,6 +64,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
     /// Reduce the size of the coset by a factor of 2^log_scale_factor
     /// the shift is raised to the power of 2^log_scale_factor
+    // NP TODO shrink_and_shift
     pub fn shrink_coset(&self, log_scale_factor: usize) -> Radix2Coset<F> {
         let generator = self.generator.exp_power_of_2(log_scale_factor);
         let shift = self.shift.exp_power_of_2(log_scale_factor);
@@ -77,34 +79,22 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
     /// Shift the coset by an element of the field
     pub fn shift_by(&self, shift: F) -> Radix2Coset<F> {
-        Radix2Coset {
-            shift: self.shift * shift,
-            generator: self.generator,
-            generator_inv: self.generator_inv,
-            root_of_unity: self.root_of_unity,
-            log_size: self.log_size,
-        }
+        let mut shifted = self.clone();
+        shifted.shift = self.shift * shift;
+        shifted
     }
 
     pub fn shift_by_root_of_unity(&self) -> Radix2Coset<F> {
-        Radix2Coset {
-            shift: self.shift * self.root_of_unity,
-            generator: self.generator,
-            generator_inv: self.generator_inv,
-            root_of_unity: self.root_of_unity,
-            log_size: self.log_size,
-        }
+        let mut shifted = self.clone();
+        shifted.shift = self.shift * self.root_of_unity;
+        shifted
     }
 
     /// Set the shift of the coset to a given element
     pub fn set_shift(&self, shift: F) -> Radix2Coset<F> {
-        Radix2Coset {
-            shift,
-            generator: self.generator,
-            generator_inv: self.generator_inv,
-            root_of_unity: self.root_of_unity,
-            log_size: self.log_size,
-        }
+        let mut shifted = self.clone();
+        shifted.shift = shift;
+        shifted
     }
 
     /// Checks if a given element is in the coset
@@ -122,9 +112,11 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         interpolate_coset(coset_evals, self.shift, point)
     }
 
+    // NP interpolate(
     pub fn interpolate_evals(&self, evals: Vec<F>) -> Polynomial<F> {
         let mut evals = evals;
         evals.resize(1 << self.log_size, F::zero());
+        // NP TODO is there a better impl?
         let dft = NaiveDft.coset_idft(evals, self.shift);
         Polynomial::from_coeffs(dft).truncate_leading_zeros()
     }

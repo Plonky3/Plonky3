@@ -72,6 +72,10 @@ impl<F: Field> Polynomial<F> {
         self.coeffs.is_empty()
     }
 
+    pub fn is_constant(&self) -> bool {
+        self.coeffs.len() <= 1
+    }
+
     pub fn divide_with_q_and_r(&self, divisor: &Self) -> (Self, Self) {
         assert!(!divisor.is_zero());
 
@@ -112,6 +116,8 @@ impl<F: TwoAdicField> Polynomial<F> {
             .product()
     }
 
+    // NP TODO lagrange_interpolate_and_eval(
+    // NP TODO lagrange_interpolate(
     pub fn naive_interpolate(point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
         let points = point_to_evals.iter().map(|(p, _)| *p).collect_vec();
         let vanishing_poly = Self::vanishing_polynomial(points);
@@ -184,6 +190,20 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
 
     // NP TODO: Definitely a better way to do this
     fn mul(self, other: &Polynomial<F>) -> Polynomial<F> {
+        if self.is_zero() || other.is_zero() {
+            return Polynomial::zero();
+        }
+
+        if self.is_constant() {
+            return other * &self.coeffs[0];
+        }
+
+        if other.is_constant() {
+            return self * &other.coeffs[0];
+        }
+
+        // NP TODO add check that FFT fits into field; ow use traditional algorithm
+
         let mut extended_self = self.coeffs.clone();
         let mut extended_other = other.coeffs.clone();
 
@@ -191,6 +211,7 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
         extended_self.resize(domain_size, F::zero());
         extended_other.resize(domain_size, F::zero());
 
+        // NP TODO transposing?
         let coeffs = RowMajorMatrix::new(
             extended_self.into_iter().chain(extended_other).collect(),
             domain_size,
@@ -220,6 +241,7 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
 impl<F: TwoAdicField> Div<&Polynomial<F>> for &Polynomial<F> {
     type Output = Polynomial<F>;
 
+    // NP TODO think about FFT
     fn div(self, other: &Polynomial<F>) -> Polynomial<F> {
         let (q, r) = self.divide_with_q_and_r(other);
         assert!(

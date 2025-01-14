@@ -17,9 +17,6 @@ use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
 use crate::{StirConfig, StirParameters, StirProof};
 
-#[cfg(test)]
-mod test;
-
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) domain: Radix2Coset<F>,
     pub(crate) polynomial: Polynomial<F>,
@@ -69,12 +66,15 @@ where
             merkle_tree,
             stacked_evals,
             round: 0,
+            // NP TODO handle more elegantly? Use Option<F>
             folding_randomness: F::one(),
         },
         commitment,
     )
 }
 
+// NP TODO pub fn prove_on_evals
+// NP TODO commit_and_prove
 pub fn prove<F, M, Challenger>(
     config: &StirConfig<M>,
     polynomial: Polynomial<F>,
@@ -92,24 +92,23 @@ where
 
     // NP TODO: Should the prover call commit like in Plonky3's FRI?
     // or should be called separately like in Giacomo's code?
-    let (witness, commitment) = commit(config, polynomial);
+    let (mut witness, commitment) = commit(config, polynomial);
 
     // Observe the commitment
     challenger.observe(commitment);
     let folding_randomness = challenger.sample_ext_element();
 
-    let mut witness = StirWitness {
-        folding_randomness,
-        ..witness
-    };
+    // NP TODO: Handle more elegantly?
+    witness.folding_randomness = folding_randomness;
 
     let mut round_proofs = vec![];
     for _ in 0..config.num_rounds() {
-        let val = prove_round(config, witness, challenger);
-        witness = val.0;
-        round_proofs.push(val.1);
+        let (new_witness, round_proof) = prove_round(config, witness, challenger);
+        witness = new_witness;
+        round_proofs.push(round_proof);
     }
 
+    // NP TODO final round
     todo!()
 }
 
@@ -126,10 +125,12 @@ where
     // De-structure the round-specific configuration and the witness
     let RoundConfig {
         log_folding_factor,
+        // NP TODO why is this not used?
         log_evaluation_domain_size,
         pow_bits,
         num_queries,
         ood_samples,
+        // NP TODO why is this not used?
         log_inv_rate,
     } = config.round_config(witness.round).clone();
 
@@ -142,18 +143,32 @@ where
         folding_randomness,
     } = witness;
 
+    // NP Remove
+    assert!(log_evaluation_domain_size == domain.log_size());
+
     // ========= FOLDING =========
 
     // Fold the polynomial and the evaluations
     let folded_polynomial =
         fold_polynomial(polynomial, folding_randomness, 1 << log_folding_factor);
-    let folded_evals = fold_evals(stacked_evals, folding_randomness, 1 << log_folding_factor);
 
     // Compute L' = omega * <omega^2>
     // Shrink the evaluation domain by a factor of 2 (log_scale_factor = 1)
     // NP TODO: Does this make sense? It's equivalent to Giacomo's code but note that root_of_unity is never updated
-    // So this is not really omega * <omega^2> but initial omega * <omega^2>
+    // So this is not really omega * <omega^2> but initial_omega * <omega^2>
+
+    // NP TODO remove
+    // domain_0 = shift * <omega>                               // o = shift                // shift * <omega>
+    // domain_1 = [omega * (shift^2)] * <omega^2>               // o = omega * shift^2      // omega * shift^2 * <omega^2>
+    // domain_2 = [omega * (omega^2 * shift^4)] * <omega^4>     // o = omega^3 * shift^4    // omega^3 * shift^4 * <omega^4>
+    // domain_3 = [omega * (omega^6 * shift^8)] * <omega^8>     // o = omega^7 * shift^8    // omega^7 * shift^8 * <omega^8>
+
+    // shift = 1
+    // domain_1 = [omega * (shift^2)] * <omega^2>               //  omega * <omega^2>
+    // domain_2 = [omega * (omega^2 * shift^4)] * <omega^4>     //  omega^3 * <omega^4>
+
     let new_domain = domain.shrink_coset(1).shift_by_root_of_unity();
+    let folded_evals = new_domain.evaluate_polynomial(&folded_polynomial);
 
     // Stack the new folded evaluations, commit and observe the commitment
     let new_stacked_evals = RowMajorMatrix::new(folded_evals, 1 << log_folding_factor);
@@ -165,10 +180,11 @@ where
     // ========= OOD SAMPLING =========
 
     // NP TODO: Sample from the extension field like in FRI
-    let ood_samples: Vec<F> = (0..ood_samples).map(|_| challenger.sample()).collect();
+    let ood_samples: Vec<F> = (0..ood_samples)
+        .map(|_| challenger.sample_ext_element())
+        .collect();
 
     // Evaluate the polynomial at the OOD samples
-    // NP NOTE: Here we are using the initial domain for this round
     let betas: Vec<F> = ood_samples
         .iter()
         .map(|x| folded_polynomial.evaluate(x))
@@ -180,25 +196,29 @@ where
     // ========= STIR MESSAGE =========
 
     // Sample ramdomness for degree correction
-    // NP TODO: Sample from the extension field like in FRI
-    let comb_randomness = challenger.sample();
+    let comb_randomness = challenger.sample_ext_element();
 
     // Sample randomness for the next folding
-    // NP TODO: Sample from the extension field like in FRI
-    let new_folding_randomness = challenger.sample();
+    let new_folding_randomness = challenger.sample_ext_element();
 
     // Sample queried indices of elements in L^k
-    let scaling_factor = 1 << (domain.log_size() - log_folding_factor);
+    let log_scaling_factor = domain.log_size() - log_folding_factor;
 
     // Sample queried indices of elements in L^k
     // NP TODO: Currently no index deduplication
-    // NP TODO: Unsafe cast to u64
+    // NP TODO: Unsafe cast to u64, need u64 here because domain.element() requires u64
     let queried_indices: Vec<u64> = (0..num_queries)
-        .map(|_| challenger.sample_bits(scaling_factor).try_into().unwrap())
+        .map(|_| {
+            challenger
+                .sample_bits(log_scaling_factor)
+                .try_into()
+                .unwrap()
+        })
         .collect();
 
     // Proof of work witness
     // NP TODO: Is this correct? Can we just take the ceil?
+    // NP TODO unsafe cast to usize
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
 
     // ========= QUERY PROOFS =========

@@ -32,7 +32,6 @@ fn test_sum_sub() {
         .map(F::from_canonical_u32)
         .collect_vec();
 
-    // a
     let expected_coeffs_sum = vec![4, 4, 8, 10, 5, 7, 8]
         .into_iter()
         .map(F::from_canonical_u32)
