@@ -11,14 +11,22 @@ use p3_matrix::Matrix;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub use tests::rand_poly;
+
 /// Stores a polynomial in coefficient form.
+// NP TODO: Implement debug
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct Polynomial<F: Field> {
     /// The coefficient of `x^i` is stored at location `i` in `self.coeffs`.
-    pub coeffs: Vec<F>,
+    coeffs: Vec<F>,
 }
 
 impl<F: Field> Polynomial<F> {
+    pub fn coeffs(&self) -> &[F] {
+        &self.coeffs
+    }
+
     pub fn zero() -> Self {
         Self { coeffs: vec![] }
     }
@@ -62,9 +70,11 @@ impl<F: Field> Polynomial<F> {
     }
 
     pub fn degree(&self) -> usize {
+        // TODO
         if self.is_zero() {
-            return 0;
+            panic!("Undefined deg of the 0 polynomial");
         }
+        assert!(self.coeffs.last().map_or(false, |coeff| !coeff.is_zero()));
         self.coeffs.len() - 1
     }
 
@@ -121,18 +131,23 @@ impl<F: TwoAdicField> Polynomial<F> {
     pub fn naive_interpolate(point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
         let points = point_to_evals.iter().map(|(p, _)| *p).collect_vec();
         let vanishing_poly = Self::vanishing_polynomial(points);
-
         let mut result = Polynomial::zero();
         for (point, eval) in point_to_evals.into_iter() {
             let term = &vanishing_poly / &Polynomial::monomial(-point);
-
             let scale = eval / term.evaluate(&point);
-
-            let coeffs = term.coeffs.iter().map(|c| *c * scale).collect_vec();
-
+            let coeffs = term.coeffs().iter().map(|c| *c * scale).collect_vec();
             result += &Polynomial::from_coeffs(coeffs);
         }
-        result
+        result.truncate_leading_zeros()
+    }
+
+    /// Given f(x) and e, returns f(x^e)
+    pub fn compose_with_exponent(&self, exponent: usize) -> Polynomial<F> {
+        let mut coeffs = vec![F::zero(); self.degree() * exponent + 1];
+        for (i, coeff) in self.coeffs.iter().enumerate() {
+            coeffs[i * exponent] = *coeff;
+        }
+        Polynomial::from_coeffs(coeffs)
     }
 }
 
@@ -195,15 +210,25 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
         }
 
         if self.is_constant() {
-            return other * &self.coeffs[0];
+            return Polynomial::from_coeffs(
+                other
+                    .coeffs
+                    .iter()
+                    .map(|c| *c * self.coeffs[0])
+                    .collect_vec(),
+            );
         }
 
         if other.is_constant() {
-            return self * &other.coeffs[0];
+            return Polynomial::from_coeffs(
+                self.coeffs
+                    .iter()
+                    .map(|c| *c * other.coeffs[0])
+                    .collect_vec(),
+            );
         }
 
         // NP TODO add check that FFT fits into field; ow use traditional algorithm
-
         let mut extended_self = self.coeffs.clone();
         let mut extended_other = other.coeffs.clone();
 
