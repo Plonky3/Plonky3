@@ -293,4 +293,90 @@ mod tests {
         reverse_slice_index_bits(&mut input256[..]);
         assert_eq!(input256, output256);
     }
+
+    #[test]
+    fn test_apply_to_chunks_exact_fit() {
+        const CHUNK_SIZE: usize = 4;
+        let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let mut results: Vec<Vec<u8>> = Vec::new();
+
+        apply_to_chunks::<CHUNK_SIZE, _, _>(input, |chunk| {
+            results.push(chunk.to_vec());
+        });
+
+        assert_eq!(results, vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]]);
+    }
+
+    #[test]
+    fn test_apply_to_chunks_with_remainder() {
+        const CHUNK_SIZE: usize = 3;
+        let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7];
+        let mut results: Vec<Vec<u8>> = Vec::new();
+
+        apply_to_chunks::<CHUNK_SIZE, _, _>(input, |chunk| {
+            results.push(chunk.to_vec());
+        });
+
+        assert_eq!(results, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7]]);
+    }
+
+    #[test]
+    fn test_apply_to_chunks_empty_input() {
+        const CHUNK_SIZE: usize = 4;
+        let input: Vec<u8> = vec![];
+        let mut results: Vec<Vec<u8>> = Vec::new();
+
+        apply_to_chunks::<CHUNK_SIZE, _, _>(input, |chunk| {
+            results.push(chunk.to_vec());
+        });
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_apply_to_chunks_single_chunk() {
+        const CHUNK_SIZE: usize = 10;
+        let input: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let mut results: Vec<Vec<u8>> = Vec::new();
+
+        apply_to_chunks::<CHUNK_SIZE, _, _>(input, |chunk| {
+            results.push(chunk.to_vec());
+        });
+
+        assert_eq!(results, vec![vec![1, 2, 3, 4, 5]]);
+    }
+
+    #[test]
+    fn test_apply_to_chunks_large_chunk_size() {
+        const CHUNK_SIZE: usize = 100;
+        let input: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let mut results: Vec<Vec<u8>> = Vec::new();
+
+        apply_to_chunks::<CHUNK_SIZE, _, _>(input, |chunk| {
+            results.push(chunk.to_vec());
+        });
+
+        assert_eq!(results, vec![vec![1, 2, 3, 4, 5, 6, 7, 8]]);
+    }
+
+    #[test]
+    fn test_apply_to_chunks_large_input() {
+        const CHUNK_SIZE: usize = 5;
+        let input: Vec<u8> = (1..=20).collect();
+        let mut results: Vec<Vec<u8>> = Vec::new();
+
+        apply_to_chunks::<CHUNK_SIZE, _, _>(input, |chunk| {
+            results.push(chunk.to_vec());
+        });
+
+        assert_eq!(
+            results,
+            vec![
+                vec![1, 2, 3, 4, 5],
+                vec![6, 7, 8, 9, 10],
+                vec![11, 12, 13, 14, 15],
+                vec![16, 17, 18, 19, 20]
+            ]
+        );
+    }
 }
