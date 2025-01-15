@@ -23,5 +23,5 @@ fn test_interpolate_evals() {
 
     let interpolation = coset.interpolate_evals(evals);
 
-    assert_eq!(interpolation.coeffs, coeffs);
+    assert_eq!(interpolation.coeffs(), coeffs);
 }
