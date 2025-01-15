@@ -108,8 +108,39 @@ where
         round_proofs.push(round_proof);
     }
 
-    // NP TODO final round
-    todo!()
+    let final_polynomial = fold_polynomial(
+        witness.polynomial,
+        witness.folding_randomness,
+        1 << config.log_starting_folding_factor(),
+    );
+
+    let final_queries = config.final_num_queries();
+    let scaling_factor = 1 << (witness.domain.log_size() - config.log_starting_folding_factor());
+
+    // NP TODO: Unsafe cast to u64
+    // NP TODO: No index deduplication
+    let queried_indices: Vec<u64> = (0..final_queries)
+        .map(|_| challenger.sample_bits(scaling_factor).try_into().unwrap())
+        .collect();
+
+    let queries_to_final: Vec<(Vec<Vec<F>>, M::Proof)> = queried_indices
+        .iter()
+        .map(|index| {
+            config
+                .mmcs_config()
+                .open_batch(*index as usize, &witness.merkle_tree)
+        })
+        .collect();
+
+    // NP TODO: Is this correct? Can we just take the ceil?
+    let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
+
+    StirProof {
+        round_proofs,
+        final_polynomial,
+        pow_witness,
+        queries_to_final,
+    }
 }
 
 fn prove_round<F, M, Challenger>(
@@ -267,12 +298,7 @@ where
     let ans_polynomial = Polynomial::<F>::naive_interpolate(quotient_answers.clone().collect_vec());
 
     // Compute the shake polynomial
-    let mut shake_polynomial = Polynomial::zero();
-    for (x, y) in quotient_answers {
-        let numerator = &ans_polynomial - &y;
-        let denominator = Polynomial::monomial(-x);
-        shake_polynomial = &shake_polynomial + &(&numerator / &denominator);
-    }
+    let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers);
 
     // Compute the quotient polynomial
     // NP TODO: Remove the clone
@@ -308,4 +334,17 @@ where
             pow_witness,
         },
     )
+}
+
+fn compute_shake_polynomial<F: TwoAdicField>(
+    ans_polynomial: &Polynomial<F>,
+    quotient_answers: impl Iterator<Item = (F, F)>,
+) -> Polynomial<F> {
+    let mut shake_polynomial = Polynomial::zero();
+    for (x, y) in quotient_answers {
+        let numerator = ans_polynomial - &y;
+        let denominator = Polynomial::monomial(-x);
+        shake_polynomial = &shake_polynomial + &(&numerator / &denominator);
+    }
+    shake_polynomial
 }

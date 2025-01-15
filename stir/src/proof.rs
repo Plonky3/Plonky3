@@ -8,17 +8,17 @@ use crate::polynomial::Polynomial;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "Witness: Serialize, RoundProof<F, M, Witness>: Serialize",
-    deserialize = "Witness: Deserialize<'de>, RoundProof<F, M, Witness>: Deserialize<'de>"
+    serialize = "Witness: Serialize, RoundProof<F, M, Witness>: Serialize, Polynomial<F>: Serialize",
+    deserialize = "Witness: Deserialize<'de>, RoundProof<F, M, Witness>: Deserialize<'de>, Polynomial<F>: Deserialize<'de>"
 ))]
 pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
     pub(crate) round_proofs: Vec<RoundProof<F, M, Witness>>,
-    pub(crate) final_polynomial: Vec<F>,
+    pub(crate) final_polynomial: Polynomial<F>,
     pub(crate) pow_witness: Witness,
 
     // NP TODO path pruning/batch opening
     // pub(crate) queries_to_final: (Vec<Vec<F>>, MultiPath<MerkleConfig>),
-    pub(crate) queries_to_final: (Vec<F>, Vec<M::Proof>),
+    pub(crate) queries_to_final: Vec<(Vec<Vec<F>>, M::Proof)>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
