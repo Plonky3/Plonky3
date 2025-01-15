@@ -41,7 +41,7 @@ impl Goldilocks {
     #[inline]
     #[must_use]
     pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
-        let mut output = [Goldilocks { value: 0 }; N];
+        let mut output = [Goldilocks::ZERO; N];
         let mut i = 0;
         loop {
             if i == N {
