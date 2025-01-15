@@ -577,9 +577,8 @@ mod tests {
     use p3_field_testing::test_packed_field;
 
     use super::{Goldilocks, WIDTH};
-    use crate::to_goldilocks_array;
 
-    const SPECIAL_VALS: [Goldilocks; WIDTH] = to_goldilocks_array([
+    const SPECIAL_VALS: [Goldilocks; WIDTH] = Goldilocks::new_array([
         0xFFFF_FFFF_0000_0000,
         0xFFFF_FFFF_FFFF_FFFF,
         0x0000_0000_0000_0001,
