@@ -179,6 +179,12 @@ where
 
     // ========= FOLDING =========
 
+    // NP TODO ask This folding factor uses the folding factor for this round.
+    // The stacking a few lines below ("new_stacked_evals =
+    // RowMajorMatrix::new(folded_evals, 1 << log_folding_factor)") uses the
+    // folding factor of the next round. Correct? Giacomo's code is not very
+    // well suited for this since only one folding factor is passed
+
     // Fold the polynomial and the evaluations
     let folded_polynomial =
         fold_polynomial(polynomial, folding_randomness, 1 << log_folding_factor);
@@ -198,7 +204,11 @@ where
     // domain_1 = [omega * (shift^2)] * <omega^2>               //  omega * <omega^2>
     // domain_2 = [omega * (omega^2 * shift^4)] * <omega^4>     //  omega^3 * <omega^4>
 
+    // NP TODO maybe keep root of unity separate
     let new_domain = domain.shrink_coset(1).shift_by_root_of_unity();
+
+    // NP TODO can this be done more efficiently using stacked_evals? If not,
+    // remove stacked_evals from the witness?
     let folded_evals = new_domain.evaluate_polynomial(&folded_polynomial);
 
     // Stack the new folded evaluations, commit and observe the commitment
@@ -211,6 +221,8 @@ where
     // ========= OOD SAMPLING =========
 
     // NP TODO: Sample from the extension field like in FRI
+
+    // NP TODO Ask THESE ARE NOT OUT OF THE DOMAIN!
     let ood_samples: Vec<F> = (0..ood_samples)
         .map(|_| challenger.sample_ext_element())
         .collect();
@@ -235,7 +247,7 @@ where
     // Sample queried indices of elements in L^k
     let log_scaling_factor = domain.log_size() - log_folding_factor;
 
-    // Sample queried indices of elements in L^k
+    // Sample queried indices of elements in L^k_{i-1}
     // NP TODO: Currently no index deduplication
     // NP TODO: Unsafe cast to u64, need u64 here because domain.element() requires u64
     let queried_indices: Vec<u64> = (0..num_queries)
@@ -252,6 +264,9 @@ where
     // NP TODO unsafe cast to usize
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
 
+    // Shake randomness
+    let _shake_randomnes: F = challenger.sample_ext_element();
+
     // ========= QUERY PROOFS =========
 
     // Open the Merkle paths for the queried indices
@@ -266,8 +281,16 @@ where
 
     // ========= POLY QUOTIENT =========
 
-    // Compute the domain L^k = shift * <omega^k>
-    let domain_k = domain.shrink_subgroup(log_folding_factor);
+    // NP TODO revise FS in general
+
+    // NP TODO ask Giacomo: is this division (prover step 5) computed before or
+    // after the verifier queries f_{i - 1} (verifier step 1)? The protocol is
+    // interactive but the order of the interaction is not shown in the paper,
+    // yet it is important for FS
+
+    // Compute the domain L^k = shift^k * <omega^k>
+    // NP TODO ask Giacomo: should this also scale the shift?
+    let domain_k = domain.shrink_coset(log_folding_factor);
 
     // Get the elements in L^k corresponding to the queried indices
     // (i.e r^{shift}_i in the paper)
@@ -303,7 +326,7 @@ where
     // Compute the quotient polynomial
     // NP TODO: Remove the clone
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set.clone());
-    let quotient_polynomial = &(&folded_polynomial + &ans_polynomial) / &vanishing_polynomial;
+    let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
     // Compute the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
     // NP TODO: From the call with Giacomo, it seems that this computation might be wrong
@@ -315,6 +338,9 @@ where
     );
 
     let witness_polynomial = &quotient_polynomial * &scaling_polynomial;
+
+    // NP TODO remove
+    assert_eq!(witness_polynomial.degree(), folded_polynomial.degree());
 
     (
         StirWitness {
