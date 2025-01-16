@@ -25,6 +25,15 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
 
     let mut folded_coeffs = vec![F::zero(); fold_size];
 
+    // NP TODO remove or move:
+    // Example:
+    // 1 + 2*x + 3*x^2 + 4*x^3 + 5*x^4 + 6*x^5 + 7*x^6 + 8*x^7
+    // folding_factor = 4
+    // fold_size = 2
+    // folding_powers = [1, r, r^2, r^3]
+    // folded_polynomial = (1 + 5x) + r * (2 + 6x) + r^2 * (3 + 7x) + r^3 * (4 + 8x)
+    //                   = (1 + 2r + 3r^2 + 4r^3) + (5 + 6r + 7r^2 + 8r^3)x
+
     for (i, coeff) in polynomial.coeffs().iter().enumerate() {
         folded_coeffs[i / folding_factor] += *coeff * folding_powers[i % folding_factor];
     }
@@ -74,8 +83,11 @@ mod tests {
     fn test_fold_backwards() {
         let fold_degree = 5;
         let log_folding_factor = 4;
+
         let folding_factor = 1 << log_folding_factor;
+
         let mut rng = rand::thread_rng();
+
         let folding_randomness: F = rng.gen();
 
         let folds = (0..folding_factor)
@@ -93,6 +105,8 @@ mod tests {
             .map(|fold| fold.compose_with_exponent(folding_factor))
             .zip(powers_of_x.iter())
             .fold(Polynomial::zero(), |acc, (raised_fold, power_of_x)| {
+                // NP TODO maybe method multiply_by_xn(exp)? or have * detect
+                // which situation it is
                 &acc + &(&raised_fold * power_of_x)
             });
 
@@ -107,8 +121,8 @@ mod tests {
             .fold(Polynomial::zero(), |acc, p| &acc + &p);
 
         assert_eq!(
-            fold_polynomial(&polynomial, folding_randomness, log_folding_factor).coeffs(),
-            expected_folded_polynomial.coeffs()
+            fold_polynomial(&polynomial, folding_randomness, log_folding_factor),
+            expected_folded_polynomial
         );
     }
 }

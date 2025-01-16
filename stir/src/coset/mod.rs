@@ -118,7 +118,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         evals.resize(1 << self.log_size, F::zero());
         // NP TODO is there a better impl?
         let dft = NaiveDft.coset_idft(evals, self.shift);
-        Polynomial::from_coeffs(dft).truncate_leading_zeros()
+        Polynomial::from_coeffs(dft)
     }
 
     /// NP TODO: No optimization here

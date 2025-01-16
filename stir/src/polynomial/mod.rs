@@ -15,10 +15,9 @@ mod tests;
 pub use tests::rand_poly;
 
 /// Stores a polynomial in coefficient form.
-// NP TODO: Implement debug
-#[derive(Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, PartialEq, Eq, Hash, Default, Debug)]
 pub struct Polynomial<F: Field> {
-    /// The coefficient of `x^i` is stored at location `i` in `self.coeffs`.
+    // The coefficient of `x^i` is stored at location `i` in `self.coeffs`.
     coeffs: Vec<F>,
 }
 
@@ -44,15 +43,23 @@ impl<F: Field> Polynomial<F> {
     }
 
     pub fn from_coeffs(coeffs: Vec<F>) -> Self {
-        Self { coeffs }
+        Self { coeffs }.truncate_leading_zeros()
     }
 
-    pub fn truncate_leading_zeros(self) -> Self {
-        let mut coeffs = self.coeffs;
-        while coeffs.last().map_or(false, |c| c.is_zero()) {
-            coeffs.pop();
+    fn truncate_leading_zeros(mut self) -> Self {
+        if self.is_zero() || !self.coeffs.last().unwrap().is_zero() {
+            return self;
         }
-        Self { coeffs }
+
+        let mut leading_index = self.coeffs.len() - 1;
+
+        while self.coeffs[leading_index].is_zero() {
+            leading_index -= 1;
+        }
+
+        self.coeffs.truncate(leading_index + 1);
+
+        self
     }
 
     // Horner's method for polynomial evaluation
@@ -70,11 +77,11 @@ impl<F: Field> Polynomial<F> {
     }
 
     pub fn degree(&self) -> usize {
-        // TODO
+        // NP TODO Option
         if self.is_zero() {
-            panic!("Undefined deg of the 0 polynomial");
+            panic!("The degree of the zero polynomial is undefined");
         }
-        assert!(self.coeffs.last().map_or(false, |coeff| !coeff.is_zero()));
+        // All operations internally ensure that the result has no leading zeros
         self.coeffs.len() - 1
     }
 
@@ -138,7 +145,7 @@ impl<F: TwoAdicField> Polynomial<F> {
             let coeffs = term.coeffs().iter().map(|c| *c * scale).collect_vec();
             result += &Polynomial::from_coeffs(coeffs);
         }
-        result.truncate_leading_zeros()
+        result
     }
 
     /// Given f(x) and e, returns f(x^e)
@@ -256,10 +263,7 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
 
         let inverse_dft = NaiveDft.idft_batch(pointwise_multiplication);
 
-        Polynomial {
-            coeffs: inverse_dft.values.clone(),
-        }
-        .truncate_leading_zeros()
+        Polynomial::from_coeffs(inverse_dft.values.clone())
     }
 }
 

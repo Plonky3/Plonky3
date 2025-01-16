@@ -162,7 +162,7 @@ fn test_naive_interpolate() {
         .collect_vec();
 
     let poly = Polynomial::<BB>::naive_interpolate(points.into_iter().zip(evals).collect_vec());
-    assert_eq!(poly.coeffs(), polynomial.coeffs());
+    assert_eq!(poly, polynomial);
 }
 
 #[test]

@@ -17,6 +17,9 @@ use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
 use crate::{StirConfig, StirParameters, StirProof};
 
+#[cfg(test)]
+mod tests;
+
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) domain: Radix2Coset<F>,
     pub(crate) polynomial: Polynomial<F>,
