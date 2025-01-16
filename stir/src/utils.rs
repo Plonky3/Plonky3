@@ -1,11 +1,8 @@
 use core::iter;
 
+use crate::polynomial::Polynomial;
 use itertools::Itertools;
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
-
-use crate::polynomial::Polynomial;
 
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
     0f64.max(security_level as f64 - error)
@@ -19,11 +16,11 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     let folding_factor = 1 << log_folding_factor;
     let fold_size = (polynomial.degree() + 1).div_ceil(folding_factor);
 
-    let folding_powers = iter::successors(Some(F::one()), |&x| Some(x * folding_randomness))
+    let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * folding_randomness))
         .take(folding_factor)
         .collect_vec();
 
-    let mut folded_coeffs = vec![F::zero(); fold_size];
+    let mut folded_coeffs = vec![F::ZERO; fold_size];
 
     // NP TODO remove or move:
     // Example:
@@ -43,11 +40,12 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
 
 #[cfg(test)]
 mod tests {
-    use core::assert_eq;
 
-    use iter::Iterator;
     use p3_baby_bear::BabyBear;
-    use p3_field::AbstractField;
+    use p3_field::FieldAlgebra;
+
+    use core::assert_eq;
+    use iter::Iterator;
     use rand::Rng;
 
     use super::*;
@@ -57,7 +55,7 @@ mod tests {
 
     #[test]
     fn test_fold_polynomial() {
-        let polynomial = Polynomial::<F>::from_coeffs(vec![F::one(); 16]);
+        let polynomial = Polynomial::<F>::from_coeffs(vec![F::ONE; 16]);
         let folding_randomness = F::from_canonical_u32(3);
 
         // log_folding_factor = 1
@@ -95,7 +93,7 @@ mod tests {
             .collect_vec();
 
         let powers_of_x = iter::successors(Some(Polynomial::one()), |p| {
-            Some(&Polynomial::monomial(F::zero()) * p)
+            Some(&Polynomial::monomial(F::ZERO) * p)
         })
         .take(folding_factor)
         .collect_vec();
@@ -110,7 +108,7 @@ mod tests {
                 &acc + &(&raised_fold * power_of_x)
             });
 
-        let powers_of_r = iter::successors(Some(F::one()), |&x| Some(x * folding_randomness))
+        let powers_of_r = iter::successors(Some(F::ONE), |&x| Some(x * folding_randomness))
             .take(folding_factor)
             .collect_vec();
 

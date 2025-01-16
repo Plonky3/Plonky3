@@ -3,19 +3,18 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 use core::iter;
 
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_util::log2_strict_usize;
-use tracing::{info_span, instrument};
 
 use crate::config::RoundConfig;
 use crate::coset::Radix2Coset;
 use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
-use crate::{StirConfig, StirParameters, StirProof};
+use crate::utils::fold_polynomial;
+use crate::{StirConfig, StirProof};
 
 #[cfg(test)]
 mod tests;
@@ -27,22 +26,6 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) stacked_evals: RowMajorMatrix<F>,
     pub(crate) round: usize,
     pub(crate) folding_randomness: F,
-}
-
-pub fn fold_polynomial<F: TwoAdicField>(
-    polynomial: Polynomial<F>,
-    folding_randomness: F,
-    log_folding_factor: usize,
-) -> Polynomial<F> {
-    todo!()
-}
-
-pub fn fold_evals<F: TwoAdicField>(
-    evals: RowMajorMatrix<F>,
-    folding_randomness: F,
-    log_folding_factor: usize,
-) -> Vec<F> {
-    todo!()
 }
 
 pub fn commit<F, M>(
@@ -70,7 +53,7 @@ where
             stacked_evals,
             round: 0,
             // NP TODO handle more elegantly? Use Option<F>
-            folding_randomness: F::one(),
+            folding_randomness: F::ONE,
         },
         commitment,
     )
@@ -112,7 +95,7 @@ where
     }
 
     let final_polynomial = fold_polynomial(
-        witness.polynomial,
+        &witness.polynomial,
         witness.folding_randomness,
         1 << config.log_starting_folding_factor(),
     );
@@ -190,7 +173,7 @@ where
 
     // Fold the polynomial and the evaluations
     let folded_polynomial =
-        fold_polynomial(polynomial, folding_randomness, 1 << log_folding_factor);
+        fold_polynomial(&polynomial, folding_randomness, 1 << log_folding_factor);
 
     // Compute L' = omega * <omega^2>
     // Shrink the evaluation domain by a factor of 2 (log_scale_factor = 1)
@@ -335,7 +318,7 @@ where
     // NP TODO: From the call with Giacomo, it seems that this computation might be wrong
     // NP TODO: Don't use std
     let scaling_polynomial = Polynomial::from_coeffs(
-        iter::successors(Some(F::one()), |&prev| Some(prev * comb_randomness))
+        iter::successors(Some(F::ONE), |&prev| Some(prev * comb_randomness))
             .take(quotient_set.len() + 1)
             .collect_vec(),
     );

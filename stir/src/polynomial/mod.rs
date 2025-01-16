@@ -32,13 +32,13 @@ impl<F: Field> Polynomial<F> {
 
     pub fn one() -> Self {
         Self {
-            coeffs: vec![F::one()],
+            coeffs: vec![F::ONE],
         }
     }
 
     pub fn monomial(coeff: F) -> Self {
         Self {
-            coeffs: vec![coeff, F::one()],
+            coeffs: vec![coeff, F::ONE],
         }
     }
 
@@ -66,12 +66,12 @@ impl<F: Field> Polynomial<F> {
     fn horner_evaluate(poly_coeffs: &[F], point: &F) -> F {
         poly_coeffs
             .iter()
-            .rfold(F::zero(), move |result, coeff| result * *point + *coeff)
+            .rfold(F::ZERO, move |result, coeff| result * *point + *coeff)
     }
 
     pub fn evaluate(&self, point: &F) -> F {
         if self.is_zero() {
-            return F::zero();
+            return F::ZERO;
         }
         Self::horner_evaluate(&self.coeffs, point)
     }
@@ -102,7 +102,7 @@ impl<F: Field> Polynomial<F> {
             return (Self::zero(), self.clone());
         }
 
-        let mut quotient_coeffs = vec![F::zero(); self.degree() - divisor.degree() + 1];
+        let mut quotient_coeffs = vec![F::ZERO; self.degree() - divisor.degree() + 1];
         let mut remainder = self.clone();
 
         let divisor_leading_coeff_inv = divisor.coeffs.last().unwrap().inverse();
@@ -150,7 +150,7 @@ impl<F: TwoAdicField> Polynomial<F> {
 
     /// Given f(x) and e, returns f(x^e)
     pub fn compose_with_exponent(&self, exponent: usize) -> Polynomial<F> {
-        let mut coeffs = vec![F::zero(); self.degree() * exponent + 1];
+        let mut coeffs = vec![F::ZERO; self.degree() * exponent + 1];
         for (i, coeff) in self.coeffs.iter().enumerate() {
             coeffs[i * exponent] = *coeff;
         }
@@ -240,8 +240,8 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
         let mut extended_other = other.coeffs.clone();
 
         let domain_size = (self.coeffs.len() + other.coeffs.len() - 1).next_power_of_two();
-        extended_self.resize(domain_size, F::zero());
-        extended_other.resize(domain_size, F::zero());
+        extended_self.resize(domain_size, F::ZERO);
+        extended_other.resize(domain_size, F::ZERO);
 
         // NP TODO transposing?
         let coeffs = RowMajorMatrix::new(

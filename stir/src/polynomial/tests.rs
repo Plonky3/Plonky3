@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_field::{AbstractField, Field};
+use p3_field::{Field, FieldAlgebra};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -18,9 +18,9 @@ where
 
     let mut coeffs: Vec<F> = (0..degree).map(|_| rng.gen()).collect();
 
-    let mut leading_coeff = F::zero();
+    let mut leading_coeff = F::ZERO;
 
-    while leading_coeff == F::zero() {
+    while leading_coeff == F::ZERO {
         leading_coeff = rng.gen();
     }
 

@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_field::AbstractField;
+use p3_field::FieldAlgebra;
 
 use super::*;
 
@@ -8,7 +8,7 @@ type F = BabyBear;
 
 #[test]
 fn test_interpolate_evals() {
-    let coset = Radix2Coset::<F>::new(F::one(), 3);
+    let coset = Radix2Coset::<F>::new(F::ONE, 3);
 
     let coeffs = vec![3, 5, 6, 7, 9]
         .into_iter()

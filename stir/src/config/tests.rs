@@ -1,9 +1,8 @@
-use p3_baby_bear::{BabyBear, DiffusionMatrixBabyBear};
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -13,7 +12,7 @@ use crate::{SecurityAssumption, StirConfig, StirParameters};
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
 
-type Perm = Poseidon2<Val, Poseidon2ExternalMatrixGeneral, DiffusionMatrixBabyBear, 16, 7>;
+type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 
@@ -24,11 +23,7 @@ type BabyBear4 = BinomialExtensionField<BabyBear, 4>;
 
 fn mmcs_config() -> ChallengeMmcs {
     let mut rng = ChaCha20Rng::from_entropy();
-    let perm = Perm::new_from_rng_128(
-        Poseidon2ExternalMatrixGeneral,
-        DiffusionMatrixBabyBear::default(),
-        &mut rng,
-    );
+    let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     ChallengeMmcs::new(ValMmcs::new(hash, compress))

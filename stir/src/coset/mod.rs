@@ -40,7 +40,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
             root_of_unity: generator.clone(),
             generator,
             generator_inv: generator.inverse(),
-            shift: F::one(),
+            shift: F::ONE,
             log_size,
         }
     }
@@ -102,20 +102,21 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         // Note that a subgroup of order n of the group of units of a field is
         // necessarily the group of n-th roots of unity. Therefore, testing for
         // belonging to that group can be done by raising to its order.
-        element.exp_power_of_2(self.log_size) == F::one()
+        element.exp_power_of_2(self.log_size) == F::ONE
     }
 
     pub fn evaluate_interpolation<Mat>(&self, coset_evals: &Mat, point: F) -> Vec<F>
     where
         Mat: Matrix<F>,
     {
-        interpolate_coset(coset_evals, self.shift, point)
+        // NP TODO: Make use of the denominator diffs for efficiency
+        interpolate_coset(coset_evals, self.shift, point, None)
     }
 
     // NP interpolate(
     pub fn interpolate_evals(&self, evals: Vec<F>) -> Polynomial<F> {
         let mut evals = evals;
-        evals.resize(1 << self.log_size, F::zero());
+        evals.resize(1 << self.log_size, F::ZERO);
         // NP TODO is there a better impl?
         let dft = NaiveDft.coset_idft(evals, self.shift);
         Polynomial::from_coeffs(dft)
@@ -128,7 +129,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
     pub fn evaluate_polynomial(&self, polynomial: &Polynomial<F>) -> Vec<F> {
         let mut coeffs = polynomial.coeffs().to_vec();
-        coeffs.resize(1 << self.log_size, F::zero());
+        coeffs.resize(1 << self.log_size, F::ZERO);
         let dft = NaiveDft.coset_dft(coeffs, self.shift);
         dft
     }
