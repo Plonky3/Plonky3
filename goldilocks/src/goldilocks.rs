@@ -10,8 +10,9 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_large_uint,
-    quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, PrimeField64, TwoAdicField,
+    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_large_iint,
+    quotient_map_large_uint, quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField,
+    PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
@@ -232,6 +233,13 @@ quotient_map_large_uint!(
     "`[0, 2^64 - 1]`",
     [u128]
 );
+quotient_map_large_iint!(
+    Goldilocks,
+    i64,
+    "`[-(2^63 - 2^31), 2^63 - 2^31]`",
+    "`[1 + 2^32 - 2^64, 2^64 - 1]`",
+    [(i128, u128)]
+);
 
 // We are left with writing some custom impls for the final three types.
 impl QuotientMap<u64> for Goldilocks {
@@ -239,6 +247,7 @@ impl QuotientMap<u64> for Goldilocks {
     ///
     /// No reduction is needed as the internal value is allowed
     /// to be any u64.
+    #[inline]
     fn from_int(int: u64) -> Self {
         Self::new(int)
     }
@@ -246,6 +255,7 @@ impl QuotientMap<u64> for Goldilocks {
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
     ///
     /// Return `None` if the given integer is greater than `p = 2^64 - 2^32 + 1`.
+    #[inline]
     fn from_canonical_checked(int: u64) -> Option<Self> {
         if int < Self::ORDER_U64 {
             Some(Self::new(int))
@@ -259,6 +269,7 @@ impl QuotientMap<u64> for Goldilocks {
     /// # Safety
     /// In this case this function is actually always safe as the internal
     /// value is allowed to be any u64.
+    #[inline(always)]
     unsafe fn from_canonical_unchecked(int: u64) -> Goldilocks {
         Self::new(int)
     }
@@ -268,6 +279,7 @@ impl QuotientMap<i64> for Goldilocks {
     /// Convert a given `i64` integer into an element of the `Goldilocks` field.
     ///
     /// We simply need to deal with the sign.
+    #[inline]
     fn from_int(int: i64) -> Self {
         if int >= 0 {
             Self::new(int as u64)
@@ -295,48 +307,9 @@ impl QuotientMap<i64> for Goldilocks {
     /// # Safety
     /// In this case this function is actually always safe as the internal
     /// value is allowed to be any i64.
+    #[inline(always)]
     unsafe fn from_canonical_unchecked(int: i64) -> Goldilocks {
         Self::from_int(int)
-    }
-}
-
-impl QuotientMap<i128> for Goldilocks {
-    /// Convert a given `i128` integer into an element of the `Goldilocks` field.
-    ///
-    /// We check for sign and apply the `u128` to either the input or it's negative.
-    fn from_int(int: i128) -> Self {
-        if int >= 0 {
-            Self::from_int(int as u128)
-        } else {
-            -Self::from_int((-int) as u128)
-        }
-    }
-
-    /// Convert a given `i128` integer into an element of the `Goldilocks` field.
-    ///
-    /// Returns none if the input does not lie in the range `[-(2^63 - 2^31), 2^63 - 2^31]`.
-    #[inline]
-    fn from_canonical_checked(int: i128) -> Option<Goldilocks> {
-        const POS_BOUND: i128 = ((1 << 32) - 1) << 31;
-        const NEG_BOUND: i128 = -((1 << 32) - 1) << 31;
-        match int {
-            0..=POS_BOUND => Some(Self::new(int as u64)),
-            NEG_BOUND..0 => Some(Self::new(Self::ORDER_U64.wrapping_add_signed(int as i64))),
-            _ => None,
-        }
-    }
-
-    /// Convert a given `i128` integer into an element of the `Goldilocks` field.
-    ///
-    /// # Safety
-    /// Input must lie in the range `[1 + 2^32 - 2^64, 2^64 - 1]`.
-    /// Note that the lower bound is exactly -p.
-    unsafe fn from_canonical_unchecked(int: i128) -> Goldilocks {
-        if int >= 0 {
-            Self::new(int as u64)
-        } else {
-            Self::new((Self::ORDER_U64 as u128).wrapping_add_signed(int) as u64)
-        }
     }
 }
 

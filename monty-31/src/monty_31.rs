@@ -253,6 +253,7 @@ quotient_map_small_int!(MontyField31, i32, FieldParameters, [i8, i16]);
 
 impl<FP: FieldParameters> QuotientMap<u32> for MontyField31<FP> {
     /// Convert a given `u32` integer into an element of the `MontyField31` field.
+    #[inline]
     fn from_int(int: u32) -> Self {
         Self::new(int)
     }
@@ -260,6 +261,7 @@ impl<FP: FieldParameters> QuotientMap<u32> for MontyField31<FP> {
     /// Convert a given `u32` integer into an element of the `MontyField31` field.
     ///
     /// Returns `None` if the given integer is greater than the Prime.
+    #[inline]
     fn from_canonical_checked(int: u32) -> Option<Self> {
         if int < FP::PRIME {
             Some(Self::new(int))
@@ -272,6 +274,7 @@ impl<FP: FieldParameters> QuotientMap<u32> for MontyField31<FP> {
     ///
     /// # Safety
     /// This is always safe as the conversion to monty form can accept any `u32`.
+    #[inline(always)]
     unsafe fn from_canonical_unchecked(int: u32) -> Self {
         Self::new(int)
     }
@@ -279,6 +282,7 @@ impl<FP: FieldParameters> QuotientMap<u32> for MontyField31<FP> {
 
 impl<FP: FieldParameters> QuotientMap<i32> for MontyField31<FP> {
     /// Convert a given `i32` integer into an element of the `MontyField31` field.
+    #[inline]
     fn from_int(int: i32) -> Self {
         Self::new_monty(to_monty_signed::<FP>(int))
     }
@@ -286,6 +290,7 @@ impl<FP: FieldParameters> QuotientMap<i32> for MontyField31<FP> {
     /// Convert a given `i32` integer into an element of the `MontyField31` field.
     ///
     /// Returns `None` if the given integer does not lie in the range `[(1 - P)/2, (P - 1)/2]`.
+    #[inline]
     fn from_canonical_checked(int: i32) -> Option<Self> {
         let bound = ((FP::PRIME - 1) >> 2) as i32;
         if int < bound {
@@ -303,6 +308,7 @@ impl<FP: FieldParameters> QuotientMap<i32> for MontyField31<FP> {
     ///
     /// # Safety
     /// This is always safe as the conversion to monty form can accept any `i32`.
+    #[inline(always)]
     unsafe fn from_canonical_unchecked(int: i32) -> Self {
         Self::new_monty(to_monty_signed::<FP>(int))
     }

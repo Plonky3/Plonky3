@@ -200,9 +200,7 @@ macro_rules! quotient_map_small_int {
 /// If the unsigned integer type is large enough, there is often no method better for `from_int` than
 /// just doing a modular reduction to a smaller type.
 ///
-/// This provides a simple macro for this this implementation.
-///
-/// This macro accepts 5 inputs.
+/// This macro accepts 6 inputs.
 /// - The name of the prime field `P`
 /// - The natural integer type `Int` in which the field characteristic lives.
 /// - The order of the field.
@@ -210,39 +208,46 @@ macro_rules! quotient_map_small_int {
 /// - A string giving the range for which from_canonical_unchecked produces the correct result.
 /// - A list of large integer types to auto implement `QuotientMap<LargeInt>`.
 ///
-/// Then `from_int` is implemented by doing a modular reduction, casting to `Int` and calling `from_canonical_unchecked`.
-/// Similarly, both `from_canonical_checked`, `from_canonical_unchecked` also cast the value
-/// to `Int` and call their equivalent method in `QuotientMap<Int>`.
-///
-/// For a concrete example, `quotient_map_large_uint!(Mersenne31, u32, Mersenne31::ORDER_U32, "`[0, 2^31 - 1]`", [u128])` would produce the following code:
+/// For a concrete example, `quotient_map_large_uint!(Mersenne31, u32, Mersenne31::ORDER_U32, "`\[0, 2^31 - 2\]`", "`\[0, 2^31 - 1\]`", [u128])` would produce the following code:
 ///
 /// ```rust,ignore
 /// impl QuotientMap<u128> for Mersenne31 {
-///     /// Due to the integer type, the input value is always canonical.
+///     /// Convert a given `u128` integer into an element of the `Mersenne31` field.
+///     ///
+///     /// Uses a modular reduction to reduce to canonical form.
+///     /// This should be avoided in performance critical locations.
 ///     #[inline]
 ///     fn from_int(int: u128) -> Mersenne31 {
 ///         // Should be removed by the compiler.
-///         assert!(size_of::<u128>() >= size_of::<u32>());
-///         unsafe {
-///             Self::from_canonical_unchecked(int as u32)
+///         assert!(size_of::<u128>() > size_of::<u32>());
+///         let red = (int % (Mersenne31::ORDER_U32 as u128)) as u32;
+///            unsafe {
+///                // This is safe as red is less than the field order by assumption.
+///                Self::from_canonical_unchecked(red)
+///            }
+///     }
+///
+///     /// Convert a given `u128` integer into an element of the `Mersenne31` field.
+///     ///
+///     /// Returns `None` if the input does not lie in the range: [0, 2^31 - 2].
+///     #[inline]
+///     fn from_canonical_checked(int: u128) -> Option<Mersenne31> {
+///         if int < Mersenne31::ORDER_U32 as u128 {
+///             unsafe {
+///                 // This is safe as we just checked that int is less than the field order.
+///                 Some(Self::from_canonical_unchecked(int as u32))
+///             }
+///         } else {
+///             None
 ///         }
 ///     }
 ///
-///     /// Due to the integer type, the input value is always canonical.
-///     #[inline]
-///     fn from_canonical_checked(int: u128) -> Option<Mersenne31> {
-///         // Should be removed by the compiler.
-///         assert!(size_of::<u128>() >= size_of::<u32>());
-///         Some(unsafe {
-///             Self::from_canonical_unchecked(int as u32)
-///         })
-///     }
-///
-///     /// Due to the integer type, the input value is always canonical.
+///     /// Convert a given `u128` integer into an element of the `Mersenne31` field.
+///     ///
+///     /// # Safety
+///     /// The input mut lie in the range:", [0, 2^31 - 1].
 ///     #[inline]
 ///     unsafe fn from_canonical_unchecked(int: u128) -> Mersenne31 {
-///         // We use debug_assert to ensure this is removed by the compiler in release mode.
-///         debug_assert!(size_of::<u128>() >= size_of::<u32>());
 ///         Self::from_canonical_unchecked(int as u32)
 ///     }
 /// }
@@ -253,10 +258,10 @@ macro_rules! quotient_map_large_uint {
         $(
         impl QuotientMap<$large_int> for $field {
             #[doc = concat!("Convert a given `", stringify!($large_int), "` integer into an element of the `", stringify!($field), "` field.
-                \n Uses a modular reduction to reduce to canonical form.")]
+                \n Uses a modular reduction to reduce to canonical form. \n This should be avoided in performance critical locations.")]
             #[inline]
             fn from_int(int: $large_int) -> $field {
-                assert!(size_of::<$large_int>() >= size_of::<$field_size>());
+                assert!(size_of::<$large_int>() > size_of::<$field_size>());
                 let red = (int % ($field_order as $large_int)) as $field_size;
                 unsafe {
                     // This is safe as red is less than the field order by assumption.
@@ -284,6 +289,98 @@ macro_rules! quotient_map_large_uint {
             #[doc = concat!("The input mut lie in the range:", $unchecked_bounds, ".")]
             #[inline]
             unsafe fn from_canonical_unchecked(int: $large_int) -> $field {
+                Self::from_canonical_unchecked(int as $field_size)
+            }
+        }
+        )*
+    };
+}
+
+/// For large signed integer types, a simple method which is usually good enough is to simply check the sign and use this to
+/// pass to the equivalent unsigned method. This will often not be the fastest implementation but should be good enough for most cases.
+///
+/// This macro accepts 4 inputs.
+/// - The name of the prime field `P`.
+/// - The natural signed integer type `Int` in which elements of the live.
+/// - A string giving the range for which from_canonical_checked produces the correct result.
+/// - A string giving the range for which from_canonical_unchecked produces the correct result.
+/// - A list of pairs of large sign and unsigned integer types to auto implement `QuotientMap<LargeSignInt>`.
+///
+/// For a concrete example, `quotient_map_large_iint!(Mersenne31, i32, "`\[-2^30, 2^30\]`", "`\[1 - 2^31, 2^31 - 1\]`", [(i128, u128)])` would produce the following code:
+///
+/// ```rust,ignore
+/// impl QuotientMap<i128> for Mersenne31 {
+///     /// Convert a given `i128` integer into an element of the `Mersenne31` field.
+///     ///
+///     /// This checks the sign and then makes use of the equivalent method for unsigned integers.
+///     /// This should be avoided in performance critical locations.
+///     #[inline]
+///     fn from_int(int: i128) -> Mersenne31 {
+///         if int >= 0 {
+///             Self::from_int(int as u128)
+///         } else {
+///            -Self::from_int(-int as u128)
+///         }
+///     }
+///
+///     /// Convert a given `i128` integer into an element of the `Mersenne31` field.
+///     ///
+///     /// Returns `None` if the input does not lie in the range: `[-2^30, 2^30]`.
+///     #[inline]
+///     fn from_canonical_checked(int: i128) -> Option<Mersenne31> {
+///         // We just check that int fits into an i32 now and then use the i32 method.
+///         let int_small = TryInto::<i32>::try_into(int);
+///         if int_small.is_ok() {
+///             Self::from_canonical_checked(int_small.unwrap())
+///         } else {
+///             None
+///         }
+///     }
+///
+///     /// Convert a given `i128` integer into an element of the `Mersenne31` field.
+///     ///
+///     /// # Safety
+///     /// The input mut lie in the range:", `[1 - 2^31, 2^31 - 1]`.
+///     #[inline]
+///     unsafe fn from_canonical_unchecked(int: i128) -> Mersenne31 {
+///         Self::from_canonical_unchecked(int as i32)
+///     }
+/// }
+///```
+#[macro_export]
+macro_rules! quotient_map_large_iint {
+    ($field:ty, $field_size:ty, $checked_bounds:literal, $unchecked_bounds:literal, [$(($large_signed_int:ty, $large_int:ty)),*] ) => {
+        $(
+        impl QuotientMap<$large_signed_int> for $field {
+            #[doc = concat!("Convert a given `", stringify!($large_signed_int), "` integer into an element of the `", stringify!($field), "` field.
+                \n This checks the sign and then makes use of the equivalent method for unsigned integers. \n This should be avoided in performance critical locations.")]
+            #[inline]
+            fn from_int(int: $large_signed_int) -> $field {
+                if int >= 0 {
+                    Self::from_int(int as $large_int)
+                } else {
+                    -Self::from_int(-int as $large_int)
+                }
+            }
+
+            #[doc = concat!("Convert a given `", stringify!($large_int), "` integer into an element of the `", stringify!($field), "` field.
+                \n Returns `None` if the input does not lie in the range:", $checked_bounds, ".")]
+            #[inline]
+            fn from_canonical_checked(int: $large_signed_int) -> Option<$field> {
+                let int_small = TryInto::<$field_size>::try_into(int);
+                if int_small.is_ok() {
+                    Self::from_canonical_checked(int_small.unwrap())
+                } else {
+                    None
+                }
+            }
+
+            #[doc = concat!("Convert a given `", stringify!($large_int), "` integer into an element of the `", stringify!($field), "` field.")]
+            ///
+            /// # Safety
+            #[doc = concat!("The input mut lie in the range:", $unchecked_bounds, ".")]
+            #[inline]
+            unsafe fn from_canonical_unchecked(int: $large_signed_int) -> $field {
                 Self::from_canonical_unchecked(int as $field_size)
             }
         }
@@ -352,4 +449,4 @@ impl_u_i_size!(isize, i8, i16, i32, i64, i128);
 // This is because different field will usually want to handle large signed integers in
 // their own way.
 pub(crate) use from_integer_types;
-pub use {quotient_map_large_uint, quotient_map_small_int};
+pub use {quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int};
