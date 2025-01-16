@@ -10,6 +10,9 @@ use crate::SecurityAssumption;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub use tests::*;
+
 /// STIR-related parameters defined by the user. These get expanded into a full `StirConfig`.
 #[derive(Debug, Clone)]
 pub struct StirParameters<M: Clone> {

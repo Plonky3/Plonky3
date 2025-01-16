@@ -1,5 +1,5 @@
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_commit::ExtensionMmcs;
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -19,9 +19,8 @@ type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
     MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-type BabyBear4 = BinomialExtensionField<BabyBear, 4>;
 
-fn mmcs_config() -> ChallengeMmcs {
+pub fn test_mmcs_config() -> ChallengeMmcs {
     let mut rng = ChaCha20Rng::from_entropy();
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
@@ -47,10 +46,10 @@ fn test_config() {
         security_assumption,
         security_level,
         pow_bits,
-        mmcs_config(),
+        test_mmcs_config(),
     );
 
-    let config = StirConfig::new::<BabyBear4>(parameters);
+    let config = StirConfig::new::<Challenge>(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(
