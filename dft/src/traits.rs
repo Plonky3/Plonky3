@@ -123,4 +123,47 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         );
         self.coset_dft_batch(coeffs, shift)
     }
+
+    /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup, with randomization.
+    fn coset_lde_batch_zk(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        added_values: &[F],
+    ) -> Self::Evaluations {
+        let h = mat.height();
+        let w = mat.width();
+        let mut coeffs = self.idft_batch(mat.clone());
+        assert!(added_values.len() == coeffs.values.len());
+        let new_height = added_values.len() + h;
+        let mut new_values = F::zero_vec(new_height * w);
+        // This adds v_H * r(X). So on H, the evaluation is not affected by this change.
+        for i in 0..h * w {
+            new_values[i] = coeffs.values[i] - added_values[i];
+            new_values[h * w + i] = added_values[i];
+        }
+
+        let sub1 = RowMajorMatrix::new(new_values[..h * w].to_vec(), w);
+        let sub2 = RowMajorMatrix::new(new_values[h * w..].to_vec(), w);
+
+        let interp1 = self.coset_dft_batch(sub1, F::ONE);
+        let interp2 = self.coset_dft_batch(sub2, F::ONE);
+        for i in 0..h {
+            for j in 0..w {
+                assert!(interp1.get(i, j) + interp2.get(i, j) == mat.get(i, j));
+            }
+        }
+        assert!(1 == 2);
+        // PANICS: possible panic if the new resized length overflows
+        coeffs.values.resize(
+            coeffs
+                .values
+                .len()
+                .checked_shl(added_bits.try_into().unwrap())
+                .unwrap(),
+            F::ZERO,
+        );
+        self.coset_dft_batch(coeffs, shift)
+    }
 }

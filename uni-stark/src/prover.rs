@@ -83,7 +83,7 @@ where
     let qc_domains = quotient_domain.split_domains(quotient_degree);
 
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
-        .in_scope(|| pcs.commit(izip!(qc_domains, quotient_chunks).collect_vec()));
+        .in_scope(|| pcs.commit_quotient(izip!(qc_domains, quotient_chunks).collect_vec()));
     challenger.observe(quotient_commit.clone());
 
     let commitments = Commitments {

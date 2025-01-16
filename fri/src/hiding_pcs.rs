@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
+use p3_commit::PolynomialSpace;
+use p3_matrix::bitrev::BitReversableMatrix;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, TwoAdicMultiplicativeCoset};
@@ -88,6 +90,41 @@ where
             &self.inner,
             randomized_evaluations,
         )
+    }
+
+    fn commit_quotient(
+        &self,
+        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
+            .into_iter()
+            .map(|(domain, mat)| {
+                (
+                    domain,
+                    add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut()),
+                )
+            })
+            .collect();
+        // First, add random values as described in https://eprint.iacr.org/2024/1037.pdf.
+        // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
+        // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
+        let ldes: Vec<_> = randomized_evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert_eq!(domain.size(), evals.height());
+                let shift = Val::GENERATOR / domain.shift;
+                let random_values =
+                    vec![self.rng.borrow_mut().gen(); evals.height() * evals.width()];
+                // Commit to the bit-reversed LDE.
+                self.inner
+                    .dft
+                    .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, &random_values)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect();
+
+        self.inner.mmcs.commit(ldes)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -209,4 +246,34 @@ where
             new_row[old_w..].iter_mut().for_each(|v| *v = rng.gen());
         });
     result
+}
+
+use alloc::vec;
+
+fn randomize_quotients<Val, R>(
+    h: usize,
+    evals: RowMajorMatrix<Val>,
+    mut rng: R,
+) -> RowMajorMatrix<Val>
+where
+    Val: TwoAdicField,
+    R: Rng + Send + Sync,
+    Standard: Distribution<Val>,
+{
+    let orig_height = evals.height();
+    let mut new_evals = RowMajorMatrix::new(
+        vec![Val::ZERO; evals.width * (orig_height + h)],
+        evals.width(),
+    );
+
+    let new_evals_height = new_evals.height();
+    let all_random_vals = vec![rng.gen(); (evals.width() - 1) * h];
+    for i in 0..evals.width() - 1 {
+        new_evals.values[i * new_evals_height..i * new_evals_height + orig_height]
+            .copy_from_slice(&evals.values[i * orig_height..(i + 1) * orig_height]);
+        new_evals.values[(i + 1) * orig_height..(i + 1) * new_evals_height]
+            .copy_from_slice(&vec![rng.gen(); h]);
+    }
+
+    new_evals
 }

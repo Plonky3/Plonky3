@@ -41,6 +41,14 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    #[allow(clippy::type_complexity)]
+    fn commit_quotient(
+        &self,
+        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit(evaluations)
+    }
+
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,
