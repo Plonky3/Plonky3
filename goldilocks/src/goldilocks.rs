@@ -11,9 +11,9 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_large_iint,
-    quotient_map_large_uint, quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField,
-    PrimeField64, TwoAdicField,
+    halve_u64, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
+    FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField, PrimeField64,
+    TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};

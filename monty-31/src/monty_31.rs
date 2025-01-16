@@ -17,13 +17,12 @@ use p3_field::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
     from_monty, halve_u32, monty_reduce, to_monty, to_monty_64, to_monty_64_signed, to_monty_signed,
 };
-use crate::{FieldParameters, MontyParameters, TwoAdicData};
+use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
@@ -160,8 +159,9 @@ impl<FP: FieldParameters> Serialize for MontyField31<FP> {
 
 impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // It's faster to Serialize and Deserialize in monty form.
         let val = u32::deserialize(d)?;
-        Ok(MontyField31::from_u32(val))
+        Ok(MontyField31::new_monty(val))
     }
 }
 
