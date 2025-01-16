@@ -163,9 +163,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
         for src in 0..vals.len() {
             let dst = (BIT_REVERSE_6BIT[src] as usize).wrapping_shr(dst_shr_amt);
             if src < dst {
-                unsafe {
-                    core::ptr::swap(vals.get_unchecked_mut(src), vals.get_unchecked_mut(dst));
-                }
+                vals.swap(src, dst);
             }
         }
     } else {
@@ -183,9 +181,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
                 let src = src_hi + src_lo;
                 let dst = dst_hi + dst_lo;
                 if src < dst {
-                    unsafe {
-                        core::ptr::swap(vals.get_unchecked_mut(src), vals.get_unchecked_mut(dst));
-                    }
+                    vals.swap(src, dst);
                 }
             }
         }
@@ -198,9 +194,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     for src in 0..vals.len() {
         let dst = src.reverse_bits().wrapping_shr(usize::BITS - lb_n as u32);
         if src < dst {
-            unsafe {
-                core::ptr::swap(vals.get_unchecked_mut(src), vals.get_unchecked_mut(dst));
-            }
+            vals.swap(src, dst);
         }
     }
 }
