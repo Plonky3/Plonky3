@@ -2,7 +2,7 @@ use core::iter;
 
 use crate::polynomial::Polynomial;
 use itertools::Itertools;
-use p3_field::TwoAdicField;
+use p3_field::{Field, TwoAdicField};
 
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
     0f64.max(security_level as f64 - error)
@@ -36,6 +36,12 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     }
 
     Polynomial::from_coeffs(folded_coeffs)
+}
+
+pub(crate) fn field_element_from_isize<F: Field>(x: isize) -> F {
+    let sign = if x >= 0 { F::ONE } else { -F::ONE };
+    let value = F::from_canonical_u32(x.abs() as u32);
+    sign * value
 }
 
 #[cfg(test)]

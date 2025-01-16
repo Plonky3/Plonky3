@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
+use itertools::Itertools;
 
 use p3_field::Field;
 use p3_matrix::Matrix;
@@ -27,10 +28,7 @@ pub struct StirParameters<M: Clone> {
     // 1". Comments are more accurate: "degree" means "degree bound (<=)"
     pub(crate) log_starting_degree: usize,
 
-    /// log of the folding factor in the first round.
-    pub(crate) log_starting_folding_factor: usize,
-
-    /// log of the folding factors in non-first rounds.
+    /// log of the folding factor in each round.
     pub(crate) log_folding_factors: Vec<usize>,
 
     /// log of the inverse of the starting rate used in the protocol.
@@ -53,7 +51,7 @@ impl<M: Clone> StirParameters<M> {
         log_starting_degree: usize,
         log_starting_inv_rate: usize,
         log_inv_rates: Vec<usize>,
-        log_starting_folding_factor: usize,
+        log_folding_factor: usize,
         security_assumption: SecurityAssumption,
         security_level: usize,
         pow_bits: usize,
@@ -62,8 +60,7 @@ impl<M: Clone> StirParameters<M> {
         StirParameters {
             log_starting_degree,
             log_starting_inv_rate,
-            log_starting_folding_factor,
-            log_folding_factors: vec![log_starting_folding_factor; log_inv_rates.len()],
+            log_folding_factors: vec![log_folding_factor; log_inv_rates.len()],
             log_inv_rates,
             security_assumption,
             security_level,
@@ -87,9 +84,8 @@ impl<M: Clone> StirParameters<M> {
     ) -> Self {
         StirParameters {
             log_starting_degree,
-            log_starting_inv_rate,
-            log_starting_folding_factor: log_folding_factor,
             log_folding_factors: vec![log_folding_factor; num_rounds],
+            log_starting_inv_rate,
             log_inv_rates: (0..num_rounds)
                 .map(|i| log_starting_inv_rate + (i + 1) * (log_folding_factor - 1))
                 .collect(),
@@ -106,6 +102,10 @@ impl<M: Clone> StirParameters<M> {
 pub(crate) struct RoundConfig {
     /// log of the folding factor for this round.
     pub(crate) log_folding_factor: usize,
+
+    // NP TODO think if this should be external
+    /// log of the folding factor for the next round.
+    pub(crate) log_next_folding_factor: usize,
 
     /// log of the size of the evaluation domain of the oracle *sent this round*
     pub(crate) log_evaluation_domain_size: usize,
@@ -158,7 +158,6 @@ impl<M: Clone> StirConfig<M> {
             security_level,
             security_assumption,
             log_starting_degree,
-            log_starting_folding_factor,
             log_folding_factors,
             log_starting_inv_rate,
             log_inv_rates,
@@ -167,19 +166,20 @@ impl<M: Clone> StirConfig<M> {
         } = parameters.clone();
 
         assert!(
-            log_starting_folding_factor > 0 && log_folding_factors.iter().all(|&x| x != 0),
+            log_folding_factors.iter().all(|&x| x != 0),
             "Folding factors should be non zero"
         );
         assert_eq!(log_folding_factors.len(), log_inv_rates.len());
 
         // log(degree + 1) can not be reduced past 0
-        let total_reduction =
-            log_starting_folding_factor + log_folding_factors.iter().sum::<usize>();
+        let total_reduction = log_folding_factors.iter().sum::<usize>();
         assert!(total_reduction <= log_starting_degree);
 
-        // If the first round wants to reduce the degreemore than possible, one
+        let log_starting_folding_factor = log_folding_factors[0];
+
+        // If the first round wants to reduce the degree more than possible, one
         // should send the polynomial directly instead
-        assert!(log_starting_degree >= log_folding_factors[0]);
+        assert!(log_starting_degree >= log_starting_folding_factor);
 
         // Compute the log of (final degree + 1) as well as the number of (non-final) rounds
         let log_stopping_degree = log_starting_degree - total_reduction;
@@ -235,7 +235,7 @@ impl<M: Clone> StirConfig<M> {
             current_log_degree,
             log_inv_rate,
             field_bits,
-            1 << parameters.log_starting_folding_factor,
+            1 << log_starting_folding_factor,
         );
 
         let starting_folding_pow_bits =
@@ -243,7 +243,17 @@ impl<M: Clone> StirConfig<M> {
 
         let mut round_parameters = Vec::with_capacity(num_rounds);
 
-        for (next_folding_factor, next_rate) in log_folding_factors.into_iter().zip(log_inv_rates) {
+        // If folding factors has length (i. e. num_rounds) 1, the only round is
+        // by definition the last one, which is treated separately; In that
+        // case, windows(2) returns no elements, as desired.
+        for (log_folding_factor_pair, next_rate) in log_folding_factors
+            .windows(2)
+            .into_iter()
+            .zip(log_inv_rates)
+        {
+            let (log_curr_folding_factor, log_next_folding_factor) =
+                (log_folding_factor_pair[0], log_folding_factor_pair[1]);
+
             // This is the size of the new evaluation domain
             let new_evaluation_domain_size = current_log_degree + next_rate;
 
@@ -290,10 +300,10 @@ impl<M: Clone> StirConfig<M> {
             );
 
             let prox_gaps_error_2 = security_assumption.prox_gaps_error(
-                current_log_degree - next_folding_factor,
+                current_log_degree - log_curr_folding_factor,
                 next_rate,
                 field_bits,
-                1 << next_folding_factor,
+                1 << log_curr_folding_factor,
             );
 
             // Now compute the PoW
@@ -304,7 +314,8 @@ impl<M: Clone> StirConfig<M> {
 
             let round_config = RoundConfig {
                 log_evaluation_domain_size: new_evaluation_domain_size,
-                log_folding_factor: next_folding_factor,
+                log_folding_factor: log_curr_folding_factor,
+                log_next_folding_factor,
                 num_queries,
                 pow_bits,
                 ood_samples,
@@ -312,7 +323,7 @@ impl<M: Clone> StirConfig<M> {
             };
             round_parameters.push(round_config);
             log_inv_rate = next_rate;
-            current_log_degree -= next_folding_factor;
+            current_log_degree -= log_curr_folding_factor;
         }
 
         // Compute the number of queries required
@@ -391,7 +402,7 @@ impl<M: Clone> StirConfig<M> {
     }
 
     pub fn log_starting_folding_factor(&self) -> usize {
-        self.parameters.log_starting_folding_factor
+        self.parameters.log_folding_factors[0]
     }
 
     pub fn log_folding_factors(&self) -> &[usize] {

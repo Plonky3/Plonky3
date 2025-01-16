@@ -21,6 +21,16 @@ pub struct Radix2Coset<F: TwoAdicField> {
     log_size: usize,
 }
 
+impl<F: TwoAdicField> Iterator for Radix2Iterator<F> {
+    type Item = F;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.current;
+        self.current = self.current * self.generator;
+        Some(next)
+    }
+}
+
 impl<F: TwoAdicField> Radix2Coset<F> {
     pub fn new(shift: F, log_size: usize) -> Self {
         let generator = F::two_adic_generator(log_size);
@@ -133,6 +143,13 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         let dft = NaiveDft.coset_dft(coeffs, self.shift);
         dft
     }
+
+    pub fn iter(&self) -> Radix2Iterator<F> {
+        Radix2Iterator {
+            current: self.shift,
+            generator: self.generator,
+        }
+    }
 }
 
 impl<F: TwoAdicField> PartialEq for Radix2Coset<F> {
@@ -142,3 +159,20 @@ impl<F: TwoAdicField> PartialEq for Radix2Coset<F> {
 }
 
 impl<F: TwoAdicField> Eq for Radix2Coset<F> {}
+
+pub struct Radix2Iterator<F: TwoAdicField> {
+    current: F,
+    generator: F,
+}
+
+impl<F: TwoAdicField> IntoIterator for Radix2Coset<F> {
+    type Item = F;
+    type IntoIter = Radix2Iterator<F>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Radix2Iterator {
+            current: self.shift,
+            generator: self.generator,
+        }
+    }
+}

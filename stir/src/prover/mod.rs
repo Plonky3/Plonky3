@@ -94,14 +94,17 @@ where
         round_proofs.push(round_proof);
     }
 
+    let log_last_folding_factor = config.log_folding_factors().last().unwrap();
+
     let final_polynomial = fold_polynomial(
         &witness.polynomial,
         witness.folding_randomness,
-        1 << config.log_starting_folding_factor(),
+        1 << log_last_folding_factor,
     );
 
     let final_queries = config.final_num_queries();
-    let scaling_factor = 1 << (witness.domain.log_size() - config.log_starting_folding_factor());
+
+    let scaling_factor = 1 << (witness.domain.log_size() - log_last_folding_factor);
 
     // NP TODO: Unsafe cast to u64
     // NP TODO: No index deduplication
@@ -142,6 +145,7 @@ where
     // De-structure the round-specific configuration and the witness
     let RoundConfig {
         log_folding_factor,
+        log_next_folding_factor,
         // NP TODO why is this not used?
         log_evaluation_domain_size,
         pow_bits,
@@ -197,11 +201,14 @@ where
     // remove stacked_evals from the witness?
     let folded_evals = new_domain.evaluate_polynomial(&folded_polynomial);
 
-    // Stack the new folded evaluations, commit and observe the commitment
-    let new_stacked_evals = RowMajorMatrix::new(folded_evals, 1 << log_folding_factor);
+    // Stack the new folded evaluations, commit and observe the commitment (in
+    // preparation for next-round folding verification and hence with the
+    // folding factor of the next round)
+    let new_stacked_evals = RowMajorMatrix::new(folded_evals, 1 << log_next_folding_factor);
     let (new_commitment, new_merkle_tree) = config
         .mmcs_config()
         .commit_matrix(new_stacked_evals.clone());
+
     challenger.observe(new_commitment.clone());
 
     // ========= OOD SAMPLING =========
