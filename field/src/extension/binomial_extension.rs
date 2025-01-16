@@ -13,7 +13,7 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenius, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
@@ -51,7 +51,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionF
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
-    type ExtensionPacking = BinomialExtensionField<F::Packing, D>;
+    type ExtensionPacking = PackedBinomialExtensionField<F, F::Packing, D>;
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
@@ -572,7 +572,12 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-fn cubic_mul<FA: FieldAlgebra, const D: usize>(a: &[FA; D], b: &[FA; D], res: &mut [FA; D], w: FA) {
+pub(crate) fn cubic_mul<FA: FieldAlgebra, const D: usize>(
+    a: &[FA; D],
+    b: &[FA; D],
+    res: &mut [FA; D],
+    w: FA,
+) {
     assert_eq!(D, 3);
 
     let a0_b0 = a[0].clone() * b[0].clone();
@@ -593,7 +598,11 @@ fn cubic_mul<FA: FieldAlgebra, const D: usize>(a: &[FA; D], b: &[FA; D], res: &m
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_square<FA: FieldAlgebra, const D: usize>(a: &[FA; D], res: &mut [FA; D], w: FA::F) {
+pub(crate) fn cubic_square<FA: FieldAlgebra, const D: usize>(
+    a: &[FA; D],
+    res: &mut [FA; D],
+    w: FA::F,
+) {
     assert_eq!(D, 3);
 
     let w_a2 = a[2].clone() * FA::from_f(w);

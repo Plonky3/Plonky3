@@ -55,7 +55,7 @@ where
         self.inner.hash_iter(
             input
                 .into_iter()
-                .flat_map(|x| x.as_canonical_u32().to_le_bytes()),
+                .flat_map(|x| x.to_unique_u32().to_le_bytes()),
         )
     }
 }
@@ -74,7 +74,7 @@ where
         self.inner.hash_iter(
             input
                 .into_iter()
-                .map(|x| PW::from_fn(|i| x.as_slice()[i].as_canonical_u32())),
+                .map(|x| PW::from_fn(|i| x.as_slice()[i].to_unique_u32())),
         )
     }
 }
@@ -99,13 +99,13 @@ where
                 let b = input.next();
                 if let (Some(a), Some(b)) = (a, b) {
                     let ab = PW::from_fn(|i| {
-                        let a_i = a.as_slice()[i].as_canonical_u64();
-                        let b_i = b.as_slice()[i].as_canonical_u64();
+                        let a_i = a.as_slice()[i].to_unique_u64();
+                        let b_i = b.as_slice()[i].to_unique_u64();
                         a_i | (b_i << 32)
                     });
                     Some(ab)
                 } else {
-                    a.map(|a| PW::from_fn(|i| a.as_slice()[i].as_canonical_u64()))
+                    a.map(|a| PW::from_fn(|i| a.as_slice()[i].to_unique_u64()))
                 }
             },
         ))
@@ -124,7 +124,7 @@ where
         self.inner.hash_iter(
             input
                 .into_iter()
-                .flat_map(|x| x.as_canonical_u64().to_le_bytes()),
+                .flat_map(|x| x.to_unique_u64().to_le_bytes()),
         )
     }
 }
@@ -143,7 +143,7 @@ where
         self.inner.hash_iter(
             input
                 .into_iter()
-                .map(|x| PW::from_fn(|i| x.as_slice()[i].as_canonical_u64())),
+                .map(|x| PW::from_fn(|i| x.as_slice()[i].to_unique_u64())),
         )
     }
 }

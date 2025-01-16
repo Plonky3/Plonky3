@@ -3,13 +3,12 @@ use std::fmt::Debug;
 use p3_blake3_air::{generate_trace_rows, Blake3Air};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
+use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_koala_bear::KoalaBear;
-use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_monty_31::dft::RecursiveDft;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
@@ -59,8 +58,8 @@ fn main() -> Result<(), impl Debug> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
-    type Dft = RecursiveDft<Val>;
-    let dft = Dft::new(trace.height() << fri_config.log_blowup);
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
 
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);

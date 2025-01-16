@@ -1,7 +1,8 @@
-use p3_field::{exp_1420470955, exp_u64_by_squaring, Field, FieldAlgebra};
+use p3_field::exponentiation::exp_1420470955;
+use p3_field::{Field, FieldAlgebra};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, TwoAdicData,
+    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -29,13 +30,6 @@ impl BarrettParameters for KoalaBearParameters {}
 impl FieldParameters for KoalaBearParameters {
     const MONTY_GEN: KoalaBear = KoalaBear::new(3);
 
-    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
-        match power {
-            1420470955 => exp_1420470955(val), // used to compute x^{1/7}
-            _ => exp_u64_by_squaring(val, power),
-        }
-    }
-
     fn try_inverse<F: Field>(p1: F) -> Option<F> {
         if p1.is_zero() {
             return None;
@@ -60,6 +54,17 @@ impl FieldParameters for KoalaBearParameters {
         let p1111110111111111111111111111111 = p1111110111111111111110000000000 * p1111111111;
 
         Some(p1111110111111111111111111111111)
+    }
+}
+
+impl RelativelyPrimePower<3> for KoalaBearParameters {
+    /// In the field `KoalaBear`, `a^{1/3}` is equal to a^{1420470955}.
+    ///
+    /// This follows from the calculation `3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1)`.
+    fn exp_root_d<FA: FieldAlgebra>(val: FA) -> FA {
+        // We use a custom addition chain.
+        // This could possibly by further optimised.
+        exp_1420470955(val)
     }
 }
 
@@ -102,7 +107,9 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
+    use p3_field::{
+        InjectiveMonomial, PermutationMonomial, PrimeField32, PrimeField64, TwoAdicField,
+    };
     use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
 
     use super::*;
@@ -169,9 +176,9 @@ mod tests {
         let expected_prod = F::from_u32(0x54b46b81);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(m1.exp_u64(1420470955).exp_const_u64::<3>(), m1);
-        assert_eq!(m2.exp_u64(1420470955).exp_const_u64::<3>(), m2);
-        assert_eq!(f_2.exp_u64(1420470955).exp_const_u64::<3>(), f_2);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();

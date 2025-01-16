@@ -13,7 +13,7 @@ use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::exponentiation::exp_u64_by_squaring;
+use crate::exponentiation::bits_u64;
 use crate::integers::{from_integer_types, QuotientMap};
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
@@ -142,15 +142,19 @@ pub trait FieldAlgebra:
     }
 
     /// Exponentiation by a `u64` power.
-    ///
-    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
-    /// by squaring. Rather than override this method, it is generally recommended to have the
-    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
-    /// abstract fields.
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        Self::F::exp_u64_generic(self.clone(), power)
+        let mut current = self.clone();
+        let mut product = Self::ONE;
+
+        for j in 0..bits_u64(power) {
+            if (power >> j & 1) != 0 {
+                product *= current.clone();
+            }
+            current = current.square();
+        }
+        product
     }
 
     /// Exponentiation by a constant power.
@@ -253,6 +257,35 @@ pub trait FieldAlgebra:
     }
 }
 
+/// A ring implements `InjectiveMonomial<N>` if the algebraic function
+/// `f(x) = x^N` is an injective map on elements of the ring.
+///
+/// We do not enforce that this map be invertible as there are useful
+/// cases such as polynomials or symbolic expressions where no inverse exists.
+///
+/// However, if the ring is a field with order `q` or an array of such field elements,
+/// then `f(x) = x^N` will be injective if and only if it is invertible and so in
+/// such cases this monomial acts as a permutation. Moreover, this will occur
+/// exactly when `N` and `q - 1` are relatively prime i.e. `gcd(N, q - 1) = 1`.
+pub trait InjectiveMonomial<const N: u64>: FieldAlgebra {
+    /// Compute `x -> x^n` for a given `n > 1` such that this
+    /// map is injective.
+    fn injective_exp_n(&self) -> Self {
+        self.exp_const_u64::<N>()
+    }
+}
+
+/// A ring implements PermutationMonomial<N> if the algebraic function
+/// `f(x) = x^N` is invertible and thus acts as a permutation on elements of the ring.
+///
+/// In all cases we care about, this means that we can find another integer `K` such
+/// that `x = x^{NK}` for all elements of our ring.
+pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
+    /// Compute `x -> x^K` for a given `K > 1` such that
+    /// `x^{NK} = x` for all elements `x`.
+    fn injective_exp_root_n(&self) -> Self;
+}
+
 /// An element of a finite field.
 pub trait Field:
     FieldAlgebra<F = Self>
@@ -286,17 +319,6 @@ pub trait Field:
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         *self / Self::TWO.exp_u64(exp)
-    }
-
-    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `FieldAlgebra`s, not just this concrete field.
-    ///
-    /// The default implementation uses naive square and multiply. Implementations may want to
-    /// override this and handle certain powers with more optimal addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        exp_u64_by_squaring(val, power)
     }
 
     /// The multiplicative inverse of this field element, if it exists.
@@ -366,6 +388,16 @@ pub trait PrimeField64: PrimeField {
 
     /// Return the representative of `value` that is less than `ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
+
+    /// Convert a field element to a `u64` such that any two field elements
+    /// are converted to the same `u64` if and only if they represent the same value.
+    ///
+    /// This will be the fastest way to convert a field element to a `u64` and
+    /// is intended for use in hashing. It will also be consistent across different targets.
+    fn to_unique_u64(&self) -> u64 {
+        // A simple default which is optimal for some fields.
+        self.as_canonical_u64()
+    }
 }
 
 /// A prime field of order less than `2^32`.
@@ -374,6 +406,16 @@ pub trait PrimeField32: PrimeField64 {
 
     /// Return the representative of `value` that is less than `ORDER_U32`.
     fn as_canonical_u32(&self) -> u32;
+
+    /// Convert a field element to a `u32` such that any two field elements
+    /// are converted to the same `u32` if and only if they represent the same value.
+    ///
+    /// This will be the fastest way to convert a field element to a `u32` and
+    /// is intended for use in hashing. It will also be consistent across different targets.
+    fn to_unique_u32(&self) -> u32 {
+        // A simple default which is optimal for some fields.
+        self.as_canonical_u32()
+    }
 }
 
 /// A commutative algebra over an extension field.

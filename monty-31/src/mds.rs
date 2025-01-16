@@ -243,7 +243,7 @@ where
         // Thus the values appearing at the end are bounded by 3^n 2^50
         // where n is the maximal number of negacyclic_conv
         // recombination steps. When N = 64, we need to recombine for
-        // singed_conv_32, singed_conv_16, singed_conv_8 so the
+        // signed_conv_32, signed_conv_16, signed_conv_8 so the
         // overall bound will be 3^3 2^50 < 32 * 2^50 < 2^55.
         debug_assert!(z > -(1i64 << 55));
         debug_assert!(z < (1i64 << 55));

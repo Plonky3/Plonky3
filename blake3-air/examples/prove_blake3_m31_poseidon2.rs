@@ -1,13 +1,13 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
+use p3_blake3_air::{generate_trace_rows, Blake3Air};
 use p3_challenger::DuplexChallenger;
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_fri::FriConfig;
-use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -19,7 +19,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-const NUM_HASHES: usize = 1365;
+const NUM_HASHES: usize = 1 << 13;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -76,8 +76,8 @@ fn main() -> Result<(), impl Debug> {
     let trace = generate_trace_rows::<Val>(inputs);
 
     let mut challenger = Challenger::new(perm24.clone());
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &Blake3Air {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::new(perm24);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &Blake3Air {}, &mut challenger, &proof, &vec![])
 }

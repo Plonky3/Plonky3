@@ -1,14 +1,15 @@
 use std::fmt::Debug;
 
 use p3_baby_bear::BabyBear;
+use p3_blake3_air::{generate_trace_rows, Blake3Air};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
+use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_sha256::{Sha256, Sha256Compress};
-use p3_symmetric::SerializingHasher32;
+use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::random;
 use tracing_forest::util::LevelFilter;
@@ -17,12 +18,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(feature = "parallel")]
-type Dft = p3_dft::Radix2DitParallel<BabyBear>;
-#[cfg(not(feature = "parallel"))]
-type Dft = p3_dft::Radix2Bowers;
-
-const NUM_HASHES: usize = 1_365;
+const NUM_HASHES: usize = 1 << 13;
 
 fn main() -> Result<(), impl Debug> {
     let env_filter = EnvFilter::builder()
@@ -37,21 +33,19 @@ fn main() -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    type ByteHash = Sha256;
+    type ByteHash = Keccak256Hash;
     type FieldHash = SerializingHasher32<ByteHash>;
     let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(byte_hash);
+    let field_hash = FieldHash::new(Keccak256Hash {});
 
-    type MyCompress = Sha256Compress;
-    let compress = MyCompress {};
+    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+    let compress = MyCompress::new(byte_hash);
 
     type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
-
-    let dft = Dft::default();
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
@@ -64,6 +58,10 @@ fn main() -> Result<(), impl Debug> {
         proof_of_work_bits: 16,
         mmcs: challenge_mmcs,
     };
+
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
+
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
@@ -71,8 +69,8 @@ fn main() -> Result<(), impl Debug> {
     let config = MyConfig::new(pcs);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &Blake3Air {}, &mut challenger, trace, &vec![]);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &Blake3Air {}, &mut challenger, &proof, &vec![])
 }

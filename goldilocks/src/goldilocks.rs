@@ -8,6 +8,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     exp_10540996611094048183, exp_u64_by_squaring, halve_u64, quotient_map_large_iint,
@@ -23,6 +24,8 @@ use serde::{Deserialize, Serialize};
 const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
+///
+/// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct Goldilocks {
@@ -121,6 +124,21 @@ impl FieldAlgebra for Goldilocks {
     }
 }
 
+// Degree of the smallest permutation polynomial for Goldilocks.
+//
+// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
+impl InjectiveMonomial<7> for Goldilocks {}
+
+impl PermutationMonomial<7> for Goldilocks {
+    /// In the field `Goldilocks`, `a^{1/7}` is equal to a^{10540996611094048183}.
+    ///
+    /// This follows from the calculation `7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
+    fn injective_exp_root_n(&self) -> Self {
+        // This could likely by further optimised.
+        exp_10540996611094048183(*self)
+    }
+}
+
 impl Field for Goldilocks {
     // TODO: Add cfg-guarded Packing for NEON
 
@@ -156,14 +174,6 @@ impl Field for Goldilocks {
 
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U64
-    }
-
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        match power {
-            10540996611094048183 => exp_10540996611094048183(val), // used to compute x^{1/7}
-            _ => exp_u64_by_squaring(val, power),
-        }
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -624,9 +634,9 @@ mod tests {
         let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
         assert_eq!(y, expected_result);
 
-        assert_eq!(f.exp_u64(10540996611094048183).exp_const_u64::<7>(), f);
-        assert_eq!(y.exp_u64(10540996611094048183).exp_const_u64::<7>(), y);
-        assert_eq!(f_2.exp_u64(10540996611094048183).exp_const_u64::<7>(), f_2);
+        assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
+        assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
+        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
     }
 
     test_field!(crate::Goldilocks);

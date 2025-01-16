@@ -3,12 +3,12 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Field, FieldAlgebra, PrimeField64};
+use p3_field::{Field, FieldAlgebra, PermutationMonomial, PrimeField64};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
-use p3_rescue::{BasicSboxLayer, Rescue};
+use p3_rescue::Rescue;
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
@@ -29,8 +29,8 @@ fn bench_rescue(c: &mut Criterion) {
 
 fn rescue<FA, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
-    FA: FieldAlgebra,
-    FA::F: PrimeField64,
+    FA: FieldAlgebra + PermutationMonomial<ALPHA>,
+    FA::F: PrimeField64 + PermutationMonomial<ALPHA>,
     Standard: Distribution<FA::F>,
     Mds: MdsPermutation<FA, WIDTH> + Default,
 {
@@ -42,8 +42,7 @@ where
     let num_constants = 2 * WIDTH * NUM_ROUNDS;
     let round_constants = rng.sample_iter(Standard).take(num_constants).collect();
     let mds = Mds::default();
-    let sbox = BasicSboxLayer::for_alpha(ALPHA);
-    let rescue = Rescue::<FA::F, Mds, _, WIDTH>::new(NUM_ROUNDS, round_constants, mds, sbox);
+    let rescue = Rescue::<FA::F, Mds, WIDTH, ALPHA>::new(NUM_ROUNDS, round_constants, mds);
     let input: [FA; WIDTH] = array::from_fn(|_| FA::ZERO);
     let name = format!("rescue::<{}, {}>", type_name::<FA>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);

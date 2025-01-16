@@ -12,11 +12,12 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField, PrimeField32, PrimeField64,
-    TwoAdicField,
+    quotient_map_small_int, Field, FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial,
+    PrimeField, PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
@@ -27,8 +28,10 @@ use crate::{FieldParameters, MontyParameters, TwoAdicData};
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct MontyField31<MP: MontyParameters> {
-    // This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
-    // likely doing something fishy.
+    /// The MONTY form of the field element, saved as a positive integer less than `P`.
+    ///
+    /// This is `pub(crate)` for tests and delayed reduction strategies. If you're accessing `value` outside of those, you're
+    /// likely doing something fishy.
     pub(crate) value: u32,
     _phantom: PhantomData<MP>,
 }
@@ -150,7 +153,8 @@ impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
 
 impl<FP: FieldParameters> Serialize for MontyField31<FP> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u32(self.as_canonical_u32())
+        // It's faster to Serialize and Deserialize in monty form.
+        serializer.serialize_u32(self.value)
     }
 }
 
@@ -196,6 +200,19 @@ impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     }
 }
 
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
+    for MontyField31<FP>
+{
+}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMonomial<D>
+    for MontyField31<FP>
+{
+    fn injective_exp_root_n(&self) -> Self {
+        FP::exp_root_d(*self)
+    }
+}
+
 impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedMontyField31Neon<FP>;
@@ -227,11 +244,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     type Packing = Self;
 
     const GENERATOR: Self = FP::MONTY_GEN;
-
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        FP::exp_u64_generic(val, power)
-    }
 
     fn try_inverse(&self) -> Option<Self> {
         FP::try_inverse(*self)
@@ -441,6 +453,13 @@ impl<FP: FieldParameters> PrimeField64 for MontyField31<FP> {
     fn as_canonical_u64(&self) -> u64 {
         self.as_canonical_u32().into()
     }
+
+    #[inline]
+    fn to_unique_u64(&self) -> u64 {
+        // The internal representation is already a unique u32 for each field element.
+        // It's fine to hash things in monty form.
+        self.value as u64
+    }
 }
 
 impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
@@ -449,6 +468,13 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
     #[inline]
     fn as_canonical_u32(&self) -> u32 {
         MontyField31::to_u32(self)
+    }
+
+    #[inline]
+    fn to_unique_u32(&self) -> u32 {
+        // The internal representation is already a unique u32 for each field element.
+        // It's fine to hash things in monty form.
+        self.value
     }
 }
 

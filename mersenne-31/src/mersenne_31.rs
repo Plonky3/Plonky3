@@ -8,21 +8,23 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, quotient_map_large_iint,
-    quotient_map_large_uint, quotient_map_small_int, Field, FieldAlgebra, Packable, PrimeField,
-    PrimeField32, PrimeField64,
+    halve_u32, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
+    FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField, PrimeField32,
+    PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Mersenne31 prime
 const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
@@ -50,7 +52,7 @@ impl Packable for Mersenne31 {}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.as_canonical_u32());
+        state.write_u32(self.to_unique_u32());
     }
 }
 
@@ -88,6 +90,25 @@ impl Distribution<Mersenne31> for Standard {
             if is_canonical {
                 return Mersenne31::new(next_u31);
             }
+        }
+    }
+}
+
+impl Serialize for Mersenne31 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // No need to convert to canonical.
+        serializer.serialize_u32(self.value)
+    }
+}
+
+impl<'a> Deserialize<'a> for Mersenne31 {
+    fn deserialize<D: Deserializer<'a>>(d: D) -> Result<Self, D::Error> {
+        let val = u32::deserialize(d)?;
+        // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
+        if val <= P {
+            Ok(Mersenne31::new(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
         }
     }
 }
@@ -132,6 +153,22 @@ impl FieldAlgebra for Mersenne31 {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u32; len]) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for Mersenne31 {}
+
+impl PermutationMonomial<5> for Mersenne31 {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        // We use a custom addition chain.
+        // This could possibly by further optimised.
+        exp_1717986917(*self)
     }
 }
 
@@ -181,14 +218,6 @@ impl Field for Mersenne31 {
         let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
         let rotated = left | right;
         Self::new(rotated)
-    }
-
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        match power {
-            1717986917 => exp_1717986917(val), // used in x^{1/5}
-            _ => exp_u64_by_squaring(val, power),
-        }
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -485,7 +514,7 @@ pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, FieldAlgebra, PrimeField32};
+    use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PermutationMonomial, PrimeField32};
     use p3_field_testing::test_field;
 
     use crate::Mersenne31;
@@ -536,9 +565,9 @@ mod tests {
         let m1 = F::from_u32(0x34167c58);
         let m2 = F::from_u32(0x61f3207b);
 
-        assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
-        assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
     test_field!(crate::Mersenne31);
