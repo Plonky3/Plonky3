@@ -13,6 +13,7 @@ use core::mem::MaybeUninit;
 
 pub mod array_serialization;
 pub mod linear_map;
+pub mod transpose;
 
 /// Computes `ceil(log_2(n))`.
 #[must_use]
@@ -230,14 +231,7 @@ unsafe fn transpose_in_place_square<T>(
     lb_num_chunks: usize,
     offset: usize,
 ) {
-    let n = 1 << lb_num_chunks;
-    for i in 0..n {
-        for j in 0..i {
-            let a = offset + (i << lb_chunk_size) + j;
-            let b = offset + (j << lb_chunk_size) + i;
-            core::ptr::swap(arr.get_unchecked_mut(a), arr.get_unchecked_mut(b));
-        }
-    }
+    transpose::transpose_in_place_square(arr, lb_chunk_size, lb_num_chunks, offset)
 }
 
 #[inline(always)]
