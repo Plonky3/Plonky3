@@ -10,31 +10,30 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 use crate::{
-    coset::Radix2Coset, polynomial::Polynomial, utils::field_element_from_isize,
+    coset::Radix2Coset, polynomial::Polynomial, prover::commit, utils::field_element_from_isize,
     SecurityAssumption, StirConfig, StirParameters,
 };
 
 use super::{prove_round, RoundConfig, StirWitness};
 
-// This configuration is insecure!
+// This configuration is insecure (the field is too small). Use for testing
+// purposes only!
 type BB = BabyBear;
-type BBExt = BinomialExtensionField<BB, 4>;
-type BBExtPerm = Poseidon2BabyBear<16>;
-type BBExtHash = PaddingFreeSponge<BBExtPerm, 16, 8, 8>;
-type BBExtCompress = TruncatedPermutation<BBExtPerm, 2, 8, 16>;
-type BBExtPacking = <BBExt as Field>::Packing;
+type BBPerm = Poseidon2BabyBear<16>;
+type BBHash = PaddingFreeSponge<BBPerm, 16, 8, 8>;
+type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
+type BBPacking = <BB as Field>::Packing;
+type BBMMCS = MerkleTreeMmcs<BBPacking, BBPacking, BBHash, BBCompress, 8>;
 
-type BBExtMMCS = MerkleTreeMmcs<BBExtPacking, BBExtPacking, BBExtHash, BBExtCompress, 8>;
-
-pub fn test_mmcs_config() -> BBExtMMCS {
+pub fn test_mmcs_config() -> BBMMCS {
     let mut rng = ChaCha20Rng::from_entropy();
-    let perm = BBExtPerm::new_from_rng_128(&mut rng);
-    let hash = BBExtHash::new(perm.clone());
-    let compress = BBExtCompress::new(perm.clone());
-    BBExtMMCS::new(hash, compress)
+    let perm = BBPerm::new_from_rng_128(&mut rng);
+    let hash = BBHash::new(perm.clone());
+    let compress = BBCompress::new(perm.clone());
+    BBMMCS::new(hash, compress)
 }
 
-fn test_stir_config() -> StirConfig<BBExtMMCS> {
+fn test_stir_config() -> StirConfig<BBMMCS> {
     let security_level = 128;
     let log_starting_degree = 4;
     let log_folding_factor = 2;
@@ -74,14 +73,14 @@ fn test_prove_round() {
 
     let field_replies = [
         // ood_samples
-        (0..ood_samples).map(|_| BBExt::ZERO).collect_vec(),
+        (0..ood_samples).map(|_| BB::ZERO).collect_vec(),
         vec![
             // comb_randomness
-            BBExt::ZERO,
+            BB::ZERO,
             // folding_randomness
-            BBExt::ZERO,
+            BB::ZERO,
             // shake_randomness (unused)
-            BBExt::ZERO,
+            BB::ZERO,
         ],
     ]
     .concat();
@@ -89,12 +88,12 @@ fn test_prove_round() {
     // indices
     let bit_replies = (0..num_queries).map(|_| 0).collect::<Vec<_>>();
 
-    let challenger = MockChallenger::new(field_replies, bit_replies);
+    let mut challenger = MockChallenger::new(field_replies, bit_replies);
 
     // Starting domain: 10 <w> with w of size
 
     // Starting polynomial: -2 + 17x + 42x^2 + 3x^3 - x^4 - x^5 + 4x^6 + 5x^7
-    let coeffs: Vec<BBExt> = vec![-2, 17, 42, 3, -1, -1, 4, 5]
+    let coeffs: Vec<BB> = vec![-2, 17, 42, 3, -1, -1, 4, 5]
         .into_iter()
         .map(field_element_from_isize)
         .collect_vec();
@@ -102,24 +101,25 @@ fn test_prove_round() {
     let f = Polynomial::from_coeffs(coeffs);
 
     let original_domain =
-        Radix2Coset::new(BBExt::from_canonical_usize(10), log_evaluation_domain_size);
+        Radix2Coset::new(BB::from_canonical_usize(10), log_evaluation_domain_size);
 
     let original_evals = original_domain.evaluate_polynomial(&f);
+
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
 
-    // let _ = config.mmcs_config().commit_matrix(stacked_original_evals);
+    let (commitment, merkle_tree) = config.mmcs_config().commit_matrix(stacked_original_evals);
 
-    // let witness = StirWitness {
-    //     domain: original_domain,
-    //     polynomial: f,
-    //     merkle_tree,
-    //     stacked_evals: ,
-    //     round,
-    //     folding_randomness: F::ZERO,
-    // };
+    let witness = StirWitness {
+        domain: original_domain,
+        polynomial: f,
+        merkle_tree,
+        stacked_evals: stacked_original_evals,
+        round,
+        folding_randomness: BB::ZERO,
+    };
 
-    // prove_round(&config, witness, &mut challenger);
+    let (round_proof, witness) = prove_round(&config, witness, &mut challenger);
 }
 
 // NP TODO discuss with Giacomo Every round needs two: this round's, to know how

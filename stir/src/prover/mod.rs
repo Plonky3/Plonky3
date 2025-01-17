@@ -234,7 +234,7 @@ where
     // Sample ramdomness for degree correction
     let comb_randomness = challenger.sample_ext_element();
 
-    // Sample randomness for the next folding
+    // Sample folding randomness for the next round
     let new_folding_randomness = challenger.sample_ext_element();
 
     // Sample queried indices of elements in L^k
