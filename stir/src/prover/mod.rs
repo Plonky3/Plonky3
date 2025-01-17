@@ -175,14 +175,14 @@ where
     // folding factor of the next round. Correct? Giacomo's code is not very
     // well suited for this since only one folding factor is passed
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 0");
 
     // Fold the polynomial and the evaluations
     let folded_polynomial =
         fold_polynomial(&polynomial, folding_randomness, 1 << log_folding_factor);
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 1");
 
     // Compute L' = omega * <omega^2>
@@ -217,7 +217,7 @@ where
 
     challenger.observe(new_commitment.clone());
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 2");
 
     // ========= OOD SAMPLING =========
@@ -238,7 +238,7 @@ where
     // Observe the betas
     challenger.observe_slice(&betas);
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 3");
 
     // ========= STIR MESSAGE =========
@@ -246,19 +246,19 @@ where
     // Sample ramdomness for degree correction
     let comb_randomness = challenger.sample_ext_element();
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 4");
 
     // Sample folding randomness for the next round
     let new_folding_randomness = challenger.sample_ext_element();
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 5");
 
     // Sample queried indices of elements in L^k
     let log_scaling_factor = domain.log_size() - log_folding_factor;
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 6");
 
     // Sample queried indices of elements in L^k_{i-1}
@@ -273,7 +273,7 @@ where
         })
         .collect();
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 7");
 
     // Proof of work witness
@@ -281,13 +281,13 @@ where
     // NP TODO unsafe cast to usize
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 8");
 
     // Shake randomness
     let _shake_randomnes: F = challenger.sample_ext_element();
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 9");
 
     // ========= QUERY PROOFS =========
@@ -315,7 +315,7 @@ where
     // NP TODO ask Giacomo: should this also scale the shift?
     let domain_k = domain.shrink_coset(log_folding_factor);
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 10");
 
     // Get the elements in L^k corresponding to the queried indices
@@ -331,7 +331,7 @@ where
         .map(|x| folded_polynomial.evaluate(x))
         .collect();
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 11");
 
     // Compute the quotient set, i.e \mathcal{G}_i in the paper
@@ -341,7 +341,7 @@ where
         .cloned()
         .collect_vec();
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 12");
 
     // Compute the quotient set evaluations
@@ -349,26 +349,33 @@ where
     let stir_answers = stir_randomness.into_iter().zip(stir_randomness_evals);
     let quotient_answers = beta_answers.chain(stir_answers);
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 13");
 
     // Compute the answer polynomial
     let ans_polynomial =
         Polynomial::<F>::lagrange_interpolation(quotient_answers.clone().collect_vec());
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 14");
 
     // Compute the shake polynomial
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers);
 
-    // TODO remove
+    // NP TODO remove
     println!("PROVE_ROUND REACHES 15");
 
     // Compute the quotient polynomial
     // NP TODO: Remove the clone
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set.clone());
+
+    // NP TODO remove
+    println!("PROVE_ROUND REACHES 16");
+
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
+
+    // NP TODO remove
+    println!("PROVE_ROUND REACHES 17");
 
     // Compute the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
     // NP TODO: From the call with Giacomo, it seems that this computation might be wrong
@@ -379,10 +386,19 @@ where
             .collect_vec(),
     );
 
+    // NP TODO remove
+    println!("PROVE_ROUND REACHES 18");
+
     let witness_polynomial = &quotient_polynomial * &scaling_polynomial;
 
     // NP TODO remove
+    println!("PROVE_ROUND REACHES 19");
+
+    // NP TODO remove
     assert_eq!(witness_polynomial.degree(), folded_polynomial.degree());
+
+    // NP TODO remove
+    println!("PROVE_ROUND REACHES 20");
 
     (
         StirWitness {
