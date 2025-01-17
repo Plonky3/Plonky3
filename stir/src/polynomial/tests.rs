@@ -6,6 +6,7 @@ use rand::prelude::Distribution;
 use rand::Rng;
 
 use crate::polynomial::Polynomial;
+use crate::utils::field_element_from_isize;
 type BB = BabyBear;
 
 // NP TODO move?
@@ -141,7 +142,7 @@ fn test_divide() {
 }
 
 #[test]
-fn test_naive_interpolate() {
+fn test_lagrange_interpolation() {
     // p(x) = 3 + 4x + 2x^2 + 7x^3 + 9x^4 + x^5
     let polynomial = Polynomial::<BB>::from_coeffs(
         vec![3, 4, 2, 7, 9, 1]
@@ -161,10 +162,12 @@ fn test_naive_interpolate() {
         .map(BB::from_canonical_u32)
         .collect_vec();
 
-    let poly = Polynomial::<BB>::naive_interpolate(points.into_iter().zip(evals).collect_vec());
+    let poly =
+        Polynomial::<BB>::lagrange_interpolation(points.into_iter().zip(evals).collect_vec());
     assert_eq!(poly, polynomial);
 }
 
+// NP TODO test_lagrange_interpolation with duplicate points and inconsistent ones
 #[test]
 fn test_compose_with_exponent() {
     // p(x) = 3 + 2x + 6x^2 + 7x^3 + 9x^4
@@ -186,3 +189,70 @@ fn test_compose_with_exponent() {
             .collect_vec()
     );
 }
+
+#[test]
+fn test_vanishing() {
+    let points = vec![3, -5, 7, 2].into_iter().map(field_element_from_isize);
+
+    let expected_coeffs = vec![-210, 163, -19, -7, 1]
+        .into_iter()
+        .map(field_element_from_isize)
+        .collect();
+    let expected_poly = Polynomial::<BB>::from_coeffs(expected_coeffs);
+
+    assert_eq!(
+        Polynomial::<BB>::vanishing_polynomial(points),
+        expected_poly
+    );
+}
+
+#[test]
+fn test_vanishing_random() {
+    let max_num_points = 100;
+
+    let mut rng = rand::thread_rng();
+    let mut points = (0..max_num_points)
+        .map(|_| field_element_from_isize(rng.gen::<i16>() as isize))
+        .collect_vec();
+    points.dedup();
+    let num_points = points.len();
+
+    let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
+
+    assert_eq!(vanishing_poly.degree(), num_points);
+    assert!(points
+        .iter()
+        .all(|p| vanishing_poly.evaluate(p) == BB::ZERO));
+}
+
+#[test]
+fn test_vanishing_and_lagrange_interpolation() {
+    let max_num_points = 100;
+
+    let mut rng = rand::thread_rng();
+    let mut points = (0..max_num_points)
+        .map(|_| field_element_from_isize(rng.gen::<i16>() as isize))
+        .collect_vec();
+    points.dedup();
+
+    let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
+
+    assert_eq!(vanishing_poly.degree(), points.len());
+
+    // In order to recover the same polynomial through interpolation, we need
+    // one more value
+    let mut point_evals = points.iter().map(|p| (*p, BB::ZERO)).collect_vec();
+
+    let mut new_point = BB::ZERO;
+    while new_point.is_zero() {
+        new_point = field_element_from_isize(rng.gen::<i16>() as isize);
+    }
+    let new_eval = vanishing_poly.evaluate(&new_point);
+    point_evals.push((new_point, new_eval));
+
+    let new_vanishing_poly = Polynomial::lagrange_interpolation(point_evals);
+
+    assert_eq!(new_vanishing_poly, vanishing_poly);
+}
+
+// NP TODO add tests for vanishing with duplicate points

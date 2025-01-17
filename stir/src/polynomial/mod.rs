@@ -1,6 +1,7 @@
 use core::clone::Clone;
 use core::iter::Product;
 use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
+use std::collections::{BTreeSet, HashMap};
 
 use itertools::Itertools;
 use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
@@ -54,6 +55,10 @@ impl<F: Field> Polynomial<F> {
         let mut leading_index = self.coeffs.len() - 1;
 
         while self.coeffs[leading_index].is_zero() {
+            if leading_index == 0 {
+                return Self::zero();
+            }
+
             leading_index -= 1;
         }
 
@@ -125,26 +130,100 @@ impl<F: Field> Polynomial<F> {
 }
 
 impl<F: TwoAdicField> Polynomial<F> {
-    // NP TODO: This is far from optimal
+    // NP TODO: Confirm the naive algorithm is best
+    // 1 (naive)
+    // (x - x_0)(x - x_1): four products, results in 3 coefficients
+    // [(x - x_0)(x - x_1)] * (x - x_1): six products, results in 4 coefficients
+    // [[(x - x_0)(x - x_1)] * (x - x_1)] * (x - x_2): eight products, results in 5 coefficients
+
+    // 2 (as it works now)
+    // (x - x_0)(x - x_1): 2 FFT of size 4, 4 products, 1 IDFT of size 4                                (4
+    // [(x - x_0)(x - x_1)] * (x - x_1): 2 FFT of size 4, 4 products, 1 IDFT of size 4                  (4
+    // [[(x - x_0)(x - x_1)] * (x - x_1)] * (x - x_2): 2 FFT of size 8, 8 products, 1 IDFT of size 8    (8
+    // another 3 times: 2 FFT of size 8, 8 products, 1 IDFT of size 8
+
+    // 2.5:
+    // (worse)
+
+    // 2.75: Tree version of 2.5
+
+    // 3 (bad)
+    // FFT:
+    // n times FFT of size n = n * n * log(n)
+    // n products each of size n = n^2
+    // one time FFT of size n = n * log(n)
+
+    // NP TODO doc
+    // mention empty lists are mapped to zero
+    // mention dedup, careful with the expected degree!
     pub fn vanishing_polynomial(points: impl IntoIterator<Item = F>) -> Polynomial<F> {
-        points
-            .into_iter()
-            .map(|point| Polynomial::monomial(-point))
-            .product()
+        let mut points = points.into_iter().collect_vec();
+        points.dedup();
+
+        if points.is_empty() {
+            return Polynomial::zero();
+        }
+
+        let mut coeffs = vec![-points.pop().unwrap(), F::ONE];
+
+        while let Some(point) = points.pop() {
+            // Basic idea: add shifted and scaled versions of the current polynomial
+            // For instance, if f has coefficients
+            //   [2, -3, 4, 1],
+            // then (x - 5) * f has coefficients
+            //   [0, 2, -3, 4, 1] + (-5) * [2, -3, 4, 1, 0]
+
+            let mut prev_coeff = F::ZERO;
+
+            for coeff in coeffs.iter_mut() {
+                let current_coeff = *coeff;
+                *coeff = prev_coeff - *coeff * point;
+                prev_coeff = current_coeff;
+            }
+
+            coeffs.push(F::ONE);
+        }
+
+        Polynomial::from_coeffs(coeffs)
     }
 
     // NP TODO lagrange_interpolate_and_eval(
-    // NP TODO lagrange_interpolate(
-    pub fn naive_interpolate(point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
-        let points = point_to_evals.iter().map(|(p, _)| *p).collect_vec();
-        let vanishing_poly = Self::vanishing_polynomial(points);
-        let mut result = Polynomial::zero();
-        for (point, eval) in point_to_evals.into_iter() {
-            let term = &vanishing_poly / &Polynomial::monomial(-point);
-            let scale = eval / term.evaluate(&point);
-            let coeffs = term.coeffs().iter().map(|c| *c * scale).collect_vec();
-            result += &Polynomial::from_coeffs(coeffs);
+
+    /// Returns the unique polynomial of degree less than `point_to_evals.len()`
+    /// that evaluates to `y_i` at `x_i`, where `(x_i, y_i)` refers to
+    /// `point_to_evals[i]`. If two points in `point_to_evals` have the same x
+    /// coordinate, the following happens:
+    /// - If their evaluations do not match, the function `panic`s.
+    /// - If their evaluations match, the function proceeds normally (note that
+    ///   this reduces expected degree by one).
+    ///
+    /// This allows the function to be called in situations where, for instance,
+    /// the x coordinates are generated randomly and the evaluations come from
+    /// evaluating a (larger-degree) polynomial.
+    ///
+    /// This function uses naive Lagrange interpolation and is not optimal (cost
+    /// `O(n^2)`)
+    pub fn lagrange_interpolation(mut point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
+        // Testing for consistency and removing duplicate points
+        point_to_evals.dedup();
+
+        let mut points = point_to_evals.iter().map(|(x, _)| *x).collect_vec();
+        points.dedup();
+        if points.len() != point_to_evals.len() {
+            panic!("Two points with the same x coordinate have different evaluations");
         }
+
+        // Computing interpolator
+        let vanishing_poly = Self::vanishing_polynomial(points);
+
+        let mut result = Polynomial::zero();
+
+        for (point, eval) in point_to_evals.into_iter() {
+            let polynomial = &vanishing_poly / &Polynomial::monomial(-point);
+            let denominator = polynomial.evaluate(&point);
+            result += &(&polynomial * &(eval / denominator));
+        }
+
         result
     }
 

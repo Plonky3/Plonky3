@@ -39,7 +39,7 @@ fn test_stir_config() -> StirConfig<BBMMCS> {
     let log_folding_factor = 2;
     let log_starting_inv_rate = 1;
     let security_assumption = SecurityAssumption::CapacityBound;
-    let num_rounds = 1;
+    let num_rounds = 2;
     let pow_bits = 20;
 
     let parameters = StirParameters::fixed_domain_shift(
@@ -60,9 +60,15 @@ fn test_stir_config() -> StirConfig<BBMMCS> {
 fn test_prove_round() {
     let config = test_stir_config();
 
+    // TODO remove
+    println!("REACHES 0");
+
     let round = 0;
 
     let round_config = config.round_config(round);
+
+    // TODO remove
+    println!("REACHES 1");
 
     let RoundConfig {
         log_evaluation_domain_size,
@@ -70,6 +76,9 @@ fn test_prove_round() {
         num_queries,
         ..
     } = round_config.clone();
+
+    // TODO remove
+    println!("REACHES 2");
 
     let field_replies = [
         // ood_samples
@@ -85,10 +94,19 @@ fn test_prove_round() {
     ]
     .concat();
 
+    // TODO remove
+    println!("REACHES 3");
+
     // indices
     let bit_replies = (0..num_queries).map(|_| 0).collect::<Vec<_>>();
 
+    // TODO remove
+    println!("REACHES 4");
+
     let mut challenger = MockChallenger::new(field_replies, bit_replies);
+
+    // TODO remove
+    println!("REACHES 5");
 
     // Starting domain: 10 <w> with w of size
 
@@ -98,17 +116,37 @@ fn test_prove_round() {
         .map(field_element_from_isize)
         .collect_vec();
 
+    // TODO remove
+    println!("REACHES 6");
+
     let f = Polynomial::from_coeffs(coeffs);
+
+    // TODO remove
+    println!("REACHES 7");
 
     let original_domain =
         Radix2Coset::new(BB::from_canonical_usize(10), log_evaluation_domain_size);
 
+    // TODO remove
+    println!("REACHES 8");
+
     let original_evals = original_domain.evaluate_polynomial(&f);
+
+    // TODO remove
+    println!("REACHES 9");
 
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
 
-    let (commitment, merkle_tree) = config.mmcs_config().commit_matrix(stacked_original_evals);
+    // TODO remove
+    println!("REACHES 10");
+
+    let (_, merkle_tree) = config
+        .mmcs_config()
+        .commit_matrix(stacked_original_evals.clone());
+
+    // TODO remove
+    println!("REACHES 11");
 
     let witness = StirWitness {
         domain: original_domain,
@@ -118,6 +156,9 @@ fn test_prove_round() {
         round,
         folding_randomness: BB::ZERO,
     };
+
+    // TODO remove
+    println!("REACHES 12");
 
     let (round_proof, witness) = prove_round(&config, witness, &mut challenger);
 }
