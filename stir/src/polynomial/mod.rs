@@ -205,10 +205,14 @@ impl<F: TwoAdicField> Polynomial<F> {
     /// `O(n^2)`)
     pub fn lagrange_interpolation(mut point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
         // Testing for consistency and removing duplicate points
-        point_to_evals.dedup();
+        let point_to_evals = point_to_evals.into_iter().unique().collect_vec();
 
-        let mut points = point_to_evals.iter().map(|(x, _)| *x).collect_vec();
-        points.dedup();
+        let mut points = point_to_evals
+            .iter()
+            .map(|(x, _)| *x)
+            .unique()
+            .collect_vec();
+
         if points.len() != point_to_evals.len() {
             panic!("Two points with the same x coordinate have different evaluations");
         }
