@@ -37,8 +37,8 @@ impl<T> CanSample<T> for MockChallenger<T> {
     }
 }
 
-impl<T> CanObserve<T> for MockChallenger<T> {
-    fn observe(&mut self, _: T) {}
+impl<S, T> CanObserve<S> for MockChallenger<T> {
+    fn observe(&mut self, _: S) {}
 }
 
 impl<T> CanSampleBits<usize> for MockChallenger<T> {
