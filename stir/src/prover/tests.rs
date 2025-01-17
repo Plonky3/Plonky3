@@ -2,8 +2,8 @@ use itertools::Itertools;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
-use p3_field::{extension::BinomialExtensionField, Field, FieldAlgebra};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::{extension::BinomialExtensionField, Field, FieldAlgebra, TwoAdicField};
+use p3_matrix::{dense::RowMajorMatrix, Matrix};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
@@ -35,8 +35,8 @@ pub fn test_mmcs_config() -> BBMMCS {
 
 fn test_stir_config() -> StirConfig<BBMMCS> {
     let security_level = 128;
-    let log_starting_degree = 4;
-    let log_folding_factor = 2;
+    let log_starting_degree = 3;
+    let log_folding_factor = 1;
     let log_starting_inv_rate = 1;
     let security_assumption = SecurityAssumption::CapacityBound;
     let num_rounds = 2;
@@ -60,15 +60,9 @@ fn test_stir_config() -> StirConfig<BBMMCS> {
 fn test_prove_round() {
     let config = test_stir_config();
 
-    // TODO remove
-    println!("REACHES 0");
-
     let round = 0;
 
     let round_config = config.round_config(round);
-
-    // TODO remove
-    println!("REACHES 1");
 
     let RoundConfig {
         log_evaluation_domain_size,
@@ -77,38 +71,28 @@ fn test_prove_round() {
         ..
     } = round_config.clone();
 
-    // TODO remove
-    println!("REACHES 2");
-
     let field_replies = [
         // ood_samples
-        (0..ood_samples).map(|_| BB::ZERO).collect_vec(),
+        (0..ood_samples)
+            .map(|x| BB::from_canonical_usize(3) * BB::from_canonical_usize(x))
+            .collect_vec(),
         vec![
             // comb_randomness
-            BB::ZERO,
+            BB::ONE,
             // folding_randomness
-            BB::ZERO,
+            BB::ONE,
             // shake_randomness (unused)
-            BB::ZERO,
+            BB::ONE,
         ],
     ]
     .concat();
 
-    // TODO remove
-    println!("REACHES 3");
-
     // indices
-    let bit_replies = (0..num_queries).map(|_| 0).collect::<Vec<_>>();
-
-    // TODO remove
-    println!("REACHES 4");
+    let bit_replies = (0..num_queries)
+        .map(|i| i % (config.log_starting_degree() / config.log_starting_folding_factor()))
+        .collect::<Vec<_>>();
 
     let mut challenger = MockChallenger::new(field_replies, bit_replies);
-
-    // TODO remove
-    println!("REACHES 5");
-
-    // Starting domain: 10 <w> with w of size
 
     // Starting polynomial: -2 + 17x + 42x^2 + 3x^3 - x^4 - x^5 + 4x^6 + 5x^7
     let coeffs: Vec<BB> = vec![-2, 17, 42, 3, -1, -1, 4, 5]
@@ -116,51 +100,53 @@ fn test_prove_round() {
         .map(field_element_from_isize)
         .collect_vec();
 
-    // TODO remove
-    println!("REACHES 6");
-
     let f = Polynomial::from_coeffs(coeffs);
 
-    // TODO remove
-    println!("REACHES 7");
-
-    let original_domain =
-        Radix2Coset::new(BB::from_canonical_usize(10), log_evaluation_domain_size);
-
-    // TODO remove
-    println!("REACHES 8");
+    let original_domain = Radix2Coset::new_from_degree_and_rate(
+        config.log_starting_degree(),
+        config.log_starting_inv_rate(),
+    );
 
     let original_evals = original_domain.evaluate_polynomial(&f);
 
-    // TODO remove
-    println!("REACHES 9");
-
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
-
-    // TODO remove
-    println!("REACHES 10");
 
     let (_, merkle_tree) = config
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
-    // TODO remove
-    println!("REACHES 11");
-
     let witness = StirWitness {
-        domain: original_domain,
+        domain: original_domain.clone(),
         polynomial: f,
         merkle_tree,
         stacked_evals: stacked_original_evals,
         round,
-        folding_randomness: BB::ZERO,
+        folding_randomness: BB::from_canonical_usize(2),
     };
 
-    // TODO remove
-    println!("REACHES 12");
+    let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
 
-    let (round_proof, witness) = prove_round(&config, witness, &mut challenger);
+    // =============== Witness Checks ===============
+
+    // expected_shift = shift^2 * omega
+    let expected_shift = original_domain.element(1);
+    let expected_domain = Radix2Coset::new(expected_shift, log_evaluation_domain_size);
+    let expected_round = 1;
+    let expected_folding_randomness = BB::ONE;
+
+    let StirWitness {
+        domain,
+        polynomial,
+        merkle_tree,
+        stacked_evals,
+        folding_randomness,
+        round,
+    } = witness;
+
+    assert_eq!(domain, expected_domain);
+    assert_eq!(folding_randomness, expected_folding_randomness);
+    assert_eq!(round, expected_round);
 }
 
 // NP TODO discuss with Giacomo Every round needs two: this round's, to know how
