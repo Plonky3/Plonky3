@@ -304,9 +304,9 @@ impl<FP: FieldParameters> QuotientMap<i32> for MontyField31<FP> {
     /// Returns `None` if the given integer does not lie in the range `[(1 - P)/2, (P - 1)/2]`.
     #[inline]
     fn from_canonical_checked(int: i32) -> Option<Self> {
-        let bound = ((FP::PRIME - 1) >> 2) as i32;
-        if int < bound {
-            if int > (-bound) {
+        let bound = (FP::PRIME >> 1) as i32;
+        if int <= bound {
+            if int >= (-bound) {
                 Some(Self::new_monty(to_monty_signed::<FP>(int)))
             } else {
                 None
@@ -362,9 +362,9 @@ impl<FP: FieldParameters> QuotientMap<i64> for MontyField31<FP> {
     ///
     /// Returns `None` if the given integer does not lie in the range `[(1 - P)/2, (P - 1)/2]`.
     fn from_canonical_checked(int: i64) -> Option<Self> {
-        let bound = ((FP::PRIME - 1) >> 2) as i64;
-        if int < bound {
-            if int > (-bound) {
+        let bound = (FP::PRIME >> 1) as i64;
+        if int <= bound {
+            if int >= (-bound) {
                 Some(Self::new_monty(to_monty_signed::<FP>(int as i32)))
             } else {
                 None
@@ -419,9 +419,9 @@ impl<FP: FieldParameters> QuotientMap<i128> for MontyField31<FP> {
     ///
     /// Returns `None` if the given integer does not lie in the range `[(1 - P)/2, (P - 1)/2]`.
     fn from_canonical_checked(int: i128) -> Option<Self> {
-        let bound = ((FP::PRIME - 1) >> 2) as i128;
-        if int < bound {
-            if int > (-bound) {
+        let bound = (FP::PRIME >> 1) as i128;
+        if int <= bound {
+            if int >= (-bound) {
                 Some(Self::new_monty(to_monty_signed::<FP>(int as i32)))
             } else {
                 None

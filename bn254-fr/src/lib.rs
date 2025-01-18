@@ -321,7 +321,7 @@ impl TwoAdicField for Bn254Fr {
 #[cfg(test)]
 mod tests {
     use num_traits::One;
-    use p3_field_testing::test_field;
+    use p3_field_testing::{test_field, test_prime_field};
 
     use super::*;
 
@@ -413,4 +413,6 @@ mod tests {
     }
 
     test_field!(crate::Bn254Fr);
+
+    test_prime_field!(crate::Bn254Fr);
 }

@@ -6,6 +6,7 @@ extern crate alloc;
 
 pub mod bench_func;
 pub mod dft_testing;
+pub mod from_integer_tests;
 pub mod packedfield_testing;
 
 pub use bench_func::*;
@@ -152,6 +153,80 @@ macro_rules! test_field {
             #[test]
             fn test_multiplicative_group_factors() {
                 $crate::test_multiplicative_group_factors::<$field>();
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_prime_field {
+    ($field:ty) => {
+        mod from_integer_small_tests {
+            use p3_field::integers::QuotientMap;
+            use p3_field::{Field, FieldAlgebra};
+
+            #[test]
+            fn test_small_integer_conversions() {
+                $crate::generate_from_small_int_tests!(
+                    $field,
+                    [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize]
+                );
+            }
+
+            #[test]
+            fn test_small_signed_integer_conversions() {
+                $crate::generate_from_small_neg_int_tests!(
+                    $field,
+                    [i8, i16, i32, i64, i128, isize]
+                );
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_prime_field_64 {
+    ($field:ty) => {
+        mod from_integer_tests_prime_field_64 {
+            use p3_field::integers::QuotientMap;
+            use p3_field::{Field, FieldAlgebra, PrimeField64};
+
+            #[test]
+            fn test_large_unsigned_integer_conversions() {
+                $crate::generate_from_large_u_int_tests!($field, <$field>::ORDER_U64, [u64, u128]);
+            }
+
+            #[test]
+            fn test_large_signed_integer_conversions() {
+                $crate::generate_from_large_i_int_tests!($field, <$field>::ORDER_U64, [i64, i128]);
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_prime_field_32 {
+    ($field:ty) => {
+        mod from_integer_tests_prime_field_32 {
+            use p3_field::integers::QuotientMap;
+            use p3_field::{Field, FieldAlgebra, PrimeField32};
+
+            #[test]
+            fn test_large_unsigned_integer_conversions() {
+                $crate::generate_from_large_u_int_tests!(
+                    $field,
+                    <$field>::ORDER_U32,
+                    [u32, u64, u128]
+                );
+            }
+
+            #[test]
+            fn test_large_signed_integer_conversions() {
+                $crate::generate_from_large_i_int_tests!(
+                    $field,
+                    <$field>::ORDER_U32,
+                    [i32, i64, i128]
+                );
             }
         }
     };

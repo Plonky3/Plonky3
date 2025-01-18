@@ -322,14 +322,16 @@ impl QuotientMap<i32> for Mersenne31 {
 
     /// Convert a given `i32` integer into an element of the `Mersenne31` field.
     ///
-    /// Returns none if the input does not lie in the range `[-2^30, 2^30]`.
+    /// Returns none if the input does not lie in the range `(-2^30, 2^30)`.
     #[inline]
     fn from_canonical_checked(int: i32) -> Option<Mersenne31> {
         const TWO_EXP_30: i32 = 1 << 30;
-        const NEG_TWO_EXP_30: i32 = -1 << 30;
+        const NEG_TWO_EXP_30_PLUS_1: i32 = (-1 << 30) + 1;
         match int {
-            0..=TWO_EXP_30 => Some(Self::new(int as u32)),
-            NEG_TWO_EXP_30..0 => Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))),
+            0..TWO_EXP_30 => Some(Self::new(int as u32)),
+            NEG_TWO_EXP_30_PLUS_1..0 => {
+                Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int)))
+            }
             _ => None,
         }
     }
@@ -515,7 +517,7 @@ pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31
 #[cfg(test)]
 mod tests {
     use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PermutationMonomial, PrimeField32};
-    use p3_field_testing::test_field;
+    use p3_field_testing::{test_field, test_prime_field, test_prime_field_32};
 
     use crate::Mersenne31;
 
@@ -571,4 +573,6 @@ mod tests {
     }
 
     test_field!(crate::Mersenne31);
+    test_prime_field!(crate::Mersenne31);
+    test_prime_field_32!(crate::Mersenne31);
 }

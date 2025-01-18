@@ -367,12 +367,12 @@ macro_rules! quotient_map_large_iint {
                 \n Returns `None` if the input does not lie in the range:", $checked_bounds, ".")]
             #[inline]
             fn from_canonical_checked(int: $large_signed_int) -> Option<$field> {
-                let int_small = TryInto::<$field_size>::try_into(int);
-                if int_small.is_ok() {
-                    Self::from_canonical_checked(int_small.unwrap())
-                } else {
-                    None
-                }
+                let int_small = TryInto::<$field_size>::try_into(int).ok();
+
+                // The type of the following is Option<Option<$field>>.
+                // We use the ? operator to convert it to Option<$field>, with
+                // None and Some(None) both becoming None.
+                int_small.map(Self::from_canonical_checked)?
             }
 
             #[doc = concat!("Convert a given `", stringify!($large_int), "` integer into an element of the `", stringify!($field), "` field.")]

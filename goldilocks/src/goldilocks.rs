@@ -300,11 +300,11 @@ impl QuotientMap<i64> for Goldilocks {
 
     /// Convert a given `i64` integer into an element of the `Goldilocks` field.
     ///
-    /// Returns none if the input does not lie in the range `[-(2^63 - 2^31), 2^63 - 2^31]`.
+    /// Returns none if the input does not lie in the range `(-(2^63 - 2^31), 2^63 - 2^31)`.
     #[inline]
     fn from_canonical_checked(int: i64) -> Option<Goldilocks> {
-        const POS_BOUND: i64 = ((1 << 32) - 1) << 31;
-        const NEG_BOUND: i64 = -((1 << 32) - 1) << 31;
+        const POS_BOUND: i64 = (P >> 1) as i64;
+        const NEG_BOUND: i64 = -POS_BOUND;
         match int {
             0..=POS_BOUND => Some(Self::new(int as u64)),
             NEG_BOUND..0 => Some(Self::new(Self::ORDER_U64.wrapping_add_signed(int))),
@@ -316,7 +316,7 @@ impl QuotientMap<i64> for Goldilocks {
     ///
     /// # Safety
     /// In this case this function is actually always safe as the internal
-    /// value is allowed to be any i64.
+    /// value is allowed to be any u64.
     #[inline(always)]
     unsafe fn from_canonical_unchecked(int: i64) -> Goldilocks {
         Self::from_int(int)
@@ -551,7 +551,9 @@ pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Gol
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
+    use p3_field_testing::{
+        test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
+    };
 
     use super::*;
 
@@ -640,6 +642,8 @@ mod tests {
     }
 
     test_field!(crate::Goldilocks);
+    test_prime_field!(crate::Goldilocks);
+    test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);
 
     test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);

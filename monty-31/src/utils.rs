@@ -14,7 +14,7 @@ pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
 #[inline]
 pub(crate) const fn to_monty_signed<MP: MontyParameters>(x: i32) -> u32 {
     let red = (((x as i64) << MP::MONTY_BITS) % MP::PRIME as i64) as i32;
-    if red > 0 {
+    if red >= 0 {
         red as u32
     } else {
         MP::PRIME.wrapping_add_signed(red)
@@ -35,7 +35,7 @@ pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
 #[inline]
 pub(crate) const fn to_monty_64_signed<MP: MontyParameters>(x: i64) -> u32 {
     let red = (((x as i128) << MP::MONTY_BITS) % MP::PRIME as i128) as i32;
-    if red > 0 {
+    if red >= 0 {
         red as u32
     } else {
         MP::PRIME.wrapping_add_signed(red)
