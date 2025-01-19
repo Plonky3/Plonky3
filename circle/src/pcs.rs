@@ -226,7 +226,7 @@ where
                             let zeta = Point::from_projective_line(zeta);
 
                             // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                            let mat_ros = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+                            let mat_ros = evals.deep_quotient_reduce(alpha, zeta, ps_at_zeta);
 
                             // Fold it into our running reduction, offset by alpha_offset.
                             reduced_opening_for_log_height
